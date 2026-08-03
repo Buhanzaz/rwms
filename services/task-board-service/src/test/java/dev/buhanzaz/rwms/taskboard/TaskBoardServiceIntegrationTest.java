@@ -1,5 +1,7 @@
 package dev.buhanzaz.rwms.taskboard;
 
+import static dev.buhanzaz.rwms.taskboard.QueueFixtureModels.*;
+
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -93,18 +95,28 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void holdingIsAlwaysLastAndStaleVersionConflicts() {
-    var holding = registry.createQueue(W1, queue("HOLD", QueueType.HOLDING, List.of()));
-    var repair = registry.createQueue(W1, queue("REPAIR", QueueType.REPAIR, List.of()));
+    var holding =
+        QueueRegistryTestFixtures.create(
+            registry, jdbc, W1, queue("HOLD", QueueType.HOLDING, List.of()));
+    var repair =
+        QueueRegistryTestFixtures.create(
+            registry, jdbc, W1, queue("REPAIR", QueueType.REPAIR, List.of()));
+    var secondRepair =
+        QueueRegistryTestFixtures.create(
+            registry,
+            jdbc,
+            W1,
+            queue("REPAIR_SECOND", QueueType.REPAIR, List.of()));
     assertThat(registry.listQueues(W1))
         .extracting(WorkQueueDto::id)
-        .containsExactly(repair.id(), holding.id());
+        .containsExactly(repair.id(), secondRepair.id(), holding.id());
     assertThatThrownBy(
             () ->
                 registry.updateQueue(
                     W1,
                     repair.id(),
                     new WorkQueueRequest(
-                        99L,
+                        repair.version() + 99,
                         repair.definitionId(),
                         true,
                         false,
@@ -118,19 +130,25 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void globalQueueDefinitionsAreSharedWhileWarehouseBindingsAndOrderRemainLocal() {
+  void globalDefinitionsAreSharedWhileWarehouseBindingsAndOrderRemainLocal() {
     var firstW1 =
-        registry.createQueue(W1, queue("GLOBAL_EXTERNAL", QueueType.REPAIR, List.of()));
+        QueueRegistryTestFixtures.create(
+            registry, jdbc, W1, queue("GLOBAL_EXTERNAL", QueueType.REPAIR, List.of()));
     var secondW1 =
-        registry.createQueue(W1, queue("GLOBAL_INTERNAL", QueueType.REPAIR, List.of()));
+        QueueRegistryTestFixtures.create(
+            registry, jdbc, W1, queue("GLOBAL_INTERNAL", QueueType.REPAIR, List.of()));
     var firstW2 =
-        registry.createQueue(W2, queue("GLOBAL_EXTERNAL", QueueType.REPAIR, List.of()));
-    var secondW2 =
-        registry.createQueue(W2, queue("GLOBAL_INTERNAL", QueueType.REPAIR, List.of()));
+        QueueRegistryTestFixtures.create(
+            registry, jdbc, W2, queue("GLOBAL_EXTERNAL", QueueType.REPAIR, List.of()));
 
     assertThat(firstW1.definitionId()).isEqualTo(firstW2.definitionId());
-    assertThat(secondW1.definitionId()).isEqualTo(secondW2.definitionId());
     assertThat(firstW1.id()).isNotEqualTo(firstW2.id());
+    assertThat(registry.listQueues(W2)).extracting(WorkQueueDto::definitionId)
+        .containsExactly(firstW2.definitionId());
+    assertThat(registry.listQueues(UUID.randomUUID())).isEmpty();
+    assertThat(registry.listQueueDefinitions())
+        .extracting(QueueDefinitionDto::id)
+        .containsExactlyInAnyOrder(firstW1.definitionId(), secondW1.definitionId());
     assertThatThrownBy(
             () ->
                 registry.createQueue(
@@ -147,31 +165,21 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                         null,
                         List.of())))
         .isInstanceOf(ConflictException.class);
-    assertThat(registry.listQueues(UUID.randomUUID())).isEmpty();
-    assertThat(registry.listQueueDefinitions())
-        .extracting(QueueDefinitionDto::id)
-        .containsExactlyInAnyOrder(firstW1.definitionId(), secondW1.definitionId());
-    assertThatThrownBy(
-            () ->
-                registry.createQueueDefinition(
-                    new QueueDefinitionRequest(
-                        0L, "  global_external  ", null, QueueType.REPAIR)))
-        .isInstanceOf(ConflictException.class);
 
     var w1Before = registry.listQueues(W1);
-    registry.reorder(
+    QueueRegistryTestFixtures.reorder(registry, jdbc,
         W1,
-        new QueueOrderRequest(
+        new QueueFixtureOrderRequest(
             List.of(
-                new QueueOrderItem(secondW1.id(), versionOf(w1Before, secondW1.id())),
-                new QueueOrderItem(firstW1.id(), versionOf(w1Before, firstW1.id())))));
+                new QueueFixtureOrderItem(secondW1.id(), versionOf(w1Before, secondW1.id())),
+                new QueueFixtureOrderItem(firstW1.id(), versionOf(w1Before, firstW1.id())))));
 
     assertThat(registry.listQueues(W1))
         .extracting(WorkQueueDto::definitionId)
         .containsExactly(secondW1.definitionId(), firstW1.definitionId());
     assertThat(registry.listQueues(W2))
         .extracting(WorkQueueDto::definitionId)
-        .containsExactly(firstW2.definitionId(), secondW2.definitionId());
+        .containsExactly(firstW2.definitionId());
 
     QueueDefinitionDto definition =
         registry.listQueueDefinitions().stream()
@@ -197,15 +205,94 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void movementCapabilityUsesActiveVisibleWarehouseBindingOfStableDefinition() {
+  void globalDefinitionUpdateDoesNotProvisionOrRewriteWarehouseConnections() {
+    var definition =
+        registry.createQueueDefinition(
+            new QueueDefinitionRequest(0L, "GLOBAL_SETTINGS", null, QueueType.REPAIR));
+    var workerClass = registry.createClass(workerClass("GLOBAL_SETTINGS_PRIMARY"));
+    assertThat(registry.listQueues(W1)).isEmpty();
+    assertThat(registry.listQueues(W2)).isEmpty();
+
+    var renamed =
+        registry.updateQueueDefinition(
+            definition.id(),
+            new QueueDefinitionRequest(
+                definition.version(),
+                "GLOBAL_SETTINGS_RENAMED",
+                "Каталог",
+                QueueType.REPAIR));
+    assertThat(registry.listQueues(W1)).isEmpty();
+    assertThat(registry.listQueues(W2)).isEmpty();
+
+    var first =
+        QueueRegistryTestFixtures.create(
+            registry,
+            jdbc,
+            W1,
+            new QueueFixtureRequest(
+                0L,
+                renamed.id(),
+                true,
+                true,
+                true,
+                null,
+                null,
+                false,
+                2,
+                List.of(
+                    new QueueBindingRequest(
+                        workerClass.id(), 0, true, ParticipationPolicy.PRIMARY, false))));
+
+    registry.updateQueueDefinition(
+        renamed.id(),
+        new QueueDefinitionRequest(
+            renamed.version(),
+            "GLOBAL_SETTINGS_RENAMED_AGAIN",
+            "Каталог 2",
+            QueueType.REPAIR));
+
+    WorkQueueDto connection = registry.listQueues(W1).getFirst();
+    assertThat(connection.id()).isEqualTo(first.id());
+    assertThat(connection.active()).isTrue();
+    assertThat(connection.hidden()).isTrue();
+    assertThat(connection.collapsed()).isTrue();
+    assertThat(connection.resultPhotoMinCount()).isEqualTo(2);
+    assertThat(connection.bindings()).extracting(binding -> binding.workerClass().id())
+        .containsExactly(workerClass.id());
+    assertThat(registry.listQueues(W2)).isEmpty();
+  }
+
+  @Test
+  void driverQueueUpdateRemainsWarehouseSpecificAndControlsMovementCapability() {
     var movementW1 =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             W1,
             queue(
                 "GLOBAL_DRIVERS",
                 QueueType.MOVEMENT,
                 QueuePurpose.LOGISTICS_DRIVER,
                 List.of()));
+
+    assertThat(registry.listQueueDefinitions())
+        .filteredOn(definition -> definition.purpose() == QueuePurpose.LOGISTICS_DRIVER)
+        .extracting(QueueDefinitionDto::id)
+        .containsExactly(movementW1.definitionId());
+    assertThatThrownBy(
+            () ->
+                registry.createQueue(
+                    W2,
+                    new WorkQueueRequest(
+                        0L,
+                        movementW1.definitionId(),
+                        true,
+                        false,
+                        false,
+                        null,
+                        null,
+                        false,
+                        1,
+                        List.of())))
+        .isInstanceOf(NotFoundException.class);
 
     assertThat(registry.queueCapabilities(W1).movementToShipmentAvailable()).isTrue();
     assertThat(registry.queueCapabilities(W1).movementQueueDefinitions())
@@ -214,7 +301,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(registry.queueCapabilities(W2).movementToShipmentAvailable()).isFalse();
 
     var movementW2 =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             W2,
             queue(
                 "GLOBAL_DRIVERS",
@@ -224,10 +311,10 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(movementW2.definitionId()).isEqualTo(movementW1.definitionId());
     assertThat(registry.queueCapabilities(W2).movementToShipmentAvailable()).isTrue();
 
-    registry.updateQueue(
+    QueueRegistryTestFixtures.update(registry, jdbc,
         W2,
         movementW2.id(),
-        new WorkQueueRequest(
+        new QueueFixtureRequest(
             movementW2.version(),
             movementW2.definitionId(),
             false,
@@ -244,6 +331,226 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
+  void logisticsPrimaryClassMarkerIsGlobalWhenAnotherWarehouseHasNoDriverQueue() {
+    var driverClass = registry.createClass(workerClass("LOGISTICS_PRIMARY"));
+    var repairClass = registry.createClass(workerClass("ORDINARY_REPAIR"));
+    QueueRegistryTestFixtures.create(
+        registry,
+        jdbc,
+        W1,
+        queue(
+            "DRIVER_MARKER",
+            QueueType.MOVEMENT,
+            QueuePurpose.LOGISTICS_DRIVER,
+            List.of(
+                new QueueBindingRequest(
+                    driverClass.id(), 0, false, ParticipationPolicy.PRIMARY, false))));
+    QueueRegistryTestFixtures.create(
+        registry,
+        jdbc,
+        W2,
+        queue(
+            "ORDINARY_REPAIR_QUEUE",
+            QueueType.REPAIR,
+            List.of(
+                new QueueBindingRequest(
+                    repairClass.id(), 0, false, ParticipationPolicy.PRIMARY, false))));
+
+    var disabledPlaceholder =
+        QueueRegistryTestFixtures.create(
+            registry,
+            jdbc,
+            W2,
+            queue(
+                "DRIVER_MARKER",
+                QueueType.MOVEMENT,
+                QueuePurpose.LOGISTICS_DRIVER,
+                List.of(
+                    new QueueBindingRequest(
+                        repairClass.id(), 0, false, ParticipationPolicy.PRIMARY, false))));
+    QueueRegistryTestFixtures.update(
+        registry,
+        jdbc,
+        W2,
+        disabledPlaceholder.id(),
+        new QueueFixtureRequest(
+            disabledPlaceholder.version(),
+            disabledPlaceholder.definitionId(),
+            false,
+            true,
+            false,
+            null,
+            null,
+            false,
+            disabledPlaceholder.resultPhotoMinCount(),
+            List.of(
+                new QueueBindingRequest(
+                    repairClass.id(), 0, false, ParticipationPolicy.PRIMARY, false))));
+
+    assertThat(registry.listQueues(UUID.randomUUID())).isEmpty();
+    assertThat(registry.listClasses())
+        .filteredOn(workerClass -> workerClass.id().equals(driverClass.id()))
+        .extracting(WorkerClassDto::logisticsPrimary)
+        .containsExactly(true);
+    assertThat(registry.listClasses())
+        .filteredOn(workerClass -> workerClass.id().equals(repairClass.id()))
+        .extracting(WorkerClassDto::logisticsPrimary)
+        .containsExactly(false);
+    assertThat(registry.listQueues(W1).getFirst().bindings().getFirst().workerClass().logisticsPrimary())
+        .isTrue();
+  }
+
+  @Test
+  void driverCurrentLaneIsOrderedQueueAndCurrentCardCanReturnToCalendarDate() {
+    var movement =
+        QueueRegistryTestFixtures.create(
+            registry,
+            jdbc,
+            W1,
+            queue(
+                "DRIVER_CURRENT_QUEUE",
+                QueueType.MOVEMENT,
+                QueuePurpose.LOGISTICS_DRIVER,
+                List.of()));
+    LocalDate today = LocalDate.of(2026, 8, 1);
+    UUID firstExternalId = UUID.randomUUID();
+    UUID secondExternalId = UUID.randomUUID();
+    BoardTaskRegistrationDto first =
+        board.registerExternalTask(
+            "logistics-service",
+            driverRegistration(movement.definitionId(), firstExternalId, today));
+    BoardTaskRegistrationDto second =
+        board.registerExternalTask(
+            "logistics-service",
+            driverRegistration(movement.definitionId(), secondExternalId, today));
+
+    first =
+        board.setExternalTaskLane(
+            "logistics-service",
+            firstExternalId,
+            new SetTaskLaneRequest(first.taskVersion(), TaskLane.CURRENT));
+    second =
+        board.setExternalTaskLane(
+            "logistics-service",
+            secondExternalId,
+            new SetTaskLaneRequest(second.taskVersion(), TaskLane.CURRENT));
+
+    assertThat(board.logisticsSnapshot(W1).current())
+        .extracting(BoardEntryDto::externalTaskId)
+        .containsExactly(firstExternalId, secondExternalId);
+
+    LocalDate targetDate = today.plusDays(2);
+    BoardTaskRegistrationDto moved =
+        board.moveExternalLogisticsTask(
+            firstExternalId,
+            new MoveExternalLogisticsTaskRequest(
+                first.taskVersion(),
+                first.route().getFirst().entryVersion(),
+                TaskLane.SCHEDULED,
+                targetDate,
+                0));
+
+    assertThat(moved.lane()).isEqualTo(TaskLane.SCHEDULED);
+    LogisticsBoardSnapshot snapshot = board.logisticsSnapshot(W1);
+    assertThat(snapshot.current())
+        .extracting(BoardEntryDto::externalTaskId)
+        .containsExactly(secondExternalId);
+    assertThat(snapshot.dates())
+        .filteredOn(column -> column.date().equals(targetDate))
+        .flatExtracting(LogisticsDateColumnDto::entries)
+        .extracting(BoardEntryDto::externalTaskId)
+        .containsExactly(firstExternalId);
+
+    BoardTaskRegistrationDto insertedFirst =
+        board.moveExternalLogisticsTask(
+            firstExternalId,
+            new MoveExternalLogisticsTaskRequest(
+                moved.taskVersion(),
+                moved.route().getFirst().entryVersion(),
+                TaskLane.CURRENT,
+                today,
+                0));
+    assertThat(board.logisticsSnapshot(W1).current())
+        .extracting(BoardEntryDto::externalTaskId)
+        .containsExactly(firstExternalId, secondExternalId);
+
+    board.moveExternalLogisticsTask(
+        firstExternalId,
+        new MoveExternalLogisticsTaskRequest(
+            insertedFirst.taskVersion(),
+            insertedFirst.route().getFirst().entryVersion(),
+            TaskLane.CURRENT,
+            today,
+            1));
+    assertThat(board.logisticsSnapshot(W1).current())
+        .extracting(BoardEntryDto::externalTaskId)
+        .containsExactly(secondExternalId, firstExternalId);
+  }
+
+  @Test
+  void movingCurrentDriverTaskAcrossPinnedCardKeepsPinnedCurrentOrdinal() {
+    var movement =
+        QueueRegistryTestFixtures.create(
+            registry,
+            jdbc,
+            W1,
+            queue(
+                "DRIVER_PINNED_CURRENT_QUEUE",
+                QueueType.MOVEMENT,
+                QueuePurpose.LOGISTICS_DRIVER,
+                List.of()));
+    LocalDate today = LocalDate.of(2026, 8, 1);
+    UUID firstExternalId = UUID.randomUUID();
+    UUID pinnedExternalId = UUID.randomUUID();
+    UUID afterExternalId = UUID.randomUUID();
+    BoardTaskRegistrationDto first =
+        board.registerExternalTask(
+            "logistics-service",
+            driverRegistration(movement.definitionId(), firstExternalId, today));
+    BoardTaskRegistrationDto pinned =
+        board.registerExternalTask(
+            "logistics-service",
+            driverRegistration(movement.definitionId(), pinnedExternalId, today));
+    BoardTaskRegistrationDto after =
+        board.registerExternalTask(
+            "logistics-service",
+            driverRegistration(movement.definitionId(), afterExternalId, today));
+
+    first =
+        board.setExternalTaskLane(
+            "logistics-service",
+            firstExternalId,
+            new SetTaskLaneRequest(first.taskVersion(), TaskLane.CURRENT));
+    pinned =
+        board.setExternalTaskLane(
+            "logistics-service",
+            pinnedExternalId,
+            new SetTaskLaneRequest(pinned.taskVersion(), TaskLane.CURRENT));
+    after =
+        board.setExternalTaskLane(
+            "logistics-service",
+            afterExternalId,
+            new SetTaskLaneRequest(after.taskVersion(), TaskLane.CURRENT));
+    board.pin(W1, pinned.taskId(), new PinTaskRequest(pinned.taskVersion(), true));
+
+    board.moveExternalLogisticsTask(
+        afterExternalId,
+        new MoveExternalLogisticsTaskRequest(
+            after.taskVersion(),
+            after.route().getFirst().entryVersion(),
+            TaskLane.CURRENT,
+            today,
+            0));
+
+    assertThat(board.logisticsSnapshot(W1).current())
+        .extracting(BoardEntryDto::externalTaskId)
+        .containsExactly(afterExternalId, pinnedExternalId, firstExternalId);
+    assertThat(board.logisticsSnapshot(W1).current())
+        .extracting(BoardEntryDto::queuePosition)
+        .containsExactly(0, 1, 2);
+  }
+
+  @Test
   void queueUpdateCanReplaceOrderedBindingsWithoutNaturalKeyConflict() {
     var driverClass = registry.createClass(workerClass("DRIVER_ORDERED"));
     var slingerClass = registry.createClass(workerClass("SLINGER_ORDERED"));
@@ -254,13 +561,13 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             new QueueBindingRequest(
                 slingerClass.id(), 1, true, ParticipationPolicy.REQUIRED, true));
     var created =
-        registry.createQueue(W1, queue("ORDERED_MOVEMENT", QueueType.MOVEMENT, bindings));
+        QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("ORDERED_MOVEMENT", QueueType.MOVEMENT, bindings));
 
     var updated =
-        registry.updateQueue(
+        QueueRegistryTestFixtures.update(registry, jdbc,
             W1,
             created.id(),
-            new WorkQueueRequest(
+            new QueueFixtureRequest(
                 created.version(),
                 created.definitionId(),
                 created.active(),
@@ -299,7 +606,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                 updated.version(), "Versioned", null, null, 10, true));
     assertThat(updatedAgain.version()).isGreaterThan(updated.version());
 
-    var queue = registry.createQueue(W1, queue("REF", QueueType.REPAIR, List.of()));
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("REF", QueueType.REPAIR, List.of()));
     var first =
         registry.registerReference(
             queue.definitionId(),
@@ -316,8 +623,8 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void reusedReferenceRejectsAnotherQueueAndConcurrentRetryCreatesOneRow() throws Exception {
-    var firstQueue = registry.createQueue(W1, queue("REF_FIRST", QueueType.REPAIR, List.of()));
-    var secondQueue = registry.createQueue(W1, queue("REF_SECOND", QueueType.REPAIR, List.of()));
+    var firstQueue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("REF_FIRST", QueueType.REPAIR, List.of()));
+    var secondQueue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("REF_SECOND", QueueType.REPAIR, List.of()));
     var request = new QueueReferenceRequest(QueueReferenceType.REPAIR_PLAN, "plan-concurrent");
 
     List<Object> outcomes =
@@ -340,8 +647,8 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void unfinishedHoldingHidesAllLaterShadowStagesEvenWhenRequested() {
-    var holding = registry.createQueue(W1, queue("HOLD", QueueType.HOLDING, List.of()));
-    var after = registry.createQueue(W1, queue("AFTER", QueueType.REPAIR, List.of()));
+    var holding = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("HOLD", QueueType.HOLDING, List.of()));
+    var after = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("AFTER", QueueType.REPAIR, List.of()));
     var snapshot =
         board.createTask(
             W1,
@@ -365,7 +672,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void createRejectsDuplicateEffectiveRouteAndExternalTaskId() {
-    var queue = registry.createQueue(W1, queue("DUP", QueueType.REPAIR, List.of()));
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("DUP", QueueType.REPAIR, List.of()));
     var duplicateRoute =
         new CreateBoardTaskRequest(
             null,
@@ -424,7 +731,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void identicalExternalTaskRetryReturnsCurrentStateWithoutSecondEvent() {
-    var queue = registry.createQueue(W1, queue("IDEMPOTENT", QueueType.REPAIR, List.of()));
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("IDEMPOTENT", QueueType.REPAIR, List.of()));
     UUID externalTaskId = UUID.randomUUID();
     OffsetDateTime deadline = OffsetDateTime.parse("2026-07-13T12:00:00+03:00");
     var first =
@@ -447,10 +754,10 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             List.of(new RouteStepRequest(queue.definitionId(), "работа", 15)));
 
     var created = board.createTask(W1, first);
-    registry.updateQueue(
+    QueueRegistryTestFixtures.update(registry, jdbc,
         W1,
         queue.id(),
-        new WorkQueueRequest(
+        new QueueFixtureRequest(
             queue.version(),
             queue.definitionId(),
             true,
@@ -486,7 +793,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void externalTaskRetryRequiresCanonicalFingerprintAndWarehouse() {
-    var queue = registry.createQueue(W1, queue("IDEMPOTENT_CONFLICT", QueueType.REPAIR, List.of()));
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("IDEMPOTENT_CONFLICT", QueueType.REPAIR, List.of()));
     UUID externalTaskId = UUID.randomUUID();
     var request = externalTask(externalTaskId, queue.id(), "original");
     board.createTask(W1, request);
@@ -505,7 +812,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void externalTaskRetryUsesEffectiveSchedulingInOneCanonicalFingerprint() {
-    var queue = registry.createQueue(W1, queue("IDEMPOTENT_SCHEDULE", QueueType.REPAIR, List.of()));
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("IDEMPOTENT_SCHEDULE", QueueType.REPAIR, List.of()));
     UUID implicitExternalTaskId = UUID.randomUUID();
     var implicitRequest = externalTask(implicitExternalTaskId, queue.id(), "implicit-schedule");
     board.createTask(W1, implicitRequest);
@@ -573,7 +880,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void externalTaskRetryFingerprintsCompleteWorkerContent() {
-    var queue = registry.createQueue(W1, queue("IDEMPOTENT_CONTENT", QueueType.REPAIR, List.of()));
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("IDEMPOTENT_CONTENT", QueueType.REPAIR, List.of()));
     UUID externalTaskId = UUID.randomUUID();
     UUID workId = UUID.randomUUID();
     UUID materialId = UUID.randomUUID();
@@ -630,7 +937,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void concurrentExternalTaskRetryCreatesOneTaskAndOneEvent() throws Exception {
-    var queue = registry.createQueue(W1, queue("IDEMPOTENT_RACE", QueueType.REPAIR, List.of()));
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("IDEMPOTENT_RACE", QueueType.REPAIR, List.of()));
     UUID externalTaskId = UUID.randomUUID();
     var request = externalTask(externalTaskId, queue.id(), "race");
     var start = new CountDownLatch(1);
@@ -667,8 +974,8 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
     List<Object> queueOutcomes =
         race(
-            () -> registry.createQueue(W1, queue("MixedQueue", QueueType.REPAIR, List.of())),
-            () -> registry.createQueue(W1, queue("mixedqueue", QueueType.REPAIR, List.of())));
+            () -> QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("MixedQueue", QueueType.REPAIR, List.of())),
+            () -> QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("mixedqueue", QueueType.REPAIR, List.of())));
     assertSingleSuccess(queueOutcomes);
     assertThat(queueOutcomes)
         .filteredOn(RuntimeException.class::isInstance)
@@ -697,8 +1004,8 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   void concurrentQueueCreationKeepsUniqueOrderAndHoldingLast() throws Exception {
     List<Object> outcomes =
         race(
-            () -> registry.createQueue(W1, queue("REGULAR_RACE", QueueType.REPAIR, List.of())),
-            () -> registry.createQueue(W1, queue("HOLDING_RACE", QueueType.HOLDING, List.of())));
+            () -> QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("REGULAR_RACE", QueueType.REPAIR, List.of())),
+            () -> QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("HOLDING_RACE", QueueType.HOLDING, List.of())));
 
     assertThat(outcomes).allMatch(WorkQueueDto.class::isInstance);
     var ordered = registry.listQueues(W1);
@@ -709,67 +1016,73 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void reorderIsFullSetCasAndConcurrentCreateCannotCorruptOrder() throws Exception {
-    var first = registry.createQueue(W1, queue("ORDER_FIRST", QueueType.REPAIR, List.of()));
-    var second = registry.createQueue(W1, queue("ORDER_SECOND", QueueType.MOVEMENT, List.of()));
-    var holding = registry.createQueue(W1, queue("ORDER_HOLDING", QueueType.HOLDING, List.of()));
+    var first = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("ORDER_FIRST", QueueType.REPAIR, List.of()));
+    var second = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("ORDER_SECOND", QueueType.MOVEMENT, List.of()));
+    var holding = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("ORDER_HOLDING", QueueType.HOLDING, List.of()));
 
     assertThatThrownBy(
             () ->
-                registry.reorder(
+                QueueRegistryTestFixtures.reorder(registry, jdbc,
                     W1,
-                    new QueueOrderRequest(
+                    new QueueFixtureOrderRequest(
                         List.of(
-                            new QueueOrderItem(first.id(), first.version()),
-                            new QueueOrderItem(second.id(), second.version())))))
+                            new QueueFixtureOrderItem(first.id(), first.version()),
+                            new QueueFixtureOrderItem(second.id(), second.version())))))
         .isInstanceOf(ConflictException.class);
     assertThatThrownBy(
             () ->
-                registry.reorder(
+                QueueRegistryTestFixtures.reorder(registry, jdbc,
                     W1,
-                    new QueueOrderRequest(
+                    new QueueFixtureOrderRequest(
                         List.of(
-                            new QueueOrderItem(first.id(), first.version()),
-                            new QueueOrderItem(first.id(), first.version()),
-                            new QueueOrderItem(holding.id(), holding.version())))))
+                            new QueueFixtureOrderItem(first.id(), first.version()),
+                            new QueueFixtureOrderItem(first.id(), first.version()),
+                            new QueueFixtureOrderItem(holding.id(), holding.version())))))
         .isInstanceOf(ConflictException.class);
-    var foreign = registry.createQueue(W2, queue("ORDER_FOREIGN", QueueType.REPAIR, List.of()));
+    var foreign = QueueRegistryTestFixtures.create(registry, jdbc, W2, queue("ORDER_FOREIGN", QueueType.REPAIR, List.of()));
     assertThatThrownBy(
             () ->
-                registry.reorder(
+                QueueRegistryTestFixtures.reorder(registry, jdbc,
                     W1,
-                    new QueueOrderRequest(
+                    new QueueFixtureOrderRequest(
                         List.of(
-                            new QueueOrderItem(first.id(), first.version()),
-                            new QueueOrderItem(second.id(), second.version()),
-                            new QueueOrderItem(foreign.id(), foreign.version())))))
+                            new QueueFixtureOrderItem(first.id(), first.version()),
+                            new QueueFixtureOrderItem(second.id(), second.version()),
+                            new QueueFixtureOrderItem(foreign.id(), foreign.version())))))
         .isInstanceOf(ConflictException.class);
+    var foreignW1 =
+        QueueRegistryTestFixtures.create(
+            registry, jdbc, W1, queue("ORDER_FOREIGN", QueueType.REPAIR, List.of()));
+    assertThat(foreignW1.definitionId()).isEqualTo(foreign.definitionId());
     assertThatThrownBy(
             () ->
-                registry.reorder(
+                QueueRegistryTestFixtures.reorder(registry, jdbc,
                     W1,
-                    new QueueOrderRequest(
+                    new QueueFixtureOrderRequest(
                         List.of(
-                            new QueueOrderItem(first.id(), first.version() + 1),
-                            new QueueOrderItem(second.id(), second.version()),
-                            new QueueOrderItem(holding.id(), holding.version())))))
+                            new QueueFixtureOrderItem(first.id(), first.version() + 1),
+                            new QueueFixtureOrderItem(second.id(), second.version()),
+                            new QueueFixtureOrderItem(holding.id(), holding.version()),
+                            new QueueFixtureOrderItem(foreignW1.id(), foreignW1.version())))))
         .isInstanceOf(StaleVersionException.class);
 
     var reorder =
-        new QueueOrderRequest(
+        new QueueFixtureOrderRequest(
             List.of(
-                new QueueOrderItem(second.id(), second.version()),
-                new QueueOrderItem(holding.id(), holding.version()),
-                new QueueOrderItem(first.id(), first.version())));
+                new QueueFixtureOrderItem(second.id(), second.version()),
+                new QueueFixtureOrderItem(holding.id(), holding.version()),
+                new QueueFixtureOrderItem(first.id(), first.version()),
+                new QueueFixtureOrderItem(foreignW1.id(), foreignW1.version())));
     List<Object> outcomes =
         race(
-            () -> registry.reorder(W1, reorder),
-            () -> registry.createQueue(W1, queue("ORDER_CONCURRENT", QueueType.REPAIR, List.of())));
+            () -> QueueRegistryTestFixtures.reorder(registry, jdbc, W1, reorder),
+            () -> QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("ORDER_CONCURRENT", QueueType.REPAIR, List.of())));
     assertThat(outcomes).anyMatch(WorkQueueDto.class::isInstance);
     assertThat(outcomes)
         .allMatch(value -> value instanceof List<?> || value instanceof WorkQueueDto || value instanceof ConflictException);
 
     var ordered = registry.listQueues(W1);
-    assertThat(ordered).hasSize(4);
+    assertThat(ordered).hasSize(5);
     assertThat(ordered).extracting(WorkQueueDto::id).doesNotHaveDuplicates();
     assertThat(ordered).extracting(WorkQueueDto::sortOrder).doesNotHaveDuplicates();
     assertThat(ordered.getLast().type()).isEqualTo(QueueType.HOLDING);
@@ -777,7 +1090,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void kafkaOutboxInsertFailureRollsBackTaskAndRouteAtomically() {
-    var queue = registry.createQueue(W1, queue("OUTBOX_ROLLBACK", QueueType.REPAIR, List.of()));
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("OUTBOX_ROLLBACK", QueueType.REPAIR, List.of()));
     long initialOutboxCount = kafkaOutboxCount(null);
     jdbc.execute(
         "create function reject_task_board_kafka_outbox() returns trigger language plpgsql as $$ begin raise exception 'outbox rejected'; end $$");
@@ -815,14 +1128,14 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   void concurrentCompleteMoveAndCancelPreserveQueuePositionInvariants() throws Exception {
     var workerClass = registry.createClass(workerClass("QUEUE_RACE_WORKER"));
     var source =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             W1,
             queue(
                 "QUEUE_RACE_SOURCE",
                 QueueType.MOVEMENT,
                 List.of(new QueueBindingRequest(workerClass.id(), false))));
     var target =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             W1,
             queue(
                 "QUEUE_RACE_TARGET",
@@ -924,7 +1237,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   void cancellationStopsActiveWorkAndIsIdempotentAfterCancellation() {
     var workerClass = registry.createClass(workerClass("CANCEL_WORKER"));
     var queue =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             W1,
             queue(
                 "CANCEL_QUEUE",
@@ -1026,7 +1339,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void cancellationRejectsStaleActiveAndCompletedTasks() {
-    var queue = registry.createQueue(W1, queue("CANCEL_CONFLICT", QueueType.MOVEMENT, List.of()));
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("CANCEL_CONFLICT", QueueType.MOVEMENT, List.of()));
     UUID staleExternalId = UUID.randomUUID();
     board.createTask(W1, externalTask(staleExternalId, queue.id(), "stale-cancel"));
     assertThatThrownBy(
@@ -1037,7 +1350,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
     var workerClass = registry.createClass(workerClass("DONE_WORKER"));
     var boundQueue =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             W1,
             queue(
                 "DONE_QUEUE",
@@ -1091,10 +1404,10 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void queueWithTaskCannotBeDeletedButItsPresentationNameCanChange() {
-    var queue = registry.createQueue(W1, queue("REPAIR", QueueType.REPAIR, List.of()));
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("REPAIR", QueueType.REPAIR, List.of()));
     board.createTask(W1, task(queue.id(), "task"));
     var current = registry.listQueues(W1).getFirst();
-    assertThatThrownBy(() -> registry.deleteQueue(W1, current.id(), current.version()))
+    assertThatThrownBy(() -> QueueRegistryTestFixtures.delete(registry, jdbc, W1, current.id(), current.version()))
         .isInstanceOf(ConflictException.class);
     assertThat(kafkaOutboxCount(TaskBoardEventTypes.BOARD_TASK_CANCELLED)).isZero();
     registry.updateQueueDefinition(
@@ -1113,20 +1426,23 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void externalPlanReferenceBlocksDefinitionButNotWarehouseDetach() {
-    var queue = registry.createQueue(W1, queue("PLAN", QueueType.REPAIR, List.of()));
+  void externalPlanReferenceBlocksGlobalDefinitionDelete() {
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("PLAN", QueueType.REPAIR, List.of()));
     var reference =
         registry.registerReference(
             queue.definitionId(),
             new QueueReferenceRequest(QueueReferenceType.REPAIR_PLAN, "plan-1"));
-    registry.deleteQueue(W1, queue.id(), queue.version());
     assertThatThrownBy(
             () ->
                 registry.deleteQueueDefinition(
                     queue.definitionId(), queue.definitionVersion()))
         .isInstanceOf(ConflictException.class);
+    assertThat(registry.listQueues(W1)).extracting(WorkQueueDto::id).containsExactly(queue.id());
     registry.deleteReference(
         reference.type(), reference.externalReferenceId(), reference.version());
+    registry.deleteQueue(W1, queue.id(), queue.version());
+    registry.deleteQueueDefinition(
+        queue.definitionId(), queue.definitionVersion());
     assertThat(registry.listQueues(W1)).isEmpty();
   }
 
@@ -1151,7 +1467,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             List.of(new GroupMemberRequest(worker.id(), null, true)));
     assertThatThrownBy(() -> workforce.createGroup(W1, group))
         .isInstanceOf(NotFoundException.class);
-    var queue = registry.createQueue(W2, queue("WORKER_HISTORY", QueueType.REPAIR, List.of()));
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W2, queue("WORKER_HISTORY", QueueType.REPAIR, List.of()));
     var entry =
         board.createTask(W2, task(queue.id(), "worker-history"))
             .columns()
@@ -1741,14 +2057,14 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   void stopOnTakeResumesOnlyItsAutoInterruptedTask() {
     var workerClass = registry.createClass(workerClass("REPAIR"));
     var q1 =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             W1,
             queue(
                 "NORMAL",
                 QueueType.REPAIR,
                 List.of(new QueueBindingRequest(workerClass.id(), false))));
     var q2 =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             W1,
             queue(
                 "URGENT",
@@ -1812,7 +2128,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     var slingerClass = registry.createClass(workerClass("SLINGER_URGENT"));
     var generalClass = registry.createClass(workerClass("GENERAL_URGENT"));
     var repairQueue =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             W1,
             queue(
                 "BRIGADE_REPAIR",
@@ -1821,7 +2137,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                     new QueueBindingRequest(
                         generalClass.id(), 0, false, ParticipationPolicy.PRIMARY, false))));
     var movementQueue =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             W1,
             queue(
                 "DRIVER_WITH_SLINGER",
@@ -1955,7 +2271,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     var driverClass = registry.createClass(workerClass("DRIVER_VISIBILITY"));
     var slingerClass = registry.createClass(workerClass("SLINGER_VISIBILITY"));
     var queue =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             W1,
             queue(
                 "MOVEMENT_VISIBILITY",
@@ -2033,7 +2349,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     var required = registry.createClass(workerClass("REQUIRED"));
     var other = registry.createClass(workerClass("OTHER"));
     var queue =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             W1,
             queue(
                 "BOUND", QueueType.REPAIR, List.of(new QueueBindingRequest(required.id(), true))));
@@ -2056,8 +2372,8 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void moveInsertsAtTargetAndNormalizesBothQueues() {
-    var q1 = registry.createQueue(W1, queue("ONE", QueueType.REPAIR, List.of()));
-    var q2 = registry.createQueue(W1, queue("TWO", QueueType.REPAIR, List.of()));
+    var q1 = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("ONE", QueueType.REPAIR, List.of()));
+    var q2 = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("TWO", QueueType.REPAIR, List.of()));
     var moving =
         board.createTask(W1, task(q1.id(), "moving")).columns().stream()
             .flatMap(c -> c.entries().stream())
@@ -2093,14 +2409,14 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   void sameDayMovePropagatesToCompanionRouteQueuesBehindActiveAndPinnedBarriers() {
     var workerClass = registry.createClass(workerClass("ROUTE_ORDER_WORKER"));
     var firstQueue =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             W1,
             queue(
                 "ROUTE_ORDER_FIRST",
                 QueueType.REPAIR,
                 List.of(new QueueBindingRequest(workerClass.id(), false))));
     var secondQueue =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             W1, queue("ROUTE_ORDER_SECOND", QueueType.REPAIR, List.of()));
     var worker =
         workforce.createWorker(
@@ -2162,11 +2478,11 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   @Test
   void dateMoveMovesEveryRouteEntryAndKeepsTheRequestedOrdinalInEachQueue() {
     var sourceQueue =
-        registry.createQueue(W1, queue("ROUTE_DATE_SOURCE", QueueType.REPAIR, List.of()));
+        QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("ROUTE_DATE_SOURCE", QueueType.REPAIR, List.of()));
     var companionQueue =
-        registry.createQueue(W1, queue("ROUTE_DATE_COMPANION", QueueType.REPAIR, List.of()));
+        QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("ROUTE_DATE_COMPANION", QueueType.REPAIR, List.of()));
     var targetQueue =
-        registry.createQueue(W1, queue("ROUTE_DATE_TARGET", QueueType.REPAIR, List.of()));
+        QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("ROUTE_DATE_TARGET", QueueType.REPAIR, List.of()));
     LocalDate firstDate = LocalDate.of(2026, 7, 24);
     LocalDate secondDate = firstDate.plusDays(1);
     board.createTask(
@@ -2215,9 +2531,9 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void swappingDateColumnsKeepsTaskMembershipAndPersistsTheCommonRouteDate() {
-    var repairQueue = registry.createQueue(W1, queue("DATE_SWAP_REPAIR", QueueType.REPAIR, List.of()));
+    var repairQueue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("DATE_SWAP_REPAIR", QueueType.REPAIR, List.of()));
     var verificationQueue =
-        registry.createQueue(W1, queue("DATE_SWAP_VERIFY", QueueType.REPAIR, List.of()));
+        QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("DATE_SWAP_VERIFY", QueueType.REPAIR, List.of()));
     LocalDate firstDate = LocalDate.of(2026, 7, 24);
     LocalDate secondDate = firstDate.plusDays(1);
     board.createTask(
@@ -2308,9 +2624,9 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   @Test
   void routePropagationPreservesRealShadowQueueSwap() {
     var firstQueue =
-        registry.createQueue(W1, queue("ROUTE_SWAP_FIRST", QueueType.REPAIR, List.of()));
+        QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("ROUTE_SWAP_FIRST", QueueType.REPAIR, List.of()));
     var secondQueue =
-        registry.createQueue(W1, queue("ROUTE_SWAP_SECOND", QueueType.REPAIR, List.of()));
+        QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("ROUTE_SWAP_SECOND", QueueType.REPAIR, List.of()));
     LocalDate date = LocalDate.of(2026, 7, 24);
     board.createTask(
         W1,
@@ -2347,7 +2663,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void repeatedWaitingStagesInOneQueueMoveTogetherWithoutAFalseConflict() {
-    var queue = registry.createQueue(W1, queue("REPEATED_ROUTE", QueueType.REPAIR, List.of()));
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("REPEATED_ROUTE", QueueType.REPAIR, List.of()));
     LocalDate date = LocalDate.of(2026, 7, 24);
     board.createTask(W1, scheduledTask(queue.id(), "first", date, 3));
     board.registerExternalTask(
@@ -2396,7 +2712,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void newTasksAreAppendedToTheirPriorityGroup() {
-    var queue = registry.createQueue(W1, queue("STABLE_PRIORITY", QueueType.REPAIR, List.of()));
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("STABLE_PRIORITY", QueueType.REPAIR, List.of()));
     LocalDate date = LocalDate.of(2026, 7, 24);
     board.createTask(W1, scheduledTask(queue.id(), "priority 4 first", date, 4));
     board.createTask(W1, scheduledTask(queue.id(), "priority 1 first", date, 1));
@@ -2420,7 +2736,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void maintenanceRegistrationUsesDailyCapacityButManualDateMovesRemainUnrestricted() {
-    var queue = registry.createQueue(W1, queue("DAILY_CAPACITY", QueueType.REPAIR, List.of()));
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("DAILY_CAPACITY", QueueType.REPAIR, List.of()));
     LocalDate requestedDate = LocalDate.of(2026, 7, 25);
     List<BoardTaskRegistrationDto> registrations = new java.util.ArrayList<>();
     for (int number = 1; number <= 7; number++) {
@@ -2493,7 +2809,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void dailyCapacityDoesNotChangeNonMaintenanceOrPublicRegistration() {
-    var queue = registry.createQueue(W1, queue("CAPACITY_SCOPE", QueueType.REPAIR, List.of()));
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("CAPACITY_SCOPE", QueueType.REPAIR, List.of()));
     LocalDate requestedDate = LocalDate.of(2026, 7, 25);
     board.registerExternalTask(
         "maintenance-service",
@@ -2535,9 +2851,9 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   @Test
   void maintenanceRouteUsesTargetWarehouseQueueUuid() {
     var targetQueue =
-        registry.createQueue(W2, queue("Target repair route", QueueType.REPAIR, List.of()));
+        QueueRegistryTestFixtures.create(registry, jdbc, W2, queue("Target repair route", QueueType.REPAIR, List.of()));
     var replacementQueue =
-        registry.createQueue(W2, queue("Replacement repair route", QueueType.REPAIR, List.of()));
+        QueueRegistryTestFixtures.create(registry, jdbc, W2, queue("Replacement repair route", QueueType.REPAIR, List.of()));
     UUID externalTaskId = UUID.randomUUID();
 
     BoardTaskRegistrationDto registered =
@@ -2587,13 +2903,13 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   @Test
   void relocationKeepsTaskRouteStatusAndHistoryAndRemapsBindingsIdempotently() {
     var sourceRepair =
-        registry.createQueue(W1, queue("RELOCATE_REPAIR", QueueType.REPAIR, List.of()));
+        QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("RELOCATE_REPAIR", QueueType.REPAIR, List.of()));
     var sourceAcceptance =
-        registry.createQueue(W1, queue("RELOCATE_ACCEPTANCE", QueueType.REPAIR, List.of()));
+        QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("RELOCATE_ACCEPTANCE", QueueType.REPAIR, List.of()));
     var targetRepair =
-        registry.createQueue(W2, queue("RELOCATE_REPAIR", QueueType.REPAIR, List.of()));
+        QueueRegistryTestFixtures.create(registry, jdbc, W2, queue("RELOCATE_REPAIR", QueueType.REPAIR, List.of()));
     var targetAcceptance =
-        registry.createQueue(W2, queue("RELOCATE_ACCEPTANCE", QueueType.REPAIR, List.of()));
+        QueueRegistryTestFixtures.create(registry, jdbc, W2, queue("RELOCATE_ACCEPTANCE", QueueType.REPAIR, List.of()));
     UUID externalTaskId = UUID.randomUUID();
 
     RegisterExternalTaskRequest registrationRequest =
@@ -2698,17 +3014,17 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   void relocationKeepsCompletedStagesOnTheirSourceQueueAndRequiresOnlyUnfinishedBindings() {
     var workerClass = registry.createClass(workerClass("RELOCATE_COMPLETED_WORKER"));
     var sourceCompleted =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             W1,
             queue(
                 "RELOCATE_COMPLETED_STAGE",
                 QueueType.REPAIR,
                 List.of(new QueueBindingRequest(workerClass.id(), false))));
     var sourcePending =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             W1, queue("RELOCATE_PENDING_STAGE", QueueType.REPAIR, List.of()));
     var targetPending =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             W2, queue("RELOCATE_PENDING_STAGE", QueueType.REPAIR, List.of()));
     var worker =
         workforce.createWorker(
@@ -2796,7 +3112,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   @Test
   void relocationWithoutRequiredTargetBindingFailsBeforeAnyMutation() {
     var sourceQueue =
-        registry.createQueue(W1, queue("RELOCATE_MISSING_TARGET", QueueType.REPAIR, List.of()));
+        QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("RELOCATE_MISSING_TARGET", QueueType.REPAIR, List.of()));
     UUID externalTaskId = UUID.randomUUID();
     BoardTaskRegistrationDto registered =
         board.registerExternalTask(
@@ -2849,7 +3165,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   @Test
   void nonMaintenanceRouteCannotUseAnotherWarehousesQueueUuid() {
     var sourceQueue =
-        registry.createQueue(W1, queue("Source repair route", QueueType.REPAIR, List.of()));
+        QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("Source repair route", QueueType.REPAIR, List.of()));
 
     assertThatThrownBy(
             () ->
@@ -2873,11 +3189,11 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   @Test
   void maintenanceRouteRejectsMissingHiddenAndInactiveTargetQueues() {
     var hiddenTarget =
-        registry.createQueue(W2, queue("Hidden target", QueueType.REPAIR, List.of()));
-    registry.updateQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc, W2, queue("Hidden target", QueueType.REPAIR, List.of()));
+    QueueRegistryTestFixtures.update(registry, jdbc,
         W2,
         hiddenTarget.id(),
-        new WorkQueueRequest(
+        new QueueFixtureRequest(
             hiddenTarget.version(),
             hiddenTarget.definitionId(),
             true,
@@ -2889,11 +3205,11 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             hiddenTarget.resultPhotoMinCount(),
             List.of()));
     var inactiveTarget =
-        registry.createQueue(W2, queue("Inactive target", QueueType.REPAIR, List.of()));
-    registry.updateQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc, W2, queue("Inactive target", QueueType.REPAIR, List.of()));
+    QueueRegistryTestFixtures.update(registry, jdbc,
         W2,
         inactiveTarget.id(),
-        new WorkQueueRequest(
+        new QueueFixtureRequest(
             inactiveTarget.version(),
             inactiveTarget.definitionId(),
             false,
@@ -2927,7 +3243,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void concurrentMaintenanceRegistrationsDoNotOverfillDailyCapacity() throws Exception {
-    var queue = registry.createQueue(W1, queue("CAPACITY_RACE", QueueType.REPAIR, List.of()));
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("CAPACITY_RACE", QueueType.REPAIR, List.of()));
     LocalDate requestedDate = LocalDate.of(2026, 7, 25);
 
     List<Object> outcomes =
@@ -2970,8 +3286,8 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void priorityInsertionRespectsPinnedBarrierAndDateMoveUpdatesBothViews() {
-    var queue = registry.createQueue(W1, queue("PLANNED", QueueType.REPAIR, List.of()));
+  void priorityInsertionKeepsPinnedOrdinalAndDateMoveUpdatesBothViews() {
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("PLANNED", QueueType.REPAIR, List.of()));
     LocalDate firstDate = LocalDate.of(2026, 7, 24);
     LocalDate secondDate = firstDate.plusDays(1);
     board.createTask(W1, scheduledTask(queue.id(), "first", firstDate, 3));
@@ -2984,7 +3300,8 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
     assertThat(board.snapshot(W1, firstDate, true).columns().getFirst().entries())
         .extracting(BoardEntryDto::title)
-        .containsExactly("first", "pinned", "urgent");
+        .containsExactly("urgent", "pinned", "first");
+    assertThat(entry(firstDate, "pinned").queuePosition()).isEqualTo(1);
     BoardEntryDto urgent = entry(firstDate, "urgent");
     TaskBoardSnapshot moved =
         board.move(
@@ -3008,10 +3325,69 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
+  void movingTaskFromBeforePinnedCardToAfterKeepsPinnedAbsoluteOrdinal() {
+    var queue =
+        QueueRegistryTestFixtures.create(
+            registry, jdbc, W1, queue("PINNED_ORDINAL_AFTER", QueueType.REPAIR, List.of()));
+    LocalDate date = LocalDate.of(2026, 8, 3);
+    board.createTask(W1, scheduledTask(queue.id(), "before", date, 3));
+    board.createTask(W1, scheduledTask(queue.id(), "pinned", date, 3));
+    board.createTask(W1, scheduledTask(queue.id(), "after", date, 3));
+    board.createTask(W1, scheduledTask(queue.id(), "tail", date, 3));
+
+    BoardEntryDto pinned = entry(date, queue.id(), "pinned");
+    board.pin(W1, pinned.taskId(), new PinTaskRequest(pinned.taskVersion(), true));
+    BoardEntryDto before = entry(date, queue.id(), "before");
+
+    TaskBoardSnapshot snapshot =
+        board.move(
+            W1,
+            before.id(),
+            new MoveEntryRequest(
+                before.version(), before.taskVersion(), queue.id(), 3, date));
+
+    assertThat(queueEntries(snapshot, queue.id()))
+        .extracting(BoardEntryDto::title)
+        .containsExactly("after", "pinned", "tail", "before");
+    assertThat(queueEntries(snapshot, queue.id()))
+        .extracting(BoardEntryDto::queuePosition)
+        .containsExactly(0, 1, 2, 3);
+  }
+
+  @Test
+  void movingTaskFromAfterPinnedCardToBeforeKeepsPinnedAbsoluteOrdinal() {
+    var queue =
+        QueueRegistryTestFixtures.create(
+            registry, jdbc, W1, queue("PINNED_ORDINAL_BEFORE", QueueType.REPAIR, List.of()));
+    LocalDate date = LocalDate.of(2026, 8, 3);
+    board.createTask(W1, scheduledTask(queue.id(), "before", date, 3));
+    board.createTask(W1, scheduledTask(queue.id(), "pinned", date, 3));
+    board.createTask(W1, scheduledTask(queue.id(), "after", date, 3));
+    board.createTask(W1, scheduledTask(queue.id(), "tail", date, 3));
+
+    BoardEntryDto pinned = entry(date, queue.id(), "pinned");
+    board.pin(W1, pinned.taskId(), new PinTaskRequest(pinned.taskVersion(), true));
+    BoardEntryDto tail = entry(date, queue.id(), "tail");
+
+    TaskBoardSnapshot snapshot =
+        board.move(
+            W1,
+            tail.id(),
+            new MoveEntryRequest(tail.version(), tail.taskVersion(), queue.id(), 0, date));
+
+    assertThat(queueEntries(snapshot, queue.id()))
+        .extracting(BoardEntryDto::title)
+        .containsExactly("tail", "pinned", "before", "after");
+    assertThat(queueEntries(snapshot, queue.id()))
+        .extracting(BoardEntryDto::queuePosition)
+        .containsExactly(0, 1, 2, 3);
+  }
+
+  @Test
   void urgentTaskIsInsertedImmediatelyAfterTheCurrentInProgressTask() {
     var workerClass = registry.createClass(workerClass("PRIORITY_WORKER"));
     var queue =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             W1,
             queue(
                 "PRIORITY",
@@ -3071,7 +3447,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   void overdueMaintenanceTasksRollOverBeforeOriginallyPlannedTasks() {
     var workerClass = registry.createClass(workerClass("ROLLOVER_WORKER"));
     var queue =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             W1,
             queue(
                 "ROLLOVER",
@@ -3120,7 +3496,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void concurrentMaintenanceRolloverMovesEachTaskExactlyOnce() throws Exception {
-    var queue = registry.createQueue(W1, queue("ROLLOVER-RACE", QueueType.REPAIR, List.of()));
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("ROLLOVER-RACE", QueueType.REPAIR, List.of()));
     LocalDate today = LocalDate.of(2026, 7, 24);
     board.registerExternalTask(
         "maintenance-service",
@@ -3260,7 +3636,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void dateColumnSwapApiRejectsStaleTaskVersionWithoutMovingEitherColumn() throws Exception {
-    var queue = registry.createQueue(W1, queue("HTTP_DATE_SWAP", QueueType.REPAIR, List.of()));
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("HTTP_DATE_SWAP", QueueType.REPAIR, List.of()));
     LocalDate firstDate = LocalDate.of(2026, 7, 24);
     LocalDate secondDate = firstDate.plusDays(1);
     board.createTask(W1, scheduledTask(queue.id(), "first", firstDate, 3));
@@ -3319,7 +3695,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void duplicateRouteControllerMutationReturns409() throws Exception {
-    var queue = registry.createQueue(W1, queue("HTTP_ROUTE", QueueType.REPAIR, List.of()));
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("HTTP_ROUTE", QueueType.REPAIR, List.of()));
     String body =
         """
         {"externalTaskId":null,"title":"duplicate","route":[
@@ -3346,7 +3722,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void cancellationApiRequiresUserWriteAndEditWarehouseAccess() throws Exception {
-    var queue = registry.createQueue(W1, queue("HTTP_CANCEL", QueueType.MOVEMENT, List.of()));
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("HTTP_CANCEL", QueueType.MOVEMENT, List.of()));
     UUID externalTaskId = UUID.randomUUID();
     var entry =
         board.createTask(W1, externalTask(externalTaskId, queue.id(), "http-cancel"))
@@ -3454,7 +3830,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void mutableVersionTokensMustBePresentNonNullAndNonNegative() throws Exception {
-    var queue = registry.createQueue(W1, queue("HTTP_VERSION_REQUIRED", QueueType.MOVEMENT, List.of()));
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("HTTP_VERSION_REQUIRED", QueueType.MOVEMENT, List.of()));
     UUID externalTaskId = UUID.randomUUID();
     board.createTask(W1, externalTask(externalTaskId, queue.id(), "version-required"));
     String path =
@@ -3519,7 +3895,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void exactExternalTaskRegistrationApiReturnsCurrentRoute() throws Exception {
-    var queue = registry.createQueue(W1, queue("HTTP_LOOKUP", QueueType.REPAIR, List.of()));
+    var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("HTTP_LOOKUP", QueueType.REPAIR, List.of()));
     UUID externalTaskId = UUID.randomUUID();
     board.createTask(W1, externalTask(externalTaskId, queue.id(), "http-lookup"));
 
@@ -3568,28 +3944,33 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     return new WorkerClassRequest(0L, name, null, null, 10, true);
   }
 
-  private WorkQueueRequest queue(String name, QueueType type, List<QueueBindingRequest> bindings) {
+  private QueueFixtureRequest queue(String name, QueueType type, List<QueueBindingRequest> bindings) {
     return queue(name, type, QueuePurpose.GENERAL, bindings);
   }
 
-  private WorkQueueRequest queue(
+  private QueueFixtureRequest queue(
       String name,
       QueueType type,
       QueuePurpose purpose,
       List<QueueBindingRequest> bindings) {
-    QueueDefinitionDto definition =
-        registry.listQueueDefinitions().stream()
-            .filter(
-                candidate ->
-                    candidate.name().equalsIgnoreCase(name)
-                        && candidate.type() == type
-                        && candidate.purpose() == purpose)
-            .findFirst()
-            .orElseGet(
-                () ->
-                    registry.createQueueDefinition(
-                        new QueueDefinitionRequest(0L, name, null, type, purpose)));
-    return new WorkQueueRequest(
+    QueueDefinitionDto definition;
+    if (purpose == QueuePurpose.LOGISTICS_DRIVER) {
+      definition = QueueRegistryTestFixtures.ensureDriverDefinition(registry, jdbc, name, type);
+    } else {
+      definition =
+          registry.listQueueDefinitions().stream()
+              .filter(
+                  candidate ->
+                      candidate.name().equalsIgnoreCase(name)
+                          && candidate.type() == type
+                          && candidate.purpose() == purpose)
+              .findFirst()
+              .orElseGet(
+                  () ->
+                      registry.createQueueDefinition(
+                          new QueueDefinitionRequest(0L, name, null, type, purpose)));
+    }
+    return new QueueFixtureRequest(
         0L,
         definition.id(),
         true,
@@ -3648,6 +4029,24 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             null,
             null,
             List.of(new RouteStepRequest(routeDefinition(queueId), null, null))));
+  }
+
+  private RegisterExternalTaskRequest driverRegistration(
+      UUID queueDefinitionId, UUID externalTaskId, LocalDate scheduledDate) {
+    return new RegisterExternalTaskRequest(
+        W1,
+        externalTaskId,
+        "Переместить бытовку",
+        "БЫТ-001",
+        "Перемещение на ремонт",
+        null,
+        null,
+        List.of(new RouteStepRequest(queueDefinitionId, "Перемещение на ремонт", null)),
+        scheduledDate,
+        3,
+        null,
+        new TaskSourceReferenceDto(TaskSourceType.LOGISTICS_DRIVER_TASK, UUID.randomUUID()),
+        TaskLane.SCHEDULED);
   }
 
   private CreateBoardTaskRequest scheduledTask(

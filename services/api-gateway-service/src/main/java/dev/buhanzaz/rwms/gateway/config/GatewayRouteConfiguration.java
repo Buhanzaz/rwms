@@ -19,6 +19,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.web.servlet.function.RequestPredicate;
 import org.springframework.web.servlet.function.RouterFunction;
+import org.springframework.web.servlet.function.ServerRequest;
 import org.springframework.web.servlet.function.ServerResponse;
 import org.springframework.web.util.UriUtils;
 
@@ -56,6 +57,42 @@ public class GatewayRouteConfiguration {
         .before(uri(properties.getRoutes().getTaskBoardUri()))
         .before(stripPrefix(2))
         .before(prefixPath("/api"))
+        .before(removeRequestHeader(HttpHeaders.COOKIE))
+        .onError(upstreamProblems::supports, upstreamProblems::handle)
+        .build();
+  }
+
+  @Bean
+  @Order(-99)
+  RouterFunction<ServerResponse> assetEventsRoute(
+      GatewayProperties properties,
+      GatewayUpstreamProblemHandler upstreamProblems,
+      AssetEventsProxyHandler assetEventsProxyHandler) {
+    RequestPredicate assetEventsPath =
+        path("/api/asset/v1/events")
+            .and(method(HttpMethod.GET))
+            .and(request -> safePath(request.path()));
+    return route("asset-events")
+        .route(assetEventsPath, assetEventsProxyHandler)
+        .before(uri(properties.getRoutes().getAssetUri()))
+        .before(removeRequestHeader(HttpHeaders.COOKIE))
+        .onError(upstreamProblems::supports, upstreamProblems::handle)
+        .build();
+  }
+
+  @Bean
+  @Order(-98)
+  RouterFunction<ServerResponse> mediaEventsRoute(
+      GatewayProperties properties,
+      GatewayUpstreamProblemHandler upstreamProblems,
+      MediaEventsProxyHandler mediaEventsProxyHandler) {
+    RequestPredicate mediaEventsPath =
+        path("/api/media/v1/events")
+            .and(method(HttpMethod.GET))
+            .and(request -> safePath(request.path()));
+    return route("media-events")
+        .route(mediaEventsPath, mediaEventsProxyHandler)
+        .before(uri(properties.getRoutes().getMediaUri()))
         .before(removeRequestHeader(HttpHeaders.COOKIE))
         .onError(upstreamProblems::supports, upstreamProblems::handle)
         .build();
@@ -153,6 +190,24 @@ public class GatewayRouteConfiguration {
   }
 
   @Bean
+  @Order(-79)
+  RouterFunction<ServerResponse> mediaUploadContentRoute(
+      GatewayProperties properties,
+      GatewayUpstreamProblemHandler upstreamProblems,
+      MediaUploadContentProxyHandler mediaUploadContentProxyHandler) {
+    RequestPredicate mediaUploadContentPath =
+        path("/api/media/v1/upload-sessions/*/content")
+            .and(method(HttpMethod.PUT))
+            .and(request -> safePath(request.path()));
+    return route("media-upload-content")
+        .route(mediaUploadContentPath, mediaUploadContentProxyHandler)
+        .before(uri(properties.getRoutes().getMediaUri()))
+        .before(removeRequestHeader(HttpHeaders.COOKIE))
+        .onError(upstreamProblems::supports, upstreamProblems::handle)
+        .build();
+  }
+
+  @Bean
   RouterFunction<ServerResponse> mediaRoutes(
       GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
     RequestPredicate publicMediaPath =
@@ -163,7 +218,8 @@ public class GatewayRouteConfiguration {
                   String decoded = decodedPath(request.path());
                   return !decoded.startsWith("/api/media/internal")
                       && !decoded.startsWith("/api/media/private");
-                });
+                })
+            .and(request -> !isMediaUploadContentRequest(request));
     return route("media-service")
         .route(publicMediaPath, http())
         .before(uri(properties.getRoutes().getMediaUri()))
@@ -293,6 +349,12 @@ public class GatewayRouteConfiguration {
 
   private static String decodedPath(String path) {
     return UriUtils.decode(path, StandardCharsets.UTF_8);
+  }
+
+  private static boolean isMediaUploadContentRequest(ServerRequest request) {
+    return request.method() == HttpMethod.PUT
+        && decodedPath(request.path())
+            .matches("^/api/media/v1/upload-sessions/[^/]+/content$");
   }
 
   private static boolean safePath(String path) {

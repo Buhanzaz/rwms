@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Media Service API
-  version: 1.13.0
+  version: 1.14.0
   license: { name: UNLICENSED }
   description: >-
     Stateful Go media API. PostgreSQL owns metadata and replay state; MinIO
@@ -26,6 +26,32 @@ paths:
       responses:
         '200': { description: Exact Flyway schema, PostgreSQL and versioned MinIO are ready. }
         '503': { $ref: '#/components/responses/Unavailable' }
+  /api/media/v1/events:
+    get:
+      operationId: streamMediaWarehouseInvalidations
+      description: >-
+        Opens an authenticated warehouse-scoped Server-Sent Events stream.
+        Events carry opaque media identifiers and are invalidation hints only;
+        clients must re-read the cabin-cover projection. Reconnects begin with
+        a RESYNC event and do not rely on replay history.
+      parameters:
+        - name: warehouseId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema: { type: string, maxLength: 128 }
+      responses:
+        '200':
+          description: Warehouse media invalidation stream.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/internal/media/v1/owner-proofs:
     post:
       summary: Upsert one monotonic service-owned media authorization proof

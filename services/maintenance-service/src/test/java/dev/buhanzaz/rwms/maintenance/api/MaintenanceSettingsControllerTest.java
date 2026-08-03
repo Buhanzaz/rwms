@@ -27,7 +27,7 @@ class MaintenanceSettingsControllerTest {
   void getRequiresWarehouseManageBeforeDelegating() {
     UUID warehouseId = UUID.randomUUID();
     RepairCapacitySettingsResponse response =
-        new RepairCapacitySettingsResponse(warehouseId, 0, 6, null, null);
+        new RepairCapacitySettingsResponse(warehouseId, 0, 6, 5, null, null);
     when(service.get(warehouseId)).thenReturn(response);
 
     assertThat(controller.get(jwt, warehouseId)).isEqualTo(response);
@@ -41,9 +41,9 @@ class MaintenanceSettingsControllerTest {
   void putRequiresWarehouseManageBeforeDelegating() {
     UUID warehouseId = UUID.randomUUID();
     ReplaceRepairCapacitySettingsRequest request =
-        new ReplaceRepairCapacitySettingsRequest(0L, 8);
+        new ReplaceRepairCapacitySettingsRequest(0L, 8, 12);
     RepairCapacitySettingsResponse response =
-        new RepairCapacitySettingsResponse(warehouseId, 0, 8, null, null);
+        new RepairCapacitySettingsResponse(warehouseId, 0, 8, 12, null, null);
     when(service.replace(warehouseId, request)).thenReturn(response);
 
     assertThat(controller.replace(jwt, warehouseId, request)).isEqualTo(response);
@@ -57,7 +57,7 @@ class MaintenanceSettingsControllerTest {
   void deniedManageAccessStopsTheCommand() {
     UUID warehouseId = UUID.randomUUID();
     ReplaceRepairCapacitySettingsRequest request =
-        new ReplaceRepairCapacitySettingsRequest(0L, 8);
+        new ReplaceRepairCapacitySettingsRequest(0L, 8, 12);
     doThrow(new AccessDeniedException("denied"))
         .when(authorizer)
         .requireManage(jwt, warehouseId);

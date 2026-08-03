@@ -946,13 +946,18 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID externalTaskId,
       long expectedTaskVersion,
       long expectedEntryVersion,
+      String targetLane,
       LocalDate targetDate,
       int targetIndex) {
     return driverBoardTask(
         postWithoutIdempotency(
             taskBoardDriverTaskBase + "/" + externalTaskId + "/move",
             new MoveDriverTaskRequest(
-                expectedTaskVersion, expectedEntryVersion, targetDate, targetIndex),
+                expectedTaskVersion,
+                expectedEntryVersion,
+                targetLane,
+                targetDate,
+                targetIndex),
             DriverBoardTaskResponse.class,
             TASK_BOARD_CLIENT,
             TASK_BOARD_SCOPE));
@@ -1036,6 +1041,8 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
     if (response.warehouseId() == null
         || !warehouseId.equals(response.warehouseId())
         || response.repairPlaceCount() < 1
+        || response.automaticRefillDelayMinutes() < 1
+        || response.automaticRefillDelayMinutes() > 1_440
         || response.availableCount() < 0
         || response.allocations() == null) {
       throw malformed("Maintenance-service returned invalid repair-place projection");
@@ -1043,6 +1050,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
     return new RepairPlaceProjection(
         warehouseId,
         response.repairPlaceCount(),
+        response.automaticRefillDelayMinutes(),
         response.reservedCount(),
         response.occupiedCount(),
         response.readyToReleaseCount(),
@@ -2761,6 +2769,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   private record MoveDriverTaskRequest(
       long expectedTaskVersion,
       long expectedEntryVersion,
+      String targetLane,
       LocalDate targetDate,
       int targetIndex) {}
 
@@ -2789,6 +2798,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   private record RepairPlaceProjectionResponse(
       UUID warehouseId,
       int repairPlaceCount,
+      int automaticRefillDelayMinutes,
       long reservedCount,
       long occupiedCount,
       long readyToReleaseCount,

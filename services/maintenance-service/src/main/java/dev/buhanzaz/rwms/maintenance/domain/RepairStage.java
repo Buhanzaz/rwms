@@ -129,7 +129,7 @@ public class RepairStage {
       UUID primaryLineId,
       String groupComment,
       OffsetDateTime taskDeadline) {
-    if (id == null || repairId == null || stageNo < 0 || stageKind == null || routingQueueId == null
+    if (id == null || repairId == null || stageNo < 0 || stageKind != RepairStageKind.REPAIR_WORK || routingQueueId == null
         || routingQueueName == null || routingQueueName.isBlank()
         || routingQueueType == null || routingQueueType.isBlank()
         || workLines == null || materialLines == null || groupComment == null
@@ -170,26 +170,6 @@ public class RepairStage {
         && state != RepairStageState.IN_PROGRESS) {
       throw new IllegalStateException(
           "Only an active repair stage can move to external capital execution");
-    }
-    state = RepairStageState.DONE;
-    taskGenerationState = "NOT_REQUIRED";
-    deliveryState = "DELIVERED";
-    deliveryUpdatedAt = MaintenanceTime.now();
-    completedAt = MaintenanceTime.now();
-  }
-
-  /**
-   * Movement stages are orchestration markers owned by logistics, not executable task-board
-   * entries. The durable logistics reconciliation remains the execution truth.
-   */
-  public void routedThroughLogistics() {
-    if (state == RepairStageState.DONE && "NOT_REQUIRED".equals(taskGenerationState)) {
-      return;
-    }
-    if (stageKind == RepairStageKind.REPAIR_WORK
-        || (state != RepairStageState.PLANNED && state != RepairStageState.QUEUED)) {
-      throw new IllegalStateException(
-          "Only an active movement stage can be routed through logistics");
     }
     state = RepairStageState.DONE;
     taskGenerationState = "NOT_REQUIRED";

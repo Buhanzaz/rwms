@@ -1,4 +1,5 @@
 package dev.buhanzaz.rwms.taskboard;
+import static dev.buhanzaz.rwms.taskboard.QueueFixtureModels.*;
 
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -32,9 +33,9 @@ class PostgresTaskBoardIntegrationTest extends PostgresIntegrationTestSupport {
         registry.createQueueDefinition(
             new QueueDefinitionRequest(0L, "Repair", null, QueueType.REPAIR));
     var queue =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             warehouse,
-            new WorkQueueRequest(
+            new QueueFixtureRequest(
                 0L,
                 definition.id(),
                 true,

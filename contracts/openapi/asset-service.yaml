@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Asset Service API
-  version: 1.9.0
+  version: 1.10.0
   description: >-
     Stage 5 canonical asset boundary plus narrow Stage 7 inventory-service and
     Stage 8 logistics-service private surfaces. Rental-item comments and
@@ -14,6 +14,28 @@ servers:
 security:
   - bearerJwt: []
 paths:
+  /api/asset/v1/events:
+    get:
+      operationId: streamAssetWarehouseInvalidations
+      description: >-
+        Opens an authenticated warehouse-scoped Server-Sent Events stream.
+        Events are invalidation hints only; clients re-read the affected public
+        projection. A reconnect starts with a RESYNC event, so Last-Event-ID
+        is accepted for diagnostics and no event history is promised.
+      parameters:
+        - $ref: '#/components/parameters/WarehouseIdQuery'
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema: { type: string, maxLength: 128 }
+      responses:
+        '200':
+          description: Warehouse invalidation stream.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/asset/v1/rental-items:
     get:
       operationId: listRentalItems

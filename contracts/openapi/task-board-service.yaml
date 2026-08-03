@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Task Board Service API
-  version: 1.4.0
+  version: 1.5.0
   description: >-
     Canonical F2 inventory of the active task-board, workforce and queue
     registry HTTP API. All warehouse-scoped operations validate the warehouse
@@ -19,8 +19,11 @@ paths:
     get:
       operationId: listQueueDefinitions
       description: >-
-        Returns the single system-wide queue catalog. Definitions are not
-        warehouse-owned and are never copied when a warehouse is created.
+        Returns the shared system queue catalog, including the driver
+        definition. Definitions are never copied into a warehouse
+        automatically; a manager explicitly attaches a GENERAL definition as
+        a warehouse work queue, while the driver definition is configured via
+        the logistics endpoint.
       responses:
         '200': { $ref: '#/components/responses/QueueDefinitionListOk' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -76,6 +79,10 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
     post:
       operationId: createWorkQueue
+      description: >-
+        Explicitly attaches one GENERAL catalog definition to this warehouse.
+        The resulting order, runtime settings and class bindings are owned by
+        this warehouse only.
       requestBody:
         $ref: '#/components/requestBodies/WorkQueue'
       responses:
@@ -90,6 +97,9 @@ paths:
       - $ref: '#/components/parameters/Id'
     put:
       operationId: updateWorkQueue
+      description: >-
+        Updates runtime settings and bindings of one existing warehouse
+        connection. definitionId is immutable.
       requestBody:
         $ref: '#/components/requestBodies/WorkQueue'
       responses:
@@ -114,6 +124,7 @@ paths:
       - $ref: '#/components/parameters/WarehouseId'
     put:
       operationId: reorderWorkQueues
+      description: Reorders only the current warehouse's complete selected queue set.
       requestBody:
         required: true
         content:
@@ -124,6 +135,26 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/driver-queue:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    put:
+      operationId: updateDriverQueue
+      description: >-
+        Creates or updates the warehouse-specific LOGISTICS_DRIVER queue.
+        The request cannot select or replace a queue definition.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DriverQueueRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/WorkQueueOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
   /warehouses/{warehouseId}/queue-capabilities:
     parameters:
@@ -548,8 +579,9 @@ paths:
       description: >-
         Private logistics-service projection of the dedicated driver queue.
         Requires exactly the logistics-service SERVICE principal with one
-        task-board.logistics scope. The response has one server-controlled
-        CURRENT lane and a finite ordered set of non-empty date columns.
+        task-board.logistics scope. The response has an ordered server-
+        controlled CURRENT lane and a finite ordered set of non-empty date
+        columns.
       responses:
         '200':
           description: Current driver-logistics board.
@@ -565,9 +597,10 @@ paths:
     post:
       operationId: moveInternalDriverLogisticsTask
       description: >-
-        Private logistics-service command for reordering one SCHEDULED driver
-        task inside its sole warehouse driver queue or moving it to another
-        calendar date. CURRENT and already-running tasks are rejected.
+        Private logistics-service command for reordering one driver task inside
+        its sole warehouse driver queue, moving it to another calendar date,
+        moving it from CURRENT back to a date, or inserting/reordering it in
+        the ordered CURRENT lane. Already-running tasks are rejected.
       requestBody:
         required: true
         content:
@@ -1526,7 +1559,7 @@ components:
       additionalProperties: false
     WorkerClass:
       type: object
-      required: [id, version, name, description, comment, sortOrder, active]
+      required: [id, version, name, description, comment, sortOrder, active, logisticsPrimary]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64 }
@@ -1535,6 +1568,12 @@ components:
         comment: { oneOf: [{ type: string }, { type: 'null' }] }
         sortOrder: { type: integer }
         active: { type: boolean }
+        logisticsPrimary:
+          type: boolean
+          description: >-
+            True when this class is a primary LOGISTICS_DRIVER class and is not
+            attached to any GENERAL queue. This is a stable relation, not a
+            display-name convention or a current-warehouse setting.
       additionalProperties: false
     WorkerClassList:
       type: array
@@ -1561,7 +1600,10 @@ components:
         name: { type: string, minLength: 1, maxLength: 128 }
         description: { oneOf: [{ type: string, maxLength: 1000 }, { type: 'null' }] }
         type: { type: string, enum: [MOVEMENT, REPAIR, HOLDING, FURNITURE_MOVEMENT] }
-        purpose: { $ref: '#/components/schemas/QueuePurpose' }
+        purpose:
+          type: string
+          enum: [GENERAL]
+          description: Global CRUD never creates or edits LOGISTICS_DRIVER.
       additionalProperties: false
     QueuePurpose:
       type: string
@@ -1952,10 +1994,11 @@ components:
       additionalProperties: false
     MoveExternalLogisticsTaskRequest:
       type: object
-      required: [expectedTaskVersion, expectedEntryVersion, targetDate, targetIndex]
+      required: [expectedTaskVersion, expectedEntryVersion, targetLane, targetDate, targetIndex]
       properties:
         expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
         expectedEntryVersion: { type: integer, format: int64, minimum: 0 }
+        targetLane: { $ref: '#/components/schemas/TaskLane' }
         targetDate: { type: string, format: date }
         targetIndex: { type: integer, minimum: 0 }
       additionalProperties: false
@@ -2006,7 +2049,7 @@ components:
         definitionId:
           type: string
           format: uuid
-          description: Stable global queue definition attached to this warehouse.
+          description: Stable GENERAL queue definition attached to this warehouse.
         active: { type: boolean }
         hidden: { type: boolean }
         collapsed: { type: boolean }
@@ -2041,6 +2084,22 @@ components:
               queueId: { type: string, format: uuid }
               expectedVersion: { type: integer, format: int64, minimum: 0 }
             additionalProperties: false
+      additionalProperties: false
+    DriverQueueRequest:
+      type: object
+      required: [expectedVersion, active, hidden, collapsed, notifyWhenThresholdReached, resultPhotoMinCount, bindings]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        active: { type: boolean }
+        hidden: { type: boolean }
+        collapsed: { type: boolean }
+        holdingPeriodMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
+        notificationThreshold: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
+        notifyWhenThresholdReached: { type: boolean }
+        resultPhotoMinCount: { type: integer, minimum: 0, maximum: 20 }
+        bindings:
+          type: array
+          items: { $ref: '#/components/schemas/QueueBindingRequest' }
       additionalProperties: false
     QueueReferenceRequest:
       type: object

@@ -67,10 +67,10 @@ class TaskBoardEventStoreMigrationIntegrationTest {
   }
 
   @Test
-  void cleanInstallAppliesV4ThroughV22AndRepeatIsNoOp() {
+  void cleanInstallAppliesV4ThroughV24AndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(19);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(21);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -657,7 +657,7 @@ class TaskBoardEventStoreMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(18);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(20);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
     assertThat(retainedContentDigests()).containsExactlyInAnyOrderEntriesOf(before);
@@ -875,7 +875,10 @@ class TaskBoardEventStoreMigrationIntegrationTest {
                     + "'original_budget_seconds','current_budget_seconds']"
                 : "work_queue".equals(table)
                     ? "to_jsonb(row_value) - array['code','result_photo_min_count',"
-                        + "'name','description','queue_type','definition_id']"
+                        + "'name','description','queue_type','definition_id',"
+                        + "'sort_order','active','hidden','collapsed',"
+                        + "'holding_period_minutes','notification_threshold',"
+                        + "'notify_when_threshold_reached','revision_marker']"
                     : "queue_usage_reference".equals(table)
                         ? "to_jsonb(row_value) - array['queue_id','queue_definition_id']"
                     : "worker_class".equals(table)

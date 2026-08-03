@@ -32,7 +32,9 @@ $env:AUTH_ISSUER = "http://localhost:8080/auth"
 
 Keep task-board's client-credentials token URI and worker-credentials URI on the
 direct internal auth address (`http://localhost:9000`); those calls must not pass
-through the gateway. Then start this module with the `dev` profile before Vite:
+through the gateway. The gateway derives its JWKS endpoint from that same private
+auth target, never from the public `/auth` route. Then start this module with the
+`dev` profile before Vite:
 
 ```powershell
 $env:SPRING_PROFILES_ACTIVE = "dev"
@@ -40,11 +42,11 @@ $env:SPRING_PROFILES_ACTIVE = "dev"
 ```
 
 The dev defaults route auth to `9000`, task-board to `8081`, reserve warehouse
-at `8083`, use the internal JWKS endpoint on `9000`, and expose the gateway on
+at `8083`, derive JWKS from the internal auth target on `9000`, and expose the gateway on
 `8088`. Start the panel/Vite server last on `8080`; it proxies `/auth` and `/api`
 to `8088` while keeping `/auth/callback` in the SPA. Production has no localhost
 or secret-bearing defaults and must provide every target, public issuer/base,
-JWKS URI, and allowed panel origin.
+and allowed panel origin.
 
 Public mappings are:
 

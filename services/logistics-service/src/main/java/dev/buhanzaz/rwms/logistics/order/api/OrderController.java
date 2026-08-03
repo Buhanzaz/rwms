@@ -1,15 +1,18 @@
 package dev.buhanzaz.rwms.logistics.order.api;
 
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AddOrderUnitRequest;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRentalShipmentRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.ClientPageResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.ClientResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateClientRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderDetailResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderHistoryEventResponse;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.ExtendOrderRentalTermsRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderPageResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderUnitPageResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.SetOrderUnitDesiredEquipmentRequest;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.SetOrderRentalTermsRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.SelectWarehouseRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.UpdateOrderRequest;
 import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
@@ -17,9 +20,11 @@ import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import dev.buhanzaz.rwms.logistics.order.security.OrderActor;
 import dev.buhanzaz.rwms.logistics.order.security.OrderAuthorizer;
 import dev.buhanzaz.rwms.logistics.order.service.OrderAuditService;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.LogisticsDocumentView;
 import dev.buhanzaz.rwms.logistics.order.service.OrderClientService;
 import dev.buhanzaz.rwms.logistics.order.service.OrderUnitConflictException;
 import dev.buhanzaz.rwms.logistics.order.service.RentalOrderService;
+import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -145,6 +150,46 @@ public class OrderController {
     return response(result.response(), result.replayed(), HttpStatus.OK);
   }
 
+  @PutMapping("/orders/{orderId}/rental-terms")
+  public ResponseEntity<OrderDetailResponse> setRentalTerms(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID orderId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody SetOrderRentalTermsRequest request) {
+    RentalOrderService.MutationResult result =
+        orders.setRentalTerms(access.writeActor(jwt), orderId, idempotencyKey, request);
+    return response(result.response(), result.replayed(), HttpStatus.OK);
+  }
+
+  @PostMapping("/orders/{orderId}/rental-terms/extend")
+  public ResponseEntity<OrderDetailResponse> extendRentalTerms(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID orderId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody ExtendOrderRentalTermsRequest request) {
+    RentalOrderService.MutationResult result =
+        orders.extendRentalTerms(access.writeActor(jwt), orderId, idempotencyKey, request);
+    return response(result.response(), result.replayed(), HttpStatus.OK);
+  }
+
+  /** Creates one selected-cabin shipment draft; preparation starts only via the shipment plan. */
+  @PostMapping("/orders/{orderId}/shipments")
+  public ResponseEntity<LogisticsDocumentView> createRentalShipment(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID orderId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody CreateOrderRentalShipmentRequest request,
+      HttpServletRequest servletRequest) {
+    LogisticsDocumentService.CreateResult result =
+        orders.createRentalShipment(
+            access.writeActor(jwt),
+            orderId,
+            idempotencyKey,
+            correlationId(servletRequest),
+            request);
+    return documentResponse(result.response(), result.replayed());
+  }
+
   @PutMapping("/orders/{orderId}/warehouse")
   public ResponseEntity<OrderDetailResponse> selectWarehouse(
       @AuthenticationPrincipal Jwt jwt,
@@ -250,6 +295,15 @@ public class OrderController {
       OrderDetailResponse body, boolean replayed, HttpStatus status) {
     ResponseEntity.BodyBuilder response =
         ResponseEntity.status(status).eTag(Long.toString(body.version()));
+    if (replayed) response.header("Idempotency-Replayed", "true");
+    return response.body(body);
+  }
+
+  private static ResponseEntity<LogisticsDocumentView> documentResponse(
+      LogisticsDocumentView body, boolean replayed) {
+    ResponseEntity.BodyBuilder response =
+        ResponseEntity.status(replayed ? HttpStatus.OK : HttpStatus.CREATED)
+            .eTag(Long.toString(body.version()));
     if (replayed) response.header("Idempotency-Replayed", "true");
     return response.body(body);
   }

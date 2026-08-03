@@ -5,5 +5,6 @@ public enum DriverTaskSourceType {
   ESTIMATE,
   INVENTORY,
   REPAIR_PLACE,
-  CAPITAL_REPAIR
+  CAPITAL_REPAIR,
+  MANUAL
 }

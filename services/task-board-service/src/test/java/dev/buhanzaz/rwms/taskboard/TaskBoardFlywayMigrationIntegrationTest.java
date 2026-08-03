@@ -70,7 +70,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
   void cumulativeVersionFourEventSourcingAndTaskSyncMigrateCleanDatabaseAndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(19);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(21);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -118,6 +118,10 @@ class TaskBoardFlywayMigrationIntegrationTest {
             "kpi_palette_range",
             "kpi_work_schedule",
             "kpi_work_break");
+    assertThat(
+            jdbc.queryForObject(
+                "select to_regclass('public.queue_definition_class_binding')", String.class))
+        .isNull();
     assertThat(columnCounts())
         .containsAllEntriesOf(
             Map.ofEntries(
@@ -131,6 +135,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
                 Map.entry("task_sync_source", 6),
                 Map.entry("task_time_event", 10),
                 Map.entry("warehouse_kpi_settings", 10),
+                Map.entry("queue_definition", 8),
                 Map.entry("work_queue", 13),
                 Map.entry("work_queue_class_binding", 8),
                 Map.entry("worker", 17),
@@ -741,6 +746,338 @@ class TaskBoardFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void versionTwentyFourRestoresAuditedLocalConnectionsAndRemovesOnlyUnusedV23SyntheticQueues() {
+    configuration(MIGRATION_LOCATION).target("22").load().migrate();
+    UUID spb = UUID.fromString("00000000-0000-0000-0000-000000000001");
+    UUID msk = UUID.fromString("00000000-0000-0000-0000-000000000002");
+    UUID generatedWarehouse = UUID.fromString("f5338f81-2831-4b14-ab99-2e611d09ba3e");
+    UUID externalDefinition = UUID.fromString("8873b3d1-2148-47cf-a0ed-789b853f1242");
+    UUID furnitureDefinition = UUID.fromString("096ada15-e366-4478-a86c-037bcddbd83e");
+    UUID spbExternal = externalDefinition;
+    UUID mskExternal = UUID.fromString("54641234-be75-480c-926c-e4ee695d9bdb");
+    UUID reviewedWorkerClass = UUID.fromString("6cee2fd5-a5d9-4205-a2bf-272181b8a284");
+    UUID reviewedBinding = UUID.fromString("8e0d6717-e41f-4eaf-ab32-136087c6d5a6");
+
+    for (UUID warehouseId : List.of(spb, msk, generatedWarehouse)) {
+      jdbc.update(
+          """
+          insert into warehouse_metadata(id,version,source_version,time_zone,active)
+          values (?,0,0,'Europe/Moscow',true)
+          """,
+          warehouseId);
+    }
+    jdbc.update(
+        """
+        insert into queue_definition(
+          id,version,revision_marker,name,normalized_name,description,queue_type,queue_purpose)
+        values
+          (?,0,?,'Внешние работы','внешние работы',null,'REPAIR','GENERAL'),
+          (?,0,?,'Перемещение мебели','перемещение мебели',null,'FURNITURE_MOVEMENT','GENERAL')
+        """,
+        externalDefinition,
+        UUID.randomUUID(),
+        furnitureDefinition,
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into worker_class(
+          id,version,revision_marker,name,description,comment_text,sort_order,active)
+        values (?,0,?,'Рабочие',null,null,10,true)
+        """,
+        reviewedWorkerClass,
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into work_queue(
+          id,version,revision_marker,warehouse_id,sort_order,active,hidden,collapsed,
+          holding_period_minutes,notification_threshold,notify_when_threshold_reached,
+          result_photo_min_count,definition_id)
+        values
+          (?,0,?,?,30,true,false,false,null,null,false,1,?),
+          (?,0,?,?,30,true,false,false,null,null,false,1,?)
+        """,
+        spbExternal,
+        UUID.randomUUID(),
+        spb,
+        externalDefinition,
+        mskExternal,
+        UUID.randomUUID(),
+        msk,
+        externalDefinition);
+    jdbc.update(
+        """
+        insert into work_queue_class_binding(
+          id,version,queue_id,worker_class_id,stop_task_on_take,binding_order,
+          participation_policy,notify_on_primary_take)
+        values (?,0,?,?,false,0,'PRIMARY',false)
+        """,
+        reviewedBinding,
+        spbExternal,
+        reviewedWorkerClass);
+
+    Flyway v23 = configuration(MIGRATION_LOCATION).target("23").load();
+    assertThat(v23.migrate().migrationsExecuted).isOne();
+
+    // Existing production queues already have a stream.  Cover the V24 append path as well as
+    // the baseline path used for a queue that had no event history before the faulty V23 run.
+    seedQueueBaseline(spbExternal);
+
+    UUID mskSyntheticFurniture = syntheticQueueId(msk, furnitureDefinition);
+    UUID protectedSyntheticExternal = syntheticQueueId(generatedWarehouse, externalDefinition);
+    appendLegacyBatchQueueEvent(mskSyntheticFurniture);
+    UUID taskId = UUID.fromString("32000000-0000-0000-0000-000000000024");
+    UUID entryId = UUID.fromString("42000000-0000-0000-0000-000000000024");
+    jdbc.update(
+        """
+        insert into board_task(
+          id,version,warehouse_id,external_task_id,title,status,priority,pinned,
+          completion_deadline_enforced)
+        values (?,0,?,null,'Защищённая синтетическая очередь','ACTIVE',3,false,false)
+        """,
+        taskId,
+        generatedWarehouse);
+    jdbc.update(
+        """
+        insert into queue_entry(
+          id,version,revision_marker,task_id,queue_id,route_index,queue_position,
+          entry_type,status,active_work_seconds)
+        values (?,0,?,?,?,0,0,'REAL','WAITING',0)
+        """,
+        entryId,
+        UUID.randomUUID(),
+        taskId,
+        protectedSyntheticExternal);
+
+    Flyway v24 = configuration(MIGRATION_LOCATION).target("24").load();
+    assertThat(v24.migrate().migrationsExecuted).isOne();
+
+    assertThat(
+            jdbc.queryForMap(
+                "select warehouse_id,definition_id,sort_order,active,hidden,collapsed,"
+                    + "result_photo_min_count from work_queue where id=?",
+                spbExternal))
+        .containsEntry("warehouse_id", spb)
+        .containsEntry("definition_id", externalDefinition)
+        .containsEntry("sort_order", 30)
+        .containsEntry("active", true)
+        .containsEntry("hidden", false)
+        .containsEntry("collapsed", false)
+        .containsEntry("result_photo_min_count", 1);
+    assertThat(
+            jdbc.queryForMap(
+                "select id,version,worker_class_id,binding_order,participation_policy "
+                    + "from work_queue_class_binding where queue_id=?",
+                spbExternal))
+        .containsEntry("id", reviewedBinding)
+        .containsEntry("version", 0L)
+        .containsEntry("worker_class_id", reviewedWorkerClass)
+        .containsEntry("binding_order", 0)
+        .containsEntry("participation_policy", "PRIMARY");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from work_queue_class_binding where queue_id=?",
+                Integer.class,
+                mskExternal))
+        .isZero();
+    assertThat(
+            jdbc.queryForMap(
+                "select current_version,last_event_id from event_stream_head "
+                    + "where aggregate_type='WORK_QUEUE' and aggregate_id=?",
+                spbExternal.toString()))
+        .containsEntry("current_version", 1L);
+    assertThat(
+            jdbc.queryForMap(
+                "select aggregate_version,event_type,payload->>'sortOrder' as sort_order "
+                    + "from domain_event where aggregate_type='WORK_QUEUE' and aggregate_id=? "
+                    + "order by aggregate_version desc limit 1",
+                spbExternal.toString()))
+        .containsEntry("aggregate_version", 1L)
+        .containsEntry("event_type", "task-board.work-queue.changed.v1")
+        .containsEntry("sort_order", "30");
+    assertThat(
+            jdbc.queryForMap(
+                "select aggregate_version,envelope_body->'payload'->>'sortOrder' as sort_order "
+                    + "from outbox_event where aggregate_type='WORK_QUEUE' and aggregate_id=?",
+                spbExternal.toString()))
+        .containsEntry("aggregate_version", 1L)
+        .containsEntry("sort_order", "30");
+    assertThat(
+            jdbc.queryForObject("select count(*) from work_queue where id=?", Integer.class, mskSyntheticFurniture))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from domain_event where aggregate_type='WORK_QUEUE' and aggregate_id=?",
+                Integer.class,
+                mskSyntheticFurniture.toString()))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject("select count(*) from outbox_event where aggregate_id=?", Integer.class, mskSyntheticFurniture.toString()))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from work_queue where id=?", Integer.class, protectedSyntheticExternal))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject("select queue_id from queue_entry where id=?", UUID.class, entryId))
+        .isEqualTo(protectedSyntheticExternal);
+    assertThat(
+            jdbc.queryForObject(
+                "select to_regclass('public.queue_definition_class_binding')", String.class))
+        .isNull();
+    assertThat(
+            jdbc.queryForList(
+                "select column_name from information_schema.columns "
+                    + "where table_schema='public' and table_name='queue_definition' "
+                    + "and column_name in ('sort_order','active','hidden','collapsed',"
+                    + "'holding_period_minutes','notification_threshold',"
+                    + "'notify_when_threshold_reached','result_photo_min_count')",
+                String.class))
+        .isEmpty();
+    assertThat(v24.migrate().migrationsExecuted).isZero();
+  }
+
+  private UUID syntheticQueueId(UUID warehouseId, UUID definitionId) {
+    return jdbc.queryForObject(
+        "select md5(? || ':' || ? || ':global-work-queue:v23')::uuid",
+        UUID.class,
+        warehouseId.toString(),
+        definitionId.toString());
+  }
+
+  private void seedQueueBaseline(UUID queueId) {
+    UUID eventId = UUID.randomUUID();
+    String aggregateId = queueId.toString();
+    String payload =
+        jdbc.queryForObject(
+            "select jsonb_build_object('workQueueId', ?::uuid, 'deleted', false)::text",
+            String.class,
+            aggregateId);
+    jdbc.update(
+        """
+        insert into event_stream_head(
+          aggregate_type,aggregate_id,current_version,last_event_id,updated_at)
+        values ('WORK_QUEUE',?,0,?,clock_timestamp())
+        """,
+        aggregateId,
+        eventId);
+    jdbc.update(
+        """
+        insert into domain_event(
+          event_id,aggregate_type,aggregate_id,aggregate_version,event_type,event_version,
+          occurred_at,recorded_at,correlation_id,causation_id,actor_ref,payload,payload_sha256,
+          baseline)
+        values (
+          ?,'WORK_QUEUE',?,0,'task-board.work-queue.baseline.v1',1,
+          null,clock_timestamp(),?,null,null,?::jsonb,
+          encode(sha256(convert_to((?::jsonb)::text,'UTF8')),'hex'),true)
+        """,
+        eventId,
+        aggregateId,
+        UUID.randomUUID(),
+        payload,
+        payload);
+    jdbc.update(
+        """
+        insert into projection_checkpoint(
+          projection_name,aggregate_type,aggregate_id,aggregate_version,projection_sha256,updated_at)
+        values (
+          'task-board-live-v1','WORK_QUEUE',?,0,
+          encode(sha256(convert_to((?::jsonb)::text,'UTF8')),'hex'),clock_timestamp())
+        """,
+        aggregateId,
+        payload);
+  }
+
+  /** Simulates the pre-fix V23 UI batch: event-store-only history is not operational usage. */
+  private void appendLegacyBatchQueueEvent(UUID queueId) {
+    UUID eventId = UUID.randomUUID();
+    UUID correlationId = UUID.randomUUID();
+    String aggregateId = queueId.toString();
+    String payload =
+        jdbc.queryForObject(
+            "select jsonb_build_object('workQueueId', ?::uuid, 'deleted', false)::text",
+            String.class,
+            aggregateId);
+    jdbc.update(
+        """
+        update event_stream_head
+           set current_version=1,last_event_id=?,updated_at=clock_timestamp()
+         where aggregate_type='WORK_QUEUE' and aggregate_id=? and current_version=0
+        """,
+        eventId,
+        aggregateId);
+    jdbc.update(
+        """
+        insert into domain_event(
+          event_id,aggregate_type,aggregate_id,aggregate_version,event_type,event_version,
+          occurred_at,recorded_at,correlation_id,causation_id,actor_ref,payload,payload_sha256,
+          baseline)
+        values (
+          ?,'WORK_QUEUE',?,1,'task-board.work-queue.changed.v1',1,
+          clock_timestamp(),clock_timestamp(),?,null,null,?::jsonb,
+          encode(sha256(convert_to((?::jsonb)::text,'UTF8')),'hex'),false)
+        """,
+        eventId,
+        aggregateId,
+        correlationId,
+        payload,
+        payload);
+    String envelope =
+        jdbc.queryForObject(
+            """
+            select jsonb_build_object(
+              'envelopeVersion', 2,
+              'eventId', event.event_id,
+              'eventType', event.event_type,
+              'eventVersion', event.event_version,
+              'occurredAt', event.occurred_at,
+              'recordedAt', event.recorded_at,
+              'producer', 'task-board-service',
+              'aggregateType', event.aggregate_type,
+              'aggregateId', event.aggregate_id,
+              'aggregateVersion', event.aggregate_version,
+              'correlation', jsonb_build_object(
+                'correlationId', event.correlation_id,
+                'causationId', event.causation_id),
+              'actorRef', event.actor_ref,
+              'payload', event.payload)::text
+            from domain_event event
+            where event.event_id=?
+            """,
+            String.class,
+            eventId);
+    jdbc.update(
+        """
+        insert into outbox_event(
+          event_id,aggregate_type,aggregate_id,aggregate_version,event_type,topic,
+          envelope_body,envelope_sha256,status,attempt_count,next_attempt_at,created_at)
+        values (
+          ?,'WORK_QUEUE',?,1,'task-board.work-queue.changed.v1',
+          'rwms.task-board.work-queue.v1',?::jsonb,
+          encode(sha256(convert_to((?::jsonb)::text,'UTF8')),'hex'),
+          'PENDING',0,clock_timestamp(),clock_timestamp())
+        """,
+        eventId,
+        aggregateId,
+        envelope,
+        envelope);
+    jdbc.update(
+        """
+        insert into projection_checkpoint(
+          projection_name,aggregate_type,aggregate_id,aggregate_version,projection_sha256,updated_at)
+        values (
+          'task-board-live-v1','WORK_QUEUE',?,1,
+          encode(sha256(convert_to((?::jsonb)::text,'UTF8')),'hex'),clock_timestamp())
+        on conflict (projection_name,aggregate_type,aggregate_id)
+        do update set aggregate_version=excluded.aggregate_version,
+                      projection_sha256=excluded.projection_sha256,
+                      updated_at=excluded.updated_at
+        """,
+        aggregateId,
+        payload);
+  }
+
+  @Test
   void nonEmptyUnversionedSchemaIsNeverAdoptedAutomatically() throws Exception {
     applyHistoricalSchema();
     createHistoricalMigrationEvidence();
@@ -809,7 +1146,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(18);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(20);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
 
@@ -966,7 +1303,10 @@ class TaskBoardFlywayMigrationIntegrationTest {
                     + "'original_budget_seconds','current_budget_seconds']"
                 : "work_queue".equals(table)
                     ? "to_jsonb(row_value) - array['code','result_photo_min_count',"
-                        + "'name','description','queue_type','definition_id']"
+                        + "'name','description','queue_type','definition_id',"
+                        + "'sort_order','active','hidden','collapsed',"
+                        + "'holding_period_minutes','notification_threshold',"
+                        + "'notify_when_threshold_reached','revision_marker']"
                     : "queue_usage_reference".equals(table)
                         ? "to_jsonb(row_value) - array['queue_id','queue_definition_id']"
                     : "worker_class".equals(table)

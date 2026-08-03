@@ -89,6 +89,7 @@ class LogisticsFlywayMigrationIntegrationTest {
             "rental_order",
             "rental_order_audit_event",
             "rental_order_command_receipt",
+            "rental_order_unit_term",
             "rental_settings",
             "sanitized_dead_letter",
             "version_gap_quarantine")
@@ -271,6 +272,52 @@ class LogisticsFlywayMigrationIntegrationTest {
                     where id='00000000-0000-0000-0000-000000000001'
                     """))
         .hasMessageContaining("ck_rental_settings_chat_hold_minutes");
+  }
+
+  @Test
+  void v28AndV29ReplaceWholeOrderShipmentIndexesWithPerCabinTermsAndReturnLinkage() {
+    Flyway beforeV28 = configuration(MIGRATIONS).target("27").load();
+    assertThat(beforeV28.migrate().migrationsExecuted).isEqualTo(27);
+    assertThat(toRegclass("uk_logistics_document_shipment_order")).isNotNull();
+    assertThat(toRegclass("uk_logistics_document_return_order")).isNotNull();
+
+    assertThat(configuration(MIGRATIONS).target("28").load().migrate().migrationsExecuted)
+        .isOne();
+
+    assertThat(tableNames()).contains("rental_order_unit_term");
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from information_schema.columns
+                where table_schema='public'
+                  and table_name='logistics_document'
+                  and column_name='rental_shipment_id'
+                """,
+                Long.class))
+        .isOne();
+    assertThat(toRegclass("uk_logistics_document_shipment_order")).isNull();
+    assertThat(toRegclass("uk_logistics_document_return_order")).isNull();
+    assertThat(toRegclass("uk_logistics_document_return_shipment")).isNotNull();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from pg_constraint
+                where conname in (
+                  'uk_rental_order_unit_term',
+                  'fk_rental_order_unit_term_order',
+                  'fk_rental_order_unit_term_rental_shipment',
+                  'ck_rental_order_unit_term_dates'
+                )
+                """,
+                Long.class))
+        .isEqualTo(4);
+
+    assertThat(configuration(MIGRATIONS).target("29").load().migrate().migrationsExecuted)
+        .isOne();
+    assertThat(toRegclass("uk_logistics_document_return_shipment")).isNull();
+    assertThat(toRegclass("idx_logistics_document_return_shipment")).isNotNull();
   }
 
   @Test
@@ -809,6 +856,315 @@ class LogisticsFlywayMigrationIntegrationTest {
                     id))
         .hasMessageContaining("ck_driver_logistics_task_priority");
     assertJpaValidationStarts();
+  }
+
+  @Test
+  void v30TurnsCurrentDriverSingletonIntoQueueAndAddsDurableManualHold() {
+    Flyway beforeV30 = configuration(MIGRATIONS).target("29").load();
+    assertThat(beforeV30.migrate().migrationsExecuted).isEqualTo(29);
+
+    UUID warehouseId = UUID.randomUUID();
+    insertCurrentDriverTask(UUID.randomUUID(), warehouseId, UUID.randomUUID());
+
+    Flyway upgraded = configuration(MIGRATIONS).target("30").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    UUID secondId = UUID.randomUUID();
+    insertCurrentDriverTask(secondId, warehouseId, UUID.randomUUID());
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from driver_logistics_task where warehouse_id=? and state='CURRENT'",
+                Long.class,
+                warehouseId))
+        .isEqualTo(2);
+    assertThat(
+            jdbc.queryForObject(
+                "select manual_promotion_hold from driver_logistics_task where id=?",
+                Boolean.class,
+                secondId))
+        .isFalse();
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v31ReopensOnlyLegacyTransientDriverTasksAtTheirPersistedWorkflowPhase() {
+    Flyway beforeV31 = configuration(MIGRATIONS).target("30").load();
+    assertThat(beforeV31.migrate().migrationsExecuted).isEqualTo(30);
+
+    UUID warehouseId = UUID.randomUUID();
+    UUID registeringId = UUID.randomUUID();
+    UUID finalizingByDoneAtId = UUID.randomUUID();
+    UUID finalizingByEntryStatusId = UUID.randomUUID();
+    UUID scheduledId = UUID.randomUUID();
+    UUID configurationId = UUID.randomUUID();
+    UUID rejectedId = UUID.randomUUID();
+    OffsetDateTime historicalNextAttempt = OffsetDateTime.parse("2026-07-01T12:00:00Z");
+
+    insertReconciliationDriverTask(
+        registeringId, warehouseId, null, null, null, 5, null, "DEPENDENCY_TRANSIENT");
+    insertReconciliationDriverTask(
+        finalizingByDoneAtId,
+        warehouseId,
+        UUID.randomUUID(),
+        "WAITING",
+        OffsetDateTime.parse("2026-07-01T11:00:00Z"),
+        5,
+        null,
+        "DEPENDENCY_TRANSIENT");
+    insertReconciliationDriverTask(
+        finalizingByEntryStatusId,
+        warehouseId,
+        UUID.randomUUID(),
+        "DONE",
+        null,
+        5,
+        null,
+        "DEPENDENCY_TRANSIENT");
+    insertReconciliationDriverTask(
+        scheduledId,
+        warehouseId,
+        UUID.randomUUID(),
+        "WAITING",
+        null,
+        5,
+        null,
+        "DEPENDENCY_TRANSIENT");
+    insertReconciliationDriverTask(
+        configurationId,
+        warehouseId,
+        UUID.randomUUID(),
+        "WAITING",
+        null,
+        17,
+        historicalNextAttempt,
+        "DEPENDENCY_CONFIGURATION");
+    insertReconciliationDriverTask(
+        rejectedId,
+        warehouseId,
+        null,
+        null,
+        null,
+        19,
+        historicalNextAttempt,
+        "DEPENDENCY_PERMANENT_REJECTION");
+
+    Flyway upgraded = configuration(MIGRATIONS).target("31").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+    assertThat(upgraded.migrate().migrationsExecuted).isZero();
+
+    assertRecoveredDriverTask(registeringId, "REGISTERING");
+    assertRecoveredDriverTask(finalizingByDoneAtId, "FINALIZING");
+    assertRecoveredDriverTask(finalizingByEntryStatusId, "FINALIZING");
+    assertRecoveredDriverTask(scheduledId, "SCHEDULED");
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from driver_logistics_task
+                where id=?
+                  and state='RECONCILIATION_REQUIRED'
+                  and failure_code='DEPENDENCY_CONFIGURATION'
+                  and retry_count=17
+                  and next_attempt_at=?
+                """,
+                Long.class,
+                configurationId,
+                historicalNextAttempt))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from driver_logistics_task
+                where id=?
+                  and state='RECONCILIATION_REQUIRED'
+                  and failure_code='DEPENDENCY_PERMANENT_REJECTION'
+                  and retry_count=19
+                  and next_attempt_at=?
+                """,
+                Long.class,
+                rejectedId,
+                historicalNextAttempt))
+        .isOne();
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v32ReplacesLegacyManualBooleanWithTimedHoldAndAddsRollingQueueFacts() {
+    Flyway beforeV32 = configuration(MIGRATIONS).target("31").load();
+    assertThat(beforeV32.migrate().migrationsExecuted).isEqualTo(31);
+
+    UUID warehouseId = UUID.randomUUID();
+    UUID taskId = UUID.randomUUID();
+    UUID repairId = UUID.randomUUID();
+    OffsetDateTime updatedAt = OffsetDateTime.parse("2026-08-01T10:15:00Z");
+    jdbc.update(
+        """
+        insert into driver_logistics_task(
+          id,version,warehouse_id,cabin_id,repair_id,source_type,source_id,task_kind,
+          planning_mode,scheduled_date,priority,unit_number,driver_queue_definition_id,
+          external_task_id,state,cover_applied,repair_place_effect_applied,manual_promotion_hold,
+          created_by_subject_id,idempotency_key,request_sha256,retry_count,created_at,updated_at)
+        values (?,0,?,?,?,'REPAIR',?,'DELIVER_TO_REPAIR','FIXED_DATE',date '2026-08-04',3,
+          'БЫТ-032',?,?,'SCHEDULED',false,false,true,?,?,?,0,?,?)
+        """,
+        taskId,
+        warehouseId,
+        UUID.randomUUID(),
+        repairId,
+        repairId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "a".repeat(64),
+        updatedAt,
+        updatedAt);
+
+    Flyway upgraded = configuration(MIGRATIONS).target("32").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+    assertThat(upgraded.migrate().migrationsExecuted).isZero();
+
+    Map<String, Object> migrated =
+        jdbc.queryForMap(
+            """
+            select manual_promotion_hold_until,fixed_date_lower_bound,movement_comment
+            from driver_logistics_task where id=?
+            """,
+            taskId);
+    assertThat(((java.sql.Timestamp) migrated.get("manual_promotion_hold_until")).toInstant())
+        .isEqualTo(updatedAt.plusMinutes(5).toInstant());
+    assertThat(migrated)
+        .containsEntry("fixed_date_lower_bound", java.sql.Date.valueOf("2026-08-04"))
+        .containsEntry("movement_comment", null);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from information_schema.columns
+                where table_schema='public'
+                  and table_name='driver_logistics_task'
+                  and column_name='manual_promotion_hold'
+                """,
+                Integer.class))
+        .isZero();
+
+    jdbc.update(
+        """
+        update driver_logistics_task
+           set source_type='MANUAL', task_kind='GENERAL_MOVEMENT', repair_id=null,
+               movement_comment='Переместить к воротам'
+         where id=?
+        """,
+        taskId);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update driver_logistics_task set movement_comment=null where id=?", taskId))
+        .hasMessageContaining("ck_driver_logistics_task_manual_comment");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update driver_logistics_task set fixed_date_lower_bound=null where id=?", taskId))
+        .hasMessageContaining("ck_driver_logistics_task_fixed_lower_bound");
+    assertJpaValidationStarts();
+  }
+
+  private void assertRecoveredDriverTask(UUID id, String expectedState) {
+    Map<String, Object> row =
+        jdbc.queryForMap(
+            """
+            select state,retry_count,failure_code,next_attempt_at
+            from driver_logistics_task
+            where id=?
+            """,
+            id);
+    assertThat(row.get("state")).isEqualTo(expectedState);
+    assertThat(row.get("retry_count")).isEqualTo(0);
+    assertThat(row.get("failure_code")).isNull();
+    assertThat(row.get("next_attempt_at")).isNotNull();
+    assertThat(
+            jdbc.queryForObject(
+                "select next_attempt_at <= clock_timestamp() from driver_logistics_task where id=?",
+                Boolean.class,
+                id))
+        .isTrue();
+  }
+
+  private void insertReconciliationDriverTask(
+      UUID id,
+      UUID warehouseId,
+      UUID taskBoardTaskId,
+      String taskBoardEntryStatus,
+      OffsetDateTime taskBoardDoneAt,
+      int retryCount,
+      OffsetDateTime nextAttemptAt,
+      String failureCode) {
+    UUID repairId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into driver_logistics_task(
+          id,version,warehouse_id,cabin_id,repair_id,source_type,source_id,task_kind,
+          planning_mode,scheduled_date,priority,unit_number,driver_queue_definition_id,
+          external_task_id,task_board_task_id,task_board_task_version,task_board_entry_id,
+          task_board_entry_status,task_board_done_at,state,cover_applied,repair_place_effect_applied,
+          created_by_subject_id,idempotency_key,request_sha256,retry_count,next_attempt_at,failure_code,
+          created_at,updated_at)
+        values (?,0,?,?,?,'REPAIR',?,'DELIVER_TO_REPAIR','AUTO',current_date,3,
+          ?,?,?,?,?,?,?,?, 'RECONCILIATION_REQUIRED',false,false,?,?,?,?,?,?,
+          clock_timestamp(),clock_timestamp())
+        """,
+        id,
+        warehouseId,
+        UUID.randomUUID(),
+        repairId,
+        repairId,
+        "БЫТ-" + id.toString().substring(0, 4),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        taskBoardTaskId,
+        taskBoardTaskId == null ? null : 0L,
+        taskBoardTaskId == null ? null : UUID.randomUUID(),
+        taskBoardEntryStatus,
+        taskBoardDoneAt,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "a".repeat(64),
+        retryCount,
+        nextAttemptAt,
+        failureCode);
+  }
+
+  private void insertCurrentDriverTask(UUID id, UUID warehouseId, UUID repairId) {
+    jdbc.update(
+        """
+        insert into driver_logistics_task(
+          id,version,warehouse_id,cabin_id,repair_id,source_type,source_id,task_kind,
+          planning_mode,scheduled_date,priority,unit_number,driver_queue_definition_id,
+          external_task_id,task_board_task_id,task_board_task_version,task_board_entry_id,
+          task_board_entry_status,state,cover_applied,repair_place_effect_applied,
+          created_by_subject_id,idempotency_key,request_sha256,retry_count,
+          created_at,updated_at)
+        values (?,0,?,?,?,'REPAIR',?,'DELIVER_TO_REPAIR','AUTO',current_date,3,
+          ?,?,?,?,0,?,'WAITING','CURRENT',false,false,?,?,?,0,
+          clock_timestamp(),clock_timestamp())
+        """,
+        id,
+        warehouseId,
+        UUID.randomUUID(),
+        repairId,
+        repairId,
+        "БЫТ-" + id.toString().substring(0, 4),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "a".repeat(64));
   }
 
   @Test

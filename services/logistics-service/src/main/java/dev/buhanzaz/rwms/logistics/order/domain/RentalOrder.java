@@ -151,6 +151,14 @@ public class RentalOrder {
     return true;
   }
 
+  /** Records an extension mutation while at least one cabin is already on rent. */
+  public void recordRentalTermExtension() {
+    if (status != RentalOrderStatus.SAVED && status != RentalOrderStatus.FULFILLED) {
+      throw new IllegalStateException("Rental terms cannot be extended in the current order state");
+    }
+    updatedAt = nextUpdatedAt();
+  }
+
   public boolean close() {
     if (status == RentalOrderStatus.CLOSED) return false;
     if (status != RentalOrderStatus.FULFILLED) {

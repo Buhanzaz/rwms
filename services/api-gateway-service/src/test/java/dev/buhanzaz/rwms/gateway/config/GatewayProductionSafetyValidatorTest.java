@@ -30,25 +30,18 @@ class GatewayProductionSafetyValidatorTest {
   }
 
   @Test
-  void rejectsUnsafeRouteShapesCredentialsAndWildcardCors() {
+  void rejectsUnsafeRouteShapesPublicAuthTargetAndWildcardCors() {
     GatewayProperties path = validProperties();
     path.getRoutes().setAuthUri(URI.create("https://auth.internal/base"));
     assertThatThrownBy(() -> new GatewayProductionSafetyValidator(path, new MockEnvironment()).validate())
         .isInstanceOf(IllegalStateException.class);
 
-    GatewayProperties credentials = validProperties();
-    credentials.getSecurity().setJwkSetUri(URI.create("https://user:secret@auth.internal/oauth2/jwks"));
+    GatewayProperties publicAuthTarget = validProperties();
+    publicAuthTarget.getRoutes().setAuthUri(URI.create("https://panel.example"));
     assertThatThrownBy(
-            () -> new GatewayProductionSafetyValidator(credentials, new MockEnvironment()).validate())
-        .isInstanceOf(IllegalStateException.class);
-
-    GatewayProperties jwkQuery = validProperties();
-    jwkQuery
-        .getSecurity()
-        .setJwkSetUri(URI.create("https://auth.internal/oauth2/jwks?tenant=unsafe"));
-    assertThatThrownBy(
-            () -> new GatewayProductionSafetyValidator(jwkQuery, new MockEnvironment()).validate())
-        .isInstanceOf(IllegalStateException.class);
+            () -> new GatewayProductionSafetyValidator(publicAuthTarget, new MockEnvironment()).validate())
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("public gateway host");
 
     GatewayProperties wildcard = validProperties();
     wildcard.getCors().setAllowedOrigins(List.of("https://*.example"));
@@ -111,7 +104,6 @@ class GatewayProductionSafetyValidatorTest {
     properties.getRoutes().setAssistantUri(URI.create("http://assistant-service:8092"));
     properties.getSecurity().setIssuer("https://panel.example/auth");
     properties.getSecurity().setAudience("rwms-services");
-    properties.getSecurity().setJwkSetUri(URI.create("http://auth-service:9000/oauth2/jwks"));
     properties.getCors().setAllowedOrigins(List.of("https://panel.example"));
     properties
         .getAppLinks()

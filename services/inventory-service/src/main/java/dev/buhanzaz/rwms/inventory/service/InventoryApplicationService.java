@@ -156,6 +156,7 @@ public class InventoryApplicationService {
   private final InventoryIdempotencyPort idempotency;
   private final InventoryStartPersistencePort startPersistence;
   private final InventoryCanonicalJsonPort canonicalJson;
+  private final InventoryFrozenPlanFingerprint frozenPlanFingerprint;
   private final ObjectMapper mapper;
   private final TransactionTemplate transactions;
 
@@ -184,6 +185,7 @@ public class InventoryApplicationService {
       InventoryIdempotencyPort idempotency,
       InventoryStartPersistencePort startPersistence,
       InventoryCanonicalJsonPort canonicalJson,
+      InventoryFrozenPlanFingerprint frozenPlanFingerprint,
       ObjectMapper mapper,
       PlatformTransactionManager transactionManager) {
     this.sessions = sessions;
@@ -210,6 +212,7 @@ public class InventoryApplicationService {
     this.idempotency = idempotency;
     this.startPersistence = startPersistence;
     this.canonicalJson = canonicalJson;
+    this.frozenPlanFingerprint = frozenPlanFingerprint;
     this.mapper = mapper;
     transactions = new TransactionTemplate(transactionManager);
   }
@@ -1074,7 +1077,7 @@ public class InventoryApplicationService {
             || !session.getId().equals(plan.inventoryId())
             || !finding.getId().equals(plan.findingId())
             || Math.addExact(finding.getRevision(), 1) != plan.sourceRevision()
-            || !canonicalHash(plan.snapshot()).equals(plan.fingerprint()))) {
+            || !frozenPlanFingerprint.sha256(plan.snapshot()).equals(plan.fingerprint()))) {
       throw InventoryException.dependency("Maintenance-service returned mismatched frozen plan");
     }
     InventoryDependencyGateway.FrozenPlan frozenPlan = plan;
@@ -1833,7 +1836,13 @@ public class InventoryApplicationService {
     body.put("sourceRevision", Math.addExact(finding.getRevision(), 1));
     body.put("mode", selection.mode());
     body.put("priority", selection.priority());
-    body.put("logisticsPlanningMode", selection.logisticsPlanningMode().name());
+    body.put("movementToRepair", selection.movementToRepair());
+    body.put("movementToShipment", selection.movementToShipment());
+    if (selection.logisticsPlanningMode() == null) {
+      body.putNull("logisticsPlanningMode");
+    } else {
+      body.put("logisticsPlanningMode", selection.logisticsPlanningMode().name());
+    }
     if (selection.logisticsScheduledDate() == null) {
       body.putNull("logisticsScheduledDate");
     } else {
@@ -1904,7 +1913,6 @@ public class InventoryApplicationService {
       throw new IllegalArgumentException("Inventory logistics planning is invalid");
     }
     boolean manualMode = "MANUAL".equals(selection.mode());
-    Set<UUID> catalogLines = new HashSet<>();
     for (PlanLineInput line : selection.lines()) {
       BigDecimal quantity = new BigDecimal(line.quantity());
       if (quantity.signum() <= 0) throw new IllegalArgumentException("Plan quantity must be positive");
@@ -1914,9 +1922,8 @@ public class InventoryApplicationService {
             || line.type() != null
             || line.unit() != null
             || line.unitPriceMinor() != null
-            || line.normativeMinutes() != null
-            || !catalogLines.add(line.catalogNodeId())) {
-          throw new IllegalArgumentException("CATALOG plan line evidence is invalid or duplicated");
+            || line.normativeMinutes() != null) {
+          throw new IllegalArgumentException("CATALOG plan line evidence is invalid");
         }
       } else if (!manualMode
           || line.catalogNodeId() != null
@@ -1937,7 +1944,11 @@ public class InventoryApplicationService {
       throw new IllegalArgumentException("MANUAL plan requires ordered stages");
     }
     for (int index = 0; index < selection.stages().size(); index++) {
-      if (selection.stages().get(index).order() != index) {
+      PlanStageSelection stage = selection.stages().get(index);
+      if (!"REPAIR_WORK".equals(stage.kind())) {
+        throw new IllegalArgumentException("Inventory plan stages can contain repair work only");
+      }
+      if (stage.order() != index) {
         throw new IllegalArgumentException("Plan stage order must be contiguous");
       }
     }
@@ -2035,26 +2046,30 @@ public class InventoryApplicationService {
       InventoryDependencyGateway.FrozenPlan frozen) {
     JsonNode snapshot = frozen.snapshot();
     UUID catalogVersionId = UUID.fromString(snapshot.path("catalogVersionId").asText());
+    boolean movementToRepair =
+        requiredBoolean(snapshot, "movementToRepair", "frozen movement to repair");
+    boolean movementToShipment =
+        requiredBoolean(snapshot, "movementToShipment", "frozen movement to shipment");
     LogisticsPlanningMode logisticsPlanningMode;
     LocalDate logisticsScheduledDate;
     try {
       logisticsPlanningMode =
-          LogisticsPlanningMode.valueOf(
-              requiredText(
-                  snapshot, "logisticsPlanningMode", "frozen logistics planning mode"));
+          nullableLogisticsPlanningMode(
+              snapshot, "logisticsPlanningMode", "frozen logistics planning mode");
       logisticsScheduledDate =
-          snapshot.path("logisticsScheduledDate").isNull()
-              ? null
-              : LocalDate.parse(
-                  requiredText(
-                      snapshot,
-                      "logisticsScheduledDate",
-                      "frozen logistics scheduled date"));
+          nullableLocalDate(
+              snapshot, "logisticsScheduledDate", "frozen logistics scheduled date");
     } catch (IllegalArgumentException exception) {
       throw new IllegalStateException(
           "Persisted frozen logistics planning is invalid", exception);
     }
-    if (logisticsPlanningMode != selection.logisticsPlanningMode()
+    if (!LogisticsPlanningMode.validInboundPlanning(
+        movementToRepair, logisticsPlanningMode, logisticsScheduledDate)) {
+      throw new IllegalStateException("Persisted frozen logistics planning is invalid");
+    }
+    if (movementToRepair != selection.movementToRepair()
+        || movementToShipment != selection.movementToShipment()
+        || logisticsPlanningMode != selection.logisticsPlanningMode()
         || !java.util.Objects.equals(
             logisticsScheduledDate, selection.logisticsScheduledDate())) {
       throw InventoryException.dependency(
@@ -2066,6 +2081,8 @@ public class InventoryApplicationService {
             finding.getRevision(),
             finding.getInventoryId(),
             selection.mode(),
+            movementToRepair,
+            movementToShipment,
             logisticsPlanningMode,
             logisticsScheduledDate,
             catalogVersionId,
@@ -2111,6 +2128,9 @@ public class InventoryApplicationService {
     }
     int stageNo = 0;
     for (JsonNode stage : snapshot.path("stages")) {
+      if (!"REPAIR_WORK".equals(requiredText(stage, "kind", "frozen plan stage kind"))) {
+        throw new IllegalStateException("Frozen inventory plan contains a legacy movement stage");
+      }
       JsonNode routing = stage.path("routing");
       planStages.save(
           new FindingPlanStage(
@@ -2123,7 +2143,6 @@ public class InventoryApplicationService {
               UUID.fromString(routing.path("queueId").asText()),
               routing.path("queueName").asText(),
               routing.path("queueType").asText(),
-              !"REPAIR_WORK".equals(stage.path("kind").asText()),
               false,
               write(stage)));
     }
@@ -2322,7 +2341,7 @@ public class InventoryApplicationService {
         if (finding.getMaintenancePlanFingerprintSha256() == null
             || plan == null
             || !finding.getMaintenancePlanFingerprintSha256().equals(plan.getFingerprint())
-            || !plan.getFingerprint().equals(canonicalHash(read(plan.getSourceSnapshot())))) {
+            || !plan.getFingerprint().equals(frozenPlanFingerprint.sha256(read(plan.getSourceSnapshot())))) {
           result.add(new CompletionRisk(finding.getId(), "PLAN_STALE"));
         }
       }
@@ -3551,7 +3570,26 @@ public class InventoryApplicationService {
       List<FindingPlanLine> lines,
       List<FindingPlanStage> stages) {
     JsonNode source = read(snapshot.getSourceSnapshot());
-    int priority = source.has("priority") ? source.path("priority").asInt(-1) : 3;
+    boolean sourceMovementToRepair =
+        requiredBoolean(source, "movementToRepair", "frozen plan movement to repair");
+    boolean sourceMovementToShipment =
+        requiredBoolean(source, "movementToShipment", "frozen plan movement to shipment");
+    LogisticsPlanningMode sourceLogisticsPlanningMode =
+        nullableLogisticsPlanningMode(
+            source, "logisticsPlanningMode", "frozen plan logistics planning mode");
+    LocalDate sourceLogisticsScheduledDate =
+        nullableLocalDate(
+            source, "logisticsScheduledDate", "frozen plan logistics scheduled date");
+    if (!LogisticsPlanningMode.validInboundPlanning(
+            sourceMovementToRepair, sourceLogisticsPlanningMode, sourceLogisticsScheduledDate)
+        || sourceMovementToRepair != snapshot.isMovementToRepair()
+        || sourceMovementToShipment != snapshot.isMovementToShipment()
+        || sourceLogisticsPlanningMode != snapshot.getLogisticsPlanningMode()
+        || !java.util.Objects.equals(
+            sourceLogisticsScheduledDate, snapshot.getLogisticsScheduledDate())) {
+      throw new IllegalStateException("Persisted frozen plan movement snapshot is invalid");
+    }
+    int priority = source.path("priority").asInt(-1);
     if (priority < 1 || priority > 5) {
       throw new IllegalStateException("Persisted frozen plan priority is invalid");
     }
@@ -3597,7 +3635,6 @@ public class InventoryApplicationService {
                         stage.getRoutingQueueId(),
                         stage.getRoutingQueueName(),
                         stage.getRoutingQueueType(),
-                        stage.isMovementRequired(),
                         stage.isPhotoRequired(),
                         sourceStage.path("normativeDurationMinutes").asInt(0));
                 })
@@ -3608,6 +3645,8 @@ public class InventoryApplicationService {
         snapshot.getFingerprint(),
         priority,
         coverMediaId,
+        snapshot.isMovementToRepair(),
+        snapshot.isMovementToShipment(),
         snapshot.getLogisticsPlanningMode(),
         snapshot.getLogisticsScheduledDate(),
         lineViews,
@@ -3618,6 +3657,41 @@ public class InventoryApplicationService {
     try {
       return UUID.fromString(requiredText(value, field, name));
     } catch (IllegalArgumentException exception) {
+      throw new IllegalStateException("Persisted " + name + " is invalid", exception);
+    }
+  }
+
+  private boolean requiredBoolean(JsonNode value, String field, String name) {
+    JsonNode result = value.get(field);
+    if (result == null || !result.isBoolean()) {
+      throw new IllegalStateException("Persisted " + name + " is missing");
+    }
+    return result.booleanValue();
+  }
+
+  private LogisticsPlanningMode nullableLogisticsPlanningMode(
+      JsonNode value, String field, String name) {
+    JsonNode result = value.get(field);
+    if (result == null || result.isNull()) return null;
+    if (!result.isTextual()) {
+      throw new IllegalStateException("Persisted " + name + " is invalid");
+    }
+    try {
+      return LogisticsPlanningMode.valueOf(result.stringValue());
+    } catch (IllegalArgumentException exception) {
+      throw new IllegalStateException("Persisted " + name + " is invalid", exception);
+    }
+  }
+
+  private LocalDate nullableLocalDate(JsonNode value, String field, String name) {
+    JsonNode result = value.get(field);
+    if (result == null || result.isNull()) return null;
+    if (!result.isTextual()) {
+      throw new IllegalStateException("Persisted " + name + " is invalid");
+    }
+    try {
+      return LocalDate.parse(result.stringValue());
+    } catch (java.time.format.DateTimeParseException exception) {
       throw new IllegalStateException("Persisted " + name + " is invalid", exception);
     }
   }

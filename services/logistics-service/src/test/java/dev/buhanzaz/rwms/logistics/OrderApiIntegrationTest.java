@@ -294,45 +294,45 @@ class OrderApiIntegrationTest {
     UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент сохранённого заказа");
     selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
     addUnit(orderId, MANAGER_1, UNIT_1, 1);
+    setRentalTerms(orderId, MANAGER_1, 2, UNIT_1, 2);
     UUID idempotencyKey = UUID.randomUUID();
 
     mvc.perform(
             post("/api/logistics/v1/orders/{orderId}/save", orderId)
-                .param("expectedVersion", "2")
+                .param("expectedVersion", "3")
                 .header("Idempotency-Key", idempotencyKey)
                 .with(manager(MANAGER_1, "manager-one")))
         .andExpect(status().isOk())
-        .andExpect(header().string("ETag", "\"3\""))
-        .andExpect(jsonPath("$.version").value(3))
+        .andExpect(header().string("ETag", "\"4\""))
+        .andExpect(jsonPath("$.version").value(4))
         .andExpect(jsonPath("$.status").value("SAVED"))
         .andExpect(jsonPath("$.unitCount").value(1));
     mvc.perform(
             post("/api/logistics/v1/orders/{orderId}/save", orderId)
-                .param("expectedVersion", "2")
+                .param("expectedVersion", "3")
                 .header("Idempotency-Key", idempotencyKey)
                 .with(manager(MANAGER_1, "manager-one")))
         .andExpect(status().isOk())
         .andExpect(header().string("Idempotency-Replayed", "true"))
-        .andExpect(jsonPath("$.version").value(3));
-    jdbc.update(
-        """
-        update logistics_document_line
-        set tenant_snapshot=null
-        where document_id=(
-          select id from logistics_document
-          where rental_order_id=? and document_type='SHIPMENT'
-        )
-        """,
-        orderId);
+        .andExpect(jsonPath("$.version").value(4));
     mvc.perform(
             post("/api/logistics/v1/orders/{orderId}/save", orderId)
-                .param("expectedVersion", "3")
+                .param("expectedVersion", "4")
                 .header("Idempotency-Key", UUID.randomUUID())
                 .with(manager(MANAGER_1, "manager-one")))
         .andExpect(status().isOk())
-        .andExpect(header().string("ETag", "\"3\""))
-        .andExpect(jsonPath("$.version").value(3))
+        .andExpect(header().string("ETag", "\"4\""))
+        .andExpect(jsonPath("$.version").value(4))
         .andExpect(jsonPath("$.status").value("SAVED"));
+
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_document where rental_order_id=? and document_type='SHIPMENT'",
+                Long.class,
+                orderId))
+        .isZero();
+
+    createRentalShipment(orderId, MANAGER_1, 4, UNIT_1, "2026-07-29", "Водитель");
 
     mvc.perform(
             get("/api/logistics/v1/shipments")
@@ -341,8 +341,8 @@ class OrderApiIntegrationTest {
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.length()").value(1))
         .andExpect(jsonPath("$[0].state").value("DRAFT"))
-        .andExpect(jsonPath("$[0].scheduledAt").isEmpty())
-        .andExpect(jsonPath("$[0].driverSnapshot").isEmpty())
+        .andExpect(jsonPath("$[0].scheduledDate").value("2026-07-29"))
+        .andExpect(jsonPath("$[0].driverSnapshot").value("Водитель"))
         .andExpect(jsonPath("$[0].rentalOrderId").value(orderId.toString()))
         .andExpect(jsonPath("$[0].lines.length()").value(1))
         .andExpect(jsonPath("$[0].lines[0].assetId").value(UNIT_1.toString()))
@@ -371,7 +371,7 @@ class OrderApiIntegrationTest {
             put("/api/logistics/v1/orders/{orderId}", orderId)
                 .header("Idempotency-Key", UUID.randomUUID())
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(updateOrderBody(3, orderClientId(orderId)))
+                .content(updateOrderBody(4, orderClientId(orderId)))
                 .with(manager(MANAGER_1, "manager-one")))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.status").value("SAVED"))
@@ -391,23 +391,17 @@ class OrderApiIntegrationTest {
     UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент начатой отгрузки");
     selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
     addUnit(orderId, MANAGER_1, UNIT_1, 1);
+    setRentalTerms(orderId, MANAGER_1, 2, UNIT_1, 1);
     mvc.perform(
             post("/api/logistics/v1/orders/{orderId}/save", orderId)
-                .param("expectedVersion", "2")
+                .param("expectedVersion", "3")
                 .header("Idempotency-Key", UUID.randomUUID())
                 .with(manager(MANAGER_1, "manager-one")))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.status").value("SAVED"));
 
-    UUID shipmentId =
-        jdbc.queryForObject(
-            """
-            select id
-            from logistics_document
-            where rental_order_id=? and document_type='SHIPMENT'
-            """,
-            UUID.class,
-            orderId);
+    JsonNode shipment = createRentalShipment(orderId, MANAGER_1, 4, UNIT_1, "2026-07-29", "Водитель");
+    UUID shipmentId = UUID.fromString(shipment.get("id").stringValue());
     long shipmentVersion =
         jdbc.queryForObject(
             "select version from logistics_document where id=?", Long.class, shipmentId);
@@ -442,23 +436,17 @@ class OrderApiIntegrationTest {
     UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент задания на мебель");
     selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
     addUnit(orderId, MANAGER_1, UNIT_1, 1);
+    setRentalTerms(orderId, MANAGER_1, 2, UNIT_1, 1);
     mvc.perform(
             post("/api/logistics/v1/orders/{orderId}/save", orderId)
-                .param("expectedVersion", "2")
+                .param("expectedVersion", "3")
                 .header("Idempotency-Key", UUID.randomUUID())
                 .with(manager(MANAGER_1, "manager-one")))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.status").value("SAVED"));
 
-    UUID shipmentId =
-        jdbc.queryForObject(
-            """
-            select id
-            from logistics_document
-            where rental_order_id=? and document_type='SHIPMENT'
-            """,
-            UUID.class,
-            orderId);
+    JsonNode shipment = createRentalShipment(orderId, MANAGER_1, 4, UNIT_1, "2026-07-29", "Водитель");
+    UUID shipmentId = UUID.fromString(shipment.get("id").stringValue());
     linkFurnitureMovementTask(shipmentId, UNIT_1);
 
     mvc.perform(
@@ -477,6 +465,139 @@ class OrderApiIntegrationTest {
                 .with(manager(MANAGER_1, "manager-one")))
         .andExpect(status().isConflict())
         .andExpect(jsonPath("$.code").value("ORDER_NOT_EDITABLE"));
+  }
+
+  @Test
+  void rentalTermsRequireACompleteDraftVectorAndKeepPartialShipmentDatesIndependent()
+      throws Exception {
+    UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент частичных отгрузок");
+    selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
+    addUnit(orderId, MANAGER_1, UNIT_1, 1);
+    addUnit(orderId, MANAGER_1, UNIT_2, 2);
+
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/save", orderId)
+                .param("expectedVersion", "3")
+                .header("Idempotency-Key", UUID.randomUUID())
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("ORDER_RENTAL_TERMS_REQUIRED"));
+
+    JsonNode terms =
+        setRentalTerms(
+            orderId,
+            MANAGER_1,
+            3,
+            Map.of(UNIT_1, 2L, UNIT_2, 3L));
+    assertThat(rentalTerm(terms, UNIT_1).get("rentalMonths").longValue()).isEqualTo(2);
+    assertThat(rentalTerm(terms, UNIT_1).get("shipmentDate").isNull()).isTrue();
+    assertThat(rentalTerm(terms, UNIT_1).get("returnDate").isNull()).isTrue();
+
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/save", orderId)
+                .param("expectedVersion", "4")
+                .header("Idempotency-Key", UUID.randomUUID())
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.version").value(5))
+        .andExpect(jsonPath("$.status").value("SAVED"));
+
+    JsonNode firstShipment =
+        createRentalShipment(orderId, MANAGER_1, 5, UNIT_1, "2026-08-01", "Водитель 1");
+    JsonNode afterFirstShipment =
+        json(
+            mvc.perform(
+                    get("/api/logistics/v1/orders/{orderId}", orderId)
+                        .with(manager(MANAGER_1, "manager-one")))
+                .andExpect(status().isOk())
+                .andReturn());
+    assertThat(rentalTerm(afterFirstShipment, UNIT_1).get("shipmentDate").stringValue())
+        .isEqualTo("2026-08-01");
+    assertThat(rentalTerm(afterFirstShipment, UNIT_1).get("returnDate").stringValue())
+        .isEqualTo("2026-10-01");
+    assertThat(rentalTerm(afterFirstShipment, UNIT_2).get("shipmentDate").isNull()).isTrue();
+
+    createRentalShipment(orderId, MANAGER_1, 5, UNIT_2, "2026-08-08", "Водитель 2");
+    JsonNode afterSecondShipment =
+        json(
+            mvc.perform(
+                    get("/api/logistics/v1/orders/{orderId}", orderId)
+                        .with(manager(MANAGER_1, "manager-one")))
+                .andExpect(status().isOk())
+                .andReturn());
+    assertThat(rentalTerm(afterSecondShipment, UNIT_2).get("shipmentDate").stringValue())
+        .isEqualTo("2026-08-08");
+    assertThat(rentalTerm(afterSecondShipment, UNIT_2).get("returnDate").stringValue())
+        .isEqualTo("2026-11-08");
+
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/shipments", orderId)
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {
+                      "expectedVersion": 5,
+                      "driverSnapshot": "Повтор",
+                      "scheduledDate": "2026-08-09",
+                      "unitIds": ["%s"]
+                    }
+                    """
+                        .formatted(UNIT_1))
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isConflict());
+
+    mvc.perform(
+            put("/api/logistics/v1/orders/{orderId}/rental-terms", orderId)
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {
+                      "expectedVersion": 5,
+                      "terms": [
+                        {"unitId":"%s", "rentalMonths":4},
+                        {"unitId":"%s", "rentalMonths":3}
+                      ]
+                    }
+                    """
+                        .formatted(UNIT_1, UNIT_2))
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("ORDER_RENTAL_TERM_ASSIGNED"));
+
+    jdbc.update(
+        "update logistics_document set state='SHIPPED' where id=?",
+        UUID.fromString(firstShipment.get("id").stringValue()));
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/rental-terms/extend", orderId)
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {
+                      "expectedVersion": 5,
+                      "terms": [{"unitId":"%s", "additionalMonths":1}]
+                    }
+                    """
+                        .formatted(UNIT_1))
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.version").value(6));
+    assertThat(
+            jdbc.queryForObject(
+                "select rental_months from rental_order_unit_term where order_id=? and rental_item_id=?",
+                Long.class,
+                orderId,
+                UNIT_1))
+        .isEqualTo(3);
+    assertThat(
+            jdbc.queryForObject(
+                "select return_date::text from rental_order_unit_term where order_id=? and rental_item_id=?",
+                String.class,
+                orderId,
+                UNIT_1))
+        .isEqualTo("2026-11-01");
   }
 
   @Test
@@ -1249,6 +1370,82 @@ class OrderApiIntegrationTest {
   private static String updateOrderBody(long expectedVersion, UUID clientId) {
     return "{\"expectedVersion\":%d,\"clientId\":\"%s\"}"
         .formatted(expectedVersion, clientId);
+  }
+
+  private JsonNode setRentalTerms(
+      UUID orderId, UUID subjectId, long expectedVersion, UUID unitId, long rentalMonths)
+      throws Exception {
+    return setRentalTerms(orderId, subjectId, expectedVersion, Map.of(unitId, rentalMonths));
+  }
+
+  private JsonNode setRentalTerms(
+      UUID orderId, UUID subjectId, long expectedVersion, Map<UUID, Long> terms) throws Exception {
+    String termValues =
+        terms.entrySet().stream()
+            .map(
+                entry ->
+                    "{\"unitId\":\"%s\",\"rentalMonths\":%d}"
+                        .formatted(entry.getKey(), entry.getValue()))
+            .collect(java.util.stream.Collectors.joining(","));
+    MvcResult result =
+        mvc.perform(
+                put("/api/logistics/v1/orders/{orderId}/rental-terms", orderId)
+                    .header("Idempotency-Key", UUID.randomUUID())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(
+                        """
+                        {
+                          "expectedVersion": %d,
+                          "terms": [%s]
+                        }
+                        """
+                            .formatted(expectedVersion, termValues))
+                    .with(manager(subjectId, "manager-one")))
+            .andExpect(status().isOk())
+            .andReturn();
+    return json(result);
+  }
+
+  private JsonNode createRentalShipment(
+      UUID orderId,
+      UUID subjectId,
+      long expectedVersion,
+      UUID unitId,
+      String scheduledDate,
+      String driver)
+      throws Exception {
+    MvcResult result =
+        mvc.perform(
+                post("/api/logistics/v1/orders/{orderId}/shipments", orderId)
+                    .header("Idempotency-Key", UUID.randomUUID())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(
+                        """
+                        {
+                          "expectedVersion": %d,
+                          "driverSnapshot": "%s",
+                          "scheduledDate": "%s",
+                          "unitIds": ["%s"]
+                        }
+                        """
+                            .formatted(expectedVersion, driver, scheduledDate, unitId))
+                    .with(manager(subjectId, "manager-one")))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.state").value("DRAFT"))
+            .andExpect(jsonPath("$.scheduledDate").value(scheduledDate))
+            .andExpect(jsonPath("$.rentalOrderId").value(orderId.toString()))
+            .andExpect(jsonPath("$.lines.length()").value(1))
+            .andReturn();
+    return json(result);
+  }
+
+  private static JsonNode rentalTerm(JsonNode detail, UUID unitId) {
+    for (JsonNode unit : detail.get("units")) {
+      if (unitId.toString().equals(unit.at("/unit/id").stringValue())) {
+        return unit.get("rentalTerm");
+      }
+    }
+    throw new AssertionError("Order unit was not returned: " + unitId);
   }
 
   private static String nextTestPhone() {

@@ -1,4 +1,5 @@
 package dev.buhanzaz.rwms.taskboard;
+import static dev.buhanzaz.rwms.taskboard.QueueFixtureModels.*;
 
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.CancelLogisticsEquipmentMovementTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.CreateBoardTaskRequest;
@@ -9,7 +10,6 @@ import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RegisterLogisticsEquipme
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RouteStepRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.TakeEntryRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.VersionCommand;
-import static dev.buhanzaz.rwms.taskboard.api.ApiModels.WorkQueueRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.WorkerRequest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -78,9 +78,9 @@ class LogisticsEquipmentMovementTaskIntegrationTest extends PostgresIntegrationT
             new QueueDefinitionRequest(
                 0L, "Перемещение мебели", null, QueueType.FURNITURE_MOVEMENT));
     furnitureQueue =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             WAREHOUSE,
-            new WorkQueueRequest(
+            new QueueFixtureRequest(
                 0L,
                 definition.id(),
                 true,
@@ -224,9 +224,9 @@ class LogisticsEquipmentMovementTaskIntegrationTest extends PostgresIntegrationT
         registry.createQueueDefinition(
             new QueueDefinitionRequest(0L, "Movement", null, QueueType.MOVEMENT));
     var queue =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             WAREHOUSE,
-            new WorkQueueRequest(
+            new QueueFixtureRequest(
                 0L,
                 definition.id(),
                 true,

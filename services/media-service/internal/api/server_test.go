@@ -20,6 +20,7 @@ import (
 	"dev.buhanzaz.rwms/media-service/internal/auth"
 	"dev.buhanzaz.rwms/media-service/internal/media"
 	"dev.buhanzaz.rwms/media-service/internal/persistence"
+	"dev.buhanzaz.rwms/media-service/internal/realtime"
 	"github.com/google/uuid"
 )
 
@@ -51,6 +52,7 @@ func TestUnknownRouteAndWrongMethodUseProblemDetails(t *testing.T) {
 	}{
 		{name: "unknown", method: http.MethodGet, path: "/does-not-exist", wantStatus: http.StatusNotFound, wantCode: "MEDIA_NOT_FOUND"},
 		{name: "wrong method", method: http.MethodPut, path: "/api/media/v1/upload-sessions", wantStatus: http.StatusMethodNotAllowed, wantCode: "MEDIA_METHOD_NOT_ALLOWED"},
+		{name: "event stream wrong method", method: http.MethodPost, path: "/api/media/v1/events", wantStatus: http.StatusMethodNotAllowed, wantCode: "MEDIA_METHOD_NOT_ALLOWED"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			response := httptest.NewRecorder()
@@ -63,17 +65,73 @@ func TestUnknownRouteAndWrongMethodUseProblemDetails(t *testing.T) {
 	}
 }
 
+func TestWarehouseEventStreamRequiresReadViewAndStartsWithResync(t *testing.T) {
+	warehouseID := uuid.New()
+	readPrincipal := auth.Principal{
+		SubjectID: uuid.New(), Scopes: map[string]struct{}{"rwms.read": {}},
+		Grants: []auth.WarehouseGrant{{WarehouseID: warehouseID, Level: auth.View}},
+	}
+	tests := []struct {
+		name       string
+		path       string
+		validator  validatorStub
+		wantStatus int
+	}{
+		{name: "unauthenticated", path: "/api/media/v1/events?warehouseId=" + warehouseID.String(), validator: validatorStub{err: auth.ErrUnauthorized}, wantStatus: http.StatusUnauthorized},
+		{name: "invalid warehouse", path: "/api/media/v1/events?warehouseId=invalid", validator: validatorStub{principal: readPrincipal}, wantStatus: http.StatusBadRequest},
+		{name: "missing read scope", path: "/api/media/v1/events?warehouseId=" + warehouseID.String(), validator: validatorStub{principal: auth.Principal{
+			SubjectID: uuid.New(), Grants: []auth.WarehouseGrant{{WarehouseID: warehouseID, Level: auth.View}},
+		}}, wantStatus: http.StatusForbidden},
+		{name: "missing warehouse view", path: "/api/media/v1/events?warehouseId=" + warehouseID.String(), validator: validatorStub{principal: auth.Principal{
+			SubjectID: uuid.New(), Scopes: map[string]struct{}{"rwms.read": {}},
+		}}, wantStatus: http.StatusForbidden},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := newTestServer(t, &repositoryStub{}, test.validator, &storeStub{})
+			request := httptest.NewRequest(http.MethodGet, test.path, nil)
+			request.Header.Set("Authorization", "Bearer test")
+			response := httptest.NewRecorder()
+			server.Handler().ServeHTTP(response, request)
+			if response.Code != test.wantStatus || response.Header().Get("Content-Type") != "application/problem+json" {
+				t.Fatalf("response = %d %q %s", response.Code, response.Header().Get("Content-Type"), response.Body.String())
+			}
+		})
+	}
+
+	server := newTestServer(t, &repositoryStub{}, validatorStub{principal: readPrincipal}, &storeStub{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	request := httptest.NewRequest(http.MethodGet,
+		"/api/media/v1/events?warehouseId="+warehouseID.String(), nil).WithContext(ctx)
+	request.Header.Set("Authorization", "Bearer test")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "text/event-stream" ||
+		response.Header().Get("Cache-Control") != "no-cache, no-store, must-revalidate" ||
+		!strings.Contains(response.Body.String(), "event: warehouse-invalidation\n") ||
+		!strings.Contains(response.Body.String(), `"warehouseId":"`+warehouseID.String()+`"`) ||
+		!strings.Contains(response.Body.String(), `"scope":"RESYNC"`) {
+		t.Fatalf("event stream response = %d %#v %q", response.Code, response.Header(), response.Body.String())
+	}
+}
+
 func TestCreateUploadReturnsOnlySameOriginContentPath(t *testing.T) {
 	warehouseID, ownerID, subjectID := uuid.New(), uuid.New(), uuid.New()
 	sessionID, mediaID := uuid.New(), uuid.New()
 	repository := &repositoryStub{createAsset: persistence.AssetRecord{
-		ID: mediaID, UploadSessionID: sessionID, UploadExpiresAt: time.Now().Add(time.Minute),
+		ID: mediaID, OwnerType: persistence.OwnerTypeInventoryFinding, OwnerID: ownerID.String(),
+		WarehouseID: warehouseID, Version: 1, UploadSessionID: sessionID,
+		UploadExpiresAt: time.Now().Add(time.Minute),
 	}}
 	principal := auth.Principal{
 		SubjectID: subjectID, Scopes: map[string]struct{}{"rwms.write": {}},
 		Grants: []auth.WarehouseGrant{{WarehouseID: warehouseID, Level: auth.Edit}},
 	}
 	server := newTestServer(t, repository, validatorStub{principal: principal}, &storeStub{})
+	invalidations := &invalidationRecorder{}
+	server.invalidations = invalidations
 	checksum := strings.Repeat("a", 64)
 	body := fmt.Sprintf(`{"ownerType":"INVENTORY_FINDING","ownerId":"%s","warehouseId":"%s","context":"INSPECTION","fileName":"finding.jpg","contentType":"image/jpeg","contentLength":128,"checksumSha256":"%s","sortOrder":0}`,
 		ownerID, warehouseID, checksum)
@@ -110,6 +168,11 @@ func TestCreateUploadReturnsOnlySameOriginContentPath(t *testing.T) {
 	server.Handler().ServeHTTP(invalidResponse, invalidRequest)
 	if invalidResponse.Code != http.StatusBadRequest || repository.createCalls != 1 {
 		t.Fatalf("unproved owner response = %d %s; create calls=%d", invalidResponse.Code, invalidResponse.Body.String(), repository.createCalls)
+	}
+	events := invalidations.snapshot()
+	if len(events) != 1 || events[0].WarehouseID != warehouseID || events[0].MediaID != mediaID ||
+		events[0].Scope != "MEDIA_CHANGED" || events[0].Revision != 1 {
+		t.Fatalf("create invalidations = %#v", events)
 	}
 }
 
@@ -478,12 +541,13 @@ func TestCabinCoverBatchIsBoundedWarehouseScopedAndCountsAssets(t *testing.T) {
 }
 
 func TestUploadContentStreamsFinalizesAndReplaysExactlyOnce(t *testing.T) {
-	warehouseID, subjectID, sessionID, mediaID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	warehouseID, cabinID, subjectID, sessionID, mediaID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	body := []byte{0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00, 0x01, 0x01, 0x00, 0x00, 0x01}
 	sum := sha256.Sum256(body)
 	checksum := hex.EncodeToString(sum[:])
 	asset := persistence.AssetRecord{
-		ID: mediaID, WarehouseID: warehouseID, SourceObjectKey: "private/ingress/source.jpg",
+		ID: mediaID, OwnerType: persistence.OwnerTypeCabin, OwnerID: cabinID.String(),
+		WarehouseID: warehouseID, SourceObjectKey: "private/ingress/source.jpg",
 		ContentType: "image/jpeg", ExpectedLength: int64(len(body)), ExpectedChecksum: checksum,
 		UploadSessionID: sessionID, UploadExpiresAt: time.Now().Add(time.Minute),
 	}
@@ -515,6 +579,8 @@ func TestUploadContentStreamsFinalizesAndReplaysExactlyOnce(t *testing.T) {
 		Grants: []auth.WarehouseGrant{{WarehouseID: warehouseID, Level: auth.Edit}},
 	}
 	server := newTestServer(t, repository, validatorStub{principal: principal}, store)
+	invalidations := &invalidationRecorder{}
+	server.invalidations = invalidations
 	contentKey := uuid.New()
 	contentPath := "/api/media/v1/upload-sessions/" + sessionID.String() + "/content"
 	doContent := func(key uuid.UUID) *httptest.ResponseRecorder {
@@ -591,6 +657,12 @@ func TestUploadContentStreamsFinalizesAndReplaysExactlyOnce(t *testing.T) {
 	server.Handler().ServeHTTP(completeResponse, completeRequest)
 	if completeResponse.Code != http.StatusOK || store.putCalls != 1 {
 		t.Fatalf("completion confirmation = %d %s; put=%d", completeResponse.Code, completeResponse.Body.String(), store.putCalls)
+	}
+	events := invalidations.snapshot()
+	if len(events) != 1 || events[0].WarehouseID != warehouseID || events[0].MediaID != mediaID ||
+		events[0].OwnerType != persistence.OwnerTypeCabin || events[0].OwnerID != cabinID.String() ||
+		events[0].Scope != "MEDIA_CHANGED" || events[0].Revision != 2 {
+		t.Fatalf("upload/finalize invalidations = %#v", events)
 	}
 }
 
@@ -829,7 +901,8 @@ func TestCabinRotationUsesTheBoundWarehouseScope(t *testing.T) {
 			WarehouseID: warehouseID, Status: media.StatusReady, Version: 4, Generation: 1,
 		},
 		rotateAsset: persistence.AssetRecord{
-			ID: mediaID, Status: media.StatusProcessing, Version: 5, Generation: 1,
+			ID: mediaID, OwnerType: persistence.OwnerTypeCabin, OwnerID: cabinID.String(),
+			WarehouseID: warehouseID, Status: media.StatusProcessing, Version: 5, Generation: 1,
 		},
 	}
 	principal := auth.Principal{
@@ -837,6 +910,8 @@ func TestCabinRotationUsesTheBoundWarehouseScope(t *testing.T) {
 		Grants: []auth.WarehouseGrant{{WarehouseID: warehouseID, Level: auth.Edit}},
 	}
 	server := newTestServer(t, repository, validatorStub{principal: principal}, &storeStub{})
+	invalidations := &invalidationRecorder{}
+	server.invalidations = invalidations
 	path := "/api/media/v1/assets/" + mediaID.String() + "/rotation?ownerType=CABIN&ownerId=" +
 		cabinID.String() + "&warehouseId=" + warehouseID.String() + "&context=WAREHOUSE"
 	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"rotationDegrees":90,"expectedVersion":4}`))
@@ -859,6 +934,12 @@ func TestCabinRotationUsesTheBoundWarehouseScope(t *testing.T) {
 		repository.rotateCommand.ExpectedVersion != 4 || repository.rotateCommand.Rotation != media.Rotation90 {
 		t.Fatalf("rotation command = %#v, calls=%d", repository.rotateCommand, repository.rotateCalls)
 	}
+	events := invalidations.snapshot()
+	if len(events) != 1 || events[0].WarehouseID != warehouseID || events[0].MediaID != mediaID ||
+		events[0].OwnerType != persistence.OwnerTypeCabin || events[0].OwnerID != cabinID.String() ||
+		events[0].Scope != "MEDIA_CHANGED" || events[0].Revision != 5 {
+		t.Fatalf("rotation invalidations = %#v", events)
+	}
 }
 
 func TestOwnerScopedDeletionUsesExpectedVersionAndNeverTouchesStorage(t *testing.T) {
@@ -875,6 +956,8 @@ func TestOwnerScopedDeletionUsesExpectedVersionAndNeverTouchesStorage(t *testing
 	}
 	store := &storeStub{}
 	server := newTestServer(t, repository, validatorStub{principal: principal}, store)
+	invalidations := &invalidationRecorder{}
+	server.invalidations = invalidations
 	path := fmt.Sprintf("/api/media/v1/assets/%s/deletion?ownerType=MAINTENANCE_ESTIMATE&ownerId=%s&warehouseId=%s&context=ESTIMATE",
 		mediaID, ownerID, warehouseID)
 	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"expectedVersion":5}`))
@@ -895,6 +978,12 @@ func TestOwnerScopedDeletionUsesExpectedVersionAndNeverTouchesStorage(t *testing
 	}
 	if store.putCalls != 0 || store.statCalls != 0 || store.getCalls != 0 {
 		t.Fatalf("deletion touched storage: put=%d stat=%d get=%d", store.putCalls, store.statCalls, store.getCalls)
+	}
+	events := invalidations.snapshot()
+	if len(events) != 1 || events[0].WarehouseID != warehouseID || events[0].MediaID != mediaID ||
+		events[0].OwnerType != "" || events[0].OwnerID != "" ||
+		events[0].Scope != "MEDIA_CHANGED" || events[0].Revision != 6 {
+		t.Fatalf("deletion invalidations = %#v", events)
 	}
 }
 
@@ -1193,6 +1282,8 @@ func TestLogisticsCabinCoverCommandRequiresExactServiceAndIdempotencyKey(t *test
 		Generation: 2, TaskBoardEntryID: entryID, Version: 7, ChangedAt: changedAt,
 	}}
 	server := newTestServer(t, repository, logisticsValidatorStub(), &storeStub{})
+	invalidations := &invalidationRecorder{}
+	server.invalidations = invalidations
 	body := fmt.Sprintf(`{"taskBoardEntryId":"%s","evidenceMediaId":"%s"}`, entryID, mediaID)
 	idempotencyKey := uuid.New()
 	request := httptest.NewRequest(http.MethodPost,
@@ -1220,6 +1311,13 @@ func TestLogisticsCabinCoverCommandRequiresExactServiceAndIdempotencyKey(t *test
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil ||
 		result.CabinID != cabinID || result.CoverMediaID != mediaID || result.Version != 7 {
 		t.Fatalf("cover result = %#v error=%v", result, err)
+	}
+	events := invalidations.snapshot()
+	if len(events) != 1 || events[0].WarehouseID != warehouseID || events[0].MediaID != mediaID ||
+		events[0].OwnerType != persistence.OwnerTypeCabin || events[0].OwnerID != cabinID.String() ||
+		events[0].Scope != "CABIN_COVER_CHANGED" || events[0].Generation != 2 ||
+		events[0].Revision != 7 || !events[0].OccurredAt.Equal(changedAt) {
+		t.Fatalf("cover invalidations = %#v", events)
 	}
 
 	missingKey := httptest.NewRequest(http.MethodPost,
@@ -1594,6 +1692,25 @@ func newTestServer(t *testing.T, repository repository, validator tokenValidator
 		t.Fatalf("NewServer() error = %v", err)
 	}
 	return server
+}
+
+type invalidationRecorder struct {
+	mutex  sync.Mutex
+	events []realtime.Event
+}
+
+func (recorder *invalidationRecorder) Publish(event realtime.Event) {
+	recorder.mutex.Lock()
+	defer recorder.mutex.Unlock()
+	recorder.events = append(recorder.events, event)
+}
+
+func (*invalidationRecorder) ServeHTTP(http.ResponseWriter, *http.Request, uuid.UUID) {}
+
+func (recorder *invalidationRecorder) snapshot() []realtime.Event {
+	recorder.mutex.Lock()
+	defer recorder.mutex.Unlock()
+	return append([]realtime.Event(nil), recorder.events...)
 }
 
 type readyStub struct{ err error }

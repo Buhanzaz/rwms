@@ -8,6 +8,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
 
 class DriverLogisticsTaskTest {
   @Test
@@ -115,6 +116,214 @@ class DriverLogisticsTaskTest {
     assertThat(task.getState()).isEqualTo(DriverTaskState.SCHEDULED);
   }
 
+  @Test
+  void transientRetryCounterSaturatesInsteadOfOverflowing() {
+    DriverLogisticsTask task =
+        create(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            DriverTaskSourceType.REPAIR,
+            UUID.randomUUID(),
+            DriverTaskKind.DELIVER_TO_REPAIR);
+    ReflectionTestUtils.setField(task, "retryCount", Integer.MAX_VALUE);
+
+    task.retryAfterSeconds(32, "DEPENDENCY_TRANSIENT", 5);
+
+    assertThat(task.getState()).isEqualTo(DriverTaskState.REGISTERING);
+    assertThat(task.getRetryCount()).isEqualTo(5);
+    assertThat(task.getFailureCode()).isEqualTo("DEPENDENCY_TRANSIENT");
+    assertThat(task.getNextAttemptAt()).isNotNull();
+  }
+
+  @Test
+  void successfulBoardTransitionsClearTransientFailureAndRestoreNormalScheduling() {
+    DriverLogisticsTask task =
+        create(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            DriverTaskSourceType.REPAIR,
+            UUID.randomUUID(),
+            DriverTaskKind.DELIVER_TO_REPAIR);
+    UUID taskBoardTaskId = UUID.randomUUID();
+    UUID entryId = UUID.randomUUID();
+    LocalDate scheduledDate = LocalDate.now(ZoneOffset.UTC);
+    task.registerBoardTask(taskBoardTaskId, 0, entryId, "WAITING", "SCHEDULED", null);
+
+    task.retryAfterSeconds(32, "DEPENDENCY_TRANSIENT", 5);
+    OffsetDateTime beforeCurrentConfirmation = OffsetDateTime.now(ZoneOffset.UTC);
+    task.moveToCurrent(1, entryId, "WAITING");
+    OffsetDateTime afterCurrentConfirmation = OffsetDateTime.now(ZoneOffset.UTC);
+
+    assertThat(task.getState()).isEqualTo(DriverTaskState.CURRENT);
+    assertThat(task.getRetryCount()).isZero();
+    assertThat(task.getFailureCode()).isNull();
+    assertThat(task.getNextAttemptAt())
+        .isAfter(beforeCurrentConfirmation)
+        .isBeforeOrEqualTo(afterCurrentConfirmation.plusSeconds(2));
+
+    task.retryAfterSeconds(32, "DEPENDENCY_TRANSIENT", 5);
+    OffsetDateTime beforeStatusConfirmation = OffsetDateTime.now(ZoneOffset.UTC);
+    task.observeBoardTask(
+        taskBoardTaskId,
+        2,
+        entryId,
+        "WAITING",
+        scheduledDate,
+        "CURRENT",
+        "ACTIVE",
+        null);
+    OffsetDateTime afterStatusConfirmation = OffsetDateTime.now(ZoneOffset.UTC);
+
+    assertThat(task.getState()).isEqualTo(DriverTaskState.CURRENT);
+    assertThat(task.getRetryCount()).isZero();
+    assertThat(task.getFailureCode()).isNull();
+    assertThat(task.getNextAttemptAt())
+        .isAfter(beforeStatusConfirmation)
+        .isBeforeOrEqualTo(afterStatusConfirmation.plusSeconds(2));
+
+    task.retryAfterSeconds(32, "DEPENDENCY_TRANSIENT", 5);
+    OffsetDateTime completionAt = OffsetDateTime.now(ZoneOffset.UTC);
+    task.observeBoardTask(
+        taskBoardTaskId,
+        3,
+        entryId,
+        "DONE",
+        scheduledDate,
+        "CURRENT",
+        "DONE",
+        completionAt);
+
+    assertThat(task.getState()).isEqualTo(DriverTaskState.FINALIZING);
+    assertThat(task.getRetryCount()).isZero();
+    assertThat(task.getFailureCode()).isNull();
+    assertThat(task.isDue(OffsetDateTime.now(ZoneOffset.UTC))).isTrue();
+  }
+
+  @Test
+  void fixedDateRetainsItsOperatorLowerBoundWhenRollingQueueMovesItLater() {
+    DriverLogisticsTask task =
+        create(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            DriverTaskSourceType.REPAIR,
+            UUID.randomUUID(),
+            DriverTaskKind.DELIVER_TO_REPAIR);
+    UUID boardTaskId = UUID.randomUUID();
+    UUID entryId = UUID.randomUUID();
+    LocalDate selectedDate = LocalDate.now(ZoneOffset.UTC).plusDays(3);
+    LocalDate capacityDate = selectedDate.plusDays(2);
+    task.registerBoardTask(boardTaskId, 0, entryId, "WAITING", "SCHEDULED", null);
+    task.markFixedDate(selectedDate);
+
+    task.observeBoardTask(
+        boardTaskId,
+        1,
+        entryId,
+        "WAITING",
+        capacityDate,
+        "SCHEDULED",
+        "ACTIVE",
+        null);
+
+    assertThat(task.getPlanningMode()).isEqualTo(DriverTaskPlanningMode.FIXED_DATE);
+    assertThat(task.getFixedDateLowerBound()).isEqualTo(selectedDate);
+    assertThat(task.getScheduledDate()).isEqualTo(capacityDate);
+  }
+
+  @Test
+  void manualPromotionHoldExpiresButItsReservationReleaseMarkerRemainsDurable() {
+    DriverLogisticsTask task =
+        create(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            DriverTaskSourceType.REPAIR,
+            UUID.randomUUID(),
+            DriverTaskKind.DELIVER_TO_REPAIR);
+    task.markManualPromotionHold(1);
+    ReflectionTestUtils.setField(
+        task,
+        "manualPromotionHoldUntil",
+        OffsetDateTime.now(ZoneOffset.UTC).minusSeconds(1));
+
+    assertThat(task.hasManualPromotionHold()).isTrue();
+    assertThat(task.isManualPromotionHeldAt(OffsetDateTime.now(ZoneOffset.UTC))).isFalse();
+  }
+
+  @Test
+  void manualGeneralMovementRequiresCommentAndNeverAllocatesRepairCapacity() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    UUID sourceId = UUID.randomUUID();
+
+    assertThatThrownBy(
+            () ->
+                DriverLogisticsTask.create(
+                    warehouseId,
+                    cabinId,
+                    null,
+                    DriverTaskSourceType.MANUAL,
+                    sourceId,
+                    DriverTaskKind.GENERAL_MOVEMENT,
+                    DriverTaskPlanningMode.AUTO,
+                    LocalDate.now(ZoneOffset.UTC),
+                    3,
+                    "   ",
+                    "БЫТ-777",
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    "a".repeat(64)))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("comment");
+
+    assertThatThrownBy(
+            () ->
+                DriverLogisticsTask.create(
+                    warehouseId,
+                    cabinId,
+                    null,
+                    DriverTaskSourceType.MANUAL,
+                    sourceId,
+                    DriverTaskKind.GENERAL_MOVEMENT,
+                    DriverTaskPlanningMode.AUTO,
+                    LocalDate.now(ZoneOffset.UTC),
+                    3,
+                    "x".repeat(1_001),
+                    "БЫТ-777",
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    "a".repeat(64)))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("comment");
+
+    DriverLogisticsTask task =
+        DriverLogisticsTask.create(
+            warehouseId,
+            cabinId,
+            null,
+            DriverTaskSourceType.MANUAL,
+            sourceId,
+            DriverTaskKind.GENERAL_MOVEMENT,
+            DriverTaskPlanningMode.AUTO,
+            LocalDate.now(ZoneOffset.UTC),
+            3,
+            "  Переместить к воротам  ",
+            "БЫТ-777",
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            "a".repeat(64));
+
+    assertThat(task.getComment()).isEqualTo("Переместить к воротам");
+    assertThat(task.getRepairPlaceAllocationId()).isNull();
+    assertThat(task.isRepairPlaceEffectApplied()).isTrue();
+  }
+
   private static DriverLogisticsTask create(
       UUID warehouseId,
       UUID cabinId,
@@ -132,6 +341,7 @@ class DriverLogisticsTaskTest {
         DriverTaskPlanningMode.AUTO,
         LocalDate.now(ZoneOffset.UTC),
         3,
+        null,
         "БЫТ-001",
         UUID.randomUUID(),
         UUID.randomUUID(),

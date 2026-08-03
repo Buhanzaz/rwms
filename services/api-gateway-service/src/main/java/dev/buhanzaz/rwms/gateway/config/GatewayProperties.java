@@ -46,7 +46,6 @@ public class GatewayProperties {
   public static final class Security {
     @NotBlank private String issuer;
     @NotBlank private String audience = "rwms-services";
-    @NotNull private URI jwkSetUri;
   }
 
   @Setter

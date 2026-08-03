@@ -8,6 +8,7 @@ import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.UUID;
@@ -25,7 +26,8 @@ public final class DriverTaskApiModels {
       @NotNull DriverTaskPlanningMode planningMode,
       LocalDate scheduledDate,
       @NotNull @Min(1) @Max(5) Integer priority,
-      boolean activateNow) {
+      boolean activateNow,
+      @Size(max = 1000) String comment) {
     @AssertTrue(message = "scheduledDate must be set only for FIXED_DATE")
     public boolean isPlanningValid() {
       return planningMode == null
@@ -37,6 +39,14 @@ public final class DriverTaskApiModels {
       return kind == null
           || (!kind.consumesRepairPlace() && !kind.releasesRepairPlace())
           || repairId != null;
+    }
+
+    @AssertTrue(message = "MANUAL source is allowed only for GENERAL_MOVEMENT and requires comment")
+    public boolean isManualMovementValid() {
+      if (sourceType == null || kind == null) return true;
+      boolean manualMovement = sourceType == DriverTaskSourceType.MANUAL;
+      if (manualMovement != (kind == DriverTaskKind.GENERAL_MOVEMENT)) return false;
+      return !manualMovement || (comment != null && !comment.isBlank());
     }
   }
 
@@ -52,6 +62,7 @@ public final class DriverTaskApiModels {
       DriverTaskPlanningMode planningMode,
       LocalDate scheduledDate,
       int priority,
+      String comment,
       String unitNumber,
       UUID driverQueueDefinitionId,
       UUID externalTaskId,

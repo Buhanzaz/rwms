@@ -126,7 +126,9 @@ class MaintenanceBearerSecurityMockMvcTest {
           "plan":[],
           "mediaReferences":[],
           "priority":3,
-          "logisticsPlanningMode":"AUTO",
+          "movementToRepair":false,
+          "movementToShipment":false,
+          "logisticsPlanningMode":null,
           "logisticsScheduledDate":null,
           "coverMediaId":null
         }

@@ -553,6 +553,7 @@ class ShipmentWorkflowStore {
     }
     document.cancelShipment();
     documentRepository.saveAndFlush(document);
+    documents.clearRentalShipmentTerms(document);
     eventStore.append(
         document,
         lineCount(document),

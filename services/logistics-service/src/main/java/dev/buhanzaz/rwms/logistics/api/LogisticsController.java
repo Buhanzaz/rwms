@@ -218,6 +218,7 @@ public class LogisticsController {
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID documentId,
       @RequestParam @Min(0) long expectedVersion,
+      @RequestParam(name = "keepScheduledDate", defaultValue = "false") boolean keepScheduledDate,
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       HttpServletRequest servletRequest) {
     LogisticsDocumentView current = service.get(documentId, LogisticsDocumentType.SHIPMENT);
@@ -228,7 +229,8 @@ public class LogisticsController {
             idempotencyKey,
             correlationId(servletRequest),
             documentId,
-            expectedVersion));
+            expectedVersion,
+            keepScheduledDate));
   }
 
   @PostMapping("/shipments/{documentId}/cancel")

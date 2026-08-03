@@ -316,11 +316,69 @@ class MaintenanceInventoryBoundaryIntegrationTest {
   }
 
   @Test
+  void autoFreezeUsesTheRouteInheritedThroughEveryCatalogGraphLevel() {
+    UUID routedCategoryId = UUID.randomUUID();
+    UUID intermediateNodeId = UUID.randomUUID();
+    UUID queueId = UUID.randomUUID();
+    jdbc.update(
+        """
+        update catalog_node
+           set routing_queue_id=null,routing_queue_name=null,routing_queue_type=null
+         where catalog_version_id=? and node_id=?
+        """,
+        catalogId,
+        workNodeId);
+    jdbc.update(
+        """
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,node_type,name,active,parent_node_id,
+          furniture_category,unit,price_minor,duration_minutes,include_in_estimate,
+          common_item,show_in_main_menu,routing_queue_id,routing_queue_name,routing_queue_type)
+        values (?,?,?,'CATEGORY','Категория маршрута',true,null,false,null,null,0,false,false,false,
+                ?,'Внешние работы','REPAIR')
+        """,
+        UUID.randomUUID(),
+        routedCategoryId,
+        catalogId,
+        queueId);
+    jdbc.update(
+        """
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,node_type,name,active,parent_node_id,
+          furniture_category,unit,price_minor,duration_minutes,include_in_estimate,
+          common_item,show_in_main_menu)
+        values (?,?,?,'SUBCATEGORY','Промежуточный блок',true,null,false,null,null,0,false,false,false)
+        """,
+        UUID.randomUUID(), intermediateNodeId, catalogId);
+    jdbc.update(
+        """
+        insert into catalog_link(
+          row_id,link_id,catalog_version_id,source_node_id,target_node_id,link_type,sort_order)
+        values
+          (?,?,?,?,?,'FOLLOW_UP',10),
+          (?,?,?,?,?,'DEPENDENCY',20)
+        """,
+        UUID.randomUUID(), UUID.randomUUID(), catalogId, routedCategoryId, intermediateNodeId,
+        UUID.randomUUID(), UUID.randomUUID(), catalogId, intermediateNodeId, workNodeId);
+
+    FrozenInventoryPlanResponse frozen = inventory.freeze(
+        autoRequest(UUID.randomUUID(), UUID.randomUUID(), List.of())).response();
+
+    assertThat(frozen.snapshot().lines()).singleElement().satisfies(line -> {
+      assertThat(line.routing()).isNotNull();
+      assertThat(line.routing().queueId()).isEqualTo(queueId);
+      assertThat(line.routing().queueName()).isEqualTo("Внешние работы");
+    });
+    assertThat(frozen.snapshot().stages()).singleElement().satisfies(stage -> {
+      assertThat(stage.routing().queueId()).isEqualTo(queueId);
+      assertThat(stage.routing().queueType()).isEqualTo("REPAIR");
+    });
+  }
+
+  @Test
   void frozenInventoryPlanningCreatesTheSameCanonicalDriverTaskWithInventorySource() {
     UUID inventoryId = UUID.randomUUID();
     UUID findingId = UUID.randomUUID();
-    UUID moveToNode = insertMovementLocation("Доставка в ремонт");
-    UUID moveFromNode = insertMovementLocation("Вывоз из ремонта");
     LocalDate scheduledDate = LocalDate.of(2026, 8, 5);
     FreezeInventoryPlanRequest freeze =
         new FreezeInventoryPlanRequest(
@@ -332,18 +390,12 @@ class MaintenanceInventoryBoundaryIntegrationTest {
             List.of(
                 catalogLine(
                     workNodeId, "1", null, List.of())),
-            List.of(
-                new InventoryPlanStageSelection(
-                    moveToNode,
-                    RepairStageKind.MOVE_TO_REPAIR,
-                    0),
-                new InventoryPlanStageSelection(
-                    moveFromNode,
-                    RepairStageKind.MOVE_FROM_REPAIR,
-                    2)),
+            List.of(),
             List.of(),
             4,
             null,
+            true,
+            true,
             RepairLogisticsPlanningMode.FIXED_DATE,
             scheduledDate);
 
@@ -354,8 +406,8 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         .isEqualTo(RepairLogisticsPlanningMode.FIXED_DATE);
     assertThat(frozen.snapshot().logisticsScheduledDate())
         .isEqualTo(scheduledDate);
-    assertThat(frozen.snapshot().moveToRepairRequired()).isTrue();
-    assertThat(frozen.snapshot().moveFromRepairRequired()).isTrue();
+    assertThat(frozen.snapshot().movementToRepair()).isTrue();
+    assertThat(frozen.snapshot().movementToShipment()).isTrue();
 
     UUID rentalItemId = UUID.randomUUID();
     rentalItems.saveAndFlush(
@@ -607,6 +659,66 @@ class MaintenanceInventoryBoundaryIntegrationTest {
   }
 
   @Test
+  void repeatedCatalogWorkCreatesSeparateRepairStagesWithoutDuplicatingLines() {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    FreezeInventoryPlanRequest request = new FreezeInventoryPlanRequest(
+        warehouseId,
+        inventoryId,
+        findingId,
+        1L,
+        InventoryPlanMode.AUTO,
+        List.of(
+            catalogLine(workNodeId, "1", "Стена", List.of()),
+            catalogLine(workNodeId, "1", "Потолок", List.of())),
+        List.of(),
+        List.of(),
+        3,
+        null);
+
+    FrozenInventoryPlanResponse frozen = inventory.freeze(request).response();
+    assertThat(frozen.snapshot().stages())
+        .extracting(InventoryPlanStageSnapshot::catalogNodeId)
+        .containsExactly(workNodeId, workNodeId);
+    assertThat(frozen.snapshot().stages())
+        .extracting(InventoryPlanStageSnapshot::order)
+        .containsExactly(0, 1);
+
+    UUID rentalItemId = UUID.randomUUID();
+    rentalItems.saveAndFlush(
+        RentalItemFactProjection.create(rentalItemId, warehouseId, "FREE", 7));
+    InventoryMaintenanceService.UpsertResult created = inventory.upsert(
+        inventoryId,
+        findingId,
+        new UpsertInventoryRepairRequest(
+            warehouseId,
+            1L,
+            rentalItemId,
+            7L,
+            LocalDate.of(2026, 8, 3),
+            frozen.fingerprint(),
+            frozen.snapshot()));
+
+    assertThat(
+            jdbc.query(
+                """
+                select jsonb_array_length(work_lines)
+                  from repair_stage
+                 where repair_id=?
+                 order by stage_no
+                """,
+                (row, ignored) -> row.getInt(1),
+                created.repairId()))
+        .containsExactly(1, 1);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(distinct primary_line_id) from repair_stage where repair_id=?",
+                Integer.class,
+                created.repairId()))
+        .isEqualTo(2);
+  }
+
+  @Test
   void sourceRevisionStageKindsAndRoutingAreValidatedBeforeFreeze() {
     FreezeInventoryPlanRequest zeroRevision = new FreezeInventoryPlanRequest(
         warehouseId, UUID.randomUUID(), UUID.randomUUID(), 0L, InventoryPlanMode.AUTO,
@@ -616,15 +728,16 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         .isInstanceOf(MaintenanceValidationException.class)
         .hasMessageContaining("revision");
 
-    FreezeInventoryPlanRequest workAsLocation = new FreezeInventoryPlanRequest(
+    UUID locationNode = insertMovementLocation("Только для логистики");
+    FreezeInventoryPlanRequest locationAsRepairWork = new FreezeInventoryPlanRequest(
         warehouseId, UUID.randomUUID(), UUID.randomUUID(), 1L, InventoryPlanMode.MANUAL,
         List.of(catalogLine(workNodeId, "1", null, List.of())),
         List.of(new InventoryPlanStageSelection(
-            workNodeId, RepairStageKind.MOVE_TO_REPAIR, 0)),
+            locationNode, RepairStageKind.REPAIR_WORK, 0)),
         List.of(), 3, null);
-    assertThatThrownBy(() -> inventory.freeze(workAsLocation))
+    assertThatThrownBy(() -> inventory.freeze(locationAsRepairWork))
         .isInstanceOf(MaintenanceValidationException.class)
-        .hasMessageContaining("LOCATION");
+        .hasMessageContaining("REPAIR_WORK");
 
     UUID materialNode = insertCatalogNode("MATERIAL", true);
     FreezeInventoryPlanRequest materialAsWork = new FreezeInventoryPlanRequest(

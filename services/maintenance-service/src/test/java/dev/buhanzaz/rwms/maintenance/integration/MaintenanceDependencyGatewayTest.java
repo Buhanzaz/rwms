@@ -520,28 +520,19 @@ class MaintenanceDependencyGatewayTest {
   }
 
   @Test
-  void registerUsesOnlyExplicitStageDurationWithoutALegacyMovementDefault() {
+  void registerUsesOnlyExplicitRepairStageDuration() {
     UUID externalTaskId = UUID.randomUUID();
     UUID repairId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
     UUID rentalItemId = UUID.randomUUID();
-    UUID firstQueue = UUID.randomUUID();
-    UUID secondQueue = UUID.randomUUID();
-    MaintenanceDependencyGateway.TaskStage movement =
-        new MaintenanceDependencyGateway.TaskStage(
-            UUID.randomUUID(),
-            0,
-            RepairStageKind.MOVE_TO_REPAIR,
-            "Move",
-            firstQueue,
-            null);
+    UUID queue = UUID.randomUUID();
     MaintenanceDependencyGateway.TaskStage repair =
         new MaintenanceDependencyGateway.TaskStage(
             UUID.randomUUID(),
-            1,
+            0,
             RepairStageKind.REPAIR_WORK,
             "Repair",
-            secondQueue,
+            queue,
             null,
             List.of(),
             List.of(),
@@ -552,8 +543,6 @@ class MaintenanceDependencyGatewayTest {
         .andExpect(method(HttpMethod.POST))
         .andExpect(content().string(containsString("\"plannedDurationMinutes\":35")))
         .andExpect(content().string(containsString(
-            "\"taskText\":\"Move\",\"plannedDurationMinutes\":null")))
-        .andExpect(content().string(containsString(
             "\"taskText\":\"Repair\",\"plannedDurationMinutes\":35")))
         .andRespond(withSuccess(
             taskResponse(
@@ -562,7 +551,7 @@ class MaintenanceDependencyGatewayTest {
                 null,
                 LocalDate.of(2026, 7, 24),
                 3,
-                List.of(firstQueue, secondQueue)),
+                List.of(queue)),
             MediaType.APPLICATION_JSON));
 
     gateway.registerTask(
@@ -575,7 +564,7 @@ class MaintenanceDependencyGatewayTest {
         LocalDate.of(2026, 7, 24),
         3,
         6,
-        List.of(movement, repair));
+        List.of(repair));
 
     server.verify();
   }

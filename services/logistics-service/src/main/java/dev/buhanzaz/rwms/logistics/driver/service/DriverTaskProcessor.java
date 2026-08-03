@@ -45,7 +45,7 @@ public class DriverTaskProcessor {
                 value.taskId(),
                 value.title(),
                 value.unitNumber(),
-                value.title(),
+                value.description(),
                 value.queueDefinitionId(),
                 value.scheduledDate(),
                 value.priority()));
@@ -83,6 +83,19 @@ public class DriverTaskProcessor {
                 value.transition()));
         return;
       }
+      if (work instanceof DriverTaskWorkflowStore.ManualReservationReleaseWork value) {
+        store.confirmManualReservationRelease(
+            value.taskId(),
+            dependencies.transitionRepairPlace(
+                derivedKey(
+                    "manual-reservation-release:" + value.allocationId(),
+                    value.taskId()),
+                value.warehouseId(),
+                value.repairId(),
+                value.expectedVersion(),
+                "release"));
+        return;
+      }
       throw new IllegalStateException("Unsupported driver workflow item");
     } catch (LogisticsDependencyException exception) {
       store.recordFailure(taskId(work), exception);
@@ -105,6 +118,7 @@ public class DriverTaskProcessor {
       case DriverTaskWorkflowStore.EvidenceWork value -> value.taskId();
       case DriverTaskWorkflowStore.CoverWork value -> value.taskId();
       case DriverTaskWorkflowStore.RepairPlaceEffectWork value -> value.taskId();
+      case DriverTaskWorkflowStore.ManualReservationReleaseWork value -> value.taskId();
     };
   }
 

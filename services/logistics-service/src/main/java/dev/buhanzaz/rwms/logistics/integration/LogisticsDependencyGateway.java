@@ -293,6 +293,7 @@ public interface LogisticsDependencyGateway {
       UUID externalTaskId,
       long expectedTaskVersion,
       long expectedEntryVersion,
+      String targetLane,
       LocalDate targetDate,
       int targetIndex) {
     throw unavailable("Driver task movement is not configured");
@@ -695,6 +696,7 @@ public interface LogisticsDependencyGateway {
   record RepairPlaceProjection(
       UUID warehouseId,
       int repairPlaceCount,
+      int automaticRefillDelayMinutes,
       long reservedCount,
       long occupiedCount,
       long readyToReleaseCount,

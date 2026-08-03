@@ -56,6 +56,12 @@ public interface DriverLogisticsTaskRepository
   boolean existsByWarehouseIdAndStateIn(
       UUID warehouseId, Collection<DriverTaskState> states);
 
+  boolean existsByWarehouseIdAndStateAndManualPromotionHoldUntilAfter(
+      UUID warehouseId, DriverTaskState state, OffsetDateTime value);
+
+  List<DriverLogisticsTask> findAllByWarehouseIdAndStateAndManualPromotionHoldUntilAfterOrderByManualPromotionHoldUntilAscIdAsc(
+      UUID warehouseId, DriverTaskState state, OffsetDateTime value);
+
   @Query(
       """
       select task

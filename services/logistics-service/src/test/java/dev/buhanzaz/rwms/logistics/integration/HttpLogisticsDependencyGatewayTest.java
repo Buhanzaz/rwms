@@ -1180,6 +1180,7 @@ class HttpLogisticsDependencyGatewayTest {
         .andExpect(header("Authorization", "Bearer test-task-board.logistics"))
         .andExpect(jsonPath("$.expectedTaskVersion").value(3))
         .andExpect(jsonPath("$.expectedEntryVersion").value(5))
+        .andExpect(jsonPath("$.targetLane").value("SCHEDULED"))
         .andExpect(jsonPath("$.targetDate").value(targetDate.toString()))
         .andExpect(jsonPath("$.targetIndex").value(2))
         .andRespond(
@@ -1212,7 +1213,8 @@ class HttpLogisticsDependencyGatewayTest {
                 MediaType.APPLICATION_JSON));
 
     LogisticsDependencyGateway.DriverBoardTask moved =
-        gateway.moveDriverTask(externalTaskId, 3, 5, targetDate, 2);
+        gateway.moveDriverTask(
+            externalTaskId, 3, 5, "SCHEDULED", targetDate, 2);
 
     assertThat(moved.scheduledDate()).isEqualTo(targetDate);
     assertThat(moved.queuePosition()).isEqualTo(2);
@@ -1236,7 +1238,7 @@ class HttpLogisticsDependencyGatewayTest {
             withSuccess(
                 """
                 {
-                  "warehouseId":"%s","repairPlaceCount":3,"reservedCount":0,
+                  "warehouseId":"%s","repairPlaceCount":3,"automaticRefillDelayMinutes":5,"reservedCount":0,
                   "occupiedCount":2,"readyToReleaseCount":0,"availableCount":1,
                   "overCapacity":false,"allocations":[]
                 }
@@ -1266,13 +1268,56 @@ class HttpLogisticsDependencyGatewayTest {
                     .formatted(repairId, cabinId, warehouseId),
                 MediaType.APPLICATION_JSON));
 
-    assertThat(gateway.readRepairPlaces(warehouseId).availableCount()).isOne();
+    assertThat(gateway.readRepairPlaces(warehouseId))
+        .satisfies(
+            places -> {
+              assertThat(places.availableCount()).isOne();
+              assertThat(places.automaticRefillDelayMinutes()).isEqualTo(5);
+            });
     assertThat(gateway.readCapitalRepair(repairId))
         .satisfies(
             repair -> {
               assertThat(repair.rentalItemId()).isEqualTo(cabinId);
               assertThat(repair.complexity().forcedCapital()).isTrue();
             });
+    server.verify();
+  }
+
+  @Test
+  void readsTheCabinIdentityFromAnEnrichedRepairPlaceTransition() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID repairId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    UUID idempotencyKey = UUID.randomUUID();
+    server
+        .expect(
+            requestTo(
+                "http://maintenance.test/api/internal/maintenance/v1/logistics/repair-places/"
+                    + warehouseId
+                    + "/allocations/"
+                    + repairId
+                    + "/reserve"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(header("Authorization", "Bearer test-maintenance.logistics"))
+        .andExpect(header("Idempotency-Key", idempotencyKey.toString()))
+        .andExpect(jsonPath("$.expectedVersion").value(0))
+        .andRespond(
+            withSuccess(
+                """
+                {
+                  "id":"%s","version":0,"warehouseId":"%s","repairId":"%s",
+                  "rentalItemId":"%s","state":"RESERVED",
+                  "createdAt":"2026-08-01T00:00:00Z","updatedAt":"2026-08-01T00:00:00Z"
+                }
+                """
+                    .formatted(UUID.randomUUID(), warehouseId, repairId, rentalItemId),
+                MediaType.APPLICATION_JSON));
+
+    LogisticsDependencyGateway.RepairPlaceAllocation allocation =
+        gateway.transitionRepairPlace(idempotencyKey, warehouseId, repairId, 0, "reserve");
+
+    assertThat(allocation.rentalItemId()).isEqualTo(rentalItemId);
+    assertThat(allocation.state()).isEqualTo("RESERVED");
     server.verify();
   }
 }

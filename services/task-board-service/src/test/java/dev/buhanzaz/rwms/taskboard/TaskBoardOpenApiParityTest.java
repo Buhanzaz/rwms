@@ -114,8 +114,11 @@ class TaskBoardOpenApiParityTest {
   }
 
   @Test
-  void queueAndBrigadeSchemasExposeOnlyTheCurrentOrderedClassContract() throws Exception {
-    Map<String, Object> schemas = child(child(openApiDocument(), "components"), "schemas");
+  void queueAndBrigadeSchemasKeepGlobalDefinitionsSeparateFromWarehouseConnections()
+      throws Exception {
+    Map<String, Object> document = openApiDocument();
+    Map<String, Object> schemas = child(child(document, "components"), "schemas");
+    Map<String, Object> paths = child(document, "paths");
 
     assertThat(schemas).doesNotContainKeys("QueueGroupBinding", "QueueGroupBindingRequest");
 
@@ -123,8 +126,42 @@ class TaskBoardOpenApiParityTest {
     assertThat(child(queue, "properties")).doesNotContainKey("groupBindings");
     assertThat(list(queue.get("required"))).doesNotContain("groupBindings");
 
-    Map<String, Object> queueRequest = child(schemas, "WorkQueueRequest");
-    assertThat(child(queueRequest, "properties")).doesNotContainKey("groupBindings");
+    Map<String, Object> queueDefinitionRequest = child(schemas, "QueueDefinitionRequest");
+    assertThat(child(queueDefinitionRequest, "properties"))
+        .containsKeys("version", "name", "description", "type", "purpose")
+        .doesNotContainKeys(
+            "sortOrder",
+            "active",
+            "hidden",
+            "collapsed",
+            "holdingPeriodMinutes",
+            "notificationThreshold",
+            "notifyWhenThresholdReached",
+            "resultPhotoMinCount",
+            "bindings",
+            "groupBindings");
+    assertThat(schemas).containsKey("DriverQueueRequest");
+    assertThat(schemas).containsKeys("WorkQueueRequest", "QueueOrderRequest");
+    assertThat(schemas).doesNotContainKey("QueueOrderItem");
+    assertThat(child(child(schemas, "WorkQueueRequest"), "properties"))
+        .containsKeys(
+            "version",
+            "definitionId",
+            "active",
+            "hidden",
+            "collapsed",
+            "holdingPeriodMinutes",
+            "notificationThreshold",
+            "notifyWhenThresholdReached",
+            "resultPhotoMinCount",
+            "bindings");
+    assertThat(child(paths, "/warehouses/{warehouseId}/work-queues"))
+        .containsKeys("get", "post");
+    assertThat(paths)
+        .containsKey("/warehouses/{warehouseId}/driver-queue")
+        .containsKeys(
+            "/warehouses/{warehouseId}/work-queues/{id}",
+            "/warehouses/{warehouseId}/work-queue-order");
 
     assertThat(list(child(schemas, "QueueBinding").get("required")))
         .contains(

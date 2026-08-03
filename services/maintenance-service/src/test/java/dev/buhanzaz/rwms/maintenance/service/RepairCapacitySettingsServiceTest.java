@@ -39,7 +39,8 @@ class RepairCapacitySettingsServiceTest {
     when(repository.findById(warehouseId)).thenReturn(Optional.empty());
 
     assertThat(service.get(warehouseId))
-        .isEqualTo(new RepairCapacitySettingsResponse(warehouseId, 0, 6, null, null));
+        .isEqualTo(
+            new RepairCapacitySettingsResponse(warehouseId, 0, 6, 5, null, null));
     verify(repository).findById(warehouseId);
     verifyNoMoreInteractions(repository);
   }
@@ -52,15 +53,17 @@ class RepairCapacitySettingsServiceTest {
         .thenAnswer(invocation -> invocation.getArgument(0));
 
     RepairCapacitySettingsResponse response = service.replace(
-        warehouseId, new ReplaceRepairCapacitySettingsRequest(0L, 9));
+        warehouseId, new ReplaceRepairCapacitySettingsRequest(0L, 9, 15));
 
     assertThat(response)
-        .isEqualTo(new RepairCapacitySettingsResponse(warehouseId, 0, 9, null, null));
+        .isEqualTo(
+            new RepairCapacitySettingsResponse(warehouseId, 0, 9, 15, null, null));
     ArgumentCaptor<RepairCapacitySettings> saved =
         ArgumentCaptor.forClass(RepairCapacitySettings.class);
     verify(repository).saveAndFlush(saved.capture());
     assertThat(saved.getValue().getWarehouseId()).isEqualTo(warehouseId);
     assertThat(saved.getValue().getRepairPlaceCount()).isEqualTo(9);
+    assertThat(saved.getValue().getAutomaticRefillDelayMinutes()).isEqualTo(15);
   }
 
   @Test
@@ -69,7 +72,7 @@ class RepairCapacitySettingsServiceTest {
     when(repository.findById(warehouseId)).thenReturn(Optional.empty());
 
     assertThatThrownBy(() -> service.replace(
-        warehouseId, new ReplaceRepairCapacitySettingsRequest(1L, 7)))
+        warehouseId, new ReplaceRepairCapacitySettingsRequest(1L, 7, 5)))
         .isInstanceOf(MaintenanceConflictException.class)
         .extracting(exception -> ((MaintenanceConflictException) exception).code())
         .isEqualTo("MAINTENANCE_VERSION_CONFLICT");
@@ -79,17 +82,18 @@ class RepairCapacitySettingsServiceTest {
   @Test
   void existingSettingsUseStrictVersionCasAndDomainReplace() {
     UUID warehouseId = UUID.randomUUID();
-    RepairCapacitySettings settings = RepairCapacitySettings.create(warehouseId, 4);
+    RepairCapacitySettings settings = RepairCapacitySettings.create(warehouseId, 4, 5);
     when(repository.findById(warehouseId)).thenReturn(Optional.of(settings));
     when(repository.saveAndFlush(settings)).thenReturn(settings);
 
     assertThat(service.replace(
-            warehouseId, new ReplaceRepairCapacitySettingsRequest(0L, 8))
+            warehouseId, new ReplaceRepairCapacitySettingsRequest(0L, 8, 10))
         .repairPlaceCount())
         .isEqualTo(8);
+    assertThat(settings.getAutomaticRefillDelayMinutes()).isEqualTo(10);
 
     assertThatThrownBy(() -> service.replace(
-        warehouseId, new ReplaceRepairCapacitySettingsRequest(1L, 10)))
+        warehouseId, new ReplaceRepairCapacitySettingsRequest(1L, 10, 10)))
         .isInstanceOf(MaintenanceConflictException.class)
         .extracting(exception -> ((MaintenanceConflictException) exception).code())
         .isEqualTo("MAINTENANCE_VERSION_CONFLICT");
@@ -98,11 +102,15 @@ class RepairCapacitySettingsServiceTest {
   @Test
   void domainRejectsNonpositiveCapacity() {
     UUID warehouseId = UUID.randomUUID();
-    assertThatThrownBy(() -> RepairCapacitySettings.create(warehouseId, 0))
+    assertThatThrownBy(() -> RepairCapacitySettings.create(warehouseId, 0, 5))
         .isInstanceOf(IllegalArgumentException.class);
 
-    RepairCapacitySettings settings = RepairCapacitySettings.create(warehouseId, 1);
-    assertThatThrownBy(() -> settings.replace(-1))
+    RepairCapacitySettings settings = RepairCapacitySettings.create(warehouseId, 1, 5);
+    assertThatThrownBy(() -> settings.replace(-1, 5))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> settings.replace(1, 0))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> settings.replace(1, 1441))
         .isInstanceOf(IllegalArgumentException.class);
   }
 }
