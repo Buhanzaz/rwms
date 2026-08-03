@@ -15,6 +15,7 @@ import (
 
 	"dev.buhanzaz.rwms/media-service/internal/media"
 	"dev.buhanzaz.rwms/media-service/internal/persistence"
+	"dev.buhanzaz.rwms/media-service/internal/realtime"
 	"github.com/google/uuid"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -157,6 +158,27 @@ func TestInvalidMessageIsDeterministicAndSanitized(t *testing.T) {
 	}
 }
 
+func TestProcessingInvalidationCarriesCabinOwnerContext(t *testing.T) {
+	warehouseID, cabinID, mediaID := uuid.New(), uuid.New(), uuid.New()
+	publisher := &recordingPublisher{}
+	consumer := &Consumer{publisher: publisher}
+
+	consumer.publish(persistence.WorkerJob{
+		MediaID: mediaID, WarehouseID: warehouseID,
+		OwnerType: persistence.OwnerTypeCabin, OwnerID: cabinID.String(), Generation: 4,
+	}, "MEDIA_CHANGED")
+
+	if len(publisher.events) != 1 {
+		t.Fatalf("published events = %d, want one", len(publisher.events))
+	}
+	event := publisher.events[0]
+	if event.EventID == uuid.Nil || event.WarehouseID != warehouseID || event.MediaID != mediaID ||
+		event.Scope != "MEDIA_CHANGED" || event.OwnerType != persistence.OwnerTypeCabin ||
+		event.OwnerID != cabinID.String() || event.Generation != 4 || event.OccurredAt.IsZero() {
+		t.Fatalf("processing invalidation = %#v", event)
+	}
+}
+
 func TestProcessingConsumerKeepsRuntimeAliveAndCommitsOnlyPersistedTerminalOutcome(t *testing.T) {
 	first := newProcessingRecord(t).record
 	first.Partition, first.Offset = 0, 9
@@ -261,6 +283,14 @@ type processingKafkaClientStub struct {
 	committed           []int64
 	allowRebalanceCalls int
 	cancel              context.CancelFunc
+}
+
+type recordingPublisher struct {
+	events []realtime.Event
+}
+
+func (publisher *recordingPublisher) Publish(event realtime.Event) {
+	publisher.events = append(publisher.events, event)
 }
 
 func (client *processingKafkaClientStub) PollFetches(ctx context.Context) kgo.Fetches {

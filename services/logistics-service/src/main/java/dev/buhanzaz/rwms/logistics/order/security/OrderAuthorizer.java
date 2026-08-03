@@ -87,6 +87,39 @@ public class OrderAuthorizer {
     }
   }
 
+  /** Actor/warehouse authorization for selecting a partial shipment batch. */
+  public void requireRentalShipmentCreation(OrderActor actor, RentalOrder order) {
+    requireVisible(actor, order);
+    if (!actor.writeScope()) {
+      throw new AccessDeniedException("Required USER scope is missing");
+    }
+    if (order.getStatus() != RentalOrderStatus.SAVED) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT, "ORDER_NOT_SHIPPABLE", "Отгрузка доступна только для сохранённого заказа");
+    }
+    if (order.getWarehouseId() != null && !canEditWarehouse(actor, order.getWarehouseId())) {
+      throw new AccessDeniedException("Insufficient warehouse access");
+    }
+  }
+
+  /** Actor/warehouse authorization for extending cabins that are already on rent. */
+  public void requireRentalTermExtension(OrderActor actor, RentalOrder order) {
+    requireVisible(actor, order);
+    if (!actor.writeScope()) {
+      throw new AccessDeniedException("Required USER scope is missing");
+    }
+    if (order.getStatus() != RentalOrderStatus.SAVED
+        && order.getStatus() != RentalOrderStatus.FULFILLED) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "ORDER_RENTAL_NOT_STARTED",
+          "Продление доступно только для отгруженной бытовки");
+    }
+    if (order.getWarehouseId() != null && !canEditWarehouse(actor, order.getWarehouseId())) {
+      throw new AccessDeniedException("Insufficient warehouse access");
+    }
+  }
+
   public void requireWarehouseRead(OrderActor actor, UUID warehouseId) {
     if (!canReadWarehouse(actor, warehouseId)) {
       throw new AccessDeniedException("Insufficient warehouse access");

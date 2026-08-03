@@ -42,7 +42,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsTheAuthoritativeMaintenanceSchema() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(24);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(27);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains(
@@ -62,7 +62,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
     assertThat(columnCount("maintenance_repair", "dispatch_date")).isOne();
     assertThat(columnCount("maintenance_repair", "priority")).isOne();
     assertThat(columns("maintenance_repair")).contains(
-        "movement_to_shipment", "transfer_state", "transfer_document_id",
+        "movement_to_repair", "movement_to_shipment", "transfer_state", "transfer_document_id",
         "transfer_line_id", "transfer_target_warehouse_id",
         "logistics_planning_mode", "logistics_scheduled_date");
     assertThat(
@@ -72,16 +72,29 @@ class MaintenanceFlywayMigrationIntegrationTest {
         .contains(
             "AUTO",
             "FIXED_DATE",
+            "movement_to_repair",
             "logistics_scheduled_date IS NULL",
             "logistics_scheduled_date IS NOT NULL");
+    assertThat(constraintDefinition("repair_stage", "ck_repair_stage_kind"))
+        .contains("REPAIR_WORK")
+        .doesNotContain("MOVE_TO_REPAIR", "MOVE_FROM_REPAIR");
+    assertThat(constraintDefinition("estimate_plan_stage", "ck_estimate_plan_kind"))
+        .contains("REPAIR_WORK")
+        .doesNotContain("MOVE_TO_REPAIR", "MOVE_FROM_REPAIR");
     assertThat(columnCount("maintenance_estimate", "cover_media_id")).isOne();
     assertThat(columnCount("maintenance_repair", "cover_media_id")).isOne();
     assertThat(columns("repair_capacity_settings")).containsExactlyInAnyOrder(
-        "warehouse_id", "version", "repair_place_count", "created_at", "updated_at");
+        "warehouse_id", "version", "repair_place_count", "automatic_refill_delay_minutes",
+        "created_at", "updated_at");
     assertThat(columnDefault("repair_capacity_settings", "repair_place_count")).contains("6");
+    assertThat(columnDefault(
+        "repair_capacity_settings", "automatic_refill_delay_minutes")).contains("5");
     assertThat(constraintDefinition(
         "repair_capacity_settings", "ck_repair_capacity_settings_count"))
         .contains("repair_place_count > 0");
+    assertThat(constraintDefinition(
+        "repair_capacity_settings", "ck_repair_capacity_settings_refill_delay"))
+        .contains("automatic_refill_delay_minutes", "1", "1440");
     assertThat(columns("repair_complexity_settings")).contains(
         "warehouse_id", "version", "light_boundary_minutes", "medium_boundary_minutes",
         "complex_boundary_minutes", "imported_from_task_board_version", "imported_at");
@@ -194,6 +207,272 @@ class MaintenanceFlywayMigrationIntegrationTest {
         .contains("jsonb_typeof");
     assertThat(jdbc.queryForObject("select count(*) from catalog_version", Integer.class)).isZero();
     assertThat(jdbc.queryForObject("select count(*) from maintenance_repair", Integer.class)).isZero();
+  }
+
+  @Test
+  void v25RemovesDuplicateActiveCatalogPositionsAndKeepsTheEventStreamCanonical() {
+    Flyway beforeV25 = Flyway.configure()
+        .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+        .locations(MIGRATIONS)
+        .target("24")
+        .baselineOnMigrate(false)
+        .cleanDisabled(true)
+        .validateOnMigrate(true)
+        .validateMigrationNaming(true)
+        .outOfOrder(false)
+        .load();
+    assertThat(beforeV25.migrate().migrationsExecuted).isEqualTo(24);
+
+    UUID warehouseId = UUID.randomUUID();
+    UUID catalogId = UUID.randomUUID();
+    UUID parentId = UUID.randomUUID();
+    UUID canonicalWorkId = UUID.randomUUID();
+    UUID duplicateWorkId = UUID.randomUUID();
+    UUID materialId = UUID.randomUUID();
+    UUID parentRowId = UUID.randomUUID();
+    UUID canonicalWorkRowId = UUID.randomUUID();
+    UUID duplicateWorkRowId = UUID.randomUUID();
+    UUID materialRowId = UUID.randomUUID();
+    UUID canonicalFollowUpId = UUID.randomUUID();
+    UUID duplicateFollowUpId = UUID.randomUUID();
+    UUID duplicateDependencyId = UUID.randomUUID();
+    UUID streamEventId = UUID.randomUUID();
+    String state = """
+        {
+          "id":"%s","version":0,"warehouseId":"%s","lifecycle":"ACTIVE",
+          "sourceSha256":"%s","nodeCount":4,"linkCount":3,
+          "validationReport":{"valid":true,"errorCount":0,"warningCount":0,
+            "contentSha256":"%s","nodeCount":4,"linkCount":3,
+            "materialCount":1,"dependencyAcyclic":true,
+            "reportSha256":"%s"},
+          "activatedAt":"2026-07-31T00:00:00Z",
+          "createdAt":"2026-07-31T00:00:00Z",
+          "updatedAt":"2026-07-31T00:00:00Z",
+          "nodes":[
+            {"id":"%s","nodeType":"SUBCATEGORY","name":"External","active":true,
+              "parentNodeId":null,"unit":null,"priceMinor":null,"durationMinutes":0,
+              "includeInEstimate":false,"commonItem":false,"showInMainMenu":false,
+              "canvasX":0,"canvasY":0,"displayColor":null,"forcesCapitalRepair":false,
+              "characteristic":null,"routing":null,"comment":null},
+            {"id":"%s","nodeType":"WORK","name":"Duplicate work","active":true,
+              "parentNodeId":"%s","unit":"piece","priceMinor":10000,"durationMinutes":15,
+              "includeInEstimate":true,"commonItem":false,"showInMainMenu":true,
+              "canvasX":0,"canvasY":0,"displayColor":null,"forcesCapitalRepair":false,
+              "characteristic":null,"routing":null,"comment":null},
+            {"id":"%s","nodeType":"WORK","name":"Duplicate work","active":true,
+              "parentNodeId":"%s","unit":"piece","priceMinor":10000,"durationMinutes":15,
+              "includeInEstimate":true,"commonItem":false,"showInMainMenu":true,
+              "canvasX":10,"canvasY":10,"displayColor":null,"forcesCapitalRepair":false,
+              "characteristic":null,"routing":null,"comment":null},
+            {"id":"%s","nodeType":"MATERIAL","name":"Sheet","active":true,
+              "parentNodeId":null,"unit":"piece","priceMinor":5000,"durationMinutes":0,
+              "includeInEstimate":true,"commonItem":false,"showInMainMenu":false,
+              "canvasX":0,"canvasY":0,"displayColor":null,"forcesCapitalRepair":false,
+              "characteristic":null,"routing":null,"comment":null}
+          ],
+          "links":[
+            {"id":"%s","sourceNodeId":"%s","targetNodeId":"%s",
+              "linkType":"FOLLOW_UP","sourceAnchor":"BOTTOM","targetAnchor":"TOP","sortOrder":0},
+            {"id":"%s","sourceNodeId":"%s","targetNodeId":"%s",
+              "linkType":"FOLLOW_UP","sourceAnchor":"BOTTOM","targetAnchor":"TOP","sortOrder":1},
+            {"id":"%s","sourceNodeId":"%s","targetNodeId":"%s",
+              "linkType":"DEPENDENCY","sourceAnchor":"BOTTOM","targetAnchor":"TOP","sortOrder":0}
+          ]
+        }
+        """.formatted(
+        catalogId,
+        warehouseId,
+        "f".repeat(64),
+        "0".repeat(64),
+        "0".repeat(64),
+        parentId,
+        canonicalWorkId,
+        parentId,
+        duplicateWorkId,
+        parentId,
+        materialId,
+        canonicalFollowUpId,
+        parentId,
+        canonicalWorkId,
+        duplicateFollowUpId,
+        parentId,
+        duplicateWorkId,
+        duplicateDependencyId,
+        duplicateWorkId,
+        materialId);
+
+    jdbc.update(
+        """
+        insert into catalog_version(
+          id,version,warehouse_id,state,source_sha256,node_count,link_count,
+          validation_report,activated_at,created_at,updated_at)
+        values (?,0,?,'ACTIVE',?,4,3,?,'2026-07-31T00:00:00Z',
+          '2026-07-31T00:00:00Z','2026-07-31T00:00:00Z')
+        """,
+        catalogId,
+        warehouseId,
+        "f".repeat(64),
+        "{\"valid\":true,\"errorCount\":0,\"warningCount\":0,"
+            + "\"contentSha256\":\"" + "0".repeat(64) + "\",\"nodeCount\":4,"
+            + "\"linkCount\":3,\"materialCount\":1,\"dependencyAcyclic\":true,"
+            + "\"reportSha256\":\"" + "0".repeat(64) + "\"}");
+    jdbc.update(
+        """
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,node_type,name,active,parent_node_id,
+          unit,price_minor,duration_minutes,include_in_estimate,common_item,
+          show_in_main_menu,furniture_category,canvas_x,canvas_y)
+        values (?,?,?,'SUBCATEGORY','External',true,null,null,null,0,false,false,
+          false,false,0,0)
+        """,
+        parentRowId,
+        parentId,
+        catalogId);
+    jdbc.update(
+        """
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,node_type,name,active,parent_node_id,
+          unit,price_minor,duration_minutes,include_in_estimate,common_item,
+          show_in_main_menu,furniture_category,canvas_x,canvas_y)
+        values (?,?,?,'WORK','Duplicate work',true,?,'piece',10000,15,true,false,
+          true,false,0,0)
+        """,
+        canonicalWorkRowId,
+        canonicalWorkId,
+        catalogId,
+        parentId);
+    jdbc.update(
+        """
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,node_type,name,active,parent_node_id,
+          unit,price_minor,duration_minutes,include_in_estimate,common_item,
+          show_in_main_menu,furniture_category,canvas_x,canvas_y)
+        values (?,?,?,'WORK','Duplicate work',true,?,'piece',10000,15,true,false,
+          true,false,10,10)
+        """,
+        duplicateWorkRowId,
+        duplicateWorkId,
+        catalogId,
+        parentId);
+    jdbc.update(
+        """
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,node_type,name,active,parent_node_id,
+          unit,price_minor,duration_minutes,include_in_estimate,common_item,
+          show_in_main_menu,furniture_category,canvas_x,canvas_y)
+        values (?,?,?,'MATERIAL','Sheet',true,null,'piece',5000,0,true,false,
+          false,false,0,0)
+        """,
+        materialRowId,
+        materialId,
+        catalogId);
+    jdbc.update(
+        """
+        insert into catalog_link(
+          row_id,link_id,catalog_version_id,source_node_id,target_node_id,
+          link_type,source_anchor,target_anchor,sort_order)
+        values
+          (?,?,?,?,?,'FOLLOW_UP','BOTTOM','TOP',0),
+          (?,?,?,?,?,'FOLLOW_UP','BOTTOM','TOP',1),
+          (?,?,?,?,?,'DEPENDENCY','BOTTOM','TOP',0)
+        """,
+        UUID.randomUUID(), canonicalFollowUpId, catalogId, parentId, canonicalWorkId,
+        UUID.randomUUID(), duplicateFollowUpId, catalogId, parentId, duplicateWorkId,
+        UUID.randomUUID(), duplicateDependencyId, catalogId, duplicateWorkId, materialId);
+    jdbc.update(
+        """
+        insert into event_stream_head(
+          aggregate_type,aggregate_id,current_version,last_event_id,updated_at)
+        values ('CATALOG_VERSION',?,0,?,clock_timestamp())
+        """,
+        catalogId.toString(),
+        streamEventId);
+    jdbc.update(
+        """
+        insert into domain_event(
+          event_id,aggregate_type,aggregate_id,aggregate_version,event_type,event_version,
+          occurred_at,recorded_at,correlation_id,payload,payload_sha256,baseline)
+        values (?,'CATALOG_VERSION',?,0,'maintenance.catalog-version.imported.v1',1,
+          clock_timestamp(),clock_timestamp(),?,?::jsonb,?,false)
+        """,
+        streamEventId,
+        catalogId.toString(),
+        UUID.randomUUID(),
+        "{\"model\":\"maintenance-full-state-v1\",\"event\":{},\"state\":" + state + "}",
+        "0".repeat(64));
+    jdbc.update(
+        """
+        insert into aggregate_snapshot(
+          aggregate_type,aggregate_id,aggregate_version,state,state_sha256,recorded_at)
+        values ('CATALOG_VERSION',?,0,?::jsonb,?,clock_timestamp())
+        """,
+        catalogId.toString(),
+        state,
+        "0".repeat(64));
+    jdbc.update(
+        """
+        insert into outbox_event(
+          event_id,aggregate_type,aggregate_id,aggregate_version,event_type,topic,
+          envelope_body,envelope_sha256,status,attempt_count,next_attempt_at,created_at,
+          published_at)
+        values (?,'CATALOG_VERSION',?,0,'maintenance.catalog-version.imported.v1',
+          'rwms.maintenance.catalog-version.v1','{}'::jsonb,?,'PUBLISHED',0,
+          clock_timestamp(),clock_timestamp(),clock_timestamp())
+        """,
+        streamEventId,
+        catalogId.toString(),
+        "0".repeat(64));
+
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(3);
+
+    assertThat(jdbc.queryForObject(
+        "select count(*) from catalog_node where catalog_version_id=? and node_type='WORK'",
+        Integer.class,
+        catalogId)).isOne();
+    assertThat(jdbc.queryForObject(
+        "select count(*) from catalog_link where catalog_version_id=? and link_type='FOLLOW_UP'",
+        Integer.class,
+        catalogId)).isOne();
+    UUID survivingWorkId = jdbc.queryForObject(
+        """
+        select node_id from catalog_node
+        where catalog_version_id=? and node_type='WORK'
+        """,
+        UUID.class,
+        catalogId);
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from catalog_link
+        where catalog_version_id=? and source_node_id=? and target_node_id=? and link_type='DEPENDENCY'
+        """,
+        Integer.class,
+        catalogId,
+        survivingWorkId,
+        materialId)).isOne();
+    assertThat(jdbc.queryForObject(
+        "select version from catalog_version where id=?", Integer.class, catalogId)).isEqualTo(1);
+    assertThat(jdbc.queryForObject(
+        """
+        select current_version from event_stream_head
+        where aggregate_type='CATALOG_VERSION' and aggregate_id=?
+        """,
+        Long.class,
+        catalogId.toString())).isEqualTo(1L);
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from domain_event
+        where aggregate_type='CATALOG_VERSION' and aggregate_id=?
+        """,
+        Integer.class,
+        catalogId.toString())).isEqualTo(2);
+    assertThat(jdbc.queryForObject(
+        """
+        select aggregate_version from projection_checkpoint
+        where projection_name='maintenance-live-v1'
+          and aggregate_type='CATALOG_VERSION' and aggregate_id=?
+        """,
+        Long.class,
+        catalogId.toString())).isEqualTo(1L);
   }
 
   @Test
@@ -445,7 +724,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
   }
 
   @Test
-  void v24AddsCanonicalRepairPlanningAndRealignsHistoricalStateHashes() {
+  void v24ThroughV27CanonicalizeRepairPlanningAndRealignHistoricalStateHashes() {
     Flyway beforeV24 =
         Flyway.configure()
             .dataSource(
@@ -525,7 +804,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "0".repeat(64));
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(4);
     upgraded.validate();
 
     assertThat(
@@ -535,12 +814,13 @@ class MaintenanceFlywayMigrationIntegrationTest {
                 from maintenance_repair where id=?
                 """,
                 repairId))
-        .containsEntry("logistics_planning_mode", "AUTO")
+        .containsEntry("logistics_planning_mode", null)
         .containsEntry("logistics_scheduled_date", null);
     assertThat(
             jdbc.queryForObject(
                 """
-                select payload #>> '{state,logisticsPlanningMode}' = 'AUTO'
+                select payload #> '{state,movementToRepair}' = 'false'::jsonb
+                  and payload #> '{state,logisticsPlanningMode}' = 'null'::jsonb
                   and payload #> '{state,logisticsScheduledDate}' = 'null'::jsonb
                   and payload_sha256 =
                     encode(sha256(convert_to(payload::text, 'UTF8')), 'hex')
@@ -552,7 +832,8 @@ class MaintenanceFlywayMigrationIntegrationTest {
     assertThat(
             jdbc.queryForObject(
                 """
-                select state ->> 'logisticsPlanningMode' = 'AUTO'
+                select state -> 'movementToRepair' = 'false'::jsonb
+                  and state -> 'logisticsPlanningMode' = 'null'::jsonb
                   and state -> 'logisticsScheduledDate' = 'null'::jsonb
                   and state_sha256 =
                     encode(sha256(convert_to(state::text, 'UTF8')), 'hex')
@@ -583,7 +864,236 @@ class MaintenanceFlywayMigrationIntegrationTest {
   }
 
   @Test
-  void v20ToV24GloballyConsolidatesCatalogsAndCanonicalizesLegacySnapshots() {
+  void v27ConvertsCompletedMovementStagesWithoutLosingCanonicalHistoryOrExternalTaskArchive() {
+    Flyway beforeV27 = Flyway.configure()
+        .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+        .locations(MIGRATIONS)
+        .target("26")
+        .baselineOnMigrate(false)
+        .cleanDisabled(true)
+        .validateOnMigrate(true)
+        .validateMigrationNaming(true)
+        .outOfOrder(false)
+        .load();
+    assertThat(beforeV27.migrate().migrationsExecuted).isEqualTo(26);
+
+    UUID warehouseId = UUID.randomUUID();
+    UUID repairId = UUID.randomUUID();
+    UUID moveStageId = UUID.randomUUID();
+    UUID workStageId = UUID.randomUUID();
+    UUID eventId = UUID.randomUUID();
+    insertRepair(repairId, warehouseId, null, "DIRECT_REPAIR", "PRIMARY", null, null);
+    insertLegacyRepairStage(
+        repairId,
+        moveStageId,
+        0,
+        "MOVE_TO_REPAIR",
+        "DONE",
+        UUID.randomUUID());
+    insertLegacyRepairStage(
+        repairId,
+        workStageId,
+        1,
+        "REPAIR_WORK",
+        "PLANNED",
+        null);
+
+    String state = """
+        {"id":"%s","version":0,"warehouseId":"%s",
+         "movementToShipment":false,"logisticsPlanningMode":"AUTO",
+         "logisticsScheduledDate":null,"stages":[
+           {"id":"%s","stageNo":0,"kind":"MOVE_TO_REPAIR"},
+           {"id":"%s","stageNo":1,"kind":"REPAIR_WORK"}
+         ]}
+        """.formatted(repairId, warehouseId, moveStageId, workStageId);
+    String payload = """
+        {"model":"maintenance-full-state-v1","event":{},"state":%s}
+        """.formatted(state);
+    String envelope = """
+        {"payload":{"stages":[
+          {"stageId":"%s","kind":"MOVE_TO_REPAIR","order":0},
+          {"stageId":"%s","kind":"REPAIR_WORK","order":1}
+        ]}}
+        """.formatted(moveStageId, workStageId);
+    jdbc.update(
+        """
+        insert into event_stream_head(
+          aggregate_type,aggregate_id,current_version,last_event_id,updated_at)
+        values ('REPAIR',?,0,?,clock_timestamp())
+        """,
+        repairId.toString(), eventId);
+    jdbc.update(
+        """
+        insert into domain_event(
+          event_id,aggregate_type,aggregate_id,aggregate_version,event_type,event_version,
+          occurred_at,recorded_at,correlation_id,payload,payload_sha256,baseline)
+        values (?,'REPAIR',?,0,'maintenance.repair.created.v1',1,clock_timestamp(),
+          clock_timestamp(),?,?::jsonb,?,false)
+        """,
+        eventId, repairId.toString(), UUID.randomUUID(), payload, "0".repeat(64));
+    jdbc.update(
+        """
+        insert into aggregate_snapshot(
+          aggregate_type,aggregate_id,aggregate_version,state,state_sha256,recorded_at)
+        values ('REPAIR',?,0,?::jsonb,?,clock_timestamp())
+        """,
+        repairId.toString(), state, "0".repeat(64));
+    jdbc.update(
+        """
+        insert into projection_checkpoint(
+          projection_name,aggregate_type,aggregate_id,aggregate_version,
+          projection_sha256,updated_at)
+        values ('maintenance-live-v1','REPAIR',?,0,?,clock_timestamp())
+        """,
+        repairId.toString(), "0".repeat(64));
+    jdbc.update(
+        """
+        insert into outbox_event(
+          event_id,aggregate_type,aggregate_id,aggregate_version,event_type,topic,
+          envelope_body,envelope_sha256,status,attempt_count,next_attempt_at,created_at)
+        values (?,'REPAIR',?,0,'maintenance.repair.created.v1',
+          'rwms.maintenance.repair.v1',?::jsonb,?,'PENDING',0,clock_timestamp(),
+          clock_timestamp())
+        """,
+        eventId, repairId.toString(), envelope, "0".repeat(64));
+
+    UUID catalogId = UUID.randomUUID();
+    UUID estimateId = UUID.randomUUID();
+    insertCatalogVersion(catalogId, warehouseId, "d".repeat(64));
+    insertEstimateWithRevision(estimateId, catalogId, warehouseId);
+    insertLegacyEstimateStage(estimateId, UUID.randomUUID(), 0, "MOVE_TO_REPAIR");
+    UUID estimateWorkId = UUID.randomUUID();
+    insertLegacyEstimateStage(estimateId, estimateWorkId, 1, "REPAIR_WORK");
+    insertLegacyEstimateStage(estimateId, UUID.randomUUID(), 2, "MOVE_FROM_REPAIR");
+
+    Flyway upgraded = flyway(MIGRATIONS);
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(jdbc.queryForMap(
+        """
+        select movement_to_repair,movement_to_shipment,logistics_planning_mode,
+               logistics_scheduled_date
+        from maintenance_repair where id=?
+        """, repairId))
+        .containsEntry("movement_to_repair", true)
+        .containsEntry("movement_to_shipment", false)
+        .containsEntry("logistics_planning_mode", "AUTO")
+        .containsEntry("logistics_scheduled_date", null);
+    assertThat(jdbc.queryForList(
+        "select stage_id,stage_no,stage_kind from repair_stage where repair_id=? order by stage_no",
+        repairId))
+        .singleElement()
+        .satisfies(row -> assertThat(row)
+            .containsEntry("stage_id", workStageId)
+            .containsEntry("stage_no", 1)
+            .containsEntry("stage_kind", "REPAIR_WORK"));
+    assertThat(jdbc.queryForList(
+        "select stage_id,stage_no,stage_kind from estimate_plan_stage where estimate_id=? order by stage_no",
+        estimateId))
+        .singleElement()
+        .satisfies(row -> assertThat(row)
+            .containsEntry("stage_id", estimateWorkId)
+            .containsEntry("stage_no", 0)
+            .containsEntry("stage_kind", "REPAIR_WORK"));
+    assertThat(jdbc.queryForObject(
+        """
+        select payload #> '{state,movementToRepair}' = 'true'::jsonb
+          and payload #> '{state,logisticsPlanningMode}' = '"AUTO"'::jsonb
+          and jsonb_array_length(payload #> '{state,stages}') = 1
+          and payload #>> '{state,stages,0,id}' = ?
+          and payload_sha256 = encode(sha256(convert_to(payload::text, 'UTF8')), 'hex')
+        from domain_event where event_id=?
+        """, Boolean.class, workStageId.toString(), eventId)).isTrue();
+    assertThat(jdbc.queryForObject(
+        """
+        select state #> '{movementToRepair}' = 'true'::jsonb
+          and state #> '{logisticsPlanningMode}' = '"AUTO"'::jsonb
+          and jsonb_array_length(state -> 'stages') = 1
+          and state #>> '{stages,0,id}' = ?
+          and state_sha256 = encode(sha256(convert_to(state::text, 'UTF8')), 'hex')
+        from aggregate_snapshot
+        where aggregate_type='REPAIR' and aggregate_id=? and aggregate_version=0
+        """, Boolean.class, workStageId.toString(), repairId.toString())).isTrue();
+    assertThat(jdbc.queryForObject(
+        """
+        select jsonb_array_length(envelope_body #> '{payload,stages}') = 1
+          and envelope_body #>> '{payload,stages,0,kind}' = 'REPAIR_WORK'
+          and envelope_sha256 = encode(sha256(convert_to(envelope_body::text, 'UTF8')), 'hex')
+        from outbox_event where event_id=?
+        """, Boolean.class, eventId)).isTrue();
+    assertThat(jdbc.queryForObject(
+        """
+        select checkpoint.projection_sha256 = snapshot.state_sha256
+        from projection_checkpoint checkpoint
+        join aggregate_snapshot snapshot
+          on snapshot.aggregate_type=checkpoint.aggregate_type
+         and snapshot.aggregate_id=checkpoint.aggregate_id
+         and snapshot.aggregate_version=checkpoint.aggregate_version
+        where checkpoint.projection_name='maintenance-live-v1'
+          and checkpoint.aggregate_type='REPAIR'
+          and checkpoint.aggregate_id=?
+        """, Boolean.class, repairId.toString())).isTrue();
+  }
+
+  @Test
+  void v27RejectsAnyActiveLegacyMovementStage() {
+    Flyway beforeV27 = Flyway.configure()
+        .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+        .locations(MIGRATIONS)
+        .target("26")
+        .baselineOnMigrate(false)
+        .cleanDisabled(true)
+        .validateOnMigrate(true)
+        .validateMigrationNaming(true)
+        .outOfOrder(false)
+        .load();
+    beforeV27.migrate();
+    UUID repairId = UUID.randomUUID();
+    insertRepair(repairId, UUID.randomUUID(), null, "DIRECT_REPAIR", "PRIMARY", null, null);
+    insertLegacyRepairStage(
+        repairId, UUID.randomUUID(), 0, "MOVE_TO_REPAIR", "QUEUED", null);
+
+    assertThatThrownBy(() -> flyway(MIGRATIONS).migrate())
+        .isInstanceOf(FlywayException.class)
+        .hasStackTraceContaining("cannot cut over active legacy movement stages");
+  }
+
+  @Test
+  void v27RejectsLegacyMovementStagesReferencedByEvidence() {
+    Flyway beforeV27 = Flyway.configure()
+        .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+        .locations(MIGRATIONS)
+        .target("26")
+        .baselineOnMigrate(false)
+        .cleanDisabled(true)
+        .validateOnMigrate(true)
+        .validateMigrationNaming(true)
+        .outOfOrder(false)
+        .load();
+    beforeV27.migrate();
+    UUID repairId = UUID.randomUUID();
+    UUID stageId = UUID.randomUUID();
+    insertRepair(repairId, UUID.randomUUID(), null, "DIRECT_REPAIR", "PRIMARY", null, null);
+    insertLegacyRepairStage(repairId, stageId, 0, "MOVE_FROM_REPAIR", "DONE", null);
+    jdbc.update(
+        """
+        insert into repair_task_evidence(
+          evidence_id,aggregate_version,repair_id,repair_stage_id,entry_id,task_id,route_index,
+          worker_id,worker_group_id,media_id,media_generation,captured_at,recorded_at,
+          evidence_state,updated_at)
+        values (?,0,?,?,?,?,0,?,?,?,1,clock_timestamp(),clock_timestamp(),'READY',clock_timestamp())
+        """,
+        UUID.randomUUID(), repairId, stageId, UUID.randomUUID(), UUID.randomUUID(),
+        UUID.randomUUID(), null, UUID.randomUUID());
+
+    assertThatThrownBy(() -> flyway(MIGRATIONS).migrate())
+        .isInstanceOf(FlywayException.class)
+        .hasStackTraceContaining("repair_task_evidence");
+  }
+
+  @Test
+  void v20ThroughV27GloballyConsolidatesCatalogsAndCanonicalizesLegacySnapshots() {
     Flyway beforeV21 = Flyway.configure()
         .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
         .locations(MIGRATIONS)
@@ -637,7 +1147,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
     insertV20CatalogStreamArtifacts(otherCatalogId, otherNodeId, "ACTIVE");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(4);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(7);
     upgraded.validate();
 
     assertThat(jdbc.queryForObject(
@@ -1583,6 +2093,48 @@ class MaintenanceFlywayMigrationIntegrationTest {
         """,
         UUID.randomUUID(),
         estimateId);
+  }
+
+  private void insertLegacyEstimateStage(
+      UUID estimateId, UUID stageId, int stageNo, String stageKind) {
+    jdbc.update(
+        """
+        insert into estimate_plan_stage(
+          row_id,stage_id,estimate_id,estimate_revision,stage_no,stage_kind,
+          routing_queue_id,routing_queue_name,routing_queue_type)
+        values (?,?,?,1,?,?,?,'Ремонт','REPAIR')
+        """,
+        UUID.randomUUID(), stageId, estimateId, stageNo, stageKind, UUID.randomUUID());
+  }
+
+  private void insertLegacyRepairStage(
+      UUID repairId,
+      UUID stageId,
+      int stageNo,
+      String stageKind,
+      String state,
+      UUID externalQueueEntryId) {
+    jdbc.update(
+        """
+        insert into repair_stage(
+          row_id,stage_id,repair_id,stage_no,stage_kind,state,routing_queue_id,
+          routing_queue_name,routing_queue_type,external_queue_entry_id,task_board_version,
+          task_generation_state,delivery_state,delivery_attempts,delivery_updated_at,
+          task_deadline,completed_event_id,completed_at)
+        values (?,?,?,?,?,?,?,'Перемещения','MOVEMENT',?,null,
+          ?,?,0,clock_timestamp(),null,null,?)
+        """,
+        UUID.randomUUID(),
+        stageId,
+        repairId,
+        stageNo,
+        stageKind,
+        state,
+        UUID.randomUUID(),
+        externalQueueEntryId,
+        "DONE".equals(state) ? "NOT_REQUIRED" : "PENDING_GENERATION",
+        "DONE".equals(state) ? "DELIVERED" : "PENDING",
+        "DONE".equals(state) ? java.time.OffsetDateTime.now() : null);
   }
 
   private void insertRepair(

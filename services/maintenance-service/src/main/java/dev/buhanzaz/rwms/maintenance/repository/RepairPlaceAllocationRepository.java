@@ -25,6 +25,9 @@ public interface RepairPlaceAllocationRepository
 
   long countByWarehouseIdAndState(UUID warehouseId, RepairPlaceAllocationState state);
 
+  boolean existsByWarehouseIdAndRepairIdAndState(
+      UUID warehouseId, UUID repairId, RepairPlaceAllocationState state);
+
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query(
       "select allocation from RepairPlaceAllocation allocation"

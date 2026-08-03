@@ -156,6 +156,7 @@ func run(logger *slog.Logger) error {
 		producer.Close()
 		return err
 	}
+	processingConsumer.SetInvalidationPublisher(apiServer.Invalidations())
 	httpServer := &http.Server{
 		Addr: configuration.HTTPAddress, Handler: apiServer.Handler(),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,

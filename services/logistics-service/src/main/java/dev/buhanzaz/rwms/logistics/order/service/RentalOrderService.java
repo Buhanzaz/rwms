@@ -4,6 +4,7 @@ import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.inquiry.service.RentalSettingsService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.LogisticsDocumentView;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AddOrderUnitRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderDesiredEquipmentInput;
@@ -17,6 +18,12 @@ import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderRentalItemRespo
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderSummaryResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderUnitPageResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderUnitResponse;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRentalShipmentRequest;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.ExtendOrderRentalTermsRequest;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderRentalTermExtensionInput;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderRentalTermInput;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderRentalTermResponse;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.SetOrderRentalTermsRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.SelectWarehouseRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.SetOrderUnitDesiredEquipmentRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.UpdateOrderRequest;
@@ -27,11 +34,13 @@ import dev.buhanzaz.rwms.logistics.order.domain.OrderCommandReceipt;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderEquipmentRequirement;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderUnitTerm;
 import dev.buhanzaz.rwms.logistics.order.mapper.RentalOrderResponseMapper;
 import dev.buhanzaz.rwms.logistics.order.repository.OrderAuditEventRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.OrderCommandReceiptRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderEquipmentRequirementRepository;
+import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderUnitTermRepository;
 import dev.buhanzaz.rwms.logistics.order.security.OrderActor;
 import dev.buhanzaz.rwms.logistics.order.security.OrderAuthorizer;
 import jakarta.persistence.criteria.Predicate;
@@ -76,11 +85,14 @@ public class RentalOrderService {
   private static final String ADD_UNIT = "ADD_UNIT";
   private static final String REMOVE_UNIT = "REMOVE_UNIT";
   private static final String SET_DESIRED_EQUIPMENT = "SET_DESIRED_EQUIPMENT";
+  private static final String SET_RENTAL_TERMS = "SET_RENTAL_TERMS";
+  private static final String EXTEND_RENTAL_TERMS = "EXTEND_RENTAL_TERMS";
 
   private final RentalOrderRepository orders;
   private final OrderCommandReceiptRepository receipts;
   private final OrderAuditEventRepository auditEvents;
   private final RentalOrderEquipmentRequirementRepository equipmentRequirements;
+  private final RentalOrderUnitTermRepository rentalTerms;
   private final OrderClientService clientService;
   private final OrderAuditService audit;
   private final OrderAuthorizer access;
@@ -188,6 +200,7 @@ public class RentalOrderService {
               orderId, warehouseId, page, size, search == null ? "" : search.trim());
       Map<UUID, List<OrderDesiredEquipmentResponse>> desiredByUnit =
           desiredContentsByUnit(order);
+      Map<UUID, OrderRentalTermResponse> rentalTermsByUnit = rentalTermsByUnit(order);
       List<OrderUnitResponse> content =
           result.content().stream()
               .map(
@@ -203,7 +216,8 @@ public class RentalOrderService {
                         candidate.reservationId(),
                         candidate.added(),
                         rentalItem(candidate.unit()),
-                        desiredByUnit.getOrDefault(candidate.unit().id(), List.of()));
+                        desiredByUnit.getOrDefault(candidate.unit().id(), List.of()),
+                        rentalTermsByUnit.get(candidate.unit().id()));
                   })
               .toList();
       return new OrderUnitPageResponse(
@@ -511,6 +525,11 @@ public class RentalOrderService {
     List<LogisticsDependencyGateway.OrderUnitReservation> currentUnits = readUnits(order);
     LogisticsDependencyGateway.OrderUnitReservation current =
         findCurrentUnit(orderId, unitId, currentUnits);
+    if (documents.isRentalOrderUnitAssignedToShipment(orderId, unitId)) {
+      throw conflict(
+          "ORDER_UNIT_SHIPMENT_ASSIGNED",
+          "Бытовку нельзя удалить после назначения в отгрузку");
+    }
     if (order.getStatus() == RentalOrderStatus.SAVED
         && current != null
         && currentUnits.size() == 1) {
@@ -552,6 +571,8 @@ public class RentalOrderService {
               Map.of(),
               reservationByEquipment,
               actor);
+      rentalTerms.deleteAllByOrder_IdAndRentalItemId(orderId, unitId);
+      rentalTerms.flush();
       ensureUnitAddedEvidence(order, released, actor);
       boolean recorded =
           hasReservationEvidence(
@@ -633,6 +654,133 @@ public class RentalOrderService {
       changed(order, actor, "desiredEquipment");
     }
     remember(actor, SET_DESIRED_EQUIPMENT, idempotencyKey, checksum, order);
+    return new MutationResult(detail(order, actor, readUnits(order)), false);
+  }
+
+  @Transactional
+  public MutationResult setRentalTerms(
+      OrderActor actor,
+      UUID orderId,
+      UUID idempotencyKey,
+      SetOrderRentalTermsRequest request) {
+    Map<UUID, Long> requested = rentalTermValues(request.terms());
+    List<String> checksumValues = new ArrayList<>();
+    checksumValues.add(orderId.toString());
+    checksumValues.add(Long.toString(request.expectedVersion()));
+    requested.forEach(
+        (unitId, months) -> {
+          checksumValues.add(unitId.toString());
+          checksumValues.add(Long.toString(months));
+        });
+    String checksum = OrderCommandChecksum.sha256(SET_RENTAL_TERMS, checksumValues);
+    OrderCommandReceipt replay = replay(actor, SET_RENTAL_TERMS, idempotencyKey, checksum);
+    if (replay != null) {
+      RentalOrder replayedOrder = replay.getOrder();
+      access.requireVisible(actor, replayedOrder);
+      return new MutationResult(detail(replayedOrder, actor, readUnits(replayedOrder)), true);
+    }
+
+    RentalOrder order = lockedOrder(orderId);
+    requireEditable(actor, order);
+    requireVersion(order, request.expectedVersion());
+    List<LogisticsDependencyGateway.OrderUnitReservation> units = readUnits(order);
+    Set<UUID> unitIds =
+        units.stream()
+            .map(LogisticsDependencyGateway.OrderUnitReservation::unitId)
+            .collect(Collectors.toUnmodifiableSet());
+    if (!unitIds.equals(requested.keySet())) {
+      throw conflict(
+          "ORDER_RENTAL_TERMS_MISMATCH",
+          "Срок аренды должен быть задан для каждой выбранной бытовки");
+    }
+    List<RentalOrderUnitTerm> existing =
+        rentalTerms.findAllByOrder_IdOrderByRentalItemIdAsc(orderId);
+    Map<UUID, RentalOrderUnitTerm> existingByUnit =
+        existing.stream()
+            .collect(
+                Collectors.toMap(
+                    RentalOrderUnitTerm::getRentalItemId,
+                    value -> value,
+                    (left, right) -> left,
+                    LinkedHashMap::new));
+    List<RentalOrderUnitTerm> changedTerms = new ArrayList<>();
+    for (Map.Entry<UUID, Long> entry : requested.entrySet()) {
+      RentalOrderUnitTerm term = existingByUnit.get(entry.getKey());
+      if (term == null) {
+        term = RentalOrderUnitTerm.create(order, entry.getKey(), entry.getValue());
+        changedTerms.add(term);
+      } else if (term.getRentalShipmentId() != null
+          && term.getRentalMonths() != entry.getValue()) {
+        throw conflict(
+            "ORDER_RENTAL_TERM_ASSIGNED",
+            "Срок уже назначен отгрузке; отмените черновик отгрузки или используйте продление после SHIPPED");
+      } else if (term.changeRentalMonths(entry.getValue())) {
+        changedTerms.add(term);
+      }
+    }
+    if (!changedTerms.isEmpty()) {
+      rentalTerms.saveAllAndFlush(changedTerms);
+      order.touch();
+      orders.saveAndFlush(order);
+      changed(order, actor, "rentalTerms");
+    }
+    remember(actor, SET_RENTAL_TERMS, idempotencyKey, checksum, order);
+    return new MutationResult(detail(order, actor, units), false);
+  }
+
+  @Transactional
+  public MutationResult extendRentalTerms(
+      OrderActor actor,
+      UUID orderId,
+      UUID idempotencyKey,
+      ExtendOrderRentalTermsRequest request) {
+    Map<UUID, Long> requested = rentalTermExtensionValues(request.terms());
+    List<String> checksumValues = new ArrayList<>();
+    checksumValues.add(orderId.toString());
+    checksumValues.add(Long.toString(request.expectedVersion()));
+    requested.forEach(
+        (unitId, months) -> {
+          checksumValues.add(unitId.toString());
+          checksumValues.add(Long.toString(months));
+        });
+    String checksum = OrderCommandChecksum.sha256(EXTEND_RENTAL_TERMS, checksumValues);
+    OrderCommandReceipt replay = replay(actor, EXTEND_RENTAL_TERMS, idempotencyKey, checksum);
+    if (replay != null) {
+      RentalOrder replayedOrder = replay.getOrder();
+      access.requireVisible(actor, replayedOrder);
+      return new MutationResult(detail(replayedOrder, actor, readUnits(replayedOrder)), true);
+    }
+
+    RentalOrder order = lockedOrder(orderId);
+    access.requireRentalTermExtension(actor, order);
+    requireVersion(order, request.expectedVersion());
+    List<RentalOrderUnitTerm> terms =
+        rentalTerms.findAllByOrder_IdAndRentalItemIdInOrderByRentalItemIdAsc(
+            orderId, requested.keySet());
+    if (terms.size() != requested.size()) {
+      throw conflict("ORDER_RENTAL_TERM_NOT_FOUND", "Срок аренды бытовки не найден");
+    }
+    Map<UUID, RentalOrderUnitTerm> termsByUnit =
+        terms.stream()
+            .collect(Collectors.toMap(RentalOrderUnitTerm::getRentalItemId, value -> value));
+    for (Map.Entry<UUID, Long> entry : requested.entrySet()) {
+      RentalOrderUnitTerm term = termsByUnit.get(entry.getKey());
+      if (term == null
+          || term.getRentalShipmentId() == null
+          || term.getShipmentDate() == null
+          || term.getReturnDate() == null
+          || !documents.isRentalShipmentShipped(term.getRentalShipmentId())) {
+        throw conflict(
+            "ORDER_RENTAL_TERM_NOT_SHIPPED",
+            "Продлить можно только уже отгруженную бытовку");
+      }
+      term.extend(entry.getValue());
+    }
+    rentalTerms.saveAllAndFlush(terms);
+    order.recordRentalTermExtension();
+    orders.saveAndFlush(order);
+    changed(order, actor, "rentalTerms");
+    remember(actor, EXTEND_RENTAL_TERMS, idempotencyKey, checksum, order);
     return new MutationResult(detail(order, actor, readUnits(order)), false);
   }
 
@@ -803,12 +951,11 @@ public class RentalOrderService {
       throw conflict("ORDER_UNITS_REQUIRED", "Добавьте в заказ хотя бы одну бытовку");
     }
     units = synchronizeOrderUnits(order, actor, units);
+    requireCompleteRentalTerms(order, units);
     if (firstSave) {
       order.saveForFulfillment();
       orders.saveAndFlush(order);
     }
-    documents.createRentalOrderShipmentDraft(
-        actor.subjectId(), correlationId, order, units);
     if (firstSave) {
       audit.append(
           orderId,
@@ -822,6 +969,76 @@ public class RentalOrderService {
     }
     remember(actor, SAVE_ORDER, idempotencyKey, checksum, order);
     return new MutationResult(detail(order, actor, units), false);
+  }
+
+  private void requireCompleteRentalTerms(
+      RentalOrder order, List<LogisticsDependencyGateway.OrderUnitReservation> units) {
+    Set<UUID> unitIds =
+        units.stream()
+            .map(LogisticsDependencyGateway.OrderUnitReservation::unitId)
+            .collect(Collectors.toUnmodifiableSet());
+    Set<UUID> configured =
+        rentalTerms.findAllByOrder_IdOrderByRentalItemIdAsc(order.getId()).stream()
+            .map(RentalOrderUnitTerm::getRentalItemId)
+            .collect(Collectors.toUnmodifiableSet());
+    if (!unitIds.equals(configured)) {
+      throw conflict(
+          "ORDER_RENTAL_TERMS_REQUIRED",
+          "Перед сохранением задайте срок аренды для каждой выбранной бытовки");
+    }
+  }
+
+  @Transactional
+  public LogisticsDocumentService.CreateResult createRentalShipment(
+      OrderActor actor,
+      UUID orderId,
+      UUID idempotencyKey,
+      UUID correlationId,
+      CreateOrderRentalShipmentRequest request) {
+    if (actor == null
+        || orderId == null
+        || idempotencyKey == null
+        || correlationId == null
+        || request == null) {
+      throw new IllegalArgumentException("Rental shipment command is invalid");
+    }
+    String checksum = rentalShipmentChecksum(orderId, request);
+    LogisticsDocumentService.CreateResult replay =
+        documents.replayRentalOrderShipment(actor.subjectId(), idempotencyKey, checksum);
+    if (replay != null) {
+      if (!orderId.equals(replay.response().rentalOrderId())) {
+        throw conflict(
+            "IDEMPOTENCY_KEY_REUSED",
+            "Idempotency-Key уже использован для другого заказа");
+      }
+      RentalOrder replayedOrder = order(replay.response().rentalOrderId());
+      access.requireVisible(actor, replayedOrder);
+      return replay;
+    }
+
+    RentalOrder order = lockedOrder(orderId);
+    access.requireRentalShipmentCreation(actor, order);
+    requireVersion(order, request.expectedVersion());
+    List<LogisticsDependencyGateway.OrderUnitReservation> units = readUnits(order);
+    return documents.createRentalOrderShipment(
+        actor.subjectId(),
+        idempotencyKey,
+        correlationId,
+        order,
+        units,
+        request,
+        checksum);
+  }
+
+  private static String rentalShipmentChecksum(
+      UUID orderId, CreateOrderRentalShipmentRequest request) {
+    List<String> values = new ArrayList<>();
+    values.add(orderId.toString());
+    values.add(Long.toString(request.expectedVersion()));
+    values.add(request.driverSnapshot().trim());
+    values.add(request.scheduledDate().toString());
+    request.unitIds().stream().sorted().map(UUID::toString).forEach(values::add);
+    return OrderCommandChecksum.sha256("CREATE_RENTAL_ORDER_SHIPMENT", values);
   }
 
   private List<LogisticsDependencyGateway.OrderUnitReservation> synchronizeOrderUnits(
@@ -874,6 +1091,55 @@ public class RentalOrderService {
           || requirement.quantity() < 1
           || values.putIfAbsent(requirement.equipmentId(), requirement.quantity()) != null) {
         throw new IllegalArgumentException("Equipment requirements are invalid");
+      }
+    }
+    return values.entrySet().stream()
+        .sorted(Map.Entry.comparingByKey())
+        .collect(
+            Collectors.toMap(
+                Map.Entry::getKey,
+                Map.Entry::getValue,
+                (left, right) -> left,
+                LinkedHashMap::new));
+  }
+
+  private static Map<UUID, Long> rentalTermValues(List<OrderRentalTermInput> inputs) {
+    if (inputs == null || inputs.isEmpty()) {
+      throw new IllegalArgumentException("Rental terms are required");
+    }
+    Map<UUID, Long> values = new LinkedHashMap<>();
+    for (OrderRentalTermInput input : inputs) {
+      if (input == null
+          || input.unitId() == null
+          || input.rentalMonths() == null
+          || input.rentalMonths() < 1
+          || values.putIfAbsent(input.unitId(), input.rentalMonths()) != null) {
+        throw new IllegalArgumentException("Rental terms are invalid");
+      }
+    }
+    return values.entrySet().stream()
+        .sorted(Map.Entry.comparingByKey())
+        .collect(
+            Collectors.toMap(
+                Map.Entry::getKey,
+                Map.Entry::getValue,
+                (left, right) -> left,
+                LinkedHashMap::new));
+  }
+
+  private static Map<UUID, Long> rentalTermExtensionValues(
+      List<OrderRentalTermExtensionInput> inputs) {
+    if (inputs == null || inputs.isEmpty()) {
+      throw new IllegalArgumentException("Rental term extensions are required");
+    }
+    Map<UUID, Long> values = new LinkedHashMap<>();
+    for (OrderRentalTermExtensionInput input : inputs) {
+      if (input == null
+          || input.unitId() == null
+          || input.additionalMonths() == null
+          || input.additionalMonths() < 1
+          || values.putIfAbsent(input.unitId(), input.additionalMonths()) != null) {
+        throw new IllegalArgumentException("Rental term extensions are invalid");
       }
     }
     return values.entrySet().stream()
@@ -1179,6 +1445,7 @@ public class RentalOrderService {
     OrderSummaryResponse summary = mapper.toSummaryResponse(order, units.size());
     Map<UUID, List<OrderDesiredEquipmentResponse>> desiredByUnit =
         desiredContentsByUnit(order);
+    Map<UUID, OrderRentalTermResponse> rentalTermsByUnit = rentalTermsByUnit(order);
     return new OrderDetailResponse(
         summary.id(),
         summary.version(),
@@ -1193,19 +1460,30 @@ public class RentalOrderService {
         summary.unitCount(),
         summary.createdAt(),
         summary.updatedAt(),
-        units.stream().map(unit -> unit(unit, desiredByUnit)).toList(),
+        units.stream().map(unit -> unit(unit, desiredByUnit, rentalTermsByUnit)).toList(),
         new OrderPermissions(
             canEdit(actor, order), actor.canViewOtherManagers()));
   }
 
   private OrderUnitResponse unit(
       LogisticsDependencyGateway.OrderUnitReservation reservation,
-      Map<UUID, List<OrderDesiredEquipmentResponse>> desiredByUnit) {
+      Map<UUID, List<OrderDesiredEquipmentResponse>> desiredByUnit,
+      Map<UUID, OrderRentalTermResponse> rentalTermsByUnit) {
     return new OrderUnitResponse(
         reservation.reservationId(),
         true,
         rentalItem(reservation.unit()),
-        desiredByUnit.getOrDefault(reservation.unitId(), List.of()));
+        desiredByUnit.getOrDefault(reservation.unitId(), List.of()),
+        rentalTermsByUnit.get(reservation.unitId()));
+  }
+
+  private Map<UUID, OrderRentalTermResponse> rentalTermsByUnit(RentalOrder order) {
+    return rentalTerms.findAllByOrder_IdOrderByRentalItemIdAsc(order.getId()).stream()
+        .collect(
+            Collectors.toUnmodifiableMap(
+                RentalOrderUnitTerm::getRentalItemId,
+                mapper::toRentalTermResponse,
+                (left, right) -> left));
   }
 
   private Map<UUID, List<OrderDesiredEquipmentResponse>> desiredContentsByUnit(

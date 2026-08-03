@@ -11,5 +11,6 @@ public record RepairCapacitySettingsResponse(
     UUID warehouseId,
     long version,
     int repairPlaceCount,
+    int automaticRefillDelayMinutes,
     OffsetDateTime createdAt,
     OffsetDateTime updatedAt) {}

@@ -114,7 +114,6 @@ class GatewayRouteIntegrationTest {
     registry.add("rwms.gateway.cors.allowed-origins", () -> "https://panel.example");
     registry.add("rwms.gateway.security.issuer", () -> "https://panel.example/auth");
     registry.add("rwms.gateway.security.audience", () -> "rwms-services");
-    registry.add("rwms.gateway.security.jwk-set-uri", () -> origin(auth) + "/oauth2/jwks");
     registry.add(
         "rwms.gateway.app-links.sha256-cert-fingerprints[0]",
         () -> RELEASE_CERT_SHA256);

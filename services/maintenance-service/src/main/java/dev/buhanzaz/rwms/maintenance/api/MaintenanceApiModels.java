@@ -42,14 +42,16 @@ import tools.jackson.databind.exc.InvalidNullException;
 public final class MaintenanceApiModels {
   private MaintenanceApiModels() {}
 
-  private static boolean validLogisticsPlanning(
-      RepairLogisticsPlanningMode mode, LocalDate scheduledDate) {
+  private static boolean validInboundLogisticsPlanning(
+      boolean movementToRepair,
+      RepairLogisticsPlanningMode mode,
+      LocalDate scheduledDate) {
+    if (!movementToRepair) {
+      return mode == null && scheduledDate == null;
+    }
     return mode != null
-        && ((mode == RepairLogisticsPlanningMode.AUTO
-                && scheduledDate == null)
-            || (mode
-                    == RepairLogisticsPlanningMode.FIXED_DATE
-                && scheduledDate != null));
+        && ((mode == RepairLogisticsPlanningMode.AUTO && scheduledDate == null)
+            || (mode == RepairLogisticsPlanningMode.FIXED_DATE && scheduledDate != null));
   }
 
   public enum ActorType { USER, SERVICE }
@@ -274,14 +276,19 @@ public final class MaintenanceApiModels {
   public record CompleteEstimateRequest(
       @NotNull @Min(0) Long expectedVersion,
       @NotNull @Min(1) @Max(5) Integer priority,
-      @NotNull RepairLogisticsPlanningMode logisticsPlanningMode,
+      @JsonProperty(required = true) boolean movementToRepair,
+      @JsonProperty(required = true) boolean movementToShipment,
+      @JsonProperty(required = true)
+          RepairLogisticsPlanningMode logisticsPlanningMode,
       @JsonProperty(required = true)
           LocalDate logisticsScheduledDate) {
     public CompleteEstimateRequest(Long expectedVersion) {
       this(
           expectedVersion,
           3,
-          RepairLogisticsPlanningMode.AUTO,
+          false,
+          false,
+          null,
           null);
     }
 
@@ -290,23 +297,28 @@ public final class MaintenanceApiModels {
       this(
           expectedVersion,
           priority,
-          RepairLogisticsPlanningMode.AUTO,
+          false,
+          false,
+          null,
           null);
     }
 
     @AssertTrue(
         message =
-            "logisticsScheduledDate must be set only for FIXED_DATE")
+            "inbound logistics planning must be present only when movementToRepair is selected")
     @JsonIgnore
     public boolean isLogisticsPlanningValid() {
-      return validLogisticsPlanning(
-          logisticsPlanningMode, logisticsScheduledDate);
+      return validInboundLogisticsPlanning(
+          movementToRepair, logisticsPlanningMode, logisticsScheduledDate);
     }
   }
   public record QueueRepairRequest(
       @NotNull @Min(0) Long expectedVersion,
       @NotNull @Min(1) @Max(5) Integer priority,
-      @NotNull RepairLogisticsPlanningMode logisticsPlanningMode,
+      @JsonProperty(required = true) boolean movementToRepair,
+      @JsonProperty(required = true) boolean movementToShipment,
+      @JsonProperty(required = true)
+          RepairLogisticsPlanningMode logisticsPlanningMode,
       @JsonProperty(required = true)
           LocalDate logisticsScheduledDate) {
     public QueueRepairRequest(
@@ -314,17 +326,19 @@ public final class MaintenanceApiModels {
       this(
           expectedVersion,
           priority,
-          RepairLogisticsPlanningMode.AUTO,
+          false,
+          false,
+          null,
           null);
     }
 
     @AssertTrue(
         message =
-            "logisticsScheduledDate must be set only for FIXED_DATE")
+            "inbound logistics planning must be present only when movementToRepair is selected")
     @JsonIgnore
     public boolean isLogisticsPlanningValid() {
-      return validLogisticsPlanning(
-          logisticsPlanningMode, logisticsScheduledDate);
+      return validInboundLogisticsPlanning(
+          movementToRepair, logisticsPlanningMode, logisticsScheduledDate);
     }
   }
 
@@ -782,8 +796,10 @@ public final class MaintenanceApiModels {
       List<MediaReferenceInput> mediaReferences,
       UUID coverMediaId,
       RepairComplexitySnapshot complexity,
+      boolean movementToRepair,
       boolean movementToShipment,
-      @NotNull RepairLogisticsPlanningMode logisticsPlanningMode,
+      @JsonProperty(required = true)
+          RepairLogisticsPlanningMode logisticsPlanningMode,
       LocalDate logisticsScheduledDate,
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt,
@@ -820,7 +836,10 @@ public final class MaintenanceApiModels {
       @NotNull @Size(max = 100) List<@Valid MediaReferenceInput> mediaReferences,
       @NotNull @Min(1) @Max(5) Integer priority,
       @JsonProperty(required = true) UUID coverMediaId,
-      @NotNull RepairLogisticsPlanningMode logisticsPlanningMode,
+      @JsonProperty(required = true) boolean movementToRepair,
+      @JsonProperty(required = true) boolean movementToShipment,
+      @JsonProperty(required = true)
+          RepairLogisticsPlanningMode logisticsPlanningMode,
       @JsonProperty(required = true)
           LocalDate logisticsScheduledDate) {
     public FreezeInventoryPlanRequest(
@@ -845,31 +864,19 @@ public final class MaintenanceApiModels {
           mediaReferences,
           priority,
           coverMediaId,
-          RepairLogisticsPlanningMode.AUTO,
+          false,
+          false,
+          null,
           null);
     }
 
     @AssertTrue(
         message =
-            "logistics planning must match inventory movement stages")
+            "inbound logistics planning must be present only when movementToRepair is selected")
     @JsonIgnore
     public boolean isLogisticsPlanningValid() {
-      if (!validLogisticsPlanning(
-          logisticsPlanningMode, logisticsScheduledDate)) {
-        return false;
-      }
-      boolean movementRequired =
-          plan != null
-              && plan.stream()
-                  .anyMatch(
-                      stage ->
-                          stage.kind() == RepairStageKind.MOVE_TO_REPAIR
-                              || stage.kind()
-                                  == RepairStageKind.MOVE_FROM_REPAIR);
-      return movementRequired
-          || (logisticsPlanningMode
-                  == RepairLogisticsPlanningMode.AUTO
-              && logisticsScheduledDate == null);
+      return validInboundLogisticsPlanning(
+          movementToRepair, logisticsPlanningMode, logisticsScheduledDate);
     }
   }
   public record InventoryPlanLineSnapshot(
@@ -902,12 +909,13 @@ public final class MaintenanceApiModels {
       @NotNull InventoryPlanMode mode,
       @NotEmpty List<@Valid InventoryPlanLineSnapshot> lines,
       @NotEmpty List<@Valid InventoryPlanStageSnapshot> stages,
-      boolean moveToRepairRequired,
-      boolean moveFromRepairRequired,
+      @JsonProperty(required = true) boolean movementToRepair,
+      @JsonProperty(required = true) boolean movementToShipment,
       @NotNull List<@Valid MediaReferenceInput> mediaReferences,
       @NotNull @Min(1) @Max(5) Integer priority,
       @JsonProperty(required = true) UUID coverMediaId,
-      @NotNull RepairLogisticsPlanningMode logisticsPlanningMode,
+      @JsonProperty(required = true)
+          RepairLogisticsPlanningMode logisticsPlanningMode,
       @JsonProperty(required = true)
           LocalDate logisticsScheduledDate) {
     public FrozenInventoryPlanSnapshot(
@@ -915,8 +923,8 @@ public final class MaintenanceApiModels {
         InventoryPlanMode mode,
         List<InventoryPlanLineSnapshot> lines,
         List<InventoryPlanStageSnapshot> stages,
-        boolean moveToRepairRequired,
-        boolean moveFromRepairRequired,
+        boolean movementToRepair,
+        boolean movementToShipment,
         List<MediaReferenceInput> mediaReferences,
         Integer priority,
         UUID coverMediaId) {
@@ -925,29 +933,22 @@ public final class MaintenanceApiModels {
           mode,
           lines,
           stages,
-          moveToRepairRequired,
-          moveFromRepairRequired,
+          movementToRepair,
+          movementToShipment,
           mediaReferences,
           priority,
           coverMediaId,
-          RepairLogisticsPlanningMode.AUTO,
+          null,
           null);
     }
 
     @AssertTrue(
         message =
-            "logistics planning must match frozen movement stages")
+            "inbound logistics planning must be present only when movementToRepair is selected")
     @JsonIgnore
     public boolean isLogisticsPlanningValid() {
-      if (!validLogisticsPlanning(
-          logisticsPlanningMode, logisticsScheduledDate)) {
-        return false;
-      }
-      return moveToRepairRequired
-          || moveFromRepairRequired
-          || (logisticsPlanningMode
-                  == RepairLogisticsPlanningMode.AUTO
-              && logisticsScheduledDate == null);
+      return validInboundLogisticsPlanning(
+          movementToRepair, logisticsPlanningMode, logisticsScheduledDate);
     }
   }
   public record FrozenInventoryPlanResponse(

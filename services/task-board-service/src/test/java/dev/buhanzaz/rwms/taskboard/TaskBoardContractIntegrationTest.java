@@ -1,4 +1,5 @@
 package dev.buhanzaz.rwms.taskboard;
+import static dev.buhanzaz.rwms.taskboard.QueueFixtureModels.*;
 
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.CreateBoardTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueBindingRequest;
@@ -7,7 +8,6 @@ import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RegisterExternalTaskRequ
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RouteStepRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.TaskSourceReferenceDto;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.WorkQueueDto;
-import static dev.buhanzaz.rwms.taskboard.api.ApiModels.WorkQueueRequest;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.networknt.schema.JsonSchema;
@@ -577,9 +577,9 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
     var definition =
         registry.createQueueDefinition(
             new QueueDefinitionRequest(0L, name, null, QueueType.REPAIR));
-    return registry.createQueue(
+    return QueueRegistryTestFixtures.create(registry, jdbc,
         WAREHOUSE,
-        new WorkQueueRequest(
+        new QueueFixtureRequest(
             0L,
             definition.id(),
             true,

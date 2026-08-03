@@ -685,7 +685,7 @@ class MaintenanceOpenApiParityTest {
               RepairPlaceTransitionRequest.class,
               "RepairPlaceTransitionRequest",
               "200",
-              "RepairPlaceAllocation",
+              "LogisticsRepairPlaceAllocation",
               true,
               "400",
               "401",
@@ -1216,6 +1216,7 @@ class MaintenanceOpenApiParityTest {
       case "transferArrivalPreflight" ->
           sample(TransferRepairArrivalPreflightResponse.class, "transferArrivalPreflight");
       case "completeTransferArrival" -> createResult(CompleteTransferRepairResponse.class);
+      case "activateQueuedRepairAfterDelivery" -> null;
       case "acceptance" -> List.of(sample(AcceptanceProjection.class, "acceptance"));
       case "writeOffs" -> List.of(sample(WriteOffProjection.class, "writeOff"));
       default -> invocation.callRealMethod();
@@ -1302,9 +1303,11 @@ class MaintenanceOpenApiParityTest {
             sample(
                 LogisticsRepairPlaceProjectionResponse.class,
                 "logisticsRepairPlaceProjection");
-    RepairPlaceAllocationResponse allocation =
-        (RepairPlaceAllocationResponse)
-            sample(RepairPlaceAllocationResponse.class, "repairPlaceAllocation");
+    LogisticsRepairPlaceAllocationResponse allocation =
+        (LogisticsRepairPlaceAllocationResponse)
+            sample(
+                LogisticsRepairPlaceAllocationResponse.class,
+                "logisticsRepairPlaceAllocation");
     when(service.projection(org.mockito.ArgumentMatchers.any())).thenReturn(projection);
     when(service.logisticsProjection(org.mockito.ArgumentMatchers.any()))
         .thenReturn(logisticsProjection);
@@ -1412,20 +1415,11 @@ class MaintenanceOpenApiParityTest {
           arguments[index] = 360;
         }
       }
-      if ("logisticsPlanningMode"
-          .equals(components[index].getName())) {
-        arguments[index] =
-            recordType == FreezeInventoryPlanRequest.class
-                    || recordType
-                        == FrozenInventoryPlanSnapshot.class
-                ? RepairLogisticsPlanningMode.AUTO
-                : RepairLogisticsPlanningMode.FIXED_DATE;
+      if ("movementToRepair".equals(components[index].getName())) {
+        arguments[index] = false;
       }
-      if ("logisticsScheduledDate"
-              .equals(components[index].getName())
-          && (recordType == FreezeInventoryPlanRequest.class
-              || recordType
-                  == FrozenInventoryPlanSnapshot.class)) {
+      if ("logisticsPlanningMode".equals(components[index].getName())
+          || "logisticsScheduledDate".equals(components[index].getName())) {
         arguments[index] = null;
       }
     }

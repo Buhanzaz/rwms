@@ -1,4 +1,5 @@
 package dev.buhanzaz.rwms.taskboard;
+import static dev.buhanzaz.rwms.taskboard.QueueFixtureModels.*;
 
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
 import static dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.EvidenceReservationRequest;
@@ -54,9 +55,9 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
         registry.createQueueDefinition(
             new QueueDefinitionRequest(0L, "Ремонт", null, QueueType.REPAIR));
     var queue =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             WAREHOUSE,
-            new WorkQueueRequest(
+            new QueueFixtureRequest(
                 0L,
                 definition.id(),
                 true,

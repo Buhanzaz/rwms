@@ -86,7 +86,7 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
 
   @Test
   @Transactional
-  void bootMigratesAdoptedVersionFourThroughVersionTwentyTwoAndValidatesJpa() {
+  void bootMigratesAdoptedVersionFourThroughVersionTwentyFourAndValidatesJpa() {
     assertThat(entityManagerFactory.isOpen()).isTrue();
     assertThat(retainedDigests(jdbc)).containsExactlyInAnyOrderEntriesOf(beforeStartup);
     assertThat(
@@ -125,6 +125,16 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
                     + "where version='22' and type='SQL' and success",
                 Integer.class))
         .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from flyway_schema_history "
+                    + "where version='24' and type='SQL' and success",
+                Integer.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select to_regclass('public.queue_definition_class_binding')", String.class))
+        .isNull();
     assertThat(
             jdbc.queryForObject(
                 """
@@ -428,7 +438,10 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
                     + "'original_budget_seconds','current_budget_seconds']"
                 : "work_queue".equals(table)
                     ? "to_jsonb(row_value) - array['code','result_photo_min_count',"
-                        + "'name','description','queue_type','definition_id']"
+                        + "'name','description','queue_type','definition_id',"
+                        + "'sort_order','active','hidden','collapsed',"
+                        + "'holding_period_minutes','notification_threshold',"
+                        + "'notify_when_threshold_reached','revision_marker']"
                     : "queue_usage_reference".equals(table)
                         ? "to_jsonb(row_value) - array['queue_id','queue_definition_id']"
                     : "worker_class".equals(table)

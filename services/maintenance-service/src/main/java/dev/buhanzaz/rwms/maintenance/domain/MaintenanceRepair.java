@@ -76,13 +76,15 @@ public class MaintenanceRepair {
   @Column(name = "cover_media_id")
   private UUID coverMediaId;
 
+  @Column(name = "movement_to_repair", nullable = false)
+  private boolean movementToRepair;
+
   @Column(name = "movement_to_shipment", nullable = false)
   private boolean movementToShipment;
 
   @Enumerated(EnumType.STRING)
-  @Column(name = "logistics_planning_mode", nullable = false, length = 16)
-  private RepairLogisticsPlanningMode logisticsPlanningMode =
-      RepairLogisticsPlanningMode.AUTO;
+  @Column(name = "logistics_planning_mode", length = 16)
+  private RepairLogisticsPlanningMode logisticsPlanningMode;
 
   @Column(name = "logistics_scheduled_date")
   private LocalDate logisticsScheduledDate;
@@ -369,24 +371,37 @@ public class MaintenanceRepair {
     this.movementToShipment = movementToShipment;
   }
 
-  public boolean selectLogisticsPlanning(
-      RepairLogisticsPlanningMode mode, LocalDate scheduledDate) {
+  /**
+   * Stores the sole canonical request for an inbound driver movement. Planning belongs to that
+   * request and must be absent when a repair is already in the repair area.
+   */
+  public boolean selectMovementToRepair(
+      boolean movementToRepair,
+      RepairLogisticsPlanningMode mode,
+      LocalDate scheduledDate) {
     if (executionState != RepairExecutionState.DRAFT) {
       throw new IllegalStateException(
-          "Logistics planning can only be selected before repair queueing");
+          "Inbound movement can only be selected before repair queueing");
     }
-    if (mode == null
-        || (mode == RepairLogisticsPlanningMode.AUTO
-            && scheduledDate != null)
-        || (mode == RepairLogisticsPlanningMode.FIXED_DATE
-            && scheduledDate == null)) {
+    if (!movementToRepair && (mode != null || scheduledDate != null)) {
       throw new IllegalArgumentException(
-          "Repair logistics planning mode and date are inconsistent");
+          "Inbound logistics planning must be absent when movement to repair is disabled");
+    }
+    if (movementToRepair
+        && (mode == null
+            || (mode == RepairLogisticsPlanningMode.AUTO
+                && scheduledDate != null)
+            || (mode == RepairLogisticsPlanningMode.FIXED_DATE
+                && scheduledDate == null))) {
+      throw new IllegalArgumentException(
+          "Inbound logistics planning mode and date are inconsistent");
     }
     boolean changed =
-        logisticsPlanningMode != mode
+        this.movementToRepair != movementToRepair
+            || logisticsPlanningMode != mode
             || !java.util.Objects.equals(
                 logisticsScheduledDate, scheduledDate);
+    this.movementToRepair = movementToRepair;
     logisticsPlanningMode = mode;
     logisticsScheduledDate = scheduledDate;
     if (changed) {
@@ -736,6 +751,7 @@ public class MaintenanceRepair {
   public int getPriority() { return priority; }
   public String getSourceParty() { return sourceParty; }
   public UUID getCoverMediaId() { return coverMediaId; }
+  public boolean isMovementToRepair() { return movementToRepair; }
   public boolean isMovementToShipment() { return movementToShipment; }
   public RepairLogisticsPlanningMode getLogisticsPlanningMode() {
     return logisticsPlanningMode;

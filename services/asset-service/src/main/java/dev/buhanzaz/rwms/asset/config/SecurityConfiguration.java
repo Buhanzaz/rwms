@@ -62,7 +62,7 @@ public class SecurityConfiguration {
     configuration.setAllowedOrigins(allowedOrigins);
     configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
     configuration.setAllowedHeaders(List.of(HttpHeaders.AUTHORIZATION, HttpHeaders.CONTENT_TYPE,
-        CorrelationIdFilter.HEADER_NAME, "Idempotency-Key"));
+        CorrelationIdFilter.HEADER_NAME, "Idempotency-Key", "Last-Event-ID"));
     configuration.setExposedHeaders(List.of(CorrelationIdFilter.HEADER_NAME, "Idempotency-Replayed"));
     UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
     source.registerCorsConfiguration("/**", configuration);

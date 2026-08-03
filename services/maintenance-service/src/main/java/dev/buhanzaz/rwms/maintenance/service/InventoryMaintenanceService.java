@@ -21,6 +21,7 @@ import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventStore;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceJsonbCanonicalizer;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceProjectionSnapshotFactory;
 import dev.buhanzaz.rwms.maintenance.integration.MaintenanceDependencyGateway;
+import dev.buhanzaz.rwms.maintenance.repository.CatalogLinkRepository;
 import dev.buhanzaz.rwms.maintenance.repository.CatalogNodeRepository;
 import dev.buhanzaz.rwms.maintenance.repository.CatalogVersionRepository;
 import dev.buhanzaz.rwms.maintenance.repository.InventoryRepairSourceRepository;
@@ -43,6 +44,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -62,6 +64,7 @@ public class InventoryMaintenanceService {
 
   private final CatalogVersionRepository catalogs;
   private final CatalogNodeRepository catalogNodes;
+  private final CatalogLinkRepository catalogLinks;
   private final InventoryRepairSourceOperationRepository sourceOperations;
   private final InventoryRepairSourceRepository sources;
   private final RentalItemFactProjectionRepository rentalItems;
@@ -81,6 +84,7 @@ public class InventoryMaintenanceService {
   public InventoryMaintenanceService(
       CatalogVersionRepository catalogs,
       CatalogNodeRepository catalogNodes,
+      CatalogLinkRepository catalogLinks,
       InventoryRepairSourceOperationRepository sourceOperations,
       InventoryRepairSourceRepository sources,
       RentalItemFactProjectionRepository rentalItems,
@@ -98,6 +102,7 @@ public class InventoryMaintenanceService {
       ObjectMapper mapper) {
     this.catalogs = catalogs;
     this.catalogNodes = catalogNodes;
+    this.catalogLinks = catalogLinks;
     this.sourceOperations = sourceOperations;
     this.sources = sources;
     this.rentalItems = rentalItems;
@@ -138,7 +143,9 @@ public class InventoryMaintenanceService {
     Map<UUID, CatalogNode> nodes = catalogNodes
         .findAllByCatalogVersionIdOrderByNameAscIdAsc(catalog.getId()).stream()
         .collect(Collectors.toMap(CatalogNode::getId, Function.identity()));
-    FrozenInventoryPlanSnapshot snapshot = freezeSnapshot(request, catalog, nodes);
+    Map<UUID, List<UUID>> incomingLinks = CatalogRoutingResolver.incoming(
+        catalogLinks.findAllByCatalogVersionIdOrderBySortOrderAscIdAsc(catalog.getId()));
+    FrozenInventoryPlanSnapshot snapshot = freezeSnapshot(request, catalog, nodes, incomingLinks);
     String fingerprint = frozenHash(snapshot);
 
     InventoryRepairSourceOperationId operationId =
@@ -248,56 +255,21 @@ public class InventoryMaintenanceService {
         RepairOrigin.INVENTORY, request.dispatchDate(), "Инвентаризация", inventoryActorJson());
     draft.selectPriority(request.snapshot().priority());
     draft.selectMovementToShipment(
-        request.snapshot().moveFromRepairRequired());
-    draft.selectLogisticsPlanning(
+        request.snapshot().movementToShipment());
+    draft.selectMovementToRepair(
+        request.snapshot().movementToRepair(),
         request.snapshot().logisticsPlanningMode(),
         request.snapshot().logisticsScheduledDate());
     draft.replaceCoverMediaId(request.snapshot().coverMediaId());
     MaintenanceRepair repair = repairs.saveAndFlush(draft);
-    Map<UUID, List<EstimateLineResponse>> linesByQueue =
+    List<InventoryRepairLine> inventoryLines =
         inventoryRepairLines(inventoryId, findingId, request.snapshot());
-    List<EstimateLineResponse> unrouted =
-        linesByQueue.remove(new UUID(0, 0));
-    if (unrouted != null && !unrouted.isEmpty()) {
+    if (inventoryLines.stream().anyMatch(line -> line.snapshot().routing() == null)) {
       throw invalid(
           "Every inventory repair line must have an explicit global queue definition");
     }
-    List<RepairStage> stages = request.snapshot().stages().stream()
-        .map(
-            stage -> {
-              List<EstimateLineResponse> stageLines =
-                  stage.kind() == RepairStageKind.REPAIR_WORK
-                      ? linesByQueue.getOrDefault(stage.routing().queueId(), List.of())
-                      : List.of();
-              List<EstimateLineResponse> workLines = stageLines.stream()
-                  .filter(line -> line.lineType() == EstimateLineType.WORK)
-                  .toList();
-              List<EstimateLineResponse> materialLines = stageLines.stream()
-                  .filter(line -> line.lineType() == EstimateLineType.MATERIAL)
-                  .toList();
-              return new RepairStage(
-                  stage.id(),
-                  repair.getId(),
-                  stage.order(),
-                  stage.kind(),
-                  stage.routing().queueId(),
-                  stage.routing().queueName(),
-                  stage.routing().queueType(),
-                  write(workLines),
-                  write(materialLines),
-                  workLines.isEmpty() ? null : workLines.getFirst().id(),
-                  "",
-                  null);
-            })
-        .toList();
-    Set<UUID> stageQueues = request.snapshot().stages().stream()
-        .filter(stage -> stage.kind() == RepairStageKind.REPAIR_WORK)
-        .map(stage -> stage.routing().queueId())
-        .collect(Collectors.toSet());
-    if (linesByQueue.entrySet().stream()
-        .anyMatch(entry -> !entry.getValue().isEmpty() && !stageQueues.contains(entry.getKey()))) {
-      throw invalid("Inventory line has no selected repair-work route");
-    }
+    List<RepairStage> stages = inventoryRepairStages(
+        repair.getId(), request.snapshot(), inventoryLines);
     repairStages.saveAllAndFlush(stages);
     source.bindRepair(
         repair.getId(), request.rentalItemId(), request.rentalItemVersion(), sourceFingerprint);
@@ -327,13 +299,13 @@ public class InventoryMaintenanceService {
   private FrozenInventoryPlanSnapshot freezeSnapshot(
       FreezeInventoryPlanRequest request,
       CatalogVersion catalog,
-      Map<UUID, CatalogNode> nodes) {
+      Map<UUID, CatalogNode> nodes,
+      Map<UUID, List<UUID>> incomingLinks) {
     validateMedia(request.findingId(), request.warehouseId(), request.mediaReferences());
     validateCoverMediaSelection(request.mediaReferences(), request.coverMediaId());
     if (request.priority() < 1 || request.priority() > 5) {
       throw invalid("Inventory repair priority must be between 1 and 5");
     }
-    Set<UUID> lineIds = new HashSet<>();
     List<InventoryPlanLineSnapshot> lines = new ArrayList<>();
     for (InventoryPlanLineInput input : request.lines()) {
       validateMedia(request.findingId(), request.warehouseId(), input.mediaReferences());
@@ -346,9 +318,6 @@ public class InventoryMaintenanceService {
             || input.unitPriceMinor() != null
             || input.normativeMinutes() != null) {
           throw invalid("CATALOG line accepts only catalogNodeId and quantity evidence");
-        }
-        if (!lineIds.add(input.catalogNodeId())) {
-          throw invalid("Inventory plan contains a duplicate catalog line");
         }
         CatalogNode node = activeNode(nodes, input.catalogNodeId());
         if (!node.isIncludeInEstimate()
@@ -369,7 +338,8 @@ public class InventoryMaintenanceService {
         lines.add(new InventoryPlanLineSnapshot(
             InventoryPlanLineKind.CATALOG, catalog.getId(), node.getId(), node.getName(),
             InventoryPlanLineType.valueOf(node.getNodeType()), node.getName(), null, unit,
-            quantity, node.getPriceMinor(), normativeMinutes(node.getDurationMinutes()), routing(node),
+            quantity, node.getPriceMinor(), normativeMinutes(node.getDurationMinutes()),
+            routing(node, nodes, incomingLinks),
             normalize(input.groupComment()), List.copyOf(input.mediaReferences()),
             node.isForcesCapitalRepair(),
             node.getCharacteristicId() == null
@@ -405,20 +375,16 @@ public class InventoryMaintenanceService {
     validateAggregateLimits(lines);
 
     List<InventoryPlanStageSnapshot> stages = request.mode() == InventoryPlanMode.AUTO
-        ? autoStages(request, catalog.getId(), nodes, lines)
-        : manualStages(request, catalog.getId(), nodes);
-    boolean moveTo = stages.stream().anyMatch(value -> value.kind() == RepairStageKind.MOVE_TO_REPAIR);
-    boolean moveFrom = stages.stream().anyMatch(value -> value.kind() == RepairStageKind.MOVE_FROM_REPAIR);
-    if (moveTo != moveFrom) {
-      throw invalid("Movement plan requires both move-to and move-from stages");
-    }
+        ? autoStages(request, catalog.getId(), nodes, incomingLinks, lines)
+        : manualStages(request, catalog.getId(), nodes, incomingLinks);
     if (!request.isLogisticsPlanningValid()) {
       throw invalid(
           "Inventory logistics planning mode and date are inconsistent");
     }
     requireWarehouseRoutingReady(request.warehouseId(), stages);
     FrozenInventoryPlanSnapshot snapshot = new FrozenInventoryPlanSnapshot(
-        catalog.getId(), request.mode(), List.copyOf(lines), List.copyOf(stages), moveTo, moveFrom,
+        catalog.getId(), request.mode(), List.copyOf(lines), List.copyOf(stages),
+        request.movementToRepair(), request.movementToShipment(),
         List.copyOf(request.mediaReferences()), request.priority(), request.coverMediaId(),
         request.logisticsPlanningMode(), request.logisticsScheduledDate());
     if (sourceMedia(snapshot).size() > 100) {
@@ -484,34 +450,35 @@ public class InventoryMaintenanceService {
       FreezeInventoryPlanRequest request,
       UUID catalogVersionId,
       Map<UUID, CatalogNode> nodes,
+      Map<UUID, List<UUID>> incomingLinks,
       List<InventoryPlanLineSnapshot> lines) {
-    List<InventoryPlanStageSelection> movement = request.plan();
-    if (movement.stream().anyMatch(value -> value.kind() == RepairStageKind.REPAIR_WORK)) {
-      throw invalid("AUTO plan derives repair-work stages; only movement nodes may be selected");
+    if (!request.plan().isEmpty()) {
+      throw invalid("AUTO inventory plan derives every repair-work stage from its lines");
     }
     List<InventoryPlanStageSnapshot> result = new ArrayList<>();
-    InventoryPlanStageSelection moveTo = single(movement, RepairStageKind.MOVE_TO_REPAIR);
-    InventoryPlanStageSelection moveFrom = single(movement, RepairStageKind.MOVE_FROM_REPAIR);
-    if ((moveTo == null) != (moveFrom == null)) {
-      throw invalid("AUTO movement requires both route endpoints");
-    }
     int order = 0;
-    if (moveTo != null) result.add(stage(catalogVersionId, nodes, moveTo, order++));
-    Set<UUID> repairQueues = new HashSet<>();
-    for (InventoryPlanLineSnapshot line : lines) {
+    List<InventoryPlanLineSnapshot> stageLines = lines.stream()
+        .filter(line -> line.type() == InventoryPlanLineType.WORK)
+        .toList();
+    if (stageLines.isEmpty()) {
+      // A historical material-only inventory plan remains executable, but a plan with work
+      // always has one stage per work line, even when several works share one queue.
+      stageLines = lines;
+    }
+    for (InventoryPlanLineSnapshot line : stageLines) {
       if (line.catalogNodeId() == null || line.routing() == null) {
         throw invalid("AUTO inventory line has no existing catalog routing");
       }
       CatalogNode node = activeNode(nodes, line.catalogNodeId());
-      if (!repairQueues.add(line.routing().queueId())) continue;
       result.add(stage(
           catalogVersionId,
           node,
+          nodes,
+          incomingLinks,
           RepairStageKind.REPAIR_WORK,
           order++));
     }
-    if (moveFrom != null) result.add(stage(catalogVersionId, nodes, moveFrom, order));
-    if (result.stream().noneMatch(value -> value.kind() == RepairStageKind.REPAIR_WORK)) {
+    if (result.isEmpty()) {
       throw invalid("Inventory repair plan requires at least one routed work stage");
     }
     return result;
@@ -520,19 +487,16 @@ public class InventoryMaintenanceService {
   private List<InventoryPlanStageSnapshot> manualStages(
       FreezeInventoryPlanRequest request,
       UUID catalogVersionId,
-      Map<UUID, CatalogNode> nodes) {
+      Map<UUID, CatalogNode> nodes,
+      Map<UUID, List<UUID>> incomingLinks) {
     if (request.plan().isEmpty()) throw invalid("MANUAL inventory plan requires ordered stages");
     List<InventoryPlanStageSnapshot> result = new ArrayList<>();
-    Set<UUID> stageNodes = new HashSet<>();
     for (int index = 0; index < request.plan().size(); index++) {
       InventoryPlanStageSelection selection = request.plan().get(index);
       if (selection.order() != index) throw invalid("MANUAL plan order must be contiguous");
-      if (!stageNodes.add(selection.catalogNodeId())) {
-        throw invalid("MANUAL plan cannot repeat a catalog node");
-      }
-      result.add(stage(catalogVersionId, nodes, selection, index));
+      result.add(stage(catalogVersionId, nodes, incomingLinks, selection, index));
     }
-    if (result.stream().noneMatch(value -> value.kind() == RepairStageKind.REPAIR_WORK)) {
+    if (result.isEmpty()) {
       throw invalid("MANUAL inventory plan requires a repair-work stage");
     }
     return result;
@@ -541,23 +505,33 @@ public class InventoryMaintenanceService {
   private InventoryPlanStageSnapshot stage(
       UUID catalogVersionId,
       Map<UUID, CatalogNode> nodes,
+      Map<UUID, List<UUID>> incomingLinks,
       InventoryPlanStageSelection selection,
       int normalizedOrder) {
     if (selection.order() != normalizedOrder) throw invalid("Inventory plan order is not canonical");
     return stage(
-        catalogVersionId, activeNode(nodes, selection.catalogNodeId()), selection.kind(), normalizedOrder);
+        catalogVersionId,
+        activeNode(nodes, selection.catalogNodeId()),
+        nodes,
+        incomingLinks,
+        selection.kind(),
+        normalizedOrder);
   }
 
   private InventoryPlanStageSnapshot stage(
-      UUID catalogVersionId, CatalogNode node, RepairStageKind kind, int order) {
-    if (kind == RepairStageKind.REPAIR_WORK
-        && !("WORK".equals(node.getNodeType()) || "MATERIAL".equals(node.getNodeType()))) {
+      UUID catalogVersionId,
+      CatalogNode node,
+      Map<UUID, CatalogNode> nodes,
+      Map<UUID, List<UUID>> incomingLinks,
+      RepairStageKind kind,
+      int order) {
+    if (kind != RepairStageKind.REPAIR_WORK) {
+      throw invalid("Inventory plan stages can contain repair work only");
+    }
+    if (!("WORK".equals(node.getNodeType()) || "MATERIAL".equals(node.getNodeType()))) {
       throw invalid("REPAIR_WORK must reference active WORK or MATERIAL catalog routing");
     }
-    if (kind != RepairStageKind.REPAIR_WORK && !"LOCATION".equals(node.getNodeType())) {
-      throw invalid("Movement stages must reference active LOCATION catalog nodes");
-    }
-    RoutingSnapshot routing = routing(node);
+    RoutingSnapshot routing = routing(node, nodes, incomingLinks);
     if (routing == null) throw invalid("Inventory plan stage catalog node has no routing snapshot");
     UUID stageId = UUID.nameUUIDFromBytes(
         (catalogVersionId + ":" + node.getId() + ":" + kind + ":" + order)
@@ -679,15 +653,6 @@ public class InventoryMaintenanceService {
     return node;
   }
 
-  private static InventoryPlanStageSelection single(
-      List<InventoryPlanStageSelection> values, RepairStageKind kind) {
-    List<InventoryPlanStageSelection> matches = values.stream()
-        .filter(value -> value.kind() == kind)
-        .toList();
-    if (matches.size() > 1) throw invalid("AUTO movement stage may appear only once");
-    return matches.isEmpty() ? null : matches.getFirst();
-  }
-
   private static boolean belongsToFurnitureTree(
       CatalogNode node, Map<UUID, CatalogNode> nodes) {
     Set<UUID> visited = new HashSet<>();
@@ -703,19 +668,164 @@ public class InventoryMaintenanceService {
     return false;
   }
 
-  private static RoutingSnapshot routing(CatalogNode node) {
+  private static RoutingSnapshot routing(
+      CatalogNode node,
+      Map<UUID, CatalogNode> nodes,
+      Map<UUID, List<UUID>> incomingLinks) {
+    return CatalogRoutingResolver.snapshot(
+        CatalogRoutingResolver.resolve(
+            node.getId(),
+            nodes,
+            CatalogNode::getParentNodeId,
+            InventoryMaintenanceService::directRouteValue,
+            incomingLinks));
+  }
+
+  private static CatalogRoutingResolver.Route directRouteValue(CatalogNode node) {
     return node.getRoutingQueueId() == null
         ? null
-        : new RoutingSnapshot(
+        : new CatalogRoutingResolver.Route(
             node.getRoutingQueueId(), node.getRoutingQueueName(), node.getRoutingQueueType());
   }
 
-  private Map<UUID, List<EstimateLineResponse>> inventoryRepairLines(
+  private List<RepairStage> inventoryRepairStages(
+      UUID repairId,
+      FrozenInventoryPlanSnapshot snapshot,
+      List<InventoryRepairLine> lines) {
+    List<InventoryStageAllocation> allocations = new ArrayList<>(snapshot.stages().stream()
+        .map(InventoryStageAllocation::new)
+        .toList());
+    Set<Integer> allocated = new HashSet<>();
+
+    // Preserve the user's selected work sequence. The same catalog work can be selected more
+    // than once, so each stage consumes exactly one matching work line in source order.
+    for (InventoryStageAllocation allocation : allocations) {
+      InventoryRepairLine primary = firstAvailable(
+          lines,
+          allocated,
+          candidate -> candidate.isWork()
+              && matchesCatalogNode(candidate, allocation.stage()));
+      if (primary == null) {
+        primary = firstAvailable(
+            lines,
+            allocated,
+            candidate -> matchesCatalogNode(candidate, allocation.stage()));
+      }
+      if (primary == null) {
+        primary = firstAvailable(
+            lines,
+            allocated,
+            candidate -> candidate.isWork() && matchesRoute(candidate, allocation.stage()));
+      }
+      if (primary != null) {
+        allocation.add(primary);
+        allocated.add(primary.sourceIndex());
+      }
+    }
+
+    // Older frozen plans may have grouped several works under one queue stage. Keep those facts
+    // executable, but never copy an unassigned line into every stage of the same queue.
+    for (InventoryRepairLine line : lines) {
+      if (!line.isWork() || allocated.contains(line.sourceIndex())) continue;
+      InventoryStageAllocation target = routeStageFor(allocations, line);
+      if (target == null) throw invalid("Inventory line has no selected repair-work route");
+      target.add(line);
+      allocated.add(line.sourceIndex());
+    }
+
+    // Materials are shared estimate positions. They are attached once to the closest matching
+    // work stage, rather than duplicated into every stage that happens to use the same queue.
+    for (InventoryRepairLine line : lines) {
+      if (!line.isMaterial() || allocated.contains(line.sourceIndex())) continue;
+      InventoryStageAllocation target = directCatalogStageFor(allocations, line);
+      if (target == null) target = routeStageFor(allocations, line);
+      if (target == null) throw invalid("Inventory line has no selected repair-work route");
+      target.add(line);
+      allocated.add(line.sourceIndex());
+    }
+
+    if (allocated.size() != lines.size()) {
+      throw invalid("Inventory repair plan did not allocate every line exactly once");
+    }
+
+    return allocations.stream()
+        .map(
+            allocation -> {
+              List<EstimateLineResponse> workLines = allocation.lines().stream()
+                  .filter(line -> line.response().lineType() == EstimateLineType.WORK)
+                  .map(InventoryRepairLine::response)
+                  .toList();
+              List<EstimateLineResponse> materialLines = allocation.lines().stream()
+                  .filter(line -> line.response().lineType() == EstimateLineType.MATERIAL)
+                  .map(InventoryRepairLine::response)
+                  .toList();
+              InventoryPlanStageSnapshot stage = allocation.stage();
+              return new RepairStage(
+                  stage.id(),
+                  repairId,
+                  stage.order(),
+                  stage.kind(),
+                  stage.routing().queueId(),
+                  stage.routing().queueName(),
+                  stage.routing().queueType(),
+                  write(workLines),
+                  write(materialLines),
+                  workLines.isEmpty() ? null : workLines.getFirst().id(),
+                  "",
+                  null);
+            })
+        .toList();
+  }
+
+  private static InventoryRepairLine firstAvailable(
+      List<InventoryRepairLine> lines,
+      Set<Integer> allocated,
+      Predicate<InventoryRepairLine> predicate) {
+    return lines.stream()
+        .filter(line -> !allocated.contains(line.sourceIndex()))
+        .filter(predicate)
+        .findFirst()
+        .orElse(null);
+  }
+
+  private static boolean matchesCatalogNode(
+      InventoryRepairLine line, InventoryPlanStageSnapshot stage) {
+    return line.snapshot().catalogNodeId() != null
+        && line.snapshot().catalogNodeId().equals(stage.catalogNodeId());
+  }
+
+  private static boolean matchesRoute(
+      InventoryRepairLine line, InventoryPlanStageSnapshot stage) {
+    return line.snapshot().routing() != null
+        && line.snapshot().routing().queueId().equals(stage.routing().queueId());
+  }
+
+  private static InventoryStageAllocation directCatalogStageFor(
+      List<InventoryStageAllocation> allocations, InventoryRepairLine line) {
+    return allocations.stream()
+        .filter(allocation -> matchesCatalogNode(line, allocation.stage()))
+        .filter(allocation -> matchesRoute(line, allocation.stage()))
+        .findFirst()
+        .orElse(null);
+  }
+
+  private static InventoryStageAllocation routeStageFor(
+      List<InventoryStageAllocation> allocations, InventoryRepairLine line) {
+    List<InventoryStageAllocation> matching = allocations.stream()
+        .filter(allocation -> matchesRoute(line, allocation.stage()))
+        .toList();
+    if (matching.isEmpty()) return null;
+    return matching.stream()
+        .filter(allocation -> allocation.lastSourceIndex() < line.sourceIndex())
+        .max(Comparator.comparingInt(InventoryStageAllocation::lastSourceIndex))
+        .orElse(matching.getFirst());
+  }
+
+  private List<InventoryRepairLine> inventoryRepairLines(
       UUID inventoryId,
       UUID findingId,
       FrozenInventoryPlanSnapshot snapshot) {
-    Map<UUID, List<EstimateLineResponse>> result = new LinkedHashMap<>();
-    UUID unrouted = new UUID(0, 0);
+    List<InventoryRepairLine> result = new ArrayList<>();
     for (int index = 0; index < snapshot.lines().size(); index++) {
       InventoryPlanLineSnapshot line = snapshot.lines().get(index);
       UUID lineId = UUID.nameUUIDFromBytes(
@@ -761,10 +871,50 @@ public class InventoryMaintenanceService {
           duration,
           line.groupComment(),
           line.mediaReferences());
-      UUID queueId = line.routing() == null ? unrouted : line.routing().queueId();
-      result.computeIfAbsent(queueId, ignored -> new ArrayList<>()).add(response);
+      result.add(new InventoryRepairLine(index, line, response));
     }
     return result;
+  }
+
+  private record InventoryRepairLine(
+      int sourceIndex,
+      InventoryPlanLineSnapshot snapshot,
+      EstimateLineResponse response) {
+    boolean isWork() {
+      return response.lineType() == EstimateLineType.WORK;
+    }
+
+    boolean isMaterial() {
+      return response.lineType() == EstimateLineType.MATERIAL;
+    }
+  }
+
+  private static final class InventoryStageAllocation {
+    private final InventoryPlanStageSnapshot stage;
+    private final List<InventoryRepairLine> lines = new ArrayList<>();
+
+    private InventoryStageAllocation(InventoryPlanStageSnapshot stage) {
+      this.stage = stage;
+    }
+
+    private InventoryPlanStageSnapshot stage() {
+      return stage;
+    }
+
+    private List<InventoryRepairLine> lines() {
+      return lines;
+    }
+
+    private void add(InventoryRepairLine line) {
+      lines.add(line);
+    }
+
+    private int lastSourceIndex() {
+      return lines.stream()
+          .mapToInt(InventoryRepairLine::sourceIndex)
+          .max()
+          .orElse(Integer.MIN_VALUE);
+    }
   }
 
   private static String moneyFromMinor(long value) {

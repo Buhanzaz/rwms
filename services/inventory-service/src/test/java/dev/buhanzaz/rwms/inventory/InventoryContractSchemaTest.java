@@ -159,6 +159,20 @@ class InventoryContractSchemaTest {
     ((ObjectNode) fixedWithoutDate.required("planSelection"))
         .put("logisticsPlanningMode", "FIXED_DATE");
     assertThat(request.validate(fixedWithoutDate)).isNotEmpty();
+
+    ObjectNode inboundAutomatic = stagedWithoutPlan.deepCopy();
+    ((ObjectNode) inboundAutomatic.required("planSelection"))
+        .put("movementToRepair", true)
+        .put("logisticsPlanningMode", "AUTO");
+    assertThat(request.validate(inboundAutomatic)).isEmpty();
+    ObjectNode inboundFixedDate = inboundAutomatic.deepCopy();
+    ((ObjectNode) inboundFixedDate.required("planSelection"))
+        .put("logisticsPlanningMode", "FIXED_DATE")
+        .put("logisticsScheduledDate", "2026-08-12");
+    assertThat(request.validate(inboundFixedDate)).isEmpty();
+    ObjectNode missingMovement = stagedWithoutPlan.deepCopy();
+    ((ObjectNode) missingMovement.required("planSelection")).remove("movementToRepair");
+    assertThat(request.validate(missingMovement)).isNotEmpty();
   }
 
   @Test
@@ -275,7 +289,8 @@ class InventoryContractSchemaTest {
                 "mode":"MANUAL","catalogVersionId":"00000000-0000-0000-0000-000000000734",
                 "fingerprintSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "priority":3,"coverMediaId":null,
-                "logisticsPlanningMode":"AUTO","logisticsScheduledDate":null,
+                "movementToRepair":false,"movementToShipment":false,
+                "logisticsPlanningMode":null,"logisticsScheduledDate":null,
                 "lines":[{
                   "id":"00000000-0000-0000-0000-000000000736",
                   "sourceKind":"MANUAL","lineType":"WORK","catalogVersionId":null,
@@ -290,7 +305,7 @@ class InventoryContractSchemaTest {
                   "catalogNodeName":"Repair work",
                   "routingQueueId":"00000000-0000-0000-0000-000000000735",
                   "routingQueueName":"Repair","routingQueueType":"MAINTENANCE",
-                  "movementRequired":false,"photoRequired":true,
+                  "photoRequired":true,
                   "normativeDurationMinutes":150
                 }]
               },
@@ -333,6 +348,20 @@ class InventoryContractSchemaTest {
     ((ObjectNode) negativeMinor.required("frozenPlan").required("lines").get(0))
         .put("unitPriceMinor", -1);
     assertThat(finding.validate(negativeMinor)).isNotEmpty();
+    ObjectNode legacyStageMovementFlag = staged.deepCopy();
+    ((ObjectNode) legacyStageMovementFlag.required("frozenPlan").required("stages").get(0))
+        .put("movementRequired", false);
+    assertThat(finding.validate(legacyStageMovementFlag)).isNotEmpty();
+    ObjectNode staleNonInboundPlanning = staged.deepCopy();
+    ((ObjectNode) staleNonInboundPlanning.required("frozenPlan"))
+        .put("logisticsPlanningMode", "AUTO");
+    assertThat(finding.validate(staleNonInboundPlanning)).isNotEmpty();
+    ObjectNode inboundFixedFrozenPlan = staged.deepCopy();
+    ((ObjectNode) inboundFixedFrozenPlan.required("frozenPlan"))
+        .put("movementToRepair", true)
+        .put("logisticsPlanningMode", "FIXED_DATE")
+        .put("logisticsScheduledDate", "2026-08-12");
+    assertThat(finding.validate(inboundFixedFrozenPlan)).isEmpty();
 
     JsonSchema validatedFinding = openApiSchema("ValidatedFinding");
     JsonNode validated =
@@ -460,7 +489,8 @@ class InventoryContractSchemaTest {
         JSON.readTree(
             """
             {"mode":"AUTO","priority":3,"coverMediaId":null,
-              "logisticsPlanningMode":"AUTO","logisticsScheduledDate":null,"lines":[{
+              "movementToRepair":false,"movementToShipment":false,
+              "logisticsPlanningMode":null,"logisticsScheduledDate":null,"lines":[{
               "aggregationKind":"CATALOG",
               "catalogNodeId":"00000000-0000-0000-0000-000000000731",
               "description":null,"type":null,"unit":null,"quantity":"1",

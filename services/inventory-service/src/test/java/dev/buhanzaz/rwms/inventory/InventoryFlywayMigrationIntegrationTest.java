@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Set;
@@ -47,7 +48,7 @@ class InventoryFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsNoSeedOrImporter() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(11);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(12);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames())
@@ -90,10 +91,14 @@ class InventoryFlywayMigrationIntegrationTest {
     assertThat(columns("finding_plan_stage")).contains(
         "catalog_node_id", "catalog_node_name", "routing_queue_id", "routing_queue_name",
         "routing_queue_type")
-        .doesNotContain("routing_queue_code", "routing_queue_kind");
+        .doesNotContain("routing_queue_code", "routing_queue_kind", "movement_required");
     assertThat(columns("inventory_finding")).contains("cover_media_id");
     assertThat(columns("finding_plan_snapshot"))
-        .contains("logistics_planning_mode", "logistics_scheduled_date");
+        .contains(
+            "movement_to_repair",
+            "movement_to_shipment",
+            "logistics_planning_mode",
+            "logistics_scheduled_date");
   }
 
   @Test
@@ -128,7 +133,15 @@ class InventoryFlywayMigrationIntegrationTest {
         "{\"lines\":[],\"stages\":[]}",
         now());
 
-    Flyway upgraded = flyway(MIGRATIONS);
+    Flyway upgraded =
+        Flyway.configure()
+            .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+            .locations(MIGRATIONS)
+            .target("11")
+            .baselineOnMigrate(false)
+            .cleanDisabled(true)
+            .validateOnMigrate(true)
+            .load();
     assertThat(upgraded.migrate().migrationsExecuted).isOne();
     upgraded.validate();
     assertThat(
@@ -154,6 +167,169 @@ class InventoryFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void v12CanonicalizesFrozenMovementAndRemovesLegacyStageRepresentation() {
+    Flyway beforeV12 =
+        Flyway.configure()
+            .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+            .locations(MIGRATIONS)
+            .target("11")
+            .baselineOnMigrate(false)
+            .cleanDisabled(true)
+            .validateOnMigrate(true)
+            .load();
+    assertThat(beforeV12.migrate().migrationsExecuted).isEqualTo(11);
+
+    UUID warehouseId = UUID.randomUUID();
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    String legacyFingerprint = "b".repeat(64);
+    insertActiveSession(inventoryId, warehouseId, UUID.randomUUID());
+    insertFinding(inventoryId, findingId, UUID.randomUUID(), "V12-MOVEMENT");
+    jdbc.update(
+        """
+        update inventory_finding
+        set inspection='WORK_STAGED', maintenance_plan_fingerprint_sha256=?,
+            inspection_asset_version=0,inspection_warehouse_id=?,inspection_status='WAREHOUSE',
+            inspection_display_canonical_number='V12-MOVEMENT',
+            inspection_passport_snapshot='{}'::jsonb,inspection_contents_snapshot='[]'::jsonb,
+            inspection_repairs_snapshot='[]'::jsonb
+        where id=?
+        """,
+        legacyFingerprint,
+        warehouseId,
+        findingId);
+    jdbc.update(
+        """
+        insert into finding_plan_snapshot(
+          finding_id,finding_revision,inventory_id,plan_mode,logistics_planning_mode,
+          logistics_scheduled_date,catalog_version_id,plan_fingerprint_sha256,source_snapshot,
+          frozen_at)
+        values (?,?,?,'MANUAL','FIXED_DATE',?,?,?,?::jsonb,?)
+        """,
+        findingId,
+        0,
+        inventoryId,
+        LocalDate.of(2026, 8, 12),
+        UUID.randomUUID(),
+        legacyFingerprint,
+        """
+        {
+          "priority":3,
+          "moveToRepairRequired":false,
+          "moveFromRepairRequired":true,
+          "logisticsPlanningMode":"FIXED_DATE",
+          "logisticsScheduledDate":"2026-08-12",
+          "stages":[
+            {"kind":"MOVE_TO_REPAIR","order":0},
+            {"kind":"REPAIR_WORK","order":1,"id":"00000000-0000-0000-0000-000000000901"}
+          ]
+        }
+        """,
+        now());
+    jdbc.update(
+        """
+        insert into finding_plan_stage(
+          row_id,finding_id,finding_revision,stage_no,stage_kind,catalog_node_id,catalog_node_name,
+          routing_queue_id,routing_queue_name,routing_queue_type,movement_required,photo_required,
+          safe_snapshot)
+        values (?,?,0,0,'MOVE_TO_REPAIR',?,'Inbound',?,'Logistics','LOGISTICS',true,false,
+          '{}'::jsonb)
+        """,
+        UUID.randomUUID(),
+        findingId,
+        UUID.randomUUID(),
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into finding_plan_stage(
+          row_id,finding_id,finding_revision,stage_no,stage_kind,catalog_node_id,catalog_node_name,
+          routing_queue_id,routing_queue_name,routing_queue_type,movement_required,photo_required,
+          safe_snapshot)
+        values (?,?,0,1,'REPAIR_WORK',?,'Repair',?,'Maintenance','MAINTENANCE',false,true,
+          '{}'::jsonb)
+        """,
+        UUID.randomUUID(),
+        findingId,
+        UUID.randomUUID(),
+        UUID.randomUUID());
+
+    Flyway upgraded = flyway(MIGRATIONS);
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select movement_to_repair,movement_to_shipment,logistics_planning_mode,
+                       logistics_scheduled_date::text as logistics_scheduled_date,
+                       source_snapshot->>'movementToRepair' as source_inbound,
+                       source_snapshot->>'movementToShipment' as source_outbound,
+                       source_snapshot->>'logisticsPlanningMode' as source_mode,
+                       jsonb_exists(source_snapshot, 'moveToRepairRequired') as legacy_inbound,
+                       jsonb_exists(source_snapshot, 'moveFromRepairRequired') as legacy_outbound,
+                       jsonb_array_length(source_snapshot->'stages') as source_stage_count,
+                       source_snapshot #>> '{stages,0,kind}' as source_stage_kind,
+                       plan_fingerprint_sha256
+                from finding_plan_snapshot where finding_id=? and finding_revision=0
+                """,
+                findingId))
+        .containsEntry("movement_to_repair", true)
+        .containsEntry("movement_to_shipment", true)
+        .containsEntry("logistics_planning_mode", "FIXED_DATE")
+        .containsEntry("logistics_scheduled_date", "2026-08-12")
+        .containsEntry("source_inbound", "true")
+        .containsEntry("source_outbound", "true")
+        .containsEntry("source_mode", "FIXED_DATE")
+        .containsEntry("legacy_inbound", false)
+        .containsEntry("legacy_outbound", false)
+        .containsEntry("source_stage_count", 1)
+        .containsEntry("source_stage_kind", "REPAIR_WORK");
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select stage_no,stage_kind
+                from finding_plan_stage where finding_id=? and finding_revision=0
+                """,
+                findingId))
+        .containsEntry("stage_no", 0)
+        .containsEntry("stage_kind", "REPAIR_WORK");
+    assertThat(columns("finding_plan_stage")).doesNotContain("movement_required");
+    String canonicalFingerprint =
+        jdbc.queryForObject(
+            """
+            select encode(sha256(convert_to(source_snapshot::text, 'UTF8')), 'hex')
+            from finding_plan_snapshot where finding_id=? and finding_revision=0
+            """,
+            String.class,
+            findingId);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select plan_fingerprint_sha256
+                from finding_plan_snapshot where finding_id=? and finding_revision=0
+                """,
+                String.class,
+                findingId))
+        .isEqualTo(canonicalFingerprint);
+    assertThat(
+            jdbc.queryForObject(
+                "select maintenance_plan_fingerprint_sha256 from inventory_finding where id=?",
+                String.class,
+                findingId))
+        .isEqualTo(canonicalFingerprint);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    update finding_plan_snapshot
+                    set movement_to_repair=false
+                    where finding_id=? and finding_revision=0
+                    """,
+                    findingId))
+        .isInstanceOf(DataIntegrityViolationException.class);
+  }
+
+  @Test
   void v10AddsNullableFindingCoverWithoutRewritingLegacyRows() {
     Flyway beforeV10 =
         Flyway.configure()
@@ -172,7 +348,7 @@ class InventoryFlywayMigrationIntegrationTest {
     insertFinding(inventoryId, findingId, UUID.randomUUID(), "V10-COVER");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(2);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(3);
     upgraded.validate();
     assertThat(columns("inventory_finding")).contains("cover_media_id");
     assertThat(
@@ -229,7 +405,7 @@ class InventoryFlywayMigrationIntegrationTest {
             + "\"queueCode\":\"REPAIR\"}");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(3);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(4);
     upgraded.validate();
     assertThat(columns("finding_plan_stage"))
         .contains(
@@ -331,7 +507,7 @@ class InventoryFlywayMigrationIntegrationTest {
         technicalOnlyExpectedId);
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(6);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(7);
     latest.validate();
 
     assertThat(jdbc.queryForObject(
@@ -496,7 +672,7 @@ class InventoryFlywayMigrationIntegrationTest {
         current.plusDays(7));
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(4);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(5);
     latest.validate();
 
     assertThat(
@@ -740,7 +916,7 @@ class InventoryFlywayMigrationIntegrationTest {
         .containsEntry("expected_item_id", null)
         .containsEntry("membership_active", true);
 
-    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(7);
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(8);
     assertThat(
             jdbc.queryForObject(
                 "select expected_population_count from inventory_session where id=?",

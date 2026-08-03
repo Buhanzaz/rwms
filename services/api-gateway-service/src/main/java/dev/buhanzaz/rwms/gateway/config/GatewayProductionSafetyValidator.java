@@ -21,6 +21,10 @@ public class GatewayProductionSafetyValidator {
   void validate() {
     URI publicBase = requireOrigin("rwms.gateway.public-base-uri", properties.getPublicBaseUri());
     URI authTarget = requireOrigin("rwms.gateway.routes.auth-uri", properties.getRoutes().getAuthUri());
+    if (sharesHost(publicBase, authTarget)) {
+      throw new IllegalStateException(
+          "Gateway auth target must not use the public gateway host");
+    }
     URI taskBoardTarget =
         requireOrigin("rwms.gateway.routes.task-board-uri", properties.getRoutes().getTaskBoardUri());
     URI warehouseTarget =
@@ -47,14 +51,6 @@ public class GatewayProductionSafetyValidator {
     URI assistantTarget =
         requireOrigin(
             "rwms.gateway.routes.assistant-uri", properties.getRoutes().getAssistantUri());
-    URI jwkSetUri = requireHttpUri("rwms.gateway.security.jwk-set-uri", properties.getSecurity().getJwkSetUri());
-    if (jwkSetUri.getPath() == null
-        || jwkSetUri.getPath().isBlank()
-        || jwkSetUri.getQuery() != null
-        || jwkSetUri.getFragment() != null) {
-      throw new IllegalStateException(
-          "rwms.gateway.security.jwk-set-uri must have a path and no query or fragment");
-    }
     URI issuer = requireHttpUri("rwms.gateway.security.issuer", URI.create(properties.getSecurity().getIssuer()));
     String expectedIssuer = trimSlash(publicBase.toString()) + "/auth";
     if (!expectedIssuer.equals(trimSlash(issuer.toString()))) {
@@ -84,8 +80,11 @@ public class GatewayProductionSafetyValidator {
       forbidLoopback("dossier target", dossierTarget);
       forbidLoopback("analytics target", analyticsTarget);
       forbidLoopback("assistant target", assistantTarget);
-      forbidLoopback("internal JWKS target", jwkSetUri);
     }
+  }
+
+  private static boolean sharesHost(URI first, URI second) {
+    return first.getHost().equalsIgnoreCase(second.getHost());
   }
 
   private static URI requireOrigin(String name, URI uri) {

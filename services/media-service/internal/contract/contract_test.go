@@ -134,6 +134,7 @@ func TestOpenAPIParsesAndExposesOnlyApprovedRuntimePaths(t *testing.T) {
 	approved := map[string]string{
 		"/health/live":                                                                                     "get",
 		"/health/ready":                                                                                    "get",
+		"/api/media/v1/events":                                                                             "get",
 		"/api/internal/media/v1/owner-proofs":                                                              "post",
 		"/api/internal/media/v1/asset-imports/preflight":                                                   "post",
 		"/api/internal/media/v1/asset-imports/{jobId}":                                                     "get",

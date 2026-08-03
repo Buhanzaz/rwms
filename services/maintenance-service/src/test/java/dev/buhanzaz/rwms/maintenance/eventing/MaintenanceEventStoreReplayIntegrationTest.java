@@ -519,25 +519,15 @@ class MaintenanceEventStoreReplayIntegrationTest {
           ACTOR);
       primary.selectPriority(1);
       primary = repairs.saveAndFlush(primary);
-      stages.saveAllAndFlush(List.of(
-          new RepairStage(
-              UUID.randomUUID(),
-              primary.getId(),
-              0,
-              RepairStageKind.MOVE_TO_REPAIR,
-              UUID.randomUUID(),
-              "MOVE-IN",
-              "MOVEMENT",
-              null),
-          new RepairStage(
-              UUID.randomUUID(),
-              primary.getId(),
-              1,
-              RepairStageKind.REPAIR_WORK,
-              queueId,
-              "REPAIR",
-              "GENERAL",
-              OffsetDateTime.of(2026, 7, 20, 12, 0, 0, 0, ZoneOffset.UTC))));
+      stages.saveAndFlush(new RepairStage(
+          UUID.randomUUID(),
+          primary.getId(),
+          0,
+          RepairStageKind.REPAIR_WORK,
+          queueId,
+          "REPAIR",
+          "GENERAL",
+          OffsetDateTime.of(2026, 7, 20, 12, 0, 0, 0, ZoneOffset.UTC)));
       media.saveAndFlush(new MaintenanceMediaReference(
           "REPAIR",
           primary.getId(),

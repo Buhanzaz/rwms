@@ -20,7 +20,12 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
 class DriverTaskWorkflowStore {
-  private static final int MAX_RETRIES = 5;
+  /**
+   * Retain the former retry horizon as a saturation point, not a terminal cutoff. A transient
+   * outage must never strand a physical movement in reconciliation.
+   */
+  static final int MAX_TRANSIENT_RETRY_COUNT = 5;
+  static final long MAX_TRANSIENT_RETRY_DELAY_SECONDS = 1L << MAX_TRANSIENT_RETRY_COUNT;
 
   private final DriverLogisticsTaskRepository tasks;
 
@@ -38,10 +43,22 @@ class DriverTaskWorkflowStore {
               task.getDriverQueueDefinitionId(),
               task.getUnitNumber(),
               title(task.getKind()),
+              description(task),
               task.getScheduledDate(),
               task.getPriority()));
-      case SCHEDULED, CURRENT ->
-          Optional.of(new StatusWork(task.getId(), task.getExternalTaskId()));
+      case SCHEDULED ->
+          task.hasManualPromotionHold()
+                  && task.getKind().consumesRepairPlace()
+                  && task.getRepairPlaceAllocationVersion() != null
+              ? Optional.of(
+                  new ManualReservationReleaseWork(
+                      task.getId(),
+                      task.getWarehouseId(),
+                      task.getRepairId(),
+                      task.getRepairPlaceAllocationId(),
+                      task.getRepairPlaceAllocationVersion()))
+              : Optional.of(new StatusWork(task.getId(), task.getExternalTaskId()));
+      case CURRENT -> Optional.of(new StatusWork(task.getId(), task.getExternalTaskId()));
       case FINALIZING -> finalizingWork(task);
       case COMPLETED, CANCELLED, RECONCILIATION_REQUIRED -> Optional.empty();
     };
@@ -182,6 +199,22 @@ class DriverTaskWorkflowStore {
   }
 
   @Transactional
+  public void confirmManualReservationRelease(
+      UUID taskId, LogisticsDependencyGateway.RepairPlaceAllocation allocation) {
+    DriverLogisticsTask task = locked(taskId);
+    if (!task.hasManualPromotionHold() || task.getRepairPlaceAllocationVersion() == null) return;
+    if (!task.getWarehouseId().equals(allocation.warehouseId())
+        || !task.getRepairId().equals(allocation.repairId())
+        || !task.getCabinId().equals(allocation.rentalItemId())
+        || !"RELEASED".equals(allocation.state())) {
+      throw new LogisticsConflictException(
+          "Released repair-place reservation does not match the driver task");
+    }
+    task.releaseRepairPlaceReservation(allocation.id(), allocation.version());
+    tasks.saveAndFlush(task);
+  }
+
+  @Transactional
   public void confirmCurrent(
       UUID taskId, LogisticsDependencyGateway.DriverBoardTask board) {
     DriverLogisticsTask task = locked(taskId);
@@ -201,13 +234,18 @@ class DriverTaskWorkflowStore {
     if (task.getState().isTerminal()) return;
     String code = "DEPENDENCY_" + exception.kind().name();
     if (exception.kind() == LogisticsDependencyException.FailureKind.CONFIGURATION
-        || exception.kind() == LogisticsDependencyException.FailureKind.PERMANENT_REJECTION
-        || task.getRetryCount() >= MAX_RETRIES) {
+        || exception.kind() == LogisticsDependencyException.FailureKind.PERMANENT_REJECTION) {
       task.requireReconciliation(code);
     } else {
-      task.retryAfterSeconds(1L << task.getRetryCount(), code);
+      task.retryAfterSeconds(
+          transientRetryDelaySeconds(task.getRetryCount()), code, MAX_TRANSIENT_RETRY_COUNT);
     }
     tasks.saveAndFlush(task);
+  }
+
+  private static long transientRetryDelaySeconds(int retryCount) {
+    int boundedRetryCount = Math.min(Math.max(retryCount, 0), MAX_TRANSIENT_RETRY_COUNT);
+    return Math.min(1L << boundedRetryCount, MAX_TRANSIENT_RETRY_DELAY_SECONDS);
   }
 
   private Optional<Work> finalizingWork(DriverLogisticsTask task) {
@@ -262,7 +300,12 @@ class DriverTaskWorkflowStore {
       case REMOVE_FROM_REPAIR -> "Вывезти бытовку после ремонта";
       case CAPITAL_TO_PRODUCTION -> "Переместить бытовку на производство";
       case MOVE_TO_SHIPMENT -> "Переместить бытовку на отгрузку";
+      case GENERAL_MOVEMENT -> "Переместить бытовку";
     };
+  }
+
+  private static String description(DriverLogisticsTask task) {
+    return task.getComment() == null ? title(task.getKind()) : task.getComment();
   }
 
   private static OffsetDateTime now() {
@@ -270,7 +313,12 @@ class DriverTaskWorkflowStore {
   }
 
   sealed interface Work
-      permits RegisterWork, StatusWork, EvidenceWork, CoverWork, RepairPlaceEffectWork {}
+      permits RegisterWork,
+          StatusWork,
+          EvidenceWork,
+          CoverWork,
+          RepairPlaceEffectWork,
+          ManualReservationReleaseWork {}
 
   record RegisterWork(
       UUID taskId,
@@ -279,6 +327,7 @@ class DriverTaskWorkflowStore {
       UUID queueDefinitionId,
       String unitNumber,
       String title,
+      String description,
       java.time.LocalDate scheduledDate,
       int priority)
       implements Work {}
@@ -297,5 +346,13 @@ class DriverTaskWorkflowStore {
       UUID repairId,
       long expectedVersion,
       String transition)
+      implements Work {}
+
+  record ManualReservationReleaseWork(
+      UUID taskId,
+      UUID warehouseId,
+      UUID repairId,
+      UUID allocationId,
+      long expectedVersion)
       implements Work {}
 }

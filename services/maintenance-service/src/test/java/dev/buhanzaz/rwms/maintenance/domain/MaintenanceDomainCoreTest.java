@@ -124,16 +124,18 @@ class MaintenanceDomainCoreTest {
             ACTOR);
     LocalDate scheduledDate = LocalDate.of(2026, 8, 3);
 
-    repair.selectLogisticsPlanning(
-        RepairLogisticsPlanningMode.FIXED_DATE, scheduledDate);
+    repair.selectMovementToRepair(
+        true, RepairLogisticsPlanningMode.FIXED_DATE, scheduledDate);
 
+    assertThat(repair.isMovementToRepair()).isTrue();
     assertThat(repair.getLogisticsPlanningMode())
         .isEqualTo(RepairLogisticsPlanningMode.FIXED_DATE);
     assertThat(repair.getLogisticsScheduledDate())
         .isEqualTo(scheduledDate);
     assertThatThrownBy(
             () ->
-                repair.selectLogisticsPlanning(
+                repair.selectMovementToRepair(
+                    true,
                     RepairLogisticsPlanningMode.AUTO,
                     scheduledDate))
         .isInstanceOf(IllegalArgumentException.class)
@@ -145,33 +147,12 @@ class MaintenanceDomainCoreTest {
         OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(15));
     assertThatThrownBy(
             () ->
-                repair.selectLogisticsPlanning(
+                repair.selectMovementToRepair(
+                    true,
                     RepairLogisticsPlanningMode.AUTO,
                     null))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("before repair queueing");
-  }
-
-  @Test
-  void movementStageIsCompletedWithoutCreatingTaskBoardTruth() {
-    RepairStage stage =
-        new RepairStage(
-            UUID.randomUUID(),
-            UUID.randomUUID(),
-            0,
-            RepairStageKind.MOVE_TO_REPAIR,
-            UUID.randomUUID(),
-            "Перемещения",
-            "MOVEMENT",
-            null);
-
-    stage.routedThroughLogistics();
-
-    assertThat(stage.getState()).isEqualTo(RepairStageState.DONE);
-    assertThat(stage.getTaskGenerationState())
-        .isEqualTo("NOT_REQUIRED");
-    assertThat(stage.getExternalQueueEntryId()).isNull();
-    assertThat(stage.getCompletedAt()).isNotNull();
   }
 
   @Test

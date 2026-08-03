@@ -3,8 +3,12 @@ package dev.buhanzaz.rwms.taskboard;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueDefinitionRequest;
+import dev.buhanzaz.rwms.taskboard.api.ApiModels.WorkQueueDto;
+import dev.buhanzaz.rwms.taskboard.domain.QueueType;
 import dev.buhanzaz.rwms.taskboard.eventing.WarehouseMetadataEventProcessor;
 import dev.buhanzaz.rwms.taskboard.repository.WarehouseMetadataRepository;
+import dev.buhanzaz.rwms.taskboard.service.RegistryService;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,6 +28,7 @@ class WarehouseMetadataEventProcessorIntegrationTest extends PostgresIntegration
 
   @Autowired WarehouseMetadataEventProcessor processor;
   @Autowired WarehouseMetadataRepository warehouses;
+  @Autowired RegistryService registry;
   @Autowired JdbcTemplate jdbc;
 
   @BeforeEach
@@ -62,6 +67,25 @@ class WarehouseMetadataEventProcessorIntegrationTest extends PostgresIntegration
             () -> processor.process(event(EVENT_ID, 6, "Europe/Samara", true)))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("eventId");
+  }
+
+  @Test
+  void activeWarehouseEventDoesNotProvisionGeneralDefinitions() {
+    var external =
+        registry.createQueueDefinition(
+            new QueueDefinitionRequest(
+                0L, "Внешний ремонт", null, QueueType.REPAIR));
+    var holding =
+        registry.createQueueDefinition(
+            new QueueDefinitionRequest(
+                0L, "Ожидание", null, QueueType.HOLDING));
+
+    processor.process(event(EVENT_ID, 1, "Europe/Moscow", true));
+
+    assertThat(registry.listQueueDefinitions())
+        .extracting(definition -> definition.id())
+        .containsExactlyInAnyOrder(external.id(), holding.id());
+    assertThat(registry.listQueues(WAREHOUSE_ID)).isEmpty();
   }
 
   private byte[] event(

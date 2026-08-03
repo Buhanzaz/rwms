@@ -49,8 +49,6 @@ class GatewayManagementEndpointIntegrationTest {
     registry.add("rwms.gateway.routes.assistant-uri", () -> "http://127.0.0.1:1");
     registry.add("rwms.gateway.security.issuer", () -> "https://" + PUBLIC_HOST + "/auth");
     registry.add("rwms.gateway.security.audience", () -> "rwms-services");
-    registry.add(
-        "rwms.gateway.security.jwk-set-uri", () -> "http://127.0.0.1:1/oauth2/jwks");
     registry.add("rwms.gateway.cors.allowed-origins", () -> "https://" + PUBLIC_HOST);
   }
 

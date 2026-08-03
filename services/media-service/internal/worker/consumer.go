@@ -16,6 +16,7 @@ import (
 
 	"dev.buhanzaz.rwms/media-service/internal/media"
 	"dev.buhanzaz.rwms/media-service/internal/persistence"
+	"dev.buhanzaz.rwms/media-service/internal/realtime"
 	"github.com/google/uuid"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -61,6 +62,7 @@ type Consumer struct {
 	timeout      time.Duration
 	pollTimeout  time.Duration
 	logger       *slog.Logger
+	publisher    realtime.Publisher
 	handleRecord func(context.Context, *kgo.Record) error
 	sleep        func(context.Context, time.Duration) error
 }
@@ -84,6 +86,10 @@ func NewConsumer(repository *persistence.Repository, client *kgo.Client, process
 		sleep: sleepProcessingConsumer}
 	consumer.handleRecord = consumer.handle
 	return consumer
+}
+
+func (consumer *Consumer) SetInvalidationPublisher(publisher realtime.Publisher) {
+	consumer.publisher = publisher
 }
 
 func (consumer *Consumer) Run(ctx context.Context) error {
@@ -203,21 +209,46 @@ func (consumer *Consumer) handle(ctx context.Context, record *kgo.Record) error 
 		variants, processErr := consumer.processor.Process(processingContext, claim.Job)
 		cancel()
 		if processErr == nil {
-			return consumer.repository.CompleteProcessingJob(ctx, claim.Job, variants)
+			err := consumer.repository.CompleteProcessingJob(ctx, claim.Job, variants)
+			if err == nil {
+				consumer.publish(claim.Job, "MEDIA_CHANGED")
+			}
+			return err
 		}
 		job := claim.Job
 		if !transient(processErr) {
 			_, _, err = consumer.repository.RecordProcessingFailure(ctx, job, "VALIDATION_FAILED")
+			if err == nil {
+				consumer.publish(job, "MEDIA_CHANGED")
+			}
 			return err
 		}
 		delay, terminal, err := consumer.repository.RecordProcessingFailure(ctx, job, "PROCESSING_DEPENDENCY_UNAVAILABLE")
 		if err != nil || terminal {
+			if err == nil && terminal {
+				consumer.publish(job, "MEDIA_CHANGED")
+			}
 			return err
 		}
 		if err := consumer.sleep(ctx, delay); err != nil {
 			return err
 		}
 	}
+}
+
+func (consumer *Consumer) publish(job persistence.WorkerJob, scope string) {
+	if consumer.publisher == nil || job.WarehouseID == uuid.Nil || job.MediaID == uuid.Nil {
+		return
+	}
+	ownerType, ownerID := "", ""
+	if job.OwnerType == persistence.OwnerTypeCabin {
+		ownerType, ownerID = job.OwnerType, job.OwnerID
+	}
+	consumer.publisher.Publish(realtime.Event{
+		EventID: uuid.New(), WarehouseID: job.WarehouseID, Scope: scope,
+		MediaID: job.MediaID, OwnerType: ownerType, OwnerID: ownerID, Generation: job.Generation,
+		OccurredAt: time.Now().UTC(),
+	})
 }
 
 func sleepProcessingConsumer(ctx context.Context, delay time.Duration) error {

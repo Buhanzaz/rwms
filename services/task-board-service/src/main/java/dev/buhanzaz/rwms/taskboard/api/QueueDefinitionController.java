@@ -28,18 +28,18 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequiredArgsConstructor
 @Validated
-@RequestMapping("/api/queue-definitions")
+@RequestMapping("/api")
 public class QueueDefinitionController {
   private final RegistryService service;
   private final WarehouseAccessAuthorizer access;
 
-  @GetMapping
+  @GetMapping("/queue-definitions")
   public List<QueueDefinitionDto> list(@AuthenticationPrincipal Jwt jwt) {
     access.requireUserScope(jwt, "rwms.read");
     return service.listQueueDefinitions();
   }
 
-  @PostMapping
+  @PostMapping("/queue-definitions")
   @ResponseStatus(HttpStatus.CREATED)
   public QueueDefinitionDto create(
       @AuthenticationPrincipal Jwt jwt,
@@ -48,7 +48,7 @@ public class QueueDefinitionController {
     return service.createQueueDefinition(request);
   }
 
-  @PutMapping("/{id}")
+  @PutMapping("/queue-definitions/{id}")
   public QueueDefinitionDto update(
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID id,
@@ -57,7 +57,7 @@ public class QueueDefinitionController {
     return service.updateQueueDefinition(id, request);
   }
 
-  @DeleteMapping("/{id}")
+  @DeleteMapping("/queue-definitions/{id}")
   @ResponseStatus(HttpStatus.NO_CONTENT)
   public void delete(
       @AuthenticationPrincipal Jwt jwt,

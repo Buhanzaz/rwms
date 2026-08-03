@@ -38,6 +38,7 @@ import dev.buhanzaz.rwms.maintenance.service.RepairPlaceService;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -231,7 +232,113 @@ class MaintenanceCorePostgresIntegrationTest {
   }
 
   @Test
-  void movementStagesUseOneDurableLogisticsTaskWhileTaskBoardReceivesOnlyRepairWork() {
+  void directRepairUsesTheRouteInheritedThroughTheWholeCatalogGraph() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    rentalItemFacts.saveAndFlush(
+        RentalItemFactProjection.create(rentalItemId, warehouseId, "FREE", 7));
+    TestCatalogWork work = ensureTestCatalogWork(warehouseId);
+    UUID routedCategoryId = UUID.randomUUID();
+    UUID intermediateNodeId = UUID.randomUUID();
+    UUID queueId = UUID.randomUUID();
+    RoutingSnapshot routing = new RoutingSnapshot(queueId, "Внешние работы", "REPAIR");
+
+    jdbc.update(
+        """
+        update catalog_node
+           set routing_queue_id=null,routing_queue_name=null,routing_queue_type=null
+         where catalog_version_id=? and node_id=?
+        """,
+        work.catalogVersionId(), work.nodeId());
+    jdbc.update(
+        """
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,node_type,name,active,parent_node_id,
+          furniture_category,unit,price_minor,duration_minutes,include_in_estimate,
+          common_item,show_in_main_menu,routing_queue_id,routing_queue_name,routing_queue_type)
+        values (?,?,?,'CATEGORY','Маршрут работ',true,null,false,null,null,0,false,false,false,
+                ?,?,?)
+        """,
+        UUID.randomUUID(),
+        routedCategoryId,
+        work.catalogVersionId(),
+        queueId,
+        routing.queueName(),
+        routing.queueType());
+    jdbc.update(
+        """
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,node_type,name,active,parent_node_id,
+          furniture_category,unit,price_minor,duration_minutes,include_in_estimate,
+          common_item,show_in_main_menu)
+        values (?,?,?,'SUBCATEGORY','Промежуточный блок',true,null,false,null,null,0,false,false,false)
+        """,
+        UUID.randomUUID(), intermediateNodeId, work.catalogVersionId());
+    jdbc.update(
+        """
+        insert into catalog_link(
+          row_id,link_id,catalog_version_id,source_node_id,target_node_id,link_type,sort_order)
+        values
+          (?,?,?,?,?,'FOLLOW_UP',10),
+          (?,?,?,?,?,'DEPENDENCY',20)
+        """,
+        UUID.randomUUID(), UUID.randomUUID(), work.catalogVersionId(), routedCategoryId,
+        intermediateNodeId,
+        UUID.randomUUID(), UUID.randomUUID(), work.catalogVersionId(), intermediateNodeId,
+        work.nodeId());
+
+    UUID lineId = UUID.randomUUID();
+    CatalogNodeSnapshot submitted = new CatalogNodeSnapshot(
+        work.catalogVersionId(),
+        work.nodeId(),
+        CatalogNodeType.WORK,
+        work.name(),
+        "шт",
+        "100.00",
+        15,
+        routing,
+        null,
+        false,
+        null);
+    CreateDirectRepairRequest request = new CreateDirectRepairRequest(
+        warehouseId,
+        rentalItemId,
+        LocalDate.of(2026, 8, 1),
+        null,
+        List.of(new EstimateLineInput(
+            lineId,
+            submitted,
+            EstimateLineType.WORK,
+            work.name(),
+            "шт",
+            "1",
+            "100.00",
+            15,
+            null,
+            List.of())),
+        List.of(new PlanStageInput(
+            UUID.randomUUID(),
+            RepairStageKind.REPAIR_WORK,
+            0,
+            routing,
+            List.of(lineId),
+            lineId,
+            "",
+            null)),
+        List.of());
+
+    RepairResponse created = service.createDirectRepair(
+        UUID.randomUUID(), UUID.randomUUID(), request).response();
+
+    assertThat(created.plan().stages()).singleElement().satisfies(stage -> {
+      assertThat(stage.routing().queueId()).isEqualTo(queueId);
+      assertThat(stage.routing().queueName()).isEqualTo("Внешние работы");
+      assertThat(stage.routing().queueType()).isEqualTo("REPAIR");
+    });
+  }
+
+  @Test
+  void inboundMovementKeepsRepairWorkOffTheBoardUntilDeliveryOccupiesARepairPlace() {
     UUID warehouseId = UUID.randomUUID();
     UUID rentalItemId = UUID.randomUUID();
     LocalDate scheduledDate = LocalDate.of(2026, 8, 4);
@@ -244,39 +351,6 @@ class MaintenanceCorePostgresIntegrationTest {
             rentalItemId,
             LocalDate.of(2026, 8, 1),
             null);
-    PlanStageInput repairWork = base.plan().getFirst();
-    RoutingSnapshot movementQueue =
-        new RoutingSnapshot(
-            UUID.randomUUID(), "Перемещения", "MOVEMENT");
-    List<PlanStageInput> plan =
-        List.of(
-            new PlanStageInput(
-                UUID.randomUUID(),
-                RepairStageKind.MOVE_TO_REPAIR,
-                0,
-                movementQueue,
-                List.of(),
-                null,
-                "",
-                null),
-            new PlanStageInput(
-                repairWork.id(),
-                RepairStageKind.REPAIR_WORK,
-                1,
-                repairWork.routing(),
-                repairWork.includedLineIds(),
-                repairWork.primaryLineId(),
-                repairWork.groupComment(),
-                repairWork.taskDeadline()),
-            new PlanStageInput(
-                UUID.randomUUID(),
-                RepairStageKind.MOVE_FROM_REPAIR,
-                2,
-                movementQueue,
-                List.of(),
-                null,
-                "",
-                null));
     RepairResponse created =
         service
             .createDirectRepair(
@@ -288,7 +362,7 @@ class MaintenanceCorePostgresIntegrationTest {
                     base.dispatchDate(),
                     base.sourceParty(),
                     base.lines(),
-                    plan,
+                    base.plan(),
                     base.mediaReferences(),
                     base.coverMediaId()))
             .response();
@@ -303,6 +377,9 @@ class MaintenanceCorePostgresIntegrationTest {
                 .externalTaskId(),
             warehouseId,
             rentalItemId);
+    repairCapacitySettings.replace(
+        warehouseId,
+        new ReplaceRepairCapacitySettingsRequest(0L, 6, 11));
 
     service.queueRepair(
         UUID.randomUUID(),
@@ -311,6 +388,8 @@ class MaintenanceCorePostgresIntegrationTest {
         new QueueRepairRequest(
             created.version(),
             2,
+            true,
+            false,
             RepairLogisticsPlanningMode.FIXED_DATE,
             scheduledDate));
     stubQueueDependencies(fixture);
@@ -336,7 +415,7 @@ class MaintenanceCorePostgresIntegrationTest {
                     """,
                     created.id())
                 .toString())
-        .isOne();
+        .isZero();
     assertThat(
             jdbc.queryForObject(
                 """
@@ -362,59 +441,7 @@ class MaintenanceCorePostgresIntegrationTest {
             row -> row.get("task_generation_state"))
         .containsExactly(
             org.assertj.core.groups.Tuple.tuple(
-                "MOVE_TO_REPAIR", "DONE", "NOT_REQUIRED"),
-            org.assertj.core.groups.Tuple.tuple(
-                "REPAIR_WORK", "QUEUED", "PENDING_GENERATION"),
-            org.assertj.core.groups.Tuple.tuple(
-                "MOVE_FROM_REPAIR", "DONE", "NOT_REQUIRED"));
-
-    UUID queueEntryId = UUID.randomUUID();
-    when(
-            dependencies.registerTask(
-                any(),
-                eq(fixture.externalTaskId()),
-                eq(fixture.repairId()),
-                eq(warehouseId),
-                eq(rentalItemId),
-                eq("БТ-42"),
-                any(LocalDate.class),
-                eq(2),
-                eq(6),
-                anyList()))
-        .thenReturn(
-            new MaintenanceDependencyGateway.TaskSnapshot(
-                fixture.externalTaskId(),
-                0,
-                "ACTIVE",
-                List.of(
-                    new MaintenanceDependencyGateway.TaskStageSnapshot(
-                        1, queueEntryId, 0))));
-    deferOtherReconciliations(created.id(), "REGISTER_TASK");
-    assertThat(service.reconcileOneTask()).isTrue();
-    @SuppressWarnings("unchecked")
-    ArgumentCaptor<List<MaintenanceDependencyGateway.TaskStage>>
-        taskStagesCaptor =
-            ArgumentCaptor.forClass(List.class);
-    verify(dependencies)
-        .registerTask(
-            any(),
-            eq(fixture.externalTaskId()),
-            eq(fixture.repairId()),
-            eq(warehouseId),
-            eq(rentalItemId),
-            eq("БТ-42"),
-            any(LocalDate.class),
-            eq(2),
-            eq(6),
-            taskStagesCaptor.capture());
-    assertThat(taskStagesCaptor.getValue())
-        .singleElement()
-        .satisfies(
-            stage -> {
-              assertThat(stage.kind())
-                  .isEqualTo(RepairStageKind.REPAIR_WORK);
-              assertThat(stage.order()).isEqualTo(1);
-            });
+                "REPAIR_WORK", "QUEUED", "PENDING_GENERATION"));
 
     UUID driverTaskId = UUID.randomUUID();
     when(
@@ -441,7 +468,7 @@ class MaintenanceCorePostgresIntegrationTest {
                   command.priority(),
                   "SCHEDULED");
             });
-    makeReconciliationDue(created.id(), "CREATE_DRIVER_TASK");
+    deferOtherReconciliations(created.id(), "CREATE_DRIVER_TASK");
     assertThat(service.reconcileOneTask()).isTrue();
     ArgumentCaptor<MaintenanceDependencyGateway.DriverTaskCommand>
         driverCommand =
@@ -462,6 +489,7 @@ class MaintenanceCorePostgresIntegrationTest {
                       RepairLogisticsPlanningMode.FIXED_DATE);
               assertThat(command.scheduledDate())
                   .isEqualTo(scheduledDate);
+              assertThat(command.priority()).isEqualTo(2);
               assertThat(command.activateNow()).isFalse();
             });
     assertThat(
@@ -473,6 +501,127 @@ class MaintenanceCorePostgresIntegrationTest {
                 String.class,
                 created.id()))
         .isEqualTo("CONFIRMED");
+
+    service.activateQueuedRepairAfterDelivery(warehouseId, created.id());
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from integration_reconciliation
+                where repair_id=?
+                  and dependency_type='TASK_BOARD'
+                  and operation_type='REGISTER_TASK'
+                """,
+                Integer.class,
+                created.id()))
+        .isZero();
+
+    RepairPlaceService.TransitionResult reserved =
+        repairPlaces.reserve(warehouseId, created.id(), 0, UUID.randomUUID());
+    assertThat(reserved.response().state()).isEqualTo(RepairPlaceAllocationState.RESERVED);
+    assertThat(reserved.response().rentalItemId()).isEqualTo(rentalItemId);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from integration_reconciliation
+                where repair_id=?
+                  and dependency_type='TASK_BOARD'
+                  and operation_type='REGISTER_TASK'
+                """,
+                Integer.class,
+                created.id()))
+        .isZero();
+
+    RepairPlaceService.TransitionResult occupied =
+        repairPlaces.occupy(
+            warehouseId,
+            created.id(),
+            reserved.response().version(),
+            UUID.randomUUID());
+    assertThat(occupied.response().state()).isEqualTo(RepairPlaceAllocationState.OCCUPIED);
+    assertThat(occupied.response().rentalItemId()).isEqualTo(rentalItemId);
+    service.activateQueuedRepairAfterDelivery(warehouseId, created.id());
+    service.activateQueuedRepairAfterDelivery(warehouseId, created.id());
+
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from integration_reconciliation
+                where repair_id=?
+                  and dependency_type='TASK_BOARD'
+                  and operation_type='REGISTER_TASK'
+                """,
+                Integer.class,
+                created.id()))
+        .isOne();
+
+    UUID queueEntryId = UUID.randomUUID();
+    when(
+            dependencies.registerTask(
+                any(),
+                eq(fixture.externalTaskId()),
+                eq(fixture.repairId()),
+                eq(warehouseId),
+                eq(rentalItemId),
+                eq("БТ-42"),
+                eq(LocalDate.now(ZoneId.of("Europe/Moscow"))),
+                eq(1),
+                eq(6),
+                anyList()))
+        .thenReturn(
+            new MaintenanceDependencyGateway.TaskSnapshot(
+                fixture.externalTaskId(),
+                0,
+                "ACTIVE",
+                List.of(
+                    new MaintenanceDependencyGateway.TaskStageSnapshot(
+                        0, queueEntryId, 0))));
+    deferOtherReconciliations(created.id(), "REGISTER_TASK");
+    assertThat(service.reconcileOneTask()).isTrue();
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<MaintenanceDependencyGateway.TaskStage>>
+        taskStagesCaptor =
+            ArgumentCaptor.forClass(List.class);
+    verify(dependencies)
+        .registerTask(
+            any(),
+            eq(fixture.externalTaskId()),
+            eq(fixture.repairId()),
+            eq(warehouseId),
+            eq(rentalItemId),
+            eq("БТ-42"),
+            eq(LocalDate.now(ZoneId.of("Europe/Moscow"))),
+            eq(1),
+            eq(6),
+            taskStagesCaptor.capture());
+    assertThat(
+            jdbc.queryForObject(
+                "select priority from maintenance_repair where id=?",
+                Integer.class,
+                created.id()))
+        .isEqualTo(2);
+    assertThat(taskStagesCaptor.getValue())
+        .singleElement()
+        .satisfies(
+            stage -> {
+              assertThat(stage.kind())
+                  .isEqualTo(RepairStageKind.REPAIR_WORK);
+              assertThat(stage.order()).isZero();
+            });
+
+    applyTaskOutcome(
+        fixture,
+        queueEntryId,
+        "task-board.queue-entry.completed.v1");
+
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select state from repair_place_allocation
+                where repair_id=? and state <> 'RELEASED'
+                """,
+                String.class,
+                created.id()))
+        .isEqualTo("READY_TO_RELEASE");
   }
 
   @Test
@@ -798,6 +947,7 @@ class MaintenanceCorePostgresIntegrationTest {
         repairPlaces.reserve(warehouseId, repair.id(), 0, reserveKey);
     assertThat(reserved.replayed()).isFalse();
     assertThat(reserved.response().state()).isEqualTo(RepairPlaceAllocationState.RESERVED);
+    assertThat(reserved.response().rentalItemId()).isEqualTo(rentalItemId);
     assertThat(repairPlaces.reserve(warehouseId, repair.id(), 0, reserveKey).replayed())
         .isTrue();
 
@@ -833,6 +983,7 @@ class MaintenanceCorePostgresIntegrationTest {
             UUID.randomUUID());
 
     assertThat(released.response().state()).isEqualTo(RepairPlaceAllocationState.RELEASED);
+    assertThat(released.response().rentalItemId()).isEqualTo(rentalItemId);
     assertThat(repairPlaces.logisticsProjection(warehouseId).allocations()).isEmpty();
     assertThat(repairPlaces.projection(warehouseId).allocations())
         .singleElement()
@@ -851,6 +1002,75 @@ class MaintenanceCorePostgresIntegrationTest {
         .containsExactly(
             RepairPlaceAllocationState.RELEASED,
             RepairPlaceAllocationState.RESERVED);
+  }
+
+  @Test
+  void readyRemovalPairsWithExactlyOneInboundReservationAtFullCapacity() {
+    UUID warehouseId = UUID.randomUUID();
+    repairCapacitySettings.replace(
+        warehouseId, new ReplaceRepairCapacitySettingsRequest(0L, 1, 5));
+    UUID readyCabinId = UUID.randomUUID();
+    UUID inboundCabinId = UUID.randomUUID();
+    rentalItemFacts.saveAllAndFlush(
+        List.of(
+            RentalItemFactProjection.create(readyCabinId, warehouseId, "FREE", 1),
+            RentalItemFactProjection.create(inboundCabinId, warehouseId, "FREE", 1)));
+    RepairResponse readyRepair =
+        service
+            .createDirectRepair(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                customWorkRepairRequest(warehouseId, readyCabinId, 30))
+            .response();
+    RepairResponse inboundRepair =
+        service
+            .createDirectRepair(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                customWorkRepairRequest(warehouseId, inboundCabinId, 30))
+            .response();
+    var readyReservation =
+        repairPlaces.reserve(warehouseId, readyRepair.id(), 0, UUID.randomUUID());
+    var occupied =
+        repairPlaces.occupy(
+            warehouseId,
+            readyRepair.id(),
+            readyReservation.response().version(),
+            UUID.randomUUID());
+    repairPlaces.readyToRelease(
+        warehouseId,
+        readyRepair.id(),
+        occupied.response().version(),
+        UUID.randomUUID());
+
+    var paired =
+        repairPlaces.reserve(warehouseId, inboundRepair.id(), 0, UUID.randomUUID());
+
+    assertThat(paired.response().state()).isEqualTo(RepairPlaceAllocationState.RESERVED);
+    var projection = repairPlaces.logisticsProjection(warehouseId);
+    assertThat(projection.readyToReleaseCount()).isOne();
+    assertThat(projection.reservedCount()).isOne();
+    assertThat(projection.availableCount()).isZero();
+    assertThat(projection.overCapacity()).isFalse();
+    UUID overflowCabinId = UUID.randomUUID();
+    rentalItemFacts.saveAndFlush(
+        RentalItemFactProjection.create(overflowCabinId, warehouseId, "FREE", 1));
+    RepairResponse overflowRepair =
+        service
+            .createDirectRepair(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                customWorkRepairRequest(warehouseId, overflowCabinId, 30))
+            .response();
+    assertThatThrownBy(
+            () ->
+                repairPlaces.reserve(
+                    warehouseId,
+                    overflowRepair.id(),
+                    0,
+                    UUID.randomUUID()))
+        .isInstanceOf(MaintenanceConflictException.class)
+        .hasMessageContaining("no available or paired repair place");
   }
 
   @Test
@@ -2040,7 +2260,7 @@ class MaintenanceCorePostgresIntegrationTest {
     RepairFixture repair = createDirectRepair(sourceStatus, 0);
     repairCapacitySettings.replace(
         repair.warehouseId(),
-        new ReplaceRepairCapacitySettingsRequest(0L, dailyCapacity));
+        new ReplaceRepairCapacitySettingsRequest(0L, dailyCapacity, 5));
     service.queueRepair(
         UUID.randomUUID(),
         UUID.randomUUID(),
@@ -3383,6 +3603,31 @@ class MaintenanceCorePostgresIntegrationTest {
         .isInstanceOf(
             dev.buhanzaz.rwms.maintenance.service.MaintenanceValidationException.class)
         .hasMessageContaining("One furniture equipment ID must use one canonical name");
+  }
+
+  @Test
+  void catalogRejectsDuplicateWorkOrMaterialNamesUnderOneParent() {
+    UUID catalogId = insertDraftCatalog(UUID.randomUUID(), "d".repeat(64));
+    UUID parentId = UUID.randomUUID();
+    CatalogNodeInput parent = new CatalogNodeInput(
+        parentId, CatalogNodeType.SUBCATEGORY, "External finish", true, null,
+        false, null, null, null, 0, false, false, false,
+        null, null, null, null, null, false, null);
+    CatalogNodeInput first = new CatalogNodeInput(
+        UUID.randomUUID(), CatalogNodeType.WORK, "Replace profile sheet", true, parentId,
+        false, null, "piece", "750.00", 60, true, false, true,
+        null, null, null, null, null, false, null);
+    CatalogNodeInput duplicate = new CatalogNodeInput(
+        UUID.randomUUID(), CatalogNodeType.WORK, "  Replace   profile sheet ", true, parentId,
+        false, null, "piece", "750.00", 60, true, false, true,
+        null, null, null, null, null, false, null);
+
+    assertThatThrownBy(() -> service.changeCatalog(
+        catalogId,
+        new ChangeCatalogRequest(0L, List.of(parent, first, duplicate), List.of())))
+        .isInstanceOf(
+            dev.buhanzaz.rwms.maintenance.service.MaintenanceValidationException.class)
+        .hasMessageContaining("Duplicate work/material name under the same catalog parent");
   }
 
   @Test

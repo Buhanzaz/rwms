@@ -9,6 +9,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
@@ -53,6 +54,31 @@ public final class OrderApiModels {
       @NotNull
           @Size(max = 100)
           List<@NotNull @Valid OrderDesiredEquipmentInput> requirements) {}
+
+  public record OrderRentalTermInput(
+      @NotNull UUID unitId, @NotNull @Min(1) Long rentalMonths) {}
+
+  /** Replaces the complete duration vector for the currently selected order cabins. */
+  public record SetOrderRentalTermsRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      @NotNull @Size(min = 1, max = 100) List<@NotNull @Valid OrderRentalTermInput> terms) {}
+
+  public record OrderRentalTermExtensionInput(
+      @NotNull UUID unitId, @NotNull @Min(1) Long additionalMonths) {}
+
+  /** Extends one or more already shipped cabins without changing their shipment dates. */
+  public record ExtendOrderRentalTermsRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      @NotNull
+          @Size(min = 1, max = 100)
+          List<@NotNull @Valid OrderRentalTermExtensionInput> terms) {}
+
+  /** Creates one independently scheduled shipment containing exactly the selected cabins. */
+  public record CreateOrderRentalShipmentRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      @NotBlank @Size(max = 512) String driverSnapshot,
+      @NotNull LocalDate scheduledDate,
+      @NotNull @Size(min = 1, max = 100) List<@NotNull UUID> unitIds) {}
 
   public record ClientResponse(
       UUID id,
@@ -104,6 +130,9 @@ public final class OrderApiModels {
   public record OrderDesiredEquipmentResponse(
       UUID equipmentId, String equipmentName, long quantity) {}
 
+  public record OrderRentalTermResponse(
+      long rentalMonths, LocalDate shipmentDate, LocalDate returnDate) {}
+
   public record OrderRentalItemResponse(
       UUID id,
       long version,
@@ -125,7 +154,8 @@ public final class OrderApiModels {
       UUID reservationId,
       boolean added,
       OrderRentalItemResponse unit,
-      List<OrderDesiredEquipmentResponse> desiredContents) {}
+      List<OrderDesiredEquipmentResponse> desiredContents,
+      OrderRentalTermResponse rentalTerm) {}
 
   public record OrderUnitPageResponse(
       List<OrderUnitResponse> content,

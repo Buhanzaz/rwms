@@ -49,6 +49,7 @@ import dev.buhanzaz.rwms.inventory.integration.InventoryDependencyGateway;
 import dev.buhanzaz.rwms.inventory.service.InventoryApplicationService;
 import dev.buhanzaz.rwms.inventory.service.InventoryCanonicalJsonPort;
 import dev.buhanzaz.rwms.inventory.service.InventoryException;
+import dev.buhanzaz.rwms.inventory.service.InventoryFrozenPlanFingerprint;
 import dev.buhanzaz.rwms.platform.contracts.OpaqueActorReference;
 import jakarta.persistence.EntityManagerFactory;
 import java.math.BigDecimal;
@@ -113,6 +114,7 @@ class InventoryReadProjectionIntegrationTest {
   @Autowired EntityManagerFactory entityManagerFactory;
   @Autowired ObjectMapper mapper;
   @Autowired InventoryCanonicalJsonPort canonicalJson;
+  @Autowired InventoryFrozenPlanFingerprint frozenPlanFingerprint;
   @Autowired InventoryEventStore events;
   @MockitoBean InventoryDependencyGateway dependencies;
 
@@ -222,6 +224,8 @@ class InventoryReadProjectionIntegrationTest {
     assertThat(expected.frozenPlan().fingerprintSha256()).isEqualTo(FINGERPRINT);
     assertThat(expected.frozenPlan().priority()).isEqualTo(3);
     assertThat(expected.frozenPlan().coverMediaId()).isNull();
+    assertThat(expected.frozenPlan().movementToRepair()).isTrue();
+    assertThat(expected.frozenPlan().movementToShipment()).isFalse();
     assertThat(expected.frozenPlan().logisticsPlanningMode())
         .isEqualTo(LogisticsPlanningMode.FIXED_DATE);
     assertThat(expected.frozenPlan().logisticsScheduledDate())
@@ -234,7 +238,7 @@ class InventoryReadProjectionIntegrationTest {
     assertThat(expected.frozenPlan().lines().getFirst().normativeMinutes()).isEqualTo("2.5");
     assertThat(expected.frozenPlan().stages())
         .extracting(stage -> stage.order())
-        .containsExactly(0, 1);
+        .containsExactly(0);
 
     FindingView ready = find(response.content(), fixture.readyFindingId());
     assertThat(ready.expectedSnapshot()).isNull();
@@ -382,7 +386,9 @@ class InventoryReadProjectionIntegrationTest {
     snapshot.put("mode", "AUTO");
     snapshot.put("priority", 4);
     snapshot.putNull("coverMediaId");
-    snapshot.put("logisticsPlanningMode", "AUTO");
+    snapshot.put("movementToRepair", false);
+    snapshot.put("movementToShipment", false);
+    snapshot.putNull("logisticsPlanningMode");
     snapshot.putNull("logisticsScheduledDate");
     snapshot
         .putArray("lines")
@@ -410,14 +416,10 @@ class InventoryReadProjectionIntegrationTest {
         .putObject("routing")
         .put("queueId", queueId.toString())
         .put("queueName", "Материалы")
-        .put("queueType", "MAINTENANCE")
-        .put("movementRequired", false)
-        .put("photoRequired", false);
+        .put("queueType", "MAINTENANCE");
     stage.put("normativeDurationMinutes", 0);
-    snapshot.put("moveToRepairRequired", false);
-    snapshot.put("moveFromRepairRequired", false);
     snapshot.putArray("mediaReferences");
-    String fingerprint = canonicalJson.sha256(snapshot);
+    String fingerprint = frozenPlanFingerprint.sha256(snapshot);
     AtomicReference<JsonNode> freezeRequest = new AtomicReference<>();
     when(dependencies.freezePlan(any(), any()))
         .thenAnswer(
@@ -450,7 +452,9 @@ class InventoryReadProjectionIntegrationTest {
                     "AUTO",
                     4,
                     null,
-                    LogisticsPlanningMode.AUTO,
+                    false,
+                    false,
+                    null,
                     null,
                     List.of(
                         new PlanLineInput(
@@ -468,15 +472,17 @@ class InventoryReadProjectionIntegrationTest {
 
     assertThat(freezeRequest.get().required("priority").asInt()).isEqualTo(4);
     assertThat(freezeRequest.get().required("coverMediaId").isNull()).isTrue();
-    assertThat(freezeRequest.get().required("logisticsPlanningMode").asText())
-        .isEqualTo("AUTO");
+    assertThat(freezeRequest.get().required("movementToRepair").booleanValue()).isFalse();
+    assertThat(freezeRequest.get().required("movementToShipment").booleanValue()).isFalse();
+    assertThat(freezeRequest.get().required("logisticsPlanningMode").isNull()).isTrue();
     assertThat(freezeRequest.get().required("logisticsScheduledDate").isNull())
         .isTrue();
     assertThat(freezeRequest.get().required("lines")).hasSize(1);
     assertThat(saved.inspectionSource()).isEqualTo("INVENTORY");
     assertThat(saved.frozenPlan().priority()).isEqualTo(4);
-    assertThat(saved.frozenPlan().logisticsPlanningMode())
-        .isEqualTo(LogisticsPlanningMode.AUTO);
+    assertThat(saved.frozenPlan().movementToRepair()).isFalse();
+    assertThat(saved.frozenPlan().movementToShipment()).isFalse();
+    assertThat(saved.frozenPlan().logisticsPlanningMode()).isNull();
     assertThat(saved.frozenPlan().logisticsScheduledDate()).isNull();
     assertThat(saved.frozenPlan().lines())
         .singleElement()
@@ -1572,18 +1578,19 @@ class InventoryReadProjectionIntegrationTest {
             expected.getRevision(),
             activeInventoryId,
             "MANUAL",
+            true,
+            false,
             LogisticsPlanningMode.FIXED_DATE,
             LocalDate.of(2026, 8, 12),
             catalogVersionId,
             FINGERPRINT,
-            "{\"logisticsPlanningMode\":\"FIXED_DATE\","
+            "{\"priority\":3,\"movementToRepair\":true,\"movementToShipment\":false,"
+                + "\"logisticsPlanningMode\":\"FIXED_DATE\","
                 + "\"logisticsScheduledDate\":\"2026-08-12\",\"stages\":["
                 + "{\"id\":\"00000000-0000-0000-0000-000000000811\","
+                + "\"kind\":\"REPAIR_WORK\",\"order\":0,"
                 + "\"catalogNodeId\":\"00000000-0000-0000-0000-000000000812\","
-                + "\"catalogNodeName\":\"Repair A\",\"normativeDurationMinutes\":150},"
-                + "{\"id\":\"00000000-0000-0000-0000-000000000813\","
-                + "\"catalogNodeId\":\"00000000-0000-0000-0000-000000000814\","
-                + "\"catalogNodeName\":\"Move A\",\"normativeDurationMinutes\":30}]}"));
+                + "\"catalogNodeName\":\"Repair A\",\"normativeDurationMinutes\":150}]}"));
     planLines.saveAllAndFlush(
         List.of(
             new FindingPlanLine(
@@ -1619,19 +1626,6 @@ class InventoryReadProjectionIntegrationTest {
             new FindingPlanStage(
                 expected.getId(),
                 expected.getRevision(),
-                1,
-                "MOVE_TO_REPAIR",
-                UUID.randomUUID(),
-                "Move to repair",
-                UUID.randomUUID(),
-                "Logistics",
-                "LOGISTICS",
-                true,
-                false,
-                "{}"),
-            new FindingPlanStage(
-                expected.getId(),
-                expected.getRevision(),
                 0,
                 "REPAIR_WORK",
                 UUID.randomUUID(),
@@ -1639,7 +1633,6 @@ class InventoryReadProjectionIntegrationTest {
                 UUID.randomUUID(),
                 "Maintenance",
                 "MAINTENANCE",
-                false,
                 true,
                 "{}")));
 

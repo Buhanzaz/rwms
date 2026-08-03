@@ -14,6 +14,7 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.EquipmentAllocationReq
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentPlanRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentFurnitureReadinessState;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRentalShipmentRequest;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
@@ -21,9 +22,11 @@ import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderEquipmentRequirement;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderUnitTerm;
 import dev.buhanzaz.rwms.logistics.order.repository.OrderClientRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderEquipmentRequirementRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
+import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderUnitTermRepository;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.ShipmentFurnitureTaskService;
@@ -75,6 +78,7 @@ class ShipmentWorkflowSagaIntegrationTest {
   @Autowired JdbcTemplate jdbc;
   @Autowired OrderClientRepository clients;
   @Autowired RentalOrderRepository orders;
+  @Autowired RentalOrderUnitTermRepository rentalTerms;
   @Autowired RentalOrderEquipmentRequirementRepository equipmentRequirements;
   @Autowired ShipmentFurnitureTaskService shipmentFurnitureTasks;
 
@@ -217,7 +221,7 @@ class ShipmentWorkflowSagaIntegrationTest {
   }
 
   @Test
-  void shippedSavedOrderBecomesFulfilledAndGetsOneDateLessReturn() {
+  void shippedSavedOrderCanExplicitlyKeepItsPlannedDateAndGetsOneDateLessReturn() {
     OrderClient client =
         clients.saveAndFlush(
             OrderClient.create(
@@ -245,14 +249,24 @@ class ShipmentWorkflowSagaIntegrationTest {
     order.selectWarehouse(WAREHOUSE);
     order.saveForFulfillment();
     order = orders.saveAndFlush(order);
+    rentalTerms.saveAndFlush(RentalOrderUnitTerm.create(order, ASSET, 1));
     equipmentRequirements.saveAndFlush(
         RentalOrderEquipmentRequirement.create(
             order, ASSET, EQUIPMENT, "Стол", 2));
     LogisticsDependencyGateway.OrderUnitReservation reservation = reservation(order.getId());
+    LocalDate plannedShipmentDate = LocalDate.now().plusDays(1);
 
     var created =
-        documents.createRentalOrderShipmentDraft(
-            SUBJECT, CORRELATION, order, List.of(reservation));
+        documents.createRentalOrderShipment(
+            SUBJECT,
+            UUID.randomUUID(),
+            CORRELATION,
+            order,
+            List.of(reservation),
+            new CreateOrderRentalShipmentRequest(
+                order.getVersion(), "Driver linked", plannedShipmentDate, List.of(ASSET)),
+            "a".repeat(64))
+            .response();
     UUID documentId = created.id();
     UUID lineId = created.lines().getFirst().id();
     UUID leaseId = UUID.randomUUID();
@@ -284,8 +298,7 @@ class ShipmentWorkflowSagaIntegrationTest {
         CORRELATION,
         documentId,
         created.version(),
-        new ShipmentPlanRequest(
-            "Driver linked", OffsetDateTime.now(ZoneOffset.UTC).toLocalDate()));
+        new ShipmentPlanRequest("Driver linked", plannedShipmentDate));
     processor.processUntilIdle(documentId);
     long awaitingVersion = documents.get(documentId, LogisticsDocumentType.SHIPMENT).version();
 
@@ -320,7 +333,7 @@ class ShipmentWorkflowSagaIntegrationTest {
         .thenReturn(List.of());
 
     documents.confirmShipmentPreparation(
-        SUBJECT, UUID.randomUUID(), CORRELATION, documentId, awaitingVersion);
+        SUBJECT, UUID.randomUUID(), CORRELATION, documentId, awaitingVersion, true);
     processor.processUntilIdle(documentId);
 
     assertThat(
@@ -335,10 +348,15 @@ class ShipmentWorkflowSagaIntegrationTest {
         .isOne();
     assertThat(
             jdbc.queryForMap(
-                "select state, driver_snapshot, scheduled_at, rental_order_id from logistics_document where document_type='RETURN' and rental_order_id=?",
+                """
+                select state, driver_snapshot, scheduled_at, rental_order_id, rental_shipment_id
+                from logistics_document
+                where document_type='RETURN' and rental_order_id=?
+                """,
                 order.getId()))
         .containsEntry("state", "DRAFT")
         .containsEntry("rental_order_id", order.getId())
+        .containsEntry("rental_shipment_id", documentId)
         .containsEntry("driver_snapshot", null)
         .containsEntry("scheduled_at", null);
     assertThat(
@@ -387,13 +405,23 @@ class ShipmentWorkflowSagaIntegrationTest {
     order.selectWarehouse(WAREHOUSE);
     order.saveForFulfillment();
     order = orders.saveAndFlush(order);
+    rentalTerms.saveAndFlush(RentalOrderUnitTerm.create(order, ASSET, 1));
     equipmentRequirements.saveAndFlush(
         RentalOrderEquipmentRequirement.create(
             order, ASSET, EQUIPMENT, "Стол", 2));
 
     var shipment =
-        documents.createRentalOrderShipmentDraft(
-            SUBJECT, CORRELATION, order, List.of(reservation(order.getId())));
+        documents
+            .createRentalOrderShipment(
+                SUBJECT,
+                UUID.randomUUID(),
+                CORRELATION,
+                order,
+                List.of(reservation(order.getId())),
+                new CreateOrderRentalShipmentRequest(
+                    order.getVersion(), "Driver linked", LocalDate.now(), List.of(ASSET)),
+                "b".repeat(64))
+            .response();
     LogisticsDependencyGateway.OrderFurnitureMovementPlan plan =
         new LogisticsDependencyGateway.OrderFurnitureMovementPlan(
             order.getId(),

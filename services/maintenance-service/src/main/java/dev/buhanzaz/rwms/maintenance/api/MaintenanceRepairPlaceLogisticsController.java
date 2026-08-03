@@ -67,7 +67,7 @@ public class MaintenanceRepairPlaceLogisticsController {
   }
 
   @PostMapping("/repair-places/{warehouseId}/allocations/{repairId}/reserve")
-  public ResponseEntity<RepairPlaceAllocationResponse> reserve(
+  public ResponseEntity<LogisticsRepairPlaceAllocationResponse> reserve(
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID warehouseId,
       @PathVariable UUID repairId,
@@ -80,20 +80,24 @@ public class MaintenanceRepairPlaceLogisticsController {
   }
 
   @PostMapping("/repair-places/{warehouseId}/allocations/{repairId}/occupy")
-  public ResponseEntity<RepairPlaceAllocationResponse> occupy(
+  public ResponseEntity<LogisticsRepairPlaceAllocationResponse> occupy(
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID warehouseId,
       @PathVariable UUID repairId,
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody RepairPlaceTransitionRequest request) {
     access.requireLogisticsService(jwt);
-    return result(
+    RepairPlaceService.TransitionResult transition =
         repairPlaces.occupy(
-            warehouseId, repairId, request.expectedVersion(), idempotencyKey));
+            warehouseId, repairId, request.expectedVersion(), idempotencyKey);
+    // A replay reaches this branch too: that is deliberate, so an interrupted callback cannot
+    // leave the cabin occupying a repair place without its ordinary repair task being activated.
+    maintenance.activateQueuedRepairAfterDelivery(warehouseId, repairId);
+    return result(transition);
   }
 
   @PostMapping("/repair-places/{warehouseId}/allocations/{repairId}/ready-to-release")
-  public ResponseEntity<RepairPlaceAllocationResponse> readyToRelease(
+  public ResponseEntity<LogisticsRepairPlaceAllocationResponse> readyToRelease(
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID warehouseId,
       @PathVariable UUID repairId,
@@ -106,7 +110,7 @@ public class MaintenanceRepairPlaceLogisticsController {
   }
 
   @PostMapping("/repair-places/{warehouseId}/allocations/{repairId}/release")
-  public ResponseEntity<RepairPlaceAllocationResponse> release(
+  public ResponseEntity<LogisticsRepairPlaceAllocationResponse> release(
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID warehouseId,
       @PathVariable UUID repairId,
@@ -118,7 +122,7 @@ public class MaintenanceRepairPlaceLogisticsController {
             warehouseId, repairId, request.expectedVersion(), idempotencyKey));
   }
 
-  private static ResponseEntity<RepairPlaceAllocationResponse> result(
+  private static ResponseEntity<LogisticsRepairPlaceAllocationResponse> result(
       RepairPlaceService.TransitionResult result) {
     ResponseEntity.BodyBuilder response = ResponseEntity.ok();
     if (result.replayed()) {
