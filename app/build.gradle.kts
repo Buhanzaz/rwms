@@ -32,8 +32,8 @@ android {
         applicationId = "dev.buhanzaz.rwms.manager"
         minSdk = 23
         targetSdk = 36
-        versionCode = 21
-        versionName = "0.3.18"
+        versionCode = 27
+        versionName = "0.3.24"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["appAuthRedirectScheme"] = "rwms-manager-auth"
@@ -103,6 +103,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
     implementation("androidx.navigation:navigation-compose:2.9.5")
     implementation("androidx.datastore:datastore-preferences:1.2.1")
+    implementation("androidx.work:work-runtime-ktx:2.11.2")
     implementation("androidx.exifinterface:exifinterface:1.4.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("net.openid:appauth:0.11.1")
@@ -130,6 +131,7 @@ dependencies {
     testImplementation("com.google.truth:truth:1.4.4")
     testImplementation("com.squareup.okhttp3:mockwebserver:$okHttpVersion")
     testImplementation("org.robolectric:robolectric:4.16.1")
+    testImplementation("androidx.work:work-testing:2.11.2")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation(platform("androidx.compose:compose-bom:2026.03.01"))

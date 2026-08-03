@@ -6,6 +6,7 @@ import dev.buhanzaz.rwms.manager.network.RoutingSnapshotDto
 import dev.buhanzaz.rwms.manager.ui.MaintenanceEditorMode
 import dev.buhanzaz.rwms.manager.ui.MaintenanceEditorState
 import dev.buhanzaz.rwms.manager.ui.MaintenanceLineEditorState
+import dev.buhanzaz.rwms.manager.ui.LOGISTICS_PLANNING_MODE_AUTO
 import dev.buhanzaz.rwms.manager.ui.isEmptyMaintenanceEstimate
 import dev.buhanzaz.rwms.manager.ui.maintenanceLocalPhotoKey
 import dev.buhanzaz.rwms.manager.ui.maintenanceRequiresPhotos
@@ -13,6 +14,37 @@ import java.math.BigDecimal
 import org.junit.Test
 
 class MaintenanceEditorValidationTest {
+    @Test
+    fun `movement to repair requires a driver queue priority`() {
+        val photoUri = "content://rwms/maintenance/movement-priority.jpg"
+        val editor = MaintenanceEditorState(
+            mode = MaintenanceEditorMode.REPAIR,
+            entityId = null,
+            expectedVersion = null,
+            readOnly = false,
+            selectedAsset = RentalItemDto(
+                id = "asset-1",
+                version = 1,
+                warehouseId = "warehouse-1",
+                number = "БК-001",
+                status = "AFTER_RENT",
+            ),
+            dispatchDate = "2026-08-03",
+            sourceParty = "",
+            lines = listOf(line(id = "one", quantity = "1", unitPrice = "100.00")),
+            photoUris = listOf(photoUri),
+            readyMedia = emptyList(),
+            priority = 0,
+            movementToRepair = true,
+            logisticsPlanningMode = LOGISTICS_PLANNING_MODE_AUTO,
+            step = 5,
+            coverPhotoKey = maintenanceLocalPhotoKey(photoUri),
+        )
+
+        assertThat(maintenanceCanSubmit(editor)).isFalse()
+        assertThat(maintenanceCanSubmit(editor.copy(priority = 4))).isTrue()
+    }
+
     @Test
     fun totalUsesExactDecimalArithmetic() {
         val total = maintenanceTotal(

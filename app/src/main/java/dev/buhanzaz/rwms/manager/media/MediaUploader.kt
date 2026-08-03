@@ -9,9 +9,16 @@ import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.network.RotateMediaRequest
 import dev.buhanzaz.rwms.manager.network.RwmsApi
 import java.io.File
+import java.io.IOException
+import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import retrofit2.HttpException
@@ -44,6 +51,54 @@ data class PhotoPayload(
     }
 }
 
+/**
+ * Stable client identities for one exact local upload attempt.
+ *
+ * The URI is deliberately part of the fingerprint: two photos with identical bytes are still
+ * distinct user choices and must not be collapsed into one media asset.  The checksum and order
+ * keep a reused local file path from replaying a request whose actual content changed.
+ */
+internal data class MediaUploadIdentity(
+    val folderId: String,
+    val createSessionKey: String,
+    /** The media API requires the same key when content upload is finalized. */
+    val contentAndFinalizeKey: String,
+)
+
+internal fun mediaUploadIdentity(
+    owner: MediaOwner,
+    localUri: String,
+    photo: PhotoPayload,
+    sortOrder: Int,
+): MediaUploadIdentity {
+    require(sortOrder >= 0) { "Порядок фотографии не может быть отрицательным" }
+    val fingerprint = listOf(
+        "rwms-mobile-media-upload-v1",
+        owner.ownerType,
+        owner.ownerId.orEmpty(),
+        owner.documentId.orEmpty(),
+        owner.lineId.orEmpty(),
+        owner.warehouseId,
+        owner.context,
+        localUri,
+        photo.fileName,
+        photo.contentType,
+        photo.bytes.size.toString(),
+        photo.checksumSha256,
+        sortOrder.toString(),
+    ).joinToString(separator = "\u001f")
+    return MediaUploadIdentity(
+        folderId = stableMediaUploadUuid("folder", fingerprint),
+        createSessionKey = stableMediaUploadUuid("create", fingerprint),
+        contentAndFinalizeKey = stableMediaUploadUuid("content-finalize", fingerprint),
+    )
+}
+
+private fun stableMediaUploadUuid(scope: String, fingerprint: String): String =
+    UUID.nameUUIDFromBytes(
+        "rwms-mobile-media:$scope:$fingerprint".toByteArray(StandardCharsets.UTF_8),
+    ).toString()
+
 class PhotoPayloadReader(
     private val contentResolver: ContentResolver,
 ) {
@@ -61,7 +116,8 @@ class PhotoPayloadReader(
         val fileName = uri.lastPathSegment
             ?.substringAfterLast('/')
             ?.takeIf(String::isNotBlank)
-            ?: "rwms-media-${UUID.randomUUID()}${mediaFileExtension(contentType)}"
+            ?: "rwms-media-${stableMediaUploadUuid("file-name", uriText)}" +
+                mediaFileExtension(contentType)
 
         /*
          * This is deliberately an exact byte read. CameraX writes image orientation as
@@ -81,6 +137,8 @@ class MediaUploader private constructor(
     private val api: RwmsApi,
     private val payloadLoader: (String) -> PhotoPayload,
 ) {
+    private val uploadPermits = Semaphore(MEDIA_UPLOAD_PARALLELISM)
+
     constructor(
         api: RwmsApi,
         payloadReader: PhotoPayloadReader,
@@ -95,12 +153,38 @@ class MediaUploader private constructor(
     suspend fun upload(
         owner: MediaOwner,
         photoUris: List<String>,
+        sortOrderByUri: Map<String, Int> = photoUris.withIndex().associate { (index, uri) ->
+            uri to index
+        },
+        onReady: suspend (uri: String, reference: MediaReferenceDto) -> Unit = { _, _ -> },
     ): List<MediaReferenceDto> {
         require(photoUris.isNotEmpty()) { "Добавьте хотя бы одну фотографию" }
-        val folderId = UUID.randomUUID().toString()
-        return photoUris.mapIndexed { index, uri ->
-            uploadOne(owner, folderId, index, payloadLoader(uri))
+        require(photoUris.distinct().size == photoUris.size) {
+            "Одна фотография не может быть добавлена дважды"
         }
+        val uploadRequests = photoUris.map { uri ->
+            uri to requireNotNull(sortOrderByUri[uri]) {
+                "Не задан порядок фотографии"
+            }
+        }
+        return uploadBoundedParallelOrdered(
+            inputs = uploadRequests,
+            permits = uploadPermits,
+            upload = { (uri, sortOrder) ->
+                uploadOne(
+                    owner = owner,
+                    localUri = uri,
+                    sortOrder = sortOrder,
+                    photo = payloadLoader(uri),
+                )
+            },
+            onReady = { (uri, _), reference ->
+                // Persisting this callback immediately lets an interrupted batch resume from
+                // the remaining local URIs instead of creating another attachment for the
+                // already READY original.
+                onReady(uri, reference)
+            },
+        )
     }
 
     /**
@@ -177,60 +261,68 @@ class MediaUploader private constructor(
 
     private suspend fun uploadOne(
         owner: MediaOwner,
-        folderId: String,
+        localUri: String,
         sortOrder: Int,
         photo: PhotoPayload,
     ): MediaReferenceDto {
-        val createSessionKey = UUID.randomUUID().toString()
-        val uploadAndFinalizeKey = UUID.randomUUID().toString()
-        val completedMediaId = retryMediaCommandAfterOwnerProof {
-            val session = api.createUploadSession(
-                createSessionKey,
-                CreateUploadSessionRequest(
-                    ownerType = owner.ownerType,
-                    ownerId = owner.ownerId,
-                    documentId = owner.documentId,
-                    lineId = owner.lineId,
-                    warehouseId = owner.warehouseId,
-                    context = owner.context,
-                    folderId = folderId,
-                    fileName = photo.fileName,
-                    contentType = photo.contentType,
-                    contentLength = photo.bytes.size.toLong(),
-                    checksumSha256 = photo.checksumSha256,
-                    sortOrder = sortOrder,
-                ),
-            )
-            val expectedContentPath =
-                "/api/media/v1/upload-sessions/${session.uploadSessionId}/content"
-            if (session.contentUploadUrl != expectedContentPath) {
-                throw IllegalStateException(
-                    "Медиасервис вернул небезопасный путь загрузки фотографии",
+        val identity = mediaUploadIdentity(owner, localUri, photo, sortOrder)
+        val completedMediaId = try {
+            retryMediaCommandAfterOwnerProof {
+                val session = api.createUploadSession(
+                    identity.createSessionKey,
+                    CreateUploadSessionRequest(
+                        ownerType = owner.ownerType,
+                        ownerId = owner.ownerId,
+                        documentId = owner.documentId,
+                        lineId = owner.lineId,
+                        warehouseId = owner.warehouseId,
+                        context = owner.context,
+                        folderId = identity.folderId,
+                        fileName = photo.fileName,
+                        contentType = photo.contentType,
+                        contentLength = photo.bytes.size.toLong(),
+                        checksumSha256 = photo.checksumSha256,
+                        sortOrder = sortOrder,
+                    ),
                 )
-            }
-            val uploaded = api.uploadContent(
-                contentPath = session.contentUploadUrl,
-                idempotencyKey = uploadAndFinalizeKey,
-                body = photo.bytes.toRequestBody(photo.contentType.toMediaType()),
-            )
-            val completed = api.finalizeUpload(
-                uploadSessionId = session.uploadSessionId,
-                idempotencyKey = uploadAndFinalizeKey,
-                request = FinalizeUploadRequest(
-                    objectVersionId = uploaded.objectVersionId,
-                    etag = uploaded.etag,
-                    checksumSha256 = uploaded.checksumSha256,
-                ),
-            )
-            if (completed.id != session.mediaId) {
-                throw IllegalStateException(
-                    "Медиасервис вернул другую фотографию после завершения загрузки",
+                val expectedContentPath =
+                    "/api/media/v1/upload-sessions/${session.uploadSessionId}/content"
+                if (session.contentUploadUrl != expectedContentPath) {
+                    throw IllegalStateException(
+                        "Медиасервис вернул небезопасный путь загрузки фотографии",
+                    )
+                }
+                val uploaded = api.uploadContent(
+                    contentPath = session.contentUploadUrl,
+                    idempotencyKey = identity.contentAndFinalizeKey,
+                    body = photo.bytes.toRequestBody(photo.contentType.toMediaType()),
                 )
+                val completed = api.finalizeUpload(
+                    uploadSessionId = session.uploadSessionId,
+                    idempotencyKey = identity.contentAndFinalizeKey,
+                    request = FinalizeUploadRequest(
+                        objectVersionId = uploaded.objectVersionId,
+                        etag = uploaded.etag,
+                        checksumSha256 = uploaded.checksumSha256,
+                    ),
+                )
+                if (completed.id != session.mediaId) {
+                    throw IllegalStateException(
+                        "Медиасервис вернул другую фотографию после завершения загрузки",
+                    )
+                }
+                if (completed.status == "FAILED" || completed.status == "DELETED") {
+                    throw IllegalStateException(MEDIA_PROCESSING_FAILED_MESSAGE)
+                }
+                session.mediaId
             }
-            if (completed.status == "FAILED" || completed.status == "DELETED") {
-                throw IllegalStateException(MEDIA_PROCESSING_FAILED_MESSAGE)
-            }
-            session.mediaId
+        } catch (failure: Throwable) {
+            if (failure is CancellationException) throw failure
+            if (!shouldRecoverAcceptedMedia(failure)) throw failure
+            // A phone can lose the response after media-service has accepted the bytes.  The
+            // stable one-photo folder makes recovery exact without treating another URI with the
+            // same checksum as the same user-selected photo.
+            recoverAcceptedMediaId(owner, identity) ?: throw failure
         }
         return awaitReadyMediaReference(completedMediaId) {
             api.ownerMedia(
@@ -243,6 +335,85 @@ class MediaUploader private constructor(
             ).items.firstOrNull { it.id == completedMediaId }
         }
     }
+
+    private suspend fun recoverAcceptedMediaId(
+        owner: MediaOwner,
+        identity: MediaUploadIdentity,
+    ): String? = try {
+        retryMediaReadAfterOwnerProof {
+            api.ownerMedia(
+                ownerType = owner.ownerType,
+                ownerId = owner.ownerId,
+                documentId = owner.documentId,
+                lineId = owner.lineId,
+                warehouseId = owner.warehouseId,
+                context = owner.context,
+            ).items.firstOrNull { media ->
+                media.folderId == identity.folderId &&
+                    media.status in setOf("PROCESSING", "READY")
+            }?.id
+        }
+    } catch (failure: Throwable) {
+        if (failure is CancellationException) throw failure
+        null
+    }
+}
+
+/**
+ * Executes the expensive upload transport with a small bounded parallelism, but exposes an
+ * ordered, serialized completion stream to stateful callers.
+ */
+internal suspend fun <Input, Output> uploadBoundedParallelOrdered(
+    inputs: List<Input>,
+    parallelism: Int = MEDIA_UPLOAD_PARALLELISM,
+    permits: Semaphore = Semaphore(parallelism),
+    upload: suspend (Input) -> Output,
+    onReady: suspend (Input, Output) -> Unit,
+): List<Output> {
+    require(parallelism > 0) { "Параллелизм загрузки должен быть положительным" }
+    return supervisorScope {
+        val uploads = inputs.map { input ->
+            async {
+                try {
+                    Result.success(permits.withPermit { upload(input) })
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Throwable) {
+                    Result.failure(failure)
+                }
+            }
+        }
+
+        /*
+         * Upload work is concurrent, while callbacks deliberately remain ordered and
+         * serialized. Callers use onReady to persist individual references into editor state;
+         * invoking it concurrently would make a successful batch race its UI state.
+         */
+        var firstFailure: Throwable? = null
+        val outputs = mutableListOf<Output>()
+        uploads.forEachIndexed { index, upload ->
+            upload.await().fold(
+                onSuccess = { output ->
+                    onReady(inputs[index], output)
+                    outputs += output
+                },
+                onFailure = { failure ->
+                    if (firstFailure == null) firstFailure = failure
+                },
+            )
+        }
+        firstFailure?.let { throw it }
+        outputs
+    }
+}
+
+private fun shouldRecoverAcceptedMedia(failure: Throwable): Boolean = when (failure) {
+    is IOException -> true
+    is HttpException -> failure.code() == 409 || failure.code() in 500..599
+    else -> failure.cause
+        ?.takeUnless { it === failure }
+        ?.let(::shouldRecoverAcceptedMedia)
+        ?: false
 }
 
 internal suspend fun awaitReadyMediaReference(
@@ -335,11 +506,6 @@ private suspend fun <T> retryMediaOperationAfterOwnerProof(
     }
     error("Недостижимое состояние повтора загрузки")
 }
-
-@Deprecated("Use retryMediaCommandAfterOwnerProof")
-internal suspend fun <T> retryCreateUploadSessionAfterOwnerProof(
-    operation: suspend () -> T,
-): T = retryMediaCommandAfterOwnerProof(operation)
 
 internal fun ownerProofRetryDelayMillis(failureCount: Int): Long =
     (OWNER_PROOF_RETRY_INITIAL_DELAY_MILLIS shl failureCount.coerceAtLeast(0))
@@ -438,6 +604,7 @@ internal const val MEDIA_READY_TIMEOUT_MESSAGE =
 internal const val INVENTORY_MEDIA_READY_TIMEOUT_MESSAGE =
     "Фотография обработана, но инвентаризация ещё не получила подтверждение готовности. Повторите сохранение через несколько секунд"
 internal const val INVENTORY_MEDIA_READY_MAX_RETRIES = 8
+internal const val MEDIA_UPLOAD_PARALLELISM = 3
 private const val INVENTORY_MEDIA_NOT_READY_CODE = "INVENTORY_MEDIA_NOT_READY"
 private const val OWNER_PROOF_RETRY_INITIAL_DELAY_MILLIS = 250L
 private const val OWNER_PROOF_RETRY_MAX_DELAY_MILLIS = 2_000L

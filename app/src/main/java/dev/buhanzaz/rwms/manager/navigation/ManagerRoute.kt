@@ -4,6 +4,7 @@ import android.net.Uri
 
 sealed class ManagerRoute(val route: String) {
     data object Home : ManagerRoute("manager-home")
+    data object Uploads : ManagerRoute("manager-uploads")
     data object Logistics : ManagerRoute("manager-logistics")
     data object Returns : ManagerRoute("manager-returns")
     data object ReturnInspection : ManagerRoute("manager-return-inspection")

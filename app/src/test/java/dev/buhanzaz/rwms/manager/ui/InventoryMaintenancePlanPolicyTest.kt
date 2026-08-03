@@ -6,7 +6,7 @@ import org.junit.Test
 
 class InventoryMaintenancePlanPolicyTest {
     @Test
-    fun `inventory plan reuses maintenance editor without losing priority or stages`() {
+    fun `inventory plan reuses maintenance editor without losing logistics choice`() {
         val line = MaintenanceLineEditorState(
             id = "line-1",
             catalogNodeId = "node-1",
@@ -33,25 +33,91 @@ class InventoryMaintenancePlanPolicyTest {
             planLines = listOf(line),
             planStages = listOf(stage),
             planPriority = 2,
+            planMovementToRepair = true,
+            planMovementToShipment = false,
+            planLogisticsPlanningMode = LOGISTICS_PLANNING_MODE_FIXED_DATE,
+            planLogisticsScheduledDate = "2026-08-03",
         )
 
         val maintenance = inventory.toMaintenancePlanEditor()
         val changed = inventory.withMaintenancePlanEditor(
-            maintenance.copy(priority = 5),
+            maintenance.copy(priority = 5, movementToShipment = true),
         )
 
         assertThat(maintenance.sourceParty).isEqualTo("Инвентаризация")
         assertThat(maintenance.lines).containsExactly(line)
         assertThat(maintenance.stages).containsExactly(stage)
+        assertThat(maintenance.movementToRepair).isTrue()
+        assertThat(maintenance.logisticsPlanningMode)
+            .isEqualTo(LOGISTICS_PLANNING_MODE_FIXED_DATE)
+        assertThat(maintenance.logisticsScheduledDate).isEqualTo("2026-08-03")
         assertThat(changed.planPriority).isEqualTo(5)
         assertThat(changed.planLines).containsExactly(line)
+        assertThat(changed.planMovementToRepair).isTrue()
+        assertThat(changed.planMovementToShipment).isTrue()
+        assertThat(changed.planLogisticsPlanningMode)
+            .isEqualTo(LOGISTICS_PLANNING_MODE_FIXED_DATE)
+        assertThat(changed.planLogisticsScheduledDate).isEqualTo("2026-08-03")
     }
 
     @Test
-    fun `inventory repair source falls back for legacy repair only`() {
+    fun `inventory repair source uses the inventory default when no party was supplied`() {
         assertThat(repairSourceLabel("INVENTORY", null)).isEqualTo("Инвентаризация")
         assertThat(repairSourceLabel("INVENTORY", "Инвентаризация склада"))
             .isEqualTo("Инвентаризация склада")
         assertThat(repairSourceLabel("DIRECT", null)).isEqualTo("—")
     }
+
+    @Test
+    fun `inventory plan keeps repeated catalog work as distinct stages`() {
+        val firstWork = planLine(id = "work-1", comment = "Первая работа")
+        val secondWork = planLine(id = "work-2", comment = "Вторая работа")
+        val route = RoutingSnapshotDto("queue-1", "Ремонт", "REPAIR")
+        val firstStage = MaintenanceStageEditorState(
+            id = "stage-1",
+            kind = "REPAIR_WORK",
+            routing = route,
+            includedLineIds = listOf(firstWork.id),
+            primaryLineId = firstWork.id,
+            groupComment = firstWork.comment,
+        )
+        val secondStage = MaintenanceStageEditorState(
+            id = "stage-2",
+            kind = "REPAIR_WORK",
+            routing = route,
+            includedLineIds = listOf(secondWork.id),
+            primaryLineId = secondWork.id,
+            groupComment = secondWork.comment,
+        )
+        val inventory = InventoryEditorState(
+            findingId = "finding-1",
+            number = "БЫТ-001",
+            outcome = "MATCHED",
+            planLines = listOf(firstWork, secondWork),
+            planStages = listOf(firstStage, secondStage),
+        )
+
+        val maintenance = inventory.toMaintenancePlanEditor()
+        val roundTripped = inventory.withMaintenancePlanEditor(maintenance)
+
+        assertThat(maintenance.lines.map(MaintenanceLineEditorState::id))
+            .containsExactly(firstWork.id, secondWork.id)
+            .inOrder()
+        assertThat(maintenance.stages.map(MaintenanceStageEditorState::primaryLineId))
+            .containsExactly(firstWork.id, secondWork.id)
+            .inOrder()
+        assertThat(roundTripped.planStages).containsExactly(firstStage, secondStage).inOrder()
+    }
+
+    private fun planLine(id: String, comment: String) = MaintenanceLineEditorState(
+        id = id,
+        catalogNodeId = "catalog-work",
+        description = "Замена ДВП",
+        lineType = "WORK",
+        unit = "ед.",
+        quantity = "1",
+        unitPrice = "1500.00",
+        normativeMinutes = 45,
+        comment = comment,
+    )
 }

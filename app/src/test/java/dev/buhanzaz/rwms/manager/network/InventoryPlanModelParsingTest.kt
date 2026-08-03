@@ -39,6 +39,11 @@ class InventoryPlanModelParsingTest {
                         "catalogVersionId":"55555555-5555-5555-5555-555555555555",
                         "fingerprintSha256":"${"a".repeat(64)}",
                         "priority":2,
+                        "coverMediaId":"44444444-4444-4444-4444-444444444444",
+                        "movementToRepair":true,
+                        "movementToShipment":false,
+                        "logisticsPlanningMode":"FIXED_DATE",
+                        "logisticsScheduledDate":"2026-08-04",
                         "lines":[{
                           "id":"66666666-6666-6666-6666-666666666666",
                           "sourceKind":"CATALOG",
@@ -53,7 +58,18 @@ class InventoryPlanModelParsingTest {
                           "normativeMinutes":"45",
                           "groupComment":null
                         }],
-                        "stages":[]
+                        "stages":[{
+                          "id":"88888888-8888-8888-8888-888888888888",
+                          "order":0,
+                          "catalogNodeId":"77777777-7777-7777-7777-777777777777",
+                          "catalogNodeName":"Замена ДВП",
+                          "kind":"REPAIR_WORK",
+                          "routingQueueId":"99999999-9999-9999-9999-999999999999",
+                          "routingQueueName":"Внутренние работы",
+                          "routingQueueType":"MAINTENANCE",
+                          "photoRequired":false,
+                          "normativeDurationMinutes":45
+                        }]
                       },
                       "media":[{
                         "mediaId":"44444444-4444-4444-4444-444444444444",
@@ -68,6 +84,11 @@ class InventoryPlanModelParsingTest {
         assertThat(finding.coverMediaId)
             .isEqualTo("44444444-4444-4444-4444-444444444444")
         assertThat(finding.frozenPlan?.priority).isEqualTo(2)
+        assertThat(finding.frozenPlan?.movementToRepair).isTrue()
+        assertThat(finding.frozenPlan?.movementToShipment).isFalse()
+        assertThat(finding.frozenPlan?.logisticsPlanningMode).isEqualTo("FIXED_DATE")
+        assertThat(finding.frozenPlan?.logisticsScheduledDate).isEqualTo("2026-08-04")
         assertThat(finding.frozenPlan?.lines?.single()?.description).isEqualTo("Замена ДВП")
+        assertThat(finding.frozenPlan?.stages?.single()?.kind).isEqualTo("REPAIR_WORK")
     }
 }

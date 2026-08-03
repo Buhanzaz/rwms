@@ -3,11 +3,12 @@ package dev.buhanzaz.rwms.manager.ui
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.manager.network.CatalogNodeDto
 import dev.buhanzaz.rwms.manager.network.FurnitureEquipmentReferenceDto
+import dev.buhanzaz.rwms.manager.network.RoutingSnapshotDto
 import org.junit.Test
 
 class MaintenanceCatalogLinePolicyTest {
     @Test
-    fun `linked catalog selection adds work and material with quantity and comment`() {
+    fun `linked catalog selection applies its comment only to the work`() {
         val work = node(id = "work", type = "WORK")
         val material = node(id = "material", type = "MATERIAL")
 
@@ -24,29 +25,100 @@ class MaintenanceCatalogLinePolicyTest {
         assertThat(result.lines.map(MaintenanceLineEditorState::quantity))
             .containsExactly("2", "2")
         assertThat(result.lines.map(MaintenanceLineEditorState::comment))
-            .containsExactly("Осмотр", "Осмотр")
+            .containsExactly("Осмотр", "")
     }
 
     @Test
-    fun `repeated catalog selection increments quantity and merges comments`() {
+    fun `selected existing work keeps its comment while the material aggregates`() {
         val work = node(id = "work", type = "WORK")
+        val material = node(id = "material", type = "MATERIAL")
         val first = applyMaintenanceCatalogNodes(
             editor = editor(),
-            nodes = listOf(work),
-            quantity = "1.5",
+            nodes = listOf(work, material),
+            quantity = "1",
             comment = "Первый",
+        )
+        val existingWork = first.lines.single { line -> line.lineType == "WORK" }
+
+        val result = applyMaintenanceCatalogNodes(
+            editor = first,
+            nodes = listOf(work, material),
+            quantity = "0.5",
+            comment = "Второй",
+            existingWorkLineId = existingWork.id,
+        )
+
+        assertThat(result.lines).hasSize(2)
+        assertThat(result.lines.single { line -> line.lineType == "WORK" }).isEqualTo(
+            existingWork.copy(quantity = "1.5", comment = "Первый; Второй"),
+        )
+        assertThat(result.lines.single { line -> line.lineType == "MATERIAL" })
+            .isEqualTo(first.lines.single { line -> line.lineType == "MATERIAL" }.copy(quantity = "1.5"))
+    }
+
+    @Test
+    fun `new repeated catalog work has its own stage on the same queue`() {
+        val work = node(id = "work", type = "WORK")
+        val material = node(id = "material", type = "MATERIAL")
+        val first = applyMaintenanceCatalogNodes(
+            editor = editor(),
+            nodes = listOf(work, material),
+            quantity = "1",
+            comment = "Первая работа",
         )
 
         val result = applyMaintenanceCatalogNodes(
             editor = first,
-            nodes = listOf(work, work),
-            quantity = "0.5",
-            comment = "Второй",
+            nodes = listOf(work, material),
+            quantity = "2",
+            comment = "Вторая работа",
         )
+        val works = result.lines.filter { line -> line.lineType == "WORK" }
+        val materialLine = result.lines.single { line -> line.lineType == "MATERIAL" }
+        val route = RoutingSnapshotDto("queue-1", "Ремонт", "REPAIR")
+        val stages = planMaintenanceStages(result) { route }
 
-        assertThat(result.lines).hasSize(1)
-        assertThat(result.lines.single().quantity).isEqualTo("2")
-        assertThat(result.lines.single().comment).isEqualTo("Первый; Второй")
+        assertThat(works).hasSize(2)
+        assertThat(works[0].id).isNotEqualTo(works[1].id)
+        assertThat(works.map(MaintenanceLineEditorState::comment))
+            .containsExactly("Первая работа", "Вторая работа")
+            .inOrder()
+        assertThat(materialLine.quantity).isEqualTo("3")
+        assertThat(materialLine.comment).isEmpty()
+        assertThat(stages.map { stage -> stage.primaryLineId })
+            .containsExactly(works[0].id, works[1].id)
+            .inOrder()
+        assertThat(stages).hasSize(2)
+    }
+
+    @Test
+    fun `different catalog works have distinct stages on the same queue`() {
+        val firstWork = node(id = "first-work", type = "WORK")
+        val secondWork = node(id = "second-work", type = "WORK")
+        val first = applyMaintenanceCatalogNodes(
+            editor = editor(),
+            nodes = listOf(firstWork),
+            quantity = "1",
+            comment = "Первая работа",
+        )
+        val result = applyMaintenanceCatalogNodes(
+            editor = first,
+            nodes = listOf(secondWork),
+            quantity = "1",
+            comment = "Вторая работа",
+        )
+        val works = result.lines.filter { line -> line.lineType == "WORK" }
+        val route = RoutingSnapshotDto("queue-1", "Ремонт", "REPAIR")
+
+        val stages = planMaintenanceStages(result) { route }
+
+        assertThat(stages).hasSize(2)
+        assertThat(stages.map { stage -> stage.primaryLineId })
+            .containsExactly(works[0].id, works[1].id)
+            .inOrder()
+        assertThat(stages.map { stage -> stage.includedLineIds })
+            .containsExactly(listOf(works[0].id), listOf(works[1].id))
+            .inOrder()
     }
 
     @Test
