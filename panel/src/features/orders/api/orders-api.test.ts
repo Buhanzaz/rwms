@@ -1,15 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
+  extendOrderRentalTerms,
   listOrders,
   listOrderClients,
   parseOrderDetail,
   saveOrder,
+  setOrderRentalTerms,
   updateOrder,
 } from "@/features/orders/api/orders-api"
 
 const ORDER_ID = "50ac5b00-2378-457b-82fc-14d43daa5c5c"
 const CLIENT_ID = "8a14d50d-4b0b-4a4d-9aaf-b29cd877fcd3"
+const UNIT_ID = "9b14d50d-4b0b-4a4d-9aaf-b29cd877fcd3"
+const WAREHOUSE_ID = "4b14d50d-4b0b-4a4d-9aaf-b29cd877fcd3"
 const IDEMPOTENCY_KEY = "ad4f4e00-2378-457b-82fc-14d43daa5c5c"
 
 const orderDetailResponse = {
@@ -65,6 +69,49 @@ describe("parseOrderDetail", () => {
 
     expect(order.managerId).toBe("00000000-0000-0000-0000-0000000000d8")
     expect(order.createdBy).toBe("00000000-0000-0000-0000-0000000000d8")
+  })
+
+  it("parses the rental term and shipment dates attached to an order cabin", () => {
+    const order = parseOrderDetail({
+      ...orderDetailResponse,
+      warehouseId: WAREHOUSE_ID,
+      unitCount: 1,
+      units: [
+        {
+          reservationId: "2b14d50d-4b0b-4a4d-9aaf-b29cd877fcd3",
+          added: true,
+          unit: {
+            id: UNIT_ID,
+            version: 2,
+            warehouseId: WAREHOUSE_ID,
+            number: "БЫТ-001",
+            status: "RENTED",
+            rentalType: null,
+            dimensions: null,
+            finishing: null,
+            category: null,
+            characteristics: null,
+            linoleum: null,
+            tags: [],
+            contents: [],
+            createdAt: "2026-07-19T19:49:56.046806Z",
+            updatedAt: "2026-07-19T20:49:56.046806Z",
+          },
+          desiredContents: [],
+          rentalTerm: {
+            rentalMonths: 6,
+            shipmentDate: "2026-07-20",
+            returnDate: "2027-01-20",
+          },
+        },
+      ],
+    })
+
+    expect(order.units[0]?.rentalTerm).toEqual({
+      rentalMonths: 6,
+      shipmentDate: "2026-07-20",
+      returnDate: "2027-01-20",
+    })
   })
 
   it("updates an order client through the same-origin gateway with CAS and idempotency", async () => {
@@ -176,6 +223,72 @@ describe("parseOrderDetail", () => {
     expect(new Headers(init.headers).get("Idempotency-Key")).toBe(
       IDEMPOTENCY_KEY
     )
+  })
+
+  it("sets a complete rental-term vector through the gateway", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(orderDetailResponse), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      setOrderRentalTerms({
+        accessToken: "orders-token",
+        orderId: ORDER_ID,
+        expectedVersion: 5,
+        terms: [{ unitId: UNIT_ID, rentalMonths: 12 }],
+        idempotencyKey: IDEMPOTENCY_KEY,
+      })
+    ).resolves.toMatchObject({ id: ORDER_ID })
+
+    const [input, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new URL(input).pathname).toBe(
+      `/api/logistics/v1/orders/${ORDER_ID}/rental-terms`
+    )
+    expect(init.method).toBe("PUT")
+    expect(new Headers(init.headers).get("Idempotency-Key")).toBe(
+      IDEMPOTENCY_KEY
+    )
+    expect(JSON.parse(String(init.body))).toEqual({
+      expectedVersion: 5,
+      terms: [{ unitId: UNIT_ID, rentalMonths: 12 }],
+    })
+  })
+
+  it("extends selected shipped cabins through the gateway", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(orderDetailResponse), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      extendOrderRentalTerms({
+        accessToken: "orders-token",
+        orderId: ORDER_ID,
+        expectedVersion: 5,
+        terms: [{ unitId: UNIT_ID, additionalMonths: 3 }],
+        idempotencyKey: IDEMPOTENCY_KEY,
+      })
+    ).resolves.toMatchObject({ id: ORDER_ID })
+
+    const [input, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new URL(input).pathname).toBe(
+      `/api/logistics/v1/orders/${ORDER_ID}/rental-terms/extend`
+    )
+    expect(init.method).toBe("POST")
+    expect(new Headers(init.headers).get("Idempotency-Key")).toBe(
+      IDEMPOTENCY_KEY
+    )
+    expect(JSON.parse(String(init.body))).toEqual({
+      expectedVersion: 5,
+      terms: [{ unitId: UNIT_ID, additionalMonths: 3 }],
+    })
   })
 
   it("sends status, counterparty, warehouse and creation-date filters", async () => {

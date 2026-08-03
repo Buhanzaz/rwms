@@ -23,6 +23,7 @@ import type {
   RepairEstimateCatalogSnapshotDto,
 } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
 import { RepairEstimateCatalogPicker } from "@/features/repair-estimates/repair-estimate-catalog-picker"
+import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/repair-estimate"
 
 const catalogVersionId = "11111111-1111-4111-8111-111111111111"
 const workId = "33333333-3333-4333-8333-333333333333"
@@ -89,6 +90,33 @@ function estimateNode(
     durationMinutes: nodeType === "WORK" ? 30 : null,
     ...overrides,
   })
+}
+
+function catalogWorkLine(
+  id: string,
+  node: RepairEstimateCatalogNodeDto,
+  lineComment: string
+): RepairEstimateLineDto {
+  return {
+    id,
+    sourceLineKey: id,
+    lineType: "WORK",
+    description: node.name,
+    lineComment,
+    unit: node.unit ?? "ед",
+    quantity: 1,
+    normativeMinutes: node.durationMinutes ?? 0,
+    unitPrice: node.unitPrice ?? "0.00",
+    lineTotal: node.unitPrice ?? "0.00",
+    catalogSnapshot: {
+      nodeId: node.id,
+      name: node.name,
+      nodeType: "WORK",
+      furnitureEquipment: null,
+      characteristic: null,
+    },
+    customQueueBinding: null,
+  }
 }
 
 function graphCatalog(
@@ -439,7 +467,87 @@ describe("RepairEstimateCatalogPicker", () => {
     ])
   })
 
-  it("continues from an added node through its outgoing single-arrow link", async () => {
+  it("keeps common items out of regular branches and opens them through the common picker", async () => {
+    const exterior = createNode({
+      id: "12111111-1111-4111-8111-111111111111",
+      name: "Внешняя отделка",
+      showInMainMenu: true,
+    })
+    const regularWork = estimateNode(
+      "12222222-2222-4222-8222-222222222222",
+      "Локальная работа",
+      "WORK",
+      false,
+      { parentId: exterior.id }
+    )
+    const commonWork = estimateNode(
+      "12333333-3333-4333-8333-333333333333",
+      "Общая работа",
+      "WORK",
+      false,
+      { parentId: exterior.id, commonItem: true }
+    )
+    const commonMaterial = estimateNode(
+      "12444444-4444-4444-8444-444444444444",
+      "Общий материал",
+      "MATERIAL",
+      false,
+      { parentId: exterior.id, commonItem: true }
+    )
+    catalogApi.getOperationalRepairEstimateCatalog.mockResolvedValue(
+      graphCatalog([exterior, regularWork, commonWork, commonMaterial], [])
+    )
+    const user = userEvent.setup()
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RepairEstimateCatalogPicker
+          lines={[]}
+          readOnly={false}
+          onChange={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Открыть: Внешняя отделка",
+      })
+    )
+
+    expect(
+      screen.getByRole("button", { name: "Выбрать: Локальная работа" })
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole("button", { name: "Выбрать: Общая работа" })
+    ).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Выбрать: Общий материал" })
+    ).toBeNull()
+
+    await user.click(screen.getByRole("button", { name: "Добавить общее" }))
+
+    expect(
+      screen.getByRole("button", { name: "Выбрать: Общая работа" })
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole("button", { name: "Выбрать: Общий материал" })
+    ).toBeNull()
+
+    await user.click(screen.getByRole("button", { name: "Материалы" }))
+
+    expect(
+      screen.queryByRole("button", { name: "Выбрать: Общая работа" })
+    ).toBeNull()
+    expect(
+      screen.getByRole("button", { name: "Выбрать: Общий материал" })
+    ).toBeTruthy()
+  })
+
+  it("returns to the catalog root after an added node", async () => {
     const work = estimateNode(workId, "Основная работа", "WORK", true)
     const next = estimateNode(followUpId, "Следующая работа", "WORK")
     catalogApi.getOperationalRepairEstimateCatalog.mockResolvedValue(
@@ -478,7 +586,164 @@ describe("RepairEstimateCatalogPicker", () => {
 
     expect(onChange).toHaveBeenCalledTimes(1)
     expect(
-      await screen.findByRole("button", { name: "Выбрать: Следующая работа" })
+      await screen.findByRole("button", { name: "Выбрать: Основная работа" })
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole("button", { name: "Выбрать: Следующая работа" })
+    ).toBeNull()
+  })
+
+  it("lets the user choose which duplicate catalog work receives the quantity", async () => {
+    const work = estimateNode(workId, "Основная работа", "WORK", true)
+    const firstExisting = catalogWorkLine(
+      "77777777-7777-4777-8777-777777777701",
+      work,
+      "Первый комментарий"
+    )
+    const secondExisting = catalogWorkLine(
+      "77777777-7777-4777-8777-777777777702",
+      work,
+      "Второй комментарий"
+    )
+    catalogApi.getOperationalRepairEstimateCatalog.mockResolvedValue(
+      graphCatalog([work], [])
+    )
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RepairEstimateCatalogPicker
+          lines={[firstExisting, secondExisting]}
+          readOnly={false}
+          onChange={onChange}
+        />
+      </QueryClientProvider>
+    )
+
+    await user.click(
+      await screen.findByRole("button", { name: "Выбрать: Основная работа" })
+    )
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Работа уже добавлена в смету",
+      })
+    ).toBeTruthy()
+    expect(
+      screen.getByRole("button", {
+        name: "Добавить к работе 1: Основная работа",
+      })
+    ).toBeTruthy()
+    expect(
+      screen.getByRole("button", {
+        name: "Добавить к работе 2: Основная работа",
+      })
+    ).toBeTruthy()
+    expect(
+      screen.getByRole("button", { name: "Создать отдельную работу" })
+    ).toBeTruthy()
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Добавить к работе 2: Основная работа",
+      })
+    )
+    await user.type(
+      await screen.findByRole("textbox", { name: "Комментарий к работе" }),
+      "Не менять существующий комментарий"
+    )
+    await user.click(screen.getByRole("button", { name: "Добавить" }))
+
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(onChange.mock.calls[0]?.[0]).toEqual([
+      expect.objectContaining({
+        id: firstExisting.id,
+        quantity: 1,
+        lineComment: "Первый комментарий",
+      }),
+      expect.objectContaining({
+        id: secondExisting.id,
+        quantity: 2,
+        lineComment:
+          "Второй комментарий; Не менять существующий комментарий",
+      }),
+    ])
+  })
+
+  it("checks for duplicate work only after its location is selected", async () => {
+    const work = estimateNode(workId, "Монтаж двери", "WORK", true)
+    const material = estimateNode(materialId, "Дверь", "MATERIAL")
+    const location = createNode({
+      id: "77777777-7777-4777-8777-777777777703",
+      name: "Секция А",
+      nodeType: "LOCATION",
+      showInMainMenu: false,
+    })
+    const existing = {
+      ...catalogWorkLine(
+        "77777777-7777-4777-8777-777777777704",
+        work,
+        "Не потерять"
+      ),
+      description: `${work.name} ${location.name}`,
+    }
+    catalogApi.getOperationalRepairEstimateCatalog.mockResolvedValue(
+      graphCatalog(
+        [work, material, location],
+        [
+          graphLink(
+            "77777777-7777-4777-8777-777777777705",
+            work.id,
+            material.id,
+            "DEPENDENCY"
+          ),
+          graphLink(
+            "77777777-7777-4777-8777-777777777706",
+            material.id,
+            location.id,
+            "FOLLOW_UP"
+          ),
+        ]
+      )
+    )
+    const user = userEvent.setup()
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RepairEstimateCatalogPicker
+          lines={[existing]}
+          readOnly={false}
+          onChange={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+
+    await user.click(
+      await screen.findByRole("button", { name: "Выбрать: Монтаж двери" })
+    )
+    await user.click(
+      await screen.findByRole("button", { name: "Выбрать: Дверь" })
+    )
+    expect(
+      screen.queryByRole("heading", {
+        name: "Работа уже добавлена в смету",
+      })
+    ).toBeNull()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Выбрать: Секция А" })
+    )
+    expect(
+      await screen.findByRole("heading", {
+        name: "Работа уже добавлена в смету",
+      })
     ).toBeTruthy()
   })
 
@@ -531,7 +796,7 @@ describe("RepairEstimateCatalogPicker", () => {
     ])
   })
 
-  it("continues from the second double-arrow node through later single and double arrows", async () => {
+  it("returns to the root instead of continuing through later graph links", async () => {
     const work = estimateNode(workId, "Замена двери", "WORK", true)
     const material = estimateNode(materialId, "Дверь", "MATERIAL")
     const followUp = estimateNode(followUpId, "Покраска двери", "WORK")
@@ -590,10 +855,13 @@ describe("RepairEstimateCatalogPicker", () => {
     await user.click(await screen.findByRole("button", { name: "Добавить" }))
 
     expect(
-      await screen.findByRole("button", { name: "Выбрать: Покраска двери" })
+      await screen.findByRole("button", { name: "Выбрать: Замена двери" })
     ).toBeTruthy()
     expect(
-      screen.getByRole("button", { name: "Выбрать: Дверная ручка" })
-    ).toBeTruthy()
+      screen.queryByRole("button", { name: "Выбрать: Покраска двери" })
+    ).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Выбрать: Дверная ручка" })
+    ).toBeNull()
   })
 })

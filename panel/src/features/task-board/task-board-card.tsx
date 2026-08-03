@@ -27,11 +27,17 @@ import {
   paletteColorForRemainingPercent,
   taskTimerAt,
 } from "@/features/task-board/domain/task-board-kpi-presentation"
+import type { MaintenanceRepair } from "@/features/repair-estimates/api/http-maintenance-lifecycle-client"
 import type {
   TaskBoardEntryDto,
   TaskBoardEntryStatus,
 } from "@/features/task-board/model/task-board"
 import { cn } from "@/lib/utils"
+
+export type TaskBoardRepairComplexity = Pick<
+  MaintenanceRepair["complexity"],
+  "type" | "name" | "color"
+>
 
 const statusLabels: Record<TaskBoardEntryStatus, string> = {
   WAITING: "Ожидает",
@@ -139,6 +145,46 @@ function taskDescription(entry: TaskBoardEntryDto) {
   return entry.title === "MAINTENANCE_REPAIR" ? null : entry.title
 }
 
+function ordinaryRepairComplexity(
+  complexity: TaskBoardRepairComplexity | null | undefined
+) {
+  return complexity?.type === "LIGHT" ||
+    complexity?.type === "MEDIUM" ||
+    complexity?.type === "COMPLEX"
+    ? complexity
+    : null
+}
+
+function repairComplexityBadgeStyle(complexity: TaskBoardRepairComplexity) {
+  const color = complexity.color
+  const red = Number.parseInt(color.slice(1, 3), 16)
+  const green = Number.parseInt(color.slice(3, 5), 16)
+  const blue = Number.parseInt(color.slice(5, 7), 16)
+  const foreground =
+    (red * 299 + green * 587 + blue * 114) / 1000 >= 150 ? "#111827" : "#FFFFFF"
+
+  return { backgroundColor: color, borderColor: color, color: foreground }
+}
+
+function RepairComplexityBadge({
+  complexity,
+}: {
+  complexity: TaskBoardRepairComplexity | null | undefined
+}) {
+  const ordinaryComplexity = ordinaryRepairComplexity(complexity)
+  if (!ordinaryComplexity) return null
+
+  return (
+    <Badge
+      variant="outline"
+      style={repairComplexityBadgeStyle(ordinaryComplexity)}
+      data-repair-complexity-type={ordinaryComplexity.type}
+    >
+      {ordinaryComplexity.name}
+    </Badge>
+  )
+}
+
 const shadowEntryCardClassName =
   "border-dashed bg-muted/70 opacity-65 shadow-lg transition-opacity"
 
@@ -165,10 +211,12 @@ function TaskBoardCardContent({
   entry,
   now,
   collapsed,
+  repairComplexity,
 }: {
   entry: TaskBoardEntryDto
   now: number
   collapsed: boolean
+  repairComplexity?: TaskBoardRepairComplexity | null
 }) {
   const workers = assignedWorkerNames(entry)
   const groups = assignedGroupNames(entry)
@@ -184,6 +232,13 @@ function TaskBoardCardContent({
         <Badge variant="outline">
           Этап {entry.routeIndex + 1} из {entry.routeLength}
         </Badge>
+        <RepairComplexityBadge
+          complexity={
+            entry.source?.type === "MAINTENANCE_REPAIR"
+              ? repairComplexity
+              : null
+          }
+        />
         <Badge variant={entry.priority <= 2 ? "default" : "secondary"}>
           Приоритет {entry.priority}
         </Badge>
@@ -229,6 +284,7 @@ export const TaskBoardCardPreview = memo(function TaskBoardCardPreview({
   canEdit,
   collapsed,
   palette = null,
+  repairComplexity = null,
 }: {
   entry: TaskBoardEntryDto
   now: number
@@ -236,6 +292,7 @@ export const TaskBoardCardPreview = memo(function TaskBoardCardPreview({
   canEdit: boolean
   collapsed: boolean
   palette?: KpiPalette | null
+  repairComplexity?: TaskBoardRepairComplexity | null
 }) {
   const description = taskDescription(entry)
   const unitLabel = entry.unitNumber ?? description ?? "Задание без номера"
@@ -283,7 +340,12 @@ export const TaskBoardCardPreview = memo(function TaskBoardCardPreview({
           <CardDescription>{description}</CardDescription>
         ) : null}
       </CardHeader>
-      <TaskBoardCardContent entry={entry} now={now} collapsed={collapsed} />
+      <TaskBoardCardContent
+        entry={entry}
+        now={now}
+        collapsed={collapsed}
+        repairComplexity={repairComplexity}
+      />
       {showActions ? (
         <CardFooter className="flex flex-col gap-2">
           {showEdit ? (
@@ -349,6 +411,7 @@ export const TaskBoardCard = memo(function TaskBoardCard({
   onPin,
   onToggleCollapsed,
   palette = null,
+  repairComplexity = null,
 }: {
   entry: TaskBoardEntryDto
   now: number
@@ -364,6 +427,7 @@ export const TaskBoardCard = memo(function TaskBoardCard({
   onPin: (entry: TaskBoardEntryDto, pinned: boolean) => void
   onToggleCollapsed: (entryId: string) => void
   palette?: KpiPalette | null
+  repairComplexity?: TaskBoardRepairComplexity | null
 }) {
   const description = taskDescription(entry)
   const { showEdit, showDetails, showPause, showResume, showActions } =
@@ -453,7 +517,12 @@ export const TaskBoardCard = memo(function TaskBoardCard({
           <CardDescription>{description}</CardDescription>
         ) : null}
       </CardHeader>
-      <TaskBoardCardContent entry={entry} now={now} collapsed={collapsed} />
+      <TaskBoardCardContent
+        entry={entry}
+        now={now}
+        collapsed={collapsed}
+        repairComplexity={repairComplexity}
+      />
       {showActions ? (
         <CardFooter className="flex flex-col gap-2">
           {showEdit ? (

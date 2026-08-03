@@ -10,8 +10,15 @@ const catalogPicker = vi.hoisted(() => ({
   goForward: vi.fn(),
 }))
 
+const serviceOwnerPhotos = vi.hoisted(() => ({
+  props: null as { authoritativeReadyReferences?: unknown } | null,
+}))
+
 vi.mock("@/features/media/service-owner-photos", () => ({
-  ServiceOwnerPhotos: () => null,
+  ServiceOwnerPhotos: (props: { authoritativeReadyReferences?: unknown }) => {
+    serviceOwnerPhotos.props = props
+    return null
+  },
 }))
 
 vi.mock("@/features/repair-estimates/repair-estimate-catalog-picker", () => ({
@@ -56,7 +63,10 @@ vi.mock("@/features/repair-estimates/repair-estimate-lines-snapshot", () => ({
 
 import { InventoryInspectionWorkspace } from "@/features/inventory/inventory-inspection-workspace"
 
-function renderWorkspace(readOnly = false) {
+function renderWorkspace(
+  readOnly = false,
+  media: Array<{ mediaId: string; generation: number }> = []
+) {
   return render(
     <InventoryInspectionWorkspace
       accessToken="inventory-token"
@@ -68,6 +78,7 @@ function renderWorkspace(readOnly = false) {
       businessDate="2026-07-29"
       comment=""
       lines={[]}
+      media={media}
       repairCompletionMode={null}
       movementRequired={false}
       repairPlans={[]}
@@ -86,10 +97,26 @@ afterEach(() => {
   cleanup()
   catalogPicker.canGoBack = true
   catalogPicker.canGoForward = true
+  serviceOwnerPhotos.props = null
   vi.clearAllMocks()
 })
 
 describe("InventoryInspectionWorkspace catalog pager", () => {
+  it("passes only accepted finding media to the photo workspace", () => {
+    const media = [
+      {
+        mediaId: "33333333-3333-4333-8333-333333333333",
+        generation: 2,
+      },
+    ]
+
+    renderWorkspace(false, media)
+
+    expect(serviceOwnerPhotos.props).toEqual(
+      expect.objectContaining({ authoritativeReadyReferences: media })
+    )
+  })
+
   it("places catalog paging controls in the inspection catalog and wires them to the picker", async () => {
     const user = userEvent.setup()
 

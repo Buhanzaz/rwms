@@ -16,7 +16,8 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import { GripVertical } from "lucide-react"
+import { GripVerticalIcon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
 
 import { Button } from "@/components/ui/button"
 import type { WorkQueueDto } from "@/features/settings/task-board/model/task-board-settings"
@@ -32,6 +33,7 @@ function SortableQueue({ queue }: { queue: WorkQueueDto }) {
     transition,
     isDragging,
   } = useSortable({ id: queue.id })
+
   return (
     <div
       ref={setNodeRef}
@@ -49,13 +51,17 @@ function SortableQueue({ queue }: { queue: WorkQueueDto }) {
         {...attributes}
         {...listeners}
       >
-        <GripVertical data-icon="inline-start" />
+        <HugeiconsIcon icon={GripVerticalIcon} data-icon="inline-start" />
       </Button>
       <span className="min-w-0 flex-1 truncate font-medium">{queue.name}</span>
     </div>
   )
 }
 
+/**
+ * Reorders only the selected warehouse's GENERAL connections. The driver
+ * queue is configured in logistics and intentionally never reaches this UI.
+ */
 export function QueueOrderSettings({
   queues,
   pending,
@@ -77,6 +83,7 @@ export function QueueOrderSettings({
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event
     if (!over || active.id === over.id) return
+
     setRegular((current) => {
       const oldIndex = current.findIndex((queue) => queue.id === active.id)
       const newIndex = current.findIndex((queue) => queue.id === over.id)
@@ -91,7 +98,8 @@ export function QueueOrderSettings({
       <div className="flex flex-col gap-1">
         <h2 className="font-semibold">Порядок очередей</h2>
         <p className="text-sm text-muted-foreground">
-          Перетащите обычные очереди. HOLDING всегда сохраняются последними.
+          Перетащите очереди выбранного склада. Удержание всегда остаётся
+          последним.
         </p>
       </div>
       <DndContext

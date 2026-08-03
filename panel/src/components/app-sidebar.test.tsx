@@ -172,6 +172,25 @@ beforeAll(() => {
 })
 
 describe("AppSidebar collapsed desktop navigation", () => {
+  it("places movement inside the repair cycle between repairs and the task board", () => {
+    renderSidebar({ open: true })
+
+    const repairs = screen.getByRole("link", { name: "Ремонты" })
+    const movement = screen.getByRole("link", { name: "Перемещение" })
+    const taskBoard = screen.getByRole("link", { name: "Доска задач" })
+
+    expect(movement.getAttribute("href")).toBe("/logistics/tasks")
+    expect(
+      repairs.compareDocumentPosition(movement) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(
+      movement.compareDocumentPosition(taskBoard) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(screen.queryByText("Задания водителей")).toBeNull()
+  })
+
   it("groups Chat above Booking in the Rental section for every signed-in user", () => {
     const first = renderSidebar()
     expect(screen.getByText("Аренда")).toBeTruthy()

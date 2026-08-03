@@ -34,7 +34,9 @@ const mocks = vi.hoisted(() => ({
   listClasses: vi.fn(),
   listQueues: vi.fn(),
   listWorkers: vi.fn(),
-  updateQueue: vi.fn(),
+  createWorker: vi.fn(),
+  updateWorker: vi.fn(),
+  updateDriverQueue: vi.fn(),
 }))
 
 vi.mock("sonner", () => ({
@@ -54,12 +56,18 @@ vi.mock("@/hooks/use-warehouse", () => ({
   }),
 }))
 
+vi.mock("@/features/settings/logistics/repair-capacity-settings-card", () => ({
+  RepairCapacitySettingsCard: () => null,
+}))
+
 vi.mock("@/features/settings/task-board/api/task-board-settings-api", () => ({
   taskBoardSettingsClient: {
     listClasses: mocks.listClasses,
     listQueues: mocks.listQueues,
     listWorkers: mocks.listWorkers,
-    updateQueue: mocks.updateQueue,
+    createWorker: mocks.createWorker,
+    updateWorker: mocks.updateWorker,
+    updateDriverQueue: mocks.updateDriverQueue,
   },
   taskBoardSettingsKeys: {
     classes: ["task-board-settings", "classes"],
@@ -103,6 +111,7 @@ function workerClass(id: string, name: string): WorkerClassDto {
     comment: null,
     sortOrder: 1,
     active: true,
+    logisticsPrimary: id === DRIVER_CLASS_ID,
   }
 }
 
@@ -230,7 +239,9 @@ beforeEach(() => {
   mocks.listQueues.mockResolvedValue([driverQueue()])
   mocks.listClasses.mockResolvedValue([driverClass, slingerClass])
   mocks.listWorkers.mockResolvedValue([driverWorker()])
-  mocks.updateQueue.mockResolvedValue(driverQueue())
+  mocks.createWorker.mockResolvedValue(driverWorker())
+  mocks.updateWorker.mockResolvedValue(driverWorker())
+  mocks.updateDriverQueue.mockResolvedValue(driverQueue())
 })
 
 afterEach(() => {
@@ -248,6 +259,132 @@ describe("LogisticsSettingsPage", () => {
     expect(
       screen.getByText(/Для водителей бригада не требуется\./)
     ).toBeTruthy()
+  })
+
+  it("creates a driver without exposing qualification fields", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Создать водителя" })
+    )
+
+    const dialog = await screen.findByRole("dialog")
+    expect(within(dialog).getByText("Новый водитель")).toBeTruthy()
+    expect(within(dialog).queryByText("Квалификации")).toBeNull()
+
+    await user.type(
+      within(dialog).getByLabelText("Отображаемое имя"),
+      "Иван Водитель"
+    )
+    await user.type(within(dialog).getByLabelText("Фамилия"), "Иванов")
+    await user.type(within(dialog).getByLabelText("Имя"), "Иван")
+    await user.type(
+      within(dialog).getByLabelText("Логин приложения"),
+      "driver.ivan"
+    )
+    await user.type(within(dialog).getByLabelText("Пароль"), "password123")
+    await user.click(within(dialog).getByRole("button", { name: "Сохранить" }))
+
+    await waitFor(() =>
+      expect(mocks.createWorker).toHaveBeenCalledWith(
+        "logistics-settings-token",
+        WAREHOUSE_ID,
+        {
+          version: 0,
+          displayName: "Иван Водитель",
+          firstName: "Иван",
+          lastName: "Иванов",
+          middleName: null,
+          active: true,
+          comment: null,
+          appLogin: "driver.ivan",
+          password: "password123",
+          qualifications: [
+            {
+              workerClassId: DRIVER_CLASS_ID,
+              active: true,
+              comment: null,
+            },
+          ],
+        }
+      )
+    )
+  })
+
+  it("edits a driver and lets a failed mobile access setup be retried", async () => {
+    const user = userEvent.setup()
+    const failedDriver: WorkerDto = {
+      ...driverWorker(),
+      credentialStatus: "ERROR",
+      credentialError: "AUTH_SERVICE_UNAVAILABLE",
+    }
+    mocks.listWorkers.mockResolvedValue([failedDriver])
+    mocks.updateWorker.mockResolvedValue({
+      ...failedDriver,
+      version: 5,
+      credentialStatus: "ACTIVE",
+      credentialError: null,
+    })
+    renderPage()
+
+    expect(
+      await screen.findByText(
+        "Доступ в приложение не настроен. Нажмите «Редактировать», проверьте логин и укажите пароль ещё раз."
+      )
+    ).toBeTruthy()
+
+    await user.click(screen.getByRole("button", { name: "Редактировать" }))
+
+    const dialog = await screen.findByRole("dialog")
+    expect(within(dialog).getByText("Редактировать водителя")).toBeTruthy()
+    expect(
+      (within(dialog).getByLabelText("Отображаемое имя") as HTMLInputElement)
+        .value
+    ).toBe(failedDriver.displayName)
+    expect(
+      (within(dialog).getByLabelText("Логин приложения") as HTMLInputElement)
+        .value
+    ).toBe(failedDriver.appLogin)
+    expect(
+      within(dialog).getByText(
+        "Доступ в приложение не настроен. Проверьте логин и укажите пароль ещё раз."
+      )
+    ).toBeTruthy()
+
+    await user.type(
+      within(dialog).getByLabelText("Новый пароль (необязательно)"),
+      "password123"
+    )
+    await user.click(
+      within(dialog).getByRole("button", { name: "Сохранить изменения" })
+    )
+
+    await waitFor(() =>
+      expect(mocks.updateWorker).toHaveBeenCalledWith(
+        "logistics-settings-token",
+        WAREHOUSE_ID,
+        failedDriver.id,
+        {
+          version: failedDriver.version,
+          displayName: failedDriver.displayName,
+          firstName: failedDriver.firstName,
+          lastName: failedDriver.lastName,
+          middleName: failedDriver.middleName,
+          active: failedDriver.active,
+          comment: failedDriver.comment,
+          appLogin: failedDriver.appLogin,
+          password: "password123",
+          qualifications: [
+            {
+              workerClassId: DRIVER_CLASS_ID,
+              active: true,
+              comment: null,
+            },
+          ],
+        }
+      )
+    )
   })
 
   it("attaches the same worker class and maps the notification flag", async () => {
@@ -277,13 +414,11 @@ describe("LogisticsSettingsPage", () => {
     )
 
     await waitFor(() =>
-      expect(mocks.updateQueue).toHaveBeenCalledWith(
+      expect(mocks.updateDriverQueue).toHaveBeenCalledWith(
         "logistics-settings-token",
         WAREHOUSE_ID,
-        DRIVER_QUEUE_ID,
         expect.objectContaining({
-          version: 7,
-          definitionId: driverQueue().definitionId,
+          expectedVersion: 7,
           bindings: [
             {
               workerClassId: DRIVER_CLASS_ID,
@@ -321,6 +456,46 @@ describe("LogisticsSettingsPage", () => {
         "К складу подключено несколько очередей водителей. Должна остаться ровно одна."
       )
     ).toBeTruthy()
-    expect(mocks.updateQueue).not.toHaveBeenCalled()
+    expect(mocks.updateDriverQueue).not.toHaveBeenCalled()
+  })
+
+  it("explicitly connects the shared driver queue when the warehouse has none", async () => {
+    const user = userEvent.setup()
+    mocks.listQueues.mockResolvedValue([])
+
+    renderPage()
+
+    expect(
+      await screen.findByText("Подключить очередь перемещений")
+    ).toBeTruthy()
+    await user.click(
+      screen.getByRole("button", { name: "Подключить очередь" })
+    )
+
+    await waitFor(() =>
+      expect(mocks.updateDriverQueue).toHaveBeenCalledWith(
+        "logistics-settings-token",
+        WAREHOUSE_ID,
+        {
+          expectedVersion: 0,
+          active: true,
+          hidden: false,
+          collapsed: false,
+          holdingPeriodMinutes: null,
+          notificationThreshold: null,
+          notifyWhenThresholdReached: false,
+          resultPhotoMinCount: 1,
+          bindings: [
+            {
+              workerClassId: DRIVER_CLASS_ID,
+              order: 0,
+              stopTaskOnTake: false,
+              participationPolicy: "PRIMARY",
+              notifyOnPrimaryTake: false,
+            },
+          ],
+        }
+      )
+    )
   })
 })

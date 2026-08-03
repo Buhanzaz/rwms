@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import { createRepairEstimateCatalogIndex } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
 import type { RepairEstimateCatalogNodeDto } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
 import {
+  applyCatalogNodesToEstimateLines,
   applyEstimateRentalItemSelection,
   assertEstimateLinesValid,
   assertTaskPlansValid,
@@ -75,6 +76,7 @@ function estimateLine(
       name: node.name,
       nodeType: node.nodeType === "WORK" ? "WORK" : "MATERIAL",
       furnitureEquipment: node.furnitureEquipment,
+      characteristic: node.characteristic,
     },
   }
 }
@@ -94,6 +96,109 @@ describe("furniture estimate quantities", () => {
         1.5
       )
     ).toBeNull()
+  })
+
+  it("keeps the cabin characteristic link in catalog material snapshots", () => {
+    const characteristic = {
+      characteristicId: "00000000-0000-4000-8000-000000000050",
+      characteristicName: "Металлическая дверь",
+    }
+    const material = catalogNode("00000000-0000-4000-8000-000000000051", {
+      name: "Дверное полотно",
+      nodeType: "MATERIAL",
+      characteristic,
+    })
+
+    const [line] = applyCatalogNodesToEstimateLines({
+      lines: [],
+      nodes: [material],
+      quantity: 1,
+      comment: "",
+    })
+
+    expect(line.catalogSnapshot?.characteristic).toEqual(characteristic)
+  })
+})
+
+describe("catalog estimate additions", () => {
+  it("creates a separate duplicate work unless an existing work was selected", () => {
+    const work = catalogNode("00000000-0000-4000-8000-000000000060", {
+      name: "Покраска двери",
+      nodeType: "WORK",
+      durationMinutes: 45,
+    })
+    const existing = {
+      ...estimateLine("00000000-0000-4000-8000-000000000061", work),
+      lineComment: "Сохранить этот комментарий",
+    }
+
+    const separate = applyCatalogNodesToEstimateLines({
+      lines: [existing],
+      nodes: [work],
+      quantity: 2,
+      comment: "Новый комментарий",
+    })
+    expect(separate).toHaveLength(2)
+    expect(separate[0]).toMatchObject({
+      id: existing.id,
+      quantity: 1,
+      lineComment: "Сохранить этот комментарий",
+    })
+    expect(separate[1]).toMatchObject({
+      lineType: "WORK",
+      quantity: 2,
+      lineComment: "Новый комментарий",
+    })
+
+    const merged = applyCatalogNodesToEstimateLines({
+      lines: [existing],
+      nodes: [work],
+      quantity: 2,
+      comment: "Не заменять существующий комментарий",
+      targetWorkLineIdsByCatalogNodeId: { [work.id]: existing.id },
+    })
+    expect(merged).toEqual([
+      expect.objectContaining({
+        id: existing.id,
+        quantity: 3,
+        lineComment:
+          "Сохранить этот комментарий; Не заменять существующий комментарий",
+      }),
+    ])
+  })
+
+  it("aggregates catalog materials by node without copying a work comment", () => {
+    const material = catalogNode("00000000-0000-4000-8000-000000000062", {
+      name: "Краска",
+      nodeType: "MATERIAL",
+    })
+    const existing = {
+      ...estimateLine("00000000-0000-4000-8000-000000000063", material),
+      description: "Старое описание материала",
+      lineComment: "Комментарий к материалу",
+    }
+
+    const aggregated = applyCatalogNodesToEstimateLines({
+      lines: [existing],
+      nodes: [material],
+      quantity: 2,
+      comment: "Комментарий к работе",
+    })
+    expect(aggregated).toEqual([
+      expect.objectContaining({
+        id: existing.id,
+        quantity: 3,
+        lineComment: "Комментарий к материалу",
+      }),
+    ])
+
+    const [newMaterial] = applyCatalogNodesToEstimateLines({
+      lines: [],
+      nodes: [material],
+      quantity: 1,
+      comment: "Комментарий к работе",
+    })
+    expect(newMaterial.lineComment).toBe("")
   })
 })
 
@@ -317,6 +422,46 @@ describe("repair estimate task plan routing", () => {
         queueId: work.queueDefinitionId,
         queueName: work.queueDefinitionName,
         routeQueueKind: "REPAIR",
+      }),
+    ])
+  })
+
+  it("keeps every work in its own task-plan group even in the same queue", () => {
+    const work = catalogNode("00000000-0000-4000-8000-000000000030", {
+      name: "Окраска",
+      nodeType: "WORK",
+      routeQueueKind: "REPAIR",
+      queueDefinitionId: "00000000-0000-4000-8000-000000000031",
+      queueDefinitionName: "Малярные работы",
+    })
+    const first = {
+      ...estimateLine("00000000-0000-4000-8000-000000000032", work),
+      lineComment: "Сначала подготовить",
+    }
+    const second = {
+      ...estimateLine("00000000-0000-4000-8000-000000000033", work),
+      lineComment: "Повторно проверить",
+    }
+    const catalog = createRepairEstimateCatalogIndex({
+      nodes: [work],
+      links: [],
+    })
+
+    const plans = buildRepairEstimateTaskPlans([first, second], catalog)
+
+    expect(plans).toHaveLength(2)
+    expect(plans).toEqual([
+      expect.objectContaining({
+        includedLineIds: [first.id],
+        primaryLineId: first.id,
+        groupComment: first.lineComment,
+        queueId: work.queueDefinitionId,
+      }),
+      expect.objectContaining({
+        includedLineIds: [second.id],
+        primaryLineId: second.id,
+        groupComment: second.lineComment,
+        queueId: work.queueDefinitionId,
       }),
     ])
   })

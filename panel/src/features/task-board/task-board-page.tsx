@@ -23,7 +23,12 @@ import {
   Calendar03Icon,
   Search01Icon,
 } from "@hugeicons/core-free-icons"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
 import { Link, useNavigate, useSearchParams } from "react-router-dom"
 
 import {
@@ -45,6 +50,7 @@ import {
   getKpiSettings,
   kpiSettingsKeys,
 } from "@/features/settings/kpi/api/kpi-settings-api"
+import { getMaintenanceRepair } from "@/features/repair-estimates/api/http-maintenance-lifecycle-client"
 import {
   completeTaskBoardEntry,
   getTaskBoard,
@@ -70,7 +76,10 @@ import type {
   TaskBoardQueueDto,
   TaskBoardSnapshotDto,
 } from "@/features/task-board/model/task-board"
-import { TaskBoardCardPreview } from "@/features/task-board/task-board-card"
+import {
+  TaskBoardCardPreview,
+  type TaskBoardRepairComplexity,
+} from "@/features/task-board/task-board-card"
 import { TaskBoardColumn } from "@/features/task-board/task-board-column"
 import { TaskBoardCompletionDialog } from "@/features/task-board/task-board-completion-dialog"
 import { TaskBoardTakeDialog } from "@/features/task-board/task-board-take-dialog"
@@ -346,6 +355,44 @@ export function TaskBoardPage() {
     staleTime: 60_000,
   })
   const taskBoardPalette = paletteForTaskBoard(kpiSettingsQuery.data ?? null)
+  const maintenanceRepairSourceIds = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (
+            boardQuery.data?.queues.flatMap((queue) => queue.entries) ?? []
+          ).flatMap((entry) =>
+            entry.source?.type === "MAINTENANCE_REPAIR"
+              ? [entry.source.sourceId]
+              : []
+          )
+        )
+      ).sort(),
+    [boardQuery.data]
+  )
+  const repairComplexityQueries = useQueries({
+    queries: maintenanceRepairSourceIds.map((repairId) => ({
+      queryKey: [
+        "maintenance",
+        "repairs",
+        warehouseId ?? "none",
+        repairId,
+        "task-board-complexity",
+      ],
+      queryFn: () => getMaintenanceRepair(accessToken!, warehouseId!, repairId),
+      enabled: Boolean(accessToken && warehouseId),
+    })),
+  })
+  const repairComplexitiesByRepairId = useMemo(
+    () =>
+      new Map<string, TaskBoardRepairComplexity>(
+        maintenanceRepairSourceIds.flatMap((repairId, index) => {
+          const complexity = repairComplexityQueries[index]?.data?.complexity
+          return complexity ? [[repairId, complexity]] : []
+        })
+      ),
+    [maintenanceRepairSourceIds, repairComplexityQueries]
+  )
 
   const setPreview = useCallback(
     (
@@ -901,6 +948,7 @@ export function TaskBoardPage() {
                   actionPending={actionsBusy}
                   queueActionsDisabled={!canEdit || Boolean(normalizedSearch)}
                   palette={taskBoardPalette}
+                  repairComplexitiesByRepairId={repairComplexitiesByRepairId}
                   onToggleCollapsed={(queueKey) =>
                     setCollapsedQueues((current) => {
                       const next = new Set(current)
@@ -966,6 +1014,13 @@ export function TaskBoardPage() {
                 canEdit={canEdit}
                 collapsed={activeEntryCollapsed}
                 palette={taskBoardPalette}
+                repairComplexity={
+                  activeEntry.source?.type === "MAINTENANCE_REPAIR"
+                    ? repairComplexitiesByRepairId.get(
+                        activeEntry.source.sourceId
+                      )
+                    : null
+                }
               />
             ) : null}
           </DragOverlay>

@@ -45,7 +45,8 @@ vi.mock("@/features/settings/task-board/api/task-board-settings-api", () => ({
 
 vi.mock(
   "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api",
-  () => ({
+  async (importOriginal) => ({
+    ...(await importOriginal()),
     getOperationalRepairEstimateCatalog: catalog,
   })
 )
@@ -67,6 +68,8 @@ const stageId = "00000000-0000-4000-8000-000000000004"
 const queueId = "00000000-0000-4000-8000-000000000005"
 const legacyQueueId = "00000000-0000-4000-8000-000000000015"
 const databaseQueueId = "00000000-0000-4000-8000-000000000025"
+const workQueueId = "00000000-0000-4000-8000-000000000035"
+const databaseWorkQueueId = "00000000-0000-4000-8000-000000000045"
 const externalTaskId = "00000000-0000-4000-8000-000000000006"
 const entryId = "00000000-0000-4000-8000-000000000007"
 const workLineId = "00000000-0000-4000-8000-000000000008"
@@ -253,6 +256,7 @@ const workLine = {
     name: "Заменить окно",
     nodeType: "WORK" as const,
     furnitureEquipment: null,
+    characteristic: null,
   },
   maintenanceMediaReferences: [],
 }
@@ -272,6 +276,10 @@ const materialLine = {
     name: "Оконный блок",
     nodeType: "MATERIAL" as const,
     furnitureEquipment: null,
+    characteristic: {
+      characteristicId,
+      characteristicName: "Железная дверь",
+    },
   },
   maintenanceMediaReferences: [],
 }
@@ -409,7 +417,8 @@ describe("maintenance repair tasks adapter", () => {
     getBoard.mockResolvedValue(board)
     listQueues.mockResolvedValue([
       {
-        id: queueId,
+        id: workQueueId,
+        definitionId: queueId,
         name: "Ремонт",
         type: "REPAIR",
         active: true,
@@ -531,6 +540,67 @@ describe("maintenance repair tasks adapter", () => {
 
     expect(task?.subtasks).toHaveLength(1)
     expect(task?.subtasks[0]?.kind).toBe("REPAIR_WORK")
+  })
+
+  it("marks a queued ordinary repair as awaiting movement until work reaches the board", async () => {
+    const source = repair()
+    source.executionState = "QUEUED"
+    source.plan.stages[0]!.state = "QUEUED"
+    source.plan.stages[0]!.taskSync = {
+      ...source.plan.stages[0]!.taskSync,
+      taskBoardRegistrationVersion: null,
+      generationState: "PENDING_GENERATION",
+      delivery: {
+        state: "PENDING",
+        attempts: 0,
+        updatedAt: "2026-07-18T10:00:00Z",
+      },
+    }
+    const movementStage = structuredClone(source.plan.stages[0])
+    movementStage.id = "00000000-0000-4000-8000-000000000043"
+    movementStage.kind = "MOVE_TO_REPAIR"
+    movementStage.order = 1
+    movementStage.routing = {
+      queueId: "00000000-0000-4000-8000-000000000044",
+      queueName: "Водители",
+      queueType: "MOVEMENT",
+    }
+    source.plan.stages.push(movementStage)
+    lifecycle.get.mockResolvedValue(source)
+    lifecycle.listAcceptance.mockResolvedValue({ items: [] })
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    const task = await adapter.getById(repairId, warehouseId)
+
+    expect(task?.awaitingMovement).toBe(true)
+  })
+
+  it("does not keep a repair awaiting movement after its work is registered on the board", async () => {
+    const source = repair()
+    source.executionState = "QUEUED"
+    const movementStage = structuredClone(source.plan.stages[0])
+    movementStage.id = "00000000-0000-4000-8000-000000000043"
+    movementStage.kind = "MOVE_TO_REPAIR"
+    movementStage.order = 1
+    movementStage.routing = {
+      queueId: "00000000-0000-4000-8000-000000000044",
+      queueName: "Водители",
+      queueType: "MOVEMENT",
+    }
+    source.plan.stages.push(movementStage)
+    lifecycle.get.mockResolvedValue(source)
+    lifecycle.listAcceptance.mockResolvedValue({ items: [] })
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    const task = await adapter.getById(repairId, warehouseId)
+
+    expect(task?.awaitingMovement).toBe(false)
   })
 
   it("uses the maintenance category normative when the board entry is no longer visible", async () => {
@@ -1350,6 +1420,7 @@ describe("maintenance repair tasks adapter", () => {
     listQueues.mockResolvedValue([
       {
         id: "00000000-0000-4000-8000-000000000021",
+        definitionId: "00000000-0000-4000-8000-000000000121",
         name: "Кузовной ремонт",
         type: "REPAIR",
         active: true,
@@ -1357,6 +1428,7 @@ describe("maintenance repair tasks adapter", () => {
       },
       {
         id: "00000000-0000-4000-8000-000000000022",
+        definitionId: "00000000-0000-4000-8000-000000000122",
         name: "Электрика",
         type: "REPAIR",
         active: true,
@@ -1364,6 +1436,7 @@ describe("maintenance repair tasks adapter", () => {
       },
       {
         id: "00000000-0000-4000-8000-000000000023",
+        definitionId: "00000000-0000-4000-8000-000000000123",
         name: "Пол",
         type: "REPAIR",
         active: true,
@@ -1371,13 +1444,15 @@ describe("maintenance repair tasks adapter", () => {
       },
       {
         id: "00000000-0000-4000-8000-000000000024",
+        definitionId: "00000000-0000-4000-8000-000000000124",
         name: "Кровля",
         type: "REPAIR",
         active: true,
         hidden: false,
       },
       {
-        id: databaseQueueId,
+        id: databaseWorkQueueId,
+        definitionId: databaseQueueId,
         name: "Ремонт окон",
         type: "REPAIR",
         active: true,
@@ -1385,6 +1460,7 @@ describe("maintenance repair tasks adapter", () => {
       },
       {
         id: "00000000-0000-4000-8000-000000000026",
+        definitionId: "00000000-0000-4000-8000-000000000126",
         name: "Отделка",
         type: "REPAIR",
         active: true,
@@ -1423,6 +1499,7 @@ describe("maintenance repair tasks adapter", () => {
     listQueues.mockResolvedValue([
       {
         id: "00000000-0000-4000-8000-000000000031",
+        definitionId: "00000000-0000-4000-8000-000000000131",
         name: "Кузовной ремонт",
         type: "REPAIR",
         active: true,
@@ -1430,6 +1507,7 @@ describe("maintenance repair tasks adapter", () => {
       },
       {
         id: "00000000-0000-4000-8000-000000000032",
+        definitionId: "00000000-0000-4000-8000-000000000132",
         name: "Ремонт окон",
         type: "REPAIR",
         active: true,
@@ -1445,7 +1523,7 @@ describe("maintenance repair tasks adapter", () => {
     )
 
     await expect(adapter.saveDraft(command)).rejects.toThrow(
-      "Для этапа 0 выберите активную очередь."
+      "Очередь «Старая очередь» не подключена к выбранному складу"
     )
     expect(lifecycle.createDirect).not.toHaveBeenCalled()
   })
@@ -1454,6 +1532,7 @@ describe("maintenance repair tasks adapter", () => {
     listQueues.mockResolvedValue([
       {
         id: queueId,
+        definitionId: queueId,
         name: "Перемещение мебели",
         type: "FURNITURE_MOVEMENT",
         active: true,
@@ -1490,7 +1569,8 @@ describe("maintenance repair tasks adapter", () => {
   it("keeps routing fail-closed when no matching active visible queue exists", async () => {
     listQueues.mockResolvedValue([
       {
-        id: databaseQueueId,
+        id: databaseWorkQueueId,
+        definitionId: databaseQueueId,
         name: "Ремонт окон",
         type: "REPAIR",
         active: false,
@@ -1506,7 +1586,7 @@ describe("maintenance repair tasks adapter", () => {
     )
 
     await expect(adapter.saveDraft(command)).rejects.toThrow(
-      "Для этапа 0 выберите активную очередь."
+      "Очередь «Ремонт окон» не подключена к выбранному складу"
     )
     expect(lifecycle.createDirect).not.toHaveBeenCalled()
   })

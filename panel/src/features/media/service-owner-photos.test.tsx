@@ -1,4 +1,10 @@
-import { cleanup, render, screen } from "@testing-library/react"
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ApiError } from "@/lib/api-client"
@@ -141,6 +147,114 @@ describe("ServiceOwnerPhotos", () => {
         generation: 4,
       },
     ])
+  })
+
+  it("uses an inventory finding's accepted references instead of every owner asset", () => {
+    const onReadyReferencesChange = vi.fn()
+    const acceptedMediaId = "33333333-3333-4333-8333-333333333333"
+    const retryOrphanMediaId = "44444444-4444-4444-8444-444444444444"
+    mediaState.value = mediaValue({
+      assets: [
+        { id: acceptedMediaId, kind: "IMAGE", status: "READY" },
+        { id: retryOrphanMediaId, kind: "IMAGE", status: "READY" },
+      ],
+      photos: [
+        { id: acceptedMediaId, url: "blob:accepted" },
+        { id: retryOrphanMediaId, url: "blob:orphan" },
+      ],
+      logicalPhotoCount: 2,
+      readyReferences: [
+        { mediaId: acceptedMediaId, generation: 1 },
+        { mediaId: retryOrphanMediaId, generation: 1 },
+      ],
+    })
+
+    render(
+      <ServiceOwnerPhotos
+        accessToken="token"
+        owner={owner}
+        readOnly
+        authoritativeReadyReferences={[
+          { mediaId: acceptedMediaId, generation: 1 },
+        ]}
+        onReadyReferencesChange={onReadyReferencesChange}
+      />
+    )
+
+    expect(screen.getByText("1 из 20")).toBeTruthy()
+    expect(screen.getByText(acceptedMediaId)).toBeTruthy()
+    expect(screen.queryByText(retryOrphanMediaId)).toBeNull()
+    expect(onReadyReferencesChange).toHaveBeenCalledWith([
+      { mediaId: acceptedMediaId, generation: 1 },
+    ])
+  })
+
+  it("adds only the current editor upload to an authoritative selection", async () => {
+    const onReadyReferencesChange = vi.fn()
+    const uploadedMediaId = "55555555-5555-4555-8555-555555555555"
+    const retryOrphanMediaId = "66666666-6666-4666-8666-666666666666"
+    const uploadedAsset = {
+      id: uploadedMediaId,
+      kind: "IMAGE",
+      status: "PROCESSING",
+    }
+    const upload = vi.fn().mockResolvedValue([uploadedAsset])
+    mediaState.value = mediaValue({ upload })
+
+    const view = render(
+      <ServiceOwnerPhotos
+        accessToken="token"
+        owner={owner}
+        readOnly={false}
+        authoritativeReadyReferences={[]}
+        onReadyReferencesChange={onReadyReferencesChange}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Добавить" }))
+    fireEvent.change(screen.getByLabelText("Выбрать фотографии"), {
+      target: {
+        files: [
+          new File([new Uint8Array([1])], "new-photo.jpg", {
+            type: "image/jpeg",
+          }),
+        ],
+      },
+    })
+    await waitFor(() => expect(upload).toHaveBeenCalledOnce())
+
+    mediaState.value = mediaValue({
+      assets: [
+        { ...uploadedAsset, status: "READY" },
+        { id: retryOrphanMediaId, kind: "IMAGE", status: "READY" },
+      ],
+      photos: [
+        { id: uploadedMediaId, url: "blob:uploaded" },
+        { id: retryOrphanMediaId, url: "blob:orphan" },
+      ],
+      logicalPhotoCount: 2,
+      readyReferences: [
+        { mediaId: uploadedMediaId, generation: 1 },
+        { mediaId: retryOrphanMediaId, generation: 1 },
+      ],
+    })
+    view.rerender(
+      <ServiceOwnerPhotos
+        accessToken="token"
+        owner={owner}
+        readOnly={false}
+        authoritativeReadyReferences={[]}
+        onReadyReferencesChange={onReadyReferencesChange}
+      />
+    )
+
+    await waitFor(() =>
+      expect(onReadyReferencesChange).toHaveBeenLastCalledWith([
+        { mediaId: uploadedMediaId, generation: 1 },
+      ])
+    )
+    expect(screen.getByText(uploadedMediaId)).toBeTruthy()
+    expect(screen.queryByText(retryOrphanMediaId)).toBeNull()
   })
 
   it("renders an adjacent action and limits a read-only comparison gallery", () => {

@@ -37,6 +37,14 @@ const dndMocks = vi.hoisted(() => ({
   closestCenter: vi.fn(() => [{ id: "closest" }]),
   pointerWithin: vi.fn((): unknown[] => []),
   sortableData: new Map<string, unknown>(),
+  sortableListeners: new Map<
+    string,
+    {
+      onPointerDown: ReturnType<typeof vi.fn>
+      onKeyDown: ReturnType<typeof vi.fn>
+    }
+  >(),
+  sortableDisabled: new Map<string, boolean>(),
   droppableData: new Map<string, unknown>(),
   droppableDisabled: new Map<string, boolean>(),
   overId: null as string | null,
@@ -97,11 +105,25 @@ vi.mock("@dnd-kit/core", () => ({
 vi.mock("@dnd-kit/sortable", () => ({
   SortableContext: ({ children }: { children: ReactNode }) => children,
   sortableKeyboardCoordinates: vi.fn(),
-  useSortable: ({ id, data }: { id: string; data: unknown }) => {
+  useSortable: ({
+    id,
+    data,
+    disabled = false,
+  }: {
+    id: string
+    data: unknown
+    disabled?: boolean
+  }) => {
     dndMocks.sortableData.set(id, data)
+    dndMocks.sortableDisabled.set(id, disabled)
+    const listeners = {
+      onPointerDown: vi.fn(),
+      onKeyDown: vi.fn(),
+    }
+    dndMocks.sortableListeners.set(id, listeners)
     return {
-      attributes: {},
-      listeners: {},
+      attributes: { "data-sortable-attribute": id },
+      listeners,
       setNodeRef: vi.fn(),
       transform: null,
       transition: undefined,
@@ -299,6 +321,8 @@ afterEach(() => {
   dndMocks.collisionDetection = null
   dndMocks.overlayDropAnimation = undefined
   dndMocks.sortableData.clear()
+  dndMocks.sortableListeners.clear()
+  dndMocks.sortableDisabled.clear()
   dndMocks.droppableData.clear()
   dndMocks.droppableDisabled.clear()
   dndMocks.overId = null
@@ -640,6 +664,7 @@ describe("RepairsQueueView", () => {
 
     expect(screen.getAllByRole("button", { name: "Инфо" })).toHaveLength(1)
     expect(screen.getByText("Срочно починить крышу")).toBeTruthy()
+    expect(screen.getByText("На ремонте")).toBeTruthy()
     expect(screen.queryByText("Вернуть бытовку после ремонта")).toBeNull()
     expect(screen.queryByText("Скрытый следующий этап БЫТ-101")).toBeNull()
 
@@ -1038,12 +1063,10 @@ describe("RepairsQueueView", () => {
 
     expect(
       screen
-        .getAllByRole("button", { name: /Переместить задание бытовки/ })
-        .map((button) => button.getAttribute("aria-label"))
-    ).toEqual([
-      "Переместить задание бытовки БЫТ-201",
-      "Переместить задание бытовки БЫТ-202",
-    ])
+        .getAllByRole("generic", { name: /Задание бытовки/ })
+        .filter((card) => card.hasAttribute("data-dnd-draggable"))
+        .map((card) => card.getAttribute("aria-label"))
+    ).toEqual(["Задание бытовки БЫТ-201", "Задание бытовки БЫТ-202"])
   })
 
   it("keeps active tasks immovable while leaving pin available", () => {
@@ -1077,17 +1100,74 @@ describe("RepairsQueueView", () => {
       />
     )
 
-    const moveButton = screen.getByRole("button", {
-      name: "Переместить задание бытовки БЫТ-104",
-    }) as HTMLButtonElement
+    const card = screen.getByRole("generic", {
+      name: "Задание бытовки БЫТ-104",
+    })
     const pinButton = screen.getByRole("button", {
       name: "Закрепить задание бытовки БЫТ-104",
     }) as HTMLButtonElement
-    expect(moveButton.disabled).toBe(true)
+    expect(card.hasAttribute("data-dnd-draggable")).toBe(false)
     expect(pinButton.disabled).toBe(false)
 
     fireEvent.click(pinButton)
     expect(onPin).toHaveBeenCalledWith(activeEntry, true)
+  })
+
+  it("attaches sortable listeners to the whole movable card and keeps controls independent", () => {
+    const repairQueue = queue("repair", "Ремонт", "REPAIR")
+    const movableEntry = entry({
+      id: "entry-movable",
+      externalTaskId: "external-movable",
+      date: "2026-07-24",
+      queue: repairQueue,
+      title: "Починить крышу",
+    })
+    const onPin = vi.fn()
+    const onOpen = vi.fn()
+
+    render(
+      <RepairsQueueView
+        boards={[
+          board("2026-07-24", [{ ...repairQueue, entries: [movableEntry] }]),
+        ]}
+        repairs={[
+          repair({
+            id: "repair-movable",
+            externalTaskId: "external-movable",
+            cabinNumber: "БЫТ-105",
+          }),
+        ]}
+        disabled={false}
+        onMove={vi.fn()}
+        onPin={onPin}
+        onOpen={onOpen}
+      />
+    )
+
+    const card = screen.getByRole("generic", {
+      name: "Задание бытовки БЫТ-105",
+    })
+    const listeners = dndMocks.sortableListeners.get("repair:repair-movable")
+    expect(card.getAttribute("data-dnd-draggable")).toBe("true")
+    expect(card.getAttribute("data-sortable-attribute")).toBe(
+      "repair:repair-movable"
+    )
+    expect(listeners).toBeTruthy()
+
+    fireEvent.pointerDown(card)
+    expect(listeners?.onPointerDown).toHaveBeenCalledTimes(1)
+
+    const pinButton = screen.getByRole("button", {
+      name: "Закрепить задание бытовки БЫТ-105",
+    })
+    fireEvent.pointerDown(pinButton)
+    expect(listeners?.onPointerDown).toHaveBeenCalledTimes(1)
+    fireEvent.click(pinButton)
+    expect(onPin).toHaveBeenCalledWith(movableEntry, true)
+
+    fireEvent.click(screen.getByRole("button", { name: "Инфо" }))
+    expect(onOpen).not.toHaveBeenCalled()
+    expect(screen.getByRole("dialog")).toBeTruthy()
   })
 
   it("opens a date dialog when a movable card is dropped outside a date target", () => {

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
   createRepairEstimateCatalog,
+  getItemsForCategory,
   getRepairEstimateCatalogSection,
   getRepairEstimateCatalogSectionItems,
   getRepairEstimateCatalogSnapshot,
@@ -444,6 +445,65 @@ describe("maintenance-backed repair catalog store", () => {
     expect(
       getRepairEstimateCatalogSectionItems(furniture).map((item) => item.id)
     ).toEqual([furnitureMaterial.id])
+  })
+
+  it("keeps common items out of regular category tables", async () => {
+    const commonRoot = {
+      ...node,
+      id: "00000000-0000-4000-8000-000000000020",
+      name: "Общее",
+    }
+    const regularWork = {
+      ...node,
+      id: "00000000-0000-4000-8000-000000000021",
+      name: "Обычная работа",
+      nodeType: "WORK" as const,
+      parentNodeId: commonRoot.id,
+      unit: "шт.",
+      unitPrice: "100.00",
+      includeInEstimate: true,
+      showInMainMenu: false,
+      routing: null,
+      commonItem: false,
+    }
+    const commonWork = {
+      ...regularWork,
+      id: "00000000-0000-4000-8000-000000000022",
+      name: "Общая работа",
+      commonItem: true,
+    }
+    const regularMaterial = {
+      ...regularWork,
+      id: "00000000-0000-4000-8000-000000000023",
+      name: "Краска",
+      nodeType: "MATERIAL" as const,
+      commonItem: false,
+    }
+    const commonMaterial = {
+      ...regularMaterial,
+      id: "00000000-0000-4000-8000-000000000024",
+      name: "Общая краска",
+      commonItem: true,
+    }
+    http.listMaintenanceCatalogNodes.mockResolvedValue([
+      commonRoot,
+      regularWork,
+      commonWork,
+      regularMaterial,
+      commonMaterial,
+    ])
+
+    const [works, materials] = await Promise.all([
+      getRepairEstimateCatalogSection(request, "works"),
+      getRepairEstimateCatalogSection(request, "materials"),
+    ])
+
+    expect(getItemsForCategory(works, commonRoot.id).map((item) => item.id)).toEqual(
+      [regularWork.id]
+    )
+    expect(
+      getItemsForCategory(materials, commonRoot.id).map((item) => item.id)
+    ).toEqual([regularMaterial.id])
   })
 
   it("keeps automatic furniture equipment linking on the shared node", async () => {

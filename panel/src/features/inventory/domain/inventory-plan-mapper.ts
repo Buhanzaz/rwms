@@ -165,11 +165,10 @@ export function buildInventoryPlanSelection(input: {
       }
       return catalogNodeId
     })
-  const unique = Array.from(new Set(selected))
-  if (unique.length !== selected.length || unique.length === 0) {
-    throw new Error("Ручной план должен содержать уникальные этапы работ")
+  if (selected.length === 0) {
+    throw new Error("Ручной план должен содержать хотя бы один этап работ")
   }
-  const workStages = unique.map((catalogNodeId, index) => ({
+  const workStages = selected.map((catalogNodeId, index) => ({
     catalogNodeId,
     kind: "REPAIR_WORK" as const,
     order: index + (input.movementRequired ? 1 : 0),

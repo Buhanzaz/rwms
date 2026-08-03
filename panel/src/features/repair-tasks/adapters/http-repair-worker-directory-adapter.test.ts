@@ -34,6 +34,7 @@ beforeEach(() => {
       id: QUEUE_ID,
       version: 1,
       warehouseId: WAREHOUSE_ID,
+      purpose: "LOGISTICS_DRIVER",
       name: "Перемещение",
       description: null,
       type: "MOVEMENT",
@@ -72,7 +73,38 @@ beforeEach(() => {
       appLogin: null,
       credentialStatus: "NOT_CONFIGURED",
       credentialError: null,
-      qualifications: [],
+      qualifications: [
+        {
+          id: "99999999-9999-4999-8999-999999999999",
+          version: 1,
+          workerClass: driverClass,
+          active: true,
+          comment: null,
+        },
+      ],
+    },
+    {
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      version: 1,
+      warehouseId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      displayName: "Водитель другого города",
+      firstName: null,
+      lastName: null,
+      middleName: null,
+      active: true,
+      comment: null,
+      appLogin: null,
+      credentialStatus: "NOT_CONFIGURED",
+      credentialError: null,
+      qualifications: [
+        {
+          id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          version: 1,
+          workerClass: driverClass,
+          active: true,
+          comment: null,
+        },
+      ],
     },
   ])
   settings.listGroups.mockResolvedValue([
@@ -98,7 +130,7 @@ beforeEach(() => {
 })
 
 describe("HttpRepairWorkerDirectoryAdapter", () => {
-  it("uses active members qualified for the movement queue as drivers", async () => {
+  it("uses active standalone workers qualified for this warehouse's driver queue", async () => {
     const adapter = new HttpRepairWorkerDirectoryAdapter()
 
     await expect(
@@ -113,6 +145,34 @@ describe("HttpRepairWorkerDirectoryAdapter", () => {
       )
     ).resolves.toEqual([
       {
+        id: QUEUE_ID,
+        warehouseId: WAREHOUSE_ID,
+        name: "Перемещение",
+        active: true,
+        queueIds: [QUEUE_ID],
+        routeQueueKinds: ["MOVEMENT"],
+        members: [{ id: WORKER_ID, name: "Алексей Водитель" }],
+      },
+    ])
+
+    expect(settings.listGroups).not.toHaveBeenCalled()
+  })
+
+  it("keeps the group directory for ordinary task assignment", async () => {
+    const adapter = new HttpRepairWorkerDirectoryAdapter()
+
+    await expect(
+      adapter.listGroups(
+        {
+          warehouseId: WAREHOUSE_ID,
+          queueId: null,
+          routeQueueKind: "MOVEMENT",
+          purpose: "TASK_ASSIGNMENT",
+        },
+        "settings-token"
+      )
+    ).resolves.toEqual([
+      {
         id: GROUP_ID,
         warehouseId: WAREHOUSE_ID,
         name: "Водители",
@@ -122,5 +182,10 @@ describe("HttpRepairWorkerDirectoryAdapter", () => {
         members: [{ id: WORKER_ID, name: "Алексей Водитель" }],
       },
     ])
+
+    expect(settings.listGroups).toHaveBeenCalledWith(
+      "settings-token",
+      WAREHOUSE_ID
+    )
   })
 })

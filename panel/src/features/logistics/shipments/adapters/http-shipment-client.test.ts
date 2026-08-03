@@ -237,10 +237,31 @@ describe("HttpShipmentClient", () => {
       `/api/logistics/v1/shipments/${DOCUMENT_ID}/confirm-preparation`
     )
     expect(url.searchParams.get("expectedVersion")).toBe("5")
+    expect(url.searchParams.get("keepScheduledDate")).toBeNull()
     expect(init.method).toBe("POST")
     expect(new Headers(init.headers).get("Idempotency-Key")).toBe(
       IDEMPOTENCY_KEY
     )
+  })
+
+  it("passes an explicit keep-date decision to the service", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        json({ ...document, version: 6, state: "CONFIRMING_PREPARATION" }, 202)
+      )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await new HttpShipmentClient().confirmPreparation({
+      accessToken: "shipment-token",
+      documentId: DOCUMENT_ID,
+      expectedVersion: 5,
+      idempotencyKey: IDEMPOTENCY_KEY,
+      keepScheduledDate: true,
+    })
+
+    const [rawUrl] = fetchMock.mock.calls[0]
+    expect(new URL(rawUrl).searchParams.get("keepScheduledDate")).toBe("true")
   })
 
   it("cancels through the service-owned compensation workflow", async () => {

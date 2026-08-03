@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
   CardFooter,
@@ -28,17 +29,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { DriverEditorDialog } from "@/features/settings/logistics/driver-editor-dialog"
+import { RepairCapacitySettingsCard } from "@/features/settings/logistics/repair-capacity-settings-card"
 import {
   taskBoardSettingsClient,
   taskBoardSettingsKeys,
 } from "@/features/settings/task-board/api/task-board-settings-api"
 import type {
+  DriverQueueRequest,
   ParticipationPolicy,
   QueueBindingRequest,
   WorkerClassDto,
   WorkerDto,
+  WorkerRequest,
   WorkQueueDto,
-  WorkQueueRequest,
 } from "@/features/settings/task-board/model/task-board-settings"
 import {
   credentialStatusLabels,
@@ -54,13 +58,83 @@ type DriverQueueEditorProps = {
   classes: WorkerClassDto[]
   workers: WorkerDto[]
   pending: boolean
-  onSave: (request: WorkQueueRequest) => Promise<void>
+  onCreateDriver: () => void
+  onEditDriver: (worker: WorkerDto) => void
+  onSave: (request: DriverQueueRequest) => Promise<void>
+}
+
+type DriverQueueSetupProps = {
+  classes: WorkerClassDto[]
+  pending: boolean
+  onConnect: (primaryClassId: string) => Promise<void>
 }
 
 function isQualifiedFor(worker: WorkerDto, workerClassId: string) {
   return worker.qualifications.some(
     (qualification) =>
       qualification.active && qualification.workerClass.id === workerClassId
+  )
+}
+
+function driverCredentialIssueMessage(worker: WorkerDto) {
+  if (worker.credentialStatus !== "ERROR") return null
+
+  return "Доступ в приложение не настроен. Нажмите «Редактировать», проверьте логин и укажите пароль ещё раз."
+}
+
+function DriverQueueSetup({
+  classes,
+  pending,
+  onConnect,
+}: DriverQueueSetupProps) {
+  const [selectedClassId, setSelectedClassId] = useState(
+    classes.length === 1 ? classes[0].id : ""
+  )
+
+  return (
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle>Подключить очередь перемещений</CardTitle>
+        <CardDescription>
+          Склад получит свою очередь водителей на основе единого системного
+          определения. Пользователи и классы не копируются.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Field>
+          <FieldLabel htmlFor="logistics-primary-class">
+            Основной класс водителей
+          </FieldLabel>
+          <Select value={selectedClassId} onValueChange={setSelectedClassId}>
+            <SelectTrigger id="logistics-primary-class" className="w-full">
+              <SelectValue placeholder="Выберите существующий класс" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {classes.map((workerClass) => (
+                  <SelectItem key={workerClass.id} value={workerClass.id}>
+                    {workerClass.name}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <FieldDescription>
+            Показаны только классы, уже устойчиво связанные с логистической
+            очередью. По названию класс не определяется.
+          </FieldDescription>
+        </Field>
+      </CardContent>
+      <CardFooter className="justify-end">
+        <Button
+          type="button"
+          disabled={!selectedClassId || pending}
+          onClick={() => void onConnect(selectedClassId)}
+        >
+          {pending ? "Подключаем…" : "Подключить очередь"}
+        </Button>
+      </CardFooter>
+    </Card>
   )
 }
 
@@ -89,6 +163,8 @@ function DriverQueueEditor({
   classes,
   workers,
   pending,
+  onCreateDriver,
+  onEditDriver,
   onSave,
 }: DriverQueueEditorProps) {
   const [bindings, setBindings] = useState<QueueBindingRequest[]>(() =>
@@ -151,8 +227,7 @@ function DriverQueueEditor({
         <CardHeader>
           <CardTitle>{queue.name}</CardTitle>
           <CardDescription>
-            Складская логистическая очередь использует общее определение без
-            создания копии.
+            Очередь водителей настраивается отдельно для выбранного склада.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap items-center gap-2">
@@ -167,6 +242,11 @@ function DriverQueueEditor({
           <CardDescription>
             Уже связанные пользователи. Для водителей бригада не требуется.
           </CardDescription>
+          <CardAction>
+            <Button type="button" size="sm" onClick={onCreateDriver}>
+              Создать водителя
+            </Button>
+          </CardAction>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           {driverWorkers.length > 0 ? (
@@ -180,8 +260,21 @@ function DriverQueueEditor({
                   <span className="text-sm text-muted-foreground">
                     {worker.appLogin ?? "Мобильный логин не настроен"}
                   </span>
+                  {driverCredentialIssueMessage(worker) ? (
+                    <span className="text-sm text-destructive">
+                      {driverCredentialIssueMessage(worker)}
+                    </span>
+                  ) : null}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => onEditDriver(worker)}
+                  >
+                    Редактировать
+                  </Button>
                   <Badge variant={worker.active ? "secondary" : "outline"}>
                     {worker.active ? "Активен" : "Отключён"}
                   </Badge>
@@ -349,8 +442,7 @@ function DriverQueueEditor({
             disabled={pending}
             onClick={() =>
               void onSave({
-                version: queue.version,
-                definitionId: queue.definitionId,
+                expectedVersion: queue.version,
                 active: queue.active,
                 hidden: queue.hidden,
                 collapsed: queue.collapsed,
@@ -381,6 +473,9 @@ export function LogisticsSettingsPage() {
   const queryClient = useQueryClient()
   const { accessToken, currentUser } = useAuth()
   const { selectedWarehouse } = useWarehouse()
+  const [driverEditor, setDriverEditor] = useState<WorkerDto | "new" | null>(
+    null
+  )
   const warehouseId = selectedWarehouse?.id ?? ""
   const explicitAccess = currentUser?.warehouseAccesses.find(
     (access) => access.warehouseId === warehouseId
@@ -408,17 +503,13 @@ export function LogisticsSettingsPage() {
     enabled,
   })
   const mutation = useMutation({
-    mutationFn: (request: WorkQueueRequest) => {
-      const queue = (queuesQuery.data ?? []).find(
-        (item) => item.purpose === "LOGISTICS_DRIVER"
-      )
-      if (!accessToken || !queue) {
+    mutationFn: (request: DriverQueueRequest) => {
+      if (!accessToken) {
         throw new Error("Логистическая очередь недоступна.")
       }
-      return taskBoardSettingsClient.updateQueue(
+      return taskBoardSettingsClient.updateDriverQueue(
         accessToken,
         warehouseId,
-        queue.id,
         request
       )
     },
@@ -432,6 +523,67 @@ export function LogisticsSettingsPage() {
           queryKey: taskBoardSettingsKeys.workers(warehouseId),
         }),
       ])
+    },
+    onError: (error) => toast.error(taskBoardSettingsErrorMessage(error)),
+  })
+  const createDriverMutation = useMutation({
+    mutationFn: (request: WorkerRequest) => {
+      if (!accessToken) {
+        throw new Error("Не получен токен доступа к настройкам логистики.")
+      }
+      return taskBoardSettingsClient.createWorker(
+        accessToken,
+        warehouseId,
+        request
+      )
+    },
+    onSuccess: async (worker) => {
+      await queryClient.invalidateQueries({
+        queryKey: taskBoardSettingsKeys.workers(warehouseId),
+      })
+      const credentialIssue = driverCredentialIssueMessage(worker)
+      if (credentialIssue) {
+        setDriverEditor(worker)
+        toast.error("Водитель создан, но доступ в приложение не настроен.")
+        return
+      }
+      setDriverEditor(null)
+      toast.success("Водитель создан.")
+    },
+    onError: (error) => toast.error(taskBoardSettingsErrorMessage(error)),
+  })
+  const updateDriverMutation = useMutation({
+    mutationFn: ({
+      worker,
+      request,
+    }: {
+      worker: WorkerDto
+      request: WorkerRequest
+    }) => {
+      if (!accessToken) {
+        throw new Error("Не получен токен доступа к настройкам логистики.")
+      }
+      return taskBoardSettingsClient.updateWorker(
+        accessToken,
+        warehouseId,
+        worker.id,
+        request
+      )
+    },
+    onSuccess: async (worker) => {
+      await queryClient.invalidateQueries({
+        queryKey: taskBoardSettingsKeys.workers(warehouseId),
+      })
+      const credentialIssue = driverCredentialIssueMessage(worker)
+      if (credentialIssue) {
+        setDriverEditor(worker)
+        toast.error(
+          "Профиль водителя сохранён, но доступ в приложение не настроен."
+        )
+        return
+      }
+      setDriverEditor(null)
+      toast.success("Данные водителя сохранены.")
     },
     onError: (error) => toast.error(taskBoardSettingsErrorMessage(error)),
   })
@@ -484,16 +636,65 @@ export function LogisticsSettingsPage() {
   const logisticsQueues = (queuesQuery.data ?? []).filter(
     (queue) => queue.purpose === "LOGISTICS_DRIVER"
   )
-  if (logisticsQueues.length !== 1) {
+  if (logisticsQueues.length > 1) {
     return (
       <Alert variant="destructive">
         <AlertTitle>Неверная конфигурация очереди водителей</AlertTitle>
         <AlertDescription>
-          {logisticsQueues.length === 0
-            ? "К складу не подключена общая очередь водителей."
-            : "К складу подключено несколько очередей водителей. Должна остаться ровно одна."}
+          К складу подключено несколько очередей водителей. Должна остаться
+          ровно одна.
         </AlertDescription>
       </Alert>
+    )
+  }
+
+  if (logisticsQueues.length === 0) {
+    const logisticsPrimaryClasses = (classesQuery.data ?? []).filter(
+      (workerClass) => workerClass.active && workerClass.logisticsPrimary
+    )
+    return (
+      <div className="flex flex-col gap-4">
+        {logisticsPrimaryClasses.length > 0 ? (
+          <DriverQueueSetup
+            classes={logisticsPrimaryClasses}
+            pending={mutation.isPending}
+            onConnect={async (primaryClassId) => {
+              await mutation.mutateAsync({
+                expectedVersion: 0,
+                active: true,
+                hidden: false,
+                collapsed: false,
+                holdingPeriodMinutes: null,
+                notificationThreshold: null,
+                notifyWhenThresholdReached: false,
+                resultPhotoMinCount: 1,
+                bindings: [
+                  {
+                    workerClassId: primaryClassId,
+                    order: 0,
+                    stopTaskOnTake: false,
+                    participationPolicy: "PRIMARY",
+                    notifyOnPrimaryTake: false,
+                  },
+                ],
+              })
+            }}
+          />
+        ) : (
+          <Alert variant="destructive">
+            <AlertTitle>Не найден класс водителей</AlertTitle>
+            <AlertDescription>
+              В системе нет активного класса, устойчиво связанного с
+              логистической очередью. Скрытый поиск по названию не выполняется.
+            </AlertDescription>
+          </Alert>
+        )}
+        <RepairCapacitySettingsCard
+          accessToken={accessToken!}
+          warehouseId={warehouseId}
+          warehouseName={selectedWarehouse.name}
+        />
+      </div>
     )
   }
 
@@ -513,16 +714,73 @@ export function LogisticsSettingsPage() {
   }
 
   return (
-    <DriverQueueEditor
-      key={`${queue.id}:${queue.version}`}
-      queue={queue}
-      primaryClass={primaryBindings[0].workerClass}
-      classes={classesQuery.data ?? []}
-      workers={workersQuery.data ?? []}
-      pending={mutation.isPending}
-      onSave={async (request) => {
-        await mutation.mutateAsync(request)
-      }}
-    />
+    <div className="flex flex-col gap-4">
+      <DriverQueueEditor
+        key={`${queue.id}:${queue.version}`}
+        queue={queue}
+        primaryClass={primaryBindings[0].workerClass}
+        classes={classesQuery.data ?? []}
+        workers={workersQuery.data ?? []}
+        pending={mutation.isPending}
+        onCreateDriver={() => {
+          createDriverMutation.reset()
+          updateDriverMutation.reset()
+          setDriverEditor("new")
+        }}
+        onEditDriver={(worker) => {
+          createDriverMutation.reset()
+          updateDriverMutation.reset()
+          setDriverEditor(worker)
+        }}
+        onSave={async (request) => {
+          await mutation.mutateAsync(request)
+        }}
+      />
+      {driverEditor ? (
+        <DriverEditorDialog
+          key={
+            driverEditor === "new"
+              ? "new"
+              : `${driverEditor.id}:${driverEditor.version}`
+          }
+          worker={driverEditor === "new" ? null : driverEditor}
+          primaryClassId={primaryBindings[0].workerClass.id}
+          pending={
+            driverEditor === "new"
+              ? createDriverMutation.isPending
+              : updateDriverMutation.isPending
+          }
+          error={
+            driverEditor === "new"
+              ? createDriverMutation.error
+                ? taskBoardSettingsErrorMessage(createDriverMutation.error)
+                : null
+              : updateDriverMutation.error
+                ? taskBoardSettingsErrorMessage(updateDriverMutation.error)
+                : null
+          }
+          onClose={() => {
+            createDriverMutation.reset()
+            updateDriverMutation.reset()
+            setDriverEditor(null)
+          }}
+          onSave={async (request) => {
+            if (driverEditor === "new") {
+              await createDriverMutation.mutateAsync(request)
+              return
+            }
+            await updateDriverMutation.mutateAsync({
+              worker: driverEditor,
+              request,
+            })
+          }}
+        />
+      ) : null}
+      <RepairCapacitySettingsCard
+        accessToken={accessToken!}
+        warehouseId={warehouseId}
+        warehouseName={selectedWarehouse.name}
+      />
+    </div>
   )
 }

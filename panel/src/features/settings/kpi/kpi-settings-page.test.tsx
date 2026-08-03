@@ -35,13 +35,6 @@ const manager = {
   warehouseAccessAll: false,
   warehouseAccesses: [{ warehouseId, level: "MANAGE" }],
 }
-const defaultSetting = {
-  warehouseId,
-  version: 0,
-  repairPlaceCount: 6,
-  createdAt: null,
-  updatedAt: null,
-}
 const defaultComplexitySetting = {
   warehouseId,
   version: 2,
@@ -69,8 +62,6 @@ const defaultKpiSettings = {
 }
 
 const mocks = vi.hoisted(() => ({
-  getRepairCapacity: vi.fn(),
-  updateRepairCapacity: vi.fn(),
   getRepairComplexity: vi.fn(),
   updateRepairComplexity: vi.fn(),
   getKpiSettings: vi.fn(),
@@ -88,22 +79,6 @@ const mocks = vi.hoisted(() => ({
     selectedWarehouse: null as Record<string, unknown> | null,
   },
 }))
-
-vi.mock(
-  "@/features/settings/kpi/api/repair-capacity-api",
-  async (importOriginal) => {
-    const original =
-      await importOriginal<
-        typeof import("@/features/settings/kpi/api/repair-capacity-api")
-      >()
-
-    return {
-      ...original,
-      getRepairCapacity: mocks.getRepairCapacity,
-      updateRepairCapacity: mocks.updateRepairCapacity,
-    }
-  }
-)
 
 vi.mock(
   "@/features/settings/kpi/api/repair-complexity-api",
@@ -175,11 +150,6 @@ beforeEach(() => {
   mocks.auth.accessToken = "access-token"
   mocks.auth.currentUser = manager
   mocks.warehouse.selectedWarehouse = warehouse
-  mocks.getRepairCapacity.mockResolvedValue(defaultSetting)
-  mocks.updateRepairCapacity.mockResolvedValue({
-    ...defaultSetting,
-    version: 1,
-  })
   mocks.getRepairComplexity.mockResolvedValue(defaultComplexitySetting)
   mocks.updateRepairComplexity.mockResolvedValue({
     ...defaultComplexitySetting,
@@ -208,145 +178,13 @@ afterEach(() => {
 })
 
 describe("KpiSettingsPage", () => {
-  it("shows the service repair-place count", async () => {
-    renderPage()
-
-    const input = await screen.findByRole("spinbutton", {
-      name: "Количество ремонтных мест",
-    })
-
-    expect((input as HTMLInputElement).value).toBe("6")
-    expect(
-      screen.getByText("Настройка ещё не сохранялась для выбранного склада.")
-    ).toBeTruthy()
-  })
-
-  it("recognizes the first saved setting even when its JPA version is zero", async () => {
-    const user = userEvent.setup()
-    mocks.getRepairCapacity.mockResolvedValue(defaultSetting)
-    mocks.updateRepairCapacity.mockResolvedValue({
-      ...defaultSetting,
-      repairPlaceCount: 9,
-      createdAt: "2026-07-25T12:00:00Z",
-      updatedAt: "2026-07-25T12:00:00Z",
-    })
-
-    renderPage()
-
-    const input = await screen.findByRole("spinbutton", {
-      name: "Количество ремонтных мест",
-    })
-    await user.clear(input)
-    await user.type(input, "9")
-    await user.click(screen.getByRole("button", { name: "Сохранить" }))
-
-    await waitFor(() =>
-      expect(mocks.updateRepairCapacity).toHaveBeenCalledWith(
-        "access-token",
-        warehouseId,
-        {
-          expectedVersion: 0,
-          repairPlaceCount: 9,
-        }
-      )
-    )
-    await waitFor(() =>
-      expect(
-        (
-          screen.getByRole("spinbutton", {
-            name: "Количество ремонтных мест",
-          }) as HTMLInputElement
-        ).value
-      ).toBe("9")
-    )
-    expect(mocks.toastSuccess).toHaveBeenCalledWith(
-      "Количество ремонтных мест сохранено."
-    )
-    expect(
-      screen.getByText("Настройка сохранена в сервисе ремонтов.")
-    ).toBeTruthy()
-  })
-
-  it("does not read the setting without MANAGE access", async () => {
-    mocks.auth.currentUser = {
-      ...manager,
-      warehouseAccesses: [{ warehouseId, level: "EDIT" }],
-    }
-
-    renderPage()
-
-    expect(await screen.findByText("Недостаточно прав")).toBeTruthy()
-    expect(mocks.getRepairCapacity).not.toHaveBeenCalled()
-  })
-
-  it("shows a service loading error without a local fallback", async () => {
-    mocks.getRepairCapacity.mockRejectedValue(
-      new ApiError("maintenance-service недоступен", 503)
-    )
-
-    renderPage()
-
-    expect((await screen.findByRole("alert")).textContent).toContain(
-      "maintenance-service недоступен"
-    )
-    expect(
-      screen.getByText("Настройка не подменяется локальным значением.")
-    ).toBeTruthy()
-  })
-
-  it("refetches the current value after a version conflict", async () => {
-    const user = userEvent.setup()
-    const loaded = {
-      ...defaultSetting,
-      version: 4,
-    }
-    const refreshed = {
-      ...defaultSetting,
-      version: 5,
-      repairPlaceCount: 7,
-      updatedAt: "2026-07-25T12:30:00Z",
-    }
-    mocks.getRepairCapacity
-      .mockReset()
-      .mockResolvedValueOnce(loaded)
-      .mockResolvedValueOnce(refreshed)
-    mocks.updateRepairCapacity.mockRejectedValue(
-      new ApiError("Конфликт версий", 409)
-    )
-
-    renderPage()
-
-    const input = await screen.findByRole("spinbutton", {
-      name: "Количество ремонтных мест",
-    })
-    await user.clear(input)
-    await user.type(input, "8")
-    await user.click(screen.getByRole("button", { name: "Сохранить" }))
-
-    await waitFor(() =>
-      expect(mocks.getRepairCapacity).toHaveBeenCalledTimes(2)
-    )
-    expect((await screen.findByRole("alert")).textContent).toContain(
-      "изменена другим пользователем"
-    )
-    await waitFor(() =>
-      expect(
-        (
-          screen.getByRole("spinbutton", {
-            name: "Количество ремонтных мест",
-          }) as HTMLInputElement
-        ).value
-      ).toBe("7")
-    )
-  })
-
-  it("shows warehouse complexity, schedule, palette and the repair card", async () => {
+  it("shows warehouse complexity, schedule and palette", async () => {
     renderPage()
 
     expect(await screen.findByText("Сложность ремонта")).toBeTruthy()
     expect(await screen.findByText("Рабочий график")).toBeTruthy()
     expect(screen.getByText("Диапазоны KPI")).toBeTruthy()
-    expect(screen.getAllByText("Количество ремонтных мест")).toHaveLength(2)
+    expect(screen.queryByText("Количество ремонтных мест")).toBeNull()
     expect(screen.getByText("Europe/Moscow")).toBeTruthy()
   })
 

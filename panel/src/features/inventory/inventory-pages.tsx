@@ -399,6 +399,7 @@ function FindingEditor({
         businessDate={session.businessDate}
         comment={comment}
         lines={lines}
+        media={media}
         repairCompletionMode={finding.repairCompletionMode}
         movementRequired={finding.movementRequired}
         repairPlans={finding.repairPlans}

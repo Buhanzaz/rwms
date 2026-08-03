@@ -118,6 +118,9 @@ const FIRST_WORK_ID = "00000000-0000-4000-8000-000000000011"
 const SECOND_WORK_ID = "00000000-0000-4000-8000-000000000012"
 const SUBCATEGORY_ID = "00000000-0000-4000-8000-000000000013"
 const MATERIAL_ID = "00000000-0000-4000-8000-000000000014"
+const COMMON_CATEGORY_ID = "00000000-0000-4000-8000-000000000015"
+const COMMON_WORK_ID = "00000000-0000-4000-8000-000000000016"
+const COMMON_MATERIAL_ID = "00000000-0000-4000-8000-000000000017"
 const REPAIR_QUEUE_ID = "00000000-0000-4000-8000-000000000020"
 const FOREIGN_REPAIR_QUEUE_ID = "00000000-0000-4000-8000-000000000120"
 const FURNITURE_QUEUE_ID = "00000000-0000-4000-8000-000000000023"
@@ -251,6 +254,64 @@ function metadataCanvasFixture(): RepairEstimateCatalogCanvasDto {
   }
 }
 
+function commonCanvasFixture(): RepairEstimateCatalogCanvasDto {
+  const base = metadataCanvasFixture()
+  const category = base.nodes[0]
+  const work = base.nodes.find((node) => node.id === FIRST_WORK_ID)!
+  const material = base.nodes.find((node) => node.id === MATERIAL_ID)!
+  const commonCategory: RepairEstimateCatalogNodeDto = {
+    ...category,
+    id: COMMON_CATEGORY_ID,
+    name: "Общие позиции",
+    canvasX: 1040,
+  }
+  const routing: RepairEstimateCatalogRoutingDto = {
+    queueId: REPAIR_QUEUE_ID,
+    queueName: "Электрики",
+    queueType: "REPAIR",
+  }
+  const commonWork: RepairEstimateCatalogNodeDto = {
+    ...work,
+    id: COMMON_WORK_ID,
+    name: "Общая замена окна",
+    parentId: commonCategory.id,
+    displayColor: "#336699",
+    routeQueueKind: "REPAIR",
+    queueDefinitionId: REPAIR_QUEUE_ID,
+    routing,
+    commonItem: true,
+    forcesCapitalRepair: true,
+    canvasX: 40,
+    canvasY: 320,
+    comment: "Повторно используемая работа",
+  }
+  const commonMaterial: RepairEstimateCatalogNodeDto = {
+    ...material,
+    id: COMMON_MATERIAL_ID,
+    name: "Общая монтажная пена",
+    parentId: commonCategory.id,
+    displayColor: "#996633",
+    routeQueueKind: "REPAIR",
+    queueDefinitionId: REPAIR_QUEUE_ID,
+    routing,
+    includeInEstimate: true,
+    commonItem: true,
+    characteristic: {
+      characteristicId: CHARACTERISTIC_ID,
+      characteristicName: "Железная дверь",
+    },
+    canvasX: 380,
+    canvasY: 320,
+    comment: "Повторно используемый материал",
+  }
+
+  return {
+    ...base,
+    categories: [category, commonCategory],
+    nodes: [...base.nodes, commonCategory, commonWork, commonMaterial],
+  }
+}
+
 function queueFixture(
   overrides: Partial<QueueDefinitionDto> = {}
 ): QueueDefinitionDto {
@@ -294,7 +355,8 @@ function renderPage(
     | null
     | Error
     | Promise<RepairEstimateCatalogVersionDto | null> = catalog,
-  canvas: RepairEstimateCatalogCanvasDto = canvasFixture()
+  canvas: RepairEstimateCatalogCanvasDto = canvasFixture(),
+  initialEntries = ["/settings/estimates-repairs"]
 ) {
   mocks.level = level
   if (catalogResult instanceof Error) {
@@ -307,7 +369,7 @@ function renderPage(
   mocks.getCatalogCanvas.mockResolvedValue(canvas)
 
   return render(
-    <MemoryRouter initialEntries={["/settings/estimates-repairs"]}>
+    <MemoryRouter initialEntries={initialEntries}>
       <QueryClientProvider
         client={
           new QueryClient({
@@ -483,7 +545,7 @@ describe("maintenance catalog settings", () => {
     expect(screen.queryByRole("button", { name: "Назад" })).toBeNull()
   })
 
-  it("keeps the five compact catalog sections above action and category content", async () => {
+  it("keeps the six compact catalog sections above action and category content", async () => {
     const user = userEvent.setup()
     renderPage("MANAGE")
 
@@ -496,9 +558,10 @@ describe("maintenance catalog settings", () => {
       "Работы",
       "Материалы",
       "Мебель",
+      "Общее",
     ]
 
-    expect(navigation.firstElementChild?.className).toContain("lg:grid-cols-5")
+    expect(navigation.firstElementChild?.className).toContain("lg:grid-cols-6")
     for (const action of actions) {
       expect(
         within(navigation).getByRole("radio", { name: action }).className
@@ -590,6 +653,7 @@ describe("maintenance catalog settings", () => {
     await user.click(await findCatalogSection("Конструктор каталога смет"))
     await user.click(await screen.findByRole("button", { name: /^Окна/ }))
     expect(screen.queryByRole("button", { name: "Редактировать" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Общее" })).toBeNull()
     expect(screen.queryByRole("radio", { name: "Путь" })).toBeNull()
 
     view.unmount()
@@ -851,7 +915,7 @@ describe("maintenance catalog settings", () => {
     )
     expect(
       within(dialog).queryByRole("checkbox", {
-        name: "Связать с характеристикой",
+        name: "Сопоставить с характеристикой бытовки",
       })
     ).toBeNull()
     await user.click(within(dialog).getByRole("button", { name: "Сохранить" }))
@@ -883,10 +947,13 @@ describe("maintenance catalog settings", () => {
     const dialog = await screen.findByRole("dialog", {
       name: "Редактировать блок",
     })
+    const characteristicCheckbox = within(dialog).getByRole("checkbox", {
+      name: "Сопоставить с характеристикой бытовки",
+    })
+    expect(characteristicCheckbox.className).toContain("size-5")
+    expect(characteristicCheckbox.className).toContain("border-primary")
     await user.click(
-      within(dialog).getByRole("checkbox", {
-        name: "Связать с характеристикой",
-      })
+      characteristicCheckbox
     )
     expect(
       await within(dialog).findByRole("combobox", {
@@ -910,6 +977,114 @@ describe("maintenance catalog settings", () => {
         })
       )
     )
+  })
+
+  it("copies a selected common material into the current constructor category without arrows", async () => {
+    const user = userEvent.setup()
+    renderPage("EDIT", catalog, commonCanvasFixture())
+
+    await user.click(await findCatalogSection("Конструктор каталога смет"))
+    await user.click(await screen.findByRole("button", { name: /^Окна/ }))
+
+    const blockButton = screen.getByRole("button", { name: "Блок" })
+    const commonButton = screen.getByRole("button", { name: "Общее" })
+    const saveButton = screen.getByRole("button", { name: "Сохранить" })
+    expect(
+      blockButton.compareDocumentPosition(commonButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(
+      commonButton.compareDocumentPosition(saveButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+
+    await user.click(commonButton)
+    const dialog = await screen.findByRole("dialog", {
+      name: "Добавить общее",
+    })
+    expect(
+      within(dialog).getByRole("button", {
+        name: "Добавить: Общая замена окна",
+      })
+    ).toBeTruthy()
+    expect(
+      within(dialog).queryByRole("button", {
+        name: "Добавить: Общая монтажная пена",
+      })
+    ).toBeNull()
+
+    await user.click(
+      within(dialog).getByRole("button", { name: "Материалы" })
+    )
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: "Добавить: Общая монтажная пена",
+      })
+    )
+
+    await waitFor(() => {
+      expect(mocks.saveCanvasNode).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accessToken: "maintenance-token",
+          warehouseId: WAREHOUSE_ID,
+          catalogVersionId: catalog.id,
+        }),
+        expect.objectContaining({
+          name: "Общая монтажная пена",
+          nodeType: "MATERIAL",
+          parentId: CATEGORY_ID,
+          displayColor: "#996633",
+          unit: "баллон",
+          unitPrice: "350.00",
+          durationMinutes: null,
+          includeInEstimate: true,
+          commonItem: false,
+          routeQueueKind: "REPAIR",
+          routing: {
+            queueId: REPAIR_QUEUE_ID,
+            queueName: "Электрики",
+            queueType: "REPAIR",
+          },
+          characteristicId: CHARACTERISTIC_ID,
+          canvasX: null,
+          canvasY: null,
+          comment: "Повторно используемый материал",
+        })
+      )
+    })
+    expect(mocks.saveCanvasNode.mock.calls[0]?.[1]?.id).toBeUndefined()
+    expect(mocks.saveCanvasChanges).not.toHaveBeenCalled()
+
+    await user.click(commonButton)
+    const reopened = await screen.findByRole("dialog", {
+      name: "Добавить общее",
+    })
+    expect(
+      within(reopened).getByRole("button", {
+        name: "Добавить: Общая монтажная пена",
+      })
+    ).toBeTruthy()
+  })
+
+  it("keeps the common picker open and reports an error when a copy cannot be saved", async () => {
+    const user = userEvent.setup()
+    mocks.saveCanvasNode.mockRejectedValueOnce(new Error("Такой блок уже есть"))
+    renderPage("EDIT", catalog, commonCanvasFixture())
+
+    await user.click(await findCatalogSection("Конструктор каталога смет"))
+    await user.click(await screen.findByRole("button", { name: /^Окна/ }))
+    await user.click(screen.getByRole("button", { name: "Общее" }))
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Добавить общее",
+    })
+    const commonWork = within(dialog).getByRole("button", {
+      name: "Добавить: Общая замена окна",
+    })
+    await user.click(commonWork)
+
+    expect(await within(dialog).findByText("Такой блок уже есть")).toBeTruthy()
+    expect((commonWork as HTMLButtonElement).disabled).toBe(false)
   })
 
   it("saves a typed arrow and a moved node with one catalog command", async () => {

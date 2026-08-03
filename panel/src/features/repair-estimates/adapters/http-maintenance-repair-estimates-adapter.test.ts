@@ -28,7 +28,8 @@ vi.mock(
 
 vi.mock(
   "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api",
-  () => ({
+  async (importOriginal) => ({
+    ...(await importOriginal()),
     getOperationalRepairEstimateCatalog: catalog,
   })
 )
@@ -51,8 +52,10 @@ const estimateId = "00000000-0000-4000-8000-000000000003"
 const lineId = "00000000-0000-4000-8000-000000000004"
 const planId = "00000000-0000-4000-8000-000000000005"
 const queueId = "00000000-0000-4000-8000-000000000006"
+const workQueueId = "00000000-0000-4000-8000-000000000036"
 const foreignQueueId = "00000000-0000-4000-8000-000000000016"
 const movementQueueId = "00000000-0000-4000-8000-000000000026"
+const movementWorkQueueId = "00000000-0000-4000-8000-000000000046"
 
 function estimate(
   lifecycleState: MaintenanceEstimate["lifecycle"],
@@ -175,10 +178,11 @@ const completeCommand: CompleteRepairEstimateCommand = {
 describe("maintenance repair estimates adapter", () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    catalog.mockResolvedValue({ nodes: [] })
+    catalog.mockResolvedValue({ nodes: [], links: [] })
     listQueues.mockResolvedValue([
       {
-        id: queueId,
+        id: workQueueId,
+        definitionId: queueId,
         name: "Ремонт",
         type: "REPAIR",
         active: true,
@@ -359,6 +363,7 @@ describe("maintenance repair estimates adapter", () => {
     listQueues.mockResolvedValue([
       {
         id: queueId,
+        definitionId: queueId,
         name: "Перемещение мебели",
         type: "FURNITURE_MOVEMENT",
         active: true,
@@ -390,21 +395,25 @@ describe("maintenance repair estimates adapter", () => {
           queueId: foreignQueueId,
         })),
       })
-    ).rejects.toThrow("выберите активную очередь")
+    ).rejects.toThrow(
+      "Очередь «Ремонт» не подключена к выбранному складу"
+    )
     expect(lifecycle.create).not.toHaveBeenCalled()
   })
 
   it("resolves a new movement stage to its sole configured queue UUID", async () => {
     listQueues.mockResolvedValue([
       {
-        id: queueId,
+        id: workQueueId,
+        definitionId: queueId,
         name: "Ремонт",
         type: "REPAIR",
         active: true,
         hidden: false,
       },
       {
-        id: movementQueueId,
+        id: movementWorkQueueId,
+        definitionId: movementQueueId,
         name: "Перемещение",
         type: "MOVEMENT",
         active: true,

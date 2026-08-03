@@ -194,6 +194,9 @@ export function parseShipmentDocument(value: unknown): ShipmentDocument {
     equipmentMovementTaskId: nullableUuid(source.equipmentMovementTaskId),
     scheduledDate: nullableLocalDate(source.scheduledDate),
     rentalOrderId: nullableUuid(source.rentalOrderId),
+    ...(source.rentalShipmentId === undefined
+      ? {}
+      : { rentalShipmentId: nullableUuid(source.rentalShipmentId) }),
     lines,
     createdAt: timestamp(source.createdAt),
     updatedAt: timestamp(source.updatedAt),
@@ -293,10 +296,11 @@ export class HttpShipmentClient implements ShipmentClient {
   }
 
   confirmPreparation(input: ShipmentVersionedCommand) {
+    const keepScheduledDate = input.keepScheduledDate ? "&keepScheduledDate=true" : ""
     return parsedRequest(
       input.accessToken,
       shipmentsEndpoint(
-        `/${encodeURIComponent(input.documentId)}/confirm-preparation?expectedVersion=${input.expectedVersion}`
+        `/${encodeURIComponent(input.documentId)}/confirm-preparation?expectedVersion=${input.expectedVersion}${keepScheduledDate}`
       ),
       {
         method: "POST",

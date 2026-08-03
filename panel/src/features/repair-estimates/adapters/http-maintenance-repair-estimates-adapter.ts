@@ -1,4 +1,8 @@
-import { getOperationalRepairEstimateCatalog } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
+import {
+  createRepairEstimateCatalogIndex,
+  getOperationalRepairEstimateCatalog,
+  type RepairEstimateCatalogIndex,
+} from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
 import type { RepairEstimateCatalogSnapshotDto } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
 import {
   amendMaintenanceEstimate,
@@ -87,6 +91,7 @@ function toEstimateLine(
                 ? "OPTION"
                 : "MATERIAL",
           furnitureEquipment: value.catalogSnapshot.furnitureEquipment ?? null,
+          characteristic: value.catalogSnapshot.characteristic ?? null,
         }
       : null,
     customQueueBinding: value.catalogSnapshot ? null : customQueueBinding,
@@ -227,7 +232,8 @@ function requireExpectedVersion(value: number | null) {
 function routeFromPlan(
   plan: RepairEstimateTaskPlanCommandDto,
   queues: WorkQueueDto[],
-  includesCustomWork: boolean
+  includesCustomWork: boolean,
+  stageNumber: number
 ): MaintenanceRoutingSnapshot {
   if (
     includesCustomWork &&
@@ -239,8 +245,8 @@ function routeFromPlan(
     )
   }
   const active = queues.filter((queue) => queue.active && !queue.hidden)
-  const exactById = plan.queueId
-    ? active.find((queue) => queue.id === plan.queueId)
+  const exactByDefinitionId = plan.queueId
+    ? active.find((queue) => queue.definitionId === plan.queueId)
     : undefined
   const movementCandidates =
     !plan.queueId &&
@@ -249,7 +255,7 @@ function routeFromPlan(
       ? active.filter((queue) => queue.type === "MOVEMENT")
       : []
   const exact =
-    exactById ??
+    exactByDefinitionId ??
     (movementCandidates.length === 1 ? movementCandidates[0] : undefined)
   if (exact) {
     if (
@@ -267,22 +273,39 @@ function routeFromPlan(
       )
     }
     return {
-      queueId: exact.id,
+      queueId: exact.definitionId,
       queueName: exact.name,
       queueType: exact.type,
     }
   }
   if (movementCandidates.length > 1) {
     throw new Error(
-      `Для этапа ${plan.sortOrder} настройте единственную активную очередь перемещения.`
+      "Для перемещения подключите к складу ровно одну активную очередь типа «Перемещение»."
     )
   }
-  throw new Error(`Для этапа ${plan.sortOrder} выберите активную очередь.`)
+  if (
+    !plan.queueId &&
+    plan.kind !== "REPAIR_WORK" &&
+    plan.routeQueueKind === "MOVEMENT"
+  ) {
+    throw new Error(
+      "К выбранному складу не подключена активная очередь типа «Перемещение». Откройте «Настройки склада → Очереди склада» и подключите её."
+    )
+  }
+  if (plan.queueName?.trim()) {
+    throw new Error(
+      `Очередь «${plan.queueName.trim()}» не подключена к выбранному складу или отключена. Откройте «Настройки склада → Очереди склада» и подключите её.`
+    )
+  }
+  throw new Error(
+    `Для рабочего этапа №${stageNumber} не определена доступная очередь. Проверьте привязку категории в «Конструкторе каталога смет» и подключение очереди в «Настройки склада → Очереди склада».`
+  )
 }
 
 function catalogSnapshot(
   line: RepairEstimateLineDto,
-  catalog: RepairEstimateCatalogSnapshotDto
+  catalog: RepairEstimateCatalogSnapshotDto,
+  catalogIndex: RepairEstimateCatalogIndex
 ) {
   const nodeId = line.catalogSnapshot?.nodeId
   if (!nodeId) return null
@@ -290,12 +313,15 @@ function catalogSnapshot(
   if (!node) {
     throw new Error(`Позиция каталога «${line.description}» больше недоступна.`)
   }
+  const effectiveRouting = catalogIndex.getEffectiveQueueBinding(node.id)
   const routing =
-    node.queueDefinitionId && node.queueDefinitionName && node.routeQueueKind
+    effectiveRouting?.queueId &&
+    effectiveRouting.queueName &&
+    effectiveRouting.queueKind
       ? {
-          queueId: node.queueDefinitionId,
-          queueName: node.queueDefinitionName,
-          queueType: node.routeQueueKind,
+          queueId: effectiveRouting.queueId,
+          queueName: effectiveRouting.queueName,
+          queueType: effectiveRouting.queueKind,
         }
       : null
   return {
@@ -315,12 +341,13 @@ function catalogSnapshot(
 
 function toLineInput(
   line: RepairEstimateLineDto,
-  catalog: RepairEstimateCatalogSnapshotDto
+  catalog: RepairEstimateCatalogSnapshotDto,
+  catalogIndex: RepairEstimateCatalogIndex
 ): MaintenanceEstimateLineInput {
   if (!line.description.trim()) {
     throw new Error("Укажите описание каждой строки сметы.")
   }
-  const snapshot = catalogSnapshot(line, catalog)
+  const snapshot = catalogSnapshot(line, catalog, catalogIndex)
   const lineType = snapshot
     ? snapshot.nodeType === "WORK"
       ? "WORK"
@@ -389,7 +416,10 @@ async function serviceWrite(
       ? taskBoardSettingsClient.listQueues(accessToken, command.warehouseId)
       : Promise.resolve([]),
   ])
-  const lines = command.lines.map((line) => toLineInput(line, catalog))
+  const catalogIndex = createRepairEstimateCatalogIndex(catalog)
+  const lines = command.lines.map((line) =>
+    toLineInput(line, catalog, catalogIndex)
+  )
   const commandLineById = new Map(command.lines.map((line) => [line.id, line]))
   const lineIdByCommandId = new Map(
     command.lines.map((line, index) => [line.id, lines[index].id])
@@ -415,7 +445,8 @@ async function serviceWrite(
         plan.includedLineIds.some((lineId) => {
           const line = commandLineById.get(lineId)
           return line?.catalogSnapshot === null && line.lineType === "WORK"
-        })
+        }),
+        index + 1
       ),
       includedLineIds: plan.includedLineIds.map(maintenanceLineId),
       primaryLineId: plan.primaryLineId

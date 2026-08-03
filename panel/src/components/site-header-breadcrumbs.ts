@@ -12,11 +12,14 @@ const routeTitles = [
   { path: "/settings/kpi", title: "Настройка KPI" },
   { path: "/settings/estimates-repairs", title: "Настройка смет и ремонтов" },
   { path: "/settings/task-board", title: "Настройка доски задач" },
+  { path: "/settings/logistics", title: "Настройки логистики" },
   { path: "/settings/rental", title: "Аренда и представления" },
   { path: "/assistant", title: "Чат" },
   { path: "/warehouse", title: "Склад" },
   { path: "/equipment", title: "Доп. оборудование" },
   { path: "/inventory", title: "Инвентаризация" },
+  { path: "/logistics/order-tasks", title: "Задания" },
+  { path: "/logistics/tasks", title: "Перемещение" },
   { path: "/logistics/returns", title: "Возврат из аренды" },
   { path: "/logistics/shipments", title: "Отгрузка в аренду" },
   { path: "/logistics/transfers", title: "Перемещения" },
@@ -83,6 +86,10 @@ export function resolveHeaderBreadcrumbs(
 
   if (pathname === "/logistics/returns") {
     return [{ title: "Возврат из аренды" }]
+  }
+
+  if (pathname === "/logistics/order-tasks") {
+    return [{ title: "Задания" }]
   }
 
   if (pathname === "/logistics/shipments") {

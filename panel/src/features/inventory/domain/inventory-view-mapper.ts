@@ -109,6 +109,7 @@ function viewLine(line: InventoryFrozenPlanLine): RepairEstimateLineDto {
           name: line.description,
           nodeType: line.lineType,
           furnitureEquipment: null,
+          characteristic: null,
         }
       : null,
   }
