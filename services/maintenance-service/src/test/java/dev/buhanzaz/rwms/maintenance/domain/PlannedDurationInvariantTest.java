@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.buhanzaz.rwms.maintenance.integration.MaintenanceDependencyGateway;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -20,6 +21,36 @@ class PlannedDurationInvariantTest {
 
     assertThat(catalogNode("WORK", 1).getDurationMinutes()).isOne();
     assertThat(catalogNode("MATERIAL", 0).getDurationMinutes()).isZero();
+  }
+
+  @Test
+  void catalogMaterialNeverRetainsAComment() {
+    assertThat(catalogNode("MATERIAL", 0, "устаревший комментарий").getComment()).isNull();
+    assertThat(catalogNode("WORK", 1, "Комментарий к работе").getComment())
+        .isEqualTo("Комментарий к работе");
+  }
+
+  @Test
+  void estimateMaterialNeverRetainsAComment() {
+    EstimateLine line =
+        new EstimateLine(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            1,
+            0,
+            null,
+            "MATERIAL",
+            "Материал",
+            "шт.",
+            BigDecimal.ONE,
+            0,
+            0,
+            null,
+            null,
+            "устаревший комментарий",
+            "[]");
+
+    assertThat(line.getComment()).isNull();
   }
 
   @Test
@@ -67,6 +98,11 @@ class PlannedDurationInvariantTest {
   }
 
   private static CatalogNode catalogNode(String nodeType, Integer durationMinutes) {
+    return catalogNode(nodeType, durationMinutes, null);
+  }
+
+  private static CatalogNode catalogNode(
+      String nodeType, Integer durationMinutes, String comment) {
     return new CatalogNode(
         UUID.randomUUID(),
         UUID.randomUUID(),
@@ -88,6 +124,6 @@ class PlannedDurationInvariantTest {
         null,
         null,
         null,
-        null);
+        comment);
   }
 }

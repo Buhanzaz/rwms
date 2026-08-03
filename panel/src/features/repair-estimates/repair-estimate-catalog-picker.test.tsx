@@ -1,10 +1,23 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 const catalogApi = vi.hoisted(() => ({
   getOperationalRepairEstimateCatalog: vi.fn(),
+}))
+const ownerMedia = vi.hoisted(() => ({
+  upload: vi.fn(),
+  useServiceOwnerMedia: vi.fn(() => ({
+    query: { isLoading: false },
+    assets: [],
+    photos: [],
+    readyReferences: [],
+    logicalPhotoCount: 0,
+    upload: vi.fn(),
+    pending: false,
+    error: null,
+  })),
 }))
 
 vi.mock(
@@ -18,12 +31,17 @@ vi.mock(
   })
 )
 
+vi.mock("@/features/media/use-service-owner-media", () => ({
+  useServiceOwnerMedia: ownerMedia.useServiceOwnerMedia,
+}))
+
 import type {
   RepairEstimateCatalogNodeDto,
   RepairEstimateCatalogSnapshotDto,
 } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
 import { RepairEstimateCatalogPicker } from "@/features/repair-estimates/repair-estimate-catalog-picker"
 import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/repair-estimate"
+import { maintenanceEstimateMediaOwner } from "@/features/media/media-service"
 
 const catalogVersionId = "11111111-1111-4111-8111-111111111111"
 const workId = "33333333-3333-4333-8333-333333333333"
@@ -226,9 +244,7 @@ describe("RepairEstimateCatalogPicker", () => {
     await user.click(backButton)
 
     await waitFor(() => {
-      expect(
-        screen.queryByRole("button", { name: "Покраска" })
-      ).toBeNull()
+      expect(screen.queryByRole("button", { name: "Покраска" })).toBeNull()
       expect(
         screen.getByRole("button", { name: "К корню каталога" })
       ).toBeTruthy()
@@ -404,15 +420,9 @@ describe("RepairEstimateCatalogPicker", () => {
       })
     )
 
-    expect(
-      screen.getByRole("button", { name: "Открыть: Крыша" })
-    ).toBeTruthy()
-    expect(
-      screen.getByRole("button", { name: "Выбрать: Стены" })
-    ).toBeTruthy()
-    expect(
-      screen.getByRole("button", { name: "Выбрать: Каркас" })
-    ).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Открыть: Крыша" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Выбрать: Стены" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Выбрать: Каркас" })).toBeTruthy()
     expect(
       screen.queryByRole("button", {
         name: "Выбрать: Гидроизоляционная лента",
@@ -454,7 +464,7 @@ describe("RepairEstimateCatalogPicker", () => {
         name: "Выбрать: Гидроизоляционная лента",
       })
     )
-    await user.click(await screen.findByRole("button", { name: "Добавить" }))
+    await user.click(await screen.findByRole("button", { name: "Далее" }))
 
     expect(onChange).toHaveBeenCalledTimes(1)
     expect(
@@ -582,7 +592,7 @@ describe("RepairEstimateCatalogPicker", () => {
     await user.click(
       await screen.findByRole("button", { name: "Выбрать: Основная работа" })
     )
-    await user.click(await screen.findByRole("button", { name: "Добавить" }))
+    await user.click(await screen.findByRole("button", { name: "Далее" }))
 
     expect(onChange).toHaveBeenCalledTimes(1)
     expect(
@@ -591,6 +601,75 @@ describe("RepairEstimateCatalogPicker", () => {
     expect(
       screen.queryByRole("button", { name: "Выбрать: Следующая работа" })
     ).toBeNull()
+  })
+
+  it("persists the first work before attaching its photos without adding it twice", async () => {
+    const work = estimateNode(workId, "Основная работа", "WORK", true)
+    catalogApi.getOperationalRepairEstimateCatalog.mockResolvedValue(
+      graphCatalog([work], [])
+    )
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    const ensureMediaOwner = vi.fn().mockResolvedValue(
+      maintenanceEstimateMediaOwner(
+        "77777777-7777-4777-8777-777777777701",
+        "77777777-7777-4777-8777-777777777702"
+      )
+    )
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RepairEstimateCatalogPicker
+          lines={[]}
+          readOnly={false}
+          accessToken="media-token"
+          ensureMediaOwner={ensureMediaOwner}
+          onChange={onChange}
+        />
+      </QueryClientProvider>
+    )
+
+    await user.click(
+      await screen.findByRole("button", { name: "Выбрать: Основная работа" })
+    )
+    await user.type(
+      screen.getByRole("textbox", { name: "Комментарий к работе" }),
+      "Фото до ремонта"
+    )
+    await user.click(
+      screen.getByRole("button", { name: "Выбрать из сделанных" })
+    )
+
+    await waitFor(() => expect(ensureMediaOwner).toHaveBeenCalledTimes(1))
+    expect(ensureMediaOwner).toHaveBeenCalledWith([
+      expect.objectContaining({
+        lineType: "WORK",
+        description: "Основная работа",
+        lineComment: "Фото до ремонта",
+      }),
+    ])
+    const photoDialog = await screen.findByRole("dialog", {
+      name: "Выбрать фото работы",
+    })
+    await user.click(
+      within(photoDialog).getByRole("button", { name: "Отмена" })
+    )
+
+    await user.click(screen.getByRole("button", { name: "Далее" }))
+
+    expect(onChange).toHaveBeenCalledTimes(1)
+    const savedLines = onChange.mock.calls[0]?.[0] as RepairEstimateLineDto[]
+    expect(savedLines).toHaveLength(1)
+    expect(savedLines[0]).toEqual(
+      expect.objectContaining({
+        lineType: "WORK",
+        description: "Основная работа",
+        lineComment: "Фото до ремонта",
+      })
+    )
   })
 
   it("lets the user choose which duplicate catalog work receives the quantity", async () => {
@@ -656,7 +735,11 @@ describe("RepairEstimateCatalogPicker", () => {
       await screen.findByRole("textbox", { name: "Комментарий к работе" }),
       "Не менять существующий комментарий"
     )
-    await user.click(screen.getByRole("button", { name: "Добавить" }))
+    expect(screen.getByRole("button", { name: "Добавить фото" })).toBeTruthy()
+    expect(
+      screen.getByRole("button", { name: "Выбрать из сделанных" })
+    ).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Далее" }))
 
     expect(onChange).toHaveBeenCalledTimes(1)
     expect(onChange.mock.calls[0]?.[0]).toEqual([
@@ -668,8 +751,7 @@ describe("RepairEstimateCatalogPicker", () => {
       expect.objectContaining({
         id: secondExisting.id,
         quantity: 2,
-        lineComment:
-          "Второй комментарий; Не менять существующий комментарий",
+        lineComment: "Второй комментарий; Не менять существующий комментарий",
       }),
     ])
   })
@@ -785,7 +867,7 @@ describe("RepairEstimateCatalogPicker", () => {
     await user.click(
       await screen.findByRole("button", { name: "Выбрать: Железная дверь" })
     )
-    await user.click(await screen.findByRole("button", { name: "Добавить" }))
+    await user.click(await screen.findByRole("button", { name: "Далее" }))
 
     const addedLines = onChange.mock.calls[0]?.[0] as Array<{
       description: string
@@ -852,7 +934,7 @@ describe("RepairEstimateCatalogPicker", () => {
     await user.click(
       await screen.findByRole("button", { name: "Выбрать: Дверь" })
     )
-    await user.click(await screen.findByRole("button", { name: "Добавить" }))
+    await user.click(await screen.findByRole("button", { name: "Далее" }))
 
     expect(
       await screen.findByRole("button", { name: "Выбрать: Замена двери" })

@@ -602,6 +602,31 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/driver-board/tasks/{externalTaskId}/return-to-capital-repairs:
+    parameters:
+      - name: externalTaskId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: returnDriverTaskToCapitalRepairs
+      description: >-
+        Cancels an unfinished capital-to-production movement while preserving
+        its task history. The active repair becomes available in the dedicated
+        capital-repair column again; ordinary movements are rejected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReturnCapitalRepairRequest" }
+      responses:
+        "204": { description: Capital repair returned to its dedicated column. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/driver-board/capital-repairs/{repairId}/promote:
     parameters:
       - name: repairId
@@ -2057,6 +2082,13 @@ components:
       required: [warehouseId]
       properties:
         warehouseId: { type: string, format: uuid }
+    ReturnCapitalRepairRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, expectedTaskVersion]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
     CreateReturnRequest:
       type: object
       additionalProperties: false

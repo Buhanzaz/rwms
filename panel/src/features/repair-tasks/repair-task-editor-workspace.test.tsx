@@ -211,8 +211,7 @@ afterEach(() => {
 maintenanceLifecycle.getReworkCandidates.mockResolvedValue({ items: [] })
 
 describe("RepairTaskEditorWorkspace queue retry", () => {
-  it("adds a completed chain position as an explicit repeat line", async () => {
-    const user = userEvent.setup()
+  it("adds acceptance-selected chain work as an explicit repeat line", async () => {
     maintenanceLifecycle.getReworkCandidates.mockResolvedValueOnce({
       items: [
         {
@@ -262,6 +261,7 @@ describe("RepairTaskEditorWorkspace queue retry", () => {
               sourceEstimateVersion: null,
               rentalItemId,
               lines: [],
+              selectedLineageRootIds: ["root-line-1"],
             }}
             onClose={vi.fn()}
             onSaved={vi.fn()}
@@ -270,12 +270,8 @@ describe("RepairTaskEditorWorkspace queue retry", () => {
       </MemoryRouter>
     )
 
-    expect(await screen.findByText("Ремонт каркаса")).toBeTruthy()
-    await user.click(screen.getByRole("button", { name: "Переделать" }))
-    expect(screen.getByText("REPEAT · Ремонт каркаса")).toBeTruthy()
-    expect(
-      screen.queryByRole("button", { name: "Переделать" })
-    ).toBeNull()
+    expect(await screen.findByText("REPEAT · Ремонт каркаса")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Переделать" })).toBeNull()
   })
 
   it("places editor actions in the top toolbar and keeps catalog paging below", async () => {

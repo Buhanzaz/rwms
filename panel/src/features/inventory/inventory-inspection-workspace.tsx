@@ -274,6 +274,8 @@ export function InventoryInspectionWorkspace({
             lines={lines}
             readOnly={false}
             catalogValuesReadOnly
+            accessToken={accessToken}
+            mediaOwner={inventoryFindingMediaOwner(findingId, warehouseId)}
             onChange={onLinesChange}
           />
         )
@@ -284,6 +286,8 @@ export function InventoryInspectionWorkspace({
             <RepairEstimateCatalogPicker
               lines={lines}
               readOnly={readOnly}
+              accessToken={accessToken}
+              mediaOwner={inventoryFindingMediaOwner(findingId, warehouseId)}
               onPagerChange={handleCatalogPagerChange}
               onChange={(nextLines) => {
                 onLinesChange(nextLines)

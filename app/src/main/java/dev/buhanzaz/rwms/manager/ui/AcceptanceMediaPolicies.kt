@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.manager.ui
 
 import dev.buhanzaz.rwms.manager.network.EstimateDto
+import dev.buhanzaz.rwms.manager.network.EstimateLineDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.network.RepairDto
 import dev.buhanzaz.rwms.manager.network.RepairStageDto
@@ -24,6 +25,54 @@ data class AcceptanceMediaCollection(
  */
 internal fun MaintenanceAcceptanceEditorState.hasAcceptanceEvidence(): Boolean =
     photoUris.isNotEmpty() || readyMedia.isNotEmpty()
+
+internal fun MaintenanceAcceptanceEditorState.hasAcceptedAllWorkLines(): Boolean {
+    val workLineIds = repair.plan.stages
+        .asSequence()
+        .flatMap { stage -> stage.workLines.asSequence() }
+        .map { line -> line.id }
+        .toSet()
+    return workLineIds.all(acceptedWorkLineIds::contains)
+}
+
+internal fun acceptanceWorkSourceMedia(
+    repair: RepairDto,
+    stage: RepairStageDto,
+    work: EstimateLineDto,
+): AcceptanceMediaCollection {
+    require(work.lineType == "WORK") { "Исходные фотографии доступны только для работы" }
+    val owner = when {
+        stage.taskSync?.taskBoardEntryId != null -> Triple(
+            "TASK_BOARD_ENTRY",
+            stage.taskSync.taskBoardEntryId,
+            "WORK_RESULT",
+        )
+        repair.kind != "REWORK" && repair.estimateId != null -> Triple(
+            "MAINTENANCE_ESTIMATE",
+            repair.estimateId,
+            "ESTIMATE",
+        )
+        repair.origin == "INVENTORY" && repair.inventorySource != null -> Triple(
+            "INVENTORY_FINDING",
+            repair.inventorySource.findingId,
+            "INSPECTION",
+        )
+        else -> Triple(
+            "MAINTENANCE_REPAIR",
+            work.sourceRepairId ?: repair.id,
+            "REPAIR",
+        )
+    }
+    return AcceptanceMediaCollection(
+        title = "Фото до: ${work.description}",
+        items = work.mediaReferences
+            .distinctBy(MediaReferenceDto::mediaId)
+            .map { reference ->
+                AcceptanceScopedMedia(reference, owner.first, owner.second, owner.third)
+            },
+        emptyMessage = "Для этой работы исходные фотографии не добавлены.",
+    )
+}
 
 internal fun acceptanceCabinMedia(
     repair: RepairDto,
@@ -62,7 +111,7 @@ internal fun acceptanceCabinMedia(
 
 internal fun acceptanceStageMedia(stage: RepairStageDto): AcceptanceMediaCollection =
     AcceptanceMediaCollection(
-        title = "Фото этапа ${stage.order + 1}",
+        title = "Фото после: этап ${stage.order + 1}",
         items = stage.evidence
             .map { evidence ->
                 AcceptanceScopedMedia(

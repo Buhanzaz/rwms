@@ -38,6 +38,8 @@ data class BackgroundUploadPhoto(
     val sortOrder: Int,
     val cover: Boolean = false,
     val rotationDegrees: Int = 0,
+    /** Maintenance/inventory editor line identity; null means aggregate photo. */
+    val lineId: String? = null,
     val status: BackgroundPhotoStatus = BackgroundPhotoStatus.QUEUED,
     val reference: MediaReferenceDto? = null,
     val error: String? = null,
@@ -85,6 +87,7 @@ data class PendingBackgroundPhoto(
     val sortOrder: Int,
     val cover: Boolean = false,
     val rotationDegrees: Int = 0,
+    val lineId: String? = null,
 )
 
 data class BackgroundUploadDraft(
@@ -122,6 +125,9 @@ data class InventoryUploadCommand(
     val existingMedia: List<MediaReferenceDto> = emptyList(),
     val existingCoverMediaId: String? = null,
     val planSelection: InventoryPlanSelectionDto? = null,
+    val planLineIds: List<String> = emptyList(),
+    /** Line ids whose contract permits source media. Kept with the outbox command as a final guard. */
+    val planWorkLineIds: List<String> = emptyList(),
     val furnitureMove: InventoryFurnitureUploadCommand? = null,
     val inspectionSaved: Boolean = false,
 )
@@ -205,9 +211,22 @@ internal data class BackgroundUploadStoreDocument(
 )
 
 internal fun InventoryPlanSelectionDto.withUploadedMedia(
-    media: List<MediaReferenceDto>,
     coverMediaId: String?,
+    lineMedia: Map<String, List<MediaReferenceDto>>,
+    lineIds: List<String>,
+    workLineIds: Set<String>,
 ): InventoryPlanSelectionDto = copy(
     coverMediaId = coverMediaId,
-    lines = lines.map { line -> line.copy(mediaReferences = media) },
+    lines = lines.mapIndexed { index, line ->
+        val lineId = lineIds.getOrNull(index)
+        line.copy(
+            mediaReferences = when {
+                lineId != null && lineId !in workLineIds -> emptyList()
+                lineId != null -> (
+                    line.mediaReferences + lineMedia[lineId].orEmpty()
+                    ).distinctBy(MediaReferenceDto::mediaId)
+                else -> line.mediaReferences.distinctBy(MediaReferenceDto::mediaId)
+            },
+        )
+    },
 )

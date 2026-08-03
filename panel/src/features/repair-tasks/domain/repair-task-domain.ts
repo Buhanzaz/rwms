@@ -33,7 +33,12 @@ function cloneLine(line: RepairEstimateLineDto) {
 
 function commentsForLines(lines: RepairEstimateLineDto[]) {
   return Array.from(
-    new Set(lines.map((line) => line.lineComment.trim()).filter(Boolean))
+    new Set(
+      lines
+        .filter((line) => line.lineType === "WORK")
+        .map((line) => line.lineComment.trim())
+        .filter(Boolean)
+    )
   ).join("; ")
 }
 

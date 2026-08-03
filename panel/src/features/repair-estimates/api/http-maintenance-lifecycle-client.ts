@@ -182,6 +182,7 @@ export type MaintenanceLeaseSnapshot = {
 
 export type MaintenanceTaskSyncSnapshot = {
   externalTaskId: string
+  taskBoardEntryId: string | null
   taskBoardRegistrationVersion: number | null
   generationState: "PENDING_GENERATION" | "GENERATED" | "FAILED"
   delivery: MaintenanceDeliverySnapshot

@@ -666,7 +666,7 @@ function createNodeMutation(
     characteristicId: node.characteristic?.characteristicId ?? null,
     canvasX: node.canvasX,
     canvasY: node.canvasY,
-    comment: node.comment,
+    comment: node.nodeType === "MATERIAL" ? null : node.comment,
   }
 }
 
@@ -960,6 +960,7 @@ function NodeEditorDialogContent({
                         value === "WORK" ? current.forcesCapitalRepair : false,
                       characteristicId:
                         value === "MATERIAL" ? current.characteristicId : null,
+                      comment: value === "MATERIAL" ? null : current.comment,
                     }))
                     if (value !== "MATERIAL") {
                       setCharacteristicLinked(false)
@@ -1340,32 +1341,35 @@ function NodeEditorDialogContent({
               ) : null}
             </FieldGroup>
 
-            <Field data-invalid={commentTooLong || undefined}>
-              <FieldLabel htmlFor={`${fieldIdPrefix}-comment`}>
-                Комментарий
-              </FieldLabel>
-              <Textarea
-                id={`${fieldIdPrefix}-comment`}
-                value={draft.comment ?? ""}
-                aria-invalid={commentTooLong || undefined}
-                aria-describedby={`${fieldIdPrefix}-comment-limit`}
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    comment: event.target.value,
-                  }))
-                }
-              />
-              <FieldDescription id={`${fieldIdPrefix}-comment-limit`}>
-                {commentLength} из {CATALOG_COMMENT_MAX_LENGTH} символов
-              </FieldDescription>
-              {commentTooLong && (
-                <FieldError>
-                  Максимальная длина комментария — {CATALOG_COMMENT_MAX_LENGTH}{" "}
-                  символов. Сократите текст перед сохранением.
-                </FieldError>
-              )}
-            </Field>
+            {draft.nodeType !== "MATERIAL" && (
+              <Field data-invalid={commentTooLong || undefined}>
+                <FieldLabel htmlFor={`${fieldIdPrefix}-comment`}>
+                  Комментарий
+                </FieldLabel>
+                <Textarea
+                  id={`${fieldIdPrefix}-comment`}
+                  value={draft.comment ?? ""}
+                  aria-invalid={commentTooLong || undefined}
+                  aria-describedby={`${fieldIdPrefix}-comment-limit`}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      comment: event.target.value,
+                    }))
+                  }
+                />
+                <FieldDescription id={`${fieldIdPrefix}-comment-limit`}>
+                  {commentLength} из {CATALOG_COMMENT_MAX_LENGTH} символов
+                </FieldDescription>
+                {commentTooLong && (
+                  <FieldError>
+                    Максимальная длина комментария —{" "}
+                    {CATALOG_COMMENT_MAX_LENGTH} символов. Сократите текст перед
+                    сохранением.
+                  </FieldError>
+                )}
+              </Field>
+            )}
 
             {error !== null && <ErrorBox>{error}</ErrorBox>}
           </FieldGroup>
@@ -1834,10 +1838,10 @@ function CatalogCanvasNodeMetadata({
         </CatalogCanvasNodeMetrics>
       )}
 
-      {(node.commonItem || node.comment) && (
+      {(node.commonItem || (node.nodeType !== "MATERIAL" && node.comment)) && (
         <div className="flex flex-col gap-1 text-xs text-muted-foreground">
           {node.commonItem && <span>Общий элемент</span>}
-          {node.comment && (
+          {node.nodeType !== "MATERIAL" && node.comment && (
             <span className="break-words whitespace-pre-wrap">
               {node.comment}
             </span>
@@ -2502,8 +2506,8 @@ function CommonCatalogNodePickerDialog({
         <DialogHeader>
           <DialogTitle>Добавить общее</DialogTitle>
           <DialogDescription>
-            Выберите общую позицию для категории «{categoryName}». Будет
-            создан отдельный блок без стрелок.
+            Выберите общую позицию для категории «{categoryName}». Будет создан
+            отдельный блок без стрелок.
           </DialogDescription>
         </DialogHeader>
 
@@ -2546,7 +2550,9 @@ function CommonCatalogNodePickerDialog({
                 onClick={() => onSelect(item)}
               >
                 <span className="min-w-0">
-                  <span className="block truncate font-medium">{item.name}</span>
+                  <span className="block truncate font-medium">
+                    {item.name}
+                  </span>
                   <span className="block text-xs font-normal text-muted-foreground">
                     {item.unit ?? "Без единицы"}
                     {item.unitPrice ? ` · ${item.unitPrice}` : ""}
@@ -2892,7 +2898,9 @@ function CatalogCanvasCategoryEditor({
             <Button
               type="button"
               variant="outline"
-              disabled={addCommonNodeMutation.isPending || saveCanvasMutation.isPending}
+              disabled={
+                addCommonNodeMutation.isPending || saveCanvasMutation.isPending
+              }
               onClick={() => {
                 setError(null)
                 setCommonPickerOpen(true)
@@ -3153,7 +3161,7 @@ function CatalogItemsTable({
           <tr key={item.id} className="border-t">
             <td className="max-w-72 px-3 py-2">
               <div className="truncate font-medium">{item.name}</div>
-              {item.comment && (
+              {section.sectionType === "WORK" && item.comment && (
                 <div className="text-xs break-words whitespace-pre-wrap text-muted-foreground">
                   {item.comment}
                 </div>

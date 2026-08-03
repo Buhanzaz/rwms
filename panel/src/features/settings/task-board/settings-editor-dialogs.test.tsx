@@ -49,9 +49,9 @@ const generalClass = workerClass("general", "Разнорабочие")
 const movementDefinition: QueueDefinitionDto = {
   id: "definition-movement",
   version: 2,
-  name: "Перемещение",
+  name: "Внутренние работы",
   description: null,
-  type: "MOVEMENT",
+  type: "REPAIR",
   purpose: "GENERAL",
 }
 
@@ -245,9 +245,14 @@ describe("QueueDefinitionEditorDialog", () => {
       version: movementDefinition.version,
       name: "Водители",
       description: null,
-      type: "MOVEMENT",
+      type: "REPAIR",
       purpose: "GENERAL",
     })
+    expect(screen.queryByRole("textbox", { name: "Описание" })).toBeNull()
+    await user.click(screen.getByRole("combobox", { name: "Тип" }))
+    expect(
+      screen.queryByRole("option", { name: "Перемещение" })
+    ).toBeNull()
     expect(screen.queryByText("Классы исполнителей")).toBeNull()
     expect(
       screen.queryByRole("spinbutton", { name: "Минимум фото результата" })
@@ -331,7 +336,7 @@ describe("QueueEditorDialog warehouse settings", () => {
 
     await user.click(screen.getByRole("combobox", { name: "Общая очередь" }))
     await user.click(
-      screen.getByRole("option", { name: "Перемещение · Перемещение" })
+      screen.getByRole("option", { name: "Внутренние работы · Ремонт" })
     )
     await user.click(screen.getByRole("checkbox", { name: driverClass.name }))
     await user.click(screen.getByRole("checkbox", { name: slingerClass.name }))

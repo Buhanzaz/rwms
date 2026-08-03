@@ -377,14 +377,13 @@ describe("TaskBoardSettingsPage navigation", () => {
     expect(sectionButtons.map((button) => button.textContent)).toEqual([
       "Каталог очередей",
       "Очереди склада",
-      "Порядок",
       "Классы",
       "Бригады",
       "Рабочие",
     ])
     expect(sectionButtons[1]?.getAttribute("aria-checked")).toBe("true")
     expect(
-      navigation.firstElementChild?.classList.contains("lg:grid-cols-6")
+      navigation.firstElementChild?.classList.contains("lg:grid-cols-5")
     ).toBe(true)
     expect(
       sectionButtons.every((button) => button.classList.contains("h-9"))
@@ -402,18 +401,15 @@ describe("TaskBoardSettingsPage navigation", () => {
       createQueueButton.parentElement?.classList.contains("justify-end")
     ).toBe(true)
     expect(screen.queryByText("Водители")).toBeNull()
+    expect(
+      screen.getByRole("button", { name: "Сохранить порядок" })
+    ).toBeTruthy()
 
     fireEvent.click(screen.getByRole("radio", { name: "Каталог очередей" }))
     expect(
       screen.getByRole("button", { name: "Создать общую очередь" })
     ).toBeTruthy()
     expect(screen.queryByText("Классы исполнителей")).toBeNull()
-
-    fireEvent.click(screen.getByRole("radio", { name: "Порядок" }))
-    expect(
-      screen.getByRole("button", { name: "Сохранить порядок" })
-    ).toBeTruthy()
-    expect(screen.queryByText("Водители")).toBeNull()
 
     fireEvent.click(screen.getByRole("radio", { name: "Классы" }))
     expect(screen.queryByText("Водители")).toBeNull()
@@ -429,6 +425,41 @@ describe("TaskBoardSettingsPage navigation", () => {
         createButton.parentElement?.classList.contains("justify-end")
       ).toBe(true)
     }
+  })
+
+  it("removes the legacy general movement definition and description from repair settings", async () => {
+    const movementDefinition = queueDefinitionFixture({
+      id: "00000000-0000-4000-8000-000000000077",
+      name: "Перемещения",
+      description: "Старая очередь водителей",
+      type: "MOVEMENT",
+    })
+    const movementQueue: WorkQueueDto = {
+      ...queueFixture(),
+      id: "00000000-0000-4000-8000-000000000078",
+      definitionId: movementDefinition.id,
+      name: movementDefinition.name,
+      description: movementDefinition.description,
+      type: "MOVEMENT",
+      sortOrder: 8,
+    }
+    mocks.listQueueDefinitions.mockResolvedValue([
+      queueDefinitionFixture(),
+      movementDefinition,
+    ])
+    mocks.listQueues.mockResolvedValue([
+      queueFixture(),
+      movementQueue,
+      driverQueueFixture(),
+    ])
+
+    renderPage()
+
+    await screen.findByRole("radio", { name: "Каталог очередей" })
+    expect(screen.queryByText("Перемещения")).toBeNull()
+    fireEvent.click(screen.getByRole("radio", { name: "Каталог очередей" }))
+    expect(screen.queryByText("Перемещения")).toBeNull()
+    expect(screen.queryByText("Описание")).toBeNull()
   })
 
   it("connects a definition to only the selected warehouse with its stable id", async () => {
@@ -482,8 +513,9 @@ describe("TaskBoardSettingsPage navigation", () => {
     mocks.listQueues.mockResolvedValue([first, driverQueueFixture(), second])
 
     renderPage()
-    fireEvent.click(await screen.findByRole("radio", { name: "Порядок" }))
-    fireEvent.click(screen.getByRole("button", { name: "Сохранить порядок" }))
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Сохранить порядок" })
+    )
 
     await waitFor(() =>
       expect(mocks.reorderQueues).toHaveBeenCalledWith(
@@ -495,6 +527,45 @@ describe("TaskBoardSettingsPage navigation", () => {
             queueId: driverQueueFixture().id,
             expectedVersion: driverQueueFixture().version,
           },
+          { queueId: second.id, expectedVersion: second.version },
+        ]
+      )
+    )
+  })
+
+  it("preserves a legacy movement position while ordering visible repair queues", async () => {
+    const first = queueFixture()
+    const movement = {
+      ...queueFixture(),
+      id: "00000000-0000-4000-8000-000000000066",
+      definitionId: "00000000-0000-4000-8000-000000000067",
+      name: "Перемещения",
+      type: "MOVEMENT" as const,
+      sortOrder: 5,
+      version: 2,
+    }
+    const second = {
+      ...queueFixture(),
+      id: "00000000-0000-4000-8000-000000000099",
+      definitionId: "00000000-0000-4000-8000-000000000088",
+      name: "Внутренний ремонт",
+      sortOrder: 20,
+      version: 4,
+    }
+    mocks.listQueues.mockResolvedValue([first, movement, second])
+
+    renderPage()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Сохранить порядок" })
+    )
+
+    await waitFor(() =>
+      expect(mocks.reorderQueues).toHaveBeenCalledWith(
+        "task-board-token",
+        WAREHOUSE_ID,
+        [
+          { queueId: first.id, expectedVersion: first.version },
+          { queueId: movement.id, expectedVersion: movement.version },
           { queueId: second.id, expectedVersion: second.version },
         ]
       )

@@ -467,7 +467,8 @@ class MaintenanceDependencyGatewayTest {
                 2.5,
                 "шт",
                 15,
-                "Проверить внешний угол")),
+                "Проверить внешний угол",
+                List.of(mediaId))),
         List.of(new MaintenanceDependencyGateway.TaskMaterial(
             UUID.randomUUID(), "Профлист", 3.0, "лист")),
         List.of(
@@ -485,7 +486,8 @@ class MaintenanceDependencyGatewayTest {
             "\"works\":[{\"id\":")))
         .andExpect(content().string(containsString(
             "\"name\":\"Замена профлиста\",\"quantity\":2.5,\"unit\":\"шт\",\"durationMinutes\":15,"
-                + "\"comment\":\"Проверить внешний угол\"}]")))
+                + "\"comment\":\"Проверить внешний угол\",\"sourceMediaIds\":[\""
+                + mediaId + "\"]}]")))
         .andExpect(content().string(containsString(
             "\"materials\":[{\"id\":")))
         .andExpect(content().string(containsString(

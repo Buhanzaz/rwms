@@ -2224,7 +2224,7 @@ components:
       additionalProperties: false
     TaskWorkSnapshotRequest:
       type: object
-      required: [id, name, quantity, unit, durationMinutes, comment]
+      required: [id, name, quantity, unit, durationMinutes, comment, sourceMediaIds]
       properties:
         id: { type: string, format: uuid }
         name: { type: string, minLength: 1, maxLength: 1000 }
@@ -2232,6 +2232,12 @@ components:
         unit: { oneOf: [{ type: string, maxLength: 32 }, { type: 'null' }] }
         durationMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
         comment: { oneOf: [{ type: string, maxLength: 2000 }, { type: 'null' }] }
+        sourceMediaIds:
+          description: Source media from the enclosing route step that belong to this work only.
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
       additionalProperties: false
     TaskMaterialSnapshotRequest:
       type: object
@@ -2673,7 +2679,7 @@ components:
       additionalProperties: false
     WorkerWork:
       type: object
-      required: [id, name, quantity, unit, durationMinutes, comment]
+      required: [id, name, quantity, unit, durationMinutes, comment, sourceMediaIds]
       properties:
         id: { type: string, format: uuid }
         name: { type: string, minLength: 1 }
@@ -2681,6 +2687,11 @@ components:
         unit: { oneOf: [{ type: string }, { type: 'null' }] }
         durationMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
         comment: { oneOf: [{ type: string }, { type: 'null' }] }
+        sourceMediaIds:
+          description: Identities to resolve against WorkerTaskDetail.sourceMedia for this work.
+          type: array
+          uniqueItems: true
+          items: { type: string, format: uuid }
       additionalProperties: false
     WorkerVisibleComment:
       type: object

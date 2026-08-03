@@ -28,6 +28,7 @@ import type {
   RepairEstimateCompletionMode,
   RepairEstimateDto,
   RepairEstimateEditorDraft,
+  RepairEstimateLineDto,
   RepairPriority,
   RepairEstimateTaskPlanDto,
 } from "@/features/repair-estimates/model/repair-estimate"
@@ -193,18 +194,22 @@ function RepairEstimateEditorContent({
     })
   }
 
-  async function ensureMediaOwner() {
+  async function ensureMediaOwner(lines?: RepairEstimateLineDto[]) {
     if (draft.estimateId) {
       return maintenanceEstimateMediaOwner(draft.estimateId, warehouseId)
     }
     if (readOnly) {
       throw new Error("Для добавления фотографий нужен доступ EDIT")
     }
-    if (!validateDraft()) {
+    const ownerDraft = lines ? { ...draft, lines } : draft
+    if (!validateDraft(ownerDraft)) {
       throw new Error("Сначала заполните обязательные поля сметы")
     }
 
-    const saved = await saveRepairEstimateDraft({ draft, warehouseId })
+    const saved = await saveRepairEstimateDraft({
+      draft: ownerDraft,
+      warehouseId,
+    })
     queryClient.setQueryData(
       repairEstimateDetailQueryKey(warehouseId, saved.id),
       saved
@@ -311,17 +316,17 @@ function RepairEstimateEditorContent({
     }
   }, [draft.lines])
 
-  function validateDraft() {
-    if (!draft.rentalItemId) {
+  function validateDraft(candidate: RepairEstimateEditorDraft = draft) {
+    if (!candidate.rentalItemId) {
       setError("Выберите бытовку")
       return false
     }
 
     try {
-      assertEstimateLinesValid(draft.lines)
+      assertEstimateLinesValid(candidate.lines)
       if (
-        (draft.maintenanceMediaReferences?.length ?? 0) > 0 &&
-        !draft.coverMediaId
+        (candidate.maintenanceMediaReferences?.length ?? 0) > 0 &&
+        !candidate.coverMediaId
       ) {
         throw new Error("Выберите титульную фотографию")
       }
@@ -411,6 +416,8 @@ function RepairEstimateEditorContent({
           customWorkLinesOnly
           accessToken={accessToken}
           warehouseId={warehouseId}
+          mediaOwner={mediaOwner}
+          ensureMediaOwner={ensureMediaOwner}
           onChange={(lines) => setDraft((current) => ({ ...current, lines }))}
         />
       </div>
@@ -479,6 +486,9 @@ function RepairEstimateEditorContent({
           <RepairEstimateCatalogPicker
             lines={draft.lines}
             readOnly={interactionDisabled}
+            accessToken={accessToken}
+            mediaOwner={mediaOwner}
+            ensureMediaOwner={ensureMediaOwner}
             onChange={(lines) => setDraft((current) => ({ ...current, lines }))}
             onPagerChange={handleCatalogPagerChange}
           />
@@ -537,6 +547,9 @@ function RepairEstimateEditorContent({
             readOnly={interactionDisabled}
             title="Фотографии сметы"
             toolbarAction={beforePhotosButton}
+            authoritativeReadyReferences={
+              draft.maintenanceMediaReferences ?? []
+            }
             coverMediaId={draft.coverMediaId ?? null}
             requireCover
             onReadyReferencesChange={updateReadyMediaReferences}

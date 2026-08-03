@@ -77,6 +77,7 @@ import androidx.compose.ui.window.DialogProperties
 import dev.buhanzaz.rwms.manager.network.CatalogNodeDto
 import dev.buhanzaz.rwms.manager.network.CatalogLinkDto
 import dev.buhanzaz.rwms.manager.network.EstimateDto
+import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.network.RentalItemDto
 import dev.buhanzaz.rwms.manager.network.RepairDto
 import dev.buhanzaz.rwms.manager.network.ReworkCandidateDto
@@ -103,6 +104,7 @@ import dev.buhanzaz.rwms.manager.ui.components.EmptyState
 import dev.buhanzaz.rwms.manager.ui.components.ManagerMenuCard
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPanel
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPhotoGalleryDialog
+import dev.buhanzaz.rwms.manager.ui.components.ManagerPhotoCaptureScreen
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPhotoPreview
 import dev.buhanzaz.rwms.manager.ui.components.ManagerScreenScaffold
 import dev.buhanzaz.rwms.manager.ui.components.StatusPill
@@ -347,7 +349,14 @@ fun MaintenanceEditorScreen(
     onUpdateAssetSearch: (String) -> Unit,
     onSearchAssets: () -> Unit,
     onSelectAsset: (RentalItemDto) -> Unit,
-    onAddCatalogNodes: (List<CatalogNodeDto>, String, String, String?) -> Boolean,
+    onAddCatalogNodes: (
+        List<CatalogNodeDto>,
+        String,
+        String,
+        String?,
+        List<String>,
+        List<MediaReferenceDto>,
+    ) -> Boolean,
     onToggleReworkCandidate: (ReworkCandidateDto) -> Unit,
     onRefreshCatalog: () -> Unit,
     onEdit: ((MaintenanceEditorState) -> MaintenanceEditorState) -> Unit,
@@ -853,7 +862,14 @@ private fun MaintenanceAssetSearchFeedback(feedback: MaintenanceSearchFeedback) 
 internal fun MaintenanceCatalogStep(
     editor: MaintenanceEditorState,
     uiState: ManagerUiState,
-    onAddCatalogNodes: (List<CatalogNodeDto>, String, String, String?) -> Boolean,
+    onAddCatalogNodes: (
+        List<CatalogNodeDto>,
+        String,
+        String,
+        String?,
+        List<String>,
+        List<MediaReferenceDto>,
+    ) -> Boolean,
     onToggleReworkCandidate: (ReworkCandidateDto) -> Unit = {},
     onRefreshCatalog: () -> Unit,
     onEdit: ((MaintenanceEditorState) -> MaintenanceEditorState) -> Unit,
@@ -942,8 +958,18 @@ internal fun MaintenanceCatalogStep(
         quantity: String,
         comment: String,
         existingWorkLineId: String?,
+        photoUris: List<String>,
+        mediaReferences: List<MediaReferenceDto>,
     ) {
-        if (!onAddCatalogNodes(context.nodes, quantity, comment, existingWorkLineId)) return
+        if (!onAddCatalogNodes(
+                context.nodes,
+                quantity,
+                comment,
+                existingWorkLineId,
+                photoUris,
+                mediaReferences,
+            )
+        ) return
         addContext = null
         existingWorkContext = null
         resetNavigation()
@@ -1069,16 +1095,54 @@ internal fun MaintenanceCatalogStep(
             catalogNodes = catalogNodes,
             catalogLinks = uiState.maintenanceCatalogLinks,
             liveRoutings = uiState.repairTaskBoards.maintenanceWorkRoutingOptions(),
+            availablePhotos = editor.readyMedia
+                .filterNot { reference ->
+                    editor.lines.any { line ->
+                        line.mediaReferences.any { it.mediaId == reference.mediaId }
+                    }
+                }
+                .mapNotNull { reference ->
+                    editor.readyPhotoUris[reference.mediaId]?.let { uri ->
+                        MaintenanceWorkPhotoOption(reference, uri)
+                    }
+                },
             onDismiss = { customLineVisible = false },
             onAdd = { line ->
-                onEdit { current -> current.copy(lines = current.lines + line) }
+                onEdit { current ->
+                    val lineMediaIds = line.mediaReferences.map(MediaReferenceDto::mediaId).toSet()
+                    current.copy(
+                        lines = current.lines + line,
+                        readyMedia = current.readyMedia.filterNot { reference ->
+                            reference.mediaId in lineMediaIds
+                        },
+                        coverPhotoKey = current.coverPhotoKey.takeUnless { key ->
+                            key?.removePrefix("media:") in lineMediaIds
+                        },
+                    )
+                }
                 customLineVisible = false
             },
         )
     }
     editor.lines.firstOrNull { line -> line.id == editingLineId }?.let { line ->
+        val occupiedMediaIds = editor.lines
+            .asSequence()
+            .filter { candidate -> candidate.id != line.id }
+            .flatMap { candidate -> candidate.mediaReferences.asSequence() }
+            .map(MediaReferenceDto::mediaId)
+            .toSet()
         MaintenanceLineEditSheet(
             line = line,
+            availablePhotos = (
+                editor.readyMedia.filter { reference -> reference.mediaId !in occupiedMediaIds } +
+                    line.mediaReferences
+                )
+                .distinctBy(MediaReferenceDto::mediaId)
+                .mapNotNull { reference ->
+                    editor.readyPhotoUris[reference.mediaId]?.let { uri ->
+                        MaintenanceWorkPhotoOption(reference, uri)
+                    }
+                },
             onDismiss = { editingLineId = null },
             onSave = { updated ->
                 onEdit { current -> current.replaceMaintenanceLine(line.id) { updated } }
@@ -1095,20 +1159,40 @@ internal fun MaintenanceCatalogStep(
     addContext?.let { context ->
         MaintenanceCatalogAddSheet(
             context = context,
+            availablePhotos = editor.readyMedia
+                .filterNot { reference ->
+                    editor.lines.any { line ->
+                        line.mediaReferences.any { it.mediaId == reference.mediaId }
+                    }
+                }
+                .mapNotNull { reference ->
+                    editor.readyPhotoUris[reference.mediaId]?.let { uri ->
+                        MaintenanceWorkPhotoOption(reference, uri)
+                    }
+                },
             onDismiss = { addContext = null },
-            onConfirm = { quantity, comment ->
+            onConfirm = { quantity, comment, photoUris, mediaReferences ->
                 val existingWorks = maintenanceCatalogExistingWorkCandidates(
                     editor = editor,
                     nodes = context.nodes,
                 )
                 if (existingWorks.isEmpty()) {
-                    completeAdd(context, quantity, comment, existingWorkLineId = null)
+                    completeAdd(
+                        context,
+                        quantity,
+                        comment,
+                        existingWorkLineId = null,
+                        photoUris = photoUris,
+                        mediaReferences = mediaReferences,
+                    )
                 } else {
                     addContext = null
                     existingWorkContext = MaintenanceCatalogExistingWorkContext(
                         addContext = context,
                         quantity = quantity,
                         comment = comment,
+                        photoUris = photoUris,
+                        mediaReferences = mediaReferences,
                         candidates = existingWorks,
                     )
                 }
@@ -1125,6 +1209,8 @@ internal fun MaintenanceCatalogStep(
                     context.quantity,
                     context.comment,
                     existingWorkLineId = lineId,
+                    photoUris = context.photoUris,
+                    mediaReferences = context.mediaReferences,
                 )
             },
             onCreateNew = {
@@ -1133,6 +1219,8 @@ internal fun MaintenanceCatalogStep(
                     context.quantity,
                     context.comment,
                     existingWorkLineId = null,
+                    photoUris = context.photoUris,
+                    mediaReferences = context.mediaReferences,
                 )
             },
         )
@@ -1373,7 +1461,13 @@ private fun CompactMaintenanceLineRow(
                 color = MaterialTheme.colorScheme.primary,
             )
             Text(
-                text = line.description,
+                text = buildString {
+                    append(line.description)
+                    if (line.lineType == "WORK") {
+                        val photoCount = line.mediaReferences.size + line.photoUris.size
+                        if (photoCount > 0) append(" · фото: $photoCount")
+                    }
+                },
                 modifier = Modifier.padding(start = 8.dp).weight(1f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -1690,7 +1784,14 @@ private data class MaintenanceCatalogExistingWorkContext(
     val addContext: MaintenanceCatalogAddContext,
     val quantity: String,
     val comment: String,
+    val photoUris: List<String>,
+    val mediaReferences: List<MediaReferenceDto>,
     val candidates: List<MaintenanceLineEditorState>,
+)
+
+private data class MaintenanceWorkPhotoOption(
+    val reference: MediaReferenceDto,
+    val uri: String,
 )
 
 internal fun maintenanceCatalogSelectionHasWork(nodes: List<CatalogNodeDto>): Boolean =
@@ -1766,12 +1867,23 @@ private fun MaintenanceCatalogExistingWorkDialog(
 @Composable
 private fun MaintenanceCatalogAddSheet(
     context: MaintenanceCatalogAddContext,
+    availablePhotos: List<MaintenanceWorkPhotoOption>,
     onDismiss: () -> Unit,
-    onConfirm: (String, String) -> Unit,
+    onConfirm: (String, String, List<String>, List<MediaReferenceDto>) -> Unit,
 ) {
     var quantity by remember(context.quantityNode.id) { mutableStateOf("1") }
     var comment by remember(context.quantityNode.id) { mutableStateOf("") }
-    val hasWork = maintenanceCatalogSelectionHasWork(context.nodes)
+    var capturedPhotoUris by remember(context.quantityNode.id) {
+        mutableStateOf(emptyList<String>())
+    }
+    var selectedMediaIds by remember(context.quantityNode.id) {
+        mutableStateOf(emptySet<String>())
+    }
+    var cameraOpen by remember(context.quantityNode.id) { mutableStateOf(false) }
+    var pickerOpen by remember(context.quantityNode.id) { mutableStateOf(false) }
+    val workCount = context.nodes.count { node -> node.nodeType == "WORK" }
+    val hasWork = workCount > 0
+    val canAttachWorkPhotos = workCount == 1
     val validQuantity = maintenanceQuantity(quantity)?.let { it > BigDecimal.ZERO } == true
     val validComment = !hasWork || comment.trim().length <= 2_000
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -1828,6 +1940,42 @@ private fun MaintenanceCatalogAddSheet(
                             },
                         )
                     }
+                    if (canAttachWorkPhotos) {
+                        item {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                OutlinedButton(
+                                    onClick = { cameraOpen = true },
+                                    modifier = Modifier.weight(1f),
+                                ) { Text("Добавить фото") }
+                                OutlinedButton(
+                                    onClick = { pickerOpen = true },
+                                    modifier = Modifier.weight(1f),
+                                ) { Text("Выбрать из сделанных") }
+                            }
+                        }
+                        item {
+                            Text(
+                                text = if (capturedPhotoUris.isEmpty() && selectedMediaIds.isEmpty()) {
+                                    "Фото необязательны и относятся только к этой работе."
+                                } else {
+                                    "Выбрано фото: ${capturedPhotoUris.size + selectedMediaIds.size}"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    } else {
+                        item {
+                            Text(
+                                "Фото можно прикрепить после выбора одной конкретной работы.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
                 }
                 item {
                     Button(
@@ -1835,15 +1983,105 @@ private fun MaintenanceCatalogAddSheet(
                             onConfirm(
                                 quantity.trim(),
                                 comment.trim().takeIf { hasWork }.orEmpty(),
+                                capturedPhotoUris.takeIf { canAttachWorkPhotos }.orEmpty(),
+                                availablePhotos
+                                    .filter { option ->
+                                        canAttachWorkPhotos &&
+                                            option.reference.mediaId in selectedMediaIds
+                                    }
+                                    .map(MaintenanceWorkPhotoOption::reference),
                             )
                         },
                         enabled = validQuantity && validComment,
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Добавить") }
+                    ) { Text("Далее") }
                 }
             }
         }
     }
+
+    if (cameraOpen) {
+        Dialog(
+            onDismissRequest = { cameraOpen = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Surface(modifier = Modifier.fillMaxSize()) {
+                ManagerPhotoCaptureScreen(
+                    title = "Фото работы",
+                    photoUris = capturedPhotoUris,
+                    onPhotoCaptured = { uri ->
+                        capturedPhotoUris = (capturedPhotoUris + uri).distinct()
+                    },
+                    onRemovePhotoUri = { uri ->
+                        capturedPhotoUris = capturedPhotoUris - uri
+                    },
+                    onBack = { cameraOpen = false },
+                )
+            }
+        }
+    }
+    if (pickerOpen) {
+        MaintenanceWorkPhotoPickerDialog(
+            availablePhotos = availablePhotos,
+            selectedMediaIds = selectedMediaIds,
+            onSelectedMediaIdsChange = { selectedMediaIds = it },
+            onDismiss = { pickerOpen = false },
+        )
+    }
+}
+
+@Composable
+private fun MaintenanceWorkPhotoPickerDialog(
+    availablePhotos: List<MaintenanceWorkPhotoOption>,
+    selectedMediaIds: Set<String>,
+    onSelectedMediaIdsChange: (Set<String>) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Выбрать фото работы") },
+        text = {
+            if (availablePhotos.isEmpty()) {
+                Text("Свободных загруженных фотографий пока нет.")
+            } else {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 420.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(availablePhotos, key = { it.reference.mediaId }) { option ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            ManagerPhotoPreview(
+                                photoUri = option.uri,
+                                modifier = Modifier.width(96.dp).aspectRatio(4f / 3f),
+                            )
+                            Checkbox(
+                                checked = option.reference.mediaId in selectedMediaIds,
+                                onCheckedChange = { checked ->
+                                    onSelectedMediaIdsChange(
+                                        if (checked) {
+                                            selectedMediaIds + option.reference.mediaId
+                                        } else {
+                                            selectedMediaIds - option.reference.mediaId
+                                        },
+                                    )
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss) { Text("Выбрать") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Отмена") }
+        },
+    )
 }
 
 internal enum class MaintenanceCatalogMode(val label: String) {
@@ -2044,12 +2282,21 @@ private fun CustomMaintenanceLineSheet(
     catalogNodes: List<CatalogNodeDto>,
     catalogLinks: List<CatalogLinkDto>,
     liveRoutings: List<RoutingSnapshotDto>,
+    availablePhotos: List<MaintenanceWorkPhotoOption>,
     onDismiss: () -> Unit,
     onAdd: (MaintenanceLineEditorState) -> Unit,
 ) {
     var draft by remember(editor.entityId, editor.lines.size) {
         mutableStateOf(CustomMaintenanceLineDraft())
     }
+    var capturedPhotoUris by remember(editor.entityId, editor.lines.size) {
+        mutableStateOf(emptyList<String>())
+    }
+    var selectedMediaIds by remember(editor.entityId, editor.lines.size) {
+        mutableStateOf(emptySet<String>())
+    }
+    var cameraOpen by remember(editor.entityId, editor.lines.size) { mutableStateOf(false) }
+    var pickerOpen by remember(editor.entityId, editor.lines.size) { mutableStateOf(false) }
     val stageRoutings = (editor.stages
         .filter { stage -> stage.kind == "REPAIR_WORK" }
         .map { stage -> stage.routing } + editor.lines
@@ -2105,9 +2352,12 @@ private fun CustomMaintenanceLineSheet(
                                 draft = draft.copy(
                                     lineType = "MATERIAL",
                                     durationMinutes = "0",
+                                    comment = "",
                                     routing = draft.routing ?: stageRoutings.firstOrNull()
                                         ?: availableRoutings.firstOrNull(),
                                 )
+                                capturedPhotoUris = emptyList()
+                                selectedMediaIds = emptySet()
                             },
                             label = { Text("Материал") },
                         )
@@ -2122,16 +2372,43 @@ private fun CustomMaintenanceLineSheet(
                         singleLine = true,
                     )
                 }
-                item {
-                    OutlinedTextField(
-                        value = draft.comment,
-                        onValueChange = { value -> draft = draft.copy(comment = value) },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Комментарий") },
-                        minLines = 2,
-                    )
-                }
                 if (draft.lineType == "WORK") {
+                    item {
+                        OutlinedTextField(
+                            value = draft.comment,
+                            onValueChange = { value -> draft = draft.copy(comment = value) },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Комментарий") },
+                            minLines = 2,
+                        )
+                    }
+                    item {
+                        Text("Фото работы", style = MaterialTheme.typography.labelLarge)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OutlinedButton(
+                                onClick = { cameraOpen = true },
+                                modifier = Modifier.weight(1f),
+                            ) { Text("Добавить фото") }
+                            OutlinedButton(
+                                onClick = { pickerOpen = true },
+                                modifier = Modifier.weight(1f),
+                            ) { Text("Выбрать из сделанных") }
+                        }
+                    }
+                    item {
+                        Text(
+                            if (capturedPhotoUris.isEmpty() && selectedMediaIds.isEmpty()) {
+                                "Фото необязательны и относятся только к этой работе."
+                            } else {
+                                "Выбрано фото: ${capturedPhotoUris.size + selectedMediaIds.size}"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     item {
                         OutlinedTextField(
                             value = draft.durationMinutes,
@@ -2206,7 +2483,7 @@ private fun CustomMaintenanceLineSheet(
                             quantity = draft.quantity,
                             unitPrice = draft.unitPrice,
                             normativeMinutes = if (draft.lineType == "MATERIAL") 0 else duration ?: 0,
-                            comment = draft.comment,
+                            comment = draft.comment.takeIf { draft.lineType == "WORK" }.orEmpty(),
                             customRouting = draft.routing,
                         ),
                     )
@@ -2234,8 +2511,18 @@ private fun CustomMaintenanceLineSheet(
                                     } else {
                                         requireNotNull(duration)
                                     },
-                                    comment = draft.comment.trim(),
+                                    comment = draft.comment.trim().takeIf {
+                                        draft.lineType == "WORK"
+                                    }.orEmpty(),
                                     customRouting = draft.routing,
+                                    photoUris = capturedPhotoUris.takeIf {
+                                        draft.lineType == "WORK"
+                                    }.orEmpty(),
+                                    mediaReferences = availablePhotos
+                                        .filter { option ->
+                                            option.reference.mediaId in selectedMediaIds
+                                        }
+                                        .map(MaintenanceWorkPhotoOption::reference),
                                 ),
                             )
                         },
@@ -2246,136 +2533,33 @@ private fun CustomMaintenanceLineSheet(
             }
         }
     }
-}
-
-@Composable
-private fun MaintenanceLinesStep(
-    editor: MaintenanceEditorState,
-    onEdit: ((MaintenanceEditorState) -> MaintenanceEditorState) -> Unit,
-    onContinue: () -> Unit,
-    busy: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    val total = maintenanceTotal(editor.lines)
-    val canContinue = editor.readOnly || maintenanceCanAdvance(editor, step = 4)
-    var editingLineId by remember(editor.entityId) { mutableStateOf<String?>(null) }
-    editor.lines.firstOrNull { line -> line.id == editingLineId }?.let { line ->
-        MaintenanceLineEditSheet(
-            line = line,
-            onDismiss = { editingLineId = null },
-            onSave = { updated ->
-                onEdit { current -> current.replaceMaintenanceLine(line.id) { updated } }
-                editingLineId = null
-            },
-        )
-    }
-    LazyColumn(
-        modifier = modifier,
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        item {
-            ManagerPanel {
-                Text("Работы и материалы", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    if (editor.mode == MaintenanceEditorMode.ESTIMATE) {
-                        "Укажите количество, цену за единицу и комментарий к каждой строке."
-                    } else {
-                        "Количество и цена доступны и для прямого ремонта; ремонт не создаёт смету."
+    if (cameraOpen) {
+        Dialog(
+            onDismissRequest = { cameraOpen = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Surface(modifier = Modifier.fillMaxSize()) {
+                ManagerPhotoCaptureScreen(
+                    title = "Фото работы",
+                    photoUris = capturedPhotoUris,
+                    onPhotoCaptured = { uri ->
+                        capturedPhotoUris = (capturedPhotoUris + uri).distinct()
                     },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    if (total == null) "Итог появится после проверки всех значений." else "Итого: ${formatMaintenanceMoney(total)}",
-                    style = MaterialTheme.typography.titleMedium,
-                )
-            }
-        }
-        if (editor.lines.isEmpty()) {
-            item {
-                EmptyState(
-                    title = "Нет выбранных строк",
-                    description = if (editor.mode == MaintenanceEditorMode.ESTIMATE) {
-                        "Если ремонт не требуется, продолжите: пустая смета освободит бытовку."
-                    } else {
-                        "Вернитесь в каталог и добавьте хотя бы одну работу."
+                    onRemovePhotoUri = { uri ->
+                        capturedPhotoUris = capturedPhotoUris - uri
                     },
+                    onBack = { cameraOpen = false },
                 )
             }
-        } else {
-            items(editor.lines, key = MaintenanceLineEditorState::id) { line ->
-                MaintenanceLineCard(
-                    line = line,
-                    readOnly = editor.readOnly,
-                    onEdit = { editingLineId = line.id },
-                    onRemove = {
-                        onEdit { current ->
-                            current.copy(lines = current.lines.filterNot { currentLine -> currentLine.id == line.id })
-                        }
-                    },
-                )
-            }
-        }
-        if (!canContinue) {
-            item {
-                Text(
-                    "Проверьте количество и цену в каждой строке.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-        }
-        item {
-            Button(
-                onClick = onContinue,
-                enabled = canContinue && !busy,
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Перейти к итогу") }
         }
     }
-}
-
-@Composable
-private fun MaintenanceLineCard(
-    line: MaintenanceLineEditorState,
-    readOnly: Boolean,
-    onEdit: () -> Unit,
-    onRemove: () -> Unit,
-) {
-    val total = maintenanceLineTotal(line)
-    ManagerPanel(onClick = if (readOnly) null else onEdit) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(catalogTypeLabel(line.lineType), style = MaterialTheme.typography.labelLarge)
-                Text(line.description, style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "${line.quantity} ${line.unit.ifBlank { "ед." }} · ${line.unitPrice} ₽",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                line.comment.trim().takeIf(String::isNotEmpty)?.let { comment ->
-                    Text(
-                        comment,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-            if (!readOnly) {
-                TextButton(onClick = onRemove) { Text("Удалить") }
-            }
-        }
-        Text(
-            if (total == null) "Проверьте количество и цену." else "Итого: ${formatMaintenanceMoney(total)}",
-            style = MaterialTheme.typography.labelLarge,
-            color = if (total == null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+    if (pickerOpen) {
+        MaintenanceWorkPhotoPickerDialog(
+            availablePhotos = availablePhotos,
+            selectedMediaIds = selectedMediaIds,
+            onSelectedMediaIdsChange = { selectedMediaIds = it },
+            onDismiss = { pickerOpen = false },
         )
-        if (!readOnly) {
-            TextButton(onClick = onEdit) { Text("Изменить") }
-        }
     }
 }
 
@@ -2383,13 +2567,26 @@ private fun MaintenanceLineCard(
 @Composable
 private fun MaintenanceLineEditSheet(
     line: MaintenanceLineEditorState,
+    availablePhotos: List<MaintenanceWorkPhotoOption>,
     onDismiss: () -> Unit,
     onSave: (MaintenanceLineEditorState) -> Unit,
 ) {
     var quantity by remember(line.id) { mutableStateOf(line.quantity) }
     var comment by remember(line.id) { mutableStateOf(line.comment) }
+    var capturedPhotoUris by remember(line.id) { mutableStateOf(line.photoUris) }
+    var selectedMediaIds by remember(line.id) {
+        mutableStateOf(line.mediaReferences.map(MediaReferenceDto::mediaId).toSet())
+    }
+    var cameraOpen by remember(line.id) { mutableStateOf(false) }
+    var pickerOpen by remember(line.id) { mutableStateOf(false) }
     val canSave = maintenanceQuantity(quantity)?.let { it > BigDecimal.ZERO } == true &&
-        comment.length <= 2_000
+        (line.lineType != "WORK" || comment.length <= 2_000)
+    val selectedMedia = (
+        line.mediaReferences.filter { reference -> reference.mediaId in selectedMediaIds } +
+            availablePhotos
+                .filter { option -> option.reference.mediaId in selectedMediaIds }
+                .map(MaintenanceWorkPhotoOption::reference)
+        ).distinctBy(MediaReferenceDto::mediaId)
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
@@ -2413,14 +2610,83 @@ private fun MaintenanceLineEditSheet(
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     )
                 }
-                item {
-                    OutlinedTextField(
-                        value = comment,
-                        onValueChange = { comment = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Комментарий") },
-                        minLines = 2,
-                    )
+                if (line.lineType == "WORK") {
+                    item {
+                        OutlinedTextField(
+                            value = comment,
+                            onValueChange = { comment = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Комментарий") },
+                            minLines = 2,
+                        )
+                    }
+                    item {
+                        Text("Фото работы", style = MaterialTheme.typography.labelLarge)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OutlinedButton(
+                                onClick = { cameraOpen = true },
+                                modifier = Modifier.weight(1f),
+                            ) { Text("Добавить фото") }
+                            OutlinedButton(
+                                onClick = { pickerOpen = true },
+                                modifier = Modifier.weight(1f),
+                            ) { Text("Выбрать из сделанных") }
+                        }
+                    }
+                    if (capturedPhotoUris.isEmpty() && selectedMedia.isEmpty()) {
+                        item {
+                            Text(
+                                "Фото необязательны и относятся только к этой работе.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    } else {
+                        capturedPhotoUris.forEach { uri ->
+                            item(key = "local:$uri") {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    ManagerPhotoPreview(
+                                        photoUri = uri,
+                                        modifier = Modifier.width(96.dp).aspectRatio(4f / 3f),
+                                    )
+                                    Text("Новое фото", modifier = Modifier.weight(1f))
+                                    TextButton(
+                                        onClick = { capturedPhotoUris = capturedPhotoUris - uri },
+                                    ) { Text("Убрать") }
+                                }
+                            }
+                        }
+                        availablePhotos
+                            .filter { option -> option.reference.mediaId in selectedMediaIds }
+                            .forEach { option ->
+                                item(key = "media:${option.reference.mediaId}") {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    ) {
+                                        ManagerPhotoPreview(
+                                            photoUri = option.uri,
+                                            modifier = Modifier.width(96.dp).aspectRatio(4f / 3f),
+                                        )
+                                        Text("Загруженное фото", modifier = Modifier.weight(1f))
+                                        TextButton(
+                                            onClick = {
+                                                selectedMediaIds = selectedMediaIds -
+                                                    option.reference.mediaId
+                                            },
+                                        ) { Text("Убрать") }
+                                    }
+                                }
+                            }
+                    }
                 }
                 item {
                     Button(
@@ -2428,7 +2694,15 @@ private fun MaintenanceLineEditSheet(
                             onSave(
                                 line.copy(
                                     quantity = quantity.trim(),
-                                    comment = comment.trim(),
+                                    comment = comment.trim().takeIf {
+                                        line.lineType == "WORK"
+                                    }.orEmpty(),
+                                    photoUris = capturedPhotoUris.takeIf {
+                                        line.lineType == "WORK"
+                                    }.orEmpty(),
+                                    mediaReferences = selectedMedia.takeIf {
+                                        line.lineType == "WORK"
+                                    }.orEmpty(),
                                 ),
                             )
                         },
@@ -2438,6 +2712,34 @@ private fun MaintenanceLineEditSheet(
                 }
             }
         }
+    }
+    if (cameraOpen) {
+        Dialog(
+            onDismissRequest = { cameraOpen = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Surface(modifier = Modifier.fillMaxSize()) {
+                ManagerPhotoCaptureScreen(
+                    title = "Фото работы",
+                    photoUris = capturedPhotoUris,
+                    onPhotoCaptured = { uri ->
+                        capturedPhotoUris = (capturedPhotoUris + uri).distinct()
+                    },
+                    onRemovePhotoUri = { uri ->
+                        capturedPhotoUris = capturedPhotoUris - uri
+                    },
+                    onBack = { cameraOpen = false },
+                )
+            }
+        }
+    }
+    if (pickerOpen) {
+        MaintenanceWorkPhotoPickerDialog(
+            availablePhotos = availablePhotos,
+            selectedMediaIds = selectedMediaIds,
+            onSelectedMediaIdsChange = { selectedMediaIds = it },
+            onDismiss = { pickerOpen = false },
+        )
     }
 }
 
@@ -2918,9 +3220,24 @@ private fun maintenanceCatalogRouting(
 private fun MaintenanceEditorState.replaceMaintenanceLine(
     lineId: String,
     transform: (MaintenanceLineEditorState) -> MaintenanceLineEditorState,
-): MaintenanceEditorState = copy(
-    lines = lines.map { line -> if (line.id == lineId) transform(line) else line },
-)
+): MaintenanceEditorState {
+    val updatedLines = lines.map { line ->
+        if (line.id == lineId) transform(line) else line
+    }
+    val workMediaIds = updatedLines
+        .asSequence()
+        .filter { line -> line.lineType == "WORK" }
+        .flatMap { line -> line.mediaReferences.asSequence() }
+        .map(MediaReferenceDto::mediaId)
+        .toSet()
+    return copy(
+        lines = updatedLines,
+        readyMedia = readyMedia.filterNot { reference -> reference.mediaId in workMediaIds },
+        coverPhotoKey = coverPhotoKey.takeUnless { key ->
+            key?.removePrefix("media:") in workMediaIds
+        },
+    )
+}
 
 internal fun maintenanceCanAdvance(editor: MaintenanceEditorState, step: Int): Boolean = when (step) {
     1 -> maintenanceDetailsAreValid(editor)

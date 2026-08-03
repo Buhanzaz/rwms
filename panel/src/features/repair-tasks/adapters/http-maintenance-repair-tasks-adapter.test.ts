@@ -123,6 +123,7 @@ function repair(
           taskDeadline: null,
           taskSync: {
             externalTaskId,
+            taskBoardEntryId: entryId,
             taskBoardRegistrationVersion: 1,
             generationState: "GENERATED",
             delivery: {
@@ -630,6 +631,7 @@ describe("maintenance repair tasks adapter", () => {
     const task = await adapter.getById(repairId, warehouseId)
 
     expect(task?.subtasks[0]).toMatchObject({
+      taskBoardEntryId: entryId,
       plannedDurationMinutes: 30,
       activeWorkSeconds: 0,
     })

@@ -218,7 +218,7 @@ public class CatalogNode {
     this.routingQueueId = routingQueueId;
     this.routingQueueName = optional(routingQueueName, 255);
     this.routingQueueType = optional(routingQueueType, 64);
-    this.comment = optional(comment, 2000);
+    this.comment = "MATERIAL".equals(this.nodeType) ? null : optional(comment, 2000);
     this.displayColor = color(displayColor);
     if (forcesCapitalRepair && !"WORK".equals(nodeType)) {
       throw new IllegalArgumentException("Only a WORK can force capital repair");
@@ -335,7 +335,7 @@ public class CatalogNode {
   public UUID getRoutingQueueId() { return routingQueueId; }
   public String getRoutingQueueName() { return routingQueueName; }
   public String getRoutingQueueType() { return routingQueueType; }
-  public String getComment() { return comment; }
+  public String getComment() { return "MATERIAL".equals(nodeType) ? null : comment; }
   public String getDisplayColor() { return displayColor; }
   public boolean isForcesCapitalRepair() { return forcesCapitalRepair; }
   public UUID getCharacteristicId() { return characteristicId; }

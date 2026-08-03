@@ -6,9 +6,11 @@ import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardDa
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardLane;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardResponse;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.MoveDriverBoardTaskRequest;
+import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.ReturnCapitalRepairRequest;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
@@ -130,6 +132,34 @@ public class DriverBoardService {
     return card(moved, local);
   }
 
+  @Transactional
+  public void returnToCapitalRepairs(
+      UUID externalTaskId, ReturnCapitalRepairRequest request) {
+    tasks.acquireTransactionLock("driver-queue:" + request.warehouseId());
+    DriverLogisticsTask local =
+        tasks.findByExternalTaskId(externalTaskId)
+            .orElseThrow(
+                () ->
+                    new LogisticsConflictException(
+                        "Для задания отсутствует единый логистический workflow"));
+    if (!request.warehouseId().equals(local.getWarehouseId())) {
+      throw new LogisticsConflictException(
+          "Задание не принадлежит выбранному складу");
+    }
+    if (local.getSourceType() != DriverTaskSourceType.CAPITAL_REPAIR
+        || local.getKind() != DriverTaskKind.CAPITAL_TO_PRODUCTION) {
+      throw new LogisticsConflictException(
+          "Вернуть в капитальные ремонты можно только перемещение капитального ремонта");
+    }
+    if (local.getState().isTerminal()) {
+      throw new LogisticsConflictException(
+          "Завершённое или уже отменённое перемещение вернуть нельзя");
+    }
+    LogisticsDependencyGateway.DriverBoardTask cancelled =
+        dependencies.cancelDriverTask(externalTaskId, request.expectedTaskVersion());
+    workflowStore.confirmStatus(local.getId(), cancelled);
+  }
+
   private DriverBoardCardResponse moveToCurrent(
       DriverLogisticsTask local,
       LogisticsDependencyGateway.DriverBoardTask current,
@@ -183,6 +213,7 @@ public class DriverBoardService {
         localTasks.stream()
             .filter(task -> task.getKind() == DriverTaskKind.CAPITAL_TO_PRODUCTION)
             .filter(task -> task.getSourceType() == DriverTaskSourceType.CAPITAL_REPAIR)
+            .filter(task -> task.getState() != DriverTaskState.CANCELLED)
             .map(DriverLogisticsTask::getSourceId)
             .collect(java.util.stream.Collectors.toUnmodifiableSet());
     java.util.ArrayList<CapitalRepairCardResponse> result = new java.util.ArrayList<>();

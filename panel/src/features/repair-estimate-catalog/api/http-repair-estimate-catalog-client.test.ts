@@ -108,6 +108,36 @@ describe("operational maintenance catalog adapter", () => {
     })
   })
 
+  it("does not expose legacy material comments to estimate editors", async () => {
+    maintenance.listMaintenanceCatalogNodes.mockResolvedValue([
+      {
+        id: nodeId,
+        catalogVersionId: versionId,
+        name: "Монтажная пена",
+        nodeType: "MATERIAL",
+        parentNodeId: null,
+        active: true,
+        unit: "баллон",
+        unitPrice: "350.00",
+        durationMinutes: 0,
+        showInMainMenu: true,
+        routing: null,
+        includeInEstimate: true,
+        commonItem: false,
+        furnitureCategory: false,
+        furnitureEquipment: null,
+        forcesCapitalRepair: false,
+        characteristic: null,
+        comment: "Старый комментарий материала",
+      },
+    ])
+
+    const snapshot =
+      await httpRepairEstimateCatalogClient.getOperationalCatalog()
+
+    expect(snapshot.nodes[0]?.comment).toBeNull()
+  })
+
   it("uses the same global catalog when its recorded warehouse differs from the selected warehouse", async () => {
     maintenance.listMaintenanceCatalogVersions.mockResolvedValue({
       items: [

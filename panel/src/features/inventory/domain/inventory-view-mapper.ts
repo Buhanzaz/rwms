@@ -98,7 +98,7 @@ function viewLine(line: InventoryFrozenPlanLine): RepairEstimateLineDto {
     sourceLineKey: line.id,
     lineType: line.lineType,
     description: line.description,
-    lineComment: line.groupComment ?? "",
+    lineComment: line.lineType === "WORK" ? (line.groupComment ?? "") : "",
     unit: line.unit,
     quantity: itemQuantity,
     unitPrice,
@@ -143,7 +143,10 @@ function viewPlans(
         includedLines.find((line) => line.lineType === "WORK")?.id ?? null,
       groupComment: Array.from(
         new Set(
-          includedLines.map((line) => line.lineComment.trim()).filter(Boolean)
+          includedLines
+            .filter((line) => line.lineType === "WORK")
+            .map((line) => line.lineComment.trim())
+            .filter(Boolean)
         )
       ).join("; "),
       queueId: stage.routingQueueId,
@@ -224,10 +227,8 @@ export function toInventoryFindingView(
     movementRequired:
       finding.frozenPlan?.stages.some((stage) => stage.movementRequired) ??
       false,
-    logisticsPlanningMode:
-      finding.frozenPlan?.logisticsPlanningMode ?? "AUTO",
-    logisticsScheduledDate:
-      finding.frozenPlan?.logisticsScheduledDate ?? null,
+    logisticsPlanningMode: finding.frozenPlan?.logisticsPlanningMode ?? "AUTO",
+    logisticsScheduledDate: finding.frozenPlan?.logisticsScheduledDate ?? null,
     repairPlans: viewPlans(finding, lines),
     publicationStatus: publicationStatus(finding.publication),
     publicationOperationKey: finding.publication?.id ?? null,

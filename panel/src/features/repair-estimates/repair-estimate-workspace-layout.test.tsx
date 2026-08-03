@@ -9,7 +9,7 @@ afterEach(() => {
 })
 
 describe("RepairEstimateWorkspaceLayout", () => {
-  it("keeps catalog results and controls in scrollable card content", async () => {
+  it("keeps estimate lines and catalog controls in bounded scrollable cards", async () => {
     const user = userEvent.setup()
     const chooseCatalogResult = vi.fn()
     const saveEstimate = vi.fn()
@@ -18,7 +18,7 @@ describe("RepairEstimateWorkspaceLayout", () => {
       <RepairEstimateWorkspaceLayout
         photos={<p>Фото</p>}
         information={<p>Информация</p>}
-        estimate={<p>Смета</p>}
+        estimate={<p data-testid="estimate-lines">Смета</p>}
         controls={
           <div>
             <button
@@ -35,6 +35,15 @@ describe("RepairEstimateWorkspaceLayout", () => {
         }
       />
     )
+
+    const estimateLines = screen.getByTestId("estimate-lines")
+    const estimateContent = estimateLines.closest('[data-slot="card-content"]')
+    const estimateCard = estimateLines.closest('[data-slot="card"]')
+    expect(estimateContent).not.toBeNull()
+    expect(estimateContent?.classList.contains("overflow-y-auto")).toBe(true)
+    expect(estimateContent?.classList.contains("overflow-hidden")).toBe(false)
+    expect(estimateCard?.classList.contains("h-full")).toBe(true)
+    expect(estimateCard?.classList.contains("min-h-0")).toBe(true)
 
     const catalogTitle = screen.getByText("Каталог")
     const catalogCard = catalogTitle.closest('[data-slot="card"]')

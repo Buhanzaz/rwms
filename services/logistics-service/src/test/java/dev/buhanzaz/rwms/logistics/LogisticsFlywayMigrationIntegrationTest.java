@@ -1073,6 +1073,99 @@ class LogisticsFlywayMigrationIntegrationTest {
     assertJpaValidationStarts();
   }
 
+  @Test
+  void v33KeepsCancelledCapitalMovementHistoryAndAllowsOneNewActiveMovement() {
+    Flyway beforeV33 = configuration(MIGRATIONS).target("32").load();
+    assertThat(beforeV33.migrate().migrationsExecuted).isEqualTo(32);
+
+    UUID warehouseId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    UUID repairId = UUID.randomUUID();
+    UUID queueDefinitionId = UUID.randomUUID();
+    OffsetDateTime now = OffsetDateTime.parse("2026-08-03T08:00:00Z");
+    insertDriverMovement(
+        UUID.randomUUID(),
+        warehouseId,
+        cabinId,
+        repairId,
+        queueDefinitionId,
+        "CANCELLED",
+        now);
+
+    Flyway upgraded = configuration(MIGRATIONS).target("33").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    insertDriverMovement(
+        UUID.randomUUID(),
+        warehouseId,
+        cabinId,
+        repairId,
+        queueDefinitionId,
+        "SCHEDULED",
+        now.plusMinutes(1));
+    insertDriverMovement(
+        UUID.randomUUID(),
+        warehouseId,
+        cabinId,
+        repairId,
+        queueDefinitionId,
+        "CANCELLED",
+        now.plusMinutes(2));
+
+    assertThatThrownBy(
+            () ->
+                insertDriverMovement(
+                    UUID.randomUUID(),
+                    warehouseId,
+                    cabinId,
+                    repairId,
+                    queueDefinitionId,
+                    "CURRENT",
+                    now.plusMinutes(3)))
+        .hasMessageContaining("uk_driver_logistics_task_active_source_kind");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from driver_logistics_task where source_id=?",
+                Long.class,
+                repairId))
+        .isEqualTo(3);
+    assertJpaValidationStarts();
+  }
+
+  private void insertDriverMovement(
+      UUID id,
+      UUID warehouseId,
+      UUID cabinId,
+      UUID repairId,
+      UUID queueDefinitionId,
+      String state,
+      OffsetDateTime timestamp) {
+    jdbc.update(
+        """
+        insert into driver_logistics_task(
+          id,version,warehouse_id,cabin_id,repair_id,source_type,source_id,task_kind,
+          planning_mode,scheduled_date,fixed_date_lower_bound,priority,movement_comment,
+          unit_number,driver_queue_definition_id,external_task_id,state,cover_applied,
+          repair_place_effect_applied,created_by_subject_id,idempotency_key,request_sha256,
+          retry_count,created_at,updated_at)
+        values (?,0,?,?,null,'CAPITAL_REPAIR',?,'CAPITAL_TO_PRODUCTION','AUTO',
+          date '2026-08-03',null,2,null,'БЫТ-КАП',?,?,?,false,true,?,?,?,0,?,?)
+        """,
+        id,
+        warehouseId,
+        cabinId,
+        repairId,
+        queueDefinitionId,
+        UUID.randomUUID(),
+        state,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "c".repeat(64),
+        timestamp,
+        timestamp);
+  }
+
   private void assertRecoveredDriverTask(UUID id, String expectedState) {
     Map<String, Object> row =
         jdbc.queryForMap(

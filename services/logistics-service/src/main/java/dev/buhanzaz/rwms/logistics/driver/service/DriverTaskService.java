@@ -110,7 +110,7 @@ public class DriverTaskService {
     if (existing == null) {
       existing =
           tasks
-              .findBySourceTypeAndSourceIdAndKind(
+              .findActiveBySourceTypeAndSourceIdAndKind(
                   DriverTaskSourceType.REPAIR_PLACE,
                   repairId,
                   DriverTaskKind.REMOVE_FROM_REPAIR)
@@ -230,7 +230,7 @@ public class DriverTaskService {
             .orElse(null);
     if (replay == null) {
       replay =
-          tasks.findBySourceTypeAndSourceIdAndKind(
+          tasks.findActiveBySourceTypeAndSourceIdAndKind(
                   request.sourceType(), request.sourceId(), request.kind())
               .orElse(null);
     }

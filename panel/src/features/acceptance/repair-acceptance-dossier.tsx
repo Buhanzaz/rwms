@@ -52,7 +52,11 @@ import type {
 } from "@/features/repair-tasks/model/repair-task"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
 import {
+  inventoryFindingMediaOwner,
   maintenanceAcceptanceMediaOwner,
+  maintenanceEstimateMediaOwner,
+  maintenanceRepairMediaOwner,
+  taskBoardEntryMediaOwner,
   type ReadyMediaReference,
   type ServiceMediaOwner,
 } from "@/features/media/media-service"
@@ -71,6 +75,7 @@ import {
 import { RepairReworkWizardDialog } from "./repair-rework-wizard-dialog"
 
 type DossierMode = "ACCEPTANCE" | "WRITE_OFF"
+type WorkReviewDecision = "ACCEPTED" | "REWORK"
 const EMPTY_TASK_EVIDENCE: RepairTaskEvidenceDto[] = []
 
 type RepairAcceptanceDossierProps = {
@@ -235,16 +240,6 @@ function stageComments(subtask: RepairTaskSubtaskDto) {
       text: groupComment,
     })
   }
-  const lines = [...subtask.workLines, ...subtask.materialLines]
-  lines.forEach((line) => {
-    const text = line.lineComment.trim()
-    if (!text) return
-    comments.push({
-      id: `${subtask.id}:line:${line.id}`,
-      source: line.description,
-      text,
-    })
-  })
   return comments
 }
 
@@ -285,12 +280,110 @@ function StageComments({ subtask }: { subtask: RepairTaskSubtaskDto }) {
   )
 }
 
-function StageContent({ subtask }: { subtask: RepairTaskSubtaskDto }) {
-  const lines = [
-    ...subtask.workLines.map((line) => ({ kind: "Работа", line })),
-    ...subtask.materialLines.map((line) => ({ kind: "Материал", line })),
-  ]
-  if (lines.length === 0) {
+function WorkLineReview({
+  accessToken,
+  sourceMediaOwner,
+  line,
+  primary,
+  decision,
+  canReview,
+  onDecision,
+}: {
+  accessToken: string | null
+  sourceMediaOwner: ServiceMediaOwner
+  line: RepairTaskSubtaskDto["workLines"][number]
+  primary: boolean
+  decision: WorkReviewDecision | undefined
+  canReview: boolean
+  onDecision: (decision: WorkReviewDecision) => void
+}) {
+  const sourceReferences = line.maintenanceMediaReferences ?? []
+  return (
+    <Card size="sm" className="ring-inset">
+      <CardHeader>
+        <CardTitle className="flex flex-wrap items-center gap-2">
+          <span>{line.description}</span>
+          {primary ? <Badge variant="secondary">Основная</Badge> : null}
+        </CardTitle>
+        <CardDescription>
+          {line.quantity} {line.unit || "ед"}
+        </CardDescription>
+        {decision ? (
+          <CardAction>
+            <Badge
+              variant={decision === "REWORK" ? "destructive" : "secondary"}
+            >
+              {decision === "REWORK" ? "Переделать" : "Принято"}
+            </Badge>
+          </CardAction>
+        ) : null}
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        {sourceReferences.length > 0 ? (
+          <ServiceOwnerPhotos
+            accessToken={accessToken}
+            owner={sourceMediaOwner}
+            readOnly
+            title="Фото работы до выполнения"
+            authoritativeReadyReferences={sourceReferences}
+            visibleMediaIds={sourceReferences.map(
+              (reference) => reference.mediaId
+            )}
+          />
+        ) : (
+          <p className="rounded-lg border bg-muted/40 px-3 py-4 text-sm text-muted-foreground">
+            Фото работы до выполнения не добавлены.
+          </p>
+        )}
+        {line.lineComment.trim() ? (
+          <p className="text-sm">
+            <span className="text-muted-foreground">Комментарий: </span>
+            {line.lineComment}
+          </p>
+        ) : null}
+        {canReview ? (
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant={decision === "REWORK" ? "destructive" : "outline"}
+              aria-pressed={decision === "REWORK"}
+              onClick={() => onDecision("REWORK")}
+            >
+              Переделать
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={decision === "ACCEPTED" ? "default" : "outline"}
+              aria-pressed={decision === "ACCEPTED"}
+              onClick={() => onDecision("ACCEPTED")}
+            >
+              Принято
+            </Button>
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  )
+}
+
+function StageContent({
+  accessToken,
+  task,
+  subtask,
+  decisions,
+  canReview,
+  onWorkDecision,
+}: {
+  accessToken: string | null
+  task: RepairTaskDto
+  subtask: RepairTaskSubtaskDto
+  decisions: Readonly<Record<string, WorkReviewDecision>>
+  canReview: boolean
+  onWorkDecision: (lineId: string, decision: WorkReviewDecision) => void
+}) {
+  if (subtask.workLines.length + subtask.materialLines.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
         Для этого этапа состав работ и материалов не задан.
@@ -298,53 +391,74 @@ function StageContent({ subtask }: { subtask: RepairTaskSubtaskDto }) {
     )
   }
   return (
-    <div className="flex min-w-0 flex-col gap-2">
-      <h4 className="text-sm font-medium">Работы и материалы</h4>
-      <div className="w-full max-w-full overflow-x-auto rounded-lg border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Тип</TableHead>
-              <TableHead>Наименование</TableHead>
-              <TableHead>Количество</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {lines.map(({ kind, line }) => (
-              <TableRow key={`${kind}:${line.id}`}>
-                <TableCell>{kind}</TableCell>
-                <TableCell>
-                  <div className="flex min-w-48 items-center gap-2">
-                    <span>{line.description}</span>
-                    {line.id === subtask.primaryLineId ? (
-                      <Badge variant="secondary">Основная</Badge>
-                    ) : null}
-                  </div>
-                </TableCell>
-                <TableCell>
-                  {line.quantity} {line.unit}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+    <div className="flex min-w-0 flex-col gap-4">
+      {subtask.workLines.length > 0 ? (
+        <section className="flex flex-col gap-2" aria-label="Работы этапа">
+          <h4 className="text-sm font-medium">Работы</h4>
+          {subtask.workLines.map((line) => (
+            <WorkLineReview
+              key={line.id}
+              accessToken={accessToken}
+              sourceMediaOwner={workSourceMediaOwner(task, subtask, line)}
+              line={line}
+              primary={line.id === subtask.primaryLineId}
+              decision={decisions[line.id]}
+              canReview={canReview}
+              onDecision={(decision) => onWorkDecision(line.id, decision)}
+            />
+          ))}
+        </section>
+      ) : null}
+      {subtask.materialLines.length > 0 ? (
+        <section className="flex flex-col gap-2" aria-label="Материалы этапа">
+          <h4 className="text-sm font-medium">Материалы</h4>
+          <div className="w-full max-w-full overflow-x-auto rounded-lg border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Наименование</TableHead>
+                  <TableHead>Количество</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {subtask.materialLines.map((line) => (
+                  <TableRow key={line.id}>
+                    <TableCell>{line.description}</TableCell>
+                    <TableCell>
+                      {line.quantity} {line.unit}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </section>
+      ) : null}
     </div>
   )
 }
 
-function taskBoardEntryMediaOwner(
-  entryId: string,
-  warehouseId: string
+function workSourceMediaOwner(
+  task: RepairTaskDto,
+  subtask: RepairTaskSubtaskDto,
+  line: RepairTaskSubtaskDto["workLines"][number]
 ): ServiceMediaOwner {
-  // The shared read helper is structurally compatible with the worker-result
-  // owner scope; upload commands remain unavailable from the acceptance UI.
-  return {
-    ownerType: "TASK_BOARD_ENTRY",
-    ownerId: entryId,
-    warehouseId,
-    context: "WORK_RESULT",
-  } as unknown as ServiceMediaOwner
+  if (subtask.taskBoardEntryId) {
+    return taskBoardEntryMediaOwner(subtask.taskBoardEntryId, task.warehouseId)
+  }
+  if (task.kind !== "REWORK" && task.sourceEstimateId) {
+    return maintenanceEstimateMediaOwner(task.sourceEstimateId, task.warehouseId)
+  }
+  if (task.origin === "INVENTORY" && task.sourceInventoryFindingId) {
+    return inventoryFindingMediaOwner(
+      task.sourceInventoryFindingId,
+      task.warehouseId
+    )
+  }
+  return maintenanceRepairMediaOwner(
+    line.rework?.sourceRepairId ?? task.id,
+    task.warehouseId
+  )
 }
 
 function EvidencePhotoGallery({
@@ -570,16 +684,22 @@ function StageEvidenceInformation({
 
 function RepairStageSection({
   accessToken,
-  warehouseId,
+  task,
   subtask,
   index,
   taskBoardAvailable,
+  decisions,
+  canReview,
+  onWorkDecision,
 }: {
   accessToken: string | null
-  warehouseId: string
+  task: RepairTaskDto
   subtask: RepairTaskSubtaskDto
   index: number
   taskBoardAvailable: boolean
+  decisions: Readonly<Record<string, WorkReviewDecision>>
+  canReview: boolean
+  onWorkDecision: (lineId: string, decision: WorkReviewDecision) => void
 }) {
   const title = subtaskTitle(subtask, index)
   const titleId = `repair-stage-${subtask.id}`
@@ -590,7 +710,7 @@ function RepairStageSection({
     >
       <Card className="h-full min-h-96 min-w-0 ring-inset">
         <CardHeader>
-          <CardTitle>Фото этапа {index + 1}</CardTitle>
+          <CardTitle>Фото после · этап {index + 1}</CardTitle>
           <CardDescription>
             Фотографии результата, прикреплённые рабочими.
           </CardDescription>
@@ -598,7 +718,7 @@ function RepairStageSection({
         <CardContent className="flex min-h-72 flex-1 flex-col">
           <StagePhotos
             accessToken={accessToken}
-            warehouseId={warehouseId}
+            warehouseId={task.warehouseId}
             subtask={subtask}
           />
         </CardContent>
@@ -658,7 +778,14 @@ function RepairStageSection({
 
           <Separator />
 
-          <StageContent subtask={subtask} />
+          <StageContent
+            accessToken={accessToken}
+            task={task}
+            subtask={subtask}
+            decisions={decisions}
+            canReview={canReview}
+            onWorkDecision={onWorkDecision}
+          />
 
           <Separator />
 
@@ -672,12 +799,14 @@ function RepairStageSection({
 function DecisionDialogs({
   task,
   acceptanceMediaReferences,
+  workReviewDecisions,
   canEdit,
   canManage,
   onDecision,
 }: {
   task: RepairTaskDto
   acceptanceMediaReferences: ReadyMediaReference[]
+  workReviewDecisions: Readonly<Record<string, WorkReviewDecision>>
   canEdit: boolean
   canManage: boolean
   onDecision?: () => void
@@ -690,6 +819,18 @@ function DecisionDialogs({
   const [writeOffReason, setWriteOffReason] = useState("")
   const [writeOffSubmitted, setWriteOffSubmitted] = useState(false)
   const canAcceptWithMedia = acceptanceMediaReferences.length > 0
+  const workLines = task.subtasks.flatMap((subtask) => subtask.workLines)
+  const allWorksReviewed = workLines.every(
+    (line) => workReviewDecisions[line.id] !== undefined
+  )
+  const reworkLineageRootIds = Array.from(
+    new Set(
+      workLines
+        .filter((line) => workReviewDecisions[line.id] === "REWORK")
+        .map((line) => line.rework?.lineageRootLineId ?? line.id)
+    )
+  )
+  const hasRework = reworkLineageRootIds.length > 0
 
   function handleDecisionSuccess(updated: RepairTaskDto) {
     queryClient.setQueryData(
@@ -708,9 +849,7 @@ function DecisionDialogs({
         )
       }
       if (!canAcceptWithMedia) {
-        throw new Error(
-          "Для приёмки добавьте хотя бы одну готовую фотографию."
-        )
+        throw new Error("Для приёмки добавьте хотя бы одну готовую фотографию.")
       }
       return acceptRepairTask({
         task,
@@ -752,29 +891,37 @@ function DecisionDialogs({
         ) : null}
         {canEdit ? (
           <div className="ml-auto flex flex-col items-end gap-2">
-            {!canAcceptWithMedia ? (
+            {!allWorksReviewed ? (
               <p role="status" className="text-xs text-muted-foreground">
-                Для приёмки добавьте хотя бы одну фотографию. На доработку
-                можно отправить без нового фото.
+                Отметьте каждую работу как принятую или требующую переделки.
+              </p>
+            ) : !hasRework && !canAcceptWithMedia ? (
+              <p role="status" className="text-xs text-muted-foreground">
+                Для приёмки добавьте хотя бы одну фотографию. На доработку можно
+                отправить без нового фото.
               </p>
             ) : null}
             <div className="flex flex-wrap justify-end gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setReworkOpen(true)}
-              >
-                Переделать
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                disabled={!canAcceptWithMedia}
-                onClick={() => setAcceptOpen(true)}
-              >
-                Принять
-              </Button>
+              {hasRework ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!allWorksReviewed}
+                  onClick={() => setReworkOpen(true)}
+                >
+                  Создать доработку ({reworkLineageRootIds.length})
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={!allWorksReviewed || !canAcceptWithMedia}
+                  onClick={() => setAcceptOpen(true)}
+                >
+                  Принять
+                </Button>
+              )}
             </div>
           </div>
         ) : null}
@@ -784,6 +931,7 @@ function DecisionDialogs({
         open={reworkOpen && canEdit}
         task={task}
         canEdit={canEdit}
+        selectedLineageRootIds={reworkLineageRootIds}
         onOpenChange={setReworkOpen}
       />
 
@@ -913,6 +1061,13 @@ export function RepairAcceptanceDossier({
   const [acceptanceMediaReferences, setAcceptanceMediaReferences] = useState<
     ReadyMediaReference[]
   >([])
+  const reviewKey = `${task.id}:${task.version}`
+  const [workReviewState, setWorkReviewState] = useState<{
+    key: string
+    decisions: Record<string, WorkReviewDecision>
+  }>({ key: reviewKey, decisions: {} })
+  const workReviewDecisions =
+    workReviewState.key === reviewKey ? workReviewState.decisions : {}
   const orderedSubtasks = useMemo(
     () =>
       task.subtasks
@@ -965,10 +1120,23 @@ export function RepairAcceptanceDossier({
                 <RepairStageSection
                   key={subtask.id}
                   accessToken={accessToken}
-                  warehouseId={task.warehouseId}
+                  task={task}
                   subtask={subtask}
                   index={index}
                   taskBoardAvailable={taskBoardAvailable}
+                  decisions={workReviewDecisions}
+                  canReview={mode === "ACCEPTANCE" && canEdit}
+                  onWorkDecision={(lineId, decision) =>
+                    setWorkReviewState((current) => ({
+                      key: reviewKey,
+                      decisions: {
+                        ...(current.key === reviewKey
+                          ? current.decisions
+                          : {}),
+                        [lineId]: decision,
+                      },
+                    }))
+                  }
                 />
               ))}
             </div>
@@ -981,6 +1149,7 @@ export function RepairAcceptanceDossier({
               <DecisionDialogs
                 task={task}
                 acceptanceMediaReferences={acceptanceMediaReferences}
+                workReviewDecisions={workReviewDecisions}
                 canEdit={canEdit}
                 canManage={canManage}
                 onDecision={onDecision}

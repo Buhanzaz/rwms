@@ -184,6 +184,8 @@ data class MaintenanceLineEditorState(
     val catalogSnapshot: CatalogNodeSnapshotDto? = null,
     val customRouting: RoutingSnapshotDto? = null,
     val mediaReferences: List<MediaReferenceDto> = emptyList(),
+    /** App-owned originals waiting for background upload for this work line. */
+    val photoUris: List<String> = emptyList(),
     val reworkDisposition: String? = null,
     val sourceRepairId: String? = null,
     val sourceLineId: String? = null,
@@ -257,6 +259,8 @@ data class MaintenanceAcceptanceEditorState(
     val repair: RepairDto,
     val asset: RentalItemDto,
     val cabinPhotos: AcceptanceMediaCollection,
+    /** Local review state; the server decision remains the existing accept/rework command flow. */
+    val acceptedWorkLineIds: Set<String> = emptySet(),
     val comment: String = "",
     val photoUris: List<String> = emptyList(),
     val readyMedia: List<MediaReferenceDto> = emptyList(),
@@ -822,6 +826,8 @@ class ManagerViewModel(
         quantity: String,
         comment: String,
         existingWorkLineId: String? = null,
+        photoUris: List<String> = emptyList(),
+        mediaReferences: List<MediaReferenceDto> = emptyList(),
     ): Boolean {
         val inventory = mutableState.value.inventoryEditor ?: return false
         val canonicalQuantity = runCatching {
@@ -849,6 +855,12 @@ class ManagerViewModel(
             message("Выбранные позиции больше недоступны в активном каталоге")
             return false
         }
+        if ((photoUris.isNotEmpty() || mediaReferences.isNotEmpty()) &&
+            canonicalNodes.count { node -> node.nodeType == "WORK" } != 1
+        ) {
+            message("Фото можно прикрепить только к одной выбранной работе")
+            return false
+        }
         if (!inventory.toMaintenancePlanEditor().hasSelectedCatalogWork(
                 nodes = canonicalNodes,
                 lineId = existingWorkLineId,
@@ -864,6 +876,8 @@ class ManagerViewModel(
                 quantity = canonicalQuantity,
                 comment = canonicalComment,
                 existingWorkLineId = existingWorkLineId,
+                photoUris = photoUris,
+                mediaReferences = mediaReferences,
             )
         }
         return true
@@ -1010,7 +1024,6 @@ class ManagerViewModel(
             ?: existingMedia.firstOrNull()?.mediaId
         val planSelection = inventoryPlanSelection(
             editor = editor,
-            mediaReferences = existingMedia,
             coverMediaId = existingCoverMediaId,
         )
         val furnitureMove = if (desiredFurnitureContents != null) {
@@ -1050,7 +1063,20 @@ class ManagerViewModel(
                         cover = uri == editor.coverPhotoUri,
                         rotationDegrees = editor.photoRotationDegrees[uri] ?: 0,
                     )
-                },
+                } + editor.planLines
+                    .asSequence()
+                    .filter { line -> line.lineType == "WORK" }
+                    .flatMapIndexed { lineIndex, line ->
+                        line.photoUris.distinct().mapIndexed { photoIndex, uri ->
+                        PendingBackgroundPhoto(
+                            uri = uri,
+                            owner = owner,
+                            sortOrder = orderedPhotoUris.size + lineIndex * 100 + photoIndex,
+                            lineId = line.id,
+                        )
+                        }
+                    }
+                    .toList(),
                 inventory = InventoryUploadCommand(
                     inventoryId = session.id,
                     findingId = attached.id,
@@ -1066,6 +1092,12 @@ class ManagerViewModel(
                     existingMedia = existingMedia,
                     existingCoverMediaId = existingCoverMediaId,
                     planSelection = planSelection,
+                    planLineIds = editor.planLines.map(MaintenanceLineEditorState::id),
+                    planWorkLineIds = editor.planLines
+                        .asSequence()
+                        .filter { line -> line.lineType == "WORK" }
+                        .map(MaintenanceLineEditorState::id)
+                        .toList(),
                     furnitureMove = furnitureMove,
                 ),
             ),
@@ -1971,6 +2003,20 @@ class ManagerViewModel(
         loadAcceptanceGallery(editor.repair.id, acceptanceStageMedia(stage))
     }
 
+    fun openAcceptanceWorkSourcePhotos(stageId: String, workLineId: String) = command {
+        val editor = requireNotNull(mutableState.value.acceptanceEditor) {
+            "Откройте ремонт для приёмки"
+        }
+        val stage = editor.repair.plan.stages.firstOrNull { it.id == stageId }
+            ?: throw IllegalStateException("Этап ремонта больше не найден")
+        val work = stage.workLines.firstOrNull { line -> line.id == workLineId }
+            ?: throw IllegalStateException("Работа больше не найдена в этапе")
+        loadAcceptanceGallery(
+            editor.repair.id,
+            acceptanceWorkSourceMedia(editor.repair, stage, work),
+        )
+    }
+
     fun closeAcceptanceGallery() {
         mutableState.update { it.copy(acceptanceGallery = null) }
     }
@@ -1980,6 +2026,21 @@ class ManagerViewModel(
             current.copy(
                 acceptanceEditor = current.acceptanceEditor?.copy(
                     comment = value.take(2_000),
+                ),
+            )
+        }
+    }
+
+    fun acceptAcceptanceWork(workLineId: String) {
+        mutableState.update { current ->
+            val editor = current.acceptanceEditor ?: return@update current
+            val exists = editor.repair.plan.stages.any { stage ->
+                stage.workLines.any { line -> line.id == workLineId }
+            }
+            require(exists) { "Работа больше не найдена в ремонте" }
+            current.copy(
+                acceptanceEditor = editor.copy(
+                    acceptedWorkLineIds = editor.acceptedWorkLineIds + workLineId,
                 ),
             )
         }
@@ -2019,6 +2080,9 @@ class ManagerViewModel(
         require(existingMedia.isNotEmpty() || localUris.isNotEmpty()) {
             "Добавьте хотя бы одно фото приёмки перед принятием"
         }
+        require(editor.hasAcceptedAllWorkLines()) {
+            "Примите каждую работу или отправьте её на доработку"
+        }
         val warehouseId = requireWarehouseId()
         val owner = MediaOwner(
             ownerType = "MAINTENANCE_ACCEPTANCE",
@@ -2055,9 +2119,7 @@ class ManagerViewModel(
         collection: AcceptanceMediaCollection,
     ) {
         val warehouseId = requireWarehouseId()
-        val repair = mutableState.value.acceptanceEditor?.repair
-            ?.takeIf { it.id == repairId }
-            ?: return
+        if (mutableState.value.acceptanceEditor?.repair?.id != repairId) return
         val uniqueItems = collection.items.distinctBy { media ->
             listOf(
                 media.ownerType,
@@ -2070,40 +2132,13 @@ class ManagerViewModel(
         val requests = uniqueItems.map { media ->
             ScopedMediaDownload(
                 reference = media.reference,
-                scopes = buildList {
-                    add(
-                        MaintenanceMediaScope(
-                            ownerType = media.ownerType,
-                            ownerId = media.ownerId,
-                            context = media.context,
-                        ),
-                    )
-                    add(
-                        MaintenanceMediaScope(
-                            ownerType = "MAINTENANCE_REPAIR",
-                            ownerId = repair.id,
-                            context = "REPAIR",
-                        ),
-                    )
-                    repair.estimateId?.let { estimateId ->
-                        add(
-                            MaintenanceMediaScope(
-                                ownerType = "MAINTENANCE_ESTIMATE",
-                                ownerId = estimateId,
-                                context = "ESTIMATE",
-                            ),
-                        )
-                    }
-                    repair.sourceRepairId?.let { sourceId ->
-                        add(
-                            MaintenanceMediaScope(
-                                ownerType = "MAINTENANCE_REPAIR",
-                                ownerId = sourceId,
-                                context = "REPAIR",
-                            ),
-                        )
-                    }
-                }.distinct(),
+                scopes = listOf(
+                    MaintenanceMediaScope(
+                        ownerType = media.ownerType,
+                        ownerId = media.ownerId,
+                        context = media.context,
+                    ),
+                ),
             )
         }
         val photoUris = loadScopedPhotoUris(requests, warehouseId)
@@ -2271,8 +2306,13 @@ class ManagerViewModel(
         val asset = maintenanceRentalItem(estimate.rentalItemId, warehouseId)
         val revision = estimate.revisions.firstOrNull { it.revision == estimate.currentRevision }
             ?: throw IllegalStateException("Сервис не вернул текущую редакцию сметы")
+        val workLineMedia = revision.lines
+            .asSequence()
+            .filter { line -> line.lineType == "WORK" }
+            .flatMap { line -> line.mediaReferences.asSequence() }
+            .toList()
         val readyPhotoUris = loadMaintenancePhotoUris(
-            references = estimate.mediaReferences,
+            references = estimate.mediaReferences + workLineMedia,
             scopes = buildList {
                 add(
                     MaintenanceMediaScope(
@@ -2352,8 +2392,13 @@ class ManagerViewModel(
         }
         val readyReferences = (repair.mediaReferences + linkedEstimate?.mediaReferences.orEmpty())
             .distinctBy(MediaReferenceDto::mediaId)
+        val workLineMedia = content.lines
+            .asSequence()
+            .filter { line -> line.lineType == "WORK" }
+            .flatMap { line -> line.mediaReferences.asSequence() }
+            .toList()
         val readyPhotoUris = loadMaintenancePhotoUris(
-            references = readyReferences,
+            references = readyReferences + workLineMedia,
             scopes = buildList {
                 add(
                     MaintenanceMediaScope(
@@ -2418,7 +2463,28 @@ class ManagerViewModel(
         onReady()
     }
 
-    fun startReworkEditor(sourceRepairId: String, onReady: () -> Unit) = command {
+    fun startReworkEditor(sourceRepairId: String, onReady: () -> Unit) =
+        startReworkEditor(
+            sourceRepairId = sourceRepairId,
+            selectedSourceLineId = null,
+            onReady = onReady,
+        )
+
+    fun startReworkEditorForLine(
+        sourceRepairId: String,
+        sourceLineId: String,
+        onReady: () -> Unit,
+    ) = startReworkEditor(
+        sourceRepairId = sourceRepairId,
+        selectedSourceLineId = sourceLineId,
+        onReady = onReady,
+    )
+
+    private fun startReworkEditor(
+        sourceRepairId: String,
+        selectedSourceLineId: String?,
+        onReady: () -> Unit,
+    ) = command {
         val warehouseId = requireWarehouseId()
         ensureMaintenanceCatalog(warehouseId)
         refreshRepairTaskBoards()
@@ -2431,31 +2497,39 @@ class ManagerViewModel(
         if (candidates.isEmpty()) {
             throw IllegalStateException("В исходном ремонте нет плана для доработки")
         }
+        val selectedCandidate = selectedSourceLineId?.let { sourceLineId ->
+            candidates.singleOrNull { candidate ->
+                candidate.sourceLineId == sourceLineId && candidate.line.lineType == "WORK"
+            } ?: throw IllegalStateException(
+                "Выбранная работа больше не доступна для доработки",
+            )
+        }
+        val editor = MaintenanceEditorState(
+            mode = MaintenanceEditorMode.REPAIR,
+            entityId = null,
+            expectedVersion = null,
+            readOnly = false,
+            selectedAsset = asset,
+            dispatchDate = LocalDate.now().toString(),
+            sourceParty = source.sourceParty.orEmpty(),
+            lines = emptyList(),
+            photoUris = emptyList(),
+            readyMedia = emptyList(),
+            priority = source.priority,
+            step = 1,
+            stages = emptyList(),
+            repairKind = "REWORK",
+            sourceRepairId = source.id,
+            sourceRepairExpectedVersion = source.version,
+            reworkCandidates = candidates,
+        )
         assetSearchGeneration += 1
         mutableState.update { current ->
             current.copy(
                 acceptanceEditor = null,
                 acceptanceGallery = null,
                 maintenanceAssetLabels = current.maintenanceAssetLabels + (asset.id to asset.number),
-                maintenanceEditor = MaintenanceEditorState(
-                    mode = MaintenanceEditorMode.REPAIR,
-                    entityId = null,
-                    expectedVersion = null,
-                    readOnly = false,
-                    selectedAsset = asset,
-                    dispatchDate = LocalDate.now().toString(),
-                    sourceParty = source.sourceParty.orEmpty(),
-                    lines = emptyList(),
-                    photoUris = emptyList(),
-                    readyMedia = emptyList(),
-                    priority = source.priority,
-                    step = 1,
-                    stages = emptyList(),
-                    repairKind = "REWORK",
-                    sourceRepairId = source.id,
-                    sourceRepairExpectedVersion = source.version,
-                    reworkCandidates = candidates,
-                ),
+                maintenanceEditor = selectedCandidate?.let(editor::toggleReworkCandidate) ?: editor,
             )
         }
         onReady()
@@ -2710,6 +2784,8 @@ class ManagerViewModel(
         quantity: String,
         comment: String,
         existingWorkLineId: String? = null,
+        photoUris: List<String> = emptyList(),
+        mediaReferences: List<MediaReferenceDto> = emptyList(),
     ): Boolean {
         val activeEditor = mutableState.value.maintenanceEditor ?: return false
         val canonicalQuantity = runCatching {
@@ -2738,6 +2814,12 @@ class ManagerViewModel(
             message("Выбранные позиции больше недоступны в активном каталоге")
             return false
         }
+        if ((photoUris.isNotEmpty() || mediaReferences.isNotEmpty()) &&
+            canonicalNodes.count { node -> node.nodeType == "WORK" } != 1
+        ) {
+            message("Фото можно прикрепить только к одной выбранной работе")
+            return false
+        }
         if (!activeEditor.hasSelectedCatalogWork(
                 nodes = canonicalNodes,
                 lineId = existingWorkLineId,
@@ -2748,13 +2830,28 @@ class ManagerViewModel(
         }
 
         editMaintenance { editor ->
-            applyMaintenanceCatalogNodes(
+            val updated = applyMaintenanceCatalogNodes(
                 editor = editor,
                 nodes = canonicalNodes,
                 quantity = canonicalQuantity,
                 comment = canonicalComment,
                 existingWorkLineId = existingWorkLineId,
+                photoUris = photoUris,
+                mediaReferences = mediaReferences,
             )
+            val movedMediaIds = mediaReferences.mapTo(mutableSetOf(), MediaReferenceDto::mediaId)
+            if (movedMediaIds.isEmpty()) {
+                updated
+            } else {
+                updated.copy(
+                    readyMedia = updated.readyMedia.filterNot { reference ->
+                        reference.mediaId in movedMediaIds
+                    },
+                    coverPhotoKey = updated.coverPhotoKey.takeUnless { key ->
+                        key?.removePrefix("media:") in movedMediaIds
+                    },
+                )
+            }
         }
         return true
     }
@@ -2792,7 +2889,7 @@ class ManagerViewModel(
     fun saveMaintenanceDraft(onSaved: () -> Unit) = command {
         val existingDocument = maintenanceDocumentAlreadySubmitted(requireMaintenanceEditor())
         val current = requireMaintenanceEditor()
-        val queued = if (orderedMaintenanceLocalPhotoUris(current).isNotEmpty()) {
+        val queued = if (current.hasPendingMaintenancePhotos()) {
             enqueueMaintenanceBackground(submit = false)
         } else {
             null
@@ -3028,10 +3125,15 @@ class ManagerViewModel(
                 } else {
                     BigDecimal(line.normativeMinutes).toInt()
                 },
-                comment = line.groupComment.orEmpty(),
+                comment = line.groupComment.orEmpty().takeIf {
+                    line.lineType == "WORK"
+                }.orEmpty(),
                 catalogSnapshot = line.catalogNodeId?.let(maintenanceCatalogNodesById::get)
                     ?.toCatalogSnapshot(),
-            )
+                mediaReferences = line.mediaReferences.takeIf {
+                    line.lineType == "WORK"
+                }.orEmpty(),
+            ).normalizedMaintenanceAnnotations()
         }
         val remainingLinesByCatalogNode = lines
             .filter { it.catalogNodeId != null }
@@ -3660,6 +3762,13 @@ class ManagerViewModel(
         }
         val warehouseId = requireWarehouseId()
         val localPhotoUris = orderedMaintenanceLocalPhotoUris(editor)
+        val linePhotoUris = editor.lines
+            .asSequence()
+            .filter { line -> line.lineType == "WORK" }
+            .flatMap { line ->
+                line.photoUris.distinct().map { uri -> line.id to uri }
+            }
+            .toList()
         val owner = MediaOwner(
             ownerType = if (editor.mode == MaintenanceEditorMode.ESTIMATE) {
                 "MAINTENANCE_ESTIMATE"
@@ -3681,7 +3790,8 @@ class ManagerViewModel(
             ?.takeIf { mediaId -> existingMedia.any { it.mediaId == mediaId } }
         val submittedDocument = maintenanceDocumentAlreadySubmitted(editor)
         val replaceKind = when {
-            wasNew && localPhotoUris.isEmpty() -> MaintenanceReplaceKind.NONE
+            wasNew && localPhotoUris.isEmpty() && linePhotoUris.isEmpty() ->
+                MaintenanceReplaceKind.NONE
             editor.mode == MaintenanceEditorMode.ESTIMATE && submittedDocument ->
                 MaintenanceReplaceKind.ESTIMATE_AMENDMENT
             editor.mode == MaintenanceEditorMode.ESTIMATE -> MaintenanceReplaceKind.ESTIMATE
@@ -3714,6 +3824,13 @@ class ManagerViewModel(
                         owner = owner,
                         sortOrder = existingMedia.size + index,
                         cover = editor.coverPhotoKey == maintenanceLocalPhotoKey(uri),
+                    )
+                } + linePhotoUris.mapIndexed { index, (lineId, uri) ->
+                    PendingBackgroundPhoto(
+                        uri = uri,
+                        owner = owner,
+                        sortOrder = existingMedia.size + localPhotoUris.size + index,
+                        lineId = lineId,
                     )
                 },
                 maintenance = MaintenanceUploadCommand(
@@ -3771,8 +3888,7 @@ class ManagerViewModel(
             editor = requireMaintenanceEditor()
         }
 
-        val localPhotoUris = orderedMaintenanceLocalPhotoUris(editor)
-        require(localPhotoUris.isEmpty()) {
+        require(!editor.hasPendingMaintenancePhotos()) {
             "Фотографии должны отправляться через фоновые загрузки"
         }
         if (!wasNew) {
@@ -3895,8 +4011,8 @@ class ManagerViewModel(
         if (!isMaintenanceLineType(line.lineType)) {
             throw IllegalArgumentException("Тип строки должен быть работой или материалом")
         }
-        val comment = line.comment.trim().takeIf(String::isNotEmpty)
-        if (comment != null && comment.length > 2000) {
+        val requestedComment = line.comment.trim().takeIf(String::isNotEmpty)
+        if (requestedComment != null && requestedComment.length > 2000) {
             throw IllegalArgumentException("Комментарий строки не может быть длиннее 2000 символов")
         }
         val node = line.catalogNodeId?.let(maintenanceCatalogNodesById::get)
@@ -3912,6 +4028,7 @@ class ManagerViewModel(
                 }
             }
         }
+        val comment = requestedComment.takeIf { lineType == "WORK" }
         val normativeMinutes = when (lineType) {
             "MATERIAL" -> 0
             "WORK" -> line.normativeMinutes.also { minutes ->
@@ -3941,13 +4058,16 @@ class ManagerViewModel(
             unitPrice = canonicalMaintenanceMoney(line.unitPrice),
             normativeMinutes = normativeMinutes,
             comment = comment,
-            mediaReferences = line.mediaReferences.distinctBy(MediaReferenceDto::mediaId),
+            mediaReferences = if (lineType == "WORK") {
+                line.mediaReferences.distinctBy(MediaReferenceDto::mediaId)
+            } else {
+                emptyList()
+            },
         )
     }
 
     private fun inventoryPlanSelection(
         editor: InventoryEditorState,
-        mediaReferences: List<MediaReferenceDto>,
         coverMediaId: String?,
     ): InventoryPlanSelectionDto? {
         if (editor.planLines.isEmpty()) {
@@ -3988,11 +4108,15 @@ class ManagerViewModel(
                     quantity = normalized.quantity,
                     unitPriceMinor = null,
                     normativeMinutes = null,
-                    groupComment = stageCommentByLine[line.id]
-                        ?.trim()
-                        ?.takeIf(String::isNotEmpty)
-                        ?: normalized.comment,
-                    mediaReferences = mediaReferences,
+                    groupComment = if (normalized.lineType == "WORK") {
+                        stageCommentByLine[line.id]
+                            ?.trim()
+                            ?.takeIf(String::isNotEmpty)
+                            ?: normalized.comment
+                    } else {
+                        null
+                    },
+                    mediaReferences = normalized.mediaReferences,
                 )
             } else {
                 InventoryPlanLineInputDto(
@@ -4007,11 +4131,15 @@ class ManagerViewModel(
                         .setScale(0, RoundingMode.UNNECESSARY)
                         .longValueExact(),
                     normativeMinutes = (normalized.normativeMinutes ?: 0).toString(),
-                    groupComment = stageCommentByLine[line.id]
-                        ?.trim()
-                        ?.takeIf(String::isNotEmpty)
-                        ?: normalized.comment,
-                    mediaReferences = mediaReferences,
+                    groupComment = if (normalized.lineType == "WORK") {
+                        stageCommentByLine[line.id]
+                            ?.trim()
+                            ?.takeIf(String::isNotEmpty)
+                            ?: normalized.comment
+                    } else {
+                        null
+                    },
+                    mediaReferences = normalized.mediaReferences,
                 )
             }
         }
@@ -4175,7 +4303,9 @@ class ManagerViewModel(
                         "Для повторной строки не указана исходная позиция"
                     },
                     quantity = canonicalMaintenanceQuantity(line.quantity),
-                    comment = line.comment.trim().takeIf(String::isNotEmpty),
+                    comment = line.comment.trim().takeIf {
+                        line.lineType == "WORK" && it.isNotEmpty()
+                    },
                 )
 
                 "ADDED" -> ReworkLineInputDto(
@@ -4329,7 +4459,9 @@ class ManagerViewModel(
         }
 
     private fun normalizeMaintenanceEditor(editor: MaintenanceEditorState): MaintenanceEditorState {
-        val normalized = editor.normalizedLogisticsPlanning()
+        val normalized = editor.normalizedLogisticsPlanning().copy(
+            lines = editor.lines.map(MaintenanceLineEditorState::normalizedMaintenanceAnnotations),
+        )
         val rebuiltStages = runCatching { buildMaintenanceStages(normalized) }.getOrNull()
             ?: return normalized
         return normalized.copy(
@@ -5638,14 +5770,22 @@ internal fun applyMaintenanceCatalogNodes(
     quantity: String,
     comment: String,
     existingWorkLineId: String? = null,
+    photoUris: List<String> = emptyList(),
+    mediaReferences: List<MediaReferenceDto> = emptyList(),
 ): MaintenanceEditorState {
     val nextLines = editor.lines.toMutableList()
     val selectedNodes = nodes.distinctBy(CatalogNodeDto::id)
-    val selectedWorkNodeIds = selectedNodes
+    val selectedWorkNodes = selectedNodes
         .asSequence()
         .filter { node -> node.nodeType == "WORK" }
-        .map(CatalogNodeDto::id)
-        .toSet()
+        .toList()
+    val selectedWorkNodeIds = selectedWorkNodes.mapTo(mutableSetOf(), CatalogNodeDto::id)
+    if ((photoUris.isNotEmpty() || mediaReferences.isNotEmpty()) && selectedWorkNodes.size != 1) {
+        throw IllegalArgumentException(
+            "Фото можно прикрепить только при выборе одной работы",
+        )
+    }
+    val photoWorkNodeId = selectedWorkNodes.singleOrNull()?.id
     val existingWorkIndex = existingWorkLineId?.let { lineId ->
         nextLines.indexOfFirst { line -> line.id == lineId }
     } ?: -1
@@ -5669,12 +5809,28 @@ internal fun applyMaintenanceCatalogNodes(
                 nextLines[matchingExistingWorkIndex] = existing.copy(
                     quantity = accumulatedMaintenanceQuantity(existing.quantity, quantity),
                     comment = mergeMaintenanceLineComments(existing.comment, comment),
-                )
+                    photoUris = if (node.id == photoWorkNodeId) {
+                        (existing.photoUris + photoUris).distinct()
+                    } else {
+                        existing.photoUris
+                    },
+                    mediaReferences = if (node.id == photoWorkNodeId) {
+                        (existing.mediaReferences + mediaReferences)
+                            .distinctBy(MediaReferenceDto::mediaId)
+                    } else {
+                        existing.mediaReferences
+                    },
+                ).normalizedMaintenanceAnnotations()
             } else {
                 nextLines += node.toNewMaintenanceLine().copy(
                     quantity = quantity,
                     comment = comment,
-                )
+                    photoUris = photoUris.takeIf { node.id == photoWorkNodeId }.orEmpty(),
+                    mediaReferences = mediaReferences
+                        .takeIf { node.id == photoWorkNodeId }
+                        .orEmpty()
+                        .distinctBy(MediaReferenceDto::mediaId),
+                ).normalizedMaintenanceAnnotations()
             }
         } else {
             val existingMaterialIndex = nextLines.indexOfFirst { line ->
@@ -5682,16 +5838,19 @@ internal fun applyMaintenanceCatalogNodes(
             }
             if (existingMaterialIndex >= 0) {
                 val existing = nextLines[existingMaterialIndex]
-                // A catalog-add comment belongs to its work. Materials remain an aggregate
-                // quantity and keep any comment that was explicitly authored on the material.
                 nextLines[existingMaterialIndex] = existing.copy(
                     quantity = accumulatedMaintenanceQuantity(existing.quantity, quantity),
-                )
+                    comment = "",
+                    mediaReferences = emptyList(),
+                    photoUris = emptyList(),
+                ).normalizedMaintenanceAnnotations()
             } else {
                 nextLines += node.toNewMaintenanceLine().copy(
                     quantity = quantity,
                     comment = "",
-                )
+                    mediaReferences = emptyList(),
+                    photoUris = emptyList(),
+                ).normalizedMaintenanceAnnotations()
             }
         }
     }
@@ -5700,27 +5859,30 @@ internal fun applyMaintenanceCatalogNodes(
 
 internal fun EstimateLineDto.toMaintenanceLineEditor(
     customRouting: RoutingSnapshotDto? = null,
-): MaintenanceLineEditorState = MaintenanceLineEditorState(
-    id = id,
-    catalogNodeId = catalogSnapshot?.nodeId,
-    description = description,
-    lineType = lineType.also { type ->
+): MaintenanceLineEditorState {
+    val canonicalLineType = lineType.also { type ->
         require(isMaintenanceLineType(type)) { "Сервис вернул неподдерживаемый тип строки" }
-    },
-    unit = unit ?: catalogSnapshot?.unit.orEmpty(),
-    quantity = quantity,
-    unitPrice = unitPrice,
-    normativeMinutes = if (lineType == "MATERIAL") 0 else normativeMinutes,
-    comment = comment.orEmpty(),
-    catalogSnapshot = catalogSnapshot,
-    customRouting = if (catalogSnapshot == null) customRouting else null,
-    mediaReferences = mediaReferences,
-    reworkDisposition = disposition,
-    sourceRepairId = sourceRepairId,
-    sourceLineId = sourceLineId,
-    lineageRootLineId = lineageRootLineId,
-    repeatSourceDescription = description.takeIf { disposition == "REPEAT" },
-)
+    }
+    return MaintenanceLineEditorState(
+        id = id,
+        catalogNodeId = catalogSnapshot?.nodeId,
+        description = description,
+        lineType = canonicalLineType,
+        unit = unit ?: catalogSnapshot?.unit.orEmpty(),
+        quantity = quantity,
+        unitPrice = unitPrice,
+        normativeMinutes = if (canonicalLineType == "MATERIAL") 0 else normativeMinutes,
+        comment = comment.orEmpty().takeIf { canonicalLineType == "WORK" }.orEmpty(),
+        catalogSnapshot = catalogSnapshot,
+        customRouting = if (catalogSnapshot == null) customRouting else null,
+        mediaReferences = mediaReferences.takeIf { canonicalLineType == "WORK" }.orEmpty(),
+        reworkDisposition = disposition,
+        sourceRepairId = sourceRepairId,
+        sourceLineId = sourceLineId,
+        lineageRootLineId = lineageRootLineId,
+        repeatSourceDescription = description.takeIf { disposition == "REPEAT" },
+    ).normalizedMaintenanceAnnotations()
+}
 
 internal fun MaintenanceEditorState.toggleReworkCandidate(
     candidate: ReworkCandidateDto,
@@ -5807,7 +5969,9 @@ private fun PlanStageInputDto.toMaintenanceStageEditor(): MaintenanceStageEditor
         routing = routing,
         includedLineIds = includedLineIds,
         primaryLineId = primaryLineId,
-        groupComment = groupComment,
+        // A null primary is the contract's material-only stage marker, so an old/stale stage
+        // comment must not reappear in the Android editor.
+        groupComment = groupComment.takeIf { primaryLineId != null }.orEmpty(),
         taskDeadline = taskDeadline,
         originalOrder = order,
     )
@@ -5819,7 +5983,7 @@ private fun RepairStageDto.toMaintenanceStageEditor(): MaintenanceStageEditorSta
         routing = routing,
         includedLineIds = (workLines + materialLines).map(EstimateLineDto::id).distinct(),
         primaryLineId = primaryLineId,
-        groupComment = groupComment,
+        groupComment = groupComment.takeIf { workLines.isNotEmpty() }.orEmpty(),
         taskDeadline = taskDeadline,
         originalOrder = order,
     )
@@ -5940,7 +6104,11 @@ internal fun planMaintenanceStages(
                 groupComment = groupedLines
                     .map(RoutedLine::line)
                     .commentsForMaintenanceStage()
-                    .ifBlank { previous?.groupComment.orEmpty() },
+                    .ifBlank {
+                        previous?.groupComment
+                            ?.takeIf { primaryLineId != null }
+                            .orEmpty()
+                    },
                 taskDeadline = previous?.taskDeadline,
             ),
         )
@@ -5969,6 +6137,7 @@ private fun RoutingSnapshotDto.isValidMaintenanceRouting(): Boolean =
 
 private fun List<MaintenanceLineEditorState>.commentsForMaintenanceStage(): String =
     asSequence()
+        .filter { line -> line.lineType == "WORK" }
         .map { it.comment.trim() }
         .filter(String::isNotEmpty)
         .distinct()

@@ -108,7 +108,8 @@ public final class WorkerApiModels {
       double quantity,
       String unit,
       Integer durationMinutes,
-      String comment) {}
+      String comment,
+      List<UUID> sourceMediaIds) {}
 
   public record WorkerVisibleComment(
       UUID id, String text, String authorDisplayName, OffsetDateTime createdAt) {}

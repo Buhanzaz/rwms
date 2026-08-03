@@ -1,7 +1,6 @@
 import type {
   InventoryCatalogPlanLine,
   InventoryManualPlanLine,
-  InventoryMediaReference,
   InventoryPlanSelection,
 } from "@/features/inventory/model/inventory-service"
 import type {
@@ -29,10 +28,12 @@ function minor(value: string) {
 
 function planLine(
   line: RepairEstimateLineDto,
-  media: InventoryMediaReference[],
   planComment: string | null
 ): InventoryCatalogPlanLine | InventoryManualPlanLine {
-  const groupComment = planComment?.trim() || line.lineComment.trim() || null
+  const groupComment =
+    line.lineType === "WORK"
+      ? planComment?.trim() || line.lineComment.trim() || null
+      : null
   if (line.catalogSnapshot) {
     return {
       aggregationKind: "CATALOG" as const,
@@ -44,7 +45,10 @@ function planLine(
       unitPriceMinor: null,
       normativeMinutes: null,
       groupComment,
-      mediaReferences: media,
+      mediaReferences:
+        line.lineType === "WORK"
+          ? [...(line.maintenanceMediaReferences ?? [])]
+          : [],
     }
   }
   if (line.lineType !== "WORK" && line.lineType !== "MATERIAL") {
@@ -60,7 +64,10 @@ function planLine(
     unitPriceMinor: minor(line.unitPrice),
     normativeMinutes: "0",
     groupComment,
-    mediaReferences: media,
+    mediaReferences:
+      line.lineType === "WORK"
+        ? [...(line.maintenanceMediaReferences ?? [])]
+        : [],
   }
 }
 
@@ -74,7 +81,6 @@ export function buildInventoryPlanSelection(input: {
   coverMediaId: string | null
   taskPlans: RepairEstimateTaskPlanDto[]
   lines: RepairEstimateLineDto[]
-  media: InventoryMediaReference[]
 }): Exclude<InventoryPlanSelection, null> {
   if (!input.movementRequired) {
     if (
@@ -111,7 +117,7 @@ export function buildInventoryPlanSelection(input: {
     }
   }
   const lines = input.lines.map((line) =>
-    planLine(line, input.media, planCommentByLine.get(line.id) ?? null)
+    planLine(line, planCommentByLine.get(line.id) ?? null)
   )
   if (input.completionMode === "AUTO") {
     if (lines.some((line) => line.aggregationKind !== "CATALOG")) {

@@ -71,6 +71,31 @@ internal fun maintenanceRequiresPhotos(editor: MaintenanceEditorState): Boolean 
 internal fun maintenanceHasPhotos(editor: MaintenanceEditorState): Boolean =
     editor.photoUris.isNotEmpty() || editor.readyMedia.isNotEmpty()
 
+/**
+ * Aggregate photos and work-line photos are uploaded together, but only aggregate photos take
+ * part in the document cover policy. A line photo must still send the document through the
+ * durable upload outbox.
+ */
+internal fun MaintenanceEditorState.hasPendingMaintenancePhotos(): Boolean =
+    photoUris.isNotEmpty() || lines.any { line ->
+        line.lineType == "WORK" && line.photoUris.isNotEmpty()
+    }
+
+/**
+ * Materials are quantities, not annotated work instructions. Normalize at the UI boundary so
+ * old responses, edits and local draft state cannot put a comment or a source image back onto a
+ * MATERIAL line.
+ */
+internal fun MaintenanceLineEditorState.normalizedMaintenanceAnnotations(): MaintenanceLineEditorState =
+    if (lineType == "MATERIAL") {
+        copy(comment = "", mediaReferences = emptyList(), photoUris = emptyList())
+    } else {
+        copy(
+            mediaReferences = mediaReferences.distinctBy(MediaReferenceDto::mediaId),
+            photoUris = photoUris.distinct(),
+        )
+    }
+
 internal fun maintenanceLocalPhotoKey(uri: String): String = "local:$uri"
 
 internal fun maintenanceReadyPhotoKey(mediaId: String): String = "media:$mediaId"

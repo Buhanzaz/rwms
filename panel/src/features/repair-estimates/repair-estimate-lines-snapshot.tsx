@@ -58,10 +58,14 @@ export function RepairEstimateLinesSnapshot({
             </CardHeader>
             <CardContent>
               <dl className="grid min-w-0 gap-x-4 gap-y-2 sm:grid-cols-[10rem_minmax(0,1fr)]">
-                <dt className="text-muted-foreground">Комментарий</dt>
-                <dd className="min-w-0 break-words">
-                  {line.lineComment.trim() || "—"}
-                </dd>
+                {line.lineType === "WORK" ? (
+                  <>
+                    <dt className="text-muted-foreground">Комментарий</dt>
+                    <dd className="min-w-0 break-words">
+                      {line.lineComment.trim() || "—"}
+                    </dd>
+                  </>
+                ) : null}
                 {line.catalogSnapshot === null && line.lineType === "WORK" ? (
                   <>
                     <dt className="text-muted-foreground">Очередь работы</dt>

@@ -57,7 +57,7 @@ type repository interface {
 		func([]persistence.CabinCoverRecord) error) error
 	ReadCabinPresentationSnapshots(context.Context, uuid.UUID, []uuid.UUID,
 		func([]persistence.CabinPresentationSnapshotRecord) error) error
-	ReadOriginal(context.Context, uuid.UUID, string, string, uuid.UUID,
+	ReadOriginal(context.Context, uuid.UUID, string, string, uuid.UUID, *int,
 		func(persistence.AssetRecord, *persistence.VariantRecord) error) error
 	ReadCurrentVariant(context.Context, uuid.UUID, string, string, uuid.UUID, int, media.Variant,
 		func(persistence.AssetRecord, *persistence.VariantRecord) error) error
@@ -1298,7 +1298,7 @@ func (server *Server) getOriginal(response http.ResponseWriter, request *http.Re
 			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
 			return
 		}
-		err = server.repository.ReadOriginal(request.Context(), mediaID, ownerType, ownerID, warehouseID, consume)
+		err = server.repository.ReadOriginal(request.Context(), mediaID, ownerType, ownerID, warehouseID, generation, consume)
 	}
 	switch {
 	case errors.Is(err, errMediaNotReady):

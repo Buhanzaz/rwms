@@ -225,6 +225,239 @@ func TestTaskBoardWorkerProofGatesEvidenceAndSourceReadsIntegration(t *testing.T
 	}
 }
 
+func TestTaskBoardUserAcceptanceReadsInactiveProofSourcesIntegration(t *testing.T) {
+	databaseURL := os.Getenv("MEDIA_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("MEDIA_TEST_DATABASE_URL is not configured")
+	}
+	databaseURL = testsupport.NewMigratedMediaDatabase(t, databaseURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("open media database: %v", err)
+	}
+	defer database.Close()
+	repository := NewRepository(database.Pool)
+
+	warehouseID, entryID, workerID, subjectID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	sourceID := readyInventorySourceForTaskBoard(t, ctx, database, repository, warehouseID)
+	unreferencedID := readyInventorySourceForTaskBoard(t, ctx, database, repository, warehouseID)
+	proof0 := taskBoardOwnerProofMessage(t, entryID, warehouseID, 0, true, []uuid.UUID{workerID},
+		[]TaskBoardSourceMediaReference{{MediaID: sourceID, Generation: 1}})
+	if result, applyErr := repository.ApplyTaskBoardEntryOwnerProofMessage(ctx, proof0); applyErr != nil || result.Duplicate || result.Quarantined {
+		t.Fatalf("apply active task-board proof = %#v, %v", result, applyErr)
+	}
+
+	resultCommand := taskBoardWorkerEvidenceCommand(entryID, warehouseID, subjectID, workerID, uuid.New())
+	resultAsset, replayed, createErr := repository.CreateUpload(ctx, resultCommand)
+	if createErr != nil || replayed {
+		t.Fatalf("create task result replayed=%v error=%v", replayed, createErr)
+	}
+	seedReadyTaskBoardMedia(t, ctx, database, resultAsset.ID, resultCommand.ChecksumSHA256, 1)
+
+	// The task board cites generation 1, then the source advances. The user
+	// scope must keep returning generation 1 rather than following the source's
+	// current generation 2.
+	seedReadyTaskBoardMedia(t, ctx, database, sourceID, hex64('b'), 2)
+	proof1 := taskBoardOwnerProofMessage(t, entryID, warehouseID, 1, false, nil,
+		[]TaskBoardSourceMediaReference{{MediaID: sourceID, Generation: 1}})
+	if result, applyErr := repository.ApplyTaskBoardEntryOwnerProofMessage(ctx, proof1); applyErr != nil || result.Duplicate || result.Quarantined {
+		t.Fatalf("apply inactive task-board proof = %#v, %v", result, applyErr)
+	}
+
+	if err := repository.ReadTaskBoardEntryAssetsForWorker(ctx, entryID, warehouseID, workerID, 10, nil,
+		func([]AssetWithVariants) error { return nil }); !errors.Is(err, ErrOwnerProofMissing) {
+		t.Fatalf("inactive proof worker list error = %v, want ErrOwnerProofMissing", err)
+	}
+
+	var listed []AssetWithVariants
+	if err := repository.ReadOwnerAssets(ctx, OwnerTypeTaskBoardEntry, entryID.String(), warehouseID, 10, nil,
+		func(records []AssetWithVariants) error {
+			listed = append([]AssetWithVariants(nil), records...)
+			return nil
+		}); err != nil {
+		t.Fatalf("inactive task-board user list: %v", err)
+	}
+	if len(listed) != 2 {
+		t.Fatalf("inactive task-board user list = %#v, want result and pinned source", listed)
+	}
+	listedResult, listedSource := taskBoardListedAsset(listed, resultAsset.ID), taskBoardListedAsset(listed, sourceID)
+	if listedResult == nil || listedResult.Asset.OwnerType != OwnerTypeTaskBoardEntry ||
+		listedResult.Asset.Generation != 1 || taskBoardListedVariant(listedResult, media.VariantSmall) == nil {
+		t.Fatalf("listed result asset = %#v", listedResult)
+	}
+	if listedSource == nil || listedSource.Asset.Generation != 1 || listedSource.Asset.Status != media.StatusReady {
+		t.Fatalf("listed pinned source asset = %#v", listedSource)
+	}
+	listedSourceSmall := taskBoardListedVariant(listedSource, media.VariantSmall)
+	if listedSourceSmall == nil || listedSourceSmall.ObjectKey != taskBoardProcessedVariant(sourceID, 1, media.VariantSmall).ObjectKey {
+		t.Fatalf("listed pinned source small variant = %#v", listedSourceSmall)
+	}
+	var firstPage []AssetWithVariants
+	if err := repository.ReadOwnerAssets(ctx, OwnerTypeTaskBoardEntry, entryID.String(), warehouseID, 1, nil,
+		func(records []AssetWithVariants) error {
+			firstPage = append([]AssetWithVariants(nil), records...)
+			return nil
+		}); err != nil || len(firstPage) != 1 {
+		t.Fatalf("first task-board user page = %#v, %v", firstPage, err)
+	}
+	var secondPage []AssetWithVariants
+	if err := repository.ReadOwnerAssets(ctx, OwnerTypeTaskBoardEntry, entryID.String(), warehouseID, 1,
+		&firstPage[0].Asset.ID, func(records []AssetWithVariants) error {
+			secondPage = append([]AssetWithVariants(nil), records...)
+			return nil
+		}); err != nil || len(secondPage) != 1 || secondPage[0].Asset.ID == firstPage[0].Asset.ID {
+		t.Fatalf("second task-board user page = %#v, %v", secondPage, err)
+	}
+
+	pinnedGeneration := 1
+	if err := repository.ReadOriginal(ctx, sourceID, OwnerTypeTaskBoardEntry, entryID.String(), warehouseID,
+		&pinnedGeneration, func(asset AssetRecord, original *VariantRecord) error {
+			if asset.ID != sourceID || asset.Generation != pinnedGeneration || original == nil ||
+				original.ObjectKey != taskBoardProcessedVariant(sourceID, pinnedGeneration, media.VariantOriginal).ObjectKey {
+				t.Fatalf("pinned source original asset=%#v original=%#v", asset, original)
+			}
+			return nil
+		}); err != nil {
+		t.Fatalf("inactive task-board user source original: %v", err)
+	}
+	if err := repository.ReadCurrentVariant(ctx, sourceID, OwnerTypeTaskBoardEntry, entryID.String(), warehouseID,
+		pinnedGeneration, media.VariantSmall, func(asset AssetRecord, variant *VariantRecord) error {
+			if asset.ID != sourceID || asset.Generation != pinnedGeneration || variant == nil ||
+				variant.ObjectKey != taskBoardProcessedVariant(sourceID, pinnedGeneration, media.VariantSmall).ObjectKey {
+				t.Fatalf("pinned source variant asset=%#v variant=%#v", asset, variant)
+			}
+			return nil
+		}); err != nil {
+		t.Fatalf("inactive task-board user source variant: %v", err)
+	}
+	if err := repository.ReadOriginal(ctx, resultAsset.ID, OwnerTypeTaskBoardEntry, entryID.String(), warehouseID,
+		nil, func(asset AssetRecord, original *VariantRecord) error {
+			if asset.ID != resultAsset.ID || asset.Generation != 1 || original == nil {
+				t.Fatalf("inactive task-board user result original asset=%#v original=%#v", asset, original)
+			}
+			return nil
+		}); err != nil {
+		t.Fatalf("inactive task-board user result original: %v", err)
+	}
+	if err := repository.ReadCurrentVariant(ctx, resultAsset.ID, OwnerTypeTaskBoardEntry, entryID.String(), warehouseID,
+		1, media.VariantSmall, func(asset AssetRecord, variant *VariantRecord) error {
+			if asset.ID != resultAsset.ID || asset.Generation != 1 || variant == nil {
+				t.Fatalf("inactive task-board user result variant asset=%#v variant=%#v", asset, variant)
+			}
+			return nil
+		}); err != nil {
+		t.Fatalf("inactive task-board user result variant: %v", err)
+	}
+
+	if err := repository.ReadCurrentVariant(ctx, sourceID, OwnerTypeTaskBoardEntry, entryID.String(), warehouseID,
+		2, media.VariantSmall, func(AssetRecord, *VariantRecord) error { return nil }); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("source current generation leak error = %v, want ErrNotFound", err)
+	}
+	if err := repository.ReadOriginal(ctx, unreferencedID, OwnerTypeTaskBoardEntry, entryID.String(), warehouseID,
+		&pinnedGeneration, func(AssetRecord, *VariantRecord) error { return nil }); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unreferenced source original error = %v, want ErrNotFound", err)
+	}
+	if err := repository.ReadCurrentVariant(ctx, unreferencedID, OwnerTypeTaskBoardEntry, entryID.String(), warehouseID,
+		pinnedGeneration, media.VariantSmall, func(AssetRecord, *VariantRecord) error { return nil }); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unreferenced source variant error = %v, want ErrNotFound", err)
+	}
+	if err := repository.ReadOwnerAssets(ctx, OwnerTypeTaskBoardEntry, entryID.String(), uuid.New(), 10, nil,
+		func([]AssetWithVariants) error { return nil }); !errors.Is(err, ErrOwnerProofMissing) {
+		t.Fatalf("wrong warehouse user list error = %v, want ErrOwnerProofMissing", err)
+	}
+	if err := repository.ReadCurrentVariant(ctx, sourceID, OwnerTypeTaskBoardEntry, entryID.String(), uuid.New(),
+		pinnedGeneration, media.VariantSmall, func(AssetRecord, *VariantRecord) error { return nil }); !errors.Is(err, ErrOwnerProofMissing) {
+		t.Fatalf("wrong warehouse user source read error = %v, want ErrOwnerProofMissing", err)
+	}
+	if err := repository.ReadOwnerAssets(ctx, OwnerTypeTaskBoardEntry, uuid.New().String(), warehouseID, 10, nil,
+		func([]AssetWithVariants) error { return nil }); !errors.Is(err, ErrOwnerProofMissing) {
+		t.Fatalf("missing task-board proof user list error = %v, want ErrOwnerProofMissing", err)
+	}
+
+	staleEntryID := uuid.New()
+	for version := int64(0); version <= 1; version++ {
+		proof := taskBoardOwnerProofMessage(t, staleEntryID, warehouseID, version, false, nil, nil)
+		if result, applyErr := repository.ApplyTaskBoardEntryOwnerProofMessage(ctx, proof); applyErr != nil || result.Quarantined {
+			t.Fatalf("apply stale-proof fixture v%d = %#v, %v", version, result, applyErr)
+		}
+	}
+	if _, err := database.Pool.Exec(ctx, `update media_consumer_aggregate_checkpoint
+		set aggregate_version=0 where consumer_name=$1 and aggregate_type=$2 and aggregate_id=$3`,
+		TaskBoardEntryOwnerProofConsumer, TaskBoardEntryOwnerProofAggregate, staleEntryID); err != nil {
+		t.Fatalf("make task-board proof stale: %v", err)
+	}
+	if err := repository.ReadOwnerAssets(ctx, OwnerTypeTaskBoardEntry, staleEntryID.String(), warehouseID, 10, nil,
+		func([]AssetWithVariants) error { return nil }); !errors.Is(err, ErrOwnerProofMissing) {
+		t.Fatalf("stale task-board proof user list error = %v, want ErrOwnerProofMissing", err)
+	}
+
+	gap := taskBoardOwnerProofMessage(t, entryID, warehouseID, 3, false, nil,
+		[]TaskBoardSourceMediaReference{{MediaID: sourceID, Generation: 1}})
+	if result, applyErr := repository.ApplyTaskBoardEntryOwnerProofMessage(ctx, gap); applyErr != nil || !result.Quarantined {
+		t.Fatalf("quarantine task-board proof result = %#v, %v", result, applyErr)
+	}
+	if err := repository.ReadOwnerAssets(ctx, OwnerTypeTaskBoardEntry, entryID.String(), warehouseID, 10, nil,
+		func([]AssetWithVariants) error { return nil }); !errors.Is(err, ErrOwnerProofMissing) {
+		t.Fatalf("quarantined task-board proof user list error = %v, want ErrOwnerProofMissing", err)
+	}
+	if err := repository.ReadCurrentVariant(ctx, sourceID, OwnerTypeTaskBoardEntry, entryID.String(), warehouseID,
+		pinnedGeneration, media.VariantSmall, func(AssetRecord, *VariantRecord) error { return nil }); !errors.Is(err, ErrOwnerProofMissing) {
+		t.Fatalf("quarantined task-board proof user source read error = %v, want ErrOwnerProofMissing", err)
+	}
+}
+
+func seedReadyTaskBoardMedia(t *testing.T, ctx context.Context, database *Database, mediaID uuid.UUID, checksum string, generation int) {
+	t.Helper()
+	if _, err := database.Pool.Exec(ctx, `update media_asset set processing_status='READY',
+		current_generation=$2,next_generation=$2+1,version=version+1,
+		source_version_id='source-v'||$2::text,source_etag='source-etag',
+		source_checksum_sha256=$3,finalized_content_type='image/jpeg',finalized_size_bytes=128,size_bytes=128,
+		updated_at=clock_timestamp() where media_id=$1`, mediaID, generation, checksum); err != nil {
+		t.Fatalf("mark task-board media generation %d ready: %v", generation, err)
+	}
+	for _, variant := range processedImageVariants(mediaID, generation) {
+		if _, err := database.Pool.Exec(ctx, `insert into media_variant (
+			media_id,generation,variant,object_key,object_version_id,content_type,size_bytes,width,height,checksum_sha256)
+		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, mediaID, generation, variant.Variant, variant.ObjectKey,
+			variant.ObjectVersionID, variant.ContentType, variant.SizeBytes, variant.Width, variant.Height,
+			variant.ChecksumSHA256); err != nil {
+			t.Fatalf("seed task-board media generation %d variant %s: %v", generation, variant.Variant, err)
+		}
+	}
+}
+
+func taskBoardListedAsset(records []AssetWithVariants, mediaID uuid.UUID) *AssetWithVariants {
+	for index := range records {
+		if records[index].Asset.ID == mediaID {
+			return &records[index]
+		}
+	}
+	return nil
+}
+
+func taskBoardListedVariant(record *AssetWithVariants, requested media.Variant) *VariantRecord {
+	if record == nil {
+		return nil
+	}
+	for index := range record.Variants {
+		if record.Variants[index].Variant == requested {
+			return &record.Variants[index]
+		}
+	}
+	return nil
+}
+
+func taskBoardProcessedVariant(mediaID uuid.UUID, generation int, requested media.Variant) media.ProcessedVariant {
+	for _, variant := range processedImageVariants(mediaID, generation) {
+		if variant.Variant == requested {
+			return variant
+		}
+	}
+	panic("missing task-board processed variant")
+}
+
 func readyInventorySourceForTaskBoard(t *testing.T, ctx context.Context, database *Database, repository *Repository, warehouseID uuid.UUID) uuid.UUID {
 	t.Helper()
 	ownerID := uuid.New()
