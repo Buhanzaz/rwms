@@ -15,12 +15,14 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableFooter,
   TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { formatMoneyDecimal } from "@/features/repair-estimates/domain/repair-estimate-domain"
+import { inventoryRepairMovementCount } from "@/features/inventory/domain/inventory-domain"
 import type {
   InventoryFindingDto,
   InventoryStatisticsDto,
@@ -35,20 +37,14 @@ function formatDuration(seconds: number) {
 export function InventoryStatistics({
   statistics,
   findings = [],
+  showCounters = true,
 }: {
   statistics: InventoryStatisticsDto
   findings?: InventoryFindingDto[]
+  showCounters?: boolean
 }) {
   const [lineType, setLineType] = useState<"ALL" | "WORK" | "MATERIAL">("ALL")
-  const counters = [
-    ["Ожидалось", statistics.expectedCount],
-    ["Проверено", statistics.inspectedCount],
-    ["Не найдено", statistics.missingCount],
-    ["Готовы", statistics.readyCount],
-    ["С работами", statistics.withWorkCount],
-    ["Добавлено", statistics.addedCount],
-    ["Конфликты", statistics.conflictCount],
-  ] as const
+  const repairMovementCount = inventoryRepairMovementCount(findings)
   const findingsWithLines = useMemo(
     () =>
       findings
@@ -67,7 +63,7 @@ export function InventoryStatistics({
       className="flex flex-col gap-4"
       aria-label="Статистика инвентаризации"
     >
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <Card size="sm">
           <CardHeader>
             <CardTitle>Длительность инвентаризации</CardTitle>
@@ -113,15 +109,40 @@ export function InventoryStatistics({
             </p>
           </CardContent>
         </Card>
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle>Перемещения на ремонт и вывозы</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-semibold">{repairMovementCount}</p>
+            <p className="text-sm text-muted-foreground">
+              1 перемещение = доставка в ремонт и вывоз
+            </p>
+          </CardContent>
+        </Card>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        {counters.map(([label, value]) => (
-          <Badge key={label} variant="secondary">
-            {label}: {value}
+      {showCounters ? (
+        <div className="flex flex-wrap gap-2">
+          <Badge variant="secondary">
+            Ожидалось: {statistics.expectedCount}
           </Badge>
-        ))}
-      </div>
+          <Badge variant="secondary">
+            Проверено: {statistics.inspectedCount}
+          </Badge>
+          <Badge variant="secondary">
+            Не найдено: {statistics.missingCount}
+          </Badge>
+          <Badge variant="secondary">Готовы: {statistics.readyCount}</Badge>
+          <Badge variant="secondary">
+            С работами: {statistics.withWorkCount}
+          </Badge>
+          <Badge variant="secondary">Добавлено: {statistics.addedCount}</Badge>
+          <Badge variant="secondary">
+            Конфликты: {statistics.conflictCount}
+          </Badge>
+        </div>
+      ) : null}
 
       {findings.some((finding) => finding.lines.length > 0) ? (
         <Dialog>
@@ -233,6 +254,16 @@ export function InventoryStatistics({
                   </TableRow>
                 ))}
               </TableBody>
+              <TableFooter>
+                <TableRow>
+                  <TableCell colSpan={4} className="text-right font-semibold">
+                    Итого
+                  </TableCell>
+                  <TableCell className="font-semibold">
+                    {formatMoneyDecimal(statistics.grandTotal)} ₽
+                  </TableCell>
+                </TableRow>
+              </TableFooter>
             </Table>
           </CardContent>
         </Card>

@@ -24,6 +24,22 @@ export function inventoryCompletionRiskSignature(
   return risks.length > 0 ? JSON.stringify(risks) : ""
 }
 
+/**
+ * Counts a repair logistics cycle once per cabin. A cycle contains both the
+ * movement to the repair area and the later removal from it, rather than two
+ * independent movements in the completion summary.
+ */
+export function inventoryRepairMovementCount(findings: InventoryFindingDto[]) {
+  return findings.filter(
+    (finding) =>
+      finding.movementRequired ||
+      finding.repairPlans.some(
+        (plan) =>
+          plan.kind === "MOVE_TO_REPAIR" || plan.kind === "MOVE_FROM_REPAIR"
+      )
+  ).length
+}
+
 export function toInventoryRepairPlanSnapshot(
   plan: RepairEstimateTaskPlanDto
 ): InventoryRepairPlanSnapshotDto {

@@ -14,6 +14,7 @@ import type { CurrentUser } from "@/features/auth/auth-model"
 import type {
   InventoryFindingDto,
   InventorySessionDto,
+  InventoryStatisticsDto,
 } from "@/features/inventory/model/inventory"
 import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/repair-estimate"
 
@@ -181,6 +182,24 @@ const workLine: RepairEstimateLineDto = {
     characteristic: null,
   },
   customQueueBinding: null,
+}
+
+const finishStatistics: InventoryStatisticsDto = {
+  durationSeconds: 3_600,
+  expectedCount: 1,
+  inspectedCount: 1,
+  missingCount: 0,
+  readyCount: 1,
+  withWorkCount: 1,
+  addedCount: 0,
+  conflictCount: 0,
+  workLineCount: 1,
+  materialLineCount: 0,
+  plannedDurationMinutes: 60,
+  workTotal: "100.00",
+  materialTotal: "0.00",
+  grandTotal: "100.00",
+  aggregates: [],
 }
 
 const currentUser: CurrentUser = {
@@ -731,6 +750,39 @@ describe("InventoryFinishPage conflict resolution", () => {
       ],
     }
   }
+
+  it("keeps all completion counters together and does not render line snapshots behind findings", async () => {
+    const reviewed = activeSession(
+      finding("FREE", {
+        inspectionStatus: "WORK_STAGED",
+        lines: [workLine],
+        movementRequired: true,
+      }),
+      { statistics: finishStatistics }
+    )
+    inventoryApi.getInventory.mockResolvedValue(reviewed)
+    inventoryApi.previewInventoryCompletion.mockResolvedValue(reviewed)
+
+    renderPage(`/inventory/${INVENTORY_ID}/finish`)
+
+    const completionSummary = (
+      await screen.findByText("Итоговая сверка")
+    ).closest('[data-slot="card"]')
+    if (!(completionSummary instanceof HTMLElement)) {
+      throw new Error("Не найдена карточка итоговой сверки")
+    }
+    expect(within(completionSummary).getByText("Ожидалось: 1")).toBeTruthy()
+    expect(within(completionSummary).getByText("Проверено: 1")).toBeTruthy()
+    expect(
+      within(completionSummary).getByText("Перемещения на ремонт и вывозы: 1")
+    ).toBeTruthy()
+    expect(
+      within(screen.getByLabelText("Статистика инвентаризации")).queryByText(
+        "Ожидалось: 1"
+      )
+    ).toBeNull()
+    expect(screen.queryByText("Заменить дверь")).toBeNull()
+  })
 
   it("blocks completion and resolves a conflict by accepting the registry", async () => {
     const user = userEvent.setup()
