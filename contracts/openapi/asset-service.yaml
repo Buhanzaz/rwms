@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Asset Service API
-  version: 1.10.0
+  version: 1.11.0
   description: >-
     Stage 5 canonical asset boundary plus narrow Stage 7 inventory-service and
     Stage 8 logistics-service private surfaces. Rental-item comments and
@@ -70,6 +70,52 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/DependencyFailure' }
+  /api/asset/v1/rental-items/available:
+    get:
+      operationId: listAvailableRentalItems
+      description: >-
+        Returns only FREE rental items that are currently available for a new booking.
+        Active order reservations, presentation holds and operation leases are excluded before
+        number search and pagination. Requires USER rwms.read and warehouse VIEW access.
+        Presentation-hold expiry is reconciled before this authoritative read.
+      parameters:
+        - $ref: '#/components/parameters/WarehouseIdQuery'
+        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - name: search
+          in: query
+          description: Case-insensitive substring search over the rental-item number.
+          schema: { type: string, maxLength: 128 }
+      responses:
+        '200':
+          description: Page of currently available canonical rental items.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RentalItemPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/asset/v1/rental-items/availability:
+    post:
+      operationId: checkRentalItemAvailability
+      description: >-
+        Rechecks up to 100 selected rental items against the authoritative FREE status, active
+        order reservations, presentation holds and operation leases without changing state.
+        Requires USER rwms.read and warehouse VIEW access for the request warehouse.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CabinAvailabilityRequest' }
+      responses:
+        '200':
+          description: Per-rental-item availability in request order.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CabinAvailabilityResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/asset/v1/rental-items/creation-options:
     get:
       operationId: getRentalItemCreationOptions

@@ -150,6 +150,28 @@ function renderGrid({
 }
 
 describe("RentalItemsGridView photo covers", () => {
+  it("renders controls over the photo without changing the shared card layout", () => {
+    coverUrl.mockReturnValue({ photos: [], availability: "available" })
+
+    render(
+      <RentalItemsGridView
+        items={[item]}
+        gridFormat={{ columns: 1, rows: 1 }}
+        accessToken="read-token"
+        mediaCovers={new Map()}
+        onOpenPhotos={vi.fn()}
+        onOpenItem={vi.fn()}
+        renderPhotoOverlay={(rentalItem) => (
+          <span data-testid="photo-overlay">Выбрать {rentalItem.number}</span>
+        )}
+      />
+    )
+
+    expect(screen.getByTestId("photo-overlay").textContent).toBe(
+      "Выбрать БЫТ-001"
+    )
+  })
+
   it("shows arrows and navigates through two logical service SMALL photos", async () => {
     const user = userEvent.setup()
     coverUrl.mockReturnValue({

@@ -13,8 +13,9 @@ const routeTitles = [
   { path: "/settings/estimates-repairs", title: "Настройка смет и ремонтов" },
   { path: "/settings/task-board", title: "Настройка доски задач" },
   { path: "/settings/logistics", title: "Настройки логистики" },
-  { path: "/settings/rental", title: "Аренда и представления" },
+  { path: "/settings/rental", title: "Бронирование и чат" },
   { path: "/assistant", title: "Чат" },
+  { path: "/booking", title: "Бронирование" },
   { path: "/warehouse", title: "Склад" },
   { path: "/equipment", title: "Доп. оборудование" },
   { path: "/inventory", title: "Инвентаризация" },
@@ -113,7 +114,11 @@ export function resolveHeaderBreadcrumbs(
   }
 
   if (pathname === "/settings/rental") {
-    return [{ title: "Настройки" }, { title: "Аренда и представления" }]
+    return [{ title: "Настройки" }, { title: "Бронирование и чат" }]
+  }
+
+  if (pathname === "/booking/continue") {
+    return [{ title: "Бронирование", to: "/booking" }, { title: "Продолжение" }]
   }
 
   const inventoryHistoryMatch = /^\/inventory\/history\/([^/]+)$/.exec(pathname)
@@ -183,13 +188,13 @@ export function resolveHeaderBreadcrumbs(
 
   if (/^\/orders\/[0-9a-f-]{36}$/i.test(pathname)) {
     return [
-      { title: "Бронирование", to: "/orders" },
-      { title: orderNumber ?? "Бронирование" },
+      { title: "Заказы", to: "/orders" },
+      { title: orderNumber ?? "Заказ" },
     ]
   }
 
   if (pathname.startsWith("/orders")) {
-    return [{ title: "Бронирование", to: "/orders" }]
+    return [{ title: "Заказы", to: "/orders" }]
   }
 
   if (pathname === "/") {

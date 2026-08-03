@@ -14,8 +14,8 @@ export function canViewAllOrders(user: OrdersModuleUser | null) {
 }
 
 export const ORDERS_NAVIGATION = {
-  rootLabel: "Бронирование",
+  rootLabel: "Заказы",
   listPath: "/orders",
   createPath: "/orders/new",
-  createLabel: "Новое бронирование",
+  createLabel: "Новый заказ",
 } as const

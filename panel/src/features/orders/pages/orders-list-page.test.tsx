@@ -272,9 +272,7 @@ describe("OrdersListPage", () => {
     const warehouse = document.querySelector(
       '[data-slot="orders-filter-warehouse"]'
     )
-    const status = document.querySelector(
-      '[data-slot="orders-filter-status"]'
-    )
+    const status = document.querySelector('[data-slot="orders-filter-status"]')
     const clientType = document.querySelector(
       '[data-slot="orders-filter-client-type"]'
     )
@@ -295,7 +293,7 @@ describe("OrdersListPage", () => {
     const filters = screen.getByRole("button", {
       name: "Скрыть фильтры бронирований",
     })
-    const create = screen.getByRole("button", { name: "Новое бронирование" })
+    const create = screen.getByRole("button", { name: "Новый заказ" })
     const actions = filters.parentElement
 
     expect(actions?.className).toContain("justify-between")

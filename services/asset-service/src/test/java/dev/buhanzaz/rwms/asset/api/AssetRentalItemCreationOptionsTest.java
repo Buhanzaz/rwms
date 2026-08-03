@@ -3,14 +3,20 @@ package dev.buhanzaz.rwms.asset.api;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CabinCatalogValueResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CabinTypeDimensionResponse;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemPage;
+import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.CabinAvailability;
+import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.CabinAvailabilityRequest;
+import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.CabinAvailabilityResponse;
 import dev.buhanzaz.rwms.asset.security.AssetAuthorizer;
 import dev.buhanzaz.rwms.asset.service.AssetService;
 import dev.buhanzaz.rwms.asset.service.CabinCompositionService;
+import dev.buhanzaz.rwms.asset.service.PresentationHoldService;
 import jakarta.validation.Validation;
 import java.time.Instant;
 import java.util.List;
@@ -24,9 +30,62 @@ import org.springframework.security.oauth2.jwt.Jwt;
 class AssetRentalItemCreationOptionsTest {
   private final AssetService service = mock(AssetService.class);
   private final CabinCompositionService composition = mock(CabinCompositionService.class);
+  private final PresentationHoldService presentationHolds = mock(PresentationHoldService.class);
   private final AssetRentalItemController controller =
       new AssetRentalItemController(
-          service, composition, new AssetAuthorizer(new MockEnvironment(), false));
+          service,
+          composition,
+          presentationHolds,
+          new AssetAuthorizer(new MockEnvironment(), false));
+
+  @Test
+  void readsAvailableRentalItemsOnlyForAnAccessibleWarehouse() {
+    UUID warehouseId = UUID.randomUUID();
+    RentalItemPage expected = new RentalItemPage(List.of(), 0, 50, 0, 0);
+    when(presentationHolds.availableRentalItems(warehouseId, 0, 50, "CAB-1"))
+        .thenReturn(expected);
+
+    assertThat(controller.available(user(warehouseId), warehouseId, 0, 50, "CAB-1"))
+        .isSameAs(expected);
+    verify(presentationHolds).availableRentalItems(warehouseId, 0, 50, "CAB-1");
+  }
+
+  @Test
+  void rechecksAvailabilityOnlyForAnAccessibleWarehouse() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    CabinAvailabilityRequest request =
+        new CabinAvailabilityRequest(warehouseId, List.of(rentalItemId));
+    CabinAvailabilityResponse expected =
+        new CabinAvailabilityResponse(
+            warehouseId, List.of(new CabinAvailability(rentalItemId, true, "AVAILABLE")));
+    when(presentationHolds.availability(request)).thenReturn(expected);
+
+    assertThat(controller.availability(user(warehouseId), request)).isSameAs(expected);
+    verify(presentationHolds).availability(request);
+  }
+
+  @Test
+  void rejectsPublicAvailabilityReadsOutsideUserWarehouseAccess() {
+    UUID allowedWarehouseId = UUID.randomUUID();
+    UUID deniedWarehouseId = UUID.randomUUID();
+
+    assertThatThrownBy(
+            () ->
+                controller.available(
+                    user(allowedWarehouseId), deniedWarehouseId, 0, 50, null))
+        .isInstanceOf(AccessDeniedException.class)
+        .hasMessageContaining("warehouse access");
+    assertThatThrownBy(
+            () ->
+                controller.availability(
+                    user(allowedWarehouseId),
+                    new CabinAvailabilityRequest(
+                        deniedWarehouseId, List.of(UUID.randomUUID()))))
+        .isInstanceOf(AccessDeniedException.class)
+        .hasMessageContaining("warehouse access");
+    verifyNoInteractions(presentationHolds);
+  }
 
   @Test
   void returnsServiceManagedCabinChoicesForAccessibleWarehouse() {
