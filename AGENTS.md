@@ -92,6 +92,17 @@ Keep one production implementation per flow. Do not introduce a compatibility
 flag, dual-write, silent fallback or a second runtime merely to preserve old
 code.
 
+### Legacy Code Removal
+
+When a flow or component is replaced, the legacy implementation must be
+deleted from the repository as part of the same change. Do not hide it behind
+feature flags, unreachable routes, CSS, permissions, comments, or unused
+exports, and do not retain it as a fallback, compatibility shim, seed,
+fixture, or mock-only path. Remove the corresponding obsolete tests and
+configuration too, after verifying that no supported flow still references
+them. Keep historical documentation only when it is explicitly archival and
+cannot be executed or used as a runtime source of truth.
+
 Browser `localStorage`/IndexedDB data is fixture or recovery evidence, not
 trusted PostgreSQL migration input. Do not import it automatically.
 
