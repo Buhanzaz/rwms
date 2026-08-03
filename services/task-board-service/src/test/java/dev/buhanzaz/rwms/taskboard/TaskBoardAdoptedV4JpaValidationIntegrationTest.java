@@ -139,6 +139,12 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
         .isOne();
     assertThat(
             jdbc.queryForObject(
+                "select count(*) from flyway_schema_history "
+                    + "where version='26' and type='SQL' and success",
+                Integer.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
                 "select to_regclass('public.queue_definition_class_binding')", String.class))
         .isEqualTo("queue_definition_class_binding");
     assertThat(

@@ -160,8 +160,9 @@ public class RegistryService {
     definition = projectionWriter.saveAndFlush(definitions, definition);
     projectionWriter.refresh(definition);
     replaceDefinitionBindings(definition, request.bindings());
-    globalQueueProjections.synchronizeDefinition(definition.getId());
-    return dto(definition);
+    normalizeGlobalOrder();
+    globalQueueProjections.synchronizeAll();
+    return dto(requireGeneralQueueDefinition(definition.getId()));
   }
 
   @Transactional
@@ -186,7 +187,7 @@ public class RegistryService {
     replaceDefinitionBindings(definition, request.bindings());
     normalizeGlobalOrder();
     globalQueueProjections.synchronizeAll();
-    return dto(definition);
+    return dto(requireGeneralQueueDefinition(id));
   }
 
   @Transactional
@@ -240,13 +241,13 @@ public class RegistryService {
     current.stream()
         .filter(definition -> definition.getType() == QueueType.HOLDING)
         .forEach(ordered::add);
-    int sortOrder = 10;
+    int sortOrder = 1;
     for (QueueDefinition definition : ordered) {
       if (definition.getSortOrder() != sortOrder) {
         definition.setSortOrder(sortOrder);
         definition.touch();
       }
-      sortOrder += 10;
+      sortOrder++;
     }
     projectionWriter.saveAll(definitions, ordered);
     projectionWriter.flush();
@@ -572,24 +573,32 @@ public class RegistryService {
   }
 
   private void normalizeGlobalOrder() {
-    List<QueueDefinition> ordered = globalDefinitions();
-    var result = new java.util.ArrayList<QueueDefinition>();
-    ordered.stream()
-        .filter(definition -> definition.getType() != QueueType.HOLDING)
-        .forEach(result::add);
-    ordered.stream()
-        .filter(definition -> definition.getType() == QueueType.HOLDING)
-        .forEach(result::add);
-    int sortOrder = 10;
-    for (QueueDefinition definition : result) {
-      if (definition.getSortOrder() != sortOrder) {
-        definition.setSortOrder(sortOrder);
-        definition.touch();
-      }
-      sortOrder += 10;
-    }
-    projectionWriter.saveAll(definitions, result);
+    // Position is a derived ordinal, not independently editable content.  Do
+    // not advance unrelated definition versions when a newly created regular
+    // queue moves the terminal holding queue one position lower.
     projectionWriter.flush();
+    jdbc.update(
+        """
+        WITH ordered AS (
+          SELECT definition.id,
+                 row_number() OVER (
+                   ORDER BY
+                     CASE WHEN definition.queue_type = 'HOLDING' THEN 1 ELSE 0 END,
+                     definition.sort_order,
+                     definition.normalized_name,
+                     definition.queue_type,
+                     definition.id
+                 )::integer AS normalized_order
+            FROM queue_definition definition
+           WHERE definition.queue_purpose = 'GENERAL'
+        )
+        UPDATE queue_definition definition
+           SET sort_order = ordered.normalized_order
+          FROM ordered
+         WHERE definition.id = ordered.id
+           AND definition.sort_order IS DISTINCT FROM ordered.normalized_order
+        """);
+    projectionWriter.clear();
   }
 
   private void refresh(WorkQueue queue) {
@@ -616,7 +625,7 @@ public class RegistryService {
             .mapToInt(QueueDefinition::getSortOrder)
             .max()
             .orElse(0)
-        + 10;
+        + 1;
   }
 
   @Transactional(readOnly = true)
