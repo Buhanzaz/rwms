@@ -44,9 +44,23 @@ export type QueueDefinitionDto = {
   description: string | null
   type: QueueType
   purpose: QueuePurpose
+  sortOrder: number
+  active: boolean
+  hidden: boolean
+  collapsed: boolean
+  holdingPeriodMinutes: number | null
+  notificationThreshold: number | null
+  notifyWhenThresholdReached: boolean
+  resultPhotoMinCount: number
+  bindings: QueueBindingDto[]
 }
 
-export type QueueDefinitionRequest = Omit<QueueDefinitionDto, "id">
+export type QueueDefinitionRequest = Omit<
+  QueueDefinitionDto,
+  "id" | "bindings"
+> & {
+  bindings: QueueBindingRequest[]
+}
 
 export type WorkQueueDto = {
   id: string
@@ -67,26 +81,6 @@ export type WorkQueueDto = {
   notifyWhenThresholdReached: boolean
   resultPhotoMinCount: number
   bindings: QueueBindingDto[]
-}
-
-/**
- * Warehouse-local connection to one immutable shared queue definition.
- *
- * `definitionId` is deliberately immutable after creation: a warehouse
- * manager changes runtime settings and bindings on this connection, rather
- * than creating a warehouse-specific copy of the catalog entry.
- */
-export type WorkQueueRequest = {
-  version: number
-  definitionId: string
-  active: boolean
-  hidden: boolean
-  collapsed: boolean
-  holdingPeriodMinutes: number | null
-  notificationThreshold: number | null
-  notifyWhenThresholdReached: boolean
-  resultPhotoMinCount: number | null
-  bindings: QueueBindingRequest[]
 }
 
 export type DriverQueueRequest = {

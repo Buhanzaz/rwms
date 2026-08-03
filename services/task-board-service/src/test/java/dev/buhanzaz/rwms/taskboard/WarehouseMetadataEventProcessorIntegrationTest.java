@@ -3,7 +3,6 @@ package dev.buhanzaz.rwms.taskboard;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueDefinitionRequest;
 import dev.buhanzaz.rwms.taskboard.api.ApiModels.WorkQueueDto;
 import dev.buhanzaz.rwms.taskboard.domain.QueueType;
 import dev.buhanzaz.rwms.taskboard.eventing.WarehouseMetadataEventProcessor;
@@ -70,14 +69,14 @@ class WarehouseMetadataEventProcessorIntegrationTest extends PostgresIntegration
   }
 
   @Test
-  void activeWarehouseEventDoesNotProvisionGeneralDefinitions() {
+  void activeWarehouseEventMaterializesTheWholeGeneralQueueStandard() {
     var external =
         registry.createQueueDefinition(
-            new QueueDefinitionRequest(
+            QueueRegistryTestFixtures.globalDefinition(
                 0L, "Внешний ремонт", null, QueueType.REPAIR));
     var holding =
         registry.createQueueDefinition(
-            new QueueDefinitionRequest(
+            QueueRegistryTestFixtures.globalDefinition(
                 0L, "Ожидание", null, QueueType.HOLDING));
 
     processor.process(event(EVENT_ID, 1, "Europe/Moscow", true));
@@ -85,7 +84,14 @@ class WarehouseMetadataEventProcessorIntegrationTest extends PostgresIntegration
     assertThat(registry.listQueueDefinitions())
         .extracting(definition -> definition.id())
         .containsExactlyInAnyOrder(external.id(), holding.id());
-    assertThat(registry.listQueues(WAREHOUSE_ID)).isEmpty();
+    assertThat(registry.listQueues(WAREHOUSE_ID))
+        .extracting(WorkQueueDto::definitionId)
+        .containsExactly(external.id(), holding.id());
+
+    processor.process(event(UUID.randomUUID(), 2, "Europe/Moscow", true));
+    assertThat(registry.listQueues(WAREHOUSE_ID))
+        .extracting(WorkQueueDto::definitionId)
+        .containsExactly(external.id(), holding.id());
   }
 
   private byte[] event(

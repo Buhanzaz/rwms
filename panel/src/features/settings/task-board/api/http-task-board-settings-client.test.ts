@@ -82,7 +82,7 @@ describe("HttpTaskBoardSettingsClient gateway routes", () => {
     })
   })
 
-  it("uses warehouse-scoped connection and order endpoints for general queues", async () => {
+  it("uses the system queue catalog endpoints with aggregate versions", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
       async () =>
         new Response("{}", {
@@ -92,8 +92,12 @@ describe("HttpTaskBoardSettingsClient gateway routes", () => {
     )
     const client = new HttpTaskBoardSettingsClient()
     const request = {
-      version: 3,
-      definitionId: "definition/id",
+      version: 0,
+      name: "Внешние работы",
+      description: null,
+      type: "REPAIR" as const,
+      purpose: "GENERAL" as const,
+      sortOrder: 4,
       active: true,
       hidden: false,
       collapsed: false,
@@ -104,14 +108,14 @@ describe("HttpTaskBoardSettingsClient gateway routes", () => {
       bindings: [],
     }
 
-    await client.createQueue("token", "warehouse/id", {
+    await client.createQueueDefinition("token", request)
+    await client.updateQueueDefinition("token", "definition/id", {
       ...request,
-      version: 0,
+      version: 4,
     })
-    await client.updateQueue("token", "warehouse/id", "queue/id", request)
-    await client.deleteQueue("token", "warehouse/id", "queue/id", 3)
-    await client.reorderQueues("token", "warehouse/id", [
-      { queueId: "queue/id", expectedVersion: 3 },
+    await client.deleteQueueDefinition("token", "definition/id", 4)
+    await client.reorderQueueDefinitions("token", [
+      { definitionId: "definition/id", expectedVersion: 4 },
     ])
 
     expect(
@@ -123,67 +127,30 @@ describe("HttpTaskBoardSettingsClient gateway routes", () => {
       }))
     ).toEqual([
       {
-        path: "/api/task-board/warehouses/warehouse%2Fid/work-queues",
-        search: "",
-        method: "POST",
-        body: { ...request, version: 0 },
-      },
-      {
-        path: "/api/task-board/warehouses/warehouse%2Fid/work-queues/queue%2Fid",
-        search: "",
-        method: "PUT",
-        body: request,
-      },
-      {
-        path: "/api/task-board/warehouses/warehouse%2Fid/work-queues/queue%2Fid",
-        search: "?expectedVersion=3",
-        method: "DELETE",
-        body: undefined,
-      },
-      {
-        path: "/api/task-board/warehouses/warehouse%2Fid/work-queue-order",
-        search: "",
-        method: "PUT",
-        body: { queues: [{ queueId: "queue/id", expectedVersion: 3 }] },
-      },
-    ])
-  })
-
-  it("uses the system queue catalog endpoints with aggregate versions", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
-      async () =>
-        new Response("{}", {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        })
-    )
-    const client = new HttpTaskBoardSettingsClient()
-
-    await client.createQueueDefinition("token", {
-      version: 0,
-      name: "Внешние работы",
-      description: null,
-      type: "REPAIR",
-      purpose: "GENERAL",
-    })
-    await client.deleteQueueDefinition("token", "definition/id", 4)
-
-    expect(
-      fetchMock.mock.calls.map(([input, init]) => ({
-        path: new URL(String(input)).pathname,
-        search: new URL(String(input)).search,
-        method: init?.method,
-      }))
-    ).toEqual([
-      {
         path: "/api/task-board/queue-definitions",
         search: "",
         method: "POST",
+        body: request,
+      },
+      {
+        path: "/api/task-board/queue-definitions/definition%2Fid",
+        search: "",
+        method: "PUT",
+        body: { ...request, version: 4 },
       },
       {
         path: "/api/task-board/queue-definitions/definition%2Fid",
         search: "?expectedVersion=4",
         method: "DELETE",
+        body: undefined,
+      },
+      {
+        path: "/api/task-board/queue-definitions/order",
+        search: "",
+        method: "PUT",
+        body: {
+          definitions: [{ definitionId: "definition/id", expectedVersion: 4 }],
+        },
       },
     ])
   })

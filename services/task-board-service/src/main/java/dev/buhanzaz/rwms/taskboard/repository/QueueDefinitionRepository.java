@@ -9,6 +9,9 @@ import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface QueueDefinitionRepository extends JpaRepository<QueueDefinition, UUID> {
+  List<QueueDefinition> findAllByPurposeOrderBySortOrderAscNameAscTypeAscIdAsc(
+      QueuePurpose purpose);
+
   List<QueueDefinition> findAllByOrderByNameAscTypeAscIdAsc();
 
   List<QueueDefinition> findAllByPurposeOrderByNameAscIdAsc(QueuePurpose purpose);

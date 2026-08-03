@@ -70,7 +70,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
   void cumulativeVersionFourEventSourcingAndTaskSyncMigrateCleanDatabaseAndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(21);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(22);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -90,6 +90,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
             "outbox_event",
             "projection_checkpoint",
             "queue_definition",
+            "queue_definition_class_binding",
             "queue_entry",
             "queue_usage_reference",
             "task_assignment",
@@ -118,10 +119,6 @@ class TaskBoardFlywayMigrationIntegrationTest {
             "kpi_palette_range",
             "kpi_work_schedule",
             "kpi_work_break");
-    assertThat(
-            jdbc.queryForObject(
-                "select to_regclass('public.queue_definition_class_binding')", String.class))
-        .isNull();
     assertThat(columnCounts())
         .containsAllEntriesOf(
             Map.ofEntries(
@@ -135,7 +132,8 @@ class TaskBoardFlywayMigrationIntegrationTest {
                 Map.entry("task_sync_source", 6),
                 Map.entry("task_time_event", 10),
                 Map.entry("warehouse_kpi_settings", 10),
-                Map.entry("queue_definition", 8),
+                Map.entry("queue_definition", 16),
+                Map.entry("queue_definition_class_binding", 8),
                 Map.entry("work_queue", 13),
                 Map.entry("work_queue_class_binding", 8),
                 Map.entry("worker", 17),
@@ -297,6 +295,13 @@ class TaskBoardFlywayMigrationIntegrationTest {
         .containsEntry("version", "22")
         .containsEntry("description", "remove legacy repair complexity")
         .containsEntry("script", "V22__remove_legacy_repair_complexity.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='25'"))
+        .containsEntry("version", "25")
+        .containsEntry("script", "V25__global_task_board_queue_standard.sql")
         .containsEntry("success", true);
     assertThat(
             jdbc.queryForObject(
@@ -1146,7 +1151,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(20);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(21);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
 

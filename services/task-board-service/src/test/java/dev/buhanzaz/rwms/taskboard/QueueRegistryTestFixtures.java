@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 
-/** Test-only adapter that uses the same explicit warehouse-binding commands as production. */
+/** Test-only adapter that materializes the same global queue standard as production. */
 final class QueueRegistryTestFixtures {
   private QueueRegistryTestFixtures() {}
 
@@ -35,19 +35,10 @@ final class QueueRegistryTestFixtures {
               resultPhotoMinCount(definition.type(), request.resultPhotoMinCount()),
               request.bindings()));
     }
-    return registry.createQueue(
-        warehouseId,
-        new WorkQueueRequest(
-            request.version(),
-            request.definitionId(),
-            request.active(),
-            request.hidden(),
-            request.collapsed(),
-            request.holdingPeriodMinutes(),
-            request.notificationThreshold(),
-            request.notifyWhenThresholdReached(),
-            request.resultPhotoMinCount(),
-            request.bindings()));
+    QueueDefinitionDto updated =
+        registry.updateQueueDefinition(
+            definition.id(), globalRequest(definition, request));
+    return registry.dto(registry.requireWarehouseBinding(warehouseId, updated.id()));
   }
 
   static WorkQueueDto update(
@@ -73,33 +64,31 @@ final class QueueRegistryTestFixtures {
               resultPhotoMinCount(queue.type(), request.resultPhotoMinCount()),
               request.bindings()));
     }
-    return registry.updateQueue(
-        warehouseId,
-        queueId,
-        new WorkQueueRequest(
-            request.version(),
-            request.definitionId(),
-            request.active(),
-            request.hidden(),
-            request.collapsed(),
-            request.holdingPeriodMinutes(),
-            request.notificationThreshold(),
-            request.notifyWhenThresholdReached(),
-            request.resultPhotoMinCount(),
-            request.bindings()));
+    if (!queue.definitionId().equals(request.definitionId())) {
+      throw new IllegalArgumentException("Нельзя заменить определение общей очереди");
+    }
+    QueueDefinitionDto updated =
+        registry.updateQueueDefinition(
+            definition.id(), globalRequest(definition, request));
+    return registry.dto(registry.requireWarehouseBinding(warehouseId, updated.id()));
   }
 
-  static List<WorkQueueDto> reorder(
+  static List<QueueDefinitionDto> reorder(
       RegistryService registry,
       JdbcTemplate jdbc,
       UUID warehouseId,
       QueueFixtureModels.QueueFixtureOrderRequest request) {
     ensureWarehouse(jdbc, warehouseId);
-    return registry.reorder(
-        warehouseId,
-        new QueueOrderRequest(
+    return registry.reorderQueueDefinitions(
+        new QueueDefinitionOrderRequest(
             request.queues().stream()
-                .map(item -> new QueueOrderItem(item.queueId(), item.expectedVersion()))
+                .map(
+                    item -> {
+                      WorkQueueDto queue = registry.dto(registry.requireQueue(item.queueId()));
+                      QueueDefinitionDto definition =
+                          registry.dto(registry.requireQueueDefinition(queue.definitionId()));
+                      return new QueueDefinitionOrderItem(definition.id(), item.expectedVersion());
+                    })
                 .toList()));
   }
 
@@ -110,7 +99,9 @@ final class QueueRegistryTestFixtures {
       UUID queueId,
       long expectedVersion) {
     ensureWarehouse(jdbc, warehouseId);
-    registry.deleteQueue(warehouseId, queueId, expectedVersion);
+    WorkQueueDto queue = registry.dto(registry.requireQueue(warehouseId, queueId));
+    QueueDefinitionDto definition = registry.dto(registry.requireQueueDefinition(queue.definitionId()));
+    registry.deleteQueueDefinition(definition.id(), expectedVersion);
   }
 
   static QueueDefinitionDto ensureDriverDefinition(
@@ -143,8 +134,46 @@ final class QueueRegistryTestFixtures {
     return registry.dto(registry.requireQueueDefinition(id));
   }
 
+  static QueueDefinitionRequest globalDefinition(
+      long version, String name, String description, QueueType type) {
+    return new QueueDefinitionRequest(
+        version,
+        name,
+        description,
+        type,
+        QueuePurpose.GENERAL,
+        0,
+        true,
+        false,
+        false,
+        type == QueueType.HOLDING ? 10 : null,
+        type == QueueType.HOLDING ? 2 : null,
+        false,
+        resultPhotoMinCount(type, null),
+        List.of());
+  }
+
   private static int resultPhotoMinCount(QueueType type, Integer requested) {
     return requested == null ? (type == QueueType.HOLDING ? 0 : 1) : requested;
+  }
+
+  private static QueueDefinitionRequest globalRequest(
+      QueueDefinitionDto definition, QueueFixtureModels.QueueFixtureRequest request) {
+    return new QueueDefinitionRequest(
+        definition.version(),
+        definition.name(),
+        definition.description(),
+        definition.type(),
+        definition.purpose(),
+        definition.sortOrder(),
+        request.active(),
+        request.hidden(),
+        request.collapsed(),
+        request.holdingPeriodMinutes(),
+        request.notificationThreshold(),
+        request.notifyWhenThresholdReached(),
+        resultPhotoMinCount(definition.type(), request.resultPhotoMinCount()),
+        request.bindings() == null ? List.of() : request.bindings());
   }
 
   private static void ensureWarehouse(JdbcTemplate jdbc, UUID warehouseId) {

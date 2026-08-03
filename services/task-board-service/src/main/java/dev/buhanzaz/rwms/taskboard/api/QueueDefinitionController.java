@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.taskboard.api;
 
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueDefinitionDto;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueDefinitionOrderRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueDefinitionRequest;
 
 import dev.buhanzaz.rwms.taskboard.security.WarehouseAccessAuthorizer;
@@ -55,6 +56,14 @@ public class QueueDefinitionController {
       @Valid @RequestBody QueueDefinitionRequest request) {
     requireWrite(jwt);
     return service.updateQueueDefinition(id, request);
+  }
+
+  @PutMapping("/queue-definitions/order")
+  public List<QueueDefinitionDto> reorder(
+      @AuthenticationPrincipal Jwt jwt,
+      @Valid @RequestBody QueueDefinitionOrderRequest request) {
+    requireWrite(jwt);
+    return service.reorderQueueDefinitions(request);
   }
 
   @DeleteMapping("/queue-definitions/{id}")

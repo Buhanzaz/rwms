@@ -53,7 +53,7 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
                 0L, "Фото", null, null, 10, true));
     var definition =
         registry.createQueueDefinition(
-            new QueueDefinitionRequest(0L, "Ремонт", null, QueueType.REPAIR));
+            QueueRegistryTestFixtures.globalDefinition(0L, "Ремонт", null, QueueType.REPAIR));
     var queue =
         QueueRegistryTestFixtures.create(registry, jdbc,
             WAREHOUSE,
