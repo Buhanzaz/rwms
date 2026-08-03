@@ -31,7 +31,7 @@ class PostgresTaskBoardIntegrationTest extends PostgresIntegrationTestSupport {
     UUID warehouse = UUID.randomUUID();
     var definition =
         registry.createQueueDefinition(
-            new QueueDefinitionRequest(0L, "Repair", null, QueueType.REPAIR));
+            QueueRegistryTestFixtures.globalDefinition(0L, "Repair", null, QueueType.REPAIR));
     var queue =
         QueueRegistryTestFixtures.create(registry, jdbc,
             warehouse,

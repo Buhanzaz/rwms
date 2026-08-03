@@ -54,7 +54,7 @@ class MaintenanceRoutingPrerequisiteIntegrationTest extends PostgresIntegrationT
   void globalDefinitionPreflightDoesNotRequireWarehouseBinding() throws Exception {
     var definition =
         registry.createQueueDefinition(
-            new QueueDefinitionRequest(
+            QueueRegistryTestFixtures.globalDefinition(
                 0L, "Внешние работы", null, QueueType.REPAIR));
 
     mvc.perform(
@@ -80,7 +80,7 @@ class MaintenanceRoutingPrerequisiteIntegrationTest extends PostgresIntegrationT
   void warehousePreflightResolvesDefinitionToItsActiveVisibleBinding() throws Exception {
     var definition =
         registry.createQueueDefinition(
-            new QueueDefinitionRequest(
+            QueueRegistryTestFixtures.globalDefinition(
                 0L, "Внутренние работы", null, QueueType.REPAIR));
     var binding = QueueRegistryTestFixtures.create(registry, jdbc, MSK, binding(definition.id(), true, false));
 
@@ -105,7 +105,7 @@ class MaintenanceRoutingPrerequisiteIntegrationTest extends PostgresIntegrationT
   void missingBindingAndDisabledBindingFailClosedWithoutNameFallback() throws Exception {
     var definition =
         registry.createQueueDefinition(
-            new QueueDefinitionRequest(0L, "Электрики", null, QueueType.REPAIR));
+            QueueRegistryTestFixtures.globalDefinition(0L, "Электрики", null, QueueType.REPAIR));
 
     mvc.perform(
             post(WAREHOUSE_PREFLIGHT)
@@ -139,18 +139,20 @@ class MaintenanceRoutingPrerequisiteIntegrationTest extends PostgresIntegrationT
   void catalogReferenceBlocksGlobalDefinitionDeleteAndKeepsWarehouseProjection() {
     var definition =
         registry.createQueueDefinition(
-            new QueueDefinitionRequest(0L, "Сварка", null, QueueType.REPAIR));
+            QueueRegistryTestFixtures.globalDefinition(0L, "Сварка", null, QueueType.REPAIR));
     var binding = QueueRegistryTestFixtures.create(registry, jdbc, SPB, binding(definition.id(), true, false));
     var reference =
         registry.registerReference(
             definition.id(),
             new QueueReferenceRequest(
                 QueueReferenceType.CATALOG_POSITION, "catalog-position-1"));
+    QueueDefinitionDto definitionAtDeleteAttempt =
+        registry.dto(registry.requireQueueDefinition(definition.id()));
 
     assertThatThrownBy(
             () ->
                 registry.deleteQueueDefinition(
-                    definition.id(), definition.version()))
+                    definitionAtDeleteAttempt.id(), definitionAtDeleteAttempt.version()))
         .isInstanceOf(ConflictException.class)
         .hasMessageContaining("каталог");
     assertThat(registry.listQueues(SPB))
@@ -159,8 +161,9 @@ class MaintenanceRoutingPrerequisiteIntegrationTest extends PostgresIntegrationT
 
     registry.deleteReference(
         reference.type(), reference.externalReferenceId(), reference.version());
-    registry.deleteQueue(SPB, binding.id(), binding.version());
-    registry.deleteQueueDefinition(definition.id(), definition.version());
+    QueueDefinitionDto currentDefinition =
+        registry.dto(registry.requireQueueDefinition(definition.id()));
+    registry.deleteQueueDefinition(definition.id(), currentDefinition.version());
     assertThat(registry.listQueueDefinitions()).isEmpty();
   }
 

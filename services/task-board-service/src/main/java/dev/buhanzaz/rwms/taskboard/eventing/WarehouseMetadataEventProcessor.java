@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.taskboard.eventing;
 import dev.buhanzaz.rwms.taskboard.domain.WarehouseMetadata;
 import dev.buhanzaz.rwms.taskboard.repository.WarehouseKpiSettingsRepository;
 import dev.buhanzaz.rwms.taskboard.repository.WarehouseMetadataRepository;
+import dev.buhanzaz.rwms.taskboard.service.GlobalQueueProjectionService;
 import java.time.ZoneId;
 import java.util.Set;
 import java.util.UUID;
@@ -27,6 +28,7 @@ public class WarehouseMetadataEventProcessor {
   private final JdbcTemplate jdbc;
   private final WarehouseMetadataRepository warehouses;
   private final WarehouseKpiSettingsRepository settings;
+  private final GlobalQueueProjectionService globalQueues;
 
   @Transactional
   public void process(byte[] body) {
@@ -70,6 +72,9 @@ public class WarehouseMetadataEventProcessor {
                 settings.save(value);
               });
     }
+    // Every active warehouse receives the same GENERAL task-board standard.
+    // Existing physical work_queue UUIDs are preserved by the projection service.
+    globalQueues.synchronizeWarehouse(warehouseId);
     jdbc.update(
         """
         insert into warehouse_event_inbox(event_id,event_hash,aggregate_version,processed_at)

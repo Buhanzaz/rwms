@@ -67,10 +67,10 @@ class TaskBoardEventStoreMigrationIntegrationTest {
   }
 
   @Test
-  void cleanInstallAppliesV4ThroughV24AndRepeatIsNoOp() {
+  void cleanInstallAppliesV4ThroughV25AndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(21);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(22);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -95,6 +95,7 @@ class TaskBoardEventStoreMigrationIntegrationTest {
             "warehouse_metadata",
             "warehouse_kpi_settings",
             "queue_definition",
+            "queue_definition_class_binding",
             "task_relocation_receipt");
     assertThat(tables()).doesNotContain("worker_pii");
     assertThat(jdbc.queryForObject("select count(*) from domain_event", Integer.class)).isZero();
@@ -212,6 +213,13 @@ class TaskBoardEventStoreMigrationIntegrationTest {
         .containsEntry("version", "22")
         .containsEntry("description", "remove legacy repair complexity")
         .containsEntry("script", "V22__remove_legacy_repair_complexity.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='25'"))
+        .containsEntry("version", "25")
+        .containsEntry("script", "V25__global_task_board_queue_standard.sql")
         .containsEntry("success", true);
     assertThat(
             jdbc.queryForList(
@@ -657,7 +665,7 @@ class TaskBoardEventStoreMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(20);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(21);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
     assertThat(retainedContentDigests()).containsExactlyInAnyOrderEntriesOf(before);

@@ -1,5 +1,5 @@
 import type {
-  QueueOrderItem,
+  QueueDefinitionOrderItem,
   TaskBoardSettingsClient,
 } from "@/features/settings/task-board/api/task-board-settings-client"
 import type {
@@ -13,7 +13,6 @@ import type {
   WorkerGroupRequest,
   WorkerRequest,
   WorkQueueDto,
-  WorkQueueRequest,
 } from "@/features/settings/task-board/model/task-board-settings"
 import { bearerRequest } from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
@@ -60,48 +59,20 @@ export class HttpTaskBoardSettingsClient implements TaskBoardSettingsClient {
       { method: "DELETE" }
     )
   }
+  reorderQueueDefinitions(
+    token: string,
+    definitions: QueueDefinitionOrderItem[]
+  ) {
+    return bearerRequest<QueueDefinitionDto[]>(
+      token,
+      `${TASK_BOARD_API}/queue-definitions/order`,
+      json("PUT", { definitions })
+    )
+  }
   listQueues(token: string, warehouseId: string) {
     return bearerRequest<WorkQueueDto[]>(
       token,
       `${warehouseEndpoint(warehouseId)}/work-queues`
-    )
-  }
-  createQueue(token: string, warehouseId: string, request: WorkQueueRequest) {
-    return bearerRequest<WorkQueueDto>(
-      token,
-      `${warehouseEndpoint(warehouseId)}/work-queues`,
-      json("POST", request)
-    )
-  }
-  updateQueue(
-    token: string,
-    warehouseId: string,
-    id: string,
-    request: WorkQueueRequest
-  ) {
-    return bearerRequest<WorkQueueDto>(
-      token,
-      `${warehouseEndpoint(warehouseId)}/work-queues/${encodeURIComponent(id)}`,
-      json("PUT", request)
-    )
-  }
-  deleteQueue(
-    token: string,
-    warehouseId: string,
-    id: string,
-    expectedVersion: number
-  ) {
-    return bearerRequest<void>(
-      token,
-      `${warehouseEndpoint(warehouseId)}/work-queues/${encodeURIComponent(id)}?expectedVersion=${expectedVersion}`,
-      { method: "DELETE" }
-    )
-  }
-  reorderQueues(token: string, warehouseId: string, queues: QueueOrderItem[]) {
-    return bearerRequest<WorkQueueDto[]>(
-      token,
-      `${warehouseEndpoint(warehouseId)}/work-queue-order`,
-      json("PUT", { queues })
     )
   }
   updateDriverQueue(

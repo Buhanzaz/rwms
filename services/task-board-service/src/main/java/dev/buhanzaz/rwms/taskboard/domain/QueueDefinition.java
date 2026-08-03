@@ -45,6 +45,34 @@ public class QueueDefinition extends AbstractVersionedEntity {
   @Column(name = "queue_purpose", nullable = false, length = 32)
   private QueuePurpose purpose = QueuePurpose.GENERAL;
 
+  /**
+   * System-wide presentation order for GENERAL task-board queues.  Warehouse
+   * work_queue rows mirror this value but never own it.
+   */
+  @Column(name = "sort_order", nullable = false)
+  private int sortOrder;
+
+  @Column(name = "active", nullable = false)
+  private boolean active = true;
+
+  @Column(name = "hidden", nullable = false)
+  private boolean hidden;
+
+  @Column(name = "collapsed", nullable = false)
+  private boolean collapsed;
+
+  @Column(name = "holding_period_minutes")
+  private Integer holdingPeriodMinutes;
+
+  @Column(name = "notification_threshold")
+  private Integer notificationThreshold;
+
+  @Column(name = "notify_when_threshold_reached", nullable = false)
+  private boolean notifyWhenThresholdReached;
+
+  @Column(name = "result_photo_min_count", nullable = false)
+  private int resultPhotoMinCount = 1;
+
   @PrePersist
   @PreUpdate
   void normalize() {
@@ -93,6 +121,70 @@ public class QueueDefinition extends AbstractVersionedEntity {
 
   public void setPurpose(QueuePurpose value) {
     purpose = value;
+  }
+
+  public int getSortOrder() {
+    return sortOrder;
+  }
+
+  public void setSortOrder(int value) {
+    sortOrder = value;
+  }
+
+  public boolean isActive() {
+    return active;
+  }
+
+  public void setActive(boolean value) {
+    active = value;
+  }
+
+  public boolean isHidden() {
+    return hidden;
+  }
+
+  public void setHidden(boolean value) {
+    hidden = value;
+  }
+
+  public boolean isCollapsed() {
+    return collapsed;
+  }
+
+  public void setCollapsed(boolean value) {
+    collapsed = value;
+  }
+
+  public Integer getHoldingPeriodMinutes() {
+    return holdingPeriodMinutes;
+  }
+
+  public void setHoldingPeriodMinutes(Integer value) {
+    holdingPeriodMinutes = value;
+  }
+
+  public Integer getNotificationThreshold() {
+    return notificationThreshold;
+  }
+
+  public void setNotificationThreshold(Integer value) {
+    notificationThreshold = value;
+  }
+
+  public boolean isNotifyWhenThresholdReached() {
+    return notifyWhenThresholdReached;
+  }
+
+  public void setNotifyWhenThresholdReached(boolean value) {
+    notifyWhenThresholdReached = value;
+  }
+
+  public int getResultPhotoMinCount() {
+    return resultPhotoMinCount;
+  }
+
+  public void setResultPhotoMinCount(int value) {
+    resultPhotoMinCount = value;
   }
 
   public UUID getRevisionMarker() {

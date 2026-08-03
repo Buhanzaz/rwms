@@ -62,7 +62,7 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
     cleanTaskBoardFixtures(jdbc);
     var definition =
         registry.createQueueDefinition(
-            new QueueDefinitionRequest(0L, "Maintenance", null, QueueType.REPAIR));
+            QueueRegistryTestFixtures.globalDefinition(0L, "Maintenance", null, QueueType.REPAIR));
     var queue =
         QueueRegistryTestFixtures.create(registry, jdbc,
             WAREHOUSE,
@@ -81,7 +81,7 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
     workQueueId = queue.id();
     var verificationDefinition =
         registry.createQueueDefinition(
-            new QueueDefinitionRequest(
+            QueueRegistryTestFixtures.globalDefinition(
                 0L, "Maintenance check", null, QueueType.REPAIR));
     var verificationQueue =
         QueueRegistryTestFixtures.create(registry, jdbc,
