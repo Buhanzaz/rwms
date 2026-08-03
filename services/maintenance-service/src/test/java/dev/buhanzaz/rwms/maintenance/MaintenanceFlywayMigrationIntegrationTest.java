@@ -42,7 +42,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsTheAuthoritativeMaintenanceSchema() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(27);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(28);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains(
@@ -121,6 +121,12 @@ class MaintenanceFlywayMigrationIntegrationTest {
     assertThat(columns("catalog_link")).contains("source_anchor", "target_anchor");
     assertThat(constraintDefinition("catalog_node", "ck_catalog_node_display_color"))
         .contains("#[0-9A-F]{6}");
+    assertThat(constraintDefinition("catalog_node", "ck_catalog_node_material_comment"))
+        .contains("node_type", "MATERIAL", "comment IS NULL");
+    assertThat(constraintDefinition("estimate_line", "ck_estimate_line_material_comment"))
+        .contains("line_type", "MATERIAL", "comment IS NULL");
+    assertThat(constraintDefinition("repair_stage", "ck_repair_stage_material_comment"))
+        .contains("material_lines", "comment");
     assertThat(constraintDefinition("catalog_link", "ck_catalog_link_anchors"))
         .contains("source_anchor", "target_anchor", "TOP", "BOTTOM");
     assertThat(constraintDefinition(
@@ -423,7 +429,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         catalogId.toString(),
         "0".repeat(64));
 
-    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(3);
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(4);
 
     assertThat(jdbc.queryForObject(
         "select count(*) from catalog_node where catalog_version_id=? and node_type='WORK'",
@@ -804,7 +810,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "0".repeat(64));
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(4);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(5);
     upgraded.validate();
 
     assertThat(
@@ -967,7 +973,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
     insertLegacyEstimateStage(estimateId, UUID.randomUUID(), 2, "MOVE_FROM_REPAIR");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(2);
     upgraded.validate();
 
     assertThat(jdbc.queryForMap(
@@ -1093,6 +1099,109 @@ class MaintenanceFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void v28DeletesLegacyMaterialCommentsAndEnforcesTheCanonicalInvariant() {
+    Flyway beforeV28 = Flyway.configure()
+        .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+        .locations(MIGRATIONS)
+        .target("27")
+        .baselineOnMigrate(false)
+        .cleanDisabled(true)
+        .validateOnMigrate(true)
+        .validateMigrationNaming(true)
+        .outOfOrder(false)
+        .load();
+    assertThat(beforeV28.migrate().migrationsExecuted).isEqualTo(27);
+
+    UUID warehouseId = UUID.randomUUID();
+    UUID catalogId = UUID.randomUUID();
+    UUID estimateId = UUID.randomUUID();
+    UUID repairId = UUID.randomUUID();
+    UUID repairStageId = UUID.randomUUID();
+    insertCatalogVersion(catalogId, warehouseId, "e".repeat(64));
+    jdbc.update(
+        """
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,node_type,name,active,duration_minutes,
+          include_in_estimate,common_item,show_in_main_menu,comment)
+        values (?,?,?,'MATERIAL','Материал',true,0,true,false,false,?)
+        """,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        catalogId,
+        "устаревший комментарий");
+    insertEstimateWithRevision(estimateId, catalogId, warehouseId);
+    jdbc.update(
+        """
+        insert into estimate_line(
+          row_id,line_id,estimate_id,estimate_revision,line_no,line_type,title,unit,
+          quantity,unit_price_minor,duration_minutes,comment,media_references)
+        values (?,?,?,1,0,'MATERIAL','Материал','шт.',1,0,0,?,'[]')
+        """,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        estimateId,
+        "устаревший комментарий");
+    insertRepair(repairId, warehouseId, null, "DIRECT_REPAIR", "PRIMARY", null, null);
+    insertLegacyRepairStage(
+        repairId, repairStageId, 0, "REPAIR_WORK", "PLANNED", null);
+    jdbc.update(
+        """
+        update repair_stage
+        set material_lines='[{"id":"00000000-0000-4000-8000-000000000001",\
+          "lineType":"MATERIAL","comment":"устаревший комментарий"}]'::jsonb
+        where repair_id=? and stage_id=?
+        """,
+        repairId,
+        repairStageId);
+
+    Flyway upgraded = flyway(MIGRATIONS);
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select comment from catalog_node where catalog_version_id=?",
+                String.class,
+                catalogId))
+        .isNull();
+    assertThat(
+            jdbc.queryForObject(
+                "select comment from estimate_line where estimate_id=?",
+                String.class,
+                estimateId))
+        .isNull();
+    assertThat(
+            jdbc.queryForObject(
+                "select material_lines #>> '{0,comment}' from repair_stage where repair_id=?",
+                String.class,
+                repairId))
+        .isNull();
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update catalog_node set comment='нельзя' where catalog_version_id=?",
+                    catalogId))
+        .hasMessageContaining("ck_catalog_node_material_comment");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update estimate_line set comment='нельзя' where estimate_id=?",
+                    estimateId))
+        .hasMessageContaining("ck_estimate_line_material_comment");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    update repair_stage
+                    set material_lines=jsonb_set(
+                      material_lines,'{0,comment}','"нельзя"'::jsonb,true)
+                    where repair_id=?
+                    """,
+                    repairId))
+        .hasMessageContaining("ck_repair_stage_material_comment");
+  }
+
+  @Test
   void v20ThroughV27GloballyConsolidatesCatalogsAndCanonicalizesLegacySnapshots() {
     Flyway beforeV21 = Flyway.configure()
         .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
@@ -1147,7 +1256,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
     insertV20CatalogStreamArtifacts(otherCatalogId, otherNodeId, "ACTIVE");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(7);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(8);
     upgraded.validate();
 
     assertThat(jdbc.queryForObject(

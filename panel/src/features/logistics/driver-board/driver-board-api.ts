@@ -59,6 +59,25 @@ export function promoteCapitalRepair(params: {
   )
 }
 
+export function returnCapitalRepair(params: {
+  accessToken: string
+  externalTaskId: string
+  warehouseId: string
+  expectedTaskVersion: number
+}) {
+  return bearerRequest<void>(
+    params.accessToken,
+    `${DRIVER_BOARD_API}/tasks/${encodeURIComponent(params.externalTaskId)}/return-to-capital-repairs`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        warehouseId: params.warehouseId,
+        expectedTaskVersion: params.expectedTaskVersion,
+      }),
+    }
+  )
+}
+
 export function createManualMovement(params: {
   accessToken: string
   command: CreateManualMovement

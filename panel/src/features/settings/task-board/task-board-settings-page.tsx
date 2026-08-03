@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Queue01Icon,
-  Sorting01Icon,
   Task01Icon,
   UserGroupIcon,
   UserIcon,
@@ -104,7 +103,6 @@ function QueueBindings({ queue }: { queue: WorkQueueDto }) {
 const taskBoardSettingsSections = [
   { value: "queue-definitions", label: "Каталог очередей", icon: Queue01Icon },
   { value: "queues", label: "Очереди склада", icon: Queue01Icon },
-  { value: "order", label: "Порядок", icon: Sorting01Icon },
   { value: "classes", label: "Классы", icon: Task01Icon },
   { value: "groups", label: "Бригады", icon: UserGroupIcon },
   { value: "workers", label: "Рабочие", icon: UserIcon },
@@ -311,10 +309,13 @@ export function TaskBoardSettingsPage() {
   const allWorkers = workersQuery.data ?? []
   const allGroups = groupsQuery.data ?? []
   const queueDefinitions = allQueueDefinitions.filter(
-    (definition) => definition.purpose === "GENERAL"
+    (definition) =>
+      definition.purpose === "GENERAL" && definition.type !== "MOVEMENT"
   )
   const queues = allQueues
-    .filter((queue) => queue.purpose === "GENERAL")
+    .filter(
+      (queue) => queue.purpose === "GENERAL" && queue.type !== "MOVEMENT"
+    )
     .sort(
       (left, right) =>
         left.sortOrder - right.sortOrder || left.name.localeCompare(right.name)
@@ -330,6 +331,30 @@ export function TaskBoardSettingsPage() {
   const groups = allGroups.filter(
     (group) => !group.workerClass.logisticsPrimary
   )
+
+  async function saveQueueOrder(ordered: WorkQueueDto[]) {
+    if (!accessToken) return
+    const visibleQueueIds = new Set(queues.map((queue) => queue.id))
+    let visibleIndex = 0
+    const completeWarehouseOrder = allQueues.map((queue) => {
+      if (!visibleQueueIds.has(queue.id)) return queue
+      const reorderedQueue = ordered[visibleIndex]
+      visibleIndex += 1
+      return reorderedQueue ?? queue
+    })
+    await run(
+      () =>
+        taskBoardSettingsClient.reorderQueues(
+          accessToken,
+          warehouseId,
+          completeWarehouseOrder.map((queue) => ({
+            queueId: queue.id,
+            expectedVersion: queue.version,
+          }))
+        ),
+      "Порядок очередей склада сохранён."
+    )
+  }
   const actions = (edit: () => void, remove: () => void) => (
     <div className="flex items-center gap-2">
       <Button type="button" size="sm" variant="outline" onClick={edit}>
@@ -449,7 +474,7 @@ export function TaskBoardSettingsPage() {
           value={activeSection}
           variant="outline"
           size="lg"
-          className="grid w-full grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6"
+          className="grid w-full grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5"
           onValueChange={(section) => {
             if (section) {
               setActiveSection(section as TaskBoardSettingsSection)
@@ -501,12 +526,6 @@ export function TaskBoardSettingsPage() {
                 render: (item) => queueTypeLabels[item.type],
               },
               {
-                id: "description",
-                label: "Описание",
-                getSortValue: (item) => item.description,
-                render: (item) => item.description ?? "—",
-              },
-              {
                 id: "actions",
                 label: "Действия",
                 getSortValue: () => null,
@@ -543,10 +562,11 @@ export function TaskBoardSettingsPage() {
               Добавить из каталога
             </Button>
           </div>
-          <OperationsListGrid
-            className="min-h-0 flex-1 overflow-auto"
-            items={queues}
-            columns={[
+          <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[minmax(0,1fr)_22rem]">
+            <OperationsListGrid
+              className="min-h-64 overflow-auto xl:min-h-0"
+              items={queues}
+              columns={[
               {
                 id: "name",
                 label: "Название",
@@ -581,42 +601,19 @@ export function TaskBoardSettingsPage() {
                     () => setDeleteTarget({ kind: "queue", item: queue })
                   ),
               },
-            ]}
-          />
-        </section>
-      ) : null}
-
-      {activeSection === "order" ? (
-        <section aria-label="Порядок" className="flex min-h-0 flex-1">
-          <QueueOrderSettings
-            key={queues
-              .map((queue) => `${queue.id}:${queue.version}`)
-              .join("|")}
-            queues={queues}
-            pending={mutation.isPending}
-            onSave={async (ordered) => {
-              if (!accessToken) return
-              let generalQueueIndex = 0
-              const completeWarehouseOrder = allQueues.map((queue) => {
-                if (queue.purpose === "LOGISTICS_DRIVER") return queue
-                const reorderedQueue = ordered[generalQueueIndex]
-                generalQueueIndex += 1
-                return reorderedQueue ?? queue
-              })
-              await run(
-                () =>
-                  taskBoardSettingsClient.reorderQueues(
-                    accessToken,
-                    warehouseId,
-                    completeWarehouseOrder.map((queue) => ({
-                      queueId: queue.id,
-                      expectedVersion: queue.version,
-                    }))
-                  ),
-                "Порядок очередей склада сохранён."
-              )
-            }}
-          />
+              ]}
+            />
+            <div className="flex min-h-64 rounded-xl border bg-muted/20 p-3 xl:min-h-0">
+              <QueueOrderSettings
+                key={queues
+                  .map((queue) => `${queue.id}:${queue.version}`)
+                  .join("|")}
+                queues={queues}
+                pending={mutation.isPending}
+                onSave={saveQueueOrder}
+              />
+            </div>
+          </div>
         </section>
       ) : null}
 

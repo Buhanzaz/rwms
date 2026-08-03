@@ -179,7 +179,7 @@ class MaintenanceEventStoreReplayIntegrationTest {
     assertDrift(
         "update repair_stage set routing_queue_name='DRIFT' where repair_id=? and stage_no=0",
         new Object[] {fixture.primaryRepairId()},
-        "update repair_stage set routing_queue_name='MOVE-IN' where repair_id=? and stage_no=0",
+        "update repair_stage set routing_queue_name='REPAIR' where repair_id=? and stage_no=0",
         new Object[] {fixture.primaryRepairId()});
     assertDrift(
         "update maintenance_repair set priority=5 where id=?",
@@ -291,14 +291,14 @@ class MaintenanceEventStoreReplayIntegrationTest {
     Map<String, String> before = shadowCheckpoints();
 
     jdbc.update(
-        "update estimate_line set comment='shadow rollback canary' where estimate_id=? and estimate_revision=2",
+        "update estimate_line set title='shadow rollback canary' where estimate_id=? and estimate_revision=2",
         fixture.estimateId());
     assertThatThrownBy(replay::rebuildAndVerify)
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("JPA projection parity mismatch");
     assertThat(shadowCheckpoints()).isEqualTo(before);
     jdbc.update(
-        "update estimate_line set comment='revision two' where estimate_id=? and estimate_revision=2",
+        "update estimate_line set title='Amended material' where estimate_id=? and estimate_revision=2",
         fixture.estimateId());
   }
 
@@ -686,8 +686,8 @@ class MaintenanceEventStoreReplayIntegrationTest {
           0,
           "REPAIR-2",
           "{\"catalogVersionId\":\"" + catalog.getId() + "\",\"nodeCode\":\"WORK-A\"}",
-          "revision two",
-          "[{\"mediaId\":\"" + UUID.randomUUID() + "\",\"generation\":2}]") );
+          null,
+          "[]") );
       plans.saveAndFlush(new EstimatePlanStage(
           UUID.randomUUID(),
           estimate.getId(),

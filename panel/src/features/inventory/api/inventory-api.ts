@@ -363,8 +363,9 @@ export async function saveInventoryFinding(input: {
     planSelection = buildInventoryPlanSelection({
       completionMode: input.repairCompletionMode ?? "MANUAL",
       movementRequired,
-      logisticsPlanningMode:
-        movementRequired ? (input.logisticsPlanningMode ?? "AUTO") : "AUTO",
+      logisticsPlanningMode: movementRequired
+        ? (input.logisticsPlanningMode ?? "AUTO")
+        : "AUTO",
       logisticsScheduledDate:
         movementRequired && input.logisticsPlanningMode === "FIXED_DATE"
           ? (input.logisticsScheduledDate ?? null)
@@ -374,7 +375,6 @@ export async function saveInventoryFinding(input: {
       coverMediaId: input.coverMediaId,
       taskPlans,
       lines: input.lines,
-      media: input.media,
     })
   }
   const saved = await inventoryHttp.saveInventoryInspection({

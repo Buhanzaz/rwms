@@ -196,7 +196,6 @@ export function QueueDefinitionEditorDialog({
   onSave: (request: QueueDefinitionRequest) => Promise<void>
 }) {
   const [name, setName] = useState(definition?.name ?? "")
-  const [description, setDescription] = useState(definition?.description ?? "")
   const [type, setType] = useState<QueueType>(definition?.type ?? "REPAIR")
   const [validation, setValidation] = useState<string | null>(null)
 
@@ -209,7 +208,7 @@ export function QueueDefinitionEditorDialog({
     await onSave({
       version: definition?.version ?? 0,
       name: name.trim(),
-      description: optional(description),
+      description: definition?.description ?? null,
       type,
       purpose: "GENERAL",
     })
@@ -246,25 +245,16 @@ export function QueueDefinitionEditorDialog({
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>
-                {(Object.keys(queueTypeLabels) as QueueType[]).map((value) => (
-                  <SelectItem key={value} value={value}>
-                    {queueTypeLabels[value]}
-                  </SelectItem>
-                ))}
+                {(Object.keys(queueTypeLabels) as QueueType[])
+                  .filter((value) => value !== "MOVEMENT")
+                  .map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {queueTypeLabels[value]}
+                    </SelectItem>
+                  ))}
               </SelectGroup>
             </SelectContent>
           </Select>
-        </Field>
-        <Field>
-          <FieldLabel htmlFor="queue-definition-description">
-            Описание
-          </FieldLabel>
-          <Textarea
-            id="queue-definition-description"
-            value={description}
-            maxLength={1000}
-            onChange={(event) => setDescription(event.target.value)}
-          />
         </Field>
       </FieldGroup>
     </EditorShell>

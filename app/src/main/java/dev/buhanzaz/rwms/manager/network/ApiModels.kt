@@ -226,6 +226,7 @@ data class InventoryFrozenPlanLineDto(
     val unitPriceMinor: Long,
     val normativeMinutes: String,
     val groupComment: String? = null,
+    val mediaReferences: List<MediaReferenceDto> = emptyList(),
 )
 
 data class InventoryFrozenPlanStageDto(
@@ -825,6 +826,7 @@ data class LeaseSnapshotDto(
 
 data class TaskSyncSnapshotDto(
     val externalTaskId: String,
+    val taskBoardEntryId: String? = null,
     val taskBoardRegistrationVersion: Long? = null,
     val generationState: String,
     val delivery: DeliverySnapshotDto,

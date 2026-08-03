@@ -245,6 +245,140 @@ func TestWorkerSourceMediaReadIsProofScopedAndRevocationFailsClosed(t *testing.T
 	})
 }
 
+func TestUserTaskBoardSourceContentForwardsPinnedGeneration(t *testing.T) {
+	warehouseID, entryID, sourceMediaID, subjectID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	body := []byte("task-board-source")
+	asset := persistence.AssetRecord{
+		ID: sourceMediaID, WarehouseID: warehouseID, FileName: "source.jpg",
+		Status: media.StatusReady, Generation: 1,
+	}
+	original := &persistence.VariantRecord{
+		Variant: media.VariantOriginal, ObjectKey: "private/source-original", ObjectVersionID: "source-original-v1",
+		ContentType: "image/jpeg", SizeBytes: int64(len(body)),
+	}
+	derived := &persistence.VariantRecord{
+		Variant: media.VariantSmall, ObjectKey: "private/source-small", ObjectVersionID: "source-small-v1",
+		ContentType: "image/webp", SizeBytes: int64(len(body)),
+	}
+	repository := &repositoryStub{
+		originalAsset: asset, originalVariant: original,
+		currentAsset: asset, currentVariant: derived,
+	}
+	user := auth.Principal{
+		SubjectID: subjectID, Scopes: map[string]struct{}{"rwms.read": {}},
+		Grants: []auth.WarehouseGrant{{WarehouseID: warehouseID, Level: auth.View}},
+	}
+	base := "ownerType=TASK_BOARD_ENTRY&ownerId=" + entryID.String() +
+		"&warehouseId=" + warehouseID.String() + "&context=WORK_RESULT&generation=1"
+
+	t.Run("original", func(t *testing.T) {
+		store := &storeStub{objectBody: body, statMetadata: media.ObjectMetadata{
+			VersionID: original.ObjectVersionID, SizeBytes: int64(len(body)), ContentType: original.ContentType,
+		}}
+		server := newTestServer(t, repository, validatorStub{principal: user}, store)
+		request := httptest.NewRequest(http.MethodGet,
+			"/api/media/v1/assets/"+sourceMediaID.String()+"/original?"+base, nil)
+		request.Header.Set("Authorization", "Bearer user")
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), body) ||
+			repository.originalReadCalls != 1 || repository.originalReadMediaID != sourceMediaID ||
+			repository.originalReadOwnerType != persistence.OwnerTypeTaskBoardEntry ||
+			repository.originalReadOwnerID != entryID.String() || repository.originalReadWarehouseID != warehouseID ||
+			repository.originalReadGeneration == nil || *repository.originalReadGeneration != 1 {
+			t.Fatalf("user source original response=%d scope=%#v", response.Code, repository)
+		}
+	})
+
+	t.Run("derived variant", func(t *testing.T) {
+		store := &storeStub{objectBody: body, statMetadata: media.ObjectMetadata{
+			VersionID: derived.ObjectVersionID, SizeBytes: int64(len(body)), ContentType: derived.ContentType,
+		}}
+		server := newTestServer(t, repository, validatorStub{principal: user}, store)
+		request := httptest.NewRequest(http.MethodGet,
+			"/api/media/v1/assets/"+sourceMediaID.String()+"/variants/SMALL/content?"+base, nil)
+		request.Header.Set("Authorization", "Bearer user")
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), body) ||
+			repository.currentReadCalls != 1 || repository.currentReadMediaID != sourceMediaID ||
+			repository.currentReadOwnerType != persistence.OwnerTypeTaskBoardEntry ||
+			repository.currentReadOwnerID != entryID.String() || repository.currentReadWarehouseID != warehouseID ||
+			repository.currentReadGeneration != 1 || repository.currentReadVariant != media.VariantSmall {
+			t.Fatalf("user source variant response=%d scope=%#v", response.Code, repository)
+		}
+	})
+}
+
+func TestUserTaskBoardListUsesPinnedSourceGeneration(t *testing.T) {
+	warehouseID, entryID, resultID, sourceID, subjectID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	repository := &repositoryStub{ownerRecords: []persistence.AssetWithVariants{
+		{
+			Asset: persistence.AssetRecord{
+				ID: resultID, OwnerType: persistence.OwnerTypeTaskBoardEntry, OwnerID: entryID.String(),
+				WarehouseID: warehouseID, Status: media.StatusReady, Generation: 1,
+			},
+			Variants: []persistence.VariantRecord{{
+				Variant: media.VariantSmall, ObjectVersionID: "result-small-v1", ContentType: "image/webp",
+			}},
+		},
+		{
+			// A source asset retains its original owner identity internally; its
+			// public URLs must nevertheless remain in the task-board entry scope.
+			Asset: persistence.AssetRecord{
+				ID: sourceID, OwnerType: persistence.OwnerTypeInventoryFinding, OwnerID: uuid.NewString(),
+				WarehouseID: warehouseID, Status: media.StatusReady, Generation: 1,
+			},
+			Variants: []persistence.VariantRecord{{
+				Variant: media.VariantSmall, ObjectVersionID: "source-small-v1", ContentType: "image/webp",
+			}},
+		},
+	}}
+	user := auth.Principal{
+		SubjectID: subjectID, Scopes: map[string]struct{}{"rwms.read": {}},
+		Grants: []auth.WarehouseGrant{{WarehouseID: warehouseID, Level: auth.View}},
+	}
+	server := newTestServer(t, repository, validatorStub{principal: user}, &storeStub{})
+	request := httptest.NewRequest(http.MethodGet,
+		"/api/media/v1/assets?ownerType=TASK_BOARD_ENTRY&ownerId="+entryID.String()+
+			"&warehouseId="+warehouseID.String()+"&context=WORK_RESULT", nil)
+	request.Header.Set("Authorization", "Bearer user")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("task-board user list response = %d %s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Items []struct {
+			ID         uuid.UUID `json:"id"`
+			Generation int       `json:"generation"`
+			Variants   []struct {
+				ContentPath string `json:"contentPath"`
+			} `json:"variants"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode task-board user list: %v", err)
+	}
+	if len(body.Items) != 2 {
+		t.Fatalf("task-board user list = %#v", body)
+	}
+	for _, item := range body.Items {
+		if item.ID != sourceID {
+			continue
+		}
+		if item.Generation != 1 || len(item.Variants) != 1 ||
+			!strings.Contains(item.Variants[0].ContentPath, "ownerType=TASK_BOARD_ENTRY") ||
+			!strings.Contains(item.Variants[0].ContentPath, "ownerId="+entryID.String()) ||
+			!strings.Contains(item.Variants[0].ContentPath, "generation=1") ||
+			!strings.Contains(item.Variants[0].ContentPath, "context=WORK_RESULT") {
+			t.Fatalf("pinned source list item = %#v", item)
+		}
+		return
+	}
+	t.Fatalf("pinned source %s missing from %#v", sourceID, body)
+}
+
 func TestWorkerListUsesOneCurrentProofScopedRead(t *testing.T) {
 	warehouseID, entryID, workerID, subjectID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	worker := auth.WorkerPrincipal{
@@ -1789,6 +1923,12 @@ type repositoryStub struct {
 	originalAsset                persistence.AssetRecord
 	originalVariant              *persistence.VariantRecord
 	originalReadErr              error
+	originalReadCalls            int
+	originalReadMediaID          uuid.UUID
+	originalReadOwnerType        string
+	originalReadOwnerID          string
+	originalReadWarehouseID      uuid.UUID
+	originalReadGeneration       *int
 	currentAsset                 persistence.AssetRecord
 	currentVariant               *persistence.VariantRecord
 	currentReadErr               error
@@ -1946,9 +2086,16 @@ func (stub *repositoryStub) SetCabinCoverFromTaskEvidence(
 	return stub.cabinCoverChange, stub.cabinCoverChangeReplay, stub.cabinCoverChangeErr
 }
 
-func (stub *repositoryStub) ReadOriginal(_ context.Context, _ uuid.UUID, _, _ string, _ uuid.UUID,
+func (stub *repositoryStub) ReadOriginal(_ context.Context, mediaID uuid.UUID, ownerType, ownerID string, warehouseID uuid.UUID, generation *int,
 	consume func(persistence.AssetRecord, *persistence.VariantRecord) error,
 ) error {
+	stub.originalReadCalls++
+	stub.originalReadMediaID, stub.originalReadOwnerType, stub.originalReadOwnerID = mediaID, ownerType, ownerID
+	stub.originalReadWarehouseID = warehouseID
+	if generation != nil {
+		value := *generation
+		stub.originalReadGeneration = &value
+	}
 	if stub.originalReadErr != nil {
 		return stub.originalReadErr
 	}

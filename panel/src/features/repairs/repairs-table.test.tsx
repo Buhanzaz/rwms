@@ -449,14 +449,11 @@ describe("RepairsPage queue conflicts", () => {
       screen.getByRole("button", { name: "Закрепить тестовый ремонт" })
     )
 
-    expect(
-      await screen.findByText(
-        "Очередь уже изменилась. Данные обновлены — повторите действие."
-      )
-    ).not.toBeNull()
     await waitFor(() => {
       expect(api.getTaskBoardsForAvailableDates).toHaveBeenCalledTimes(2)
       expect(api.listRepairTasks).toHaveBeenCalledTimes(2)
     })
+    expect(screen.queryByText(/Очередь уже изменилась/)).toBeNull()
+    expect(screen.queryByRole("alert")).toBeNull()
   })
 })

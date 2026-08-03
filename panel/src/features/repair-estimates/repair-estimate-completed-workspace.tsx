@@ -346,6 +346,9 @@ export function RepairEstimateCompletedWorkspace({
             owner={mediaOwner}
             readOnly
             title="Фотографии сметы"
+            authoritativeReadyReferences={
+              estimate.maintenanceMediaReferences ?? []
+            }
             coverMediaId={estimate.coverMediaId ?? null}
           />
         }
@@ -429,6 +432,8 @@ export function RepairEstimateCompletedWorkspace({
         <RepairEstimateCatalogPicker
           lines={draft.lines}
           readOnly={mutationPending}
+          accessToken={accessToken}
+          mediaOwner={mediaOwner}
           onChange={(lines) => setDraft((current) => ({ ...current, lines }))}
           onPagerChange={handleCatalogPagerChange}
         />
@@ -509,6 +514,9 @@ export function RepairEstimateCompletedWorkspace({
             owner={mediaOwner}
             readOnly={mutationPending}
             title="Фотографии сметы"
+            authoritativeReadyReferences={
+              draft.maintenanceMediaReferences ?? []
+            }
             coverMediaId={draft.coverMediaId ?? null}
             requireCover
             onReadyReferencesChange={updateReadyMediaReferences}

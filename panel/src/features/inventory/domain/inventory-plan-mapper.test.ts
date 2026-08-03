@@ -20,6 +20,12 @@ const catalogWork: RepairEstimateLineDto = {
     furnitureEquipment: null,
     characteristic: null,
   },
+  maintenanceMediaReferences: [
+    {
+      mediaId: "00000000-0000-4000-8000-000000000102",
+      generation: 2,
+    },
+  ],
 }
 
 const manualMaterial: RepairEstimateLineDto = {
@@ -45,12 +51,6 @@ describe("inventory plan mapper", () => {
       priority: 2,
       coverMediaId: "00000000-0000-4000-8000-000000000102",
       lines: [catalogWork, manualMaterial],
-      media: [
-        {
-          mediaId: "00000000-0000-4000-8000-000000000102",
-          generation: 2,
-        },
-      ],
       taskPlans: [
         {
           id: "plan-1",
@@ -75,11 +75,14 @@ describe("inventory plan mapper", () => {
           aggregationKind: "CATALOG",
           catalogNodeId: catalogWork.catalogSnapshot?.nodeId,
           groupComment: "Плановый комментарий",
+          mediaReferences: catalogWork.maintenanceMediaReferences,
         },
         {
           aggregationKind: "MANUAL",
           description: manualMaterial.description,
           unitPriceMinor: 15050,
+          groupComment: null,
+          mediaReferences: [],
         },
       ],
       stages: [
@@ -103,7 +106,6 @@ describe("inventory plan mapper", () => {
         coverMediaId: null,
         taskPlans: [],
         lines: [catalogWork],
-        media: [],
       })
     ).toThrow("В каталоге не настроено расположение для перемещения.")
   })
@@ -119,7 +121,6 @@ describe("inventory plan mapper", () => {
         coverMediaId: null,
         taskPlans: [],
         lines: [manualMaterial],
-        media: [],
       })
     ).toThrow("Автоматический режим доступен только для позиций каталога")
   })
@@ -139,7 +140,6 @@ describe("inventory plan mapper", () => {
       priority: 2,
       coverMediaId: null,
       lines: [catalogWork, repeatedWork],
-      media: [],
       taskPlans: [
         {
           id: "plan-1",
@@ -195,7 +195,6 @@ describe("inventory plan mapper", () => {
       coverMediaId: null,
       taskPlans: [],
       lines: [catalogWork],
-      media: [],
     })
 
     expect(fixed).toMatchObject({
@@ -213,7 +212,6 @@ describe("inventory plan mapper", () => {
         coverMediaId: null,
         taskPlans: [],
         lines: [catalogWork],
-        media: [],
       })
     ).toThrow("Дата логистического задания")
   })

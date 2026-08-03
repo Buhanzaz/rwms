@@ -11,6 +11,7 @@ import {
   createManualEstimateLine,
   createNewEstimateDraft,
   getRepairEstimateCatalogQuantityError,
+  normalizeEstimateLine,
   validateAutoCompletion,
 } from "@/features/repair-estimates/domain/repair-estimate-domain"
 import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/repair-estimate"
@@ -188,7 +189,7 @@ describe("catalog estimate additions", () => {
       expect.objectContaining({
         id: existing.id,
         quantity: 3,
-        lineComment: "Комментарий к материалу",
+        lineComment: "",
       }),
     ])
 
@@ -199,6 +200,45 @@ describe("catalog estimate additions", () => {
       comment: "Комментарий к работе",
     })
     expect(newMaterial.lineComment).toBe("")
+  })
+
+  it("keeps photos on one work and strips legacy material fields", () => {
+    const work = catalogNode("00000000-0000-4000-8000-000000000064", {
+      name: "Замена двери",
+      nodeType: "WORK",
+      durationMinutes: 30,
+    })
+    const reference = {
+      mediaId: "00000000-0000-4000-8000-000000000065",
+      generation: 2,
+    }
+    const [workLine] = applyCatalogNodesToEstimateLines({
+      lines: [],
+      nodes: [work],
+      quantity: 1,
+      comment: "Снять старую дверь",
+      workMediaReferencesByCatalogNodeId: { [work.id]: [reference] },
+    })
+    expect(workLine.maintenanceMediaReferences).toEqual([reference])
+
+    const material = normalizeEstimateLine({
+      ...estimateLine("00000000-0000-4000-8000-000000000066", furniture),
+      lineComment: "legacy",
+      maintenanceMediaReferences: [reference],
+    })
+    expect(material.lineComment).toBe("")
+    expect(material.maintenanceMediaReferences).toEqual([])
+
+    expect(() =>
+      assertEstimateLinesValid([
+        workLine,
+        {
+          ...workLine,
+          id: "00000000-0000-4000-8000-000000000067",
+          sourceLineKey: "second-work",
+        },
+      ])
+    ).toThrow("Одна фотография не может принадлежать двум работам")
   })
 })
 

@@ -593,14 +593,16 @@ export function RepairsPage() {
                 </div>
               ) : null}
 
-              {view === "queue" && boardMutation.isError ? (
+              {view === "queue" &&
+              boardMutation.isError &&
+              !(
+                boardMutation.error instanceof ApiError &&
+                boardMutation.error.status === 409
+              ) ? (
                 <p role="alert" className="text-xs text-destructive">
-                  {boardMutation.error instanceof ApiError &&
-                  boardMutation.error.status === 409
-                    ? "Очередь уже изменилась. Данные обновлены — повторите действие."
-                    : boardMutation.error instanceof Error
-                      ? boardMutation.error.message
-                      : "Не удалось обновить очередь ремонтов."}
+                  {boardMutation.error instanceof Error
+                    ? boardMutation.error.message
+                    : "Не удалось обновить очередь ремонтов."}
                 </p>
               ) : null}
 

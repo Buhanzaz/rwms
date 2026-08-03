@@ -4,6 +4,7 @@ import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardCa
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardResponse;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.MoveDriverBoardTaskRequest;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.PromoteCapitalRepairRequest;
+import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.ReturnCapitalRepairRequest;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.DriverTaskResponse;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverBoardService;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverQueueScheduler;
@@ -53,6 +54,16 @@ public class DriverBoardController {
       @Valid @RequestBody MoveDriverBoardTaskRequest request) {
     access.requireEdit(jwt, request.warehouseId());
     return board.move(externalTaskId, request);
+  }
+
+  @PostMapping("/tasks/{externalTaskId}/return-to-capital-repairs")
+  public ResponseEntity<Void> returnToCapitalRepairs(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID externalTaskId,
+      @Valid @RequestBody ReturnCapitalRepairRequest request) {
+    access.requireEdit(jwt, request.warehouseId());
+    board.returnToCapitalRepairs(externalTaskId, request);
+    return ResponseEntity.noContent().build();
   }
 
   @PostMapping("/capital-repairs/{repairId}/promote")

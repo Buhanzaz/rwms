@@ -2116,7 +2116,14 @@ fun InventoryCatalogScreen(
     editor: InventoryEditorState?,
     uiState: ManagerUiState,
     onBack: () -> Unit,
-    onAddCatalogNodes: (List<CatalogNodeDto>, String, String, String?) -> Boolean,
+    onAddCatalogNodes: (
+        List<CatalogNodeDto>,
+        String,
+        String,
+        String?,
+        List<String>,
+        List<dev.buhanzaz.rwms.manager.network.MediaReferenceDto>,
+    ) -> Boolean,
     onRefreshCatalog: () -> Unit,
     onEditPlan: ((dev.buhanzaz.rwms.manager.ui.MaintenanceEditorState) ->
         dev.buhanzaz.rwms.manager.ui.MaintenanceEditorState) -> Unit,

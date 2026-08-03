@@ -14,6 +14,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -33,6 +34,7 @@ import dev.buhanzaz.rwms.manager.ui.MaintenanceAcceptanceEditorState
 import dev.buhanzaz.rwms.manager.ui.ManagerUiState
 import dev.buhanzaz.rwms.manager.ui.repairSourceLabel
 import dev.buhanzaz.rwms.manager.ui.hasAcceptanceEvidence
+import dev.buhanzaz.rwms.manager.ui.hasAcceptedAllWorkLines
 import dev.buhanzaz.rwms.manager.ui.components.EmptyState
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPanel
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPhotoGalleryDialog
@@ -49,9 +51,11 @@ fun MaintenanceAcceptanceScreen(
     onOpenPhotos: () -> Unit,
     onOpenCabinPhotos: () -> Unit,
     onOpenStagePhotos: (String) -> Unit,
+    onOpenWorkSourcePhotos: (String, String) -> Unit,
     onCloseGallery: () -> Unit,
     onAccept: () -> Unit,
-    onRework: (String) -> Unit,
+    onAcceptWork: (String) -> Unit,
+    onReworkWork: (String, String) -> Unit,
 ) {
     LaunchedEffect(uiState.selectedWarehouseId) {
         if (uiState.selectedWarehouseId != null) onLoad()
@@ -79,8 +83,10 @@ fun MaintenanceAcceptanceScreen(
                 onOpenPhotos = onOpenPhotos,
                 onOpenCabinPhotos = onOpenCabinPhotos,
                 onOpenStagePhotos = onOpenStagePhotos,
+                onOpenWorkSourcePhotos = onOpenWorkSourcePhotos,
                 onAccept = onAccept,
-                onRework = { onRework(editor.repair.id) },
+                onAcceptWork = onAcceptWork,
+                onReworkWork = { workLineId -> onReworkWork(editor.repair.id, workLineId) },
                 modifier = Modifier.fillMaxSize().padding(padding),
             )
         }
@@ -157,12 +163,15 @@ private fun AcceptanceDetails(
     onOpenPhotos: () -> Unit,
     onOpenCabinPhotos: () -> Unit,
     onOpenStagePhotos: (String) -> Unit,
+    onOpenWorkSourcePhotos: (String, String) -> Unit,
     onAccept: () -> Unit,
-    onRework: () -> Unit,
+    onAcceptWork: (String) -> Unit,
+    onReworkWork: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val repair = editor.repair
-    val canAccept = editor.hasAcceptanceEvidence()
+    val allWorkLinesAccepted = editor.hasAcceptedAllWorkLines()
+    val canAccept = editor.hasAcceptanceEvidence() && allWorkLinesAccepted
     var acceptConfirmationOpen by remember(repair.id) { mutableStateOf(false) }
     LazyColumn(
         modifier = modifier,
@@ -194,7 +203,13 @@ private fun AcceptanceDetails(
             AcceptanceStage(
                 stage = stage,
                 enabled = !busy,
-                onOpenPhotos = { onOpenStagePhotos(stage.id) },
+                acceptedWorkLineIds = editor.acceptedWorkLineIds,
+                onOpenAfterPhotos = { onOpenStagePhotos(stage.id) },
+                onOpenSourcePhotos = { workLineId ->
+                    onOpenWorkSourcePhotos(stage.id, workLineId)
+                },
+                onAcceptWork = onAcceptWork,
+                onReworkWork = onReworkWork,
             )
         }
         item {
@@ -218,24 +233,20 @@ private fun AcceptanceDetails(
                         "Фото приёмки: ${editor.readyMedia.size + editor.photoUris.size}",
                     )
                 }
-                Row(
+                Button(
+                    onClick = { acceptConfirmationOpen = true },
+                    enabled = !busy && canAccept,
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    FilledTonalButton(
-                        onClick = onRework,
-                        enabled = !busy,
-                        modifier = Modifier.weight(1f),
-                    ) { Text("На доработку") }
-                    Button(
-                        onClick = { acceptConfirmationOpen = true },
-                        enabled = !busy && canAccept,
-                        modifier = Modifier.weight(1f),
-                    ) { Text("Принять") }
-                }
+                ) { Text("Принять отмеченные работы") }
                 if (!canAccept) {
                     Text(
-                        "Для приёмки добавьте хотя бы одно фото.",
+                        when {
+                            !editor.hasAcceptanceEvidence() ->
+                                "Для приёмки добавьте хотя бы одно фото."
+                            !allWorkLinesAccepted ->
+                                "Для каждой работы выберите «Принято» или «Переделать»."
+                            else -> "Проверьте данные приёмки."
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
@@ -275,7 +286,11 @@ private fun AcceptanceDetails(
 private fun AcceptanceStage(
     stage: RepairStageDto,
     enabled: Boolean,
-    onOpenPhotos: () -> Unit,
+    acceptedWorkLineIds: Set<String>,
+    onOpenAfterPhotos: () -> Unit,
+    onOpenSourcePhotos: (String) -> Unit,
+    onAcceptWork: (String) -> Unit,
+    onReworkWork: (String) -> Unit,
 ) {
     ManagerPanel {
         Text(
@@ -285,28 +300,102 @@ private fun AcceptanceStage(
         AcceptanceInfoRow("Очередь", stage.routing.queueName)
         AcceptanceInfoRow("Статус", repairStageStateLabel(stage.state))
         stage.taskDeadline?.let { AcceptanceInfoRow("Срок", it) }
-        val lines = stage.workLines.map { "Работа" to it } +
-            stage.materialLines.map { "Материал" to it }
-        if (lines.isEmpty()) {
+        if (stage.workLines.isEmpty() && stage.materialLines.isEmpty()) {
             Text(
                 "Работы и материалы не указаны.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        } else {
-            lines.forEach { (kind, line) -> AcceptanceLine(kind, line) }
         }
-        if (stage.groupComment.isNotBlank()) {
+        if (stage.workLines.isNotEmpty()) {
+            Text("Работы", style = MaterialTheme.typography.labelLarge)
+            stage.workLines.forEach { work ->
+                AcceptanceWorkLine(
+                    line = work,
+                    afterPhotoCount = stage.evidence.size,
+                    accepted = work.id in acceptedWorkLineIds,
+                    enabled = enabled,
+                    onOpenSourcePhotos = { onOpenSourcePhotos(work.id) },
+                    onOpenAfterPhotos = onOpenAfterPhotos,
+                    onAccept = { onAcceptWork(work.id) },
+                    onRework = { onReworkWork(work.id) },
+                )
+            }
+        }
+        if (stage.materialLines.isNotEmpty()) {
+            Text("Материалы", style = MaterialTheme.typography.labelLarge)
+            stage.materialLines.forEach { line -> AcceptanceLine("Материал", line) }
+        }
+        if (stage.workLines.isNotEmpty() && stage.groupComment.isNotBlank()) {
             Text(
-                "Комментарий: ${stage.groupComment}",
+                "Комментарий к работам: ${stage.groupComment}",
                 style = MaterialTheme.typography.bodySmall,
             )
         }
         FilledTonalButton(
-            onClick = onOpenPhotos,
+            onClick = onOpenAfterPhotos,
             enabled = enabled,
             modifier = Modifier.fillMaxWidth(),
-        ) { Text("Просмотр фото") }
+        ) { Text("Фото после этапа: ${stage.evidence.size}") }
+    }
+}
+
+@Composable
+private fun AcceptanceWorkLine(
+    line: EstimateLineDto,
+    afterPhotoCount: Int,
+    accepted: Boolean,
+    enabled: Boolean,
+    onOpenSourcePhotos: () -> Unit,
+    onOpenAfterPhotos: () -> Unit,
+    onAccept: () -> Unit,
+    onRework: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        AcceptanceLine("Работа", line)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FilledTonalButton(
+                onClick = onOpenSourcePhotos,
+                enabled = enabled,
+                modifier = Modifier.weight(1f),
+            ) { Text("Фото до: ${line.mediaReferences.size}") }
+            FilledTonalButton(
+                onClick = onOpenAfterPhotos,
+                enabled = enabled,
+                modifier = Modifier.weight(1f),
+            ) { Text("Фото после: $afterPhotoCount") }
+        }
+        if (accepted) {
+            Text(
+                "Решение: Принято",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            OutlinedButton(
+                onClick = onRework,
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Переделать") }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(
+                    onClick = onAccept,
+                    enabled = enabled,
+                    modifier = Modifier.weight(1f),
+                ) { Text("Принято") }
+                OutlinedButton(
+                    onClick = onRework,
+                    enabled = enabled,
+                    modifier = Modifier.weight(1f),
+                ) { Text("Переделать") }
+            }
+        }
     }
 }
 
@@ -329,7 +418,7 @@ private fun AcceptanceLine(kind: String, line: EstimateLineDto) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            line.comment?.takeIf(String::isNotBlank)?.let { comment ->
+            line.comment?.takeIf { kind == "Работа" && it.isNotBlank() }?.let { comment ->
                 Text(comment, style = MaterialTheme.typography.bodySmall)
             }
         }

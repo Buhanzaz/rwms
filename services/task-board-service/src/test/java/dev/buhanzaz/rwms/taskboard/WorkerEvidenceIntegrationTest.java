@@ -123,7 +123,8 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
                                 2,
                                 "шт.",
                                 60,
-                                "Установить без повреждения покрытия")),
+                                "Установить без повреждения покрытия",
+                                List.of(sourceMediaId))),
                         List.of(
                             new TaskMaterialSnapshotRequest(
                                 materialId, "Краска", 2.5, "л")),
@@ -319,6 +320,7 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
               assertThat(work.unit()).isEqualTo("шт.");
               assertThat(work.durationMinutes()).isEqualTo(60);
               assertThat(work.comment()).isEqualTo("Установить без повреждения покрытия");
+              assertThat(work.sourceMediaIds()).containsExactly(sourceMediaId);
             });
     assertThat(detail.materials())
         .singleElement()

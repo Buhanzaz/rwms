@@ -1223,6 +1223,80 @@ class HttpLogisticsDependencyGatewayTest {
   }
 
   @Test
+  void cancelsCapitalDriverTaskThenReadsItsAuthoritativeCancelledSnapshot() {
+    UUID externalTaskId = UUID.randomUUID();
+    UUID taskId = UUID.randomUUID();
+    UUID entryId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID queueDefinitionId = UUID.randomUUID();
+    UUID queueId = UUID.randomUUID();
+    server
+        .expect(
+            requestTo(
+                "http://task-board.test/api/internal/task-board/v1/tasks/"
+                    + externalTaskId
+                    + "/cancel"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(header("Authorization", "Bearer test-task-board.logistics"))
+        .andExpect(jsonPath("$.expectedTaskVersion").value(3))
+        .andExpect(
+            jsonPath("$.reason")
+                .value("Капитальный ремонт возвращён в отдельную очередь"))
+        .andRespond(
+            withSuccess(
+                """
+                {
+                  "taskId":"%s","externalTaskId":"%s","taskVersion":4,
+                  "status":"CANCELLED","cancelledAt":"2026-08-03T10:00:00Z"
+                }
+                """
+                    .formatted(taskId, externalTaskId),
+                MediaType.APPLICATION_JSON));
+    server
+        .expect(
+            requestTo(
+                "http://task-board.test/api/internal/task-board/v1/tasks/"
+                    + externalTaskId))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header("Authorization", "Bearer test-task-board.logistics"))
+        .andRespond(
+            withSuccess(
+                """
+                {
+                  "taskId":"%s","taskVersion":4,"warehouseId":"%s",
+                  "externalTaskId":"%s","title":"Переместить бытовку на производство",
+                  "unitNumber":"СПБ-КАП","description":"Переместить бытовку на производство",
+                  "status":"CANCELLED","plannedDurationMinutes":null,"deadlineAt":null,
+                  "scheduledDate":"2026-08-03","lane":"CURRENT","priority":2,
+                  "pinned":false,"doneAt":null,
+                  "route":[{
+                    "entryId":"%s","entryVersion":6,
+                    "queueDefinitionId":"%s","workQueueId":"%s","queueName":"Водители",
+                    "routeIndex":0,"queuePosition":0,"entryType":"REAL",
+                    "status":"CANCELLED","taskText":"Переместить бытовку на производство",
+                    "plannedDurationMinutes":null
+                  }]
+                }
+                """
+                    .formatted(
+                        taskId,
+                        warehouseId,
+                        externalTaskId,
+                        entryId,
+                        queueDefinitionId,
+                        queueId),
+                MediaType.APPLICATION_JSON));
+
+    LogisticsDependencyGateway.DriverBoardTask cancelled =
+        gateway.cancelDriverTask(externalTaskId, 3);
+
+    assertThat(cancelled.status()).isEqualTo("CANCELLED");
+    assertThat(cancelled.entryStatus()).isEqualTo("CANCELLED");
+    assertThat(cancelled.taskVersion()).isEqualTo(4);
+    server.verify();
+  }
+
+  @Test
   void usesOnlyTheVersionedMaintenanceLogisticsRoutesForCapacityAndCapitalRepair() {
     UUID warehouseId = UUID.randomUUID();
     UUID repairId = UUID.randomUUID();

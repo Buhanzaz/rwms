@@ -78,7 +78,7 @@ func TestPublicReadsUseOneAuthorizationBearingStatementAndFailClosedWhenRevocati
 	}
 	stableOriginalCalls := 0
 	if err := repository.ReadOriginal(ctx, command.MediaID, OwnerTypeInventoryFinding,
-		ownerID.String(), warehouseID, func(asset AssetRecord, original *VariantRecord) error {
+		ownerID.String(), warehouseID, nil, func(asset AssetRecord, original *VariantRecord) error {
 			stableOriginalCalls++
 			if asset.ID != command.MediaID || original == nil ||
 				original.Variant != media.VariantOriginal || original.ObjectVersionID == "" {
@@ -115,7 +115,7 @@ func TestPublicReadsUseOneAuthorizationBearingStatementAndFailClosedWhenRevocati
 	}()
 	go func() {
 		originalResult <- repository.ReadOriginal(ctx, command.MediaID,
-			OwnerTypeInventoryFinding, ownerID.String(), warehouseID,
+			OwnerTypeInventoryFinding, ownerID.String(), warehouseID, nil,
 			func(AssetRecord, *VariantRecord) error {
 				leakedInputs.Add(1)
 				return nil

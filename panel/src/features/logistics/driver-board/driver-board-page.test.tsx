@@ -18,6 +18,7 @@ import type {
   DriverBoardCard,
 } from "@/features/logistics/driver-board/driver-board-model"
 import { DriverBoardPage } from "@/features/logistics/driver-board/driver-board-page"
+import { ApiError } from "@/lib/api-client"
 
 Object.defineProperties(HTMLElement.prototype, {
   hasPointerCapture: { configurable: true, value: () => false },
@@ -32,6 +33,7 @@ const apiMocks = vi.hoisted(() => ({
   moveDriverBoardTask: vi.fn(),
   pinDriverBoardTask: vi.fn(),
   promoteCapitalRepair: vi.fn(),
+  returnCapitalRepair: vi.fn(),
 }))
 
 const assetApiMocks = vi.hoisted(() => ({
@@ -69,6 +71,7 @@ vi.mock("@/features/logistics/driver-board/driver-board-api", async () => {
     moveDriverBoardTask: apiMocks.moveDriverBoardTask,
     pinDriverBoardTask: apiMocks.pinDriverBoardTask,
     promoteCapitalRepair: apiMocks.promoteCapitalRepair,
+    returnCapitalRepair: apiMocks.returnCapitalRepair,
   }
 })
 vi.mock("@/features/rental-items/api/asset-rental-items-api", () => ({
@@ -256,6 +259,7 @@ beforeEach(() => {
   })
   apiMocks.moveDriverBoardTask.mockResolvedValue({})
   apiMocks.promoteCapitalRepair.mockResolvedValue({})
+  apiMocks.returnCapitalRepair.mockResolvedValue(undefined)
   apiMocks.createManualMovement.mockResolvedValue({})
   apiMocks.pinDriverBoardTask.mockResolvedValue({})
   assetApiMocks.listAssetRentalItems.mockResolvedValue({
@@ -292,7 +296,14 @@ describe("DriverBoardPage", () => {
         /сб.*, 01 августа/i
       )
     ).toBeTruthy()
-    expect(screen.getByRole("heading", { name: "Перемещение" })).toBeTruthy()
+    expect(
+      screen.queryByRole("heading", { name: "Перемещение" })
+    ).toBeNull()
+    expect(
+      screen.queryByText(
+        "Текущие перемещения, запланированные даты и капитальные ремонты."
+      )
+    ).toBeNull()
     expect(
       screen.getByRole("heading", { name: "Капитальные ремонты" })
     ).toBeTruthy()
@@ -445,6 +456,106 @@ describe("DriverBoardPage", () => {
         })
       )
     })
+  })
+
+  it("returns a current capital movement to the capital-repair column", async () => {
+    const capitalMovement = card(CURRENT_EXTERNAL_ID, {
+      title: "Переместить бытовку на производство",
+      kind: "CAPITAL_TO_PRODUCTION",
+      workflowState: "CURRENT",
+      lane: "CURRENT",
+      unitNumber: "БТ-КАП",
+    })
+    renderPage({ ...board, current: [capitalMovement] })
+    await screen.findByTestId(`current-task-${CURRENT_EXTERNAL_ID}`)
+
+    const dragData = dndMocks.sortableData.get(
+      `driver-task:${CURRENT_EXTERNAL_ID}`
+    )
+    const capitalTarget = dndMocks.droppableData.get(
+      "driver-capital-repairs"
+    )
+    expect(dragData).toBeDefined()
+    expect(capitalTarget).toEqual({ type: "capital-target" })
+
+    act(() => {
+      dndMocks.onDragStart?.({ active: { data: { current: dragData } } })
+      dndMocks.onDragEnd?.({
+        active: { data: { current: dragData } },
+        over: { data: { current: capitalTarget } },
+      })
+    })
+
+    await waitFor(() => {
+      expect(apiMocks.returnCapitalRepair).toHaveBeenCalledWith({
+        accessToken: "driver-token",
+        externalTaskId: CURRENT_EXTERNAL_ID,
+        warehouseId: WAREHOUSE_ID,
+        expectedTaskVersion: 7,
+      })
+    })
+  })
+
+  it("returns a scheduled capital movement from a date column", async () => {
+    const scheduledCapital = card(SCHEDULED_EXTERNAL_ID, {
+      title: "Переместить бытовку на производство",
+      kind: "CAPITAL_TO_PRODUCTION",
+      workflowState: "SCHEDULED",
+      lane: "SCHEDULED",
+      unitNumber: "БТ-КАП-2",
+    })
+    renderPage({
+      ...board,
+      dates: [{ date: board.currentDate, tasks: [scheduledCapital] }],
+    })
+    await screen.findByTestId(`scheduled-task-${SCHEDULED_EXTERNAL_ID}`)
+
+    const dragData = dndMocks.sortableData.get(
+      `driver-task:${SCHEDULED_EXTERNAL_ID}`
+    )
+    const capitalTarget = dndMocks.droppableData.get(
+      "driver-capital-repairs"
+    )
+    act(() => {
+      dndMocks.onDragEnd?.({
+        active: { data: { current: dragData } },
+        over: { data: { current: capitalTarget } },
+      })
+    })
+
+    await waitFor(() => {
+      expect(apiMocks.returnCapitalRepair).toHaveBeenCalledWith({
+        accessToken: "driver-token",
+        externalTaskId: SCHEDULED_EXTERNAL_ID,
+        warehouseId: WAREHOUSE_ID,
+        expectedTaskVersion: 7,
+      })
+    })
+  })
+
+  it("does not show the stale-queue warning while refreshing a conflict", async () => {
+    apiMocks.moveDriverBoardTask.mockRejectedValueOnce(
+      new ApiError("Очередь перемещений уже изменилась", 409, null)
+    )
+    renderPage()
+    await screen.findByTestId(`scheduled-task-${SCHEDULED_EXTERNAL_ID}`)
+
+    const dragData = dndMocks.sortableData.get(
+      `driver-task:${SCHEDULED_EXTERNAL_ID}`
+    )
+    const currentDropData = dndMocks.droppableData.get("driver-current")
+    act(() => {
+      dndMocks.onDragEnd?.({
+        active: { data: { current: dragData } },
+        over: { data: { current: currentDropData } },
+      })
+    })
+
+    await waitFor(() => {
+      expect(apiMocks.getDriverBoard).toHaveBeenCalledTimes(2)
+    })
+    expect(screen.queryByText("Очередь уже изменилась")).toBeNull()
+    expect(screen.queryByText("Команда не выполнена")).toBeNull()
   })
 
   it("does not allow an ordinary inbound repair to exceed repair-place capacity", async () => {

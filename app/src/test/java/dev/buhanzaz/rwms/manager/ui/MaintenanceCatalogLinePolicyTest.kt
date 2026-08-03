@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.manager.ui
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.manager.network.CatalogNodeDto
 import dev.buhanzaz.rwms.manager.network.FurnitureEquipmentReferenceDto
+import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.network.RoutingSnapshotDto
 import org.junit.Test
 
@@ -54,6 +55,52 @@ class MaintenanceCatalogLinePolicyTest {
         )
         assertThat(result.lines.single { line -> line.lineType == "MATERIAL" })
             .isEqualTo(first.lines.single { line -> line.lineType == "MATERIAL" }.copy(quantity = "1.5"))
+    }
+
+    @Test
+    fun `work source photos stay on the selected work and never on its material`() {
+        val work = node(id = "work", type = "WORK")
+        val material = node(id = "material", type = "MATERIAL")
+        val media = MediaReferenceDto("source-photo", 3)
+
+        val result = applyMaintenanceCatalogNodes(
+            editor = editor(),
+            nodes = listOf(work, material),
+            quantity = "1",
+            comment = "Заменить петлю",
+            photoUris = listOf("content://camera/work-1"),
+            mediaReferences = listOf(media),
+        )
+
+        assertThat(result.lines.single { it.lineType == "WORK" }.photoUris)
+            .containsExactly("content://camera/work-1")
+        assertThat(result.lines.single { it.lineType == "WORK" }.mediaReferences)
+            .containsExactly(media)
+        assertThat(result.lines.single { it.lineType == "MATERIAL" }.photoUris).isEmpty()
+        assertThat(result.lines.single { it.lineType == "MATERIAL" }.mediaReferences).isEmpty()
+        assertThat(result.lines.single { it.lineType == "MATERIAL" }.comment).isEmpty()
+    }
+
+    @Test
+    fun `material annotation normalization removes stale comment and photo data`() {
+        val normalized = MaintenanceLineEditorState(
+            id = "material-1",
+            catalogNodeId = "material",
+            description = "Петля",
+            lineType = "MATERIAL",
+            unit = "шт.",
+            quantity = "1",
+            unitPrice = "10.00",
+            normativeMinutes = 30,
+            comment = "устаревший комментарий",
+            mediaReferences = listOf(MediaReferenceDto("wrong-photo", 1)),
+            photoUris = listOf("content://camera/wrong-photo"),
+        ).normalizedMaintenanceAnnotations()
+
+        assertThat(normalized.comment).isEmpty()
+        assertThat(normalized.normativeMinutes).isEqualTo(30)
+        assertThat(normalized.mediaReferences).isEmpty()
+        assertThat(normalized.photoUris).isEmpty()
     }
 
     @Test

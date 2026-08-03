@@ -329,7 +329,25 @@ public final class ApiModels {
       @PositiveOrZero double quantity,
       @Size(max = 32) String unit,
       @Min(0) Integer durationMinutes,
-      @Size(max = 2000) String comment) {}
+      @Size(max = 2000) String comment,
+      @NotNull @Size(max = 100) List<@NotNull UUID> sourceMediaIds) {
+    public TaskWorkSnapshotRequest {
+      sourceMediaIds = sourceMediaIds == null ? List.of() : List.copyOf(sourceMediaIds);
+      if (sourceMediaIds.stream().distinct().count() != sourceMediaIds.size()) {
+        throw new IllegalArgumentException("Work source media identities must be unique");
+      }
+    }
+
+    public TaskWorkSnapshotRequest(
+        UUID id,
+        String name,
+        double quantity,
+        String unit,
+        Integer durationMinutes,
+        String comment) {
+      this(id, name, quantity, unit, durationMinutes, comment, List.of());
+    }
+  }
 
   public record TaskCommentSnapshotRequest(
       @NotNull UUID id,

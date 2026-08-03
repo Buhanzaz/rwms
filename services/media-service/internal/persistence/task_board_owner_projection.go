@@ -467,6 +467,51 @@ func RequireTaskBoardEntryWorkerAccess(ctx context.Context, database queryer, en
 	return nil
 }
 
+// RequireTaskBoardEntryUserReadAccess authorizes a warehouse reader to inspect
+// a task-board entry's acceptance evidence. Completion deactivates the worker
+// proof, but it does not revoke this read-only acceptance scope: the entry
+// proof itself must still be current, warehouse-scoped and non-quarantined.
+// The proof and binding rows remain share-locked for the caller's complete
+// metadata or content callback so a concurrent proof replacement cannot race
+// a source-reference read.
+func RequireTaskBoardEntryUserReadAccess(ctx context.Context, database queryer, entryID, warehouseID uuid.UUID) error {
+	if entryID == uuid.Nil || warehouseID == uuid.Nil {
+		return ErrOwnerProofMissing
+	}
+	var found string
+	err := database.QueryRow(ctx, `select binding.owner_id
+		from media_owner_binding binding
+		join media_task_board_entry_owner_proof proof
+		  on proof.entry_id=binding.proof_aggregate_id
+		 and proof.warehouse_id=binding.warehouse_id
+		 and proof.aggregate_version=binding.proof_aggregate_version
+		 and proof.proof_event_id=binding.proof_event_id
+		 and not proof.quarantined
+		join media_consumer_aggregate_checkpoint checkpoint
+		  on checkpoint.consumer_name=binding.proof_consumer_name
+		 and checkpoint.aggregate_type=binding.proof_aggregate_type
+		 and checkpoint.aggregate_id=binding.proof_aggregate_id
+		 and checkpoint.aggregate_version>=binding.proof_aggregate_version
+		where binding.owner_type='TASK_BOARD_ENTRY' and binding.owner_id=$1
+		  and binding.warehouse_id=$2
+		  and binding.proof_consumer_name=$3
+		  and binding.proof_aggregate_type=$4
+		  and not exists (select 1 from media_quarantined_aggregate quarantine
+		    where quarantine.consumer_name=binding.proof_consumer_name
+		      and quarantine.aggregate_type=binding.proof_aggregate_type
+		      and quarantine.aggregate_id=binding.proof_aggregate_id
+		      and quarantine.reconciled_at is null)
+		for share of binding,proof`, entryID.String(), warehouseID,
+		TaskBoardEntryOwnerProofConsumer, TaskBoardEntryOwnerProofAggregate).Scan(&found)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrOwnerProofMissing
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (repository *Repository) AuthorizeTaskBoardEntryWorker(ctx context.Context, entryID, warehouseID, workerID uuid.UUID) error {
 	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {

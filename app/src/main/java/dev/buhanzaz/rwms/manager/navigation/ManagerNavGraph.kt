@@ -527,10 +527,12 @@ private fun AuthenticatedManagerNavGraph(
                 },
                 onOpenCabinPhotos = viewModel::openAcceptanceCabinPhotos,
                 onOpenStagePhotos = viewModel::openAcceptanceStagePhotos,
+                onOpenWorkSourcePhotos = viewModel::openAcceptanceWorkSourcePhotos,
                 onCloseGallery = viewModel::closeAcceptanceGallery,
                 onAccept = { viewModel.acceptMaintenanceRepair {} },
-                onRework = { repairId ->
-                    viewModel.startReworkEditor(repairId) {
+                onAcceptWork = viewModel::acceptAcceptanceWork,
+                onReworkWork = { repairId, workLineId ->
+                    viewModel.startReworkEditorForLine(repairId, workLineId) {
                         navController.navigate(ManagerRoute.MaintenanceEditor.route) {
                             launchSingleTop = true
                         }

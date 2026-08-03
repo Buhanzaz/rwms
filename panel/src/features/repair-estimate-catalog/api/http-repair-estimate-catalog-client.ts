@@ -66,7 +66,7 @@ export const httpRepairEstimateCatalogClient: RepairEstimateCatalogClient = {
         furnitureEquipment: node.furnitureEquipment ?? null,
         forcesCapitalRepair: node.forcesCapitalRepair,
         characteristic: node.characteristic,
-        comment: node.comment,
+        comment: node.nodeType === "MATERIAL" ? null : node.comment,
       })),
       links: links.map((link) => ({
         id: link.id,

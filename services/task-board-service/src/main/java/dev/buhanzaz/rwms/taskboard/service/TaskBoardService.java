@@ -22,6 +22,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -1361,7 +1362,7 @@ public class TaskBoardService {
       setFingerprintValue(item, "queueDefinitionId", step.queueDefinitionId());
       setFingerprintValue(item, "taskText", trim(step.taskText()));
       setFingerprintValue(item, "plannedDurationMinutes", step.plannedDurationMinutes());
-      setFingerprintValue(item, "works", step.works());
+      item.set("works", fingerprintWorks(step.works()));
       setFingerprintValue(item, "materials", step.materials());
       setFingerprintValue(item, "comments", step.comments());
       setFingerprintValue(item, "sourceMedia", step.sourceMedia());
@@ -1388,7 +1389,12 @@ public class TaskBoardService {
       setFingerprintValue(item, "queueDefinitionId", entry.getQueue().getDefinition().getId());
       setFingerprintValue(item, "taskText", entry.getTaskText());
       setFingerprintValue(item, "plannedDurationMinutes", entry.getPlannedDurationMinutes());
-      item.set("works", readJson(entry.getWorkerWorks()));
+      item.set(
+          "works",
+          fingerprintWorks(
+              readList(
+                  entry.getWorkerWorks(),
+                  new TypeReference<List<TaskWorkSnapshotRequest>>() {})));
       item.set("materials", readJson(entry.getWorkerMaterials()));
       item.set("comments", readJson(entry.getWorkerComments()));
       item.set("sourceMedia", readJson(entry.getSourceMediaReferences()));
@@ -1423,6 +1429,23 @@ public class TaskBoardService {
 
   private void setFingerprintValue(ObjectNode object, String name, Object value) {
     object.set(name, objectMapper.valueToTree(value));
+  }
+
+  private ArrayNode fingerprintWorks(List<TaskWorkSnapshotRequest> works) {
+    ArrayNode result = objectMapper.createArrayNode();
+    for (TaskWorkSnapshotRequest work : works) {
+      ObjectNode value = result.addObject();
+      setFingerprintValue(value, "id", work.id());
+      setFingerprintValue(value, "name", work.name());
+      setFingerprintValue(value, "quantity", work.quantity());
+      setFingerprintValue(value, "unit", work.unit());
+      setFingerprintValue(value, "durationMinutes", work.durationMinutes());
+      setFingerprintValue(value, "comment", work.comment());
+      if (!work.sourceMediaIds().isEmpty()) {
+        setFingerprintValue(value, "sourceMediaIds", work.sourceMediaIds());
+      }
+    }
+    return result;
   }
 
   private Long deadlineEpochMicros(OffsetDateTime deadlineAt) {
@@ -1526,6 +1549,7 @@ public class TaskBoardService {
     Set<UUID> queueIds = new LinkedHashSet<>();
     List<ResolvedRouteStep> result = new ArrayList<>();
     for (RouteStepRequest step : requestedRoute) {
+      validateWorkSourceMedia(step);
       WorkQueue queue = resolveRouteQueue(warehouseId, step);
       if (!allowRepeatedQueues && !queueIds.add(queue.getId())) {
         throw new ConflictException("Маршрут содержит повторяющуюся очередь: " + queue.getName());
@@ -1533,6 +1557,25 @@ public class TaskBoardService {
       result.add(new ResolvedRouteStep(step, queue));
     }
     return result;
+  }
+
+  private static void validateWorkSourceMedia(RouteStepRequest step) {
+    Set<UUID> available = step.sourceMedia().stream()
+        .map(TaskSourceMediaSnapshotRequest::mediaId)
+        .collect(java.util.stream.Collectors.toSet());
+    Set<UUID> assigned = new HashSet<>();
+    for (TaskWorkSnapshotRequest work : step.works()) {
+      for (UUID mediaId : work.sourceMediaIds()) {
+        if (!available.contains(mediaId)) {
+          throw new ConflictException(
+              "Фотография работы отсутствует в исходных материалах этапа");
+        }
+        if (!assigned.add(mediaId)) {
+          throw new ConflictException(
+              "Одна исходная фотография не может принадлежать двум работам");
+        }
+      }
+    }
   }
 
   private void requireRoutePurpose(

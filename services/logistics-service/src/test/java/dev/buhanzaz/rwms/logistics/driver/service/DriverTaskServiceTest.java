@@ -52,7 +52,7 @@ class DriverTaskServiceTest {
         .acquireTransactionLock(
             "driver-task:create:REPAIR_PLACE:" + repairId + ":REMOVE_FROM_REPAIR");
     verify(tasks, never())
-        .findBySourceTypeAndSourceIdAndKind(
+        .findActiveBySourceTypeAndSourceIdAndKind(
             DriverTaskSourceType.REPAIR_PLACE, repairId, DriverTaskKind.REMOVE_FROM_REPAIR);
     verifyNoInteractions(dependencies);
   }
@@ -67,7 +67,7 @@ class DriverTaskServiceTest {
 
     when(tasks.findByCreatedBySubjectIdAndIdempotencyKey(any(), any()))
         .thenReturn(Optional.empty());
-    when(tasks.findBySourceTypeAndSourceIdAndKind(
+    when(tasks.findActiveBySourceTypeAndSourceIdAndKind(
             DriverTaskSourceType.REPAIR_PLACE, repairId, DriverTaskKind.REMOVE_FROM_REPAIR))
         .thenReturn(Optional.of(existing));
     when(mapper.toResponse(existing)).thenReturn(response);

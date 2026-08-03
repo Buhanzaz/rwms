@@ -5,6 +5,7 @@ import {
   moveDriverBoardTask,
   pinDriverBoardTask,
   promoteCapitalRepair,
+  returnCapitalRepair,
 } from "@/features/logistics/driver-board/driver-board-api"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 
@@ -116,6 +117,29 @@ describe("driver board API", () => {
     )
     expect(JSON.parse(String(init?.body))).toEqual({
       warehouseId: WAREHOUSE_ID,
+    })
+  })
+
+  it("returns an unfinished capital movement through its logistics workflow", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 204 }))
+
+    await returnCapitalRepair({
+      accessToken: "driver-token",
+      externalTaskId: EXTERNAL_TASK_ID,
+      warehouseId: WAREHOUSE_ID,
+      expectedTaskVersion: 7,
+    })
+
+    const [input, init] = fetchMock.mock.calls[0]!
+    expect(String(input)).toBe(
+      `${getGatewayRuntimeConfig().logisticsApiBaseUrl}/v1/driver-board/tasks/${EXTERNAL_TASK_ID}/return-to-capital-repairs`
+    )
+    expect(init?.method).toBe("POST")
+    expect(JSON.parse(String(init?.body))).toEqual({
+      warehouseId: WAREHOUSE_ID,
+      expectedTaskVersion: 7,
     })
   })
 

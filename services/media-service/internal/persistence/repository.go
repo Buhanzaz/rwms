@@ -941,6 +941,15 @@ func (repository *Repository) ReadOwnerAssets(
 	if ownerType == OwnerTypeCabin {
 		records, err = readCabinPhotoAssets(ctx, tx, ownerID, warehouseID, limit, after,
 			repository.now)
+	} else if ownerType == OwnerTypeTaskBoardEntry {
+		entryID, parseErr := uuid.Parse(ownerID)
+		if parseErr != nil || entryID == uuid.Nil {
+			return ErrConflict
+		}
+		if err := RequireTaskBoardEntryUserReadAccess(ctx, tx, entryID, warehouseID); err != nil {
+			return err
+		}
+		records, err = readTaskBoardEntryAssetsForUser(ctx, tx, entryID, warehouseID, limit, after)
 	} else {
 		records, err = readOwnerAssets(ctx, tx, ownerType, ownerID, warehouseID, limit, after,
 			repository.now)
@@ -986,6 +995,156 @@ func (repository *Repository) ReadTaskBoardEntryAssetsForWorker(
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// readTaskBoardEntryAssetsForUser projects the acceptance scope of one
+// task-board entry. Result assets belong directly to the entry; source assets
+// are admitted only through the exact, immutable generation listed in the
+// current task-board proof. The caller must hold
+// RequireTaskBoardEntryUserReadAccess for the full callback transaction.
+func readTaskBoardEntryAssetsForUser(
+	ctx context.Context,
+	tx pgx.Tx,
+	entryID, warehouseID uuid.UUID,
+	limit int,
+	after *uuid.UUID,
+) ([]AssetWithVariants, error) {
+	if limit < 1 || limit > 100 {
+		return nil, ErrConflict
+	}
+	var cursorKind int
+	var cursorSort int64
+	var cursorCreated time.Time
+	var cursorID uuid.UUID
+	if after != nil {
+		err := tx.QueryRow(ctx, `with candidate_assets as (
+			select a.media_id,a.media_kind,a.sort_order,a.created_at,a.current_generation as exposed_generation,
+				false as source_reference
+			from media_asset a
+			where a.owner_type='TASK_BOARD_ENTRY' and a.owner_id=$1 and a.warehouse_id=$2
+			  and a.deleted_at is null and media_asset_is_available(a.media_id)
+			union all
+			select a.media_id,a.media_kind,a.sort_order,a.created_at,source.generation as exposed_generation,
+				true as source_reference
+			from media_task_board_entry_source_media_reference source
+			join media_asset a on a.media_id=source.media_id
+			where source.entry_id=$3 and a.warehouse_id=$2
+			  and a.deleted_at is null and media_asset_is_available(a.media_id)
+		), deduplicated_assets as (
+			select distinct on (candidate.media_id) candidate.*
+			from candidate_assets candidate
+			order by candidate.media_id,candidate.source_reference,candidate.exposed_generation
+		)
+		select case when media_kind='IMAGE' then 0 else 1 end,sort_order,created_at,media_id
+		from deduplicated_assets where media_id=$4`, entryID.String(), warehouseID, entryID, *after).
+			Scan(&cursorKind, &cursorSort, &cursorCreated, &cursorID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrConflict
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	rows, err := tx.Query(ctx, `/* media_task_board_user_acceptance_read */
+		with candidate_assets as (
+			select a.media_id,a.folder_id,a.owner_type,a.owner_id,a.warehouse_id,a.media_kind,
+				a.original_file_name,a.original_content_type,a.source_object_key,
+				coalesce(a.source_version_id,'') as source_version_id,
+				coalesce(a.source_etag,'') as source_etag,
+				coalesce(a.source_checksum_sha256,'') as source_checksum_sha256,
+				a.processing_status,a.version,a.current_generation as exposed_generation,a.rotation_degrees,
+				a.sort_order,a.size_bytes,a.created_at,false as source_reference,false as pinned_ready
+			from media_asset a
+			where a.owner_type='TASK_BOARD_ENTRY' and a.owner_id=$1 and a.warehouse_id=$2
+			  and a.deleted_at is null and media_asset_is_available(a.media_id)
+			union all
+			select a.media_id,a.folder_id,a.owner_type,a.owner_id,a.warehouse_id,a.media_kind,
+				a.original_file_name,a.original_content_type,a.source_object_key,
+				coalesce(a.source_version_id,''),coalesce(a.source_etag,''),coalesce(a.source_checksum_sha256,''),
+				a.processing_status,a.version,source.generation as exposed_generation,a.rotation_degrees,
+				a.sort_order,a.size_bytes,a.created_at,true as source_reference,
+				exists(select 1 from media_variant pinned
+					where pinned.media_id=a.media_id and pinned.generation=source.generation) as pinned_ready
+			from media_task_board_entry_source_media_reference source
+			join media_asset a on a.media_id=source.media_id
+			where source.entry_id=$3 and a.warehouse_id=$2
+			  and a.deleted_at is null and media_asset_is_available(a.media_id)
+		), deduplicated_assets as (
+			select distinct on (candidate.media_id) candidate.*
+			from candidate_assets candidate
+			order by candidate.media_id,candidate.source_reference,candidate.exposed_generation
+		), authorized_assets as materialized (
+			select * from deduplicated_assets a
+			where ($4::uuid is null or (
+				case when a.media_kind='IMAGE' then 0 else 1 end,
+				a.sort_order,a.created_at,a.media_id
+			) > ($5::integer,$6::bigint,$7::timestamptz,$4::uuid))
+			order by case when a.media_kind='IMAGE' then 0 else 1 end,a.sort_order,a.created_at,a.media_id
+			limit $8
+		)
+		select a.media_id,a.folder_id,a.owner_type,a.owner_id,a.warehouse_id,a.media_kind,
+			a.original_file_name,a.original_content_type,a.source_object_key,
+			a.source_version_id,a.source_etag,a.source_checksum_sha256,
+			a.processing_status,a.version,a.exposed_generation,a.rotation_degrees,
+			a.sort_order,a.size_bytes,a.created_at,a.source_reference,a.pinned_ready,
+			(variant.media_id is not null),coalesce(variant.variant,''),
+			coalesce(variant.object_key,''),coalesce(variant.object_version_id,''),
+			coalesce(variant.content_type,''),coalesce(variant.size_bytes,0),
+			variant.width,variant.height,coalesce(variant.checksum_sha256,'')
+		from authorized_assets a
+		left join media_variant variant on variant.media_id=a.media_id
+		 and variant.generation=a.exposed_generation and variant.variant<>'ORIGINAL'
+		 and (a.source_reference or a.processing_status='READY')
+		order by case when a.media_kind='IMAGE' then 0 else 1 end,a.sort_order,a.created_at,
+			a.media_id,variant.variant`, entryID.String(), warehouseID, entryID, after,
+		cursorKind, cursorSort, cursorCreated, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []AssetWithVariants
+	byID := make(map[uuid.UUID]int)
+	for rows.Next() {
+		var asset AssetRecord
+		var sourceReference bool
+		var pinnedReady bool
+		var hasVariant bool
+		var variant VariantRecord
+		var variantName string
+		if err := rows.Scan(&asset.ID, &asset.FolderID, &asset.OwnerType, &asset.OwnerID, &asset.WarehouseID,
+			&asset.Kind, &asset.FileName, &asset.ContentType, &asset.SourceObjectKey,
+			&asset.SourceVersionID, &asset.SourceETag, &asset.SourceChecksum, &asset.Status,
+			&asset.Version, &asset.Generation, &asset.Rotation, &asset.SortOrder,
+			&asset.SizeBytes, &asset.CreatedAt, &sourceReference, &pinnedReady,
+			&hasVariant, &variantName, &variant.ObjectKey, &variant.ObjectVersionID,
+			&variant.ContentType, &variant.SizeBytes, &variant.Width, &variant.Height,
+			&variant.Checksum); err != nil {
+			return nil, err
+		}
+		if sourceReference {
+			if pinnedReady {
+				asset.Status = media.StatusReady
+			} else {
+				asset.Status = media.StatusProcessing
+			}
+		}
+		index, exists := byID[asset.ID]
+		if !exists {
+			index = len(records)
+			byID[asset.ID] = index
+			records = append(records, AssetWithVariants{Asset: asset})
+		}
+		if hasVariant {
+			variant.Variant = media.Variant(variantName)
+			records[index].Variants = append(records[index].Variants, variant)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return records, nil
 }
 
 func readOwnerAssets(
@@ -1317,16 +1476,26 @@ func (repository *Repository) GetAssetScoped(ctx context.Context, mediaID uuid.U
 }
 
 // ReadOriginal fetches asset metadata and the exact current-generation
-// original with one authorization-bearing SQL statement.
+// original with one authorization-bearing SQL statement. TASK_BOARD_ENTRY
+// source reads additionally require the proof-pinned generation supplied by
+// the public handler.
 func (repository *Repository) ReadOriginal(
 	ctx context.Context,
 	mediaID uuid.UUID,
 	ownerType, ownerID string,
 	warehouseID uuid.UUID,
+	generation *int,
 	consume func(AssetRecord, *VariantRecord) error,
 ) error {
 	if consume == nil {
 		return ErrConflict
+	}
+	if ownerType == OwnerTypeTaskBoardEntry {
+		entryID, err := uuid.Parse(ownerID)
+		if err != nil || entryID == uuid.Nil || (generation != nil && *generation <= 0) {
+			return ErrConflict
+		}
+		return repository.readTaskBoardEntryOriginalForUser(ctx, entryID, warehouseID, mediaID, generation, consume)
 	}
 	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
@@ -1389,8 +1558,45 @@ func (repository *Repository) ReadOriginal(
 	return tx.Commit(ctx)
 }
 
+// readTaskBoardEntryOriginalForUser admits a warehouse reader to one direct
+// result asset or one exact source generation retained by the entry proof. A
+// source never falls back to its own current generation.
+func (repository *Repository) readTaskBoardEntryOriginalForUser(
+	ctx context.Context,
+	entryID, warehouseID, mediaID uuid.UUID,
+	generation *int,
+	consume func(AssetRecord, *VariantRecord) error,
+) error {
+	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := RequireTaskBoardEntryUserReadAccess(ctx, tx, entryID, warehouseID); err != nil {
+		return err
+	}
+	asset, original, found, err := readTaskBoardResultOriginal(ctx, tx, entryID, warehouseID, mediaID, generation)
+	if err != nil {
+		return err
+	}
+	if !found && generation != nil {
+		asset, original, found, err = readTaskBoardSourceOriginal(ctx, tx, entryID, warehouseID, mediaID, *generation)
+		if err != nil {
+			return err
+		}
+	}
+	if !found {
+		return ErrNotFound
+	}
+	if err := consume(asset, original); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // ReadCurrentVariant selects one exact derived variant only when the requested
-// generation is still current. Owner mismatch, revoked proof and stale
+// generation is still current, except for a TASK_BOARD_ENTRY source generation
+// pinned by its authoritative proof. Owner mismatch, revoked proof and stale
 // generation remain indistinguishable from an absent media resource.
 func (repository *Repository) ReadCurrentVariant(
 	ctx context.Context,
@@ -1415,6 +1621,14 @@ func (repository *Repository) ReadCurrentVariant(
 			return ErrConflict
 		}
 		return repository.ReadCabinPhotoVariant(ctx, cabinID, warehouseID, mediaID,
+			generation, requestedVariant, consume)
+	}
+	if ownerType == OwnerTypeTaskBoardEntry {
+		entryID, err := uuid.Parse(ownerID)
+		if err != nil || entryID == uuid.Nil {
+			return ErrConflict
+		}
+		return repository.readTaskBoardEntryVariantForUser(ctx, entryID, warehouseID, mediaID,
 			generation, requestedVariant, consume)
 	}
 	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
@@ -1474,6 +1688,45 @@ func (repository *Repository) ReadCurrentVariant(
 		selected = &variant
 	}
 	if err := consume(asset, selected); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// readTaskBoardEntryVariantForUser keeps the completed entry proof locked
+// while it selects either a current result variant or the exact historical
+// source generation cited by that proof.
+func (repository *Repository) readTaskBoardEntryVariantForUser(
+	ctx context.Context,
+	entryID, warehouseID, mediaID uuid.UUID,
+	generation int,
+	requestedVariant media.Variant,
+	consume func(AssetRecord, *VariantRecord) error,
+) error {
+	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := RequireTaskBoardEntryUserReadAccess(ctx, tx, entryID, warehouseID); err != nil {
+		return err
+	}
+	asset, variant, found, err := readTaskBoardResultVariant(ctx, tx, entryID, warehouseID, mediaID,
+		generation, requestedVariant)
+	if err != nil {
+		return err
+	}
+	if !found {
+		asset, variant, found, err = readTaskBoardSourceVariant(ctx, tx, entryID, warehouseID, mediaID,
+			generation, requestedVariant)
+		if err != nil {
+			return err
+		}
+	}
+	if !found {
+		return ErrNotFound
+	}
+	if err := consume(asset, variant); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

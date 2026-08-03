@@ -142,7 +142,7 @@ export function QueueOrderSettings({
         <Button
           type="button"
           disabled={pending}
-          onClick={() => void onSave(regular)}
+          onClick={() => void onSave([...regular, ...holding])}
         >
           {pending ? "Сохраняем…" : "Сохранить порядок"}
         </Button>
