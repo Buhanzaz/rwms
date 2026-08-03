@@ -310,27 +310,25 @@ export function TaskBoardSettingsPage() {
   const allClasses = classesQuery.data ?? []
   const allWorkers = workersQuery.data ?? []
   const allGroups = groupsQuery.data ?? []
-  const logisticsQueues = allQueues.filter(
-    (queue) => queue.purpose === "LOGISTICS_DRIVER"
-  )
-  const driverClassIds = new Set(
-    logisticsQueues.flatMap((queue) =>
-      queue.bindings
-        .filter(
-          (binding) =>
-            binding.primary || binding.participationPolicy === "PRIMARY"
-        )
-        .map((binding) => binding.workerClass.id)
-    )
-  )
   const queueDefinitions = allQueueDefinitions.filter(
     (definition) => definition.purpose === "GENERAL"
   )
-  const queues = allQueues.filter((queue) => queue.purpose === "GENERAL")
-  const classes = allClasses.filter((item) => !driverClassIds.has(item.id))
-  const workers = allWorkers
+  const queues = allQueues
+    .filter((queue) => queue.purpose === "GENERAL")
+    .sort(
+      (left, right) =>
+        left.sortOrder - right.sortOrder || left.name.localeCompare(right.name)
+    )
+  const classes = allClasses.filter((item) => !item.logisticsPrimary)
+  const workers = allWorkers.filter(
+    (worker) =>
+      !worker.qualifications.some(
+        (qualification) =>
+          qualification.active && qualification.workerClass.logisticsPrimary
+      )
+  )
   const groups = allGroups.filter(
-    (group) => !driverClassIds.has(group.workerClass.id)
+    (group) => !group.workerClass.logisticsPrimary
   )
   const actions = (edit: () => void, remove: () => void) => (
     <div className="flex items-center gap-2">
@@ -366,7 +364,7 @@ export function TaskBoardSettingsPage() {
               target.item.id,
               target.item.version
             ),
-          "Очередь удалена."
+          "Очередь склада отключена."
         )
       case "class":
         return run(
@@ -473,7 +471,7 @@ export function TaskBoardSettingsPage() {
 
       {activeSection === "queue-definitions" ? (
         <section
-          aria-label="Общий каталог очередей"
+          aria-label="Каталог очередей"
           className="flex min-h-0 flex-1 flex-col gap-3"
         >
           {canManageGlobal ? (
@@ -552,35 +550,35 @@ export function TaskBoardSettingsPage() {
               {
                 id: "name",
                 label: "Название",
-                getSortValue: (q) => q.name,
-                render: (q) => q.name,
+                getSortValue: (queue) => queue.name,
+                render: (queue) => queue.name,
               },
               {
                 id: "type",
                 label: "Тип",
-                getSortValue: (q) => queueTypeLabels[q.type],
-                render: (q) => queueTypeLabels[q.type],
+                getSortValue: (queue) => queueTypeLabels[queue.type],
+                render: (queue) => queueTypeLabels[queue.type],
               },
               {
                 id: "classes",
                 label: "Классы",
-                getSortValue: (q) => q.bindings.length,
-                render: (q) => <QueueBindings queue={q} />,
+                getSortValue: (queue) => queue.bindings.length,
+                render: (queue) => <QueueBindings queue={queue} />,
               },
               {
                 id: "status",
                 label: "Статус",
-                getSortValue: (q) => (q.active ? 1 : 0),
-                render: (q) => <StatusBadge active={q.active} />,
+                getSortValue: (queue) => (queue.active ? 1 : 0),
+                render: (queue) => <StatusBadge active={queue.active} />,
               },
               {
                 id: "actions",
                 label: "Действия",
                 getSortValue: () => null,
-                render: (q) =>
+                render: (queue) =>
                   actions(
-                    () => setQueueEditor(q),
-                    () => setDeleteTarget({ kind: "queue", item: q })
+                    () => setQueueEditor(queue),
+                    () => setDeleteTarget({ kind: "queue", item: queue })
                   ),
               },
             ]}
@@ -591,13 +589,15 @@ export function TaskBoardSettingsPage() {
       {activeSection === "order" ? (
         <section aria-label="Порядок" className="flex min-h-0 flex-1">
           <QueueOrderSettings
-            key={queues.map((q) => `${q.id}:${q.version}`).join("|")}
+            key={queues
+              .map((queue) => `${queue.id}:${queue.version}`)
+              .join("|")}
             queues={queues}
             pending={mutation.isPending}
             onSave={async (ordered) => {
               if (!accessToken) return
               let generalQueueIndex = 0
-              const completeOrder = allQueues.map((queue) => {
+              const completeWarehouseOrder = allQueues.map((queue) => {
                 if (queue.purpose === "LOGISTICS_DRIVER") return queue
                 const reorderedQueue = ordered[generalQueueIndex]
                 generalQueueIndex += 1
@@ -608,12 +608,12 @@ export function TaskBoardSettingsPage() {
                   taskBoardSettingsClient.reorderQueues(
                     accessToken,
                     warehouseId,
-                    completeOrder.map((queue) => ({
+                    completeWarehouseOrder.map((queue) => ({
                       queueId: queue.id,
                       expectedVersion: queue.version,
                     }))
                   ),
-                "Порядок очередей сохранён."
+                "Порядок очередей склада сохранён."
               )
             }}
           />
@@ -816,9 +816,7 @@ export function TaskBoardSettingsPage() {
                 getSortValue: (item) => item.qualifications.length,
                 render: (item) =>
                   item.qualifications
-                    .filter(
-                      (q) => q.active && !driverClassIds.has(q.workerClass.id)
-                    )
+                    .filter((q) => q.active && !q.workerClass.logisticsPrimary)
                     .map((q) => q.workerClass.name)
                     .join(", ") || "—",
               },
@@ -1021,7 +1019,7 @@ export function TaskBoardSettingsPage() {
                       queueEditor.id,
                       request
                     ),
-              "Очередь сохранена.",
+              "Очередь склада сохранена.",
               queueEditor !== "new"
             )
           }}
@@ -1196,7 +1194,9 @@ export function TaskBoardSettingsPage() {
               ? "Рабочий больше не сможет входить в приложение. Профиль и история сохранятся."
               : deleteTarget.kind === "queue-definition"
                 ? "Используемое определение удалить нельзя: сервис вернёт конфликт, пока остаются складские подключения или ссылки каталога."
-                : "Если запись уже используется, API отклонит удаление и предложит деактивацию."
+                : deleteTarget.kind === "queue"
+                  ? "Очередь будет отключена только для выбранного склада. Общая очередь каталога и другие склады не изменятся."
+                  : "Если запись уже используется, API отклонит удаление и предложит деактивацию."
           }
           confirmLabel={
             deleteTarget.kind === "credentials" ? "Отключить" : "Удалить"

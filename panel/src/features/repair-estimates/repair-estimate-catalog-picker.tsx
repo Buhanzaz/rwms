@@ -42,6 +42,7 @@ import {
 import type { RepairEstimateCatalogNodeDto } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
 import {
   applyCatalogNodesToEstimateLines,
+  catalogEstimateLineDescription,
   getRepairEstimateCatalogQuantityError,
 } from "@/features/repair-estimates/domain/repair-estimate-domain"
 import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/repair-estimate"
@@ -52,7 +53,17 @@ type AddContext = {
   nodes: RepairEstimateCatalogNodeDto[]
   quantityNode: RepairEstimateCatalogNodeDto
   locationTitle: string | null
-  continuationNode: RepairEstimateCatalogNodeDto
+  targetWorkLineIdsByCatalogNodeId: Record<string, string | null>
+}
+
+type DuplicateCatalogWorkContext = {
+  addContext: Omit<AddContext, "targetWorkLineIdsByCatalogNodeId">
+  choices: Array<{
+    node: RepairEstimateCatalogNodeDto
+    existingLines: RepairEstimateLineDto[]
+  }>
+  choiceIndex: number
+  targetWorkLineIdsByCatalogNodeId: Record<string, string | null>
 }
 
 type CatalogBreadcrumb = {
@@ -78,6 +89,7 @@ export type RepairEstimateCatalogPager = {
 
 const CATALOG_PAGE_SIZE = 9
 const DISPLAY_COLOR_PATTERN = /^#[0-9A-Fa-f]{6}$/
+const COMMON_CATALOG_SECTION_NAME = "общее"
 
 function normalizedDisplayColor(value: string | null | undefined) {
   if (value === null || value === undefined) {
@@ -117,6 +129,32 @@ function catalogNodeColorStyle(
 
 function uniqueNodes(nodes: readonly RepairEstimateCatalogNodeDto[]) {
   return Array.from(new Map(nodes.map((node) => [node.id, node])).values())
+}
+
+function normalizedCatalogName(value: string) {
+  return value.trim().toLocaleLowerCase("ru")
+}
+
+function isCommonCatalogSection(node: RepairEstimateCatalogNodeDto) {
+  return (
+    node.nodeType === "CATEGORY" &&
+    normalizedCatalogName(node.name) === COMMON_CATALOG_SECTION_NAME
+  )
+}
+
+function commonCatalogEstimateNodes(
+  catalog: Pick<
+    ReturnType<typeof createRepairEstimateCatalogIndex>,
+    "operationalEstimateNodes"
+  >
+) {
+  return uniqueNodes(
+    catalog.operationalEstimateNodes.filter(
+      (node) =>
+        node.commonItem &&
+        (node.nodeType === "WORK" || node.nodeType === "MATERIAL")
+    )
+  )
 }
 
 /**
@@ -161,11 +199,14 @@ export function RepairEstimateCatalogPicker({
   )
   const [mode, setMode] = useState<CatalogMode>("LINKED_SET")
   const [path, setPath] = useState<string[]>([])
+  const [commonOpen, setCommonOpen] = useState(false)
   const [pendingWork, setPendingWork] =
     useState<RepairEstimateCatalogNodeDto | null>(null)
   const [pendingMaterial, setPendingMaterial] =
     useState<RepairEstimateCatalogNodeDto | null>(null)
   const [addContext, setAddContext] = useState<AddContext | null>(null)
+  const [duplicateWorkContext, setDuplicateWorkContext] =
+    useState<DuplicateCatalogWorkContext | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [page, setPage] = useState(0)
 
@@ -181,8 +222,11 @@ export function RepairEstimateCatalogPicker({
     [catalog, excludeFurniture]
   )
 
-  const currentNode =
-    path.length > 0 && catalog ? catalog.nodesById.get(path.at(-1)!) : null
+  const currentNodeId = path.length > 0 ? path[path.length - 1] : null
+  const currentNode: RepairEstimateCatalogNodeDto | null =
+    currentNodeId && catalog
+      ? (catalog.nodesById.get(currentNodeId) ?? null)
+      : null
 
   const visibleNodes = useMemo(() => {
     if (!catalog) {
@@ -205,11 +249,29 @@ export function RepairEstimateCatalogPicker({
       ).filter((node) => node.nodeType === "MATERIAL" && node.active)
     }
 
-    const candidates = currentNode
-      ? catalogNavigationNodes(catalog, currentNode)
-      : [...catalog.operationalMenuNodes]
+    const currentCommonSection =
+      currentNode !== null && isCommonCatalogSection(currentNode)
+    const candidates =
+      commonOpen || currentCommonSection
+        ? commonCatalogEstimateNodes(catalog)
+        : uniqueNodes(
+            currentNode
+              ? catalogNavigationNodes(catalog, currentNode)
+              : [...catalog.operationalMenuNodes]
+          ).filter(
+            (node) => !node.commonItem && !isCommonCatalogSection(node)
+          )
 
     return filterForUsage(candidates).filter((node) => {
+      if (commonOpen || currentCommonSection) {
+        if (mode === "WORKS_ONLY") {
+          return node.nodeType === "WORK"
+        }
+        if (mode === "MATERIALS_ONLY") {
+          return node.nodeType === "MATERIAL"
+        }
+        return node.nodeType === "WORK" || node.nodeType === "MATERIAL"
+      }
       if (mode === "WORKS_ONLY") {
         return node.nodeType !== "MATERIAL"
       }
@@ -223,7 +285,23 @@ export function RepairEstimateCatalogPicker({
       }
       return true
     })
-  }, [catalog, currentNode, filterForUsage, mode, pendingMaterial, pendingWork])
+  }, [
+    catalog,
+    commonOpen,
+    currentNode,
+    filterForUsage,
+    mode,
+    pendingMaterial,
+    pendingWork,
+  ])
+
+  const commonNodesAvailable = useMemo(
+    () =>
+      catalog
+        ? filterForUsage(commonCatalogEstimateNodes(catalog)).length > 0
+        : false,
+    [catalog, filterForUsage]
+  )
 
   const breadcrumbs: CatalogBreadcrumb[] = [
     {
@@ -272,8 +350,31 @@ export function RepairEstimateCatalogPicker({
   function resetNavigation(nextMode = mode) {
     setMode(nextMode)
     setPath([])
+    setCommonOpen(false)
     setPendingWork(null)
     setPendingMaterial(null)
+    setAddContext(null)
+    setDuplicateWorkContext(null)
+    setMessage(null)
+    setPage(0)
+  }
+
+  function changeMode(nextMode: CatalogMode) {
+    const preserveCommon = commonOpen
+    resetNavigation(nextMode)
+    if (preserveCommon) {
+      setCommonOpen(true)
+    }
+  }
+
+  function openCommonCatalog() {
+    setMode("WORKS_ONLY")
+    setPath([])
+    setCommonOpen(true)
+    setPendingWork(null)
+    setPendingMaterial(null)
+    setAddContext(null)
+    setDuplicateWorkContext(null)
     setMessage(null)
     setPage(0)
   }
@@ -281,22 +382,85 @@ export function RepairEstimateCatalogPicker({
   function openAdd(
     nodes: RepairEstimateCatalogNodeDto[],
     quantityNode: RepairEstimateCatalogNodeDto,
-    continuationNode: RepairEstimateCatalogNodeDto,
     locationTitle: string | null = null
   ) {
-    setAddContext({ nodes, quantityNode, continuationNode, locationTitle })
+    const addContext = { nodes, quantityNode, locationTitle }
+    const choices = uniqueNodes(
+      nodes.filter((node) => node.nodeType === "WORK")
+    )
+      .map((node) => {
+        const description = catalogEstimateLineDescription(node, locationTitle)
+        return {
+          node,
+          existingLines: lines.filter(
+            (line) =>
+              line.lineType === "WORK" &&
+              line.catalogSnapshot?.nodeId === node.id &&
+              line.description.trim() === description.trim()
+          ),
+        }
+      })
+      .filter((choice) => choice.existingLines.length > 0)
+
+    setAddContext(null)
+    if (choices.length > 0) {
+      setDuplicateWorkContext({
+        addContext,
+        choices,
+        choiceIndex: 0,
+        targetWorkLineIdsByCatalogNodeId: {},
+      })
+      return
+    }
+    setDuplicateWorkContext(null)
+    setAddContext({ ...addContext, targetWorkLineIdsByCatalogNodeId: {} })
+  }
+
+  function chooseDuplicateWork(targetWorkLineId: string | null) {
+    if (!duplicateWorkContext) {
+      return
+    }
+    const choice =
+      duplicateWorkContext.choices[duplicateWorkContext.choiceIndex]
+    if (!choice) {
+      setDuplicateWorkContext(null)
+      return
+    }
+
+    const targetWorkLineIdsByCatalogNodeId = {
+      ...duplicateWorkContext.targetWorkLineIdsByCatalogNodeId,
+      [choice.node.id]: targetWorkLineId,
+    }
+    const nextChoiceIndex = duplicateWorkContext.choiceIndex + 1
+    if (nextChoiceIndex < duplicateWorkContext.choices.length) {
+      setDuplicateWorkContext({
+        ...duplicateWorkContext,
+        choiceIndex: nextChoiceIndex,
+        targetWorkLineIdsByCatalogNodeId,
+      })
+      return
+    }
+
+    setDuplicateWorkContext(null)
+    setAddContext({
+      ...duplicateWorkContext.addContext,
+      targetWorkLineIdsByCatalogNodeId,
+    })
   }
 
   function navigateInto(node: RepairEstimateCatalogNodeDto) {
     setPath((current) => [...current, node.id])
+    setCommonOpen(false)
     setMessage(null)
     setPage(0)
   }
 
   function navigateToBreadcrumb(pathLength: number) {
     setPath((current) => current.slice(0, pathLength))
+    setCommonOpen(false)
     setPendingWork(null)
     setPendingMaterial(null)
+    setDuplicateWorkContext(null)
     setMessage(null)
     setPage(0)
   }
@@ -305,7 +469,12 @@ export function RepairEstimateCatalogPicker({
     if (!catalog) {
       return false
     }
-    return filterForUsage(catalogNavigationNodes(catalog, node)).length > 0
+    const nodes = isCommonCatalogSection(node)
+      ? commonCatalogEstimateNodes(catalog)
+      : catalogNavigationNodes(catalog, node).filter(
+          (candidate) => !candidate.commonItem
+        )
+    return filterForUsage(nodes).length > 0
   }
 
   function nodeActionLabel(node: RepairEstimateCatalogNodeDto) {
@@ -348,7 +517,7 @@ export function RepairEstimateCatalogPicker({
         setMessage("Расположение выбирается после связанного материала")
         return
       }
-      openAdd([pendingWork, pendingMaterial], pendingMaterial, node, node.name)
+      openAdd([pendingWork, pendingMaterial], pendingMaterial, node.name)
       return
     }
 
@@ -368,7 +537,7 @@ export function RepairEstimateCatalogPicker({
         setPendingWork(node)
         return
       }
-      openAdd([node], node, node)
+      openAdd([node], node)
       return
     }
 
@@ -383,7 +552,7 @@ export function RepairEstimateCatalogPicker({
           setPendingMaterial(node)
           return
         }
-        openAdd([pendingWork, node], node, node)
+        openAdd([pendingWork, node], node)
         return
       }
 
@@ -393,7 +562,7 @@ export function RepairEstimateCatalogPicker({
               (related) => related.nodeType === "WORK" && related.active
             )
           : []
-      openAdd([...linkedWorks, node], node, node)
+      openAdd([...linkedWorks, node], node)
       return
     }
 
@@ -426,22 +595,18 @@ export function RepairEstimateCatalogPicker({
         quantity,
         comment,
         locationTitle: addContext.locationTitle,
+        targetWorkLineIdsByCatalogNodeId:
+          addContext.targetWorkLineIdsByCatalogNodeId,
       })
     )
-    const outgoingNodes = filterForUsage(
-      uniqueNodes([
-        ...catalog.getFollowUpNodes(addContext.continuationNode.id),
-        ...catalog.getDependencyNodes(addContext.continuationNode.id),
-      ])
-    )
     setAddContext(null)
+    setDuplicateWorkContext(null)
     setPendingWork(null)
     setPendingMaterial(null)
+    setPath([])
+    setCommonOpen(false)
     setMessage("Позиция добавлена в смету")
     setPage(0)
-    if (outgoingNodes.length > 0) {
-      setPath((current) => [...current, addContext.continuationNode.id])
-    }
   }
 
   if (readOnly) {
@@ -454,7 +619,7 @@ export function RepairEstimateCatalogPicker({
         <FieldLabel htmlFor="estimate-catalog-mode">Состав</FieldLabel>
         <Select
           value={mode}
-          onValueChange={(value) => resetNavigation(value as CatalogMode)}
+          onValueChange={(value) => changeMode(value as CatalogMode)}
         >
           <SelectTrigger
             id="estimate-catalog-mode"
@@ -473,11 +638,49 @@ export function RepairEstimateCatalogPicker({
         </Select>
       </Field>
 
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          variant={commonOpen ? "default" : "outline"}
+          disabled={!commonNodesAvailable}
+          onClick={openCommonCatalog}
+        >
+          Добавить общее
+        </Button>
+        {commonOpen ? (
+          <div
+            role="group"
+            aria-label="Тип общих позиций"
+            className="flex flex-wrap items-center gap-1"
+          >
+            <Button
+              type="button"
+              variant={mode === "MATERIALS_ONLY" ? "outline" : "default"}
+              size="sm"
+              onClick={() => changeMode("WORKS_ONLY")}
+            >
+              Работы
+            </Button>
+            <Button
+              type="button"
+              variant={mode === "MATERIALS_ONLY" ? "default" : "outline"}
+              size="sm"
+              onClick={() => changeMode("MATERIALS_ONLY")}
+            >
+              Материалы
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              Показываются только позиции, отмеченные как общие.
+            </span>
+          </div>
+        ) : null}
+      </div>
+
       <nav
         aria-label="Путь по каталогу"
         className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground"
       >
-        {path.length > 0 || pendingWork ? (
+        {path.length > 0 || pendingWork || commonOpen ? (
           <>
             <Button
               type="button"
@@ -498,6 +701,8 @@ export function RepairEstimateCatalogPicker({
                   setPendingMaterial(null)
                 } else if (pendingWork) {
                   setPendingWork(null)
+                } else if (commonOpen) {
+                  setCommonOpen(false)
                 } else {
                   setPath((current) => current.slice(0, -1))
                 }
@@ -522,6 +727,14 @@ export function RepairEstimateCatalogPicker({
             </Button>
           </span>
         ))}
+        {commonOpen ? (
+          <span className="flex items-center gap-1">
+            <span aria-hidden="true">/</span>
+            <Button type="button" variant="link" size="xs">
+              Общее
+            </Button>
+          </span>
+        ) : null}
         {pendingWork ? (
           <span className="flex items-center gap-1">
             <span aria-hidden="true">/</span>
@@ -606,6 +819,16 @@ export function RepairEstimateCatalogPicker({
         </div>
       )}
 
+      <DuplicateCatalogWorkDialog
+        context={duplicateWorkContext}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDuplicateWorkContext(null)
+          }
+        }}
+        onChoose={chooseDuplicateWork}
+      />
+
       <CatalogAddDialog
         key={addContext?.quantityNode.id ?? "closed"}
         context={addContext}
@@ -613,6 +836,73 @@ export function RepairEstimateCatalogPicker({
         onConfirm={finishAdd}
       />
     </section>
+  )
+}
+
+function DuplicateCatalogWorkDialog({
+  context,
+  onOpenChange,
+  onChoose,
+}: {
+  context: DuplicateCatalogWorkContext | null
+  onOpenChange: (open: boolean) => void
+  onChoose: (targetWorkLineId: string | null) => void
+}) {
+  const choice = context?.choices[context.choiceIndex] ?? null
+  return (
+    <Dialog open={context !== null} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Работа уже добавлена в смету</DialogTitle>
+          <DialogDescription>
+            {choice
+              ? `«${choice.node.name}» уже есть в смете. Выберите существующую работу или создайте отдельную.`
+              : "Выберите, как добавить работу."}
+          </DialogDescription>
+        </DialogHeader>
+
+        {choice ? (
+          <div
+            role="list"
+            aria-label="Существующие работы"
+            className="flex flex-col gap-2"
+          >
+            {choice.existingLines.map((line, index) => (
+              <Button
+                key={line.id}
+                type="button"
+                variant="outline"
+                className="h-auto justify-start py-3 text-left whitespace-normal"
+                aria-label={`Добавить к работе ${index + 1}: ${line.description}`}
+                onClick={() => onChoose(line.id)}
+              >
+                <span className="flex min-w-0 flex-col items-start gap-1">
+                  <span>{line.description}</span>
+                  {line.lineComment.trim() ? (
+                    <span className="text-xs text-muted-foreground">
+                      {line.lineComment}
+                    </span>
+                  ) : null}
+                </span>
+              </Button>
+            ))}
+          </div>
+        ) : null}
+
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+          >
+            Отмена
+          </Button>
+          <Button type="button" onClick={() => onChoose(null)}>
+            Создать отдельную работу
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -631,6 +921,7 @@ function CatalogAddDialog({
     ? getRepairEstimateCatalogQuantityError(context.quantityNode, quantity)
     : null
   const quantityInvalid = quantityError !== null
+  const hasWork = context?.nodes.some((node) => node.nodeType === "WORK")
   return (
     <Dialog open={context !== null} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -662,15 +953,19 @@ function CatalogAddDialog({
             />
             {quantityError && <FieldError>{quantityError}</FieldError>}
           </Field>
-          <Field>
-            <FieldLabel htmlFor="catalog-add-comment">Комментарий</FieldLabel>
-            <Textarea
-              id="catalog-add-comment"
-              aria-label="Комментарий к позиции каталога"
-              value={comment}
-              onChange={(event) => setComment(event.target.value)}
-            />
-          </Field>
+          {hasWork ? (
+            <Field>
+              <FieldLabel htmlFor="catalog-add-comment">
+                Комментарий к работе
+              </FieldLabel>
+              <Textarea
+                id="catalog-add-comment"
+                aria-label="Комментарий к работе"
+                value={comment}
+                onChange={(event) => setComment(event.target.value)}
+              />
+            </Field>
+          ) : null}
         </div>
 
         <DialogFooter>

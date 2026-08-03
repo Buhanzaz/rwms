@@ -1,4 +1,5 @@
 import type {
+  CreateManualMovement,
   DriverBoard,
   DriverBoardCard,
   MoveDriverBoardTask,
@@ -7,6 +8,8 @@ import { bearerRequest } from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 
 const DRIVER_BOARD_API = `${getGatewayRuntimeConfig().logisticsApiBaseUrl}/v1/driver-board`
+const DRIVER_TASKS_API = `${getGatewayRuntimeConfig().logisticsApiBaseUrl}/v1/driver-tasks`
+const TASK_BOARD_API = getGatewayRuntimeConfig().taskBoardApiBaseUrl
 
 export const DRIVER_BOARD_QUERY_KEY = ["logistics", "driver-board"] as const
 
@@ -52,6 +55,51 @@ export function promoteCapitalRepair(params: {
         "Idempotency-Key": params.idempotencyKey,
       },
       body: JSON.stringify({ warehouseId: params.warehouseId }),
+    }
+  )
+}
+
+export function createManualMovement(params: {
+  accessToken: string
+  command: CreateManualMovement
+}) {
+  const { idempotencyKey, ...command } = params.command
+
+  return bearerRequest<unknown>(params.accessToken, DRIVER_TASKS_API, {
+    method: "POST",
+    headers: { "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify({
+      warehouseId: command.warehouseId,
+      cabinId: command.cabinId,
+      repairId: null,
+      sourceType: "MANUAL",
+      sourceId: idempotencyKey,
+      kind: "GENERAL_MOVEMENT",
+      planningMode: "AUTO",
+      scheduledDate: null,
+      priority: command.priority,
+      activateNow: true,
+      comment: command.comment,
+    }),
+  })
+}
+
+export function pinDriverBoardTask(params: {
+  accessToken: string
+  warehouseId: string
+  taskId: string
+  expectedTaskVersion: number
+  pinned: boolean
+}) {
+  return bearerRequest<unknown>(
+    params.accessToken,
+    `${TASK_BOARD_API}/warehouses/${encodeURIComponent(params.warehouseId)}/task-board/tasks/${encodeURIComponent(params.taskId)}/pin`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        expectedTaskVersion: params.expectedTaskVersion,
+        pinned: params.pinned,
+      }),
     }
   )
 }

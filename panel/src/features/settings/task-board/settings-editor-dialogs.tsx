@@ -211,14 +211,14 @@ export function QueueDefinitionEditorDialog({
       name: name.trim(),
       description: optional(description),
       type,
-      purpose: definition?.purpose ?? "GENERAL",
+      purpose: "GENERAL",
     })
   }
 
   return (
     <EditorShell
       title={definition ? "Общая очередь" : "Новая общая очередь"}
-      description="Название и тип задаются один раз для всей системы."
+      description="Название и тип задаются один раз для всей системы. Складские настройки настраиваются отдельно."
       pending={pending}
       error={validation ?? error}
       onClose={onClose}
@@ -289,19 +289,11 @@ export function QueueEditorDialog({
   onSave: (request: WorkQueueRequest) => Promise<void>
 }) {
   const [definitionId, setDefinitionId] = useState(queue?.definitionId ?? "")
-  const definition =
-    definitions.find((item) => item.id === definitionId) ??
-    (queue
-      ? {
-          id: queue.definitionId,
-          version: queue.definitionVersion,
-          name: queue.name,
-          description: queue.description,
-          type: queue.type,
-          purpose: queue.purpose,
-        }
-      : null)
-  const type = definition?.type ?? "REPAIR"
+  const selectedDefinition = definitions.find(
+    (item) => item.id === definitionId
+  )
+  const type = selectedDefinition?.type ?? queue?.type ?? "REPAIR"
+  const definitionName = selectedDefinition?.name ?? queue?.name ?? ""
   const [active, setActive] = useState(queue?.active ?? true)
   const [hidden, setHidden] = useState(queue?.hidden ?? false)
   const [collapsed, setCollapsed] = useState(queue?.collapsed ?? false)
@@ -315,7 +307,7 @@ export function QueueEditorDialog({
     queue?.notifyWhenThresholdReached ?? false
   )
   const [resultPhotoMinCount, setResultPhotoMinCount] = useState(
-    String(queue?.resultPhotoMinCount ?? defaultResultPhotoMinCount("REPAIR"))
+    String(queue?.resultPhotoMinCount ?? defaultResultPhotoMinCount(type))
   )
   const [bindings, setBindings] = useState<QueueBindingRequest[]>(() =>
     normalizeBindings(
@@ -379,7 +371,7 @@ export function QueueEditorDialog({
             <>
               <Input
                 id="warehouse-queue-definition"
-                value={definition?.name ?? queue.name}
+                value={definitionName}
                 disabled
               />
               <FieldDescription>
@@ -677,7 +669,8 @@ export function QueueEditorDialog({
           </FieldGroup>
         ) : (
           <FieldDescription>
-            Классы исполнителей можно назначить после подключения очереди.
+            Выберите хотя бы один класс, если задания должны быть доступны
+            рабочим.
           </FieldDescription>
         )}
       </FieldSet>

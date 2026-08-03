@@ -104,6 +104,12 @@ type ShipmentFilters = LogisticsDocumentFiltersState<ShipmentDocumentState> & {
   drivers: string[]
 }
 
+type ShipmentConfirmationCommand = {
+  shipment: ShipmentDocument
+  /** Explicitly preserve a planned date when the physical departure is today. */
+  keepScheduledDate?: boolean
+}
+
 const EMPTY_FILTERS: ShipmentFilters = {
   states: [],
   schedule: "ALL",
@@ -121,10 +127,6 @@ function formatDate(value: string) {
   return new Intl.DateTimeFormat("ru-RU", {
     dateStyle: "medium",
   }).format(new Date(`${value}T00:00:00`))
-}
-
-function isFutureDate(value: string) {
-  return value > new Date().toISOString().slice(0, 10)
 }
 
 function matchesDateRange(
@@ -209,6 +211,8 @@ export function LogisticsShipmentsPage() {
     document: ShipmentDocument
     futureDateWarning: boolean
   } | null>(null)
+  const [shipmentDateDecisionTarget, setShipmentDateDecisionTarget] =
+    useState<ShipmentDocument | null>(null)
   const [cancelTarget, setCancelTarget] = useState<ShipmentDocument | null>(
     null
   )
@@ -435,13 +439,17 @@ export function LogisticsShipmentsPage() {
   })
 
   const confirmMutation = useMutation({
-    mutationFn: (shipment: ShipmentDocument) => {
-      const signature = `confirm:${shipment.id}:${shipment.version}`
+    mutationFn: ({
+      shipment,
+      keepScheduledDate = false,
+    }: ShipmentConfirmationCommand) => {
+      const signature = `confirm:${shipment.id}:${shipment.version}:${keepScheduledDate ? "keep" : "scheduled"}`
       return confirmShipmentPreparation({
         accessToken: accessToken!,
         documentId: shipment.id,
         expectedVersion: shipment.version,
         idempotencyKey: keyFor(signature),
+        ...(keepScheduledDate ? { keepScheduledDate: true } : {}),
       })
     },
     onSuccess: (result) => {
@@ -449,12 +457,51 @@ export function LogisticsShipmentsPage() {
       setCommandError(null)
       void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
     },
-    onError: (cause, shipment) => {
+    onError: (cause, { shipment, keepScheduledDate = false }) => {
       if (cause instanceof ApiError && cause.status === 409) {
-        commandKeys.current.delete(`confirm:${shipment.id}:${shipment.version}`)
+        commandKeys.current.delete(
+          `confirm:${shipment.id}:${shipment.version}:${keepScheduledDate ? "keep" : "scheduled"}`
+        )
         void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
       }
       setCommandError(errorMessage(cause, "Не удалось отметить отгрузку"))
+    },
+  })
+
+  const rescheduleAndConfirmMutation = useMutation({
+    mutationFn: async (shipment: ShipmentDocument) => {
+      if (!shipment.driverSnapshot) {
+        throw new Error("Для отгрузки не указан водитель")
+      }
+      const scheduledDate = new Date().toISOString().slice(0, 10)
+      const planSignature = `schedule:${shipment.id}:${shipment.version}:${shipment.driverSnapshot}:${scheduledDate}`
+      const planned = await replaceShipmentPlan({
+        accessToken: accessToken!,
+        documentId: shipment.id,
+        expectedVersion: shipment.version,
+        driverSnapshot: shipment.driverSnapshot,
+        scheduledDate,
+        idempotencyKey: keyFor(planSignature),
+      })
+      const confirmSignature = `confirm:${planned.id}:${planned.version}`
+      return confirmShipmentPreparation({
+        accessToken: accessToken!,
+        documentId: planned.id,
+        expectedVersion: planned.version,
+        idempotencyKey: keyFor(confirmSignature),
+      })
+    },
+    onSuccess: (result) => {
+      applyServerProjection(result)
+      setShipmentDateDecisionTarget(null)
+      setCommandError(null)
+      setCommandNotice("Дата изменена на сегодня, отгрузка отмечена.")
+      void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
+    },
+    onError: (cause) => {
+      setCommandError(
+        errorMessage(cause, "Не удалось изменить дату и отметить отгрузку")
+      )
     },
   })
 
@@ -530,25 +577,26 @@ export function LogisticsShipmentsPage() {
   })
 
   function requestConfirmation(shipment: ShipmentDocument) {
-    const futureDateWarning =
-      shipment.scheduledDate !== null && isFutureDate(shipment.scheduledDate)
-    if (
-      !shipment.scheduledDate ||
-      !shipment.driverSnapshot ||
-      futureDateWarning
-    ) {
+    if (!shipment.scheduledDate || !shipment.driverSnapshot) {
       setScheduleTarget({
         document: shipment,
-        futureDateWarning,
+        futureDateWarning: false,
       })
       return
     }
-    confirmMutation.mutate(shipment)
+    if (shipment.scheduledDate !== new Date().toISOString().slice(0, 10)) {
+      setShipmentDateDecisionTarget(shipment)
+      return
+    }
+    confirmMutation.mutate({ shipment })
   }
 
   function actions(shipment: ShipmentDocument) {
     const confirming =
-      confirmMutation.isPending && confirmMutation.variables?.id === shipment.id
+      (confirmMutation.isPending &&
+        confirmMutation.variables?.shipment.id === shipment.id) ||
+      (rescheduleAndConfirmMutation.isPending &&
+        rescheduleAndConfirmMutation.variables?.id === shipment.id)
     const cancelling =
       cancelMutation.isPending && cancelMutation.variables?.id === shipment.id
     const scheduling =
@@ -908,8 +956,8 @@ export function LogisticsShipmentsPage() {
               <CardHeader>
                 <CardTitle>Отгрузки не найдены</CardTitle>
                 <CardDescription>
-                  Измените поиск или фильтры. Новые отгрузки появляются после
-                  сохранения заказа.
+                  Измените поиск или фильтры. Новые отгрузки создаются из
+                  раздела «Задания» после выбора бытовок и даты рейса.
                 </CardDescription>
               </CardHeader>
             </Card>
@@ -929,6 +977,25 @@ export function LogisticsShipmentsPage() {
               document: scheduleTarget.document,
               ...input,
             })
+          }
+        />
+      ) : null}
+      {shipmentDateDecisionTarget ? (
+        <ShipmentDateDecisionDialog
+          shipment={shipmentDateDecisionTarget}
+          pending={
+            confirmMutation.isPending || rescheduleAndConfirmMutation.isPending
+          }
+          onOpenChange={(open) =>
+            !open && setShipmentDateDecisionTarget(null)
+          }
+          onKeepDate={() => {
+            const target = shipmentDateDecisionTarget
+            setShipmentDateDecisionTarget(null)
+            confirmMutation.mutate({ shipment: target, keepScheduledDate: true })
+          }}
+          onUseToday={() =>
+            rescheduleAndConfirmMutation.mutate(shipmentDateDecisionTarget)
           }
         />
       ) : null}
@@ -961,6 +1028,49 @@ export function LogisticsShipmentsPage() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  )
+}
+
+function ShipmentDateDecisionDialog({
+  shipment,
+  pending,
+  onOpenChange,
+  onKeepDate,
+  onUseToday,
+}: {
+  shipment: ShipmentDocument
+  pending: boolean
+  onOpenChange: (open: boolean) => void
+  onKeepDate: () => void
+  onUseToday: () => void
+}) {
+  return (
+    <Dialog open onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Дата отгрузки отличается</DialogTitle>
+          <DialogDescription>
+            Назначенная дата: {formatDate(shipment.scheduledDate!)}. Сегодня
+            {" "}
+            {formatDate(new Date().toISOString().slice(0, 10))}. Выберите, как
+            сохранить дату задания.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter className="flex-col sm:flex-row sm:justify-end">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending}
+            onClick={onKeepDate}
+          >
+            Оставить назначенную
+          </Button>
+          <Button type="button" disabled={pending} onClick={onUseToday}>
+            Изменить на сегодня
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

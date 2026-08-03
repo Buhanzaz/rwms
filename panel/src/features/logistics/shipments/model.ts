@@ -48,6 +48,8 @@ export type ShipmentDocument = {
   equipmentMovementTaskId: string | null
   scheduledDate: string | null
   rentalOrderId: string | null
+  /** Null for a shipment; optional for older gateway responses. */
+  rentalShipmentId?: string | null
   lines: ShipmentLine[]
   createdAt: string
   updatedAt: string

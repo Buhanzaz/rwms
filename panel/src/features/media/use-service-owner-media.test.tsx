@@ -70,10 +70,12 @@ const readyAsset = {
 
 function MediaHarness({
   onReferences,
+  onUpload,
 }: {
   onReferences?: (
     references: Array<{ mediaId: string; generation: number }>
   ) => void
+  onUpload?: (assets: unknown) => void
 }) {
   const media = useServiceOwnerMedia({ accessToken: "media-token", owner })
   useEffect(() => {
@@ -100,19 +102,21 @@ function MediaHarness({
       <button
         type="button"
         onClick={() =>
-          void media.upload([
-            {
-              file: new File([new Uint8Array([1])], "estimate.jpg", {
-                type: "image/jpeg",
-              }),
-              folderId: FOLDER_ID,
-              sortOrder: 0,
-              commandKeys: {
-                createSession: "55555555-5555-4555-8555-555555555555",
-                uploadAndFinalize: "66666666-6666-4666-8666-666666666666",
+          void media
+            .upload([
+              {
+                file: new File([new Uint8Array([1])], "estimate.jpg", {
+                  type: "image/jpeg",
+                }),
+                folderId: FOLDER_ID,
+                sortOrder: 0,
+                commandKeys: {
+                  createSession: "55555555-5555-4555-8555-555555555555",
+                  uploadAndFinalize: "66666666-6666-4666-8666-666666666666",
+                },
               },
-            },
-          ])
+            ])
+            .then((assets) => onUpload?.(assets))
         }
       >
         Upload
@@ -132,11 +136,15 @@ function MediaHarness({
   )
 }
 
-function renderMediaHarness(
+function renderMediaHarness({
+  onReferences,
+  onUpload,
+}: {
   onReferences?: (
     references: Array<{ mediaId: string; generation: number }>
   ) => void
-) {
+  onUpload?: (assets: unknown) => void
+} = {}) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: Infinity },
@@ -145,7 +153,7 @@ function renderMediaHarness(
   })
   return render(
     <QueryClientProvider client={queryClient}>
-      <MediaHarness onReferences={onReferences} />
+      <MediaHarness onReferences={onReferences} onUpload={onUpload} />
     </QueryClientProvider>
   )
 }
@@ -177,7 +185,7 @@ describe("useServiceOwnerMedia", () => {
         dispose: vi.fn(),
       })
 
-    renderMediaHarness(onReferences)
+    renderMediaHarness({ onReferences })
 
     await waitFor(() =>
       expect(mediaClient.listOwnerMedia).toHaveBeenCalledOnce()
@@ -214,7 +222,7 @@ describe("useServiceOwnerMedia", () => {
           "MEDIA_OWNER_PROOF_REQUIRED"
         )
       )
-      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ asset: readyAsset })
 
     renderMediaHarness()
 
@@ -224,6 +232,20 @@ describe("useServiceOwnerMedia", () => {
     fireEvent.click(screen.getByRole("button", { name: "Upload" }))
     await waitFor(() => expect(mediaClient.uploadFile).toHaveBeenCalledOnce())
     await waitFor(() => expect(mediaClient.uploadFile).toHaveBeenCalledTimes(2))
+  })
+
+  it("returns assets created by this upload invocation", async () => {
+    const onUpload = vi.fn()
+    mediaClient.listOwnerMedia.mockResolvedValue({ items: [], next: null })
+    mediaClient.uploadFile.mockResolvedValue({ asset: readyAsset })
+
+    renderMediaHarness({ onUpload })
+
+    await waitFor(() =>
+      expect(mediaClient.listOwnerMedia).toHaveBeenCalledOnce()
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Upload" }))
+    await waitFor(() => expect(onUpload).toHaveBeenCalledWith([readyAsset]))
   })
 
   it("retries rotation with the same command key while owner proof propagates", async () => {

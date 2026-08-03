@@ -287,8 +287,9 @@ export function useServiceOwnerMedia({
   const uploadMutation = useMutation({
     mutationFn: async (jobs: readonly ServiceOwnerMediaUploadJob[]) => {
       if (!accessToken) throw new Error("Для загрузки требуется авторизация")
+      const uploaded: MediaAsset[] = []
       for (const job of jobs) {
-        await mediaClient.uploadFile(
+        const result = await mediaClient.uploadFile(
           accessToken,
           owner,
           job.file,
@@ -296,7 +297,9 @@ export function useServiceOwnerMedia({
           job.folderId,
           job.commandKeys
         )
+        uploaded.push(result.asset)
       }
+      return uploaded
     },
     retry: shouldRetryOwnerProof,
     retryDelay: ownerProofRetryDelay,

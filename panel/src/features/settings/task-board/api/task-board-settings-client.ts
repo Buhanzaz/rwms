@@ -1,4 +1,5 @@
 import type {
+  DriverQueueRequest,
   QueueDefinitionDto,
   QueueDefinitionRequest,
   WorkerClassDto,
@@ -53,6 +54,11 @@ export interface TaskBoardSettingsClient {
     warehouseId: string,
     queues: QueueOrderItem[]
   ): Promise<WorkQueueDto[]>
+  updateDriverQueue(
+    token: string,
+    warehouseId: string,
+    request: DriverQueueRequest
+  ): Promise<WorkQueueDto>
 
   listClasses(token: string): Promise<WorkerClassDto[]>
   createClass(

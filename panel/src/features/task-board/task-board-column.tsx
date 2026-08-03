@@ -17,7 +17,10 @@ import type {
   TaskBoardEntryDto,
   TaskBoardQueueDto,
 } from "@/features/task-board/model/task-board"
-import { TaskBoardCard } from "@/features/task-board/task-board-card"
+import {
+  TaskBoardCard,
+  type TaskBoardRepairComplexity,
+} from "@/features/task-board/task-board-card"
 
 function queueKindLabel(queue: TaskBoardQueueDto) {
   if (queue.kind === "MOVEMENT") return "Перемещение"
@@ -47,6 +50,7 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
   onToggleEntryCollapsed,
   onComplete,
   palette,
+  repairComplexitiesByRepairId,
 }: {
   queue: TaskBoardQueueDto
   visibleEntries: TaskBoardEntryDto[]
@@ -68,6 +72,7 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
   onToggleEntryCollapsed: (entryId: string) => void
   onComplete: (entry: TaskBoardEntryDto) => void
   palette: KpiPalette | null
+  repairComplexitiesByRepairId: ReadonlyMap<string, TaskBoardRepairComplexity>
 }) {
   const { setNodeRef, isOver } = useDroppable({
     id: `queue:${queue.key}`,
@@ -199,6 +204,11 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
               onPin={onPin}
               onToggleCollapsed={onToggleEntryCollapsed}
               palette={palette}
+              repairComplexity={
+                entry.source?.type === "MAINTENANCE_REPAIR"
+                  ? repairComplexitiesByRepairId.get(entry.source.sourceId)
+                  : null
+              }
             />
           ))}
         </div>

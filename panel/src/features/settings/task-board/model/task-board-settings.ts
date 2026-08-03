@@ -13,9 +13,10 @@ export type WorkerClassDto = {
   comment: string | null
   sortOrder: number
   active: boolean
+  logisticsPrimary: boolean
 }
 
-export type WorkerClassRequest = Omit<WorkerClassDto, "id">
+export type WorkerClassRequest = Omit<WorkerClassDto, "id" | "logisticsPrimary">
 
 export type QueueBindingDto = {
   id: string
@@ -68,6 +69,13 @@ export type WorkQueueDto = {
   bindings: QueueBindingDto[]
 }
 
+/**
+ * Warehouse-local connection to one immutable shared queue definition.
+ *
+ * `definitionId` is deliberately immutable after creation: a warehouse
+ * manager changes runtime settings and bindings on this connection, rather
+ * than creating a warehouse-specific copy of the catalog entry.
+ */
 export type WorkQueueRequest = {
   version: number
   definitionId: string
@@ -78,6 +86,18 @@ export type WorkQueueRequest = {
   notificationThreshold: number | null
   notifyWhenThresholdReached: boolean
   resultPhotoMinCount: number | null
+  bindings: QueueBindingRequest[]
+}
+
+export type DriverQueueRequest = {
+  expectedVersion: number
+  active: boolean
+  hidden: boolean
+  collapsed: boolean
+  holdingPeriodMinutes: number | null
+  notificationThreshold: number | null
+  notifyWhenThresholdReached: boolean
+  resultPhotoMinCount: number
   bindings: QueueBindingRequest[]
 }
 

@@ -9,6 +9,7 @@ import type {
   TaskBoardEntryDto,
   TaskBoardSnapshotDto,
 } from "@/features/task-board/model/task-board"
+import type { TaskBoardRepairComplexity } from "@/features/task-board/task-board-card"
 import { TaskBoardPage } from "@/features/task-board/task-board-page"
 
 const mocks = vi.hoisted(() => ({
@@ -16,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   useWarehouse: vi.fn(),
   getTaskBoard: vi.fn(),
   getKpiSettings: vi.fn(),
+  getMaintenanceRepair: vi.fn(),
 }))
 
 vi.mock("@/features/auth/use-auth", () => ({ useAuth: mocks.useAuth }))
@@ -37,6 +39,10 @@ vi.mock("@/features/settings/kpi/api/kpi-settings-api", async () => {
 
   return { ...actual, getKpiSettings: mocks.getKpiSettings }
 })
+vi.mock(
+  "@/features/repair-estimates/api/http-maintenance-lifecycle-client",
+  () => ({ getMaintenanceRepair: mocks.getMaintenanceRepair })
+)
 vi.mock("@/features/task-board/task-board-column", () => ({
   TaskBoardColumn: ({
     dragDisabled,
@@ -45,6 +51,7 @@ vi.mock("@/features/task-board/task-board-column", () => ({
     visibleEntries,
     onEdit,
     palette,
+    repairComplexitiesByRepairId,
   }: {
     dragDisabled: boolean
     actionPending: boolean
@@ -52,6 +59,10 @@ vi.mock("@/features/task-board/task-board-column", () => ({
     visibleEntries: TaskBoardEntryDto[]
     onEdit: (entry: TaskBoardEntryDto) => void
     palette: { ranges: { color: string }[] } | null
+    repairComplexitiesByRepairId: ReadonlyMap<
+      string,
+      { name: string; type: string; color: string }
+    >
   }) => (
     <div
       data-testid="task-board-command-state"
@@ -63,6 +74,16 @@ vi.mock("@/features/task-board/task-board-column", () => ({
       <span data-testid="visible-task-external-ids">
         {visibleEntries
           .map((entry) => entry.externalTaskId ?? entry.taskId)
+          .join(",")}
+      </span>
+      <span data-testid="visible-repair-complexities">
+        {visibleEntries
+          .map((entry) =>
+            entry.source?.type === "MAINTENANCE_REPAIR"
+              ? (repairComplexitiesByRepairId.get(entry.source.sourceId)
+                  ?.name ?? "")
+              : ""
+          )
           .join(",")}
       </span>
       {visibleEntries[0] ? (
@@ -143,12 +164,22 @@ function taskEntry(externalTaskId: string, title: string): TaskBoardEntryDto {
   }
 }
 
+type RepairComplexityFixture = {
+  id: string
+  complexity: TaskBoardRepairComplexity
+}
+
 function renderPage(
   level: "VIEW" | "EDIT",
   {
     currentBoard = board,
     initialEntry = "/",
-  }: { currentBoard?: TaskBoardSnapshotDto; initialEntry?: string } = {}
+    maintenanceRepairs = [],
+  }: {
+    currentBoard?: TaskBoardSnapshotDto
+    initialEntry?: string
+    maintenanceRepairs?: RepairComplexityFixture[]
+  } = {}
 ) {
   mocks.useAuth.mockReturnValue({
     accessToken: "task-board-token",
@@ -181,6 +212,16 @@ function renderPage(
     activeSchedule: null,
     pendingSchedule: null,
   })
+  mocks.getMaintenanceRepair.mockImplementation(
+    (_accessToken: string, _warehouseId: string, repairId: string) => {
+      const repair = maintenanceRepairs.find(
+        (candidate) => candidate.id === repairId
+      )
+      return repair
+        ? Promise.resolve(repair)
+        : Promise.reject(new Error(`Не найден ремонт ${repairId}.`))
+    }
+  )
 
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
@@ -258,6 +299,76 @@ describe("task board warehouse access", () => {
         "editable"
       )
     })
+  })
+
+  it("loads service-issued complexity for each distinct maintenance source", async () => {
+    const firstRepairId = "repair-1"
+    const secondRepairId = "repair-2"
+    const currentBoard: TaskBoardSnapshotDto = {
+      ...board,
+      totalEntries: 2,
+      realEntries: 2,
+      queues: [
+        {
+          ...board.queues[0]!,
+          entries: [
+            {
+              ...taskEntry("repair-stage-1", "Замена панели"),
+              source: {
+                type: "MAINTENANCE_REPAIR",
+                sourceId: firstRepairId,
+              },
+            },
+            {
+              ...taskEntry("repair-stage-2", "Замена двери"),
+              source: {
+                type: "MAINTENANCE_REPAIR",
+                sourceId: secondRepairId,
+              },
+            },
+          ],
+        },
+      ],
+    }
+
+    renderPage("EDIT", {
+      currentBoard,
+      maintenanceRepairs: [
+        {
+          id: firstRepairId,
+          complexity: {
+            type: "LIGHT",
+            name: "Лёгкий ремонт",
+            color: "#16A34A",
+          },
+        },
+        {
+          id: secondRepairId,
+          complexity: {
+            type: "COMPLEX",
+            name: "Тяжёлый ремонт",
+            color: "#0E7490",
+          },
+        },
+      ],
+    })
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("visible-repair-complexities").textContent
+      ).toBe("Лёгкий ремонт,Тяжёлый ремонт")
+    })
+    expect(mocks.getMaintenanceRepair).toHaveBeenCalledTimes(2)
+    expect(mocks.getMaintenanceRepair).toHaveBeenCalledWith(
+      "task-board-token",
+      WAREHOUSE_ID,
+      firstRepairId
+    )
+    expect(mocks.getMaintenanceRepair).toHaveBeenCalledWith(
+      "task-board-token",
+      WAREHOUSE_ID,
+      secondRepairId
+    )
   })
 
   it("shows only the task opened from a shipment furniture blocker", async () => {

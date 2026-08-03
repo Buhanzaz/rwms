@@ -83,7 +83,7 @@ function availableCustomQueues(queues: WorkQueueDto[]): CustomWorkQueue[] {
       (left, right) =>
         left.sortOrder - right.sortOrder ||
         left.name.localeCompare(right.name, "ru") ||
-        left.id.localeCompare(right.id)
+        left.definitionId.localeCompare(right.definitionId)
     )
 }
 
@@ -487,7 +487,7 @@ function CustomEstimateLineDialog({
   const selectedQueueAvailable = selectedQueue
     ? customQueues.some(
       (queue) =>
-        queue.id === selectedQueue.queueId &&
+        queue.definitionId === selectedQueue.queueId &&
         queue.type === selectedQueue.queueKind
       )
     : false
@@ -664,15 +664,16 @@ function CustomEstimateLineDialog({
                   Boolean(customQueuesUnavailable)
                 }
                 value={selectedQueue?.queueId}
-                onValueChange={(queueId) => {
+                onValueChange={(queueDefinitionId) => {
                   const queue = customQueues.find(
-                    (candidate) => candidate.id === queueId
+                    (candidate) =>
+                      candidate.definitionId === queueDefinitionId
                   )
                   if (!queue) return
                   updateDraft((current) => ({
                     ...current,
                     customQueueBinding: {
-                      queueId: queue.id,
+                      queueId: queue.definitionId,
                       queueName: queue.name,
                       queueKind: queue.type,
                     },
@@ -696,7 +697,10 @@ function CustomEstimateLineDialog({
                 <SelectContent>
                   <SelectGroup>
                     {customQueues.map((queue) => (
-                      <SelectItem key={queue.id} value={queue.id}>
+                      <SelectItem
+                        key={queue.definitionId}
+                        value={queue.definitionId}
+                      >
                         {queue.name} ({customQueueLabel(queue)})
                       </SelectItem>
                     ))}

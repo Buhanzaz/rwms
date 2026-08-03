@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Card,
   CardAction,
@@ -53,7 +54,9 @@ import {
   ORDERS_QUERY_KEY,
   removeOrderUnit,
   saveOrder,
+  extendOrderRentalTerms,
   selectOrderWarehouse,
+  setOrderRentalTerms,
 } from "@/features/orders/api/orders-api"
 import { OrderCommandIdentityRegistry } from "@/features/orders/api/order-command-identity"
 import { EditOrderDialog } from "@/features/orders/components/edit-order-dialog"
@@ -171,6 +174,133 @@ function auditContext(
   return null
 }
 
+const RENTAL_MONTH_PRESETS = [1, 2, 3, 6, 12] as const
+const EMPTY_UNIT_IDS = new Set<string>()
+
+type VersionedMonthsDraft = {
+  orderVersion: number
+  values: Record<string, string>
+}
+
+type VersionedUnitSelection = {
+  orderVersion: number
+  unitIds: Set<string>
+}
+
+function parsePositiveMonths(value: string): number | null {
+  const normalized = value.trim()
+  if (!/^\d+$/.test(normalized)) return null
+
+  const parsed = Number(normalized)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
+}
+
+function formatRentalDate(value: string | null) {
+  if (!value) return "Не назначена"
+  const [year, month, day] = value.split("-")
+  return `${day}.${month}.${year}`
+}
+
+function isShippedRentalTerm(candidate: OrderUnitCandidate) {
+  const shipmentDate = candidate.rentalTerm?.shipmentDate
+  const returnDate = candidate.rentalTerm?.returnDate
+  return (
+    candidate.unit.status === "RENTED" &&
+    shipmentDate !== null &&
+    shipmentDate !== undefined &&
+    returnDate !== null &&
+    returnDate !== undefined
+  )
+}
+
+function monthLabel(value: number) {
+  const remainder10 = value % 10
+  const remainder100 = value % 100
+  if (remainder10 === 1 && remainder100 !== 11) return `${value} месяц`
+  if (
+    remainder10 >= 2 &&
+    remainder10 <= 4 &&
+    (remainder100 < 10 || remainder100 >= 20)
+  ) {
+    return `${value} месяца`
+  }
+  return `${value} месяцев`
+}
+
+function RentalMonthsPicker({
+  id,
+  label,
+  value,
+  disabled,
+  onChange,
+}: {
+  id: string
+  label: string
+  value: string
+  disabled?: boolean
+  onChange: (value: string) => void
+}) {
+  const normalized = value.trim()
+  const preset = RENTAL_MONTH_PRESETS.find(
+    (months) => String(months) === normalized
+  )
+  const [customMode, setCustomMode] = useState(
+    normalized !== "" && preset === undefined
+  )
+
+  const mode =
+    customMode || (normalized !== "" && preset === undefined)
+      ? "custom"
+      : normalized === ""
+        ? ""
+        : String(preset)
+
+  return (
+    <div className="grid gap-1 text-sm">
+      <label htmlFor={id} className="font-medium">
+        {label}
+      </label>
+      <select
+        id={id}
+        aria-label={label}
+        value={mode}
+        disabled={disabled}
+        className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+        onChange={(event) => {
+          const next = event.target.value
+          if (next === "custom") {
+            setCustomMode(true)
+            if (preset !== undefined) onChange("")
+          } else {
+            setCustomMode(false)
+            onChange(next)
+          }
+        }}
+      >
+        <option value="">Выберите срок</option>
+        {RENTAL_MONTH_PRESETS.map((months) => (
+          <option key={months} value={months}>
+            {monthLabel(months)}
+          </option>
+        ))}
+        <option value="custom">Другое положительное целое</option>
+      </select>
+      {mode === "custom" ? (
+        <Input
+          type="number"
+          min={1}
+          step={1}
+          value={value}
+          disabled={disabled}
+          aria-label={`${label}: произвольное значение`}
+          placeholder="Количество месяцев"
+          onChange={(event) => onChange(event.target.value)}
+        />
+      ) : null}
+    </div>
+  )
+}
+
 export function OrderDetailPage() {
   const { orderId } = useParams<{ orderId: string }>()
   const navigate = useNavigate()
@@ -187,6 +317,15 @@ export function OrderDetailPage() {
   const [contentsUnitId, setContentsUnitId] = useState<string | null>(null)
   const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false)
+  const [rentalMonthsDraft, setRentalMonthsDraft] =
+    useState<VersionedMonthsDraft>({ orderVersion: -1, values: {} })
+  const [extensionMonthsDraft, setExtensionMonthsDraft] =
+    useState<VersionedMonthsDraft>({ orderVersion: -1, values: {} })
+  const [extensionSelection, setExtensionSelection] =
+    useState<VersionedUnitSelection>({
+      orderVersion: -1,
+      unitIds: new Set<string>(),
+    })
   const commandIdentity = useRef(new OrderCommandIdentityRegistry())
   const subjectId = currentUser?.id ?? "unknown-user"
   const detailQueryKey = [
@@ -203,6 +342,18 @@ export function OrderDetailPage() {
   })
   const order = detailQuery.data
   const editableOrder = order?.permissions.canEdit === true
+  const rentalMonthsByUnitId =
+    rentalMonthsDraft.orderVersion === order?.version
+      ? rentalMonthsDraft.values
+      : {}
+  const extensionMonthsByUnitId =
+    extensionMonthsDraft.orderVersion === order?.version
+      ? extensionMonthsDraft.values
+      : {}
+  const extensionUnitIds =
+    extensionSelection.orderVersion === order?.version
+      ? extensionSelection.unitIds
+      : EMPTY_UNIT_IDS
 
   const availableQueryKey = [
     ...ORDERS_QUERY_KEY,
@@ -456,7 +607,9 @@ export function OrderDetailPage() {
     onSuccess: (projection, { fingerprint }) => {
       commandIdentity.current.confirm(fingerprint)
       applyProjection(projection)
-      toast.success("Бронирование сохранено и добавлено в ожидающие отгрузки.")
+      toast.success(
+        "Бронирование сохранено. Создайте отгрузку в разделе «Задания» логистики."
+      )
     },
     onError: (error) => {
       toast.error(
@@ -474,6 +627,159 @@ export function OrderDetailPage() {
     () => order?.units.filter((candidate) => candidate.added) ?? [],
     [order?.units]
   )
+
+  function rentalMonthsValue(candidate: OrderUnitCandidate) {
+    return (
+      rentalMonthsByUnitId[candidate.unit.id] ??
+      (candidate.rentalTerm?.rentalMonths
+        ? String(candidate.rentalTerm.rentalMonths)
+        : "")
+    )
+  }
+
+  function extensionMonthsValue(unitId: string) {
+    return extensionMonthsByUnitId[unitId] ?? "1"
+  }
+
+  function setRentalMonthsValue(unitId: string, value: string) {
+    if (!order) return
+    setRentalMonthsDraft((current) => ({
+      orderVersion: order.version,
+      values: {
+        ...(current.orderVersion === order.version ? current.values : {}),
+        [unitId]: value,
+      },
+    }))
+  }
+
+  function setExtensionMonthsValue(unitId: string, value: string) {
+    if (!order) return
+    setExtensionMonthsDraft((current) => ({
+      orderVersion: order.version,
+      values: {
+        ...(current.orderVersion === order.version ? current.values : {}),
+        [unitId]: value,
+      },
+    }))
+  }
+
+  function setExtensionUnitSelected(unitId: string, checked: boolean) {
+    if (!order) return
+    setExtensionSelection((current) => {
+      const next = new Set(
+        current.orderVersion === order.version ? current.unitIds : []
+      )
+      if (checked) next.add(unitId)
+      else next.delete(unitId)
+      return { orderVersion: order.version, unitIds: next }
+    })
+  }
+
+  const rentalTermsMutation = useMutation({
+    mutationFn: ({
+      expectedVersion,
+      terms,
+      fingerprint,
+    }: {
+      expectedVersion: number
+      terms: Array<{ unitId: string; rentalMonths: number }>
+      fingerprint: string
+    }) => {
+      if (!accessToken || !order) throw new Error("Сессия завершена.")
+      return setOrderRentalTerms({
+        accessToken,
+        orderId: order.id,
+        expectedVersion,
+        terms,
+        idempotencyKey: commandIdentity.current.keyFor(fingerprint),
+      })
+    },
+    onSuccess: (projection, { fingerprint }) => {
+      commandIdentity.current.confirm(fingerprint)
+      applyProjection(projection)
+      toast.success("Сроки аренды сохранены.")
+    },
+    onError: (error) => {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Не удалось сохранить сроки аренды."
+      )
+      if (error instanceof ApiError && error.status === 409) {
+        refreshOrderBoundary()
+      }
+    },
+  })
+
+  const extensionMutation = useMutation({
+    mutationFn: ({
+      expectedVersion,
+      terms,
+      fingerprint,
+    }: {
+      expectedVersion: number
+      terms: Array<{ unitId: string; additionalMonths: number }>
+      fingerprint: string
+    }) => {
+      if (!accessToken || !order) throw new Error("Сессия завершена.")
+      return extendOrderRentalTerms({
+        accessToken,
+        orderId: order.id,
+        expectedVersion,
+        terms,
+        idempotencyKey: commandIdentity.current.keyFor(fingerprint),
+      })
+    },
+    onSuccess: (projection, { fingerprint }) => {
+      commandIdentity.current.confirm(fingerprint)
+      applyProjection(projection)
+      toast.success("Срок аренды продлён.")
+    },
+    onError: (error) => {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Не удалось продлить срок аренды."
+      )
+      if (error instanceof ApiError && error.status === 409) {
+        refreshOrderBoundary()
+      }
+    },
+  })
+
+  const rentalTermsReady =
+    selectedUnits.length > 0 &&
+    selectedUnits.every(
+      (candidate) => parsePositiveMonths(rentalMonthsValue(candidate)) !== null
+    )
+  const rentalTermsConfigured =
+    selectedUnits.length > 0 &&
+    selectedUnits.every(
+      (candidate) =>
+        candidate.rentalTerm?.rentalMonths !== undefined &&
+        candidate.rentalTerm.rentalMonths > 0
+    )
+  const rentalTermsDirty = selectedUnits.some((candidate) => {
+    const next = parsePositiveMonths(rentalMonthsValue(candidate))
+    const current = candidate.rentalTerm?.rentalMonths ?? null
+    return next !== current
+  })
+  const extensionEligibleUnitIds = new Set(
+    selectedUnits
+      .filter(isShippedRentalTerm)
+      .map((candidate) => candidate.unit.id)
+  )
+  const extensionReady =
+    extensionUnitIds.size > 0 &&
+    [...extensionUnitIds].every(
+      (unitId) =>
+        extensionEligibleUnitIds.has(unitId) &&
+        parsePositiveMonths(extensionMonthsValue(unitId)) !== null
+    )
+  const canExtendRentalTerms =
+    (order?.status === "SAVED" || order?.status === "FULFILLED") &&
+    extensionEligibleUnitIds.size > 0
+
   const contentsCandidate =
     selectedUnits.find((candidate) => candidate.unit.id === contentsUnitId) ??
     null
@@ -573,6 +879,8 @@ export function OrderDetailPage() {
   const canEdit = order.permissions.canEdit
   const canCancel = canEdit && order.status === "DRAFT"
   const warehouseLocked = order.unitCount > 0
+  const saveActionLabel =
+    order.status === "SAVED" ? "Создать заказ" : "Сохранить бронирование"
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-auto pr-1">
@@ -600,7 +908,9 @@ export function OrderDetailPage() {
             disabled={
               saveMutation.isPending ||
               order.unitCount === 0 ||
-              order.warehouseId === null
+              order.warehouseId === null ||
+              !rentalTermsConfigured ||
+              rentalTermsDirty
             }
             onClick={() =>
               saveMutation.mutate({
@@ -616,7 +926,7 @@ export function OrderDetailPage() {
                 className="animate-spin"
               />
             ) : null}
-            {saveMutation.isPending ? "Сохраняем…" : "Сохранить бронирование"}
+            {saveMutation.isPending ? "Сохраняем…" : saveActionLabel}
           </Button>
           <Button
             type="button"
@@ -853,6 +1163,130 @@ export function OrderDetailPage() {
             склада.
           </p>
         </div>
+        {selectedUnits.length > 0 ? (
+          <div className="rounded-lg border bg-muted/20 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="font-medium">Сроки аренды</h3>
+                <p className="text-sm text-muted-foreground">
+                  Укажите срок для каждой бытовки до сохранения бронирования.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {canEdit ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={
+                      !rentalTermsReady ||
+                      !rentalTermsDirty ||
+                      rentalTermsMutation.isPending
+                    }
+                    onClick={() => {
+                      const terms = selectedUnits.flatMap((candidate) => {
+                        const rentalMonths = parsePositiveMonths(
+                          rentalMonthsValue(candidate)
+                        )
+                        return rentalMonths === null
+                          ? []
+                          : [
+                              {
+                                unitId: candidate.unit.id,
+                                rentalMonths,
+                              },
+                            ]
+                      })
+                      if (terms.length !== selectedUnits.length) return
+
+                      rentalTermsMutation.mutate({
+                        expectedVersion: order.version,
+                        terms,
+                        fingerprint: `rental-terms:${order.id}:${order.version}:${terms
+                          .map((term) => `${term.unitId}:${term.rentalMonths}`)
+                          .join(",")}`,
+                      })
+                    }}
+                  >
+                    {rentalTermsMutation.isPending ? (
+                      <HugeiconsIcon
+                        icon={Loading03Icon}
+                        data-icon="inline-start"
+                        className="animate-spin"
+                      />
+                    ) : null}
+                    {rentalTermsMutation.isPending
+                      ? "Сохраняем сроки…"
+                      : "Сохранить сроки аренды"}
+                  </Button>
+                ) : null}
+                {canExtendRentalTerms ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={!extensionReady || extensionMutation.isPending}
+                    onClick={() => {
+                      const terms = selectedUnits.flatMap((candidate) => {
+                        if (!extensionUnitIds.has(candidate.unit.id)) return []
+                        const additionalMonths = parsePositiveMonths(
+                          extensionMonthsValue(candidate.unit.id)
+                        )
+                        return additionalMonths === null
+                          ? []
+                          : [
+                              {
+                                unitId: candidate.unit.id,
+                                additionalMonths,
+                              },
+                            ]
+                      })
+                      if (terms.length !== extensionUnitIds.size) return
+
+                      extensionMutation.mutate({
+                        expectedVersion: order.version,
+                        terms,
+                        fingerprint: `extend-rental-terms:${order.id}:${order.version}:${terms
+                          .map(
+                            (term) => `${term.unitId}:${term.additionalMonths}`
+                          )
+                          .join(",")}`,
+                      })
+                    }}
+                  >
+                    {extensionMutation.isPending ? (
+                      <HugeiconsIcon
+                        icon={Loading03Icon}
+                        data-icon="inline-start"
+                        className="animate-spin"
+                      />
+                    ) : null}
+                    {extensionMutation.isPending
+                      ? "Продлеваем…"
+                      : "Продлить выбранные бытовки"}
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+            {canEdit && !rentalTermsReady ? (
+              <p className="mt-2 text-sm text-muted-foreground">
+                Выберите положительное целое число месяцев для каждой бытовки.
+              </p>
+            ) : canEdit && rentalTermsDirty ? (
+              <p className="mt-2 text-sm text-muted-foreground">
+                Сначала сохраните изменённые сроки аренды, затем создавайте
+                заказ.
+              </p>
+            ) : null}
+            {canExtendRentalTerms &&
+            extensionUnitIds.size > 0 &&
+            !extensionReady ? (
+              <p className="mt-2 text-sm text-muted-foreground">
+                Укажите положительный срок продления для каждой выбранной
+                бытовки.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
         {selectedUnits.length === 0 ? (
           <Card size="sm">
             <CardHeader>
@@ -863,86 +1297,175 @@ export function OrderDetailPage() {
             </CardHeader>
           </Card>
         ) : (
-          selectedUnits.map((candidate) => (
-            <Card key={candidate.unit.id} size="sm">
-              <CardHeader>
-                <CardTitle className="flex flex-wrap items-center gap-2">
-                  {candidate.unit.number}
-                  <RentalItemStatusBadge status={candidate.unit.status} />
-                </CardTitle>
-                <CardDescription>
-                  {[
-                    candidate.unit.rentalType,
-                    candidate.unit.dimensions,
-                    candidate.unit.category,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </CardDescription>
-                <CardAction className="flex items-center gap-1">
-                  <Badge variant="secondary">Добавлено</Badge>
-                  {canEdit ? (
+          selectedUnits.map((candidate) => {
+            const rentalTerm = candidate.rentalTerm ?? null
+            const isShipped = isShippedRentalTerm(candidate)
+            const selectedForExtension = extensionUnitIds.has(candidate.unit.id)
+
+            return (
+              <Card key={candidate.unit.id} size="sm">
+                <CardHeader>
+                  <CardTitle className="flex flex-wrap items-center gap-2">
+                    {candidate.unit.number}
+                    <RentalItemStatusBadge status={candidate.unit.status} />
+                  </CardTitle>
+                  <CardDescription>
+                    {[
+                      candidate.unit.rentalType,
+                      candidate.unit.dimensions,
+                      candidate.unit.category,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </CardDescription>
+                  <CardAction className="flex items-center gap-1">
+                    <Badge variant="secondary">Добавлено</Badge>
+                    {canEdit ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        aria-label={`Добавить наполнение ${candidate.unit.number}`}
+                        onClick={() => setContentsUnitId(candidate.unit.id)}
+                      >
+                        <HugeiconsIcon
+                          icon={Add01Icon}
+                          data-icon="inline-start"
+                        />
+                        {candidate.unit.contents.length > 0
+                          ? "Изменить наполнение"
+                          : "Добавить наполнение"}
+                      </Button>
+                    ) : null}
+                  </CardAction>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-2">
+                  <h3 className="font-medium">Наполнение</h3>
+                  <OrderUnitContentsView contents={candidate.unit.contents} />
+                  <div className="mt-3 rounded-lg border bg-muted/20 p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <h3 className="font-medium">Срок аренды</h3>
+                        <p className="text-sm text-muted-foreground">
+                          Настройка срока для бытовки {candidate.unit.number}
+                        </p>
+                      </div>
+                      <Badge variant={rentalTerm ? "secondary" : "outline"}>
+                        {rentalTerm
+                          ? monthLabel(rentalTerm.rentalMonths)
+                          : "Не задан"}
+                      </Badge>
+                    </div>
+
+                    <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                      <RentalMonthsPicker
+                        key={`rental-term-${candidate.unit.id}-${order.version}`}
+                        id={`rental-term-${candidate.unit.id}`}
+                        label={`Срок аренды в месяцах для ${candidate.unit.number}`}
+                        value={rentalMonthsValue(candidate)}
+                        disabled={!canEdit || rentalTermsMutation.isPending}
+                        onChange={(value) =>
+                          setRentalMonthsValue(candidate.unit.id, value)
+                        }
+                      />
+                      <div className="grid gap-1 text-sm">
+                        <span className="font-medium">Дата отгрузки</span>
+                        <output className="flex h-9 items-center rounded-md border border-input bg-background px-3">
+                          {formatRentalDate(rentalTerm?.shipmentDate ?? null)}
+                        </output>
+                      </div>
+                      <div className="grid gap-1 text-sm">
+                        <span className="font-medium">Дата возврата</span>
+                        <output className="flex h-9 items-center rounded-md border border-input bg-background px-3">
+                          {formatRentalDate(rentalTerm?.returnDate ?? null)}
+                        </output>
+                      </div>
+                    </div>
+
+                    {canExtendRentalTerms && isShipped ? (
+                      <div className="mt-3 grid gap-3 rounded-md border bg-background p-3 sm:grid-cols-[minmax(0,1fr)_minmax(12rem,16rem)] sm:items-end">
+                        <div className="flex items-center gap-2 text-sm">
+                          <Checkbox
+                            id={`extend-rental-term-${candidate.unit.id}`}
+                            aria-label={`Выбрать бытовку ${candidate.unit.number} для продления`}
+                            checked={selectedForExtension}
+                            disabled={extensionMutation.isPending}
+                            onCheckedChange={(checked) =>
+                              setExtensionUnitSelected(
+                                candidate.unit.id,
+                                checked === true
+                              )
+                            }
+                          />
+                          <label
+                            htmlFor={`extend-rental-term-${candidate.unit.id}`}
+                            className="cursor-pointer font-medium"
+                          >
+                            Продлить срок этой бытовки
+                          </label>
+                        </div>
+                        <RentalMonthsPicker
+                          key={`extend-rental-term-${candidate.unit.id}-${order.version}`}
+                          id={`extend-rental-months-${candidate.unit.id}`}
+                          label={`Продление в месяцах для ${candidate.unit.number}`}
+                          value={extensionMonthsValue(candidate.unit.id)}
+                          disabled={
+                            !selectedForExtension || extensionMutation.isPending
+                          }
+                          onChange={(value) =>
+                            setExtensionMonthsValue(candidate.unit.id, value)
+                          }
+                        />
+                      </div>
+                    ) : rentalTerm ? (
+                      <p className="mt-3 text-sm text-muted-foreground">
+                        {isShipped
+                          ? "Срок можно продлить, пока заказ доступен для изменений."
+                          : "Дата возврата будет рассчитана после отгрузки бытовки."}
+                      </p>
+                    ) : null}
+                  </div>
+                </CardContent>
+                {canEdit ? (
+                  <CardFooter className="border-t">
                     <Button
                       type="button"
                       size="sm"
                       variant="outline"
-                      aria-label={`Добавить наполнение ${candidate.unit.number}`}
-                      onClick={() => setContentsUnitId(candidate.unit.id)}
+                      disabled={
+                        removeUnitMutation.isPending &&
+                        removeUnitMutation.variables?.candidate.unit.id ===
+                          candidate.unit.id
+                      }
+                      onClick={() =>
+                        removeUnitMutation.mutate({
+                          candidate,
+                          expectedVersion: order.version,
+                          fingerprint: `remove-unit:${order.id}:${order.version}:${candidate.unit.id}`,
+                        })
+                      }
                     >
-                      <HugeiconsIcon
-                        icon={Add01Icon}
-                        data-icon="inline-start"
-                      />
-                      {candidate.unit.contents.length > 0
-                        ? "Изменить наполнение"
-                        : "Добавить наполнение"}
-                    </Button>
-                  ) : null}
-                </CardAction>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-2">
-                <h3 className="font-medium">Наполнение</h3>
-                <OrderUnitContentsView contents={candidate.unit.contents} />
-              </CardContent>
-              {canEdit ? (
-                <CardFooter className="border-t">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    disabled={
-                      removeUnitMutation.isPending &&
+                      {removeUnitMutation.isPending &&
                       removeUnitMutation.variables?.candidate.unit.id ===
-                        candidate.unit.id
-                    }
-                    onClick={() =>
-                      removeUnitMutation.mutate({
-                        candidate,
-                        expectedVersion: order.version,
-                        fingerprint: `remove-unit:${order.id}:${order.version}:${candidate.unit.id}`,
-                      })
-                    }
-                  >
-                    {removeUnitMutation.isPending &&
-                    removeUnitMutation.variables?.candidate.unit.id ===
-                      candidate.unit.id ? (
-                      <HugeiconsIcon
-                        icon={Loading03Icon}
-                        data-icon="inline-start"
-                        className="animate-spin"
-                      />
-                    ) : (
-                      <HugeiconsIcon
-                        icon={Delete02Icon}
-                        data-icon="inline-start"
-                      />
-                    )}
-                    Удалить из бронирования
-                  </Button>
-                </CardFooter>
-              ) : null}
-            </Card>
-          ))
+                        candidate.unit.id ? (
+                        <HugeiconsIcon
+                          icon={Loading03Icon}
+                          data-icon="inline-start"
+                          className="animate-spin"
+                        />
+                      ) : (
+                        <HugeiconsIcon
+                          icon={Delete02Icon}
+                          data-icon="inline-start"
+                        />
+                      )}
+                      Удалить из бронирования
+                    </Button>
+                  </CardFooter>
+                ) : null}
+              </Card>
+            )
+          })
         )}
       </section>
 

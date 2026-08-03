@@ -8,6 +8,12 @@ import {
   type CabinCoverProjection,
   type DisposableMediaObjectUrl,
 } from "@/features/media/media-service"
+import {
+  acquireMediaPreview,
+  getCachedMediaPreviewUrl,
+  mediaPreviewCacheKey,
+  type MediaPreviewLease,
+} from "@/features/media/media-preview-cache"
 import { retryOwnerProofOperation } from "@/features/media/owner-proof-retry"
 
 const mediaClient = createHttpMediaClient()
@@ -33,6 +39,32 @@ type LoadedRentalItemPhotos = Readonly<{
 }>
 
 const EMPTY_CABIN_PREVIEWS: NonNullable<CabinCoverProjection["previews"]> = []
+
+function previewCacheKey(
+  warehouseId: string,
+  cabinId: string,
+  preview: NonNullable<CabinCoverProjection["previews"]>[number]
+) {
+  return mediaPreviewCacheKey({
+    warehouseId,
+    cabinId,
+    mediaId: preview.mediaId,
+    generation: preview.generation,
+    variant: preview.kind,
+  })
+}
+
+function previewPhoto(
+  preview: NonNullable<CabinCoverProjection["previews"]>[number],
+  url: string
+): RentalItemCardServicePhoto {
+  return {
+    id: preview.mediaId,
+    generation: preview.generation,
+    url,
+    variants: { small: { url } },
+  }
+}
 
 function fullscreenPhotoKey(id: string, generation: number) {
   return `${id}:${generation}`
@@ -73,6 +105,16 @@ export function useRentalItemCardPhotos({
   const currentPhotoListSignature = useRef("")
   const mounted = useRef(true)
   const previews = projection?.previews ?? EMPTY_CABIN_PREVIEWS
+  const cachedPhotos = useMemo(
+    () =>
+      previews.flatMap((preview) => {
+        const url = getCachedMediaPreviewUrl(
+          previewCacheKey(warehouseId, cabinId, preview)
+        )
+        return url ? [previewPhoto(preview, url)] : []
+      }),
+    [cabinId, previews, warehouseId]
+  )
   const photoListSignature = `${warehouseId}:${cabinId}:${previews
     .map(
       (preview) =>
@@ -103,24 +145,29 @@ export function useRentalItemCardPhotos({
   useEffect(() => {
     if (coverAvailability !== "available" || previews.length === 0) return
     let active = true
-    const objectUrls: DisposableMediaObjectUrl[] = []
+    const leases: MediaPreviewLease[] = []
 
     void Promise.allSettled(
       previews.map((preview) =>
         retryOwnerProofOperation(() =>
-          mediaClient.createVariantObjectUrl(accessToken, owner, preview)
-        ).then((objectUrl) => {
+          acquireMediaPreview(
+            mediaPreviewCacheKey({
+              warehouseId,
+              cabinId,
+              mediaId: preview.mediaId,
+              generation: preview.generation,
+              variant: preview.kind,
+            }),
+            () =>
+              mediaClient.createVariantObjectUrl(accessToken, owner, preview)
+          )
+        ).then((lease) => {
           if (!active) {
-            objectUrl.dispose()
+            lease.release()
             return null
           }
-          objectUrls.push(objectUrl)
-          return {
-            id: preview.mediaId,
-            generation: preview.generation,
-            url: objectUrl.url,
-            variants: { small: { url: objectUrl.url } },
-          }
+          leases.push(lease)
+          return previewPhoto(preview, lease.url)
         })
       )
     )
@@ -149,9 +196,17 @@ export function useRentalItemCardPhotos({
 
     return () => {
       active = false
-      objectUrls.forEach((objectUrl) => objectUrl.dispose())
+      leases.forEach((lease) => lease.release())
     }
-  }, [accessToken, coverAvailability, owner, photoListSignature, previews])
+  }, [
+    accessToken,
+    cabinId,
+    coverAvailability,
+    owner,
+    photoListSignature,
+    previews,
+    warehouseId,
+  ])
 
   const requestFullscreen = useCallback(
     (photo: PhotoCarouselPhoto) => {
@@ -224,7 +279,11 @@ export function useRentalItemCardPhotos({
     }
   }
   if (loadedPhotos?.signature !== photoListSignature) {
-    return { photos: [], availability: "loading" as const, requestFullscreen }
+    return {
+      photos: cachedPhotos,
+      availability: "loading" as const,
+      requestFullscreen,
+    }
   }
   return { ...loadedPhotos, photos, requestFullscreen }
 }

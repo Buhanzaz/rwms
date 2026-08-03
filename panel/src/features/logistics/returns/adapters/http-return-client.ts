@@ -122,6 +122,9 @@ export function parseReturnDocument(value: unknown): ReturnDocument {
     equipmentMovementTaskId: nullableUuid(source.equipmentMovementTaskId),
     scheduledDate: nullableLocalDate(source.scheduledDate),
     rentalOrderId: nullableUuid(source.rentalOrderId),
+    ...(source.rentalShipmentId === undefined
+      ? {}
+      : { rentalShipmentId: nullableUuid(source.rentalShipmentId) }),
     lines,
     createdAt: timestamp(source.createdAt),
     updatedAt: timestamp(source.updatedAt),

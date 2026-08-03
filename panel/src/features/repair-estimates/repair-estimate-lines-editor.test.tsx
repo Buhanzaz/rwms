@@ -42,6 +42,7 @@ function queues() {
   return [
     {
       id: "queue-repair",
+      definitionId: "queue-definition-repair",
       name: "Кузовной ремонт",
       type: "REPAIR",
       active: true,
@@ -50,6 +51,7 @@ function queues() {
     },
     {
       id: "queue-holding",
+      definitionId: "queue-definition-holding",
       name: "Ожидание проверки",
       type: "HOLDING",
       active: true,
@@ -58,6 +60,7 @@ function queues() {
     },
     {
       id: "queue-movement",
+      definitionId: "queue-definition-movement",
       name: "Перемещение на ремонт",
       type: "MOVEMENT",
       active: true,
@@ -66,6 +69,7 @@ function queues() {
     },
     {
       id: "queue-furniture",
+      definitionId: "queue-definition-furniture",
       name: "Перемещение мебели",
       type: "FURNITURE_MOVEMENT",
       active: true,
@@ -74,6 +78,7 @@ function queues() {
     },
     {
       id: "queue-hidden",
+      definitionId: "queue-definition-hidden",
       name: "Скрытая очередь",
       type: "REPAIR",
       active: true,
@@ -82,6 +87,7 @@ function queues() {
     },
     {
       id: "queue-inactive",
+      definitionId: "queue-definition-inactive",
       name: "Неактивная очередь",
       type: "REPAIR",
       active: false,
@@ -183,7 +189,7 @@ describe("custom repair lines", () => {
           catalogSnapshot: null,
           normativeMinutes: 45,
           customQueueBinding: {
-            queueId: "queue-holding",
+            queueId: "queue-definition-holding",
             queueName: "Ожидание проверки",
             queueKind: "HOLDING",
           },
@@ -222,7 +228,7 @@ describe("custom repair lines", () => {
           description: "Саморезы",
           normativeMinutes: 0,
           customQueueBinding: {
-            queueId: "queue-holding",
+            queueId: "queue-definition-holding",
             queueName: "Ожидание проверки",
             queueKind: "HOLDING",
           },
@@ -250,6 +256,7 @@ describe("custom repair lines", () => {
             name: "Каталожная работа",
             nodeType: "WORK",
             furnitureEquipment: null,
+            characteristic: null,
           },
         },
       ],

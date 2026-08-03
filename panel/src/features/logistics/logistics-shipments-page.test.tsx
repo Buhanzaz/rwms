@@ -627,17 +627,30 @@ describe("LogisticsShipmentsPage", () => {
       )[0]!
     )
 
+    const dateDialog = screen.queryByRole("dialog", {
+      name: "Дата отгрузки отличается",
+    })
+    if (dateDialog) {
+      await user.click(
+        within(dateDialog).getByRole("button", {
+          name: "Оставить назначенную",
+        })
+      )
+    }
+
     await waitFor(() =>
       expect(shipmentApi.confirmShipmentPreparation).toHaveBeenCalledWith({
         accessToken: "shipment-token",
         documentId: AWAITING_ID,
         expectedVersion: 5,
         idempotencyKey: CONFIRM_KEY,
+        keepScheduledDate: true,
       })
     )
   })
 
-  it("asks to change a future shipment date instead of shipping early", async () => {
+  it("asks whether to keep or change a shipment date from another day", async () => {
+    vi.stubGlobal("crypto", { randomUUID: () => CONFIRM_KEY })
     const future = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)
     shipmentApi.listShipments.mockResolvedValue([
       {
@@ -652,11 +665,22 @@ describe("LogisticsShipmentsPage", () => {
       (await screen.findAllByRole("button", { name: "Отгружена" }))[0]!
     )
 
-    expect(
-      screen.getByRole("heading", { name: "Изменить дату отгрузки" })
-    ).toBeTruthy()
-    expect(screen.getByText(/Дата отгрузки ещё не наступила/)).toBeTruthy()
-    expect(shipmentApi.confirmShipmentPreparation).not.toHaveBeenCalled()
+    const dialog = screen.getByRole("dialog", {
+      name: "Дата отгрузки отличается",
+    })
+    expect(within(dialog).getByText(/Назначенная дата/)).toBeTruthy()
+    await user.click(
+      within(dialog).getByRole("button", { name: "Оставить назначенную" })
+    )
+    await waitFor(() =>
+      expect(shipmentApi.confirmShipmentPreparation).toHaveBeenCalledWith({
+        accessToken: "shipment-token",
+        documentId: AWAITING_ID,
+        expectedVersion: 5,
+        idempotencyKey: CONFIRM_KEY,
+        keepScheduledDate: true,
+      })
+    )
   })
 
   it("cancels a preparation through the service workflow with document CAS", async () => {

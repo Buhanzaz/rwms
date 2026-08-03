@@ -1,6 +1,10 @@
 import { taskBoardSettingsClient } from "@/features/settings/task-board/api/task-board-settings-api"
 import type { RepairEstimateCatalogRouteQueueKind } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
-import type { QueueType } from "@/features/settings/task-board/model/task-board-settings"
+import type {
+  QueueType,
+  WorkerDto,
+  WorkQueueDto,
+} from "@/features/settings/task-board/model/task-board-settings"
 import type { RepairWorkerDirectoryGroupDto } from "@/features/repair-tasks/model/repair-worker-directory"
 import type { RepairWorkerDirectoryClient } from "@/features/repair-tasks/ports/repair-worker-directory-client"
 
@@ -21,13 +25,36 @@ function isRepairRouteQueueKind(
   return value === "MOVEMENT" || value === "REPAIR" || value === "HOLDING"
 }
 
+function isPrimaryBinding(binding: WorkQueueDto["bindings"][number]) {
+  return binding.primary || binding.participationPolicy === "PRIMARY"
+}
+
+function isQualifiedForAny(
+  worker: WorkerDto,
+  warehouseId: string,
+  workerClassIds: ReadonlySet<string>
+) {
+  return (
+    worker.warehouseId === warehouseId &&
+    worker.active &&
+    worker.qualifications.some(
+      (qualification) =>
+        qualification.active && workerClassIds.has(qualification.workerClass.id)
+    )
+  )
+}
+
 export class HttpRepairWorkerDirectoryAdapter implements RepairWorkerDirectoryClient {
   async listGroups(
     query: Parameters<RepairWorkerDirectoryClient["listGroups"]>[0],
     accessToken: string
   ) {
+    const groupsPromise =
+      query.purpose === "DRIVER_DIRECTORY"
+        ? Promise.resolve([])
+        : taskBoardSettingsClient.listGroups(accessToken, query.warehouseId)
     const [groups, workers, queues] = await Promise.all([
-      taskBoardSettingsClient.listGroups(accessToken, query.warehouseId),
+      groupsPromise,
       taskBoardSettingsClient.listWorkers(accessToken, query.warehouseId),
       taskBoardSettingsClient.listQueues(accessToken, query.warehouseId),
     ])
@@ -40,6 +67,40 @@ export class HttpRepairWorkerDirectoryAdapter implements RepairWorkerDirectoryCl
       }
       return true
     })
+
+    // A logistics driver is an independently registered warehouse worker.
+    // Unlike repair staff, it is not required to belong to a worker group.
+    // The warehouse's LOGISTICS_DRIVER queue and its primary class are the
+    // authoritative directory, which also keeps drivers separated by city.
+    if (query.purpose === "DRIVER_DIRECTORY") {
+      return matchingQueues
+        .filter((queue) => queue.purpose === "LOGISTICS_DRIVER")
+        .map<RepairWorkerDirectoryGroupDto>((queue) => {
+          const primaryClassIds = new Set(
+            queue.bindings
+              .filter(isPrimaryBinding)
+              .map((binding) => binding.workerClass.id)
+          )
+          return {
+            id: queue.id,
+            warehouseId: query.warehouseId,
+            name: queue.name,
+            active: queue.active,
+            queueIds: [queue.id],
+            routeQueueKinds: isRepairRouteQueueKind(queue.type)
+              ? [queue.type]
+              : [],
+            members: workers
+              .filter((worker) =>
+                isQualifiedForAny(worker, query.warehouseId, primaryClassIds)
+              )
+              .map((worker) => ({ id: worker.id, name: worker.displayName })),
+          }
+        })
+        .filter((group) => group.members.length > 0)
+        .sort((left, right) => left.name.localeCompare(right.name, "ru"))
+    }
+
     const eligibleClassIds = new Set(
       matchingQueues.flatMap((queue) =>
         queue.bindings.map((binding) => binding.workerClass.id)

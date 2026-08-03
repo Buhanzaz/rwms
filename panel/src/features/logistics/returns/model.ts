@@ -49,6 +49,8 @@ export type ReturnDocument = {
   equipmentMovementTaskId: string | null
   scheduledDate: string | null
   rentalOrderId: string | null
+  /** Shipment batch that produced this return document. */
+  rentalShipmentId?: string | null
   lines: ReturnLine[]
   createdAt: string
   updatedAt: string

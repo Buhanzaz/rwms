@@ -26,7 +26,11 @@ import type {
   WorkQueueDto,
 } from "@/features/settings/task-board/model/task-board-settings"
 
-function workerClass(id: string, name: string): WorkerClassDto {
+function workerClass(
+  id: string,
+  name: string,
+  logisticsPrimary = false
+): WorkerClassDto {
   return {
     id,
     version: 1,
@@ -35,10 +39,11 @@ function workerClass(id: string, name: string): WorkerClassDto {
     comment: null,
     sortOrder: 1,
     active: true,
+    logisticsPrimary,
   }
 }
 
-const driverClass = workerClass("driver", "Водители")
+const driverClass = workerClass("driver", "Водители", true)
 const slingerClass = workerClass("slinger", "Стропальщики")
 const generalClass = workerClass("general", "Разнорабочие")
 const movementDefinition: QueueDefinitionDto = {
@@ -50,17 +55,40 @@ const movementDefinition: QueueDefinitionDto = {
   purpose: "GENERAL",
 }
 
-const queue: WorkQueueDto = {
-  id: "queue-1",
-  version: 4,
+const movementBindings: WorkQueueDto["bindings"] = [
+  {
+    id: "binding-driver",
+    version: 3,
+    workerClass: driverClass,
+    order: 0,
+    primary: true,
+    stopTaskOnTake: false,
+    participationPolicy: "PRIMARY",
+    notifyOnPrimaryTake: false,
+  },
+  {
+    id: "binding-slinger",
+    version: 3,
+    workerClass: slingerClass,
+    order: 1,
+    primary: false,
+    stopTaskOnTake: true,
+    participationPolicy: "REQUIRED",
+    notifyOnPrimaryTake: true,
+  },
+]
+
+const movementQueue: WorkQueueDto = {
+  id: "queue-movement",
+  version: 5,
   warehouseId: "warehouse-1",
   definitionId: movementDefinition.id,
   definitionVersion: movementDefinition.version,
-  name: "Перемещение",
-  description: null,
-  type: "MOVEMENT",
+  name: movementDefinition.name,
+  description: movementDefinition.description,
+  type: movementDefinition.type,
   purpose: "GENERAL",
-  sortOrder: 3,
+  sortOrder: 10,
   active: true,
   hidden: false,
   collapsed: false,
@@ -68,28 +96,7 @@ const queue: WorkQueueDto = {
   notificationThreshold: null,
   notifyWhenThresholdReached: false,
   resultPhotoMinCount: 1,
-  bindings: [
-    {
-      id: "binding-driver",
-      version: 3,
-      workerClass: driverClass,
-      order: 0,
-      primary: true,
-      stopTaskOnTake: false,
-      participationPolicy: "PRIMARY",
-      notifyOnPrimaryTake: false,
-    },
-    {
-      id: "binding-slinger",
-      version: 3,
-      workerClass: slingerClass,
-      order: 1,
-      primary: false,
-      stopTaskOnTake: true,
-      participationPolicy: "REQUIRED",
-      notifyOnPrimaryTake: true,
-    },
-  ],
+  bindings: movementBindings,
 }
 
 function worker(
@@ -241,17 +248,21 @@ describe("QueueDefinitionEditorDialog", () => {
       type: "MOVEMENT",
       purpose: "GENERAL",
     })
+    expect(screen.queryByText("Классы исполнителей")).toBeNull()
+    expect(
+      screen.queryByRole("spinbutton", { name: "Минимум фото результата" })
+    ).toBeNull()
   })
 })
 
-describe("QueueEditorDialog", () => {
+describe("QueueEditorDialog warehouse settings", () => {
   it("preserves the primary/secondary participation and notification behavior", async () => {
     const user = userEvent.setup()
     const onSave = vi.fn(async () => undefined)
 
     render(
       <QueueEditorDialog
-        queue={queue}
+        queue={movementQueue}
         definitions={[movementDefinition]}
         classes={[driverClass, slingerClass]}
         pending={false}
@@ -365,7 +376,7 @@ describe("QueueEditorDialog", () => {
 
     render(
       <QueueEditorDialog
-        queue={queue}
+        queue={movementQueue}
         definitions={[movementDefinition]}
         classes={[driverClass, slingerClass]}
         pending={false}

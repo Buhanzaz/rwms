@@ -351,38 +351,167 @@ export function createRepairEstimateCatalogIndex(
     incomingGraphParentNodesByNodeId.set(nodeId, Object.freeze(parents))
   }
 
-  function resolveEffectiveQueueBinding(
-    nodeId: string
+  type QueueBindingCandidate = {
+    sourceNodeId: string
+    binding: RepairEstimateCatalogEffectiveQueueBinding
+  }
+
+  function comparePredecessors(
+    left: RepairEstimateCatalogNodeDto,
+    right: RepairEstimateCatalogNodeDto,
+    parentId: string | null
+  ) {
+    // The explicit hierarchy is considered before graph predecessors.  The
+    // resolver still visits every predecessor; this only makes the result
+    // (including the selected display name when the same queue is reachable
+    // by several paths) deterministic.
+    const leftIsExplicitParent = left.id === parentId ? 0 : 1
+    const rightIsExplicitParent = right.id === parentId ? 0 : 1
+    return (
+      leftIsExplicitParent - rightIsExplicitParent || compareNodes(left, right)
+    )
+  }
+
+  function bindingKey(binding: RepairEstimateCatalogEffectiveQueueBinding) {
+    return `${binding.queueKind ?? ""}:${binding.queueId ?? ""}`
+  }
+
+  function mergeQueueBindingCandidates(
+    candidates: readonly QueueBindingCandidate[]
   ): RepairEstimateCatalogEffectiveQueueBinding | null {
-    const visited = new Set<string>()
-    let current = nodesById.get(nodeId)
+    const unique = new Map<string, QueueBindingCandidate>()
 
-    while (current) {
-      if (visited.has(current.id)) {
-        return null
-      }
-      visited.add(current.id)
-
-      const queueId = current.queueDefinitionId?.trim() || null
-      if (queueId && current.routeQueueKind) {
-        return {
-          queueId,
-          queueName: current.queueDefinitionName?.trim() || null,
-          queueKind: current.routeQueueKind,
-        }
-      }
-
-      if (current.parentId) {
-        current = nodesById.get(current.parentId)
+    for (const candidate of candidates) {
+      const key = bindingKey(candidate.binding)
+      const existing = unique.get(key)
+      if (!existing) {
+        unique.set(key, candidate)
         continue
       }
 
-      current = incomingGraphParentNodesByNodeId
-        .get(current.id)
-        ?.find((parent) => !visited.has(parent.id))
+      // A queue id and kind are the stable identity of a binding.  Names are
+      // presentation data and may be stale in an old snapshot; prefer the
+      // first deterministic value, but use a non-empty name when available.
+      if (
+        !existing.binding.queueName &&
+        candidate.binding.queueName
+      ) {
+        unique.set(key, {
+          ...existing,
+          binding: {
+            ...existing.binding,
+            queueName: candidate.binding.queueName,
+          },
+        })
+      }
     }
 
-    return null
+    if (unique.size !== 1) {
+      // A graph with two different routes is ambiguous.  Failing closed is
+      // safer than silently putting a task into an arbitrary queue.
+      return null
+    }
+
+    return unique.values().next().value?.binding ?? null
+  }
+
+  function resolveEffectiveQueueBinding(
+    nodeId: string
+  ): RepairEstimateCatalogEffectiveQueueBinding | null {
+    const memoized = new Map<string, readonly QueueBindingCandidate[]>()
+    const resolving = new Set<string>()
+
+    function collectReachableBindings(
+      currentNodeId: string
+    ): readonly QueueBindingCandidate[] {
+      const cached = memoized.get(currentNodeId)
+      if (cached) {
+        return cached
+      }
+
+      // A cycle is invalid for inheritance, but it must not make the whole
+      // catalog projection recurse forever.  The other branches remain
+      // usable and are still collected by the caller.
+      if (resolving.has(currentNodeId)) {
+        return Object.freeze([])
+      }
+
+      const current = nodesById.get(currentNodeId)
+      if (!current) {
+        return Object.freeze([])
+      }
+
+      resolving.add(currentNodeId)
+      const candidates: QueueBindingCandidate[] = []
+      const queueId = current.queueDefinitionId?.trim() || null
+      if (queueId && current.routeQueueKind) {
+        const result = Object.freeze([{
+          sourceNodeId: current.id,
+          binding: {
+            queueId,
+            queueName: current.queueDefinitionName?.trim() || null,
+            queueKind: current.routeQueueKind,
+          },
+        }])
+        resolving.delete(currentNodeId)
+        memoized.set(currentNodeId, result)
+        return result
+      }
+
+      const predecessorIds = new Set<string>()
+      if (current.parentId && nodesById.has(current.parentId)) {
+        predecessorIds.add(current.parentId)
+      }
+      for (const predecessor of
+        incomingGraphParentNodesByNodeId.get(current.id) ?? EMPTY_NODES) {
+        predecessorIds.add(predecessor.id)
+      }
+
+      const predecessors = Array.from(predecessorIds)
+        .map((predecessorId) => nodesById.get(predecessorId))
+        .filter(
+          (predecessor): predecessor is RepairEstimateCatalogNodeDto =>
+            predecessor !== undefined
+        )
+        .sort((left, right) =>
+          comparePredecessors(left, right, current.parentId)
+        )
+
+      for (const predecessor of predecessors) {
+        candidates.push(
+          ...collectReachableBindings(predecessor.id)
+        )
+      }
+
+      resolving.delete(currentNodeId)
+
+      // Keep one deterministic candidate for each queue identity while
+      // retaining all distinct identities for the fail-closed check.
+      const unique = new Map<string, QueueBindingCandidate>()
+      for (const candidate of candidates) {
+        const key = bindingKey(candidate.binding)
+        const existing = unique.get(key)
+        if (!existing) {
+          unique.set(key, candidate)
+          continue
+        }
+        if (!existing.binding.queueName && candidate.binding.queueName) {
+          unique.set(key, {
+            ...existing,
+            binding: {
+              ...existing.binding,
+              queueName: candidate.binding.queueName,
+            },
+          })
+        }
+      }
+
+      const result = Object.freeze(Array.from(unique.values()))
+      memoized.set(currentNodeId, result)
+      return result
+    }
+
+    return mergeQueueBindingCandidates(collectReachableBindings(nodeId))
   }
 
   const effectiveQueueBindingByNodeId = new Map<

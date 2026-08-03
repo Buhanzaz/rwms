@@ -26,7 +26,7 @@ const queue: WorkQueueDto = {
 }
 
 describe("QueueOrderSettings", () => {
-  it("renders ordering controls without an enclosing card", () => {
+  it("renders selected warehouse ordering controls without a card", () => {
     const { container } = render(
       <QueueOrderSettings queues={[queue]} pending={false} onSave={vi.fn()} />
     )

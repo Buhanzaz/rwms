@@ -2,16 +2,22 @@ import { Badge } from "@/components/ui/badge"
 import type { RepairTaskStatus } from "@/features/repair-tasks/model/repair-task"
 import { repairTaskStatusLabel } from "@/features/repair-tasks/repair-task-status-labels"
 
-export function RepairTaskStatusBadge({ status }: { status: RepairTaskStatus }) {
+export function RepairTaskStatusBadge({
+  status,
+  awaitingMovement = false,
+}: {
+  status: RepairTaskStatus
+  awaitingMovement?: boolean
+}) {
   return (
     <Badge
       variant={
-        status === "DRAFT" || status === "CANCELLED"
+        awaitingMovement || status === "DRAFT" || status === "CANCELLED"
           ? "outline"
           : "secondary"
       }
     >
-      {repairTaskStatusLabel(status)}
+      {awaitingMovement ? "Ожидает перемещения" : repairTaskStatusLabel(status)}
     </Badge>
   )
 }

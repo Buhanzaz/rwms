@@ -12,6 +12,7 @@ import type {
   CabinCoverProjection,
   MediaVariant,
 } from "@/features/media/media-service"
+import { clearMediaPreviewCache } from "@/features/media/media-preview-cache"
 
 const media = vi.hoisted(() => ({
   createOriginalObjectUrl: vi.fn(),
@@ -104,6 +105,7 @@ function Harness() {
 
 afterEach(() => {
   cleanup()
+  clearMediaPreviewCache()
   vi.useRealTimers()
   media.createOriginalObjectUrl.mockReset()
   media.createVariantObjectUrl.mockReset()

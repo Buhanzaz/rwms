@@ -51,6 +51,7 @@ export function ServiceOwnerPhotos({
   title = "Фотографии",
   toolbarAction,
   visibleMediaIds,
+  authoritativeReadyReferences,
   coverMediaId = null,
   requireCover = false,
   onReadyReferencesChange,
@@ -65,6 +66,8 @@ export function ServiceOwnerPhotos({
   title?: string
   toolbarAction?: ReactNode
   visibleMediaIds?: readonly string[]
+  /** Domain-owned references, not an unfiltered owner-media listing. */
+  authoritativeReadyReferences?: readonly ReadyMediaReference[]
   coverMediaId?: string | null
   requireCover?: boolean
   onReadyReferencesChange?: (references: ReadyMediaReference[]) => void
@@ -96,6 +99,7 @@ export function ServiceOwnerPhotos({
       title={title}
       toolbarAction={toolbarAction}
       visibleMediaIds={visibleMediaIds}
+      authoritativeReadyReferences={authoritativeReadyReferences}
       coverMediaId={coverMediaId}
       requireCover={requireCover}
       onReadyReferencesChange={onReadyReferencesChange}
@@ -113,6 +117,7 @@ function OwnedServiceOwnerPhotos({
   title,
   toolbarAction,
   visibleMediaIds,
+  authoritativeReadyReferences,
   coverMediaId,
   requireCover,
   onReadyReferencesChange,
@@ -126,6 +131,7 @@ function OwnedServiceOwnerPhotos({
   title: string
   toolbarAction?: ReactNode
   visibleMediaIds?: readonly string[]
+  authoritativeReadyReferences?: readonly ReadyMediaReference[]
   coverMediaId: string | null
   requireCover: boolean
   onReadyReferencesChange?: (references: ReadyMediaReference[]) => void
@@ -134,14 +140,76 @@ function OwnedServiceOwnerPhotos({
 }) {
   const [managerOpen, setManagerOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
+  const [sessionMediaIds, setSessionMediaIds] = useState<readonly string[]>([])
+  const [removedMediaIds, setRemovedMediaIds] = useState<readonly string[]>([])
   const media = useServiceOwnerMedia({ accessToken, owner })
   const visibleMediaIdSet = useMemo(
     () => (visibleMediaIds ? new Set(visibleMediaIds) : null),
     [visibleMediaIds]
   )
+  const authoritativeMediaIdSet = useMemo(
+    () =>
+      authoritativeReadyReferences
+        ? new Set(
+            authoritativeReadyReferences.map((reference) => reference.mediaId)
+          )
+        : null,
+    [authoritativeReadyReferences]
+  )
+  const selectedMediaIdSet = useMemo(() => {
+    if (!authoritativeMediaIdSet) return visibleMediaIdSet
+    const selected = new Set(authoritativeMediaIdSet)
+    sessionMediaIds.forEach((mediaId) => selected.add(mediaId))
+    removedMediaIds.forEach((mediaId) => selected.delete(mediaId))
+    return selected
+  }, [
+    authoritativeMediaIdSet,
+    removedMediaIds,
+    sessionMediaIds,
+    visibleMediaIdSet,
+  ])
+  const selectedAssets = useMemo(
+    () =>
+      selectedMediaIdSet
+        ? media.assets.filter((asset) => selectedMediaIdSet.has(asset.id))
+        : media.assets,
+    [media.assets, selectedMediaIdSet]
+  )
+  const selectedReadyReferences = useMemo(() => {
+    if (!authoritativeReadyReferences) return media.readyReferences
+
+    const readyById = new Map(
+      media.readyReferences.map((reference) => [reference.mediaId, reference])
+    )
+    const selected: ReadyMediaReference[] = []
+    const seen = new Set<string>()
+    for (const reference of authoritativeReadyReferences) {
+      if (
+        removedMediaIds.includes(reference.mediaId) ||
+        seen.has(reference.mediaId)
+      ) {
+        continue
+      }
+      selected.push(readyById.get(reference.mediaId) ?? reference)
+      seen.add(reference.mediaId)
+    }
+    for (const mediaId of sessionMediaIds) {
+      if (removedMediaIds.includes(mediaId) || seen.has(mediaId)) continue
+      const reference = readyById.get(mediaId)
+      if (!reference) continue
+      selected.push(reference)
+      seen.add(mediaId)
+    }
+    return selected
+  }, [
+    authoritativeReadyReferences,
+    media.readyReferences,
+    removedMediaIds,
+    sessionMediaIds,
+  ])
   const visiblePhotos = useMemo(() => {
-    const photos = visibleMediaIdSet
-      ? media.photos.filter((photo) => visibleMediaIdSet.has(photo.id))
+    const photos = selectedMediaIdSet
+      ? media.photos.filter((photo) => selectedMediaIdSet.has(photo.id))
       : [...media.photos]
     if (!coverMediaId) return photos
     return photos.slice().sort((left, right) => {
@@ -149,25 +217,23 @@ function OwnedServiceOwnerPhotos({
       if (right.id === coverMediaId) return 1
       return 0
     })
-  }, [coverMediaId, media.photos, visibleMediaIdSet])
-  const visibleLogicalPhotoCount = visibleMediaIdSet
-    ? media.assets.filter(
-        (asset) =>
-          visibleMediaIdSet.has(asset.id) &&
-          asset.kind === "IMAGE" &&
-          asset.status !== "DELETED"
+  }, [coverMediaId, media.photos, selectedMediaIdSet])
+  const visibleLogicalPhotoCount = selectedMediaIdSet
+    ? selectedAssets.filter(
+        (asset) => asset.kind === "IMAGE" && asset.status !== "DELETED"
       ).length
     : media.logicalPhotoCount
   const readyReferencesCallback = useRef(onReadyReferencesChange)
   const readyStateCallback = useRef(onReadyStateChange)
   const coverCallback = useRef(onCoverMediaIdChange)
+  const lastReportedReadyReferencesKey = useRef<string | null>(null)
   const photoById = useMemo(
     () => new Map(media.photos.map((photo) => [photo.id, photo])),
     [media.photos]
   )
   const managerItems = useMemo<ServiceMediaManagerItem[]>(
     () =>
-      media.assets
+      selectedAssets
         .filter((asset) => asset.kind === "IMAGE" && asset.status !== "DELETED")
         .map((asset) => ({
           id: asset.id,
@@ -178,7 +244,7 @@ function OwnedServiceOwnerPhotos({
           pending:
             asset.status === "UPLOADING" || asset.status === "PROCESSING",
         })),
-    [media.assets, photoById]
+    [photoById, selectedAssets]
   )
 
   useEffect(() => {
@@ -193,31 +259,36 @@ function OwnedServiceOwnerPhotos({
     coverCallback.current = onCoverMediaIdChange
   }, [onCoverMediaIdChange])
 
-  const readyReferencesKey = media.readyReferences
+  const readyReferencesKey = selectedReadyReferences
     .map((reference) => `${reference.mediaId}:${reference.generation}`)
     .join("|")
   useEffect(() => {
-    if (media.query.isSuccess) {
-      readyReferencesCallback.current?.([...media.readyReferences])
+    if (
+      !media.query.isSuccess ||
+      lastReportedReadyReferencesKey.current === readyReferencesKey
+    ) {
+      return
     }
-  }, [media.query.isSuccess, media.readyReferences, readyReferencesKey])
+    lastReportedReadyReferencesKey.current = readyReferencesKey
+    readyReferencesCallback.current?.([...selectedReadyReferences])
+  }, [media.query.isSuccess, readyReferencesKey, selectedReadyReferences])
 
   useEffect(() => {
     if (
       media.query.isSuccess &&
       coverMediaId &&
-      !media.readyReferences.some(
+      !selectedReadyReferences.some(
         (reference) => reference.mediaId === coverMediaId
       )
     ) {
       coverCallback.current?.(null)
     }
-  }, [coverMediaId, media.query.isSuccess, media.readyReferences])
+  }, [coverMediaId, media.query.isSuccess, selectedReadyReferences])
 
   const ready =
     media.query.isSuccess &&
     !media.pending &&
-    !media.assets.some(
+    !selectedAssets.some(
       (asset) => asset.status === "UPLOADING" || asset.status === "PROCESSING"
     )
   useEffect(() => {
@@ -225,13 +296,13 @@ function OwnedServiceOwnerPhotos({
   }, [ready])
 
   async function addFiles(files: File[]) {
-    const remaining = Math.max(0, maxItems - media.logicalPhotoCount)
+    const remaining = Math.max(0, maxItems - visibleLogicalPhotoCount)
     const selected = files.slice(0, remaining)
     if (selected.length === 0) return
     const folderId = crypto.randomUUID()
-    const offset = media.logicalPhotoCount
+    const offset = visibleLogicalPhotoCount
     try {
-      await media.upload(
+      const uploaded = await media.upload(
         selected.map((file, index) => ({
           file,
           folderId,
@@ -242,6 +313,11 @@ function OwnedServiceOwnerPhotos({
           },
         }))
       )
+      if (authoritativeMediaIdSet) {
+        setSessionMediaIds((current) => [
+          ...new Set([...current, ...uploaded.map((asset) => asset.id)]),
+        ])
+      }
       toast.success(
         selected.length === 1
           ? "Фотография загружена"
@@ -281,7 +357,7 @@ function OwnedServiceOwnerPhotos({
             <Button
               type="button"
               variant="outline"
-              disabled={media.pending || media.logicalPhotoCount >= maxItems}
+              disabled={media.pending || visibleLogicalPhotoCount >= maxItems}
               onClick={() => setManagerOpen(true)}
             >
               <HugeiconsIcon icon={ImageUploadIcon} data-icon="inline-start" />
@@ -297,7 +373,7 @@ function OwnedServiceOwnerPhotos({
         </p>
       ) : null}
 
-      {requireCover && media.readyReferences.length > 0 ? (
+      {requireCover && selectedReadyReferences.length > 0 ? (
         <p
           role={coverMediaId ? "status" : "alert"}
           className={
@@ -312,7 +388,9 @@ function OwnedServiceOwnerPhotos({
         </p>
       ) : null}
 
-      {media.previewUnavailable ? (
+      {media.previewUnavailable &&
+      selectedAssets.some((asset) => asset.status === "READY") &&
+      visiblePhotos.length === 0 ? (
         <div className="flex min-h-56 flex-1 flex-col items-center justify-center gap-3 rounded-lg border bg-muted px-4 text-center text-sm text-muted-foreground">
           <span>{unavailableMessage(media.previewError)}</span>
           {isRetryableOwnerProofError(media.previewError) ? (
@@ -359,6 +437,15 @@ function OwnedServiceOwnerPhotos({
             if (!asset) return
             void media
               .remove(asset)
+              .then(() => {
+                if (!authoritativeMediaIdSet) return
+                setRemovedMediaIds((current) => [
+                  ...new Set([...current, item.id]),
+                ])
+                setSessionMediaIds((current) =>
+                  current.filter((mediaId) => mediaId !== item.id)
+                )
+              })
               .catch((error) =>
                 toast.error(
                   error instanceof Error
