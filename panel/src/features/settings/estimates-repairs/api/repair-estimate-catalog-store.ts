@@ -713,6 +713,6 @@ export function getItemsForCategory(
 ) {
   const nodes = nodeById(section.nodes)
   return getRepairEstimateCatalogSectionItems(section).filter(
-    (item) => item.commonItem || belongsToCategory(item, categoryId, nodes)
+    (item) => !item.commonItem && belongsToCategory(item, categoryId, nodes)
   )
 }

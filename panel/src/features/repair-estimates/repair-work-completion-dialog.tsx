@@ -509,7 +509,11 @@ function RepairWorkCompletionForm({
               taskPlans: empty ? [] : plans,
               priority: 3,
             }
-            if (empty || !selectPriority) onComplete(result)
+            // A repair that first has to be delivered is placed into the
+            // neutral logistics flow. Its system priority is assigned only
+            // after the driver completes the move to the repair zone, so a
+            // user must not choose a repair-board priority at this point.
+            if (empty || !selectPriority || movementRequired) onComplete(result)
             else setPreparedResult(result)
           }}
         >
@@ -517,7 +521,7 @@ function RepairWorkCompletionForm({
             ? pendingLabel
             : empty
               ? emptyCompleteLabel
-              : selectPriority
+              : selectPriority && !movementRequired
                 ? "Далее"
                 : completeLabel}
         </Button>

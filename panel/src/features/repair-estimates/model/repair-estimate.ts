@@ -1,4 +1,5 @@
 import type {
+  RepairEstimateCabinCharacteristicReferenceDto,
   RepairEstimateCatalogRouteQueueKind,
   RepairEstimateFurnitureEquipmentReferenceDto,
 } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
@@ -33,6 +34,7 @@ export type RepairEstimateCatalogLineSnapshotDto = {
   name: string
   nodeType: "WORK" | "MATERIAL" | "OPTION"
   furnitureEquipment: RepairEstimateFurnitureEquipmentReferenceDto | null
+  characteristic: RepairEstimateCabinCharacteristicReferenceDto | null
 }
 
 /**

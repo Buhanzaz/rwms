@@ -3,6 +3,7 @@ export type DriverTaskKind =
   | "REMOVE_FROM_REPAIR"
   | "CAPITAL_TO_PRODUCTION"
   | "MOVE_TO_SHIPMENT"
+  | "GENERAL_MOVEMENT"
 
 export type DriverTaskWorkflowState =
   | "REGISTERING"
@@ -56,11 +57,14 @@ export type CapitalRepairCard = {
 
 export type DriverBoard = {
   warehouseId: string
+  currentDate: string
   queueId: string
   queueVersion: number
   repairPlaceCount: number
-  occupiedRepairPlaceCount: number
+  usedRepairPlaceCount: number
   availableRepairPlaceCount: number
+  inboundRepairPlaceAvailable: boolean
+  automaticRefillDelayMinutes: number
   repairPlacesOverCapacity: boolean
   current: DriverBoardCard[]
   dates: DriverBoardDateColumn[]
@@ -71,6 +75,15 @@ export type MoveDriverBoardTask = {
   warehouseId: string
   expectedTaskVersion: number
   expectedEntryVersion: number
+  targetLane: "SCHEDULED" | "CURRENT"
   targetDate: string
   targetIndex: number
+}
+
+export type CreateManualMovement = {
+  warehouseId: string
+  cabinId: string
+  comment: string
+  priority: number
+  idempotencyKey: string
 }

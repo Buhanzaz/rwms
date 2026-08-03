@@ -346,12 +346,44 @@ function nodeMoney(node: RepairEstimateCatalogNodeDto) {
   return normalizeMoney(node.unitPrice ?? "0")
 }
 
+export function catalogEstimateLineDescription(
+  node: RepairEstimateCatalogNodeDto,
+  locationTitle?: string | null
+) {
+  return node.nodeType === "WORK" && locationTitle
+    ? `${node.name} ${locationTitle}`
+    : node.name
+}
+
+function catalogLineSnapshotFromNode(
+  node: RepairEstimateCatalogNodeDto
+): NonNullable<RepairEstimateLineDto["catalogSnapshot"]> {
+  return {
+    nodeId: node.id,
+    name: node.name,
+    nodeType:
+      node.nodeType === "WORK"
+        ? "WORK"
+        : node.nodeType === "OPTION"
+          ? "OPTION"
+          : "MATERIAL",
+    furnitureEquipment: node.furnitureEquipment ?? null,
+    characteristic: node.characteristic ?? null,
+  }
+}
+
 export function applyCatalogNodesToEstimateLines(params: {
   lines: RepairEstimateLineDto[]
   nodes: RepairEstimateCatalogNodeDto[]
   quantity: number
   comment: string
   locationTitle?: string | null
+  /**
+   * An explicitly selected existing catalog work receives the added quantity.
+   * Omitting a work node (or giving it null) deliberately creates a separate
+   * work line, even when the same catalog node is already present.
+   */
+  targetWorkLineIdsByCatalogNodeId?: Readonly<Record<string, string | null>>
 }) {
   let nextLines = params.lines.map((line) => normalizeEstimateLine(line))
   const quantity = Math.max(1, Math.trunc(params.quantity || 1))
@@ -364,15 +396,32 @@ export function applyCatalogNodesToEstimateLines(params: {
       return
     }
 
-    const description =
-      node.nodeType === "WORK" && params.locationTitle
-        ? `${node.name} ${params.locationTitle}`
-        : node.name
-    const existingIndex = nextLines.findIndex(
-      (line) =>
-        line.catalogSnapshot?.nodeId === node.id &&
-        line.description.trim() === description.trim()
+    const description = catalogEstimateLineDescription(
+      node,
+      params.locationTitle
     )
+    const targetWorkLineId =
+      params.targetWorkLineIdsByCatalogNodeId?.[node.id] ?? null
+    const existingIndex =
+      node.nodeType === "WORK" && targetWorkLineId
+        ? nextLines.findIndex(
+            (line) =>
+              line.id === targetWorkLineId &&
+              line.lineType === "WORK" &&
+              line.catalogSnapshot?.nodeId === node.id &&
+              line.description.trim() === description.trim()
+          )
+        : node.nodeType === "WORK"
+          ? -1
+          : nextLines.findIndex(
+              (line) =>
+                line.lineType === "MATERIAL" &&
+                line.catalogSnapshot?.nodeId === node.id
+            )
+
+    if (node.nodeType === "WORK" && targetWorkLineId && existingIndex < 0) {
+      throw new Error("Выбранная работа больше недоступна для объединения")
+    }
 
     if (existingIndex >= 0) {
       nextLines = nextLines.map((line, index) => {
@@ -383,7 +432,11 @@ export function applyCatalogNodesToEstimateLines(params: {
         return normalizeEstimateLine({
           ...line,
           quantity: line.quantity + quantity,
-          lineComment: mergeLineComments(line.lineComment, params.comment),
+          lineComment:
+            node.nodeType === "WORK"
+              ? mergeLineComments(line.lineComment, params.comment)
+              : line.lineComment,
+          catalogSnapshot: catalogLineSnapshotFromNode(node),
         })
       })
       return
@@ -397,23 +450,13 @@ export function applyCatalogNodesToEstimateLines(params: {
         sourceLineKey: id,
         lineType: nodeLineType(node),
         description,
-        lineComment: params.comment.trim(),
+        lineComment: node.nodeType === "WORK" ? params.comment.trim() : "",
         unit: node.unit?.trim() || "",
         quantity,
         normativeMinutes: node.durationMinutes ?? 0,
         unitPrice: nodeMoney(node),
         lineTotal: "0.00",
-        catalogSnapshot: {
-          nodeId: node.id,
-          name: node.name,
-          nodeType:
-            node.nodeType === "WORK"
-              ? "WORK"
-              : node.nodeType === "OPTION"
-                ? "OPTION"
-                : "MATERIAL",
-          furnitureEquipment: node.furnitureEquipment ?? null,
-        },
+        catalogSnapshot: catalogLineSnapshotFromNode(node),
         customQueueBinding: null,
       }),
     ]
@@ -476,7 +519,6 @@ export function buildRepairEstimateTaskPlans(
     bindingKey: string
     lines: RepairEstimateLineDto[]
   }> = []
-  let currentWorkGroup: (typeof groups)[number] | null = null
   const groupByWorkLineId = new Map<string, (typeof groups)[number]>()
 
   lines.forEach((line) => {
@@ -487,21 +529,15 @@ export function buildRepairEstimateTaskPlans(
     const queueName = binding?.queueName ?? null
     const routeQueueKind = binding?.queueKind ?? null
     const currentBindingKey = bindingKey(binding)
-    if (
-      !currentWorkGroup ||
-      currentWorkGroup.bindingKey !== currentBindingKey
-    ) {
-      currentWorkGroup = {
-        queueId,
-        queueName,
-        routeQueueKind,
-        bindingKey: currentBindingKey,
-        lines: [],
-      }
-      groups.push(currentWorkGroup)
+    const group = {
+      queueId,
+      queueName,
+      routeQueueKind,
+      bindingKey: currentBindingKey,
+      lines: [line],
     }
-    currentWorkGroup.lines.push(line)
-    groupByWorkLineId.set(line.id, currentWorkGroup)
+    groups.push(group)
+    groupByWorkLineId.set(line.id, group)
   })
 
   let precedingWorkGroup: (typeof groups)[number] | null = null
@@ -513,12 +549,22 @@ export function buildRepairEstimateTaskPlans(
 
     const binding = lineQueueBinding(line, catalog)
     const matchingWorkGroup = binding
-      ? (groups.find((group) => group.bindingKey === bindingKey(binding)) ??
-        null)
+      ? ([...groups]
+          .reverse()
+          .find(
+            (group) =>
+              group.bindingKey === bindingKey(binding) &&
+              group.lines.some((candidate) => candidate.lineType === "WORK")
+          ) ?? null)
       : null
     const customMaterial = line.catalogSnapshot === null
+    const precedingWorkAcceptsBinding =
+      precedingWorkGroup !== null &&
+      (!binding || precedingWorkGroup.bindingKey === bindingKey(binding))
     const target = customMaterial
-      ? (matchingWorkGroup ?? (binding ? null : precedingWorkGroup))
+      ? precedingWorkAcceptsBinding
+        ? precedingWorkGroup
+        : (matchingWorkGroup ?? (binding ? null : precedingWorkGroup))
       : (precedingWorkGroup ??
         matchingWorkGroup ??
         (groups.length === 1 ? groups[0] : null))

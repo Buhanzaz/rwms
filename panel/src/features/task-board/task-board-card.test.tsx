@@ -12,6 +12,7 @@ import type {
 import {
   TaskBoardCard,
   TaskBoardCardPreview,
+  type TaskBoardRepairComplexity,
 } from "@/features/task-board/task-board-card"
 
 const externalTaskId = "legacy-repair-reference"
@@ -23,6 +24,12 @@ const kpiPalette: KpiPalette = {
     { fromPercent: 70, toPercent: 100, color: "#16A34A" },
   ],
   overdueColor: "#7F1D1D",
+}
+
+const complexRepair: TaskBoardRepairComplexity = {
+  type: "COMPLEX",
+  name: "Тяжёлый ремонт",
+  color: "#0E7490",
 }
 
 afterEach(cleanup)
@@ -72,6 +79,7 @@ function renderCard(
     dragDisabled = true,
     entryPatch = {},
     palette = null,
+    repairComplexity = null,
   }: {
     onDetails?: (entry: TaskBoardEntryDto) => void
     onEdit?: (entry: TaskBoardEntryDto) => void
@@ -82,6 +90,7 @@ function renderCard(
     dragDisabled?: boolean
     entryPatch?: Partial<TaskBoardEntryDto>
     palette?: KpiPalette | null
+    repairComplexity?: TaskBoardRepairComplexity | null
   } = {}
 ) {
   const entry = { ...taskEntry(source), ...entryPatch }
@@ -102,6 +111,7 @@ function renderCard(
         onPin={vi.fn()}
         onToggleCollapsed={onToggleCollapsed}
         palette={palette}
+        repairComplexity={repairComplexity}
       />
     </DndContext>
   )
@@ -131,6 +141,7 @@ function CollapsibleCard() {
         onResume={vi.fn()}
         onPin={vi.fn()}
         onToggleCollapsed={() => setCollapsed((current) => !current)}
+        repairComplexity={complexRepair}
       />
     </DndContext>
   )
@@ -234,6 +245,7 @@ describe("TaskBoardCard source details", () => {
 
     expect(screen.getByText("Группа")).toBeTruthy()
     expect(screen.getByText("Замена панели")).toBeTruthy()
+    expect(screen.getByText("Тяжёлый ремонт")).toBeTruthy()
 
     await user.click(collapse)
 
@@ -245,6 +257,7 @@ describe("TaskBoardCard source details", () => {
     expect(screen.getByText("Ожидает")).toBeTruthy()
     expect(screen.getByRole("button", { name: "Редактировать" })).toBeTruthy()
     expect(screen.getByRole("button", { name: "Детали" })).toBeTruthy()
+    expect(screen.getByText("Тяжёлый ремонт")).toBeTruthy()
 
     await user.click(
       screen.getByRole("button", { name: "Развернуть этап БЫТ-001" })
@@ -252,6 +265,40 @@ describe("TaskBoardCard source details", () => {
 
     expect(screen.getByText("Группа")).toBeTruthy()
     expect(screen.getByText("Замена панели")).toBeTruthy()
+    expect(screen.getByText("Тяжёлый ремонт")).toBeTruthy()
+  })
+
+  it("uses the service-issued complexity name and color on an ordinary repair card", () => {
+    renderCard(
+      {
+        type: "MAINTENANCE_REPAIR",
+        sourceId: "repair-1",
+      },
+      { repairComplexity: complexRepair }
+    )
+
+    const badge = screen.getByText("Тяжёлый ремонт")
+    expect(badge.getAttribute("data-repair-complexity-type")).toBe("COMPLEX")
+    expect(badge.style.backgroundColor).toBe("rgb(14, 116, 144)")
+    expect(badge.style.borderColor).toBe("rgb(14, 116, 144)")
+  })
+
+  it("does not render a capital repair badge in the ordinary task board", () => {
+    renderCard(
+      {
+        type: "MAINTENANCE_REPAIR",
+        sourceId: "repair-1",
+      },
+      {
+        repairComplexity: {
+          type: "CAPITAL",
+          name: "Капитальный ремонт",
+          color: "#7C3AED",
+        },
+      }
+    )
+
+    expect(screen.queryByText("Капитальный ремонт")).toBeNull()
   })
 
   it("keeps the pin next to the drag handle and shows the full repair text", () => {
@@ -296,11 +343,13 @@ describe("TaskBoardCard source details", () => {
         mobile={false}
         canEdit
         collapsed
+        repairComplexity={complexRepair}
       />
     )
 
     expect(screen.queryByText("Группа")).toBeNull()
     expect(screen.queryByText("Замена панели")).toBeNull()
+    expect(screen.getByText("Тяжёлый ремонт")).toBeTruthy()
 
     rerender(
       <TaskBoardCardPreview
@@ -309,11 +358,13 @@ describe("TaskBoardCard source details", () => {
         mobile={false}
         canEdit
         collapsed={false}
+        repairComplexity={complexRepair}
       />
     )
 
     expect(screen.getByText("Группа")).toBeTruthy()
     expect(screen.getByText("Замена панели")).toBeTruthy()
+    expect(screen.getByText("Тяжёлый ремонт")).toBeTruthy()
     expect(screen.queryByText("Дата")).toBeNull()
   })
 

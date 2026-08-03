@@ -4,6 +4,7 @@ export type EstimateCatalogSettingsActionId =
   | "repair-estimate-catalog-works"
   | "repair-estimate-catalog-materials"
   | "repair-estimate-catalog-furniture"
+  | "repair-estimate-catalog-common"
 
 export type EstimateCatalogSectionType =
   "COLORS" | "CANVAS" | "WORK" | "MATERIAL"

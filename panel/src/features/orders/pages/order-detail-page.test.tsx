@@ -28,6 +28,8 @@ const ordersApi = vi.hoisted(() => ({
   listOrderClients: vi.fn(),
   updateOrder: vi.fn(),
   saveOrder: vi.fn(),
+  setOrderRentalTerms: vi.fn(),
+  extendOrderRentalTerms: vi.fn(),
   createOrderIdempotencyKey: vi.fn(
     () => "99999999-9999-4999-8999-999999999999"
   ),
@@ -209,6 +211,8 @@ beforeEach(() => {
     status: "SAVED",
     permissions: { ...detail.permissions, canEdit: false },
   })
+  ordersApi.setOrderRentalTerms.mockResolvedValue(detail)
+  ordersApi.extendOrderRentalTerms.mockResolvedValue(detail)
   ordersApi.deleteOrder.mockResolvedValue({
     ...detail,
     version: 5,
@@ -396,6 +400,9 @@ describe("OrderDetailPage draft actions", () => {
     expect(screen.getByText("Черновик")).toBeTruthy()
     expect(screen.getByText(/Изменён/)).toBeTruthy()
     expect(
+      screen.getByRole("button", { name: "Сохранить бронирование" })
+    ).toBeTruthy()
+    expect(
       screen.queryByRole("heading", { name: "Бронирование ORD-000001" })
     ).toBeNull()
   })
@@ -465,6 +472,11 @@ describe("OrderDetailPage draft actions", () => {
       ...candidate,
       reservationId: "66666666-6666-4666-8666-666666666666",
       added: true,
+      rentalTerm: {
+        rentalMonths: 3,
+        shipmentDate: null,
+        returnDate: null,
+      },
     }
     ordersApi.getOrder.mockResolvedValue({
       ...detail,
@@ -495,17 +507,199 @@ describe("OrderDetailPage draft actions", () => {
       })
     )
     expect(toast.success).toHaveBeenCalledWith(
-      "Бронирование сохранено и добавлено в ожидающие отгрузки."
+      "Бронирование сохранено. Создайте отгрузку в разделе «Задания» логистики."
     )
     expect(
       screen.getByRole("button", { name: "Редактировать бронирование" })
     ).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Создать заказ" })).toBeTruthy()
     expect(
-      screen.getByRole("button", { name: "Сохранить бронирование" })
-    ).toBeTruthy()
+      screen.queryByRole("button", { name: "Сохранить бронирование" })
+    ).toBeNull()
     expect(
       screen.queryByRole("button", { name: "Удалить черновик" })
     ).toBeNull()
+  })
+
+  it("saves the complete rental-term vector before the draft can be saved", async () => {
+    const selectedCandidate = {
+      ...candidate,
+      reservationId: "66666666-6666-4666-8666-666666666666",
+      added: true,
+      rentalTerm: null,
+    }
+    ordersApi.getOrder.mockResolvedValue({
+      ...detail,
+      unitCount: 1,
+      units: [selectedCandidate],
+    })
+    ordersApi.setOrderRentalTerms.mockResolvedValue({
+      ...detail,
+      version: 5,
+      unitCount: 1,
+      units: [
+        {
+          ...selectedCandidate,
+          rentalTerm: {
+            rentalMonths: 18,
+            shipmentDate: null,
+            returnDate: null,
+          },
+        },
+      ],
+    })
+    const user = userEvent.setup()
+
+    renderPage()
+
+    const term = await screen.findByRole("combobox", {
+      name: "Срок аренды в месяцах для БЫТ-001",
+    })
+    expect((term as HTMLSelectElement).disabled).toBe(false)
+    expect(within(term).getByRole("option", { name: "1 месяц" })).toBeTruthy()
+    expect(
+      within(term).getByRole("option", { name: "Другое положительное целое" })
+    ).toBeTruthy()
+    expect(
+      screen.getByRole("button", { name: "Сохранить бронирование" })
+    ).toHaveProperty("disabled", true)
+
+    await user.selectOptions(term, "custom")
+    const customTerm = screen.getByRole("spinbutton", {
+      name: "Срок аренды в месяцах для БЫТ-001: произвольное значение",
+    })
+    await user.type(customTerm, "18")
+    await user.click(
+      screen.getByRole("button", { name: "Сохранить сроки аренды" })
+    )
+
+    await waitFor(() =>
+      expect(ordersApi.setOrderRentalTerms).toHaveBeenCalledWith({
+        accessToken: "orders-token",
+        orderId: ORDER_ID,
+        expectedVersion: 4,
+        terms: [{ unitId: UNIT_ID, rentalMonths: 18 }],
+        idempotencyKey: "99999999-9999-4999-8999-999999999999",
+      })
+    )
+    expect(toast.success).toHaveBeenCalledWith("Сроки аренды сохранены.")
+    expect(await screen.findByText("18 месяцев")).toBeTruthy()
+    expect(screen.getAllByText("Не назначена")).toHaveLength(2)
+    expect(
+      screen.getByRole("button", { name: "Сохранить бронирование" })
+    ).toHaveProperty("disabled", false)
+  })
+
+  it("extends one or several shipped cabins and shows their return dates", async () => {
+    const secondUnitId = "77777777-7777-4777-8777-777777777777"
+    const firstShippedCandidate = {
+      ...candidate,
+      reservationId: "66666666-6666-4666-8666-666666666666",
+      added: true,
+      unit: {
+        ...candidate.unit,
+        status: "RENTED" as const,
+      },
+      rentalTerm: {
+        rentalMonths: 3,
+        shipmentDate: "2026-07-20",
+        returnDate: "2026-10-20",
+      },
+    }
+    const secondShippedCandidate = {
+      ...candidate,
+      reservationId: "88888888-8888-4888-8888-888888888888",
+      added: true,
+      unit: {
+        ...candidate.unit,
+        id: secondUnitId,
+        number: "БЫТ-002",
+        status: "RENTED" as const,
+      },
+      rentalTerm: {
+        rentalMonths: 6,
+        shipmentDate: "2026-07-22",
+        returnDate: "2027-01-22",
+      },
+    }
+    const shippedDetail = {
+      ...detail,
+      version: 8,
+      status: "FULFILLED" as const,
+      unitCount: 2,
+      units: [firstShippedCandidate, secondShippedCandidate],
+      permissions: { ...detail.permissions, canEdit: false },
+    }
+    ordersApi.getOrder.mockResolvedValue(shippedDetail)
+    ordersApi.extendOrderRentalTerms.mockResolvedValue({
+      ...shippedDetail,
+      version: 9,
+      units: [
+        {
+          ...firstShippedCandidate,
+          rentalTerm: {
+            ...firstShippedCandidate.rentalTerm,
+            rentalMonths: 4,
+            returnDate: "2026-11-20",
+          },
+        },
+        {
+          ...secondShippedCandidate,
+          rentalTerm: {
+            ...secondShippedCandidate.rentalTerm,
+            rentalMonths: 12,
+            returnDate: "2027-07-22",
+          },
+        },
+      ],
+    })
+    const user = userEvent.setup()
+
+    renderPage()
+
+    expect(await screen.findByText("20.10.2026")).toBeTruthy()
+    expect(screen.getByText("22.01.2027")).toBeTruthy()
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "Выбрать бытовку БЫТ-001 для продления",
+      })
+    )
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "Выбрать бытовку БЫТ-002 для продления",
+      })
+    )
+    await user.selectOptions(
+      screen.getByRole("combobox", {
+        name: "Продление в месяцах для БЫТ-001",
+      }),
+      "1"
+    )
+    await user.selectOptions(
+      screen.getByRole("combobox", {
+        name: "Продление в месяцах для БЫТ-002",
+      }),
+      "6"
+    )
+    await user.click(
+      screen.getByRole("button", { name: "Продлить выбранные бытовки" })
+    )
+
+    await waitFor(() =>
+      expect(ordersApi.extendOrderRentalTerms).toHaveBeenCalledWith({
+        accessToken: "orders-token",
+        orderId: ORDER_ID,
+        expectedVersion: 8,
+        terms: [
+          { unitId: UNIT_ID, additionalMonths: 1 },
+          { unitId: secondUnitId, additionalMonths: 6 },
+        ],
+        idempotencyKey: "99999999-9999-4999-8999-999999999999",
+      })
+    )
+    expect(toast.success).toHaveBeenCalledWith("Срок аренды продлён.")
+    expect(await screen.findByText("20.11.2026")).toBeTruthy()
+    expect(screen.getByText("22.07.2027")).toBeTruthy()
   })
 
   it("updates the detail projection after selecting an existing client", async () => {

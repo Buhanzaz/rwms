@@ -52,6 +52,13 @@ import {
   SHIPMENTS_QUERY_KEY,
   listShipments,
 } from "@/features/logistics/shipments/api"
+import {
+  RETURNS_QUERY_KEY,
+  listReturns,
+} from "@/features/logistics/returns/api"
+import type { ReturnDocument } from "@/features/logistics/returns/model"
+import type { ShipmentDocument } from "@/features/logistics/shipments/model"
+import { getOrder } from "@/features/orders/api/orders-api"
 import { AddContentsDialog } from "@/features/rental-items/add-contents-dialog"
 import {
   getRentalItemDossierPage,
@@ -182,6 +189,27 @@ function formatDateTime(value: string | null) {
     dateStyle: "medium",
     timeStyle: value.includes("T") ? "short" : undefined,
   }).format(date)
+}
+
+function isDateDue(value: string | null) {
+  return Boolean(value && value <= new Date().toISOString().slice(0, 10))
+}
+
+function rentalLifecycleLabel(
+  shipment: ShipmentDocument | null,
+  rentalReturn: ReturnDocument | null,
+  returnDate: string | null
+) {
+  if (rentalReturn?.state === "ACCEPTED") return "Возвращено"
+  if (rentalReturn && rentalReturn.state !== "DRAFT")
+    return "Возврат в процессе"
+  if (shipment?.state === "SHIPPED" && isDateDue(returnDate)) {
+    return "Требует возврата"
+  }
+  if (shipment?.state === "SHIPPED") return "Отгружено"
+  if (shipment?.state === "DRAFT") return "Ожидает отгрузки"
+  if (shipment) return "В процессе отгрузки"
+  return "Не отгружена"
 }
 
 function formatCurrency(value: number | null) {
@@ -472,20 +500,72 @@ export function RentalItemDetailPage() {
   })
   const rentalItem = assetQuery.data ?? null
   const activeOrderReservation = rentalItem?.activeOrderReservation ?? null
+  const hasRentalLifecycle = Boolean(
+    activeOrderReservation ||
+      rentalItem?.shipmentDate ||
+      rentalItem?.tenant ||
+      rentalItem?.status === "RENTED"
+  )
   const shipmentsQuery = useQuery({
     queryKey: [...SHIPMENTS_QUERY_KEY, rentalItem?.warehouseId ?? "none"],
     queryFn: () => listShipments(accessToken!, rentalItem!.warehouseId),
-    enabled: Boolean(accessToken && rentalItem && activeOrderReservation),
+    enabled: Boolean(accessToken && rentalItem && hasRentalLifecycle),
   })
-  const rentalOrderShipment = shipmentsQuery.data?.find(
-    (shipment) =>
-      shipment.rentalOrderId === activeOrderReservation?.orderId &&
-      shipment.lines.some((line) => line.assetId === rentalItem?.id)
+  const returnsQuery = useQuery({
+    queryKey: [...RETURNS_QUERY_KEY, rentalItem?.warehouseId ?? "none"],
+    queryFn: () => listReturns(accessToken!, rentalItem!.warehouseId),
+    enabled: Boolean(accessToken && rentalItem && hasRentalLifecycle),
+  })
+  const rentalOrderShipment =
+    (shipmentsQuery.data ?? [])
+      .filter(
+        (shipment) =>
+          (!activeOrderReservation ||
+            shipment.rentalOrderId === activeOrderReservation.orderId) &&
+          shipment.lines.some((line) => line.assetId === rentalItem?.id) &&
+          shipment.state !== "CANCELLED"
+      )
+      .sort((left, right) =>
+        right.updatedAt.localeCompare(left.updatedAt)
+      )[0] ?? null
+  const rentalOrderReturn =
+    (returnsQuery.data ?? [])
+      .filter(
+        (rentalReturn) =>
+          (!activeOrderReservation ||
+            rentalReturn.rentalOrderId === activeOrderReservation.orderId) &&
+          rentalReturn.lines.some((line) => line.assetId === rentalItem?.id) &&
+          rentalReturn.state !== "CANCELLED"
+      )
+      .sort((left, right) =>
+        right.updatedAt.localeCompare(left.updatedAt)
+      )[0] ?? null
+  const relatedOrderId =
+    activeOrderReservation?.orderId ??
+    rentalOrderShipment?.rentalOrderId ??
+    rentalOrderReturn?.rentalOrderId ??
+    null
+  const rentalOrderQuery = useQuery({
+    queryKey: ["orders", "detail", userCacheKey, relatedOrderId ?? "none"],
+    queryFn: () => getOrder(accessToken!, relatedOrderId!),
+    enabled: Boolean(accessToken && relatedOrderId),
+  })
+  const rentalOrderUnit = rentalOrderQuery.data?.units.find(
+    (candidate) => candidate.unit.id === rentalItem?.id
   )
+  const rentalTerm = rentalOrderUnit?.rentalTerm ?? null
   const effectiveShipmentDate =
-    rentalOrderShipment?.scheduledDate ?? rentalItem?.shipmentDate ?? null
+    rentalTerm?.shipmentDate ??
+    rentalOrderShipment?.scheduledDate ??
+    rentalItem?.shipmentDate ??
+    null
   const effectiveTenant =
     activeOrderReservation?.tenantSnapshot ?? rentalItem?.tenant ?? null
+  const rentalLifecycle = rentalLifecycleLabel(
+    rentalOrderShipment,
+    rentalOrderReturn,
+    rentalTerm?.returnDate ?? null
+  )
   const dossierPages = dossierQuery.data?.pages
   const dossierActivities =
     dossierPages?.flatMap((page) => page.activities) ?? []
@@ -739,6 +819,27 @@ export function RentalItemDetailPage() {
               <dd>{formatDateTime(effectiveShipmentDate)}</dd>
               <dt className="text-muted-foreground">Арендатор</dt>
               <dd>{effectiveTenant ?? "—"}</dd>
+              <dt className="text-muted-foreground">Статус аренды</dt>
+              <dd>
+                <Badge
+                  variant={
+                    rentalLifecycle === "Требует возврата"
+                      ? "destructive"
+                      : rentalLifecycle === "Отгружено" ||
+                          rentalLifecycle === "Возвращено"
+                        ? "secondary"
+                        : "outline"
+                  }
+                >
+                  {rentalLifecycle}
+                </Badge>
+              </dd>
+              <dt className="text-muted-foreground">Срок аренды</dt>
+              <dd>
+                {rentalTerm ? `${rentalTerm.rentalMonths} мес.` : "Не задан"}
+              </dd>
+              <dt className="text-muted-foreground">Возврат до</dt>
+              <dd>{formatDateTime(rentalTerm?.returnDate ?? null)}</dd>
               <dt className="text-muted-foreground">Цена</dt>
               <dd>{formatCurrency(rentalItem.price)}</dd>
               <dt className="text-muted-foreground">Последнее действие</dt>
@@ -821,6 +922,37 @@ export function RentalItemDetailPage() {
                   <p className="font-medium">
                     {formatDateTime(effectiveShipmentDate)}
                   </p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Срок аренды</p>
+                  <p className="font-medium">
+                    {rentalTerm
+                      ? `${rentalTerm.rentalMonths} мес.`
+                      : "Не задан"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Возврат до</p>
+                  <p className="font-medium">
+                    {formatDateTime(rentalTerm?.returnDate ?? null)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Статус аренды</p>
+                  <div className="mt-1">
+                    <Badge
+                      variant={
+                        rentalLifecycle === "Требует возврата"
+                          ? "destructive"
+                          : rentalLifecycle === "Отгружено" ||
+                              rentalLifecycle === "Возвращено"
+                            ? "secondary"
+                            : "outline"
+                      }
+                    >
+                      {rentalLifecycle}
+                    </Badge>
+                  </div>
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -1054,11 +1186,48 @@ export function RentalItemDetailPage() {
           />
         </TabsContent>
         <TabsContent value="returns">
-          <EmptyDossierRegister
-            title="Возвраты"
-            description="Для этой бытовки нет подтверждённых возвратов."
-            columns={["Дата", "От кого", "Статус", "Действия"]}
-          />
+          {rentalOrderReturn ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Возврат из аренды</CardTitle>
+                <CardDescription>
+                  Документ возврата по текущей отгрузке этой бытовки.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-4 text-sm sm:grid-cols-4">
+                <div>
+                  <p className="text-muted-foreground">Статус</p>
+                  <p className="font-medium">{rentalOrderReturn.state}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Дата задания</p>
+                  <p className="font-medium">
+                    {formatDateTime(rentalOrderReturn.scheduledDate)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Водитель</p>
+                  <p className="font-medium">
+                    {rentalOrderReturn.driverSnapshot ?? "Не назначен"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Документ</p>
+                  <p className="font-mono text-xs">{rentalOrderReturn.id}</p>
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            <EmptyDossierRegister
+              title="Возвраты"
+              description={
+                rentalTerm?.returnDate
+                  ? `Возврат ожидается до ${formatDateTime(rentalTerm.returnDate)}.`
+                  : "Для этой бытовки возврат из аренды ещё не создан."
+              }
+              columns={["Дата", "От кого", "Статус", "Действия"]}
+            />
+          )}
         </TabsContent>
         <TabsContent value="history">
           <div className="flex flex-col gap-4">

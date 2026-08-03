@@ -11,6 +11,7 @@ import {
   type OrderDesiredEquipment,
   type OrderEquipmentContent,
   type OrderPage,
+  type OrderRentalTerm,
   type OrderRentalUnit,
   type OrderStatus,
   type OrderSummary,
@@ -113,6 +114,12 @@ function nonNegativeInteger(value: unknown): number {
   return value
 }
 
+function positiveInteger(value: unknown): number {
+  const parsed = nonNegativeInteger(value)
+  if (parsed < 1) invalidResponse()
+  return parsed
+}
+
 function boolean(value: unknown): boolean {
   if (typeof value !== "boolean") invalidResponse()
   return value as boolean
@@ -121,6 +128,18 @@ function boolean(value: unknown): boolean {
 function timestamp(value: unknown): string {
   const parsed = text(value)
   if (!Number.isFinite(Date.parse(parsed))) invalidResponse()
+  return parsed
+}
+
+function nullableDate(value: unknown): string | null {
+  if (value === null) return null
+  const parsed = text(value)
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(parsed) ||
+    !Number.isFinite(Date.parse(`${parsed}T00:00:00Z`))
+  ) {
+    invalidResponse()
+  }
   return parsed
 }
 
@@ -140,10 +159,8 @@ function parseClient(value: unknown): OrderClient {
     id: uuid(source.id),
     type: enumValue(source.type, ORDER_CLIENT_TYPES),
     displayName: text(source.displayName),
-    phone:
-      source.phone === undefined ? null : nullableText(source.phone),
-    email:
-      source.email === undefined ? null : nullableText(source.email),
+    phone: source.phone === undefined ? null : nullableText(source.phone),
+    email: source.email === undefined ? null : nullableText(source.email),
   }
 }
 
@@ -245,6 +262,20 @@ function parseOrderUnitCandidate(value: unknown): OrderUnitCandidate {
     added,
     unit: parseRentalUnit(source.unit),
     desiredContents: list(source.desiredContents).map(parseDesiredEquipment),
+    rentalTerm:
+      source.rentalTerm === undefined
+        ? null
+        : parseRentalTerm(source.rentalTerm),
+  }
+}
+
+function parseRentalTerm(value: unknown): OrderRentalTerm | null {
+  if (value === null) return null
+  const source = record(value)
+  return {
+    rentalMonths: positiveInteger(source.rentalMonths),
+    shipmentDate: nullableDate(source.shipmentDate),
+    returnDate: nullableDate(source.returnDate),
   }
 }
 
@@ -430,6 +461,75 @@ export async function saveOrder(params: {
       method: "POST",
       headers: idempotencyHeaders(params.idempotencyKey),
     })
+  )
+}
+
+function commandRentalMonths(value: number) {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(
+      "Срок аренды должен быть положительным целым числом месяцев."
+    )
+  }
+  return value
+}
+
+export async function setOrderRentalTerms(params: {
+  accessToken: string
+  orderId: string
+  expectedVersion: number
+  terms: Array<{ unitId: string; rentalMonths: number }>
+  idempotencyKey: string
+}): Promise<OrderDetail> {
+  if (params.terms.length === 0) {
+    throw new Error("Укажите срок аренды хотя бы для одной бытовки.")
+  }
+
+  return parseOrderDetail(
+    await bearerRequest<unknown>(
+      params.accessToken,
+      ordersEndpoint(orderPath(params.orderId, "/rental-terms")),
+      {
+        method: "PUT",
+        headers: idempotencyHeaders(params.idempotencyKey),
+        body: JSON.stringify({
+          expectedVersion: params.expectedVersion,
+          terms: params.terms.map((term) => ({
+            unitId: uuid(term.unitId),
+            rentalMonths: commandRentalMonths(term.rentalMonths),
+          })),
+        }),
+      }
+    )
+  )
+}
+
+export async function extendOrderRentalTerms(params: {
+  accessToken: string
+  orderId: string
+  expectedVersion: number
+  terms: Array<{ unitId: string; additionalMonths: number }>
+  idempotencyKey: string
+}): Promise<OrderDetail> {
+  if (params.terms.length === 0) {
+    throw new Error("Укажите бытовку и срок продления.")
+  }
+
+  return parseOrderDetail(
+    await bearerRequest<unknown>(
+      params.accessToken,
+      ordersEndpoint(orderPath(params.orderId, "/rental-terms/extend")),
+      {
+        method: "POST",
+        headers: idempotencyHeaders(params.idempotencyKey),
+        body: JSON.stringify({
+          expectedVersion: params.expectedVersion,
+          terms: params.terms.map((term) => ({
+            unitId: uuid(term.unitId),
+            additionalMonths: commandRentalMonths(term.additionalMonths),
+          })),
+        }),
+      }
+    )
   )
 }
 

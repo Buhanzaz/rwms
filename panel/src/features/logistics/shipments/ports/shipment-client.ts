@@ -30,6 +30,8 @@ export type ShipmentVersionedCommand = {
   documentId: string
   expectedVersion: number
   idempotencyKey: string
+  /** Explicit operator choice to keep a planned date from another day. */
+  keepScheduledDate?: boolean
 }
 
 export interface ShipmentClient {

@@ -100,8 +100,8 @@ export function LogisticsDriverPicker({
       ) : null}
       {groupsQuery.isSuccess && drivers.length === 0 ? (
         <FieldDescription>
-          В конфигурации склада нет доступных водителей: добавьте активного
-          водителя в бригаду класса «Водитель».
+          В настройках выбранного склада нет активных водителей. Создайте
+          водителя в настройках логистики этого склада.
         </FieldDescription>
       ) : null}
       {groupsQuery.isError ? (

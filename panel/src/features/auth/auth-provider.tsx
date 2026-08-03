@@ -9,6 +9,7 @@ import type { User } from "oidc-client-ts"
 
 import { AuthContext, type AuthStatus } from "@/features/auth/auth-context"
 import { getCurrentUser } from "@/features/auth/current-user-api"
+import { clearMediaPreviewCache } from "@/features/media/media-preview-cache"
 import {
   getSafeReturnTo,
   getUserManager,
@@ -42,6 +43,7 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
   const acceptUser = useCallback(
     async (user: User | null) => {
       if (user === null || user.expired) {
+        clearMediaPreviewCache()
         setOidcUser(null)
         setCurrentUser(null)
         setStatus("unauthenticated")
@@ -50,6 +52,7 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
 
       if (!isPanelUser(user)) {
         await manager.removeUser()
+        clearMediaPreviewCache()
         throw new PanelPrincipalError()
       }
 
@@ -58,6 +61,7 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
       // their five-minute access token expires.
       if (!hasRenewablePanelSession(user)) {
         await manager.removeUser()
+        clearMediaPreviewCache()
         setOidcUser(null)
         setCurrentUser(null)
         setStatus("unauthenticated")
@@ -108,6 +112,7 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
     const handleUserLoaded = (user: User) => {
       void acceptUser(user).catch((renewError) => {
         if (renewError instanceof PanelPrincipalError) {
+          clearMediaPreviewCache()
           setOidcUser(null)
           setCurrentUser(null)
           setError(getErrorMessage(renewError))
@@ -123,6 +128,7 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
 
     const handleExpired = () => {
       void manager.removeUser()
+      clearMediaPreviewCache()
       setOidcUser(null)
       setCurrentUser(null)
       setStatus("unauthenticated")
@@ -160,6 +166,7 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
       return getSafeReturnTo(state?.returnTo)
     } catch (callbackError) {
       await manager.removeUser()
+      clearMediaPreviewCache()
       setOidcUser(null)
       setCurrentUser(null)
       setError(getErrorMessage(callbackError))
@@ -174,11 +181,13 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
     try {
       const idToken = oidcUser?.id_token
       await manager.removeUser()
+      clearMediaPreviewCache()
       setOidcUser(null)
       setCurrentUser(null)
       await manager.signoutRedirect({ id_token_hint: idToken })
     } catch (logoutError) {
       await manager.removeUser()
+      clearMediaPreviewCache()
       setOidcUser(null)
       setCurrentUser(null)
       setError(getErrorMessage(logoutError))

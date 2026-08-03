@@ -346,6 +346,7 @@ function RepairTaskEditorContent({
                 : "MATERIAL",
             furnitureEquipment:
               value.catalogSnapshot.furnitureEquipment ?? null,
+            characteristic: value.catalogSnapshot.characteristic ?? null,
           }
         : null,
       customQueueBinding: null,

@@ -22,6 +22,7 @@ import {
   filterRepairsTable,
   getRepairDate,
   getRepairOperationalStatusLabel,
+  getRepairTaskLabel,
 } from "@/features/repairs/repairs-table-model"
 import type { TaskBoardEntryDto } from "@/features/task-board/model/task-board"
 import { ApiError } from "@/lib/api-client"
@@ -205,6 +206,18 @@ describe("repairs table test fixtures", () => {
     }
 
     expect(getRepairOperationalStatusLabel(draft)).toBe("Черновик")
+  })
+
+  it("labels a queued repair awaiting driver delivery without pretending it is in the repair queue", () => {
+    const awaitingMovement = {
+      ...REPAIRS_TABLE_TEST_FIXTURES[0]!,
+      awaitingMovement: true,
+    }
+
+    expect(getRepairOperationalStatusLabel(awaitingMovement)).toBe(
+      "Ожидает перемещения"
+    )
+    expect(getRepairTaskLabel(awaitingMovement)).toBe("Перемещение на ремонт")
   })
 })
 

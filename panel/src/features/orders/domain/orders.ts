@@ -80,6 +80,14 @@ export type OrderUnitCandidate = {
   added: boolean
   unit: OrderRentalUnit
   desiredContents: OrderDesiredEquipment[]
+  /** Nullable on the wire; optional keeps older read-only fixtures compatible. */
+  rentalTerm?: OrderRentalTerm | null
+}
+
+export type OrderRentalTerm = {
+  rentalMonths: number
+  shipmentDate: string | null
+  returnDate: string | null
 }
 
 export type OrderSummary = {

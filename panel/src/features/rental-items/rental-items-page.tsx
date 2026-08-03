@@ -84,6 +84,7 @@ const DESKTOP_GRID_FORMAT_MAX = 5
 const RENTAL_ITEMS_PAGE_SIZE = 200
 const RENTAL_ITEM_COVERS_BATCH_SIZE = 200
 const LOAD_MORE_SCROLL_THRESHOLD = 160
+const WAREHOUSE_QUERY_CACHE_TIME_MS = 2 * 60 * 60 * 1_000
 const EMPTY_RENTAL_ITEMS: RentalItemDto[] = []
 
 function getInitialSearch(warehouseId: string) {
@@ -319,6 +320,10 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
     initialPageParam: 0,
     getNextPageParam: (lastPage) =>
       lastPage.page + 1 < lastPage.totalPages ? lastPage.page + 1 : undefined,
+    staleTime: Infinity,
+    gcTime: WAREHOUSE_QUERY_CACHE_TIME_MS,
+    refetchOnWindowFocus: "always",
+    refetchOnReconnect: "always",
     enabled: status === "authenticated" && Boolean(accessToken),
   })
 
@@ -340,6 +345,10 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
     queryFn: () =>
       loadRentalItemCoverPages(accessToken!, warehouseId, loadedItemIds),
     retry: false,
+    staleTime: Infinity,
+    gcTime: WAREHOUSE_QUERY_CACHE_TIME_MS,
+    refetchOnWindowFocus: "always",
+    refetchOnReconnect: "always",
     enabled:
       status === "authenticated" &&
       Boolean(accessToken) &&
@@ -412,8 +421,7 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
   const queryScopeKey = `${warehouseId}:${search}`
   const nextPageRequestScopeRef = useRef<string | null>(null)
   const hasLoadedPages = (rentalItemsQuery.data?.pages.length ?? 0) > 0
-  const totalRentalItems =
-    rentalItemsQuery.data?.pages[0]?.totalElements ?? 0
+  const totalRentalItems = rentalItemsQuery.data?.pages[0]?.totalElements ?? 0
 
   useEffect(() => {
     nextPageRequestScopeRef.current = null

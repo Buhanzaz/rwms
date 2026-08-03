@@ -75,6 +75,7 @@ export function getOperationalRepairSubtask(
 }
 
 export function getRepairTaskLabel(repair: RepairTaskDto) {
+  if (repair.awaitingMovement) return "Перемещение на ремонт"
   const subtask = getOperationalRepairSubtask(repair)
   if (!subtask) return "Задание ещё не сформировано"
   if (subtask.taskText) return subtask.taskText
@@ -86,6 +87,7 @@ export function getRepairTaskLabel(repair: RepairTaskDto) {
 
 export function getRepairOperationalStatusLabel(repair: RepairTaskDto) {
   if (repair.status === "DRAFT") return "Черновик"
+  if (repair.awaitingMovement) return "Ожидает перемещения"
   const status = getOperationalRepairSubtask(repair)?.status
   if (status === "IN_PROGRESS") return "В работе"
   if (status === "PAUSED") return "На паузе"

@@ -51,6 +51,7 @@ const line: RepairEstimateLineDto = {
     name: "Заменить панель",
     nodeType: "WORK",
     furnitureEquipment: null,
+    characteristic: null,
   },
 }
 
@@ -139,7 +140,7 @@ describe("repair completion priority step", () => {
     )
   })
 
-  it("keeps the separate movement choice in the AUTO result", async () => {
+  it("uses the neutral priority and skips priority choice for AUTO movement", async () => {
     capabilities.get.mockResolvedValue({
       warehouseId: "warehouse-1",
       movementToShipmentAvailable: true,
@@ -181,12 +182,6 @@ describe("repair completion priority step", () => {
         name: "Перемещение на отгрузку",
       })
     )
-    await user.click(screen.getByRole("button", { name: "Далее" }))
-    await user.click(
-      screen.getByRole("radio", {
-        name: "Приоритет 1: Самый срочный",
-      })
-    )
     await user.click(screen.getByRole("button", { name: "Создать задание" }))
 
     expect(onComplete).toHaveBeenCalledWith(
@@ -195,6 +190,7 @@ describe("repair completion priority step", () => {
         movementRequired: true,
         logisticsPlanningMode: "AUTO",
         logisticsScheduledDate: null,
+        priority: 3,
         taskPlans: expect.arrayContaining([
           expect.objectContaining({
             kind: "MOVE_TO_REPAIR",
@@ -207,6 +203,7 @@ describe("repair completion priority step", () => {
         ]),
       })
     )
+    expect(screen.queryByText("Выберите приоритет задания")).toBeNull()
   })
 
   it("requires and submits a date for fixed-date logistics planning", async () => {
@@ -255,31 +252,25 @@ describe("repair completion priority step", () => {
       screen.getByRole("radio", { name: "Выбрать конкретную дату" })
     )
 
-    const nextButton = screen.getByRole("button", {
-      name: "Далее",
+    const completeButton = screen.getByRole("button", {
+      name: "Создать задание",
     }) as HTMLButtonElement
-    expect(nextButton.disabled).toBe(true)
+    expect(completeButton.disabled).toBe(true)
 
     fireEvent.change(
       screen.getByLabelText("Дата логистического задания"),
       { target: { value: "2026-08-12" } }
     )
-    expect(nextButton.disabled).toBe(false)
+    expect(completeButton.disabled).toBe(false)
 
-    await user.click(nextButton)
-    await user.click(
-      screen.getByRole("radio", {
-        name: "Приоритет 2: Высокий",
-      })
-    )
-    await user.click(screen.getByRole("button", { name: "Создать задание" }))
+    await user.click(completeButton)
 
     expect(onComplete).toHaveBeenCalledWith(
       expect.objectContaining({
         movementRequired: true,
         logisticsPlanningMode: "FIXED_DATE",
         logisticsScheduledDate: "2026-08-12",
-        priority: 2,
+        priority: 3,
       })
     )
   })
@@ -335,10 +326,7 @@ describe("repair completion priority step", () => {
         .value
     ).toBe("2026-08-12")
 
-    await user.click(screen.getByRole("button", { name: "Далее" }))
-    await user.click(
-      screen.getByRole("button", { name: "Создать задание" })
-    )
+    await user.click(screen.getByRole("button", { name: "Создать задание" }))
 
     expect(onComplete).toHaveBeenCalledWith(
       expect.objectContaining({

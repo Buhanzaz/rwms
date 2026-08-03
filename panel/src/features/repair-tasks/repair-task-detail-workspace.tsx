@@ -69,7 +69,12 @@ export function RepairTaskDetailWorkspace({
             authorName="Автор недоступен"
             authorLabel="Автор"
             showComment={false}
-            status={<RepairTaskStatusBadge status={task.status} />}
+            status={
+              <RepairTaskStatusBadge
+                status={task.status}
+                awaitingMovement={task.awaitingMovement}
+              />
+            }
             comment=""
           />
           <div className="flex items-center justify-between gap-3 rounded-lg border bg-card p-3">

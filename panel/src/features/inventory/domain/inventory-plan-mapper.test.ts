@@ -18,6 +18,7 @@ const catalogWork: RepairEstimateLineDto = {
     name: "Замена двери",
     nodeType: "WORK",
     furnitureEquipment: null,
+    characteristic: null,
   },
 }
 
@@ -121,6 +122,66 @@ describe("inventory plan mapper", () => {
         media: [],
       })
     ).toThrow("Автоматический режим доступен только для позиций каталога")
+  })
+
+  it("keeps repeated catalog work stages in a manual plan", () => {
+    const repeatedWork: RepairEstimateLineDto = {
+      ...catalogWork,
+      id: "work-2",
+      sourceLineKey: "work-2",
+      lineComment: "Повторная проверка",
+    }
+    const result = buildInventoryPlanSelection({
+      completionMode: "MANUAL",
+      movementRequired: false,
+      logisticsPlanningMode: "AUTO",
+      logisticsScheduledDate: null,
+      priority: 2,
+      coverMediaId: null,
+      lines: [catalogWork, repeatedWork],
+      media: [],
+      taskPlans: [
+        {
+          id: "plan-1",
+          kind: "REPAIR_WORK",
+          includedLineIds: [catalogWork.id],
+          primaryLineId: catalogWork.id,
+          groupComment: catalogWork.lineComment,
+          queueId: "00000000-0000-4000-8000-000000000103",
+          queueName: "Ремонт",
+          routeQueueKind: "REPAIR",
+          sortOrder: 10,
+          generationStatus: "PENDING_GENERATION",
+          workflowRequestRef: null,
+        },
+        {
+          id: "plan-2",
+          kind: "REPAIR_WORK",
+          includedLineIds: [repeatedWork.id],
+          primaryLineId: repeatedWork.id,
+          groupComment: repeatedWork.lineComment,
+          queueId: "00000000-0000-4000-8000-000000000103",
+          queueName: "Ремонт",
+          routeQueueKind: "REPAIR",
+          sortOrder: 20,
+          generationStatus: "PENDING_GENERATION",
+          workflowRequestRef: null,
+        },
+      ],
+    })
+
+    expect(result.stages).toEqual([
+      {
+        catalogNodeId: catalogWork.catalogSnapshot?.nodeId,
+        kind: "REPAIR_WORK",
+        order: 0,
+      },
+      {
+        catalogNodeId: catalogWork.catalogSnapshot?.nodeId,
+        kind: "REPAIR_WORK",
+        order: 1,
+      },
+    ])
   })
 
   it("preserves a fixed logistics date and rejects inconsistent planning", () => {

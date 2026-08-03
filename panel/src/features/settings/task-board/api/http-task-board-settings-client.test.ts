@@ -26,7 +26,7 @@ describe("HttpTaskBoardSettingsClient gateway routes", () => {
     ])
   })
 
-  it("sends only ordered class bindings when saving a queue", async () => {
+  it("uses the dedicated driver endpoint for warehouse-local settings", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
       async () =>
         new Response("{}", {
@@ -36,9 +36,8 @@ describe("HttpTaskBoardSettingsClient gateway routes", () => {
     )
     const client = new HttpTaskBoardSettingsClient()
 
-    await client.createQueue("token", "warehouse/id", {
-      version: 0,
-      definitionId: "definition-id",
+    await client.updateDriverQueue("token", "warehouse/id", {
+      expectedVersion: 4,
       active: true,
       hidden: false,
       collapsed: false,
@@ -59,12 +58,11 @@ describe("HttpTaskBoardSettingsClient gateway routes", () => {
 
     const [input, init] = fetchMock.mock.calls[0]!
     expect(new URL(String(input)).pathname).toBe(
-      "/api/task-board/warehouses/warehouse%2Fid/work-queues"
+      "/api/task-board/warehouses/warehouse%2Fid/driver-queue"
     )
-    expect(init?.method).toBe("POST")
+    expect(init?.method).toBe("PUT")
     expect(JSON.parse(String(init?.body))).toEqual({
-      version: 0,
-      definitionId: "definition-id",
+      expectedVersion: 4,
       active: true,
       hidden: false,
       collapsed: false,
@@ -82,6 +80,73 @@ describe("HttpTaskBoardSettingsClient gateway routes", () => {
         },
       ],
     })
+  })
+
+  it("uses warehouse-scoped connection and order endpoints for general queues", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response("{}", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+    )
+    const client = new HttpTaskBoardSettingsClient()
+    const request = {
+      version: 3,
+      definitionId: "definition/id",
+      active: true,
+      hidden: false,
+      collapsed: false,
+      holdingPeriodMinutes: null,
+      notificationThreshold: null,
+      notifyWhenThresholdReached: false,
+      resultPhotoMinCount: 1,
+      bindings: [],
+    }
+
+    await client.createQueue("token", "warehouse/id", {
+      ...request,
+      version: 0,
+    })
+    await client.updateQueue("token", "warehouse/id", "queue/id", request)
+    await client.deleteQueue("token", "warehouse/id", "queue/id", 3)
+    await client.reorderQueues("token", "warehouse/id", [
+      { queueId: "queue/id", expectedVersion: 3 },
+    ])
+
+    expect(
+      fetchMock.mock.calls.map(([input, init]) => ({
+        path: new URL(String(input)).pathname,
+        search: new URL(String(input)).search,
+        method: init?.method,
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      }))
+    ).toEqual([
+      {
+        path: "/api/task-board/warehouses/warehouse%2Fid/work-queues",
+        search: "",
+        method: "POST",
+        body: { ...request, version: 0 },
+      },
+      {
+        path: "/api/task-board/warehouses/warehouse%2Fid/work-queues/queue%2Fid",
+        search: "",
+        method: "PUT",
+        body: request,
+      },
+      {
+        path: "/api/task-board/warehouses/warehouse%2Fid/work-queues/queue%2Fid",
+        search: "?expectedVersion=3",
+        method: "DELETE",
+        body: undefined,
+      },
+      {
+        path: "/api/task-board/warehouses/warehouse%2Fid/work-queue-order",
+        search: "",
+        method: "PUT",
+        body: { queues: [{ queueId: "queue/id", expectedVersion: 3 }] },
+      },
+    ])
   })
 
   it("uses the system queue catalog endpoints with aggregate versions", async () => {

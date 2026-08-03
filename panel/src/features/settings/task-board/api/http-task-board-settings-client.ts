@@ -3,6 +3,7 @@ import type {
   TaskBoardSettingsClient,
 } from "@/features/settings/task-board/api/task-board-settings-client"
 import type {
+  DriverQueueRequest,
   QueueDefinitionDto,
   QueueDefinitionRequest,
   WorkerClassDto,
@@ -59,7 +60,6 @@ export class HttpTaskBoardSettingsClient implements TaskBoardSettingsClient {
       { method: "DELETE" }
     )
   }
-
   listQueues(token: string, warehouseId: string) {
     return bearerRequest<WorkQueueDto[]>(
       token,
@@ -102,6 +102,17 @@ export class HttpTaskBoardSettingsClient implements TaskBoardSettingsClient {
       token,
       `${warehouseEndpoint(warehouseId)}/work-queue-order`,
       json("PUT", { queues })
+    )
+  }
+  updateDriverQueue(
+    token: string,
+    warehouseId: string,
+    request: DriverQueueRequest
+  ) {
+    return bearerRequest<WorkQueueDto>(
+      token,
+      `${warehouseEndpoint(warehouseId)}/driver-queue`,
+      json("PUT", request)
     )
   }
 

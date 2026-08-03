@@ -29,6 +29,7 @@ import type {
 } from "@/types/equipment"
 
 const EMPTY_EQUIPMENT_ITEMS: EquipmentItemDto[] = []
+const WAREHOUSE_QUERY_CACHE_TIME_MS = 2 * 60 * 60 * 1_000
 const quantityFormatter = new Intl.NumberFormat("ru-RU")
 const EQUIPMENT_MOVEMENT_ROLES = new Set([
   "SYSTEM_ADMIN",
@@ -445,6 +446,10 @@ export function EquipmentPage() {
         search,
       }),
     enabled: Boolean(warehouseId && accessToken),
+    staleTime: Infinity,
+    gcTime: WAREHOUSE_QUERY_CACHE_TIME_MS,
+    refetchOnWindowFocus: "always",
+    refetchOnReconnect: "always",
   })
   const items = equipmentQuery.data ?? EMPTY_EQUIPMENT_ITEMS
   const moveEquipment = moveTarget

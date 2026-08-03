@@ -1,4 +1,8 @@
-import { getOperationalRepairEstimateCatalog } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
+import {
+  createRepairEstimateCatalogIndex,
+  getOperationalRepairEstimateCatalog,
+  type RepairEstimateCatalogIndex,
+} from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
 import type { RepairEstimateCatalogSnapshotDto } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
 import {
   acceptMaintenanceRepair,
@@ -118,6 +122,7 @@ function toRepairEstimateLine(
                 ? "OPTION"
                 : "MATERIAL",
           furnitureEquipment: line.catalogSnapshot.furnitureEquipment ?? null,
+          characteristic: line.catalogSnapshot.characteristic ?? null,
         }
       : null,
     customQueueBinding: line.catalogSnapshot ? null : customQueueBinding,
@@ -293,6 +298,21 @@ function earliest(values: Array<string | null | undefined>) {
   )
 }
 
+function isAwaitingMovementToRepair(repair: MaintenanceRepair) {
+  const repairWorkStages = repair.plan.stages.filter(
+    (stage) => stage.kind === "REPAIR_WORK"
+  )
+  return (
+    repair.executionState === "QUEUED" &&
+    repair.complexity.type !== "CAPITAL" &&
+    repair.plan.stages.some((stage) => stage.kind === "MOVE_TO_REPAIR") &&
+    repairWorkStages.length > 0 &&
+    repairWorkStages.every(
+      (stage) => stage.taskSync.taskBoardRegistrationVersion === null
+    )
+  )
+}
+
 async function toTask(
   repair: MaintenanceRepair,
   rentalItemsClient: RepairTaskRentalItemsClient,
@@ -351,6 +371,7 @@ async function toTask(
     writtenOffAt: projection?.writtenOffAt ?? null,
     decisionActorId: projection?.decisionActorId ?? null,
     taskBoardAvailable: board !== null,
+    awaitingMovement: isAwaitingMovementToRepair(repair),
     logisticsPlanningMode: repair.logisticsPlanningMode,
     logisticsScheduledDate: repair.logisticsScheduledDate,
     createdAt: repair.createdAt,
@@ -365,7 +386,8 @@ function requireDate(value: string | null) {
 
 function routeForSubtask(
   subtask: RepairTaskSubtaskDto,
-  queues: WorkQueueDto[]
+  queues: WorkQueueDto[],
+  stageNumber: number
 ): MaintenanceRoutingSnapshot {
   const includesCustomWork =
     subtask.kind === "REPAIR_WORK" &&
@@ -380,8 +402,8 @@ function routeForSubtask(
     )
   }
   const active = queues.filter((queue) => queue.active && !queue.hidden)
-  const exactById = subtask.queueId
-    ? active.find((queue) => queue.id === subtask.queueId)
+  const exactByDefinitionId = subtask.queueId
+    ? active.find((queue) => queue.definitionId === subtask.queueId)
     : undefined
   const movementCandidates =
     !subtask.queueId &&
@@ -390,7 +412,7 @@ function routeForSubtask(
       ? active.filter((queue) => queue.type === "MOVEMENT")
       : []
   const exact =
-    exactById ??
+    exactByDefinitionId ??
     (movementCandidates.length === 1 ? movementCandidates[0] : undefined)
   if (exact) {
     if (
@@ -408,22 +430,39 @@ function routeForSubtask(
       )
     }
     return {
-      queueId: exact.id,
+      queueId: exact.definitionId,
       queueName: exact.name,
       queueType: exact.type,
     }
   }
   if (movementCandidates.length > 1) {
     throw new Error(
-      `Для этапа ${subtask.sortOrder} настройте единственную активную очередь перемещения.`
+      "Для перемещения подключите к складу ровно одну активную очередь типа «Перемещение»."
     )
   }
-  throw new Error(`Для этапа ${subtask.sortOrder} выберите активную очередь.`)
+  if (
+    !subtask.queueId &&
+    subtask.kind !== "REPAIR_WORK" &&
+    subtask.routeQueueKind === "MOVEMENT"
+  ) {
+    throw new Error(
+      "К выбранному складу не подключена активная очередь типа «Перемещение». Откройте «Настройки склада → Очереди склада» и подключите её."
+    )
+  }
+  if (subtask.queueName?.trim()) {
+    throw new Error(
+      `Очередь «${subtask.queueName.trim()}» не подключена к выбранному складу или отключена. Откройте «Настройки склада → Очереди склада» и подключите её.`
+    )
+  }
+  throw new Error(
+    `Для рабочего этапа №${stageNumber} не определена доступная очередь. Проверьте привязку категории в «Конструкторе каталога смет» и подключение очереди в «Настройки склада → Очереди склада».`
+  )
 }
 
 function repairCatalogSnapshot(
   line: RepairEstimateLineDto,
-  catalog: RepairEstimateCatalogSnapshotDto
+  catalog: RepairEstimateCatalogSnapshotDto,
+  catalogIndex: RepairEstimateCatalogIndex
 ) {
   const nodeId = line.catalogSnapshot?.nodeId
   if (!nodeId) return null
@@ -440,12 +479,15 @@ function repairCatalogSnapshot(
       `Позиция каталога «${line.description}» маршрутизирована в очередь перемещения мебели.`
     )
   }
+  const effectiveRouting = catalogIndex.getEffectiveQueueBinding(node.id)
   const routing =
-    node.queueDefinitionId && node.queueDefinitionName && node.routeQueueKind
+    effectiveRouting?.queueId &&
+    effectiveRouting.queueName &&
+    effectiveRouting.queueKind
       ? {
-          queueId: node.queueDefinitionId,
-          queueName: node.queueDefinitionName,
-          queueType: node.routeQueueKind,
+          queueId: effectiveRouting.queueId,
+          queueName: effectiveRouting.queueName,
+          queueType: effectiveRouting.queueKind,
         }
       : null
   return {
@@ -466,12 +508,13 @@ function repairCatalogSnapshot(
 function lineInput(
   line: RepairEstimateLineDto,
   id: string,
-  catalog: RepairEstimateCatalogSnapshotDto
+  catalog: RepairEstimateCatalogSnapshotDto,
+  catalogIndex: RepairEstimateCatalogIndex
 ): MaintenanceEstimateLineInput {
   if (!line.description.trim()) {
     throw new Error("Укажите описание каждой строки ремонта.")
   }
-  const snapshot = repairCatalogSnapshot(line, catalog)
+  const snapshot = repairCatalogSnapshot(line, catalog, catalogIndex)
   const lineType = snapshot
     ? snapshot.nodeType === "WORK"
       ? "WORK"
@@ -550,6 +593,7 @@ async function planForCommand(
     taskBoardSettingsClient.listQueues(accessToken, command.warehouseId),
     getOperationalRepairEstimateCatalog(),
   ])
+  const catalogIndex = createRepairEstimateCatalogIndex(catalog)
   if (command.subtasks.length === 0) {
     throw new Error("Добавьте хотя бы один этап ремонта.")
   }
@@ -578,7 +622,7 @@ async function planForCommand(
         ? line.id
         : createMaintenanceIdempotencyKey()
       lineIdBySourceId.set(line.id, id)
-      lines.set(id, lineInput(line, id, catalog))
+      lines.set(id, lineInput(line, id, catalog, catalogIndex))
       sourceLineByMaintenanceId.set(id, line)
     })
   })
@@ -602,7 +646,7 @@ async function planForCommand(
           : createMaintenanceIdempotencyKey(),
         kind: subtask.kind,
         order: index,
-        routing: routeForSubtask(subtask, queues),
+        routing: routeForSubtask(subtask, queues, index + 1),
         includedLineIds: [...subtask.workLines, ...subtask.materialLines].map(
           maintenanceLineId
         ),

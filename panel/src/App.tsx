@@ -6,6 +6,8 @@ import { SiteHeader } from "@/components/site-header"
 import { WarehouseProvider } from "@/contexts/warehouse-provider"
 import { RentalItemsPage } from "@/features/rental-items/rental-items-page"
 import { useWarehouse } from "@/hooks/use-warehouse"
+import { useWarehouseRealtime } from "@/hooks/use-warehouse-realtime"
+import { useAuth } from "@/features/auth/use-auth"
 import { EquipmentPage } from "@/features/equipment/equipment-page"
 import { KpiPage } from "@/features/kpi/kpi-page"
 import { KpiSettingsPage } from "@/features/settings/kpi/kpi-settings-page"
@@ -22,6 +24,7 @@ import { TaskBoardSettingsPage } from "@/features/settings/task-board/task-board
 import { CabinCompositionSettingsPage } from "@/features/settings/cabin-composition"
 import { LogisticsReturnsPage } from "@/features/logistics/logistics-returns-page"
 import { LogisticsShipmentsPage } from "@/features/logistics/logistics-shipments-page"
+import { LogisticsOrderTasksPage } from "@/features/logistics/logistics-order-tasks-page"
 import { WarehouseTransfersPage } from "@/features/logistics/warehouse-transfers/warehouse-transfers-page"
 import { DriverBoardPage } from "@/features/logistics/driver-board"
 import { LogisticsSettingsPage } from "@/features/settings/logistics"
@@ -46,8 +49,14 @@ type PageConfig = {
 
 const pages: PageConfig[] = [
   {
+    path: "/logistics/order-tasks",
+    title: "Задания",
+    description:
+      "Отгрузка и возврат бытовок по заказам, состав и задания на мебель.",
+  },
+  {
     path: "/logistics/tasks",
-    title: "Задания водителей",
+    title: "Перемещение",
     description:
       "Текущая и плановая очередь перемещений, загрузка ремонтных мест и капитальные ремонты.",
   },
@@ -154,8 +163,7 @@ const pages: PageConfig[] = [
   {
     path: "/settings/cabins",
     title: "Настройки бытовок",
-    description:
-      "Типы, габариты, отделка, характеристики и связи между ними.",
+    description: "Типы, габариты, отделка, характеристики и связи между ними.",
   },
   {
     path: "/settings",
@@ -175,7 +183,17 @@ function EmptyPage({ title }: { title: string }) {
 }
 
 function AppLayout() {
-  const { isLoading, error } = useWarehouse()
+  const { isLoading, error, selectedWarehouse } = useWarehouse()
+  const { accessToken, currentUser } = useAuth()
+
+  // Keep the warehouse projections and media stream alive while the user
+  // moves between routes. The cache can then be patched in the background and
+  // the warehouse page paints immediately when it is opened again.
+  useWarehouseRealtime({
+    accessToken,
+    warehouseId: selectedWarehouse?.id,
+    userId: currentUser?.id,
+  })
 
   if (isLoading) {
     return (
@@ -240,6 +258,10 @@ function AppLayout() {
             <Route path="/acceptance" element={<AcceptancePage />} />
             <Route path="/logistics/tasks" element={<DriverBoardPage />} />
             <Route
+              path="/logistics/order-tasks"
+              element={<LogisticsOrderTasksPage />}
+            />
+            <Route
               path="/logistics/returns"
               element={<LogisticsReturnsPage />}
             />
@@ -295,6 +317,7 @@ function AppLayout() {
                     "/task-board",
                     "/acceptance",
                     "/logistics/tasks",
+                    "/logistics/order-tasks",
                     "/logistics/returns",
                     "/logistics/shipments",
                     "/logistics/transfers",

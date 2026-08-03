@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
+  createManualMovement,
   moveDriverBoardTask,
+  pinDriverBoardTask,
   promoteCapitalRepair,
 } from "@/features/logistics/driver-board/driver-board-api"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
@@ -39,6 +41,7 @@ describe("driver board API", () => {
         warehouseId: WAREHOUSE_ID,
         expectedTaskVersion: 7,
         expectedEntryVersion: 11,
+        targetLane: "SCHEDULED",
         targetDate: "2026-08-02",
         targetIndex: 3,
       },
@@ -56,8 +59,38 @@ describe("driver board API", () => {
       warehouseId: WAREHOUSE_ID,
       expectedTaskVersion: 7,
       expectedEntryVersion: 11,
+      targetLane: "SCHEDULED",
       targetDate: "2026-08-02",
       targetIndex: 3,
+    })
+  })
+
+  it("serializes an insertion into the current driver queue", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ externalTaskId: EXTERNAL_TASK_ID }))
+
+    await moveDriverBoardTask({
+      accessToken: "driver-token",
+      externalTaskId: EXTERNAL_TASK_ID,
+      command: {
+        warehouseId: WAREHOUSE_ID,
+        expectedTaskVersion: 7,
+        expectedEntryVersion: 11,
+        targetLane: "CURRENT",
+        targetDate: "2026-08-01",
+        targetIndex: 2,
+      },
+    })
+
+    const [, init] = fetchMock.mock.calls[0]!
+    expect(JSON.parse(String(init?.body))).toEqual({
+      warehouseId: WAREHOUSE_ID,
+      expectedTaskVersion: 7,
+      expectedEntryVersion: 11,
+      targetLane: "CURRENT",
+      targetDate: "2026-08-01",
+      targetIndex: 2,
     })
   })
 
@@ -83,6 +116,69 @@ describe("driver board API", () => {
     )
     expect(JSON.parse(String(init?.body))).toEqual({
       warehouseId: WAREHOUSE_ID,
+    })
+  })
+
+  it("creates one general movement that ignores repair-place allocation", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ id: "manual-driver-task" }, 201))
+
+    await createManualMovement({
+      accessToken: "driver-token",
+      command: {
+        warehouseId: WAREHOUSE_ID,
+        cabinId: REPAIR_ID,
+        comment: "Переставить к зоне отгрузки",
+        priority: 2,
+        idempotencyKey: IDEMPOTENCY_KEY,
+      },
+    })
+
+    const [input, init] = fetchMock.mock.calls[0]!
+    expect(String(input)).toBe(
+      `${getGatewayRuntimeConfig().logisticsApiBaseUrl}/v1/driver-tasks`
+    )
+    expect(init?.method).toBe("POST")
+    expect(new Headers(init?.headers).get("Idempotency-Key")).toBe(
+      IDEMPOTENCY_KEY
+    )
+    expect(JSON.parse(String(init?.body))).toEqual({
+      warehouseId: WAREHOUSE_ID,
+      cabinId: REPAIR_ID,
+      repairId: null,
+      sourceType: "MANUAL",
+      sourceId: IDEMPOTENCY_KEY,
+      kind: "GENERAL_MOVEMENT",
+      planningMode: "AUTO",
+      scheduledDate: null,
+      priority: 2,
+      activateNow: true,
+      comment: "Переставить к зоне отгрузки",
+    })
+  })
+
+  it("pins a driver task through the existing task-board command", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ warehouseId: WAREHOUSE_ID }))
+
+    await pinDriverBoardTask({
+      accessToken: "driver-token",
+      warehouseId: WAREHOUSE_ID,
+      taskId: EXTERNAL_TASK_ID,
+      expectedTaskVersion: 7,
+      pinned: true,
+    })
+
+    const [input, init] = fetchMock.mock.calls[0]!
+    expect(String(input)).toBe(
+      `${getGatewayRuntimeConfig().taskBoardApiBaseUrl}/warehouses/${WAREHOUSE_ID}/task-board/tasks/${EXTERNAL_TASK_ID}/pin`
+    )
+    expect(init?.method).toBe("POST")
+    expect(JSON.parse(String(init?.body))).toEqual({
+      expectedTaskVersion: 7,
+      pinned: true,
     })
   })
 })

@@ -119,6 +119,7 @@ type InventoryInspectionWorkspaceProps = {
   businessDate: string
   comment: string
   lines: RepairEstimateLineDto[]
+  media: ReadyMediaReference[]
   repairCompletionMode: RepairEstimateCompletionMode | null
   movementRequired: boolean
   repairPlans: InventoryRepairPlanSnapshotDto[]
@@ -142,6 +143,7 @@ export function InventoryInspectionWorkspace({
   businessDate,
   comment,
   lines,
+  media,
   repairCompletionMode,
   movementRequired,
   repairPlans,
@@ -182,6 +184,7 @@ export function InventoryInspectionWorkspace({
           owner={inventoryFindingMediaOwner(findingId, warehouseId)}
           readOnly={readOnly}
           maxItems={20}
+          authoritativeReadyReferences={media}
           coverMediaId={coverMediaId}
           requireCover
           onReadyReferencesChange={onMediaChange}

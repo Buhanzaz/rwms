@@ -47,6 +47,9 @@ const mocks = vi.hoisted(() => ({
   listGroups: vi.fn(),
   listQueues: vi.fn(),
   listWorkers: vi.fn(),
+  createQueue: vi.fn(),
+  deleteQueue: vi.fn(),
+  reorderQueues: vi.fn(),
   disableGroup: vi.fn(),
   enableGroup: vi.fn(),
   setWorkerCurrentGroup: vi.fn(),
@@ -76,6 +79,9 @@ vi.mock("@/features/settings/task-board/api/task-board-settings-api", () => ({
     listGroups: mocks.listGroups,
     listQueues: mocks.listQueues,
     listWorkers: mocks.listWorkers,
+    createQueue: mocks.createQueue,
+    deleteQueue: mocks.deleteQueue,
+    reorderQueues: mocks.reorderQueues,
     disableGroup: mocks.disableGroup,
     enableGroup: mocks.enableGroup,
     setWorkerCurrentGroup: mocks.setWorkerCurrentGroup,
@@ -99,10 +105,6 @@ vi.mock("@/features/settings/task-board/api/task-board-settings-api", () => ({
       "workers",
     ],
   },
-}))
-
-vi.mock("@/features/settings/task-board/queue-order-settings", () => ({
-  QueueOrderSettings: () => <p>Порядок очередей</p>,
 }))
 
 import { TaskBoardSettingsPage } from "@/features/settings/task-board/task-board-settings-page"
@@ -146,7 +148,9 @@ function queueFixture(): WorkQueueDto {
   }
 }
 
-function queueDefinitionFixture(): QueueDefinitionDto {
+function queueDefinitionFixture(
+  overrides: Partial<QueueDefinitionDto> = {}
+): QueueDefinitionDto {
   return {
     id: "00000000-0000-4000-8000-000000000010",
     version: 1,
@@ -154,6 +158,7 @@ function queueDefinitionFixture(): QueueDefinitionDto {
     description: null,
     type: "REPAIR",
     purpose: "GENERAL",
+    ...overrides,
   }
 }
 
@@ -166,6 +171,7 @@ function classFixture(): WorkerClassDto {
     comment: null,
     sortOrder: 1,
     active: true,
+    logisticsPrimary: false,
   }
 }
 
@@ -174,6 +180,7 @@ function driverClassFixture(): WorkerClassDto {
     ...classFixture(),
     id: "driver-class",
     name: "Водители",
+    logisticsPrimary: true,
   }
 }
 
@@ -223,6 +230,24 @@ function workerFixture(): WorkerDto {
   }
 }
 
+function driverWorkerFixture(): WorkerDto {
+  const driverClass = driverClassFixture()
+  return {
+    ...workerFixture(),
+    id: "driver-worker",
+    displayName: "Алексей Водитель",
+    qualifications: [
+      {
+        id: "driver-qualification",
+        version: 1,
+        workerClass: driverClass,
+        active: true,
+        comment: null,
+      },
+    ],
+  }
+}
+
 function groupFixture(
   operationalStatus: "AVAILABLE" | "DISABLED" = "AVAILABLE"
 ): WorkerGroupDto {
@@ -249,6 +274,16 @@ function groupFixture(
         active: true,
       },
     ],
+  }
+}
+
+function driverGroupFixture(): WorkerGroupDto {
+  return {
+    ...groupFixture(),
+    id: "driver-group",
+    name: "Бригада водителей",
+    workerClass: driverClassFixture(),
+    members: [],
   }
 }
 
@@ -308,20 +343,14 @@ afterAll(() => {
 })
 
 beforeEach(() => {
-  mocks.listQueueDefinitions.mockResolvedValue([
-    queueDefinitionFixture(),
-    {
-      ...queueDefinitionFixture(),
-      id: "00000000-0000-4000-8000-000000000011",
-      name: "Водители",
-      type: "MOVEMENT",
-      purpose: "LOGISTICS_DRIVER",
-    },
-  ])
+  mocks.listQueueDefinitions.mockResolvedValue([queueDefinitionFixture()])
   mocks.listClasses.mockResolvedValue([driverClassFixture()])
   mocks.listGroups.mockResolvedValue([])
   mocks.listQueues.mockResolvedValue([queueFixture(), driverQueueFixture()])
   mocks.listWorkers.mockResolvedValue([])
+  mocks.createQueue.mockResolvedValue(queueFixture())
+  mocks.deleteQueue.mockResolvedValue(undefined)
+  mocks.reorderQueues.mockResolvedValue([])
   mocks.disableGroup.mockResolvedValue({})
   mocks.enableGroup.mockResolvedValue({})
   mocks.setWorkerCurrentGroup.mockResolvedValue({})
@@ -333,7 +362,7 @@ afterEach(() => {
 })
 
 describe("TaskBoardSettingsPage navigation", () => {
-  it("uses compact section buttons and aligns the queue action to the right", async () => {
+  it("separates the global catalog, warehouse queues, and warehouse order", async () => {
     renderPage()
 
     await waitFor(() =>
@@ -378,23 +407,16 @@ describe("TaskBoardSettingsPage navigation", () => {
     expect(
       screen.getByRole("button", { name: "Создать общую очередь" })
     ).toBeTruthy()
+    expect(screen.queryByText("Классы исполнителей")).toBeNull()
+
+    fireEvent.click(screen.getByRole("radio", { name: "Порядок" }))
+    expect(
+      screen.getByRole("button", { name: "Сохранить порядок" })
+    ).toBeTruthy()
     expect(screen.queryByText("Водители")).toBeNull()
 
     fireEvent.click(screen.getByRole("radio", { name: "Классы" }))
     expect(screen.queryByText("Водители")).toBeNull()
-
-    fireEvent.click(screen.getByRole("radio", { name: "Порядок" }))
-
-    expect(screen.getByText("Порядок очередей")).toBeTruthy()
-    expect(
-      screen
-        .getByRole("radio", { name: "Порядок" })
-        .getAttribute("aria-checked")
-    ).toBe("true")
-    expect(
-      screen.queryByRole("button", { name: "Добавить из каталога" })
-    ).toBeNull()
-
     for (const [section, action] of [
       ["Классы", "Создать класс"],
       ["Бригады", "Создать бригаду"],
@@ -407,6 +429,116 @@ describe("TaskBoardSettingsPage navigation", () => {
         createButton.parentElement?.classList.contains("justify-end")
       ).toBe(true)
     }
+  })
+
+  it("connects a definition to only the selected warehouse with its stable id", async () => {
+    const user = userEvent.setup()
+    const connected = queueDefinitionFixture({
+      id: "00000000-0000-4000-8000-000000000011",
+      name: "Внешний ремонт",
+    })
+    const available = queueDefinitionFixture({
+      id: "00000000-0000-4000-8000-000000000012",
+      name: "Внутренний ремонт",
+    })
+    const connectedQueue = {
+      ...queueFixture(),
+      definitionId: connected.id,
+      name: connected.name,
+    }
+    mocks.listQueueDefinitions.mockResolvedValue([connected, available])
+    mocks.listQueues.mockResolvedValue([connectedQueue, driverQueueFixture()])
+
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Добавить из каталога" })
+    )
+    await user.click(screen.getByRole("combobox", { name: "Общая очередь" }))
+    await user.click(
+      screen.getByRole("option", { name: "Внутренний ремонт · Ремонт" })
+    )
+    await user.click(screen.getByRole("button", { name: "Сохранить" }))
+
+    await waitFor(() =>
+      expect(mocks.createQueue).toHaveBeenCalledWith(
+        "task-board-token",
+        WAREHOUSE_ID,
+        expect.objectContaining({ definitionId: available.id, version: 0 })
+      )
+    )
+  })
+
+  it("reorders general queues while preserving the warehouse driver connection", async () => {
+    const first = queueFixture()
+    const second = {
+      ...queueFixture(),
+      id: "00000000-0000-4000-8000-000000000099",
+      definitionId: "00000000-0000-4000-8000-000000000088",
+      name: "Внутренний ремонт",
+      sortOrder: 20,
+      version: 4,
+    }
+    mocks.listQueues.mockResolvedValue([first, driverQueueFixture(), second])
+
+    renderPage()
+    fireEvent.click(await screen.findByRole("radio", { name: "Порядок" }))
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить порядок" }))
+
+    await waitFor(() =>
+      expect(mocks.reorderQueues).toHaveBeenCalledWith(
+        "task-board-token",
+        WAREHOUSE_ID,
+        [
+          { queueId: first.id, expectedVersion: first.version },
+          {
+            queueId: driverQueueFixture().id,
+            expectedVersion: driverQueueFixture().version,
+          },
+          { queueId: second.id, expectedVersion: second.version },
+        ]
+      )
+    )
+  })
+
+  it("disconnects a general queue only from the selected warehouse", async () => {
+    const user = userEvent.setup()
+    const queue = queueFixture()
+    mocks.listQueues.mockResolvedValue([queue, driverQueueFixture()])
+
+    renderPage()
+
+    await user.click(await screen.findByRole("button", { name: "Удалить" }))
+    const dialog = await screen.findByRole("alertdialog")
+    await user.click(within(dialog).getByRole("button", { name: "Удалить" }))
+
+    await waitFor(() =>
+      expect(mocks.deleteQueue).toHaveBeenCalledWith(
+        "task-board-token",
+        WAREHOUSE_ID,
+        queue.id,
+        queue.version
+      )
+    )
+  })
+
+  it("uses the stable logistics marker even before a local driver queue exists", async () => {
+    const user = userEvent.setup()
+    mocks.listQueues.mockResolvedValue([queueFixture()])
+    mocks.listClasses.mockResolvedValue([driverClassFixture()])
+    mocks.listGroups.mockResolvedValue([driverGroupFixture()])
+    mocks.listWorkers.mockResolvedValue([driverWorkerFixture()])
+
+    renderPage()
+
+    await user.click(await screen.findByRole("radio", { name: "Классы" }))
+    expect(screen.queryByText("Водители")).toBeNull()
+
+    await user.click(screen.getByRole("radio", { name: "Бригады" }))
+    expect(screen.queryByText("Бригада водителей")).toBeNull()
+
+    await user.click(screen.getByRole("radio", { name: "Рабочие" }))
+    expect(screen.queryByText("Алексей Водитель")).toBeNull()
   })
 })
 

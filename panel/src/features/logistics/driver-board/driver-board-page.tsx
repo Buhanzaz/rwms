@@ -23,8 +23,11 @@ import {
 import { CSS } from "@dnd-kit/utilities"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
+  Add01Icon,
   Calendar03Icon,
   DragDropVerticalIcon,
+  PinIcon,
+  PinOffIcon,
   RefreshIcon,
   TruckDeliveryIcon,
 } from "@hugeicons/core-free-icons"
@@ -54,14 +57,30 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
+import {
+  Field,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Textarea } from "@/components/ui/textarea"
 import { useAuth } from "@/features/auth/use-auth"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import {
+  createManualMovement,
   driverBoardQueryKey,
   getDriverBoard,
   moveDriverBoardTask,
+  pinDriverBoardTask,
   promoteCapitalRepair,
 } from "@/features/logistics/driver-board/driver-board-api"
 import type {
@@ -70,13 +89,15 @@ import type {
   DriverBoardCard,
   DriverTaskKind,
 } from "@/features/logistics/driver-board/driver-board-model"
+import { listAssetRentalItems } from "@/features/rental-items/api/asset-rental-items-api"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { ApiError } from "@/lib/api-client"
 import { cn } from "@/lib/utils"
 
-type ScheduledDragItem = {
-  type: "scheduled"
+type TaskDragItem = {
+  type: "task"
   card: DriverBoardCard
+  lane: DriverBoardCard["lane"]
   date: string
   index: number
 }
@@ -86,7 +107,7 @@ type CapitalDragItem = {
   repair: CapitalRepairCard
 }
 
-type DriverDragItem = ScheduledDragItem | CapitalDragItem
+type DriverDragItem = TaskDragItem | CapitalDragItem
 
 const entryStatusLabels: Record<DriverBoardCard["entryStatus"], string> = {
   WAITING: "Ожидает",
@@ -101,6 +122,7 @@ const kindLabels: Record<DriverTaskKind, string> = {
   REMOVE_FROM_REPAIR: "Вывезти после ремонта",
   CAPITAL_TO_PRODUCTION: "Переместить на производство",
   MOVE_TO_SHIPMENT: "Переместить на отгрузку",
+  GENERAL_MOVEMENT: "Свободное перемещение",
 }
 
 function formatDate(value: string) {
@@ -121,11 +143,11 @@ function isIsoCalendarDate(value: string) {
 }
 
 function taskTitle(card: DriverBoardCard) {
-  return card.taskText?.trim() || card.title
+  return card.title
 }
 
 function taskKindLabel(kind: DriverTaskKind | null) {
-  return kind ? kindLabels[kind] : "Логистическое задание"
+  return kind ? kindLabels[kind] : "Задание перемещения"
 }
 
 function taskCardClassName(card: DriverBoardCard) {
@@ -137,12 +159,30 @@ function taskCardClassName(card: DriverBoardCard) {
   )
 }
 
+function orderCards(cards: DriverBoardCard[]) {
+  return cards
+    .slice()
+    .sort(
+      (left, right) =>
+        left.position - right.position ||
+        left.externalTaskId.localeCompare(right.externalTaskId)
+    )
+}
+
+function isTaskMovable(card: DriverBoardCard) {
+  return card.taskStatus === "ACTIVE" && card.entryStatus === "WAITING"
+}
+
 function DriverTaskCardContent({
   card,
   dragHandle,
+  onPin,
+  pinDisabled = false,
 }: {
   card: DriverBoardCard
   dragHandle?: ReactNode
+  onPin?: () => void
+  pinDisabled?: boolean
 }) {
   return (
     <>
@@ -151,12 +191,41 @@ function DriverTaskCardContent({
         <CardDescription>
           Бытовка {card.unitNumber || "без номера"}
         </CardDescription>
-        {dragHandle ? <CardAction>{dragHandle}</CardAction> : null}
+        {dragHandle || onPin ? (
+          <CardAction className="flex items-center gap-1">
+            {onPin ? (
+              <Button
+                type="button"
+                size="icon-sm"
+                variant={card.pinned ? "secondary" : "ghost"}
+                disabled={pinDisabled}
+                aria-pressed={card.pinned}
+                aria-label={
+                  card.pinned
+                    ? `Открепить задание бытовки ${card.unitNumber || "без номера"}`
+                    : `Закрепить задание бытовки ${card.unitNumber || "без номера"}`
+                }
+                onPointerDown={(event) => event.stopPropagation()}
+                onKeyDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onPin()
+                }}
+              >
+                <HugeiconsIcon icon={card.pinned ? PinOffIcon : PinIcon} />
+              </Button>
+            ) : null}
+            {dragHandle}
+          </CardAction>
+        ) : null}
       </CardHeader>
-      <CardContent className="space-y-2">
+      <CardContent className="flex flex-col gap-2">
         <p className="text-xs text-muted-foreground">
           {taskKindLabel(card.kind)}
         </p>
+        {card.taskText?.trim() && card.taskText.trim() !== card.title.trim() ? (
+          <p className="whitespace-pre-wrap text-sm">{card.taskText.trim()}</p>
+        ) : null}
         <div className="flex flex-wrap gap-1">
           <Badge
             variant={card.entryStatus === "IN_PROGRESS" ? "default" : "outline"}
@@ -173,32 +242,24 @@ function DriverTaskCardContent({
   )
 }
 
-function CurrentTaskCard({ card }: { card: DriverBoardCard }) {
-  return (
-    <Card
-      size="sm"
-      className={taskCardClassName(card)}
-      data-testid={`current-task-${card.externalTaskId}`}
-    >
-      <DriverTaskCardContent card={card} />
-    </Card>
-  )
-}
-
-function ScheduledTaskCard({
+function CurrentTaskCard({
   card,
   date,
   index,
   disabled,
+  onPin,
 }: {
   card: DriverBoardCard
   date: string
   index: number
   disabled: boolean
+  onPin: (card: DriverBoardCard) => void
 }) {
-  const dragItem: ScheduledDragItem = {
-    type: "scheduled",
+  const dragDisabled = disabled || !isTaskMovable(card)
+  const dragItem: TaskDragItem = {
+    type: "task",
     card,
+    lane: "CURRENT",
     date,
     index,
   }
@@ -211,7 +272,7 @@ function ScheduledTaskCard({
     isDragging,
   } = useSortable({
     id: `driver-task:${card.externalTaskId}`,
-    disabled,
+    disabled: dragDisabled,
     data: dragItem,
   })
   const style: CSSProperties = {
@@ -221,53 +282,139 @@ function ScheduledTaskCard({
   }
 
   return (
-    <Card
+    <div
       ref={setNodeRef}
       style={style}
-      size="sm"
-      className={taskCardClassName(card)}
-      data-testid={`scheduled-task-${card.externalTaskId}`}
+      className={cn(
+        !dragDisabled && "cursor-grab touch-none active:cursor-grabbing"
+      )}
+      data-testid={`current-task-${card.externalTaskId}`}
+      {...attributes}
+      {...listeners}
+      aria-label={`Переместить задание бытовки ${card.unitNumber || "без номера"}`}
     >
-      <DriverTaskCardContent
-        card={card}
-        dragHandle={
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            className="touch-none"
-            disabled={disabled}
-            aria-label={`Переместить задание бытовки ${card.unitNumber || "без номера"}`}
-            {...attributes}
-            {...listeners}
-          >
-            <HugeiconsIcon icon={DragDropVerticalIcon} />
-          </Button>
-        }
-      />
-    </Card>
+      <Card size="sm" className={taskCardClassName(card)}>
+        <DriverTaskCardContent
+          card={card}
+          onPin={() => onPin(card)}
+          pinDisabled={disabled}
+          dragHandle={
+            <span
+              className="flex size-8 items-center justify-center text-muted-foreground"
+              aria-hidden="true"
+            >
+              <HugeiconsIcon icon={DragDropVerticalIcon} />
+            </span>
+          }
+        />
+      </Card>
+    </div>
+  )
+}
+
+function ScheduledTaskCard({
+  card,
+  date,
+  index,
+  disabled,
+  onPin,
+}: {
+  card: DriverBoardCard
+  date: string
+  index: number
+  disabled: boolean
+  onPin: (card: DriverBoardCard) => void
+}) {
+  const dragDisabled = disabled || !isTaskMovable(card)
+  const dragItem: TaskDragItem = {
+    type: "task",
+    card,
+    lane: "SCHEDULED",
+    date,
+    index,
+  }
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: `driver-task:${card.externalTaskId}`,
+    disabled: dragDisabled,
+    data: dragItem,
+  })
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0 : 1,
+  }
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        !dragDisabled && "cursor-grab touch-none active:cursor-grabbing"
+      )}
+      data-testid={`scheduled-task-${card.externalTaskId}`}
+      {...attributes}
+      {...listeners}
+      aria-label={`Переместить задание бытовки ${card.unitNumber || "без номера"}`}
+    >
+      <Card size="sm" className={taskCardClassName(card)}>
+        <DriverTaskCardContent
+          card={card}
+          onPin={() => onPin(card)}
+          pinDisabled={disabled}
+          dragHandle={
+            <span
+              className="flex size-8 items-center justify-center text-muted-foreground"
+              aria-hidden="true"
+            >
+              <HugeiconsIcon icon={DragDropVerticalIcon} />
+            </span>
+          }
+        />
+      </Card>
+    </div>
   )
 }
 
 function InsertionSlot({
+  lane,
   date,
   index,
   disabled,
 }: {
+  lane: "SCHEDULED" | "CURRENT"
   date: string
   index: number
   disabled: boolean
 }) {
+  const current = lane === "CURRENT"
   const { setNodeRef, isOver } = useDroppable({
-    id: `driver-slot:${date}:${index}`,
+    id: current
+      ? `driver-current-slot:${date}:${index}`
+      : `driver-slot:${date}:${index}`,
     disabled,
-    data: { type: "scheduled-slot", date, index },
+    data: {
+      type: current ? "current-slot" : "scheduled-slot",
+      lane,
+      date,
+      index,
+    },
   })
 
   return (
     <div
       ref={setNodeRef}
-      aria-label={`Вставить на позицию ${index + 1} за ${formatDate(date)}`}
+      aria-label={
+        current
+          ? `Вставить в текущие задания на позицию ${index + 1}`
+          : `Вставить на позицию ${index + 1} за ${formatDate(date)}`
+      }
       data-insertion-active={isOver || undefined}
       className={cn(
         "relative h-3 shrink-0 rounded-md transition-[height,background-color] duration-150",
@@ -285,10 +432,12 @@ function DateColumn({
   date,
   tasks,
   disabled,
+  onPin,
 }: {
   date: string
   tasks: DriverBoardCard[]
   disabled: boolean
+  onPin: (card: DriverBoardCard) => void
 }) {
   const { setNodeRef, isOver } = useDroppable({
     id: `driver-date:${date}`,
@@ -317,17 +466,28 @@ function DateColumn({
       >
         {tasks.map((card, index) => (
           <div key={card.externalTaskId}>
-            <InsertionSlot date={date} index={index} disabled={disabled} />
+            <InsertionSlot
+              lane="SCHEDULED"
+              date={date}
+              index={index}
+              disabled={disabled}
+            />
             <ScheduledTaskCard
               card={card}
               date={date}
               index={index}
               disabled={disabled}
+              onPin={onPin}
             />
           </div>
         ))}
       </SortableContext>
-      <InsertionSlot date={date} index={tasks.length} disabled={disabled} />
+      <InsertionSlot
+        lane="SCHEDULED"
+        date={date}
+        index={tasks.length}
+        disabled={disabled}
+      />
     </section>
   )
 }
@@ -335,9 +495,11 @@ function DateColumn({
 function CapitalCard({
   repair,
   disabled,
+  onPromote,
 }: {
   repair: CapitalRepairCard
   disabled: boolean
+  onPromote: (repair: CapitalRepairCard) => void
 }) {
   const dragItem: CapitalDragItem = { type: "capital", repair }
   const { attributes, listeners, setNodeRef, transform, isDragging } =
@@ -353,50 +515,65 @@ function CapitalCard({
   }
 
   return (
-    <Card
+    <div
       ref={setNodeRef}
       style={style}
-      size="sm"
-      className="border-l-4"
+      className={cn(
+        !disabled && "cursor-grab touch-none active:cursor-grabbing"
+      )}
       data-testid={`capital-repair-${repair.repairId}`}
+      {...attributes}
+      {...listeners}
+      aria-label={`Переместить капитальный ремонт бытовки ${repair.unitNumber} в текущие задания`}
     >
-      <CardHeader>
-        <CardTitle>Бытовка {repair.unitNumber}</CardTitle>
-        <CardDescription>
-          {Number(repair.plannedMinutes).toLocaleString("ru-RU")} мин.
-        </CardDescription>
-        <CardAction>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            className="touch-none"
-            disabled={disabled}
-            aria-label={`Переместить капитальный ремонт бытовки ${repair.unitNumber} в текущее задание`}
-            {...attributes}
-            {...listeners}
+      <Card size="sm" className="border-l-4">
+        <CardHeader>
+          <CardTitle>Бытовка {repair.unitNumber}</CardTitle>
+          <CardDescription>
+            {Number(repair.plannedMinutes).toLocaleString("ru-RU")} мин.
+          </CardDescription>
+          <CardAction className="flex items-center gap-1">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={disabled}
+              aria-label={`Добавить капитальный ремонт бытовки ${repair.unitNumber} в текущие задания`}
+              onPointerDown={(event) => event.stopPropagation()}
+              onKeyDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation()
+                onPromote(repair)
+              }}
+            >
+              В текущее
+            </Button>
+            <span
+              className="flex size-8 items-center justify-center text-muted-foreground"
+              aria-hidden="true"
+            >
+              <HugeiconsIcon icon={DragDropVerticalIcon} />
+            </span>
+          </CardAction>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-1">
+          <Badge
+            style={{
+              backgroundColor: repair.complexityColor,
+              color: "#ffffff",
+            }}
           >
-            <HugeiconsIcon icon={DragDropVerticalIcon} />
-          </Button>
-        </CardAction>
-      </CardHeader>
-      <CardContent className="flex flex-wrap gap-1">
-        <Badge
-          style={{
-            backgroundColor: repair.complexityColor,
-            color: "#ffffff",
-          }}
-        >
-          {repair.complexityName}
-        </Badge>
-        <Badge variant={repair.priority <= 2 ? "default" : "secondary"}>
-          Приоритет {repair.priority}
-        </Badge>
-        {repair.forcedCapital ? (
-          <Badge variant="outline">Принудительно</Badge>
-        ) : null}
-      </CardContent>
-    </Card>
+            {repair.complexityName}
+          </Badge>
+          <Badge variant={repair.priority <= 2 ? "default" : "secondary"}>
+            Приоритет {repair.priority}
+          </Badge>
+          {repair.forcedCapital ? (
+            <Badge variant="outline">Принудительно</Badge>
+          ) : null}
+        </CardContent>
+      </Card>
+    </div>
   )
 }
 
@@ -411,13 +588,16 @@ function NewDateDropTarget({ disabled }: { disabled: boolean }) {
     <div
       ref={setNodeRef}
       aria-label="Перенести задание на новую дату"
+      data-testid="driver-new-date-drop-zone"
       className={cn(
-        "flex h-40 w-64 shrink-0 flex-col items-center justify-center gap-2 rounded-xl border border-dashed bg-muted/30 p-4 text-center text-sm text-muted-foreground",
+        "flex h-full min-h-full min-w-80 flex-1 shrink-0 self-stretch rounded-xl border border-dashed bg-muted/30 p-4 text-center text-sm text-muted-foreground",
         isOver && "border-primary bg-primary/8 text-primary"
       )}
     >
-      <HugeiconsIcon icon={Calendar03Icon} className="size-5" />
-      Перетащите сюда, чтобы выбрать другую дату
+      <div className="flex h-full min-h-72 w-full flex-col items-center justify-center gap-2">
+        <HugeiconsIcon icon={Calendar03Icon} className="size-5" />
+        Перетащите сюда, чтобы выбрать другую дату
+      </div>
     </div>
   )
 }
@@ -425,36 +605,49 @@ function NewDateDropTarget({ disabled }: { disabled: boolean }) {
 function CurrentColumn({
   board,
   disabled,
+  onPin,
 }: {
   board: DriverBoard
   disabled: boolean
+  onPin: (card: DriverBoardCard) => void
 }) {
+  const currentDate = board.currentDate
+  const currentTasks = orderCards(board.current)
   const { setNodeRef, isOver } = useDroppable({
     id: "driver-current",
     disabled,
-    data: { type: "current" },
+    data: {
+      type: "current",
+      lane: "CURRENT",
+      date: currentDate,
+      index: currentTasks.length,
+    },
   })
-  const current = board.current[0] ?? null
 
   return (
     <section
       ref={setNodeRef}
-      aria-label="Текущее задание"
+      aria-label={`Текущие задания на ${formatDate(currentDate)}`}
       className={cn(
         "sticky left-0 z-20 flex min-h-0 flex-col border-r bg-background p-3",
         isOver && "bg-primary/8 ring-2 ring-primary/40 ring-inset"
       )}
     >
-      <header className="mb-3 space-y-2">
+      <header className="mb-3 flex flex-col gap-2">
         <div className="flex items-center justify-between gap-2">
-          <h2 className="font-heading font-semibold">Текущее задание</h2>
-          <Badge variant={current ? "default" : "outline"}>
-            {current ? 1 : 0}
+          <div>
+            <h2 className="font-heading font-semibold">Текущие задания</h2>
+            <p className="text-xs capitalize text-muted-foreground">
+              {formatDate(currentDate)}
+            </p>
+          </div>
+          <Badge variant={currentTasks.length > 0 ? "default" : "outline"}>
+            {currentTasks.length}
           </Badge>
         </div>
         <div
           className="rounded-lg border bg-muted/35 p-2 text-xs"
-          aria-label={`Ремонтные места: ${board.occupiedRepairPlaceCount} из ${board.repairPlaceCount} занято`}
+          aria-label={`Ремонтные места: ${board.usedRepairPlaceCount} из ${board.repairPlaceCount} используется`}
         >
           <div className="flex items-center justify-between gap-2">
             <span className="font-medium">Ремонтные места</span>
@@ -463,11 +656,14 @@ function CurrentColumn({
                 board.repairPlacesOverCapacity ? "destructive" : "outline"
               }
             >
-              {board.occupiedRepairPlaceCount}/{board.repairPlaceCount}
+              {board.usedRepairPlaceCount}/{board.repairPlaceCount}
             </Badge>
           </div>
           <p className="mt-1 text-muted-foreground">
             Свободно: {board.availableRepairPlaceCount}
+          </p>
+          <p className="mt-1 text-muted-foreground">
+            Учитываются занятые места и уже назначенные доставки в ремонт.
           </p>
           {board.repairPlacesOverCapacity ? (
             <p className="mt-1 text-destructive">
@@ -477,17 +673,51 @@ function CurrentColumn({
         </div>
       </header>
       <div className="min-h-44 flex-1 rounded-xl border border-dashed p-2">
-        {current ? (
-          <CurrentTaskCard card={current} />
-        ) : (
-          <div className="flex h-full min-h-40 flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
-            <HugeiconsIcon icon={TruckDeliveryIcon} className="size-6" />
-            Водитель ожидает следующее задание
-          </div>
-        )}
+        <SortableContext
+          items={currentTasks.map((card) => `driver-task:${card.externalTaskId}`)}
+          strategy={verticalListSortingStrategy}
+        >
+          {currentTasks.length > 0 ? (
+            <div className="flex flex-col gap-2">
+              {currentTasks.map((card, index) => (
+                <div key={card.externalTaskId}>
+                  <InsertionSlot
+                    lane="CURRENT"
+                    date={currentDate}
+                    index={index}
+                    disabled={disabled}
+                  />
+                  <CurrentTaskCard
+                    card={card}
+                    date={currentDate}
+                    index={index}
+                    disabled={disabled}
+                    onPin={onPin}
+                  />
+                </div>
+              ))}
+              <InsertionSlot
+                lane="CURRENT"
+                date={currentDate}
+                index={currentTasks.length}
+                disabled={disabled}
+              />
+            </div>
+          ) : (
+            <div className="flex h-full min-h-40 flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
+              <HugeiconsIcon icon={TruckDeliveryIcon} className="size-6" />
+              Водитель ожидает следующее задание
+            </div>
+          )}
+        </SortableContext>
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
-        Перетащите сюда капитальный ремонт для отправки на производство.
+        Перетащите сюда запланированное перемещение или капитальный ремонт.
+        Карточку можно вручную перенести обратно на выбранную дату.
+      </p>
+      <p className="mt-1 text-xs text-muted-foreground">
+        После ручного освобождения очередь заполнится автоматически через{" "}
+        {board.automaticRefillDelayMinutes} мин.
       </p>
     </section>
   )
@@ -496,9 +726,11 @@ function CurrentColumn({
 function CapitalColumn({
   repairs,
   disabled,
+  onPromote,
 }: {
   repairs: CapitalRepairCard[]
   disabled: boolean
+  onPromote: (repair: CapitalRepairCard) => void
 }) {
   return (
     <section
@@ -515,6 +747,7 @@ function CapitalColumn({
             key={repair.repairId}
             repair={repair}
             disabled={disabled}
+            onPromote={onPromote}
           />
         ))}
         {repairs.length === 0 ? (
@@ -560,15 +793,19 @@ function DragCardOverlay({ item }: { item: DriverDragItem }) {
 
 function DatePickerDialog({
   item,
+  minimumDate,
   onClose,
   onConfirm,
 }: {
-  item: ScheduledDragItem | null
+  item: TaskDragItem | null
+  minimumDate: string
   onClose: () => void
   onConfirm: (date: string) => void
 }) {
   const [date, setDate] = useState("")
-  const canSubmit = Boolean(item && isIsoCalendarDate(date))
+  const canSubmit = Boolean(
+    item && isIsoCalendarDate(date) && date >= minimumDate
+  )
 
   return (
     <Dialog
@@ -592,6 +829,7 @@ function DatePickerDialog({
               <Input
                 id="driver-board-new-date"
                 type="date"
+                min={minimumDate}
                 value={date}
                 onChange={(event) => setDate(event.target.value)}
               />
@@ -619,14 +857,168 @@ function DatePickerDialog({
   )
 }
 
+function ManualMovementDialog({
+  accessToken,
+  warehouseId,
+  saving,
+  onClose,
+  onSubmit,
+}: {
+  accessToken: string
+  warehouseId: string
+  saving: boolean
+  onClose: () => void
+  onSubmit: (command: {
+    cabinId: string
+    comment: string
+    priority: number
+  }) => void
+}) {
+  const [cabinId, setCabinId] = useState("")
+  const [comment, setComment] = useState("")
+  const [priority, setPriority] = useState("3")
+  const [validationError, setValidationError] = useState<string | null>(null)
+  const cabinsQuery = useQuery({
+    queryKey: ["asset-rental-items", warehouseId, "manual-movement"],
+    queryFn: () =>
+      listAssetRentalItems({
+        accessToken,
+        warehouseId,
+        page: 0,
+        size: 200,
+      }),
+  })
+  const cabins = useMemo(
+    () =>
+      (cabinsQuery.data?.content ?? [])
+        .slice()
+        .sort((left, right) =>
+          left.number.localeCompare(right.number, "ru", { numeric: true })
+        ),
+    [cabinsQuery.data?.content]
+  )
+
+  function submit() {
+    const normalizedComment = comment.trim()
+    if (!cabinId) {
+      setValidationError("Выберите бытовку.")
+      return
+    }
+    if (!normalizedComment) {
+      setValidationError("Опишите, куда или зачем нужно переместить бытовку.")
+      return
+    }
+    if (normalizedComment.length > 1_000) {
+      setValidationError("Комментарий не должен превышать 1000 символов.")
+      return
+    }
+
+    setValidationError(null)
+    onSubmit({ cabinId, comment: normalizedComment, priority: Number(priority) })
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Создать перемещение</DialogTitle>
+          <DialogDescription>
+            Свободное перемещение не занимает ремонтное место и сразу попадает
+            в текущую очередь водителей.
+          </DialogDescription>
+        </DialogHeader>
+        <FieldGroup>
+          <Field>
+            <FieldLabel htmlFor="manual-movement-cabin">Бытовка</FieldLabel>
+            <Select
+              value={cabinId}
+              onValueChange={setCabinId}
+              disabled={saving || cabinsQuery.isLoading}
+            >
+              <SelectTrigger id="manual-movement-cabin" className="w-full">
+                <SelectValue
+                  placeholder={
+                    cabinsQuery.isLoading
+                      ? "Загружаем бытовки…"
+                      : "Выберите бытовку"
+                  }
+                />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {cabins.map((cabin) => (
+                    <SelectItem key={cabin.id} value={cabin.id}>
+                      {cabin.number}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            {cabinsQuery.isError ? (
+              <FieldError>
+                Не удалось загрузить бытовки выбранного склада.
+              </FieldError>
+            ) : null}
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="manual-movement-comment">
+              Комментарий
+            </FieldLabel>
+            <Textarea
+              id="manual-movement-comment"
+              value={comment}
+              maxLength={1_000}
+              disabled={saving}
+              placeholder="Например: переставить бытовку к зоне отгрузки"
+              onChange={(event) => setComment(event.target.value)}
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="manual-movement-priority">
+              Приоритет
+            </FieldLabel>
+            <Select
+              value={priority}
+              onValueChange={setPriority}
+              disabled={saving}
+            >
+              <SelectTrigger id="manual-movement-priority" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {[1, 2, 3, 4, 5].map((value) => (
+                    <SelectItem key={value} value={String(value)}>
+                      Приоритет {value}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
+          {validationError ? <FieldError>{validationError}</FieldError> : null}
+        </FieldGroup>
+        <DialogFooter>
+          <Button type="button" variant="outline" disabled={saving} onClick={onClose}>
+            Отмена
+          </Button>
+          <Button type="button" disabled={saving || cabinsQuery.isLoading} onClick={submit}>
+            Создать
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function BoardLoading() {
   return (
     <Card aria-busy="true">
       <CardHeader>
-        <CardTitle>Загрузка логистической очереди</CardTitle>
+        <CardTitle>Загрузка перемещений</CardTitle>
       </CardHeader>
       <CardContent className="text-sm text-muted-foreground">
-        Получаем текущее задание, даты и капитальные ремонты…
+        Получаем текущие задания, даты и капитальные ремонты…
       </CardContent>
     </Card>
   )
@@ -635,7 +1027,7 @@ function BoardLoading() {
 function errorMessage(error: unknown) {
   return error instanceof Error
     ? error.message
-    : "Не удалось выполнить команду логистики."
+    : "Не удалось выполнить команду перемещения."
 }
 
 export function DriverBoardPage() {
@@ -648,7 +1040,8 @@ export function DriverBoardPage() {
   )
   const [activeItem, setActiveItem] = useState<DriverDragItem | null>(null)
   const [datePickerItem, setDatePickerItem] =
-    useState<ScheduledDragItem | null>(null)
+    useState<TaskDragItem | null>(null)
+  const [manualMovementOpen, setManualMovementOpen] = useState(false)
   const [commandError, setCommandError] = useState<unknown>(null)
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -682,10 +1075,12 @@ export function DriverBoardPage() {
   const moveMutation = useMutation({
     mutationFn: ({
       item,
+      targetLane,
       targetDate,
       targetIndex,
     }: {
-      item: ScheduledDragItem
+      item: TaskDragItem
+      targetLane: "SCHEDULED" | "CURRENT"
       targetDate: string
       targetIndex: number
     }) =>
@@ -696,6 +1091,7 @@ export function DriverBoardPage() {
           warehouseId: warehouseId!,
           expectedTaskVersion: item.card.taskBoardTaskVersion,
           expectedEntryVersion: item.card.taskBoardEntryVersion,
+          targetLane,
           targetDate,
           targetIndex,
         },
@@ -722,49 +1118,132 @@ export function DriverBoardPage() {
     onError: handleCommandError,
   })
 
+  const createMutation = useMutation({
+    mutationFn: (command: {
+      cabinId: string
+      comment: string
+      priority: number
+    }) =>
+      createManualMovement({
+        accessToken: accessToken!,
+        command: {
+          warehouseId: warehouseId!,
+          cabinId: command.cabinId,
+          comment: command.comment,
+          priority: command.priority,
+          idempotencyKey: crypto.randomUUID(),
+        },
+      }),
+    onSuccess: () => {
+      setCommandError(null)
+      setManualMovementOpen(false)
+      void refreshBoard()
+    },
+    onError: handleCommandError,
+  })
+
+  const pinMutation = useMutation({
+    mutationFn: (card: DriverBoardCard) =>
+      pinDriverBoardTask({
+        accessToken: accessToken!,
+        warehouseId: warehouseId!,
+        taskId: card.taskBoardTaskId,
+        expectedTaskVersion: card.taskBoardTaskVersion,
+        pinned: !card.pinned,
+      }),
+    onSuccess: () => {
+      setCommandError(null)
+      void refreshBoard()
+    },
+    onError: handleCommandError,
+  })
+
   const board = boardQuery.data
   const nonEmptyDates = useMemo(
-    () => board?.dates.filter((column) => column.tasks.length > 0) ?? [],
+    () =>
+      board?.dates
+        .filter((column) => column.tasks.length > 0)
+        .map((column) => ({
+          ...column,
+          tasks: orderCards(column.tasks),
+        }))
+        .sort((left, right) => left.date.localeCompare(right.date)) ?? [],
     [board?.dates]
   )
   const disabled =
-    !canEdit || moveMutation.isPending || promoteMutation.isPending
+    !canEdit ||
+    moveMutation.isPending ||
+    promoteMutation.isPending ||
+    createMutation.isPending ||
+    pinMutation.isPending
 
   function moveItem(
-    item: ScheduledDragItem,
+    item: TaskDragItem,
+    targetLane: "SCHEDULED" | "CURRENT",
     targetDate: string,
     rawTargetIndex: number
   ) {
     if (!board || disabled) return
-    const sourceColumn = board.dates.find((column) => column.date === item.date)
-    const targetColumn = board.dates.find(
-      (column) => column.date === targetDate
+    if (
+      targetLane === "CURRENT" &&
+      item.lane !== "CURRENT" &&
+      item.card.kind === "DELIVER_TO_REPAIR" &&
+      !board.inboundRepairPlaceAvailable
+    ) {
+      setCommandError(
+        new Error(
+          "На складе нет свободного или освобождаемого ремонтного места. Сначала завершите или вывезите текущий ремонт."
+        )
+      )
+      return
+    }
+    const sourceCards =
+      item.lane === "CURRENT"
+        ? orderCards(board.current)
+        : orderCards(
+            board.dates.find((column) => column.date === item.date)?.tasks ?? []
+          )
+    const targetCards =
+      targetLane === "CURRENT"
+        ? orderCards(board.current)
+        : orderCards(
+            board.dates.find((column) => column.date === targetDate)?.tasks ?? []
+          )
+    const resolvedSourceIndex = sourceCards.findIndex(
+      (candidate) => candidate.externalTaskId === item.card.externalTaskId
     )
     const sourceIndex =
-      sourceColumn?.tasks.findIndex(
-        (candidate) => candidate.externalTaskId === item.card.externalTaskId
-      ) ?? item.index
+      resolvedSourceIndex === undefined || resolvedSourceIndex < 0
+        ? item.index
+        : resolvedSourceIndex
     let targetIndex = Math.max(
       0,
-      Math.min(rawTargetIndex, targetColumn?.tasks.length ?? 0)
+      Math.min(rawTargetIndex, targetCards.length)
     )
 
     if (
-      item.date === targetDate &&
+      item.lane === targetLane &&
+      (targetLane === "CURRENT" || item.date === targetDate) &&
       sourceIndex >= 0 &&
       sourceIndex < targetIndex
     ) {
       targetIndex -= 1
     }
-    if (item.date === targetDate && sourceIndex === targetIndex) return
+    if (
+      item.lane === targetLane &&
+      (targetLane === "CURRENT" || item.date === targetDate) &&
+      sourceIndex === targetIndex
+    ) {
+      return
+    }
 
-    moveMutation.mutate({ item, targetDate, targetIndex })
+    moveMutation.mutate({ item, targetLane, targetDate, targetIndex })
   }
 
   function handleDragStart(event: DragStartEvent) {
     if (disabled) return
     const item = event.active.data.current as DriverDragItem | undefined
-    if (item?.type === "scheduled" || item?.type === "capital") {
+    if (item?.type === "task" || item?.type === "capital") {
       setActiveItem(item)
     }
   }
@@ -775,12 +1254,37 @@ export function DriverBoardPage() {
     const item = event.active.data.current as DriverDragItem | undefined
     if (!item) return
     const overData = event.over?.data.current as
-      { type?: unknown; date?: unknown; index?: unknown } | undefined
+      | {
+          type?: unknown
+          lane?: unknown
+          date?: unknown
+          index?: unknown
+        }
+      | undefined
+
+    const overCurrent = overData?.lane === "CURRENT" || overData?.type === "current"
 
     if (item.type === "capital") {
-      if (overData?.type === "current") {
+      if (overCurrent) {
         promoteMutation.mutate(item.repair)
       }
+      return
+    }
+
+    if (overCurrent) {
+      let currentTargetIndex =
+        typeof overData?.index === "number" &&
+        Number.isInteger(overData.index)
+          ? overData.index
+          : board?.current.length ?? 0
+      if (
+        overData?.type === "task" &&
+        item.lane === "CURRENT" &&
+        item.index < currentTargetIndex
+      ) {
+        currentTargetIndex += 1
+      }
+      moveItem(item, "CURRENT", board?.currentDate ?? item.date, currentTargetIndex)
       return
     }
 
@@ -798,23 +1302,37 @@ export function DriverBoardPage() {
     const targetColumn = board?.dates.find(
       (column) => column.date === targetDate
     )
-    const targetIndex =
+    let targetIndex =
       overData.type === "scheduled-slot" &&
       typeof overData.index === "number" &&
       Number.isInteger(overData.index)
         ? overData.index
+        : overData.type === "task" &&
+            overData.lane === "SCHEDULED" &&
+            typeof overData.index === "number" &&
+            Number.isInteger(overData.index)
+          ? overData.index
         : (targetColumn?.tasks.length ?? 0)
+    if (
+      overData.type === "task" &&
+      overData.lane === "SCHEDULED" &&
+      item.lane === "SCHEDULED" &&
+      item.date === targetDate &&
+      item.index < targetIndex
+    ) {
+      targetIndex += 1
+    }
 
-    moveItem(item, targetDate, targetIndex)
+    moveItem(item, "SCHEDULED", targetDate, targetIndex)
   }
 
   if (!warehouseId) {
     return (
       <Card>
         <CardHeader>
-          <CardTitle>Задания водителей</CardTitle>
+          <CardTitle>Перемещение</CardTitle>
           <CardDescription>
-            Выберите склад, чтобы открыть логистическую очередь.
+            Выберите склад, чтобы открыть очередь перемещений.
           </CardDescription>
         </CardHeader>
       </Card>
@@ -826,7 +1344,7 @@ export function DriverBoardPage() {
   if (boardQuery.isError || !board) {
     return (
       <Alert variant="destructive">
-        <AlertTitle>Не удалось загрузить задания водителей</AlertTitle>
+        <AlertTitle>Не удалось загрузить перемещения</AlertTitle>
         <AlertDescription>{errorMessage(boardQuery.error)}</AlertDescription>
         <AlertAction>
           <Button
@@ -848,13 +1366,27 @@ export function DriverBoardPage() {
       <header className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="font-heading text-xl font-semibold">
-            Задания водителей
+            Перемещение
           </h1>
           <p className="text-sm text-muted-foreground">
-            Текущее перемещение, запланированные даты и капитальные ремонты.
+            Текущие перемещения, запланированные даты и капитальные ремонты.
           </p>
         </div>
-        {!canEdit ? <Badge variant="outline">Только просмотр</Badge> : null}
+        <div className="flex items-center gap-2">
+          {canEdit ? (
+            <Button
+              type="button"
+              size="sm"
+              disabled={disabled}
+              onClick={() => setManualMovementOpen(true)}
+            >
+              <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+              Создать перемещение
+            </Button>
+          ) : (
+            <Badge variant="outline">Только просмотр</Badge>
+          )}
+        </div>
       </header>
 
       {commandError ? (
@@ -886,24 +1418,33 @@ export function DriverBoardPage() {
         onDragEnd={handleDragEnd}
       >
         <div className="grid min-h-0 flex-1 grid-cols-[20rem_minmax(0,1fr)_20rem] overflow-hidden rounded-xl border bg-muted/20">
-          <CurrentColumn board={board} disabled={disabled} />
+          <CurrentColumn
+            board={board}
+            disabled={disabled}
+            onPin={(card) => pinMutation.mutate(card)}
+          />
           <div
-            className="min-w-0 overflow-x-auto p-3"
+            className="h-full min-w-0 overflow-x-auto p-3"
             aria-label="Запланированные задания по датам"
           >
-            <div className="flex min-w-max items-start gap-3">
+            <div className="flex min-h-full min-w-full items-stretch gap-3">
               {nonEmptyDates.map((column) => (
                 <DateColumn
                   key={column.date}
                   date={column.date}
                   tasks={column.tasks}
                   disabled={disabled}
+                  onPin={(card) => pinMutation.mutate(card)}
                 />
               ))}
               <NewDateDropTarget disabled={disabled} />
             </div>
           </div>
-          <CapitalColumn repairs={board.capitalRepairs} disabled={disabled} />
+          <CapitalColumn
+            repairs={board.capitalRepairs}
+            disabled={disabled}
+            onPromote={(repair) => promoteMutation.mutate(repair)}
+          />
         </div>
         {typeof document !== "undefined"
           ? createPortal(
@@ -918,18 +1459,28 @@ export function DriverBoardPage() {
       <DatePickerDialog
         key={datePickerItem?.card.externalTaskId ?? "closed"}
         item={datePickerItem}
+        minimumDate={board.currentDate}
         onClose={() => setDatePickerItem(null)}
         onConfirm={(date) => {
           if (!datePickerItem) return
           const targetColumn = board.dates.find(
             (column) => column.date === date
           )
-          const targetIndex = (targetColumn?.tasks ?? []).filter(
-            (card) => card.externalTaskId !== datePickerItem.card.externalTaskId
-          ).length
-          moveItem(datePickerItem, date, targetIndex)
+          const targetIndex = targetColumn?.tasks.length ?? 0
+          moveItem(datePickerItem, "SCHEDULED", date, targetIndex)
         }}
       />
+      {manualMovementOpen ? (
+        <ManualMovementDialog
+          accessToken={accessToken}
+          warehouseId={warehouseId}
+          saving={createMutation.isPending}
+          onClose={() => {
+            if (!createMutation.isPending) setManualMovementOpen(false)
+          }}
+          onSubmit={(command) => createMutation.mutate(command)}
+        />
+      ) : null}
     </div>
   )
 }

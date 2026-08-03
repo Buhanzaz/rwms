@@ -178,6 +178,7 @@ const workLine: RepairEstimateLineDto = {
     name: "Заменить дверь",
     nodeType: "WORK",
     furnitureEquipment: null,
+    characteristic: null,
   },
   customQueueBinding: null,
 }

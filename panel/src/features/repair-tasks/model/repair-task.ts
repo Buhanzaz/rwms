@@ -115,6 +115,7 @@ export type RepairTaskDto = {
   writtenOffAt?: string | null
   decisionActorId?: string | null
   taskBoardAvailable?: boolean
+  awaitingMovement?: boolean
   logisticsPlanningMode: LogisticsPlanningMode
   logisticsScheduledDate: string | null
   createdAt: string

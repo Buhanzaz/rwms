@@ -1,4 +1,10 @@
-import { useMemo, useState, type CSSProperties, type ReactNode } from "react"
+import {
+  useMemo,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+  type SyntheticEvent,
+} from "react"
 import { createPortal } from "react-dom"
 import {
   closestCenter,
@@ -249,6 +255,15 @@ function queueCardClassName(item: RepairQueueItem) {
   )
 }
 
+/**
+ * The sortable listeners live on the card itself so a user can start a drag
+ * from any part of the card.  Action buttons are still real controls and
+ * must not bubble their pointer/keyboard events into that listener.
+ */
+function stopCardDrag(event: SyntheticEvent) {
+  event.stopPropagation()
+}
+
 function QueueCardContent({
   item,
   disabled,
@@ -281,7 +296,12 @@ function QueueCardContent({
                 ? `Открепить задание бытовки ${item.repair.cabinNumber}`
                 : `Закрепить задание бытовки ${item.repair.cabinNumber}`
             }
-            onClick={() => onPin?.(item.entry, !item.entry.pinned)}
+            onPointerDown={stopCardDrag}
+            onKeyDown={stopCardDrag}
+            onClick={(event) => {
+              stopCardDrag(event)
+              onPin?.(item.entry, !item.entry.pinned)
+            }}
           >
             <HugeiconsIcon icon={item.entry.pinned ? PinOffIcon : PinIcon} />
           </Button>
@@ -290,6 +310,7 @@ function QueueCardContent({
       </CardHeader>
       <CardContent>
         <div className="flex flex-wrap gap-1">
+          <Badge variant="destructive">На ремонте</Badge>
           <Badge
             variant={
               item.entry.status === "IN_PROGRESS" ? "default" : "outline"
@@ -312,7 +333,12 @@ function QueueCardContent({
           size="sm"
           variant="ghost"
           disabled={disabled}
-          onClick={() => onInfo?.(item)}
+          onPointerDown={stopCardDrag}
+          onKeyDown={stopCardDrag}
+          onClick={(event) => {
+            stopCardDrag(event)
+            onInfo?.(item)
+          }}
         >
           <HugeiconsIcon
             icon={InformationCircleIcon}
@@ -405,6 +431,7 @@ function QueueCard({
       index,
     },
   })
+  const draggable = !disabled && !isImmovable(item.entry)
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -417,7 +444,15 @@ function QueueCard({
       style={style}
       size="sm"
       data-dragging={isDragging || undefined}
-      className={queueCardClassName(item)}
+      data-dnd-draggable={draggable || undefined}
+      aria-label={`Задание бытовки ${item.repair.cabinNumber || "без номера"}`}
+      {...(draggable ? attributes : {})}
+      {...(draggable ? listeners : {})}
+      className={cn(
+        queueCardClassName(item),
+        draggable && "cursor-grab touch-none",
+        isDragging && "cursor-grabbing"
+      )}
     >
       <QueueCardContent
         item={item}
@@ -425,18 +460,13 @@ function QueueCard({
         onPin={onPin}
         onInfo={onInfo}
         dragHandle={
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            className="touch-none"
-            disabled={disabled || isImmovable(item.entry)}
-            aria-label={`Переместить задание бытовки ${item.repair.cabinNumber}`}
-            {...attributes}
-            {...listeners}
+          <span
+            data-dnd-handle
+            aria-hidden="true"
+            className="inline-flex size-8 items-center justify-center text-muted-foreground"
           >
             <HugeiconsIcon icon={DragDropVerticalIcon} />
-          </Button>
+          </span>
         }
       />
     </Card>

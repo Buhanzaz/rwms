@@ -165,6 +165,8 @@ type CatalogTableSortState = {
   direction: "asc" | "desc"
 }
 
+type CommonCatalogKind = "works" | "materials"
+
 type CatalogLinkAnchor = "TOP" | "BOTTOM"
 
 type CatalogLinkStart = {
@@ -215,6 +217,15 @@ const REPAIR_ESTIMATE_CATALOG_COLOR_SETTINGS: EstimateCatalogSettingsActionDto =
     order: 5,
   }
 
+const REPAIR_ESTIMATE_CATALOG_COMMON_SETTINGS: EstimateCatalogSettingsActionDto =
+  {
+    id: "repair-estimate-catalog-common",
+    title: "Общее",
+    sectionType: "WORK",
+    categoryScope: "NON_FURNITURE",
+    order: 50,
+  }
+
 const DISPLAY_COLOR_GROUP_COPY: Record<
   RepairEstimateCatalogDisplayColorGroup,
   { title: string; description: string }
@@ -261,6 +272,8 @@ function getEstimateActionIcon(id: EstimateCatalogSettingsActionDto["id"]) {
       return PackageIcon
     case "repair-estimate-catalog-furniture":
       return Sofa01Icon
+    case "repair-estimate-catalog-common":
+      return PackageIcon
   }
 }
 
@@ -272,6 +285,8 @@ function getSectionKind(action: EstimateCatalogSettingsActionDto) {
       return "materials"
     case "repair-estimate-catalog-furniture":
       return "furniture"
+    case "repair-estimate-catalog-common":
+      return null
     case "repair-estimate-catalog-canvas":
     case "repair-estimate-catalog-colors":
       return null
@@ -293,6 +308,8 @@ async function getEstimateActionData(
       return getRepairEstimateMaterialCatalog(request)
     case "repair-estimate-catalog-furniture":
       return getRepairEstimateFurnitureCatalog(request)
+    case "repair-estimate-catalog-common":
+      return getRepairEstimateWorkCatalog(request)
   }
 }
 
@@ -318,7 +335,7 @@ function EstimateActionNavigation({
         value={activeActionId ?? ""}
         variant="outline"
         size="default"
-        className="grid w-full grid-cols-2 gap-2 lg:grid-cols-5"
+        className="grid w-full grid-cols-2 gap-2 lg:grid-cols-6"
         onValueChange={(actionId) => {
           if (!actionId) {
             return
@@ -685,26 +702,53 @@ function createBlankNodeMutation({
   }
 }
 
+function createCommonCatalogNodeCopy(
+  node: RepairEstimateCatalogNodeDto,
+  parentId: string
+): RepairEstimateCatalogNodeMutation {
+  return {
+    ...createNodeMutation(node),
+    id: undefined,
+    parentId,
+    // The source remains available in the common catalog. Its copy belongs to
+    // the selected category and therefore must be available in that branch.
+    commonItem: false,
+    // Let the constructor place a copied block among the destination category
+    // nodes instead of overlapping the source block on the canvas.
+    canvasX: null,
+    canvasY: null,
+  }
+}
+
 function BooleanField({
   title,
   checked,
   disabled = false,
   onCheckedChange,
+  className,
+  checkboxClassName,
 }: {
   title: string
   checked: boolean
   disabled?: boolean
   onCheckedChange: (checked: boolean) => void
+  className?: string
+  checkboxClassName?: string
 }) {
   const fieldId = useId()
 
   return (
-    <Field orientation="horizontal" data-disabled={disabled}>
+    <Field
+      orientation="horizontal"
+      data-disabled={disabled}
+      className={className}
+    >
       <Checkbox
         id={fieldId}
         aria-label={title}
         checked={checked}
         disabled={disabled}
+        className={checkboxClassName}
         onCheckedChange={(value) => onCheckedChange(value === true)}
       />
       <FieldContent>
@@ -1124,9 +1168,11 @@ function NodeEditorDialogContent({
             {materialCharacteristic ? (
               <FieldGroup>
                 <BooleanField
-                  title="Связать с характеристикой"
+                  title="Сопоставить с характеристикой бытовки"
                   checked={characteristicLinked}
                   disabled={mutation.isPending}
+                  className="rounded-md border border-primary/50 bg-primary/5 px-3 py-2"
+                  checkboxClassName="size-5 border-2 border-primary bg-background shadow-sm"
                   onCheckedChange={(checked) => {
                     setCharacteristicLinked(checked)
                     setDraft((current) => ({
@@ -1206,6 +1252,9 @@ function NodeEditorDialogContent({
                     ) : null}
                   </Field>
                 ) : null}
+                <FieldDescription>
+                  К одной характеристике можно привязать несколько материалов.
+                </FieldDescription>
               </FieldGroup>
             ) : null}
 
@@ -2415,6 +2464,124 @@ function CatalogCanvas({
   )
 }
 
+function CommonCatalogNodePickerDialog({
+  open,
+  kind,
+  categoryName,
+  items,
+  isPending,
+  error,
+  onKindChange,
+  onClose,
+  onSelect,
+}: {
+  open: boolean
+  kind: CommonCatalogKind
+  categoryName: string
+  items: RepairEstimateCatalogNodeDto[]
+  isPending: boolean
+  error: string | null
+  onKindChange: (kind: CommonCatalogKind) => void
+  onClose: () => void
+  onSelect: (node: RepairEstimateCatalogNodeDto) => void
+}) {
+  if (!open) {
+    return null
+  }
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen && !isPending) {
+          onClose()
+        }
+      }}
+    >
+      <DialogContent className="max-h-[calc(100svh-2rem)] overflow-auto sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Добавить общее</DialogTitle>
+          <DialogDescription>
+            Выберите общую позицию для категории «{categoryName}». Будет
+            создан отдельный блок без стрелок.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div
+          role="group"
+          aria-label="Тип общего блока"
+          className="flex flex-wrap items-center gap-1"
+        >
+          {(["works", "materials"] satisfies CommonCatalogKind[]).map(
+            (candidate) => (
+              <Button
+                key={candidate}
+                type="button"
+                variant={kind === candidate ? "default" : "outline"}
+                size="sm"
+                disabled={isPending}
+                onClick={() => onKindChange(candidate)}
+              >
+                {commonCatalogKindTitle(candidate)}
+              </Button>
+            )
+          )}
+        </div>
+
+        {items.length === 0 ? (
+          <p className="rounded-lg border px-3 py-2 text-sm text-muted-foreground">
+            В разделе «{commonCatalogKindTitle(kind)}» нет активных общих
+            позиций.
+          </p>
+        ) : (
+          <div className="grid gap-2">
+            {items.map((item) => (
+              <Button
+                key={item.id}
+                type="button"
+                variant="outline"
+                className="h-auto min-h-12 justify-between gap-3 px-3 py-2 text-left"
+                disabled={isPending}
+                aria-label={`Добавить: ${item.name}`}
+                onClick={() => onSelect(item)}
+              >
+                <span className="min-w-0">
+                  <span className="block truncate font-medium">{item.name}</span>
+                  <span className="block text-xs font-normal text-muted-foreground">
+                    {item.unit ?? "Без единицы"}
+                    {item.unitPrice ? ` · ${item.unitPrice}` : ""}
+                  </span>
+                </span>
+                <Badge variant="secondary" className="shrink-0">
+                  {repairEstimateCatalogNodeTypeLabel(item.nodeType)}
+                </Badge>
+              </Button>
+            ))}
+          </div>
+        )}
+
+        {isPending ? (
+          <p role="status" className="text-sm text-muted-foreground">
+            Добавляем общий блок…
+          </p>
+        ) : null}
+        {error !== null ? <ErrorBox>{error}</ErrorBox> : null}
+
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={isPending}
+            onClick={onClose}
+          >
+            Отмена
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function CatalogCanvasCategoryEditor({
   request,
   categoryId,
@@ -2440,6 +2607,9 @@ function CatalogCanvasCategoryEditor({
   const [deletedLinkIds, setDeletedLinkIds] = useState<string[]>([])
   const [nodeDialogState, setNodeDialogState] =
     useState<NodeDialogState | null>(null)
+  const [commonPickerOpen, setCommonPickerOpen] = useState(false)
+  const [commonPickerKind, setCommonPickerKind] =
+    useState<CommonCatalogKind>("works")
   const [error, setError] = useState<string | null>(null)
 
   const canvasQueryKey = [
@@ -2507,6 +2677,26 @@ function CatalogCanvasCategoryEditor({
     },
   })
 
+  const addCommonNodeMutation = useMutation({
+    mutationFn: (node: RepairEstimateCatalogNodeDto) =>
+      saveRepairEstimateCatalogCanvasNode(
+        request,
+        createCommonCatalogNodeCopy(node, categoryId)
+      ),
+    onSuccess: () => {
+      setCommonPickerOpen(false)
+      setError(null)
+      invalidate()
+    },
+    onError: (mutationError) => {
+      setError(
+        mutationError instanceof Error
+          ? mutationError.message
+          : "Не удалось добавить общий блок"
+      )
+    },
+  })
+
   if (canvasQuery.isLoading) {
     return <SectionSkeleton />
   }
@@ -2532,6 +2722,21 @@ function CatalogCanvasCategoryEditor({
     return <ErrorBox>Категория не найдена</ErrorBox>
   }
 
+  const commonNodesById = new Map(data.nodes.map((node) => [node.id, node]))
+  const commonItems = data.nodes
+    .filter(
+      (node) =>
+        node.active &&
+        node.commonItem &&
+        node.nodeType ===
+          (commonPickerKind === "works" ? "WORK" : "MATERIAL") &&
+        !isCatalogFurnitureTreeNode(node, commonNodesById)
+    )
+    .sort(
+      (left, right) =>
+        left.name.localeCompare(right.name, "ru") ||
+        left.id.localeCompare(right.id)
+    )
   const canvasNodes = getCanvasNodes(data, categoryId)
   const nodeIds = new Set(canvasNodes.map((node) => node.id))
   const canvasLinks = [
@@ -2663,6 +2868,7 @@ function CatalogCanvasCategoryEditor({
             <Button
               type="button"
               variant="outline"
+              disabled={addCommonNodeMutation.isPending}
               onClick={() =>
                 setNodeDialogState({
                   title: "Добавить блок",
@@ -2685,8 +2891,22 @@ function CatalogCanvasCategoryEditor({
             </Button>
             <Button
               type="button"
+              variant="outline"
+              disabled={addCommonNodeMutation.isPending || saveCanvasMutation.isPending}
+              onClick={() => {
+                setError(null)
+                setCommonPickerOpen(true)
+              }}
+            >
+              <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+              Общее
+            </Button>
+            <Button
+              type="button"
               disabled={
-                !hasPendingCanvasChanges || saveCanvasMutation.isPending
+                !hasPendingCanvasChanges ||
+                saveCanvasMutation.isPending ||
+                addCommonNodeMutation.isPending
               }
               onClick={() =>
                 saveCanvasMutation.mutate({
@@ -2780,6 +3000,27 @@ function CatalogCanvasCategoryEditor({
       </div>
 
       {error !== null && <ErrorBox>{error}</ErrorBox>}
+
+      <CommonCatalogNodePickerDialog
+        open={commonPickerOpen}
+        kind={commonPickerKind}
+        categoryName={category.name}
+        items={commonItems}
+        isPending={addCommonNodeMutation.isPending}
+        error={error}
+        onKindChange={(kind) => {
+          setCommonPickerKind(kind)
+          setError(null)
+        }}
+        onClose={() => {
+          setCommonPickerOpen(false)
+          setError(null)
+        }}
+        onSelect={(node) => {
+          setError(null)
+          addCommonNodeMutation.mutate(node)
+        }}
+      />
 
       <NodeEditorDialog
         state={nodeDialogState}
@@ -2936,28 +3177,30 @@ function CatalogItemsTable({
               </td>
             )}
             <td className="px-3 py-2">{item.commonItem ? "Да" : "Нет"}</td>
-            <td className="px-3 py-2">
-              <div className="flex justify-end gap-1">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => onEdit(item)}
-                >
-                  <HugeiconsIcon icon={PencilEdit01Icon} />
-                  <span className="sr-only">Редактировать</span>
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => onDelete(item)}
-                >
-                  <HugeiconsIcon icon={Delete01Icon} />
-                  <span className="sr-only">Удалить</span>
-                </Button>
-              </div>
-            </td>
+            {!readOnly && (
+              <td className="px-3 py-2">
+                <div className="flex justify-end gap-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => onEdit(item)}
+                  >
+                    <HugeiconsIcon icon={PencilEdit01Icon} />
+                    <span className="sr-only">Редактировать</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => onDelete(item)}
+                  >
+                    <HugeiconsIcon icon={Delete01Icon} />
+                    <span className="sr-only">Удалить</span>
+                  </Button>
+                </div>
+              </td>
+            )}
           </tr>
         ))}
       </tbody>
@@ -3124,6 +3367,172 @@ function CatalogSectionCategoryEditor({
           readOnly={readOnly}
         />
       </div>
+
+      {error !== null && <ErrorBox>{error}</ErrorBox>}
+
+      <NodeEditorDialog
+        state={dialogState}
+        onClose={() => setDialogState(null)}
+        onSaved={() => {
+          setError(null)
+          invalidate()
+        }}
+      />
+    </div>
+  )
+}
+
+function commonCatalogKindTitle(kind: CommonCatalogKind) {
+  return kind === "works" ? "Работы" : "Материалы"
+}
+
+function CommonCatalogItemsView({
+  request,
+  readOnly,
+}: {
+  request: RepairEstimateCatalogRequest
+  readOnly: boolean
+}) {
+  const queryClient = useQueryClient()
+  const [kind, setKind] = useState<CommonCatalogKind>("works")
+  const [dialogState, setDialogState] = useState<NodeDialogState | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const sectionQuery = useQuery({
+    queryKey: [
+      ...REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
+      request.warehouseId,
+      request.catalogVersionId,
+      "common-section",
+      kind,
+    ],
+    queryFn: () =>
+      kind === "works"
+        ? getRepairEstimateWorkCatalog(request)
+        : getRepairEstimateMaterialCatalog(request),
+  })
+
+  const invalidate = () => {
+    void queryClient.invalidateQueries({
+      queryKey: REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
+    })
+  }
+
+  const save = (input: RepairEstimateCatalogNodeMutation) =>
+    kind === "works"
+      ? saveRepairEstimateWorkCatalogItem(request, input)
+      : saveRepairEstimateMaterialCatalogItem(request, input)
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) =>
+      kind === "works"
+        ? deleteRepairEstimateWorkCatalogItem(request, id)
+        : deleteRepairEstimateMaterialCatalogItem(request, id),
+    onSuccess: () => {
+      setError(null)
+      invalidate()
+    },
+    onError: (mutationError) => {
+      setError(
+        mutationError instanceof Error
+          ? mutationError.message
+          : "Не удалось удалить запись"
+      )
+    },
+  })
+
+  if (sectionQuery.isLoading) {
+    return <SectionSkeleton />
+  }
+
+  if (sectionQuery.error) {
+    return (
+      <ErrorBox>
+        {sectionQuery.error instanceof Error
+          ? sectionQuery.error.message
+          : "Не удалось загрузить общие позиции каталога."}
+      </ErrorBox>
+    )
+  }
+
+  const section = sectionQuery.data
+  if (!section || !isSectionData(section)) {
+    return null
+  }
+
+  const items = getRepairEstimateCatalogSectionItems(section).filter(
+    (item) => item.commonItem
+  )
+
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <CatalogMeta
+            nodeCount={items.length}
+            linkCount={section.links.length}
+          />
+          <div
+            role="group"
+            aria-label="Тип общих записей каталога"
+            className="flex flex-wrap items-center gap-1"
+          >
+            {(["works", "materials"] satisfies CommonCatalogKind[]).map(
+              (candidate) => (
+                <Button
+                  key={candidate}
+                  type="button"
+                  variant={kind === candidate ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => {
+                    setKind(candidate)
+                    setDialogState(null)
+                    setError(null)
+                  }}
+                >
+                  {commonCatalogKindTitle(candidate)}
+                </Button>
+              )
+            )}
+          </div>
+        </div>
+        {readOnly ? (
+          <span className="text-sm text-muted-foreground">Только просмотр</span>
+        ) : (
+          <span className="text-sm text-muted-foreground">
+            Добавляйте новые общие позиции в их категории и отмечайте «Общий».
+          </span>
+        )}
+      </div>
+
+      {items.length === 0 ? (
+        <p className="rounded-lg border px-3 py-2 text-sm text-muted-foreground">
+          В разделе «{commonCatalogKindTitle(kind)}» нет позиций с отметкой
+          «Общий».
+        </p>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-auto rounded-lg border">
+          <CatalogItemsTable
+            key={`common:${kind}`}
+            section={section}
+            categoryId={`common:${kind}`}
+            items={items}
+            onEdit={(node) =>
+              setDialogState({
+                title: `Редактировать: Общее — ${commonCatalogKindTitle(kind)}`,
+                description: node.name,
+                submitLabel: "Сохранить",
+                allowTypeSelect: false,
+                request,
+                furnitureTree: false,
+                value: createNodeMutation(node),
+                save,
+              })
+            }
+            onDelete={(node) => deleteMutation.mutate(node.id)}
+            readOnly={readOnly}
+          />
+        </div>
+      )}
 
       {error !== null && <ErrorBox>{error}</ErrorBox>}
 
@@ -3628,6 +4037,8 @@ function EstimateDrilldownView({
               readOnly={readOnly}
             />
           </div>
+        ) : screen.action.id === "repair-estimate-catalog-common" ? (
+          <CommonCatalogItemsView request={request} readOnly={readOnly} />
         ) : screen.level === "action" ? (
           <EstimateActionCategoryMenu
             request={request}
@@ -3788,6 +4199,7 @@ export function EstimatesRepairsSettingsPage() {
       workCatalogQuery.data,
       materialCatalogQuery.data,
       furnitureCatalogQuery.data,
+      REPAIR_ESTIMATE_CATALOG_COMMON_SETTINGS,
     ]
       .filter((action): action is EstimateCatalogSettingsActionDto =>
         Boolean(action)
@@ -3806,7 +4218,7 @@ export function EstimatesRepairsSettingsPage() {
       estimateScreen.level !== "root" ||
       !catalogRequest ||
       !currentCatalog ||
-      estimateActions.length !== 5
+      estimateActions.length !== 6
     ) {
       return
     }
@@ -3849,10 +4261,11 @@ export function EstimatesRepairsSettingsPage() {
   const activeEstimateActionId =
     estimateScreen.level === "root" ? null : estimateScreen.action.id
   const openEstimateAction = (action: EstimateCatalogSettingsActionDto) => {
+    hasSelectedInitialEstimateAction.current = true
     setEstimateScreen({ level: "action", action })
   }
   const estimateActionNavigation =
-    estimateActions.length === 5 ? (
+    estimateActions.length === 6 ? (
       <EstimateActionNavigation
         actions={estimateActions}
         activeActionId={activeEstimateActionId}
@@ -3959,7 +4372,7 @@ export function EstimatesRepairsSettingsPage() {
         </CatalogNavigationState>
       ) : estimateLoading ? (
         <SectionSkeleton label="Подготавливаем разделы каталога смет…" />
-      ) : estimateError || estimateActions.length !== 5 ? (
+      ) : estimateError || estimateActions.length !== 6 ? (
         <CatalogNavigationState
           kind="error"
           title="Не удалось загрузить разделы каталога"
