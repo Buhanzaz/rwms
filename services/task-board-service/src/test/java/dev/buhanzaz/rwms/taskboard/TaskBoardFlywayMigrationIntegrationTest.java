@@ -70,7 +70,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
   void cumulativeVersionFourEventSourcingAndTaskSyncMigrateCleanDatabaseAndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(22);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(23);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -304,6 +304,13 @@ class TaskBoardFlywayMigrationIntegrationTest {
         .containsEntry("script", "V25__global_task_board_queue_standard.sql")
         .containsEntry("success", true);
     assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='26'"))
+        .containsEntry("version", "26")
+        .containsEntry("script", "V26__use_contiguous_global_queue_positions.sql")
+        .containsEntry("success", true);
+    assertThat(
             jdbc.queryForObject(
                 "select to_regprocedure('public.task_board_request_fingerprint_v4(jsonb)')",
                 String.class))
@@ -318,6 +325,44 @@ class TaskBoardFlywayMigrationIntegrationTest {
                     + "where table_schema='public' and table_name='queue_entry' "
                     + "and column_name='queue_id'"))
         .containsEntry("is_nullable", "NO");
+  }
+
+  @Test
+  void versionTwentySixMakesExistingGlobalQueuePositionsContiguous() {
+    configuration(MIGRATION_LOCATION).target("25").load().migrate();
+    UUID external = UUID.fromString("26000000-0000-0000-0000-000000000001");
+    UUID internal = UUID.fromString("26000000-0000-0000-0000-000000000002");
+    UUID holding = UUID.fromString("26000000-0000-0000-0000-000000000003");
+
+    jdbc.update(
+        """
+        insert into queue_definition(
+          id,version,revision_marker,name,normalized_name,description,queue_type,queue_purpose,
+          sort_order,active,hidden,collapsed,holding_period_minutes,notification_threshold,
+          notify_when_threshold_reached,result_photo_min_count)
+        values
+          (?,0,?,'Внешние работы','внешние работы',null,'REPAIR','GENERAL',40,true,false,false,null,null,false,1),
+          (?,0,?,'Внутренние работы','внутренние работы',null,'REPAIR','GENERAL',100,true,false,false,null,null,false,1),
+          (?,0,?,'Удержание','удержание',null,'HOLDING','GENERAL',5,true,false,false,null,null,false,1)
+        """,
+        external,
+        UUID.randomUUID(),
+        internal,
+        UUID.randomUUID(),
+        holding,
+        UUID.randomUUID());
+
+    Flyway v26 = configuration(MIGRATION_LOCATION).target("26").load();
+    assertThat(v26.migrate().migrationsExecuted).isOne();
+    assertThat(
+            jdbc.queryForList(
+                "select id,sort_order from queue_definition where queue_purpose='GENERAL' order by sort_order"))
+        .extracting(row -> row.get("id"), row -> row.get("sort_order"))
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(external, 1),
+            org.assertj.core.groups.Tuple.tuple(internal, 2),
+            org.assertj.core.groups.Tuple.tuple(holding, 3));
+    assertThat(v26.migrate().migrationsExecuted).isZero();
   }
 
   @Test
@@ -1151,7 +1196,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(21);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(22);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
 

@@ -130,7 +130,7 @@ function queueDefinitionFixture(
     description: null,
     type: "REPAIR",
     purpose: "GENERAL",
-    sortOrder: 0,
+    sortOrder: 1,
     active: true,
     hidden: false,
     collapsed: false,
@@ -425,20 +425,20 @@ describe("TaskBoardSettingsPage navigation", () => {
     const first = queueDefinitionFixture({
       id: "00000000-0000-4000-8000-000000000011",
       name: "Первый ремонт",
-      sortOrder: 0,
+      sortOrder: 1,
       version: 2,
     })
     const second = queueDefinitionFixture({
       id: "00000000-0000-4000-8000-000000000012",
       name: "Второй ремонт",
-      sortOrder: 10,
+      sortOrder: 2,
       version: 3,
     })
     const holding = queueDefinitionFixture({
       id: "00000000-0000-4000-8000-000000000013",
       name: "Удержание",
       type: "HOLDING",
-      sortOrder: 20,
+      sortOrder: 3,
       version: 4,
     })
     mocks.listQueueDefinitions.mockResolvedValue([first, second, holding])

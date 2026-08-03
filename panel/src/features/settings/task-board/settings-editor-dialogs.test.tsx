@@ -51,7 +51,7 @@ const movementDefinition: QueueDefinitionDto = {
   description: null,
   type: "REPAIR",
   purpose: "GENERAL",
-  sortOrder: 10,
+  sortOrder: 1,
   active: true,
   hidden: false,
   collapsed: false,
