@@ -93,7 +93,10 @@ function ReworkCandidates({
     (candidate) => !selectedLineages.has(candidate.lineageRootLineId)
   )
   return (
-    <section className="mb-4 flex flex-col gap-2" aria-label="Выполненные позиции">
+    <section
+      className="mb-4 flex flex-col gap-2"
+      aria-label="Выполненные позиции"
+    >
       <div>
         <h3 className="font-heading text-sm font-medium">
           Уже выполненные позиции
@@ -249,15 +252,14 @@ function RepairTaskEditorContent({
         draft.sourceRepairTaskId!
       ),
     enabled: Boolean(
-      accessToken &&
-        draft.kind === "REWORK" &&
-        draft.sourceRepairTaskId
+      accessToken && draft.kind === "REWORK" && draft.sourceRepairTaskId
     ),
   })
   const mediaOwner = draft.taskId
     ? maintenanceRepairMediaOwner(draft.taskId, warehouseId)
     : null
   const pendingUploadsRef = useRef(draft.pendingUploads)
+  const seededReworkLineagesRef = useRef(false)
 
   useEffect(() => {
     pendingUploadsRef.current = draft.pendingUploads
@@ -330,7 +332,7 @@ function RepairTaskEditorContent({
       sourceLineKey: candidate.sourceLineId,
       lineType: value.lineType,
       description: value.description,
-      lineComment: value.comment ?? "",
+      lineComment: value.lineType === "WORK" ? (value.comment ?? "") : "",
       unit: value.unit ?? "",
       quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
       normativeMinutes: value.normativeMinutes,
@@ -341,16 +343,15 @@ function RepairTaskEditorContent({
             nodeId: value.catalogSnapshot.nodeId,
             name: value.catalogSnapshot.name,
             nodeType:
-              value.catalogSnapshot.nodeType === "WORK"
-                ? "WORK"
-                : "MATERIAL",
+              value.catalogSnapshot.nodeType === "WORK" ? "WORK" : "MATERIAL",
             furnitureEquipment:
               value.catalogSnapshot.furnitureEquipment ?? null,
             characteristic: value.catalogSnapshot.characteristic ?? null,
           }
         : null,
       customQueueBinding: null,
-      maintenanceMediaReferences: [...value.mediaReferences],
+      maintenanceMediaReferences:
+        value.lineType === "WORK" ? [...value.mediaReferences] : [],
       rework: {
         disposition: "REPEAT",
         sourceRepairId: candidate.sourceRepairId,
@@ -361,18 +362,34 @@ function RepairTaskEditorContent({
     setDraft((current) => ({ ...current, lines: [...current.lines, line] }))
   }
 
-  async function ensureMediaOwner() {
+  useEffect(() => {
+    if (
+      seededReworkLineagesRef.current ||
+      !seed?.selectedLineageRootIds?.length ||
+      !reworkCandidatesQuery.isSuccess
+    ) {
+      return
+    }
+    seededReworkLineagesRef.current = true
+    const selected = new Set(seed.selectedLineageRootIds)
+    reworkCandidatesQuery.data.items
+      .filter((candidate) => selected.has(candidate.lineageRootLineId))
+      .forEach(repeatCandidate)
+  }, [reworkCandidatesQuery.data, reworkCandidatesQuery.isSuccess, seed])
+
+  async function ensureMediaOwner(lines?: RepairEstimateLineDto[]) {
     if (draft.taskId) {
       return maintenanceRepairMediaOwner(draft.taskId, warehouseId)
     }
     if (readOnly) {
       throw new Error("Для добавления фотографий нужен доступ EDIT")
     }
-    if (!validateDraft()) {
+    const ownerDraft = lines ? { ...draft, lines } : draft
+    if (!validateDraft(false, ownerDraft)) {
       throw new Error("Сначала заполните обязательные поля ремонта")
     }
 
-    const saved = await saveRepairTaskDraft({ draft, warehouseId })
+    const saved = await saveRepairTaskDraft({ draft: ownerDraft, warehouseId })
     queryClient.setQueryData(
       repairTaskDetailQueryKey(warehouseId, saved.id),
       saved
@@ -504,33 +521,36 @@ function RepairTaskEditorContent({
     }
   }, [draft.lines])
 
-  function validateDraft(forQueue = false) {
-    if (!draft.rentalItemId) {
+  function validateDraft(
+    forQueue = false,
+    candidate: RepairTaskEditorDraft = draft
+  ) {
+    if (!candidate.rentalItemId) {
       setError("Выберите бытовку")
       return false
     }
-    if (draft.kind === "REWORK" && !draft.reason.trim()) {
+    if (candidate.kind === "REWORK" && !candidate.reason.trim()) {
       setError("Укажите причину доработки")
       return false
     }
     if (
-      draft.maintenanceMediaReferences.length > 0 &&
-      !draft.coverMediaId
+      candidate.maintenanceMediaReferences.length > 0 &&
+      !candidate.coverMediaId
     ) {
       setError("Выберите титульную фотографию")
       return false
     }
-    if (draft.lines.length === 0 && !planSource?.subtasks.length) {
+    if (candidate.lines.length === 0 && !planSource?.subtasks.length) {
       setError("Добавьте хотя бы одну работу или материал")
       return false
     }
     try {
-      assertEstimateLinesValid(draft.lines)
+      assertEstimateLinesValid(candidate.lines)
       if (
         forQueue &&
-        !(draft.lines.length === 0 && planSource?.subtasks.length)
+        !(candidate.lines.length === 0 && planSource?.subtasks.length)
       ) {
-        assertRepairTaskCanBeQueued(draft.lines)
+        assertRepairTaskCanBeQueued(candidate.lines)
       }
       setError(null)
       return true
@@ -605,11 +625,13 @@ function RepairTaskEditorContent({
         {draft.kind === "REWORK" ? (
           <ReworkCandidates
             candidates={reworkCandidatesQuery.data?.items ?? []}
-            selectedLineages={new Set(
-              draft.lines
-                .map((line) => line.rework?.lineageRootLineId)
-                .filter((value): value is string => Boolean(value))
-            )}
+            selectedLineages={
+              new Set(
+                draft.lines
+                  .map((line) => line.rework?.lineageRootLineId)
+                  .filter((value): value is string => Boolean(value))
+              )
+            }
             loading={reworkCandidatesQuery.isLoading}
             error={reworkCandidatesQuery.isError}
             disabled={interactionDisabled}
@@ -623,6 +645,8 @@ function RepairTaskEditorContent({
           customWorkLinesOnly
           accessToken={accessToken}
           warehouseId={warehouseId}
+          mediaOwner={mediaOwner}
+          ensureMediaOwner={ensureMediaOwner}
           onChange={(lines) =>
             setDraft((current) => ({
               ...current,
@@ -708,6 +732,9 @@ function RepairTaskEditorContent({
           lines={draft.lines}
           readOnly={interactionDisabled}
           excludeFurniture
+          accessToken={accessToken}
+          mediaOwner={mediaOwner}
+          ensureMediaOwner={ensureMediaOwner}
           onChange={(lines) =>
             setDraft((current) => ({
               ...current,
@@ -776,6 +803,7 @@ function RepairTaskEditorContent({
             readOnly={interactionDisabled}
             title="Фотографии ремонта"
             toolbarAction={beforePhotosButton}
+            authoritativeReadyReferences={draft.maintenanceMediaReferences}
             coverMediaId={draft.coverMediaId}
             requireCover
             onReadyReferencesChange={updateReadyMediaReferences}

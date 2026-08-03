@@ -119,7 +119,7 @@ public class EstimateLine {
     this.durationMinutes = durationMinutes;
     this.queueRef = queueRef == null || queueRef.isBlank() ? null : queueRef.trim();
     this.catalogSnapshot = catalogSnapshot;
-    this.comment = optional(comment, 2000);
+    this.comment = "MATERIAL".equals(lineType) ? null : optional(comment, 2000);
     this.mediaReferences = mediaReferences == null ? "[]" : mediaReferences;
   }
 
@@ -143,6 +143,6 @@ public class EstimateLine {
   public Integer getDurationMinutes() { return durationMinutes; }
   public String getQueueRef() { return queueRef; }
   public String getCatalogSnapshot() { return catalogSnapshot; }
-  public String getComment() { return comment; }
+  public String getComment() { return "MATERIAL".equals(lineType) ? null : comment; }
   public String getMediaReferences() { return mediaReferences; }
 }

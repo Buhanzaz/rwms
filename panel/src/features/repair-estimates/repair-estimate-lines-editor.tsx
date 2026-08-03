@@ -2,6 +2,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Add01Icon,
   Delete02Icon,
+  ImageUploadIcon,
   MinusSignIcon,
 } from "@hugeicons/core-free-icons"
 import { useMemo, useState } from "react"
@@ -47,9 +48,14 @@ import {
   normalizeEstimateLine,
 } from "@/features/repair-estimates/domain/repair-estimate-domain"
 import type {
+  ReadyMediaReference,
+  ServiceMediaOwner,
+} from "@/features/media/media-service"
+import type {
   RepairEstimateLineDto,
   RepairEstimateLineType,
 } from "@/features/repair-estimates/model/repair-estimate"
+import { WorkLinePhotoControls } from "@/features/repair-estimates/work-line-photo-controls"
 import { taskBoardSettingsClient } from "@/features/settings/task-board/api/task-board-settings-api"
 import type { WorkQueueDto } from "@/features/settings/task-board/model/task-board-settings"
 
@@ -62,6 +68,10 @@ type RepairEstimateLinesEditorProps = {
   customWorkLinesOnly?: boolean
   accessToken?: string | null
   warehouseId?: string
+  mediaOwner?: ServiceMediaOwner | null
+  ensureMediaOwner?: (
+    lines?: RepairEstimateLineDto[]
+  ) => Promise<ServiceMediaOwner>
   onChange: (lines: RepairEstimateLineDto[]) => void
 }
 
@@ -107,16 +117,35 @@ export function RepairEstimateLinesEditor({
   customWorkLinesOnly = false,
   accessToken = null,
   warehouseId,
+  mediaOwner = null,
+  ensureMediaOwner,
   onChange,
 }: RepairEstimateLinesEditorProps) {
   const [customLineEditorId, setCustomLineEditorId] =
     useState<CustomLineEditorId>(null)
+  const [photoLineId, setPhotoLineId] = useState<string | null>(null)
+  const photoLine =
+    lines.find((line) => line.id === photoLineId && line.lineType === "WORK") ??
+    null
+  const excludedWorkMediaIds = useMemo(
+    () =>
+      new Set(
+        lines.flatMap((line) =>
+          line.lineType === "WORK" && line.id !== photoLineId
+            ? (line.maintenanceMediaReferences ?? []).map(
+                (reference) => reference.mediaId
+              )
+            : []
+        )
+      ),
+    [lines, photoLineId]
+  )
   const editedCustomLine =
     typeof customLineEditorId === "string"
-      ? lines.find(
+      ? (lines.find(
           (line) =>
             line.id === customLineEditorId && line.catalogSnapshot === null
-        ) ?? null
+        ) ?? null)
       : null
   const customLineDialogOpen = customLineEditorId !== null
   const needsCustomQueues =
@@ -128,9 +157,7 @@ export function RepairEstimateLinesEditor({
     queryFn: () =>
       taskBoardSettingsClient.listQueues(accessToken!, warehouseId!),
     enabled:
-      !readOnly &&
-      needsCustomQueues &&
-      Boolean(accessToken && warehouseId),
+      !readOnly && needsCustomQueues && Boolean(accessToken && warehouseId),
   })
   const customQueues = useMemo(
     () => availableCustomQueues(customQueuesQuery.data ?? []),
@@ -183,11 +210,25 @@ export function RepairEstimateLinesEditor({
     onChange(
       customLineEditorId === "new"
         ? [...lines, line]
-        : lines.map((current) =>
-            current.id === line.id ? line : current
-          )
+        : lines.map((current) => (current.id === line.id ? line : current))
     )
     setCustomLineEditorId(null)
+  }
+
+  function updateWorkMediaReferences(
+    lineId: string,
+    references: ReadyMediaReference[]
+  ) {
+    onChange(
+      lines.map((line) =>
+        line.id === lineId && line.lineType === "WORK"
+          ? normalizeEstimateLine({
+              ...line,
+              maintenanceMediaReferences: references,
+            })
+          : line
+      )
+    )
   }
 
   return (
@@ -238,6 +279,7 @@ export function RepairEstimateLinesEditor({
                   onChange(lines.filter((item) => item.id !== line.id))
                 }
                 onUpdate={updateCatalogLine}
+                onEditPhotos={() => setPhotoLineId(line.id)}
               />
             ) : line.catalogSnapshot === null ? (
               <CustomEstimateLineSummary
@@ -249,6 +291,7 @@ export function RepairEstimateLinesEditor({
                 onRemove={() =>
                   onChange(lines.filter((item) => item.id !== line.id))
                 }
+                onEditPhotos={() => setPhotoLineId(line.id)}
               />
             ) : (
               <CatalogEstimateLineCard
@@ -262,6 +305,7 @@ export function RepairEstimateLinesEditor({
                 }
                 onUpdate={updateCatalogLine}
                 onReplace={replaceCatalogLine}
+                onEditPhotos={() => setPhotoLineId(line.id)}
               />
             )
           )}
@@ -282,7 +326,42 @@ export function RepairEstimateLinesEditor({
         }}
         onSave={saveCustomLine}
       />
+      {photoLine ? (
+        <WorkLinePhotoControls
+          accessToken={accessToken}
+          owner={mediaOwner}
+          ensureOwner={
+            ensureMediaOwner ? () => ensureMediaOwner(lines) : undefined
+          }
+          disabled={readOnly}
+          excludedMediaIds={excludedWorkMediaIds}
+          value={photoLine.maintenanceMediaReferences ?? []}
+          open
+          onOpenChange={(open) => {
+            if (!open) setPhotoLineId(null)
+          }}
+          onChange={(references) =>
+            updateWorkMediaReferences(photoLine.id, references)
+          }
+        />
+      ) : null}
     </section>
+  )
+}
+
+function WorkLinePhotoAction({
+  line,
+  onClick,
+}: {
+  line: RepairEstimateLineDto
+  onClick: () => void
+}) {
+  const hasPhotos = (line.maintenanceMediaReferences?.length ?? 0) > 0
+  return (
+    <Button type="button" size="sm" variant="outline" onClick={onClick}>
+      <HugeiconsIcon icon={ImageUploadIcon} data-icon="inline-start" />
+      {hasPhotos ? "Редактировать фото" : "Добавить фото"}
+    </Button>
   )
 }
 
@@ -292,11 +371,13 @@ function RepeatedReworkLineCard({
   readOnly,
   onRemove,
   onUpdate,
+  onEditPhotos,
 }: {
   line: RepairEstimateLineDto
   index: number
   readOnly: boolean
   onRemove: () => void
+  onEditPhotos: () => void
   onUpdate: (
     lineId: string,
     update: (line: RepairEstimateLineDto) => RepairEstimateLineDto
@@ -313,15 +394,20 @@ function RepeatedReworkLineCard({
           <div className="flex items-center gap-2">
             <Badge variant="secondary">Переделать</Badge>
             {!readOnly ? (
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                aria-label={`Удалить повтор строки ${index + 1}`}
-                onClick={onRemove}
-              >
-                <HugeiconsIcon icon={Delete02Icon} />
-              </Button>
+              <>
+                {line.lineType === "WORK" ? (
+                  <WorkLinePhotoAction line={line} onClick={onEditPhotos} />
+                ) : null}
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label={`Удалить повтор строки ${index + 1}`}
+                  onClick={onRemove}
+                >
+                  <HugeiconsIcon icon={Delete02Icon} />
+                </Button>
+              </>
             ) : null}
           </div>
         </CardTitle>
@@ -358,22 +444,24 @@ function RepeatedReworkLineCard({
           <FieldLabel>Цена</FieldLabel>
           <Input readOnly value={formatMoneyDecimal(line.unitPrice)} />
         </Field>
-        <Field className="md:col-span-12" data-disabled={readOnly}>
-          <FieldLabel htmlFor={`repeat-comment-${line.id}`}>
-            Комментарий
-          </FieldLabel>
-          <Textarea
-            id={`repeat-comment-${line.id}`}
-            disabled={readOnly}
-            value={line.lineComment}
-            onChange={(event) =>
-              onUpdate(line.id, (current) => ({
-                ...current,
-                lineComment: event.target.value,
-              }))
-            }
-          />
-        </Field>
+        {line.lineType === "WORK" ? (
+          <Field className="md:col-span-12" data-disabled={readOnly}>
+            <FieldLabel htmlFor={`repeat-comment-${line.id}`}>
+              Комментарий
+            </FieldLabel>
+            <Textarea
+              id={`repeat-comment-${line.id}`}
+              disabled={readOnly}
+              value={line.lineComment}
+              onChange={(event) =>
+                onUpdate(line.id, (current) => ({
+                  ...current,
+                  lineComment: event.target.value,
+                }))
+              }
+            />
+          </Field>
+        ) : null}
       </CardContent>
     </Card>
   )
@@ -385,12 +473,14 @@ function CustomEstimateLineSummary({
   readOnly,
   onEdit,
   onRemove,
+  onEditPhotos,
 }: {
   line: RepairEstimateLineDto
   index: number
   readOnly: boolean
   onEdit: () => void
   onRemove: () => void
+  onEditPhotos: () => void
 }) {
   return (
     <Card size="sm">
@@ -412,20 +502,25 @@ function CustomEstimateLineSummary({
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <div className="flex flex-col gap-1">
-          <p className="break-words text-sm font-medium">
+          <p className="text-sm font-medium break-words">
             {line.description || "Без названия"}
           </p>
           <p className="text-xs text-muted-foreground">
-            {line.quantity} {lineUnitLabel(line.unit)} · Цена {formatMoneyDecimal(line.unitPrice)} · Итого {formatMoneyDecimal(line.lineTotal)}
+            {line.quantity} {lineUnitLabel(line.unit)} · Цена{" "}
+            {formatMoneyDecimal(line.unitPrice)} · Итого{" "}
+            {formatMoneyDecimal(line.lineTotal)}
           </p>
-          {line.lineComment.trim() ? (
-            <p className="break-words text-xs text-muted-foreground">
+          {line.lineType === "WORK" && line.lineComment.trim() ? (
+            <p className="text-xs break-words text-muted-foreground">
               {line.lineComment}
             </p>
           ) : null}
           {line.customQueueBinding ? (
             <p className="text-xs text-muted-foreground">
-              Этап: {line.customQueueBinding.queueName} — {line.customQueueBinding.queueKind === "HOLDING" ? "Ожидание" : "Ремонт"}
+              Этап: {line.customQueueBinding.queueName} —{" "}
+              {line.customQueueBinding.queueKind === "HOLDING"
+                ? "Ожидание"
+                : "Ремонт"}
             </p>
           ) : null}
         </div>
@@ -434,6 +529,9 @@ function CustomEstimateLineSummary({
             <Button type="button" variant="outline" size="sm" onClick={onEdit}>
               Изменить
             </Button>
+            {line.lineType === "WORK" ? (
+              <WorkLinePhotoAction line={line} onClick={onEditPhotos} />
+            ) : null}
             <Button
               type="button"
               variant="ghost"
@@ -473,7 +571,9 @@ function CustomEstimateLineDialog({
   onSave: (line: RepairEstimateLineDto) => void
 }) {
   const [draft, setDraft] = useState<RepairEstimateLineDto>(() =>
-    line ? { ...line, customQueueBinding: line.customQueueBinding ?? null } : createManualEstimateLine()
+    line
+      ? { ...line, customQueueBinding: line.customQueueBinding ?? null }
+      : createManualEstimateLine()
   )
   const durationInvalid =
     draft.lineType === "WORK" &&
@@ -486,16 +586,15 @@ function CustomEstimateLineDialog({
   const selectedQueue = draft.customQueueBinding ?? null
   const selectedQueueAvailable = selectedQueue
     ? customQueues.some(
-      (queue) =>
-        queue.definitionId === selectedQueue.queueId &&
-        queue.type === selectedQueue.queueKind
+        (queue) =>
+          queue.definitionId === selectedQueue.queueId &&
+          queue.type === selectedQueue.queueKind
       )
     : false
   const stageInvalid =
     requiresStageBinding &&
     !customQueuesLoading &&
-    (!selectedQueue ||
-      (customQueues.length > 0 && !selectedQueueAvailable))
+    (!selectedQueue || (customQueues.length > 0 && !selectedQueueAvailable))
   const stageMessage = customQueuesLoading
     ? "Загружаем доступные очереди…"
     : (customQueuesError ??
@@ -531,10 +630,13 @@ function CustomEstimateLineDialog({
       <DialogContent className="max-h-[calc(100svh-1rem)] w-[calc(100%-2rem)] overflow-y-auto sm:max-w-[48vw]">
         <DialogHeader>
           <DialogTitle>
-            {line ? "Изменить пользовательскую строку" : "Пользовательская строка"}
+            {line
+              ? "Изменить пользовательскую строку"
+              : "Пользовательская строка"}
           </DialogTitle>
           <DialogDescription>
-            Укажите состав и этап ремонта. Пользовательский материал получает нулевую длительность.
+            Укажите состав и этап ремонта. Пользовательский материал получает
+            нулевую длительность.
           </DialogDescription>
         </DialogHeader>
 
@@ -550,6 +652,8 @@ function CustomEstimateLineDialog({
                     lineType: value as RepairEstimateLineType,
                     normativeMinutes:
                       value === "MATERIAL" ? 0 : current.normativeMinutes,
+                    lineComment:
+                      value === "MATERIAL" ? "" : current.lineComment,
                   }))
                 }
               >
@@ -602,20 +706,22 @@ function CustomEstimateLineDialog({
             />
           </Field>
 
-          <Field>
-            <FieldLabel htmlFor="custom-line-comment">Комментарий</FieldLabel>
-            <Textarea
-              id="custom-line-comment"
-              aria-label="Комментарий пользовательской строки"
-              value={draft.lineComment}
-              onChange={(event) =>
-                updateDraft((current) => ({
-                  ...current,
-                  lineComment: event.target.value,
-                }))
-              }
-            />
-          </Field>
+          {draft.lineType === "WORK" ? (
+            <Field>
+              <FieldLabel htmlFor="custom-line-comment">Комментарий</FieldLabel>
+              <Textarea
+                id="custom-line-comment"
+                aria-label="Комментарий пользовательской работы"
+                value={draft.lineComment}
+                onChange={(event) =>
+                  updateDraft((current) => ({
+                    ...current,
+                    lineComment: event.target.value,
+                  }))
+                }
+              />
+            </Field>
+          ) : null}
 
           {draft.lineType === "WORK" ? (
             <Field data-invalid={durationInvalid || undefined}>
@@ -666,8 +772,7 @@ function CustomEstimateLineDialog({
                 value={selectedQueue?.queueId}
                 onValueChange={(queueDefinitionId) => {
                   const queue = customQueues.find(
-                    (candidate) =>
-                      candidate.definitionId === queueDefinitionId
+                    (candidate) => candidate.definitionId === queueDefinitionId
                   )
                   if (!queue) return
                   updateDraft((current) => ({
@@ -741,7 +846,10 @@ function CustomEstimateLineDialog({
                 value={draft.unitPrice}
                 onChange={(event) => {
                   const unitPrice = event.target.value.replace(",", ".")
-                  if (unitPrice === "" || /^\d+(?:\.\d{0,2})?$/.test(unitPrice)) {
+                  if (
+                    unitPrice === "" ||
+                    /^\d+(?:\.\d{0,2})?$/.test(unitPrice)
+                  ) {
                     updateDraft((current) => ({ ...current, unitPrice }))
                   }
                 }}
@@ -761,7 +869,11 @@ function CustomEstimateLineDialog({
         </FieldGroup>
 
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+          >
             Отмена
           </Button>
           <Button
@@ -792,6 +904,7 @@ function CatalogEstimateLineCard({
   onRemove,
   onUpdate,
   onReplace,
+  onEditPhotos,
 }: {
   line: RepairEstimateLineDto
   index: number
@@ -806,6 +919,7 @@ function CatalogEstimateLineCard({
     lineId: string,
     update: (line: RepairEstimateLineDto) => RepairEstimateLineDto
   ) => void
+  onEditPhotos: () => void
 }) {
   return (
     <Card size="sm">
@@ -821,15 +935,20 @@ function CatalogEstimateLineCard({
             <Badge variant="outline">Добавлено в доработке</Badge>
           ) : null}
           {!readOnly ? (
-            <Button
-              type="button"
-              size="icon-sm"
-              variant="ghost"
-              aria-label={`Удалить строку ${index + 1}`}
-              onClick={onRemove}
-            >
-              <HugeiconsIcon icon={Delete02Icon} />
-            </Button>
+            <div className="flex items-center gap-2">
+              {line.lineType === "WORK" ? (
+                <WorkLinePhotoAction line={line} onClick={onEditPhotos} />
+              ) : null}
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                aria-label={`Удалить строку ${index + 1}`}
+                onClick={onRemove}
+              >
+                <HugeiconsIcon icon={Delete02Icon} />
+              </Button>
+            </div>
           ) : null}
         </CardTitle>
       </CardHeader>
@@ -864,24 +983,26 @@ function CatalogEstimateLineCard({
             />
           </Field>
 
-          <Field className="md:col-span-5" data-disabled={readOnly}>
-            <FieldLabel htmlFor={`line-comment-${line.id}`}>
-              Комментарий
-            </FieldLabel>
-            <Textarea
-              id={`line-comment-${line.id}`}
-              aria-label={`Комментарий ${index + 1}`}
-              className="h-9 min-h-9 resize-y"
-              disabled={readOnly}
-              value={line.lineComment}
-              onChange={(event) =>
-                onUpdate(line.id, (current) => ({
-                  ...current,
-                  lineComment: event.target.value,
-                }))
-              }
-            />
-          </Field>
+          {line.lineType === "WORK" ? (
+            <Field className="md:col-span-5" data-disabled={readOnly}>
+              <FieldLabel htmlFor={`line-comment-${line.id}`}>
+                Комментарий
+              </FieldLabel>
+              <Textarea
+                id={`line-comment-${line.id}`}
+                aria-label={`Комментарий ${index + 1}`}
+                className="h-9 min-h-9 resize-y"
+                disabled={readOnly}
+                value={line.lineComment}
+                onChange={(event) =>
+                  onUpdate(line.id, (current) => ({
+                    ...current,
+                    lineComment: event.target.value,
+                  }))
+                }
+              />
+            </Field>
+          ) : null}
 
           <Field className="md:col-span-2" data-disabled={readOnly}>
             <FieldLabel htmlFor={`line-quantity-${line.id}`}>
@@ -966,7 +1087,10 @@ function CatalogEstimateLineCard({
                     return {
                       ...current,
                       unitPrice,
-                      lineTotal: calculateLineTotal(unitPrice, current.quantity),
+                      lineTotal: calculateLineTotal(
+                        unitPrice,
+                        current.quantity
+                      ),
                     }
                   })
                 }

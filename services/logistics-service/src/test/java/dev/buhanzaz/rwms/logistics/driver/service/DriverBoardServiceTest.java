@@ -8,6 +8,7 @@ import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardLane;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.MoveDriverBoardTaskRequest;
+import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.ReturnCapitalRepairRequest;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskPlanningMode;
@@ -120,6 +121,125 @@ class DriverBoardServiceTest {
     verify(tasks).saveAndFlush(task);
   }
 
+  @Test
+  void unfinishedCapitalMovementIsCancelledAndReturnsToCapitalRepairs() {
+    DriverLogisticsTask task = capitalTask();
+    task.moveToCurrent(1, task.getTaskBoardEntryId(), "WAITING");
+    LogisticsDependencyGateway.DriverBoardTask cancelled =
+        new LogisticsDependencyGateway.DriverBoardTask(
+            task.getTaskBoardTaskId(),
+            2,
+            warehouseId,
+            task.getExternalTaskId(),
+            "Переместить бытовку на производство",
+            task.getUnitNumber(),
+            "Переместить бытовку на производство",
+            "CANCELLED",
+            today,
+            "CURRENT",
+            task.getPriority(),
+            false,
+            null,
+            task.getTaskBoardEntryId(),
+            1,
+            "CANCELLED",
+            0);
+    when(tasks.findByExternalTaskId(task.getExternalTaskId())).thenReturn(Optional.of(task));
+    when(dependencies.cancelDriverTask(task.getExternalTaskId(), 1)).thenReturn(cancelled);
+    doAnswer(
+            invocation -> {
+              LogisticsDependencyGateway.DriverBoardTask board = invocation.getArgument(1);
+              task.observeBoardTask(
+                  board.taskId(),
+                  board.taskVersion(),
+                  board.entryId(),
+                  board.entryStatus(),
+                  board.scheduledDate(),
+                  board.lane(),
+                  board.status(),
+                  board.doneAt());
+              return null;
+            })
+        .when(workflowStore)
+        .confirmStatus(task.getId(), cancelled);
+
+    service.returnToCapitalRepairs(
+        task.getExternalTaskId(), new ReturnCapitalRepairRequest(warehouseId, 1L));
+
+    verify(dependencies).cancelDriverTask(task.getExternalTaskId(), 1);
+    assertThat(task.getState().name()).isEqualTo("CANCELLED");
+  }
+
+  @Test
+  void cancelledCapitalMovementNoLongerHidesTheActiveCapitalRepair() {
+    DriverLogisticsTask task = capitalTask();
+    LogisticsDependencyGateway.DriverBoardTask cancelled =
+        new LogisticsDependencyGateway.DriverBoardTask(
+            task.getTaskBoardTaskId(),
+            1,
+            warehouseId,
+            task.getExternalTaskId(),
+            "Переместить бытовку на производство",
+            task.getUnitNumber(),
+            "Переместить бытовку на производство",
+            "CANCELLED",
+            today,
+            "SCHEDULED",
+            task.getPriority(),
+            false,
+            null,
+            task.getTaskBoardEntryId(),
+            1,
+            "CANCELLED",
+            0);
+    task.observeBoardTask(
+        cancelled.taskId(),
+        cancelled.taskVersion(),
+        cancelled.entryId(),
+        cancelled.entryStatus(),
+        cancelled.scheduledDate(),
+        cancelled.lane(),
+        cancelled.status(),
+        cancelled.doneAt());
+    when(tasks.findAllByWarehouseIdOrderByCreatedAtAscIdAsc(warehouseId))
+        .thenReturn(java.util.List.of(task));
+    when(dependencies.readDriverBoard(warehouseId))
+        .thenReturn(
+            new LogisticsDependencyGateway.DriverBoardSnapshot(
+                warehouseId, UUID.randomUUID(), 0, java.util.List.of(), java.util.List.of()));
+    when(dependencies.readRepairPlaces(warehouseId)).thenReturn(repairPlaces());
+    when(dependencies.readCapitalRepairs(warehouseId, 0, 200))
+        .thenReturn(
+            new LogisticsDependencyGateway.CapitalRepairPage(
+                java.util.List.of(
+                    new LogisticsDependencyGateway.CapitalRepair(
+                        task.getSourceId(),
+                        task.getCabinId(),
+                        warehouseId,
+                        task.getPriority(),
+                        new LogisticsDependencyGateway.RepairComplexitySnapshot(
+                            "CAPITAL", "Капитальный ремонт", "#7C3AED", "540", true),
+                        3)),
+                0,
+                200,
+                1));
+    when(dependencies.readRentalItemSnapshot(task.getCabinId()))
+        .thenReturn(
+            new LogisticsDependencyGateway.RentalItemSnapshot(
+                task.getCabinId(),
+                1,
+                warehouseId,
+                task.getUnitNumber(),
+                "CAPITAL_REPAIR",
+                java.util.List.of()));
+
+    var response = service.board(warehouseId);
+
+    assertThat(response.capitalRepairs())
+        .singleElement()
+        .satisfies(card -> assertThat(card.repairId()).isEqualTo(task.getSourceId()));
+  }
+
   private DriverLogisticsTask scheduledTask() {
     UUID repairId = UUID.randomUUID();
     DriverLogisticsTask task =
@@ -139,6 +259,31 @@ class DriverBoardServiceTest {
             UUID.randomUUID(),
             UUID.randomUUID(),
             "a".repeat(64));
+    ReflectionTestUtils.setField(task, "id", UUID.randomUUID());
+    task.registerBoardTask(
+        UUID.randomUUID(), 0, UUID.randomUUID(), "WAITING", "SCHEDULED", null);
+    return task;
+  }
+
+  private DriverLogisticsTask capitalTask() {
+    UUID repairId = UUID.randomUUID();
+    DriverLogisticsTask task =
+        DriverLogisticsTask.create(
+            warehouseId,
+            UUID.randomUUID(),
+            null,
+            DriverTaskSourceType.CAPITAL_REPAIR,
+            repairId,
+            DriverTaskKind.CAPITAL_TO_PRODUCTION,
+            DriverTaskPlanningMode.AUTO,
+            today,
+            2,
+            null,
+            "БЫТ-КАП",
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            "b".repeat(64));
     ReflectionTestUtils.setField(task, "id", UUID.randomUUID());
     task.registerBoardTask(
         UUID.randomUUID(), 0, UUID.randomUUID(), "WAITING", "SCHEDULED", null);

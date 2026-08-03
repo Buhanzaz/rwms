@@ -58,6 +58,7 @@ export type RepairTaskEvidenceDto = {
 
 export type RepairTaskSubtaskDto = {
   id: string
+  taskBoardEntryId?: string | null
   externalTaskId?: string | null
   taskTitle?: string | null
   taskText?: string | null
@@ -175,6 +176,7 @@ export type RepairTaskReworkSeed = {
   sourceEstimateVersion: number | null
   rentalItemId: string
   lines: RepairEstimateLineDto[]
+  selectedLineageRootIds?: string[]
 }
 
 export type RentalItemRepairSeed = {

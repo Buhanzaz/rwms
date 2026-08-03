@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react"
-import { describe, expect, it, vi } from "vitest"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { QueueOrderSettings } from "@/features/settings/task-board/queue-order-settings"
 import type { WorkQueueDto } from "@/features/settings/task-board/model/task-board-settings"
@@ -25,6 +25,8 @@ const queue: WorkQueueDto = {
   bindings: [],
 }
 
+afterEach(cleanup)
+
 describe("QueueOrderSettings", () => {
   it("renders selected warehouse ordering controls without a card", () => {
     const { container } = render(
@@ -39,5 +41,28 @@ describe("QueueOrderSettings", () => {
       screen.getByRole("button", { name: "Сохранить порядок" })
     ).toBeTruthy()
     expect(container.querySelector('[data-slot="card"]')).toBeNull()
+  })
+
+  it("saves holding queues after the editable queue order", () => {
+    const onSave = vi.fn(async () => undefined)
+    const holding: WorkQueueDto = {
+      ...queue,
+      id: "00000000-0000-4000-8000-000000000003",
+      definitionId: "00000000-0000-4000-8000-000000000011",
+      name: "Ожидание",
+      type: "HOLDING",
+      sortOrder: 10,
+    }
+    render(
+      <QueueOrderSettings
+        queues={[queue, holding]}
+        pending={false}
+        onSave={onSave}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить порядок" }))
+
+    expect(onSave).toHaveBeenCalledWith([queue, holding])
   })
 })

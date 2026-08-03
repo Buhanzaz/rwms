@@ -18,6 +18,7 @@ type RepairReworkWizardDialogProps = {
   open: boolean
   task: RepairTaskDto
   canEdit: boolean
+  selectedLineageRootIds: string[]
   onOpenChange: (open: boolean) => void
 }
 
@@ -25,6 +26,7 @@ export function RepairReworkWizardDialog({
   open,
   task,
   canEdit,
+  selectedLineageRootIds,
   onOpenChange,
 }: RepairReworkWizardDialogProps) {
   const navigate = useNavigate()
@@ -46,6 +48,7 @@ export function RepairReworkWizardDialog({
         sourceEstimateVersion: task.sourceEstimateVersion,
         rentalItemId: task.rentalItemId,
         lines: [],
+        selectedLineageRootIds,
       },
     }
     onOpenChange(false)
@@ -64,8 +67,8 @@ export function RepairReworkWizardDialog({
           </DialogDescription>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
-          Адресный выбор исполнителя и отдельных строк не поддерживается
-          публичным maintenance-контрактом и поэтому не отправляется.
+          В черновик автоматически попадут отмеченные для переделки работы.
+          Материалы при необходимости можно добавить из существующей цепочки.
         </p>
         <DialogFooter>
           <Button

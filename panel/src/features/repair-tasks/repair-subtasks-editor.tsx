@@ -32,21 +32,25 @@ function RepairSnapshotLines({
   emptyLabel,
   lines,
   includeQuantity = false,
+  showComments = true,
 }: {
   title: string
   itemLabel: string
   emptyLabel: string
   lines: RepairSnapshotLine[]
   includeQuantity?: boolean
+  showComments?: boolean
 }) {
   return (
     <section className="flex min-w-0 flex-col gap-2" aria-label={title}>
       <Badge variant="secondary">{title}</Badge>
       {lines.length > 0 ? (
         <div className="flex min-w-0 flex-col gap-2">
-          <div className="hidden grid-cols-2 gap-3 px-3 text-xs font-medium text-muted-foreground sm:grid">
+          <div
+            className={`hidden gap-3 px-3 text-xs font-medium text-muted-foreground sm:grid ${showComments ? "grid-cols-2" : "grid-cols-1"}`}
+          >
             <span>{itemLabel}</span>
-            <span>Комментарий</span>
+            {showComments ? <span>Комментарий</span> : null}
           </div>
           <dl className="flex min-w-0 flex-col gap-2">
             {lines.map((line) => {
@@ -58,18 +62,22 @@ function RepairSnapshotLines({
               return (
                 <div
                   key={line.id}
-                  className="grid min-w-0 gap-1 rounded-md border p-3 sm:grid-cols-2 sm:gap-3"
+                  className={`grid min-w-0 gap-1 rounded-md border p-3 sm:gap-3 ${showComments ? "sm:grid-cols-2" : "sm:grid-cols-1"}`}
                 >
                   <dt className="text-xs font-medium text-muted-foreground sm:sr-only">
                     {itemLabel}
                   </dt>
                   <dd className="min-w-0 break-words">{lineName}</dd>
-                  <dt className="text-xs font-medium text-muted-foreground sm:sr-only">
-                    Комментарий
-                  </dt>
-                  <dd className="min-w-0 break-words">
-                    {line.lineComment.trim() || "—"}
-                  </dd>
+                  {showComments ? (
+                    <>
+                      <dt className="text-xs font-medium text-muted-foreground sm:sr-only">
+                        Комментарий
+                      </dt>
+                      <dd className="min-w-0 break-words">
+                        {line.lineComment.trim() || "—"}
+                      </dd>
+                    </>
+                  ) : null}
                 </div>
               )
             })}
@@ -237,6 +245,7 @@ export function RepairSubtasksEditor({
                     emptyLabel="Материалов нет."
                     lines={subtask.materialLines}
                     includeQuantity
+                    showComments={false}
                   />
                 </div>
               )}

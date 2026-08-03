@@ -105,7 +105,7 @@ function toRepairEstimateLine(
     sourceLineKey: line.id,
     lineType: line.lineType,
     description: line.description,
-    lineComment: line.comment ?? "",
+    lineComment: line.lineType === "WORK" ? (line.comment ?? "") : "",
     unit: line.unit ?? "",
     quantity: Number.isFinite(quantity) ? quantity : 0,
     normativeMinutes: line.normativeMinutes,
@@ -199,6 +199,7 @@ function toSubtask(
     plannedDurationFromWorkLines(workLines)
   return {
     id: stage.id,
+    taskBoardEntryId: entry?.id ?? stage.taskSync.taskBoardEntryId,
     externalTaskId: stage.taskSync.externalTaskId,
     taskTitle: entry?.title ?? null,
     taskText: entry?.taskText ?? null,
@@ -547,8 +548,9 @@ function lineInput(
     quantity: String(line.quantity),
     normativeMinutes,
     unitPrice: line.unitPrice,
-    comment: line.lineComment.trim() || null,
-    mediaReferences: [...(line.maintenanceMediaReferences ?? [])],
+    comment: lineType === "WORK" ? line.lineComment.trim() || null : null,
+    mediaReferences:
+      lineType === "WORK" ? [...(line.maintenanceMediaReferences ?? [])] : [],
   }
 }
 
@@ -564,8 +566,8 @@ function maintenanceLineInput(
     quantity: line.quantity,
     normativeMinutes: line.normativeMinutes,
     unitPrice: line.unitPrice,
-    comment: line.comment,
-    mediaReferences: [...line.mediaReferences],
+    comment: line.lineType === "WORK" ? line.comment : null,
+    mediaReferences: line.lineType === "WORK" ? [...line.mediaReferences] : [],
   }
 }
 
@@ -597,10 +599,7 @@ async function planForCommand(
   if (command.subtasks.length === 0) {
     throw new Error("Добавьте хотя бы один этап ремонта.")
   }
-  if (
-    command.maintenanceMediaReferences.length > 0 &&
-    !command.coverMediaId
-  ) {
+  if (command.maintenanceMediaReferences.length > 0 && !command.coverMediaId) {
     throw new Error("Выберите титульную фотографию.")
   }
   if (

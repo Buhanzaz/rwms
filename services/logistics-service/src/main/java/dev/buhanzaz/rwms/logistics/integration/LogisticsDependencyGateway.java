@@ -280,6 +280,11 @@ public interface LogisticsDependencyGateway {
     throw unavailable("Driver task lookup is not configured");
   }
 
+  default DriverBoardTask cancelDriverTask(
+      UUID externalTaskId, long expectedTaskVersion) {
+    throw unavailable("Driver task cancellation is not configured");
+  }
+
   default DriverBoardTask setDriverTaskLane(
       UUID externalTaskId, long expectedTaskVersion, String lane) {
     throw unavailable("Driver task lane transition is not configured");

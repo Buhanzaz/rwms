@@ -169,6 +169,7 @@ class BackgroundUploadCoordinator(
             sortOrder = pending.sortOrder,
             cover = pending.cover,
             rotationDegrees = pending.rotationDegrees,
+            lineId = pending.lineId,
         )
     }
 

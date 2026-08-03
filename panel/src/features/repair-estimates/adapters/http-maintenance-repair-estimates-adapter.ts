@@ -74,7 +74,7 @@ function toEstimateLine(
     sourceLineKey: value.id,
     lineType: value.lineType,
     description: value.description,
-    lineComment: value.comment ?? "",
+    lineComment: value.lineType === "WORK" ? (value.comment ?? "") : "",
     unit: value.unit ?? "",
     quantity: Number.isFinite(quantity) ? quantity : 0,
     normativeMinutes: value.normativeMinutes,
@@ -380,8 +380,9 @@ function toLineInput(
     quantity: String(line.quantity),
     normativeMinutes,
     unitPrice: line.unitPrice,
-    comment: line.lineComment.trim() || null,
-    mediaReferences: line.maintenanceMediaReferences ?? [],
+    comment: lineType === "WORK" ? line.lineComment.trim() || null : null,
+    mediaReferences:
+      lineType === "WORK" ? (line.maintenanceMediaReferences ?? []) : [],
   }
 }
 

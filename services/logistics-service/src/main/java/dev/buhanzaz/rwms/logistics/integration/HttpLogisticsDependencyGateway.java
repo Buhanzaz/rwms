@@ -892,6 +892,28 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   }
 
   @Override
+  public DriverBoardTask cancelDriverTask(
+      UUID externalTaskId, long expectedTaskVersion) {
+    CancelDriverTaskResponse cancelled =
+        postWithoutIdempotency(
+            taskBoardTaskBase + "/" + externalTaskId + "/cancel",
+            new CancelDriverTaskRequest(
+                expectedTaskVersion,
+                "Капитальный ремонт возвращён в отдельную очередь"),
+            CancelDriverTaskResponse.class,
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE);
+    if (cancelled == null
+        || cancelled.externalTaskId() == null
+        || !externalTaskId.equals(cancelled.externalTaskId())
+        || cancelled.taskVersion() < expectedTaskVersion
+        || !"CANCELLED".equals(cancelled.status())) {
+      throw malformed("Task-board returned an invalid cancelled driver task");
+    }
+    return readDriverTask(externalTaskId);
+  }
+
+  @Override
   public DriverBoardTask setDriverTaskLane(
       UUID externalTaskId, long expectedTaskVersion, String lane) {
     return driverBoardTask(
@@ -2667,6 +2689,15 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       List<EquipmentMovementOperationRequest> operations) {}
 
   private record CancelEquipmentMovementTaskRequest(long expectedTaskVersion) {}
+
+  private record CancelDriverTaskRequest(long expectedTaskVersion, String reason) {}
+
+  private record CancelDriverTaskResponse(
+      UUID taskId,
+      UUID externalTaskId,
+      long taskVersion,
+      String status,
+      OffsetDateTime cancelledAt) {}
 
   private record EquipmentMovementBoardTaskResponse(
       UUID taskId,

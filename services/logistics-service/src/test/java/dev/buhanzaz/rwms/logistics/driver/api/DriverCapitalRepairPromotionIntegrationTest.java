@@ -193,6 +193,36 @@ class DriverCapitalRepairPromotionIntegrationTest {
               boardTask.set(current);
               return current;
             });
+    when(dependencies.cancelDriverTask(any(), anyLong()))
+        .thenAnswer(
+            invocation -> {
+              LogisticsDependencyGateway.DriverBoardTask current = boardTask.get();
+              assertThat(invocation.getArgument(0, UUID.class))
+                  .isEqualTo(current.externalTaskId());
+              assertThat(invocation.getArgument(1, Long.class))
+                  .isEqualTo(current.taskVersion());
+              LogisticsDependencyGateway.DriverBoardTask cancelled =
+                  new LogisticsDependencyGateway.DriverBoardTask(
+                      current.taskId(),
+                      current.taskVersion() + 1,
+                      current.warehouseId(),
+                      current.externalTaskId(),
+                      current.title(),
+                      current.unitNumber(),
+                      current.taskText(),
+                      "CANCELLED",
+                      current.scheduledDate(),
+                      current.lane(),
+                      current.priority(),
+                      current.pinned(),
+                      null,
+                      current.entryId(),
+                      current.entryVersion() + 1,
+                      "CANCELLED",
+                      current.queuePosition());
+              boardTask.set(cancelled);
+              return cancelled;
+            });
   }
 
   @Test
@@ -244,6 +274,64 @@ class DriverCapitalRepairPromotionIntegrationTest {
     verify(dependencies, never())
         .transitionRepairPlace(any(), any(), any(), anyLong(), any());
     verify(dependencies, times(1)).setDriverTaskLane(any(), anyLong(), eq("CURRENT"));
+  }
+
+  @Test
+  void returnsCapitalMovementWithoutDeletingHistoryAndAllowsASecondPromotion()
+      throws Exception {
+    mvc.perform(promote(UUID.randomUUID()))
+        .andExpect(status().isCreated())
+        .andExpect(jsonPath("$.state").value("CURRENT"));
+
+    LogisticsDependencyGateway.DriverBoardTask first = boardTask.get();
+    mvc.perform(
+            post(
+                    "/api/logistics/v1/driver-board/tasks/{externalTaskId}/return-to-capital-repairs",
+                    first.externalTaskId())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    "{\"warehouseId\":\"%s\",\"expectedTaskVersion\":%d}"
+                        .formatted(WAREHOUSE, first.taskVersion()))
+                .with(actor()))
+        .andExpect(status().isNoContent());
+
+    assertThat(
+            jdbc.queryForObject(
+                "select state from driver_logistics_task where external_task_id = ?",
+                String.class,
+                first.externalTaskId()))
+        .isEqualTo("CANCELLED");
+
+    mvc.perform(promote(UUID.randomUUID()))
+        .andExpect(status().isCreated())
+        .andExpect(jsonPath("$.state").value("CURRENT"));
+
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                  from driver_logistics_task
+                 where source_type = 'CAPITAL_REPAIR'
+                   and source_id = ?
+                   and task_kind = 'CAPITAL_TO_PRODUCTION'
+                """,
+                Long.class,
+                REPAIR))
+        .isEqualTo(2);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                  from driver_logistics_task
+                 where source_type = 'CAPITAL_REPAIR'
+                   and source_id = ?
+                   and task_kind = 'CAPITAL_TO_PRODUCTION'
+                   and state <> 'CANCELLED'
+                """,
+                Long.class,
+                REPAIR))
+        .isOne();
+    assertThat(registrations).hasValue(2);
   }
 
   private static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder promote(

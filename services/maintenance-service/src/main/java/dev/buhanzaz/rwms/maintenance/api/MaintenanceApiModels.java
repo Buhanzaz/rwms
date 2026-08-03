@@ -203,6 +203,9 @@ public final class MaintenanceApiModels {
       displayColor = displayColor == null
           ? null
           : displayColor.toUpperCase(java.util.Locale.ROOT);
+      comment = nodeType == CatalogNodeType.MATERIAL
+          ? null
+          : comment == null || comment.isBlank() ? null : comment.trim();
     }
 
   }
@@ -592,6 +595,11 @@ public final class MaintenanceApiModels {
         throw new IllegalArgumentException(
             "Estimate line type differs from its catalog snapshot");
       }
+      if (lineType == EstimateLineType.MATERIAL) {
+        comment = null;
+      } else {
+        comment = comment == null || comment.isBlank() ? null : comment.trim();
+      }
       mediaReferences = List.copyOf(mediaReferences);
     }
 
@@ -687,6 +695,7 @@ public final class MaintenanceApiModels {
       LeaseReconciliationState reconciliationState) {}
   public record TaskSyncSnapshot(
       UUID externalTaskId,
+      UUID taskBoardEntryId,
       Long taskBoardRegistrationVersion,
       GenerationState generationState,
       DeliverySnapshot delivery) {}
@@ -895,7 +904,20 @@ public final class MaintenanceApiModels {
       @JsonProperty(required = true) String groupComment,
       @NotNull List<@Valid MediaReferenceInput> mediaReferences,
       boolean forcesCapitalRepair,
-      @JsonProperty(required = true) @Valid CabinCharacteristicReference characteristic) {}
+      @JsonProperty(required = true) @Valid CabinCharacteristicReference characteristic) {
+    public InventoryPlanLineSnapshot {
+      if (mediaReferences == null) {
+        throw new IllegalArgumentException("Inventory plan line media are required");
+      }
+      if (type == InventoryPlanLineType.MATERIAL) {
+        groupComment = null;
+      } else {
+        groupComment =
+            groupComment == null || groupComment.isBlank() ? null : groupComment.trim();
+      }
+      mediaReferences = List.copyOf(mediaReferences);
+    }
+  }
   public record InventoryPlanStageSnapshot(
       @NotNull UUID id,
       @NotNull UUID catalogNodeId,

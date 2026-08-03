@@ -171,7 +171,7 @@ function toSnapshot(
         characteristic: node.characteristic,
         canvasX: node.canvasX,
         canvasY: node.canvasY,
-        comment: node.comment,
+        comment: node.nodeType === "MATERIAL" ? null : node.comment,
       }
     })
     .sort(compareNodes)
@@ -324,7 +324,7 @@ function toNodeInput(
       : null,
     canvasX: node.canvasX,
     canvasY: node.canvasY,
-    comment: node.comment,
+    comment: node.nodeType === "MATERIAL" ? null : node.comment,
   }
 }
 
@@ -458,7 +458,8 @@ function nodeInput(
           : null,
     canvasX: input.canvasX ?? existing?.canvasX ?? null,
     canvasY: input.canvasY ?? existing?.canvasY ?? null,
-    comment: input.comment?.trim() || null,
+    comment:
+      input.nodeType === "MATERIAL" ? null : input.comment?.trim() || null,
   }
 }
 

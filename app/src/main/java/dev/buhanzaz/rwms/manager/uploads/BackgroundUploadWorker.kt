@@ -13,6 +13,7 @@ import dev.buhanzaz.rwms.manager.network.AcceptReturnRequest
 import dev.buhanzaz.rwms.manager.network.AmendEstimateRequest
 import dev.buhanzaz.rwms.manager.network.ArriveTransferLineRequest
 import dev.buhanzaz.rwms.manager.network.CreateCabinFurnitureTaskRequest
+import dev.buhanzaz.rwms.manager.network.EstimateLineInputDto
 import dev.buhanzaz.rwms.manager.network.MediaAssetDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.network.RepairDecisionRequest
@@ -284,7 +285,7 @@ class BackgroundUploadWorker(
         operation: BackgroundUploadOperation,
         command: InventoryUploadCommand,
     ) {
-        val media = operation.allReferences(command.existingMedia)
+        val media = operation.aggregateReferences(command.existingMedia)
         val coverMediaId = operation.coverMediaId() ?: command.existingCoverMediaId
         if (!command.inspectionSaved) {
             updateStage(operation.id, "Сохранение инвентаризации")
@@ -304,8 +305,10 @@ class BackgroundUploadWorker(
                             media = media,
                             coverMediaId = coverMediaId,
                             planSelection = command.planSelection?.withUploadedMedia(
-                                media,
                                 coverMediaId,
+                                operation.lineReferences(),
+                                command.planLineIds,
+                                command.planWorkLineIds.toSet(),
                             ),
                         ),
                     )
@@ -341,8 +344,24 @@ class BackgroundUploadWorker(
         command: MaintenanceUploadCommand,
     ) {
         updateStage(operation.id, "Сохранение ${if (command.mode == "ESTIMATE") "сметы" else "ремонта"}")
-        val media = operation.allReferences(command.existingMedia)
+        val media = operation.aggregateReferences(command.existingMedia)
         val coverMediaId = operation.coverMediaId() ?: command.existingCoverMediaId
+        val lineReferences = operation.lineReferences()
+        val commandLineIds = command.lines.mapTo(mutableSetOf(), EstimateLineInputDto::id)
+        require(lineReferences.keys.all(commandLineIds::contains)) {
+            "Фоновая операция содержит фото отсутствующей строки"
+        }
+        val lines = command.lines.map { line ->
+            if (line.lineType == "WORK") {
+                line.copy(
+                    mediaReferences = (
+                        line.mediaReferences + lineReferences[line.id].orEmpty()
+                        ).distinctBy(MediaReferenceDto::mediaId),
+                )
+            } else {
+                line.copy(comment = null, mediaReferences = emptyList())
+            }
+        }
         val persistedVersion = when (command.replaceKind) {
             MaintenanceReplaceKind.NONE -> command.expectedVersion
             MaintenanceReplaceKind.ESTIMATE -> backend.api.replaceEstimate(
@@ -352,7 +371,7 @@ class BackgroundUploadWorker(
                     expectedVersion = command.expectedVersion,
                     dispatchDate = command.dispatchDate,
                     sourceParty = command.sourceParty,
-                    lines = command.lines,
+                    lines = lines,
                     plan = command.stages,
                     mediaReferences = media,
                     coverMediaId = coverMediaId,
@@ -368,7 +387,7 @@ class BackgroundUploadWorker(
                     dispatchDate = command.dispatchDate,
                     reason = requireNotNull(command.amendmentReason),
                     sourceParty = command.sourceParty,
-                    lines = command.lines,
+                    lines = lines,
                     plan = command.stages,
                     mediaReferences = media,
                     coverMediaId = coverMediaId,
@@ -379,7 +398,7 @@ class BackgroundUploadWorker(
                 warehouseId = command.warehouseId,
                 request = ReplaceRepairPlanRequest(
                     expectedVersion = command.expectedVersion,
-                    lines = command.lines,
+                    lines = lines,
                     stages = command.stages,
                     mediaReferences = media,
                     coverMediaId = coverMediaId,
@@ -433,7 +452,7 @@ class BackgroundUploadWorker(
             request = RepairDecisionRequest(
                 expectedVersion = command.expectedVersion,
                 comment = command.comment,
-                mediaReferences = operation.allReferences(command.existingMedia),
+                mediaReferences = operation.aggregateReferences(command.existingMedia),
             ),
         )
     }
@@ -450,7 +469,7 @@ class BackgroundUploadWorker(
             expectedLineVersion = command.expectedLineVersion,
             idempotencyKey = command.idempotencyKey,
             request = ArriveTransferLineRequest(
-                operation.allReferences(command.existingMedia),
+                operation.aggregateReferences(command.existingMedia),
             ),
         )
     }
@@ -552,10 +571,22 @@ class BackgroundUploadWorker(
         found
     }.getOrDefault(false)
 
-    private fun BackgroundUploadOperation.allReferences(
+    private fun BackgroundUploadOperation.aggregateReferences(
         existing: List<MediaReferenceDto>,
-    ): List<MediaReferenceDto> = (existing + photos.map { requireNotNull(it.reference) })
+    ): List<MediaReferenceDto> = (
+        existing + photos
+            .filter { it.lineId == null }
+            .map { requireNotNull(it.reference) }
+        )
         .distinctBy(MediaReferenceDto::mediaId)
+
+    private fun BackgroundUploadOperation.lineReferences(): Map<String, List<MediaReferenceDto>> =
+        photos
+            .mapNotNull { photo ->
+                photo.lineId?.let { lineId -> lineId to requireNotNull(photo.reference) }
+            }
+            .groupBy({ it.first }, { it.second })
+            .mapValues { (_, references) -> references.distinctBy(MediaReferenceDto::mediaId) }
 
     private fun BackgroundUploadOperation.coverMediaId(): String? =
         photos.firstOrNull(BackgroundUploadPhoto::cover)?.reference?.mediaId

@@ -10,6 +10,8 @@ export const MAINTENANCE_REPAIR_MEDIA_CONTEXT = "REPAIR" as const
 export const MAINTENANCE_ACCEPTANCE_MEDIA_OWNER_TYPE =
   "MAINTENANCE_ACCEPTANCE" as const
 export const MAINTENANCE_ACCEPTANCE_MEDIA_CONTEXT = "ACCEPTANCE" as const
+export const TASK_BOARD_ENTRY_MEDIA_OWNER_TYPE = "TASK_BOARD_ENTRY" as const
+export const TASK_BOARD_ENTRY_MEDIA_CONTEXT = "WORK_RESULT" as const
 export const LOGISTICS_RETURN_MEDIA_OWNER_TYPE = "LOGISTICS_RETURN" as const
 export const LOGISTICS_RETURN_MEDIA_CONTEXT = "RETURN_INSPECTION" as const
 export const LOGISTICS_SHIPMENT_MEDIA_OWNER_TYPE = "LOGISTICS_SHIPMENT" as const
@@ -55,6 +57,13 @@ export type MaintenanceMediaOwner =
       typeof MAINTENANCE_ACCEPTANCE_MEDIA_CONTEXT
     >
 
+export type TaskBoardEntryMediaOwner = Readonly<{
+  ownerType: typeof TASK_BOARD_ENTRY_MEDIA_OWNER_TYPE
+  ownerId: string
+  warehouseId: string
+  context: typeof TASK_BOARD_ENTRY_MEDIA_CONTEXT
+}>
+
 type LogisticsOwnerScope<
   OwnerType extends string,
   Context extends string,
@@ -84,6 +93,7 @@ export type ServiceMediaOwner =
   | InventoryFindingMediaOwner
   | CabinMediaOwner
   | MaintenanceMediaOwner
+  | TaskBoardEntryMediaOwner
   | LogisticsMediaOwner
 
 export function inventoryFindingMediaOwner(
@@ -143,6 +153,18 @@ export function maintenanceAcceptanceMediaOwner(
     ownerId,
     warehouseId,
     context: MAINTENANCE_ACCEPTANCE_MEDIA_CONTEXT,
+  }
+}
+
+export function taskBoardEntryMediaOwner(
+  ownerId: string,
+  warehouseId: string
+): TaskBoardEntryMediaOwner {
+  return {
+    ownerType: TASK_BOARD_ENTRY_MEDIA_OWNER_TYPE,
+    ownerId,
+    warehouseId,
+    context: TASK_BOARD_ENTRY_MEDIA_CONTEXT,
   }
 }
 

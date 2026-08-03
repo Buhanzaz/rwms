@@ -88,7 +88,7 @@ export function normalizeEstimateLine(
     ...line,
     sourceLineKey: line.sourceLineKey.trim(),
     description: line.description ?? "",
-    lineComment: line.lineComment ?? "",
+    lineComment: line.lineType === "WORK" ? (line.lineComment ?? "") : "",
     unit: line.catalogSnapshot === null ? unit || "ед" : unit,
     quantity,
     normativeMinutes,
@@ -97,12 +97,24 @@ export function normalizeEstimateLine(
     customQueueBinding: line.catalogSnapshot
       ? null
       : (line.customQueueBinding ?? null),
+    maintenanceMediaReferences:
+      line.lineType === "WORK"
+        ? Array.from(
+            new Map(
+              (line.maintenanceMediaReferences ?? []).map((reference) => [
+                reference.mediaId,
+                reference,
+              ])
+            ).values()
+          )
+        : [],
   }
 }
 
 export function assertEstimateLinesValid(lines: RepairEstimateLineDto[]) {
   const sourceLineKeys = new Set<string>()
   const lineIds = new Set<string>()
+  const assignedWorkMediaIds = new Set<string>()
 
   lines.forEach((line, index) => {
     const label = `Строка ${index + 1}`
@@ -162,6 +174,16 @@ export function assertEstimateLinesValid(lines: RepairEstimateLineDto[]) {
       throw new Error(
         `${label}: у материала время выполнения должно быть равно 0`
       )
+    }
+    const mediaReferences = line.maintenanceMediaReferences ?? []
+    if (line.lineType !== "WORK" && mediaReferences.length > 0) {
+      throw new Error(`${label}: фото можно прикреплять только к работе`)
+    }
+    for (const reference of mediaReferences) {
+      if (assignedWorkMediaIds.has(reference.mediaId)) {
+        throw new Error("Одна фотография не может принадлежать двум работам")
+      }
+      assignedWorkMediaIds.add(reference.mediaId)
     }
     decimalToMinor(line.unitPrice)
   })
@@ -384,6 +406,14 @@ export function applyCatalogNodesToEstimateLines(params: {
    * work line, even when the same catalog node is already present.
    */
   targetWorkLineIdsByCatalogNodeId?: Readonly<Record<string, string | null>>
+  workMediaReferencesByCatalogNodeId?: Readonly<
+    Record<
+      string,
+      readonly NonNullable<
+        RepairEstimateLineDto["maintenanceMediaReferences"]
+      >[number][]
+    >
+  >
 }) {
   let nextLines = params.lines.map((line) => normalizeEstimateLine(line))
   const quantity = Math.max(1, Math.trunc(params.quantity || 1))
@@ -402,6 +432,10 @@ export function applyCatalogNodesToEstimateLines(params: {
     )
     const targetWorkLineId =
       params.targetWorkLineIdsByCatalogNodeId?.[node.id] ?? null
+    const workMediaReferences =
+      node.nodeType === "WORK"
+        ? (params.workMediaReferencesByCatalogNodeId?.[node.id] ?? [])
+        : []
     const existingIndex =
       node.nodeType === "WORK" && targetWorkLineId
         ? nextLines.findIndex(
@@ -437,6 +471,13 @@ export function applyCatalogNodesToEstimateLines(params: {
               ? mergeLineComments(line.lineComment, params.comment)
               : line.lineComment,
           catalogSnapshot: catalogLineSnapshotFromNode(node),
+          maintenanceMediaReferences:
+            node.nodeType === "WORK"
+              ? [
+                  ...(line.maintenanceMediaReferences ?? []),
+                  ...workMediaReferences,
+                ]
+              : [],
         })
       })
       return
@@ -458,6 +499,7 @@ export function applyCatalogNodesToEstimateLines(params: {
         lineTotal: "0.00",
         catalogSnapshot: catalogLineSnapshotFromNode(node),
         customQueueBinding: null,
+        maintenanceMediaReferences: [...workMediaReferences],
       }),
     ]
   })
@@ -504,7 +546,12 @@ function bindingKey(binding: ReturnType<typeof lineQueueBinding>) {
 
 function commentsForLines(lines: RepairEstimateLineDto[]) {
   return Array.from(
-    new Set(lines.map((line) => line.lineComment.trim()).filter(Boolean))
+    new Set(
+      lines
+        .filter((line) => line.lineType === "WORK")
+        .map((line) => line.lineComment.trim())
+        .filter(Boolean)
+    )
   ).join("; ")
 }
 

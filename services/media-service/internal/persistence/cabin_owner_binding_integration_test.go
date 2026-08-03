@@ -53,7 +53,7 @@ func TestMigratedCabinOwnerBindingsAuthorizeOnlyTheirCanonicalWarehouseIntegrati
 		t.Fatalf("ListOwner(migrated cabin) = %#v, %v", assets, err)
 	}
 	if err := repository.ReadOriginal(ctx, command.MediaID, OwnerTypeCabin, cabinID.String(),
-		warehouseID, func(asset AssetRecord, original *VariantRecord) error {
+		warehouseID, nil, func(asset AssetRecord, original *VariantRecord) error {
 			if asset.ID != command.MediaID || original != nil {
 				t.Fatalf("uploading cabin original projection = asset:%#v original:%#v", asset, original)
 			}
@@ -178,7 +178,7 @@ func TestMigratedCabinOwnerBindingsAuthorizeOnlyTheirCanonicalWarehouseIntegrati
 		t.Fatalf("ReadOwnerAssets(cross-warehouse cabin) error = %v, want ErrOwnerProofMissing", err)
 	}
 	if err := repository.ReadOriginal(ctx, command.MediaID, OwnerTypeCabin, cabinID.String(),
-		foreignWarehouseID, func(AssetRecord, *VariantRecord) error { return nil }); !errors.Is(err, ErrNotFound) {
+		foreignWarehouseID, nil, func(AssetRecord, *VariantRecord) error { return nil }); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("ReadOriginal(cross-warehouse cabin) error = %v, want ErrNotFound", err)
 	}
 	if err := repository.ReadCurrentVariant(ctx, command.MediaID, OwnerTypeCabin, cabinID.String(),

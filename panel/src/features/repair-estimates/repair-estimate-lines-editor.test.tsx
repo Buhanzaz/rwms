@@ -128,9 +128,7 @@ async function selectHoldingQueue(user: ReturnType<typeof userEvent.setup>) {
   expect(
     screen.queryByRole("option", { name: /Неактивная очередь/ })
   ).toBeNull()
-  await user.click(
-    screen.getByRole("option", { name: /Ожидание проверки/ })
-  )
+  await user.click(screen.getByRole("option", { name: /Ожидание проверки/ }))
 }
 
 afterEach(() => {
@@ -150,6 +148,86 @@ beforeAll(() => {
 })
 
 describe("custom repair lines", () => {
+  it("shows add or edit photo only for work lines and opens the work manager", async () => {
+    const user = userEvent.setup()
+    renderEditor({
+      initialLines: [
+        {
+          id: "work-without-photo",
+          sourceLineKey: "work-without-photo",
+          lineType: "WORK",
+          description: "Работа без фото",
+          lineComment: "",
+          unit: "шт.",
+          quantity: 1,
+          normativeMinutes: 30,
+          unitPrice: "100.00",
+          lineTotal: "100.00",
+          catalogSnapshot: {
+            nodeId: "work-without-photo",
+            name: "Работа без фото",
+            nodeType: "WORK",
+            furnitureEquipment: null,
+            characteristic: null,
+          },
+        },
+        {
+          id: "work-with-photo",
+          sourceLineKey: "work-with-photo",
+          lineType: "WORK",
+          description: "Работа с фото",
+          lineComment: "",
+          unit: "шт.",
+          quantity: 1,
+          normativeMinutes: 30,
+          unitPrice: "100.00",
+          lineTotal: "100.00",
+          maintenanceMediaReferences: [
+            { mediaId: "work-photo", generation: 1 },
+          ],
+          catalogSnapshot: {
+            nodeId: "work-with-photo",
+            name: "Работа с фото",
+            nodeType: "WORK",
+            furnitureEquipment: null,
+            characteristic: null,
+          },
+        },
+        {
+          id: "material",
+          sourceLineKey: "material",
+          lineType: "MATERIAL",
+          description: "Материал",
+          lineComment: "",
+          unit: "шт.",
+          quantity: 1,
+          normativeMinutes: 0,
+          unitPrice: "50.00",
+          lineTotal: "50.00",
+          catalogSnapshot: {
+            nodeId: "material",
+            name: "Материал",
+            nodeType: "MATERIAL",
+            furnitureEquipment: null,
+            characteristic: null,
+          },
+        },
+      ],
+    })
+
+    expect(
+      screen.getAllByRole("button", { name: "Добавить фото" })
+    ).toHaveLength(1)
+    expect(
+      screen.getAllByRole("button", { name: "Редактировать фото" })
+    ).toHaveLength(1)
+
+    await user.click(screen.getByRole("button", { name: "Добавить фото" }))
+    expect(
+      screen.getByRole("dialog", { name: "Фотографии работы" })
+    ).toBeTruthy()
+  })
+
   it("creates a WORK custom line in a dialog and binds it only to an active repair stage", async () => {
     listQueues.mockResolvedValue(queues())
     const user = userEvent.setup()
@@ -263,9 +341,9 @@ describe("custom repair lines", () => {
     })
 
     expect(screen.queryByLabelText("Время, мин")).toBeNull()
-    expect((screen.getByLabelText("Тип строки 1") as HTMLInputElement).value).toBe(
-      "Работа"
-    )
+    expect(
+      (screen.getByLabelText("Тип строки 1") as HTMLInputElement).value
+    ).toBe("Работа")
   })
 
   it("edits the required duration of a manual work line outside stage-bound mode", async () => {

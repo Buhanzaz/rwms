@@ -340,7 +340,8 @@ public class InventoryMaintenanceService {
             InventoryPlanLineType.valueOf(node.getNodeType()), node.getName(), null, unit,
             quantity, node.getPriceMinor(), normativeMinutes(node.getDurationMinutes()),
             routing(node, nodes, incomingLinks),
-            normalize(input.groupComment()), List.copyOf(input.mediaReferences()),
+            "WORK".equals(node.getNodeType()) ? normalize(input.groupComment()) : null,
+            List.copyOf(input.mediaReferences()),
             node.isForcesCapitalRepair(),
             node.getCharacteristicId() == null
                 ? null
@@ -367,10 +368,13 @@ public class InventoryMaintenanceService {
         lines.add(new InventoryPlanLineSnapshot(
             InventoryPlanLineKind.MANUAL, null, null, null, input.type(), description,
             description.toLowerCase(Locale.forLanguageTag("ru-RU")), unit, quantity,
-            input.unitPriceMinor(), minutes, null, normalize(input.groupComment()),
+            input.unitPriceMinor(), minutes, null,
+            input.type() == InventoryPlanLineType.WORK ? normalize(input.groupComment()) : null,
             List.copyOf(input.mediaReferences()), false, null));
       }
     }
+
+    validateWorkLineMediaIsolation(lines);
 
     validateAggregateLimits(lines);
 
@@ -560,6 +564,24 @@ public class InventoryMaintenanceService {
     validateMedia(findingId, warehouseId, snapshot.mediaReferences());
     validateCoverMediaSelection(snapshot.mediaReferences(), snapshot.coverMediaId());
     snapshot.lines().forEach(line -> validateMedia(findingId, warehouseId, line.mediaReferences()));
+    validateWorkLineMediaIsolation(snapshot.lines());
+  }
+
+  private static void validateWorkLineMediaIsolation(
+      List<InventoryPlanLineSnapshot> lines) {
+    Set<UUID> assigned = new HashSet<>();
+    for (InventoryPlanLineSnapshot line : lines) {
+      if (line.type() != InventoryPlanLineType.WORK
+          && !line.mediaReferences().isEmpty()) {
+        throw invalid("Inventory photos can only be assigned to work lines");
+      }
+      if (line.type() != InventoryPlanLineType.WORK) continue;
+      for (MediaReferenceInput reference : line.mediaReferences()) {
+        if (!assigned.add(reference.mediaId())) {
+          throw invalid("One inventory photo cannot be assigned to multiple work lines");
+        }
+      }
+    }
   }
 
   private static void validateCoverMediaSelection(
@@ -869,7 +891,7 @@ public class InventoryMaintenanceService {
           moneyFromMinor(line.unitPriceMinor()),
           moneyFromMinor(totalMinor),
           duration,
-          line.groupComment(),
+          line.type() == InventoryPlanLineType.WORK ? line.groupComment() : null,
           line.mediaReferences());
       result.add(new InventoryRepairLine(index, line, response));
     }

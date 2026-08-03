@@ -240,7 +240,8 @@ public interface MaintenanceDependencyGateway {
       double quantity,
       String unit,
       Integer durationMinutes,
-      String comment) {
+      String comment,
+      List<UUID> sourceMediaIds) {
     public TaskWork {
       if (id == null
           || name == null
@@ -252,6 +253,21 @@ public interface MaintenanceDependencyGateway {
           || durationMinutes > 525600) {
         throw new IllegalArgumentException("Worker task work snapshot is invalid");
       }
+      sourceMediaIds = sourceMediaIds == null ? List.of() : List.copyOf(sourceMediaIds);
+      if (sourceMediaIds.stream().anyMatch(java.util.Objects::isNull)
+          || sourceMediaIds.stream().distinct().count() != sourceMediaIds.size()) {
+        throw new IllegalArgumentException("Worker task work media identities are invalid");
+      }
+    }
+
+    public TaskWork(
+        UUID id,
+        String name,
+        double quantity,
+        String unit,
+        Integer durationMinutes,
+        String comment) {
+      this(id, name, quantity, unit, durationMinutes, comment, List.of());
     }
   }
 

@@ -82,6 +82,7 @@ import {
   moveDriverBoardTask,
   pinDriverBoardTask,
   promoteCapitalRepair,
+  returnCapitalRepair,
 } from "@/features/logistics/driver-board/driver-board-api"
 import type {
   CapitalRepairCard,
@@ -732,10 +733,20 @@ function CapitalColumn({
   disabled: boolean
   onPromote: (repair: CapitalRepairCard) => void
 }) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: "driver-capital-repairs",
+    data: { type: "capital-target" },
+    disabled,
+  })
+
   return (
     <section
+      ref={setNodeRef}
       aria-label="Капитальные ремонты"
-      className="sticky right-0 z-20 flex min-h-0 flex-col border-l bg-background p-3"
+      className={cn(
+        "sticky right-0 z-20 flex min-h-0 flex-col border-l bg-background p-3 transition-colors",
+        isOver && !disabled && "bg-primary/10 ring-2 ring-inset ring-primary"
+      )}
     >
       <header className="mb-3 flex items-center justify-between gap-2">
         <h2 className="font-heading font-semibold">Капитальные ремонты</h2>
@@ -756,6 +767,10 @@ function CapitalColumn({
           </p>
         ) : null}
       </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        Перетащите сюда незавершённое задание капитального ремонта, чтобы
+        вернуть бытовку в этот список.
+      </p>
     </section>
   )
 }
@@ -1066,10 +1081,12 @@ export function DriverBoardPage() {
   }
 
   function handleCommandError(error: unknown) {
-    setCommandError(error)
     if (error instanceof ApiError && error.status === 409) {
+      setCommandError(null)
       void refreshBoard()
+      return
     }
+    setCommandError(error)
   }
 
   const moveMutation = useMutation({
@@ -1110,6 +1127,21 @@ export function DriverBoardPage() {
         repairId: repair.repairId,
         warehouseId: warehouseId!,
         idempotencyKey: crypto.randomUUID(),
+      }),
+    onSuccess: () => {
+      setCommandError(null)
+      void refreshBoard()
+    },
+    onError: handleCommandError,
+  })
+
+  const returnCapitalMutation = useMutation({
+    mutationFn: (card: DriverBoardCard) =>
+      returnCapitalRepair({
+        accessToken: accessToken!,
+        externalTaskId: card.externalTaskId,
+        warehouseId: warehouseId!,
+        expectedTaskVersion: card.taskBoardTaskVersion,
       }),
     onSuccess: () => {
       setCommandError(null)
@@ -1174,6 +1206,7 @@ export function DriverBoardPage() {
     !canEdit ||
     moveMutation.isPending ||
     promoteMutation.isPending ||
+    returnCapitalMutation.isPending ||
     createMutation.isPending ||
     pinMutation.isPending
 
@@ -1271,6 +1304,13 @@ export function DriverBoardPage() {
       return
     }
 
+    if (overData?.type === "capital-target") {
+      if (item.card.kind === "CAPITAL_TO_PRODUCTION") {
+        returnCapitalMutation.mutate(item.card)
+      }
+      return
+    }
+
     if (overCurrent) {
       let currentTargetIndex =
         typeof overData?.index === "number" &&
@@ -1363,50 +1403,26 @@ export function DriverBoardPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
-      <header className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h1 className="font-heading text-xl font-semibold">
-            Перемещение
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Текущие перемещения, запланированные даты и капитальные ремонты.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {canEdit ? (
-            <Button
-              type="button"
-              size="sm"
-              disabled={disabled}
-              onClick={() => setManualMovementOpen(true)}
-            >
-              <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-              Создать перемещение
-            </Button>
-          ) : (
-            <Badge variant="outline">Только просмотр</Badge>
-          )}
-        </div>
-      </header>
+      <div className="flex items-center justify-end gap-2">
+        {canEdit ? (
+          <Button
+            type="button"
+            size="sm"
+            disabled={disabled}
+            onClick={() => setManualMovementOpen(true)}
+          >
+            <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+            Создать перемещение
+          </Button>
+        ) : (
+          <Badge variant="outline">Только просмотр</Badge>
+        )}
+      </div>
 
       {commandError ? (
-        <Alert
-          variant={
-            commandError instanceof ApiError && commandError.status === 409
-              ? "default"
-              : "destructive"
-          }
-        >
-          <AlertTitle>
-            {commandError instanceof ApiError && commandError.status === 409
-              ? "Очередь уже изменилась"
-              : "Команда не выполнена"}
-          </AlertTitle>
-          <AlertDescription>
-            {commandError instanceof ApiError && commandError.status === 409
-              ? "Данные обновляются. Повторите перенос после загрузки актуальной очереди."
-              : errorMessage(commandError)}
-          </AlertDescription>
+        <Alert variant="destructive">
+          <AlertTitle>Команда не выполнена</AlertTitle>
+          <AlertDescription>{errorMessage(commandError)}</AlertDescription>
         </Alert>
       ) : null}
 

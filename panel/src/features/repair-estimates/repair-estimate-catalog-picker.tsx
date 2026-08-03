@@ -46,6 +46,11 @@ import {
   getRepairEstimateCatalogQuantityError,
 } from "@/features/repair-estimates/domain/repair-estimate-domain"
 import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/repair-estimate"
+import type {
+  ReadyMediaReference,
+  ServiceMediaOwner,
+} from "@/features/media/media-service"
+import { WorkLinePhotoControls } from "@/features/repair-estimates/work-line-photo-controls"
 
 type CatalogMode = "LINKED_SET" | "WORKS_ONLY" | "MATERIALS_ONLY"
 
@@ -78,6 +83,11 @@ type RepairEstimateCatalogPickerProps = {
   onChange: (lines: RepairEstimateLineDto[]) => void
   onPagerChange?: (pager: RepairEstimateCatalogPager | null) => void
   excludeFurniture?: boolean
+  accessToken?: string | null
+  mediaOwner?: ServiceMediaOwner | null
+  ensureMediaOwner?: (
+    lines?: RepairEstimateLineDto[]
+  ) => Promise<ServiceMediaOwner>
 }
 
 export type RepairEstimateCatalogPager = {
@@ -185,6 +195,9 @@ export function RepairEstimateCatalogPicker({
   onChange,
   onPagerChange,
   excludeFurniture = false,
+  accessToken = null,
+  mediaOwner = null,
+  ensureMediaOwner,
 }: RepairEstimateCatalogPickerProps) {
   const catalogQuery = useQuery({
     queryKey: REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
@@ -207,6 +220,9 @@ export function RepairEstimateCatalogPicker({
   const [addContext, setAddContext] = useState<AddContext | null>(null)
   const [duplicateWorkContext, setDuplicateWorkContext] =
     useState<DuplicateCatalogWorkContext | null>(null)
+  const [provisionalBaseLines, setProvisionalBaseLines] = useState<
+    RepairEstimateLineDto[] | null
+  >(null)
   const [message, setMessage] = useState<string | null>(null)
   const [page, setPage] = useState(0)
 
@@ -258,9 +274,7 @@ export function RepairEstimateCatalogPicker({
             currentNode
               ? catalogNavigationNodes(catalog, currentNode)
               : [...catalog.operationalMenuNodes]
-          ).filter(
-            (node) => !node.commonItem && !isCommonCatalogSection(node)
-          )
+          ).filter((node) => !node.commonItem && !isCommonCatalogSection(node))
 
     return filterForUsage(candidates).filter((node) => {
       if (commonOpen || currentCommonSection) {
@@ -355,6 +369,7 @@ export function RepairEstimateCatalogPicker({
     setPendingMaterial(null)
     setAddContext(null)
     setDuplicateWorkContext(null)
+    setProvisionalBaseLines(null)
     setMessage(null)
     setPage(0)
   }
@@ -384,6 +399,7 @@ export function RepairEstimateCatalogPicker({
     quantityNode: RepairEstimateCatalogNodeDto,
     locationTitle: string | null = null
   ) {
+    setProvisionalBaseLines(null)
     const addContext = { nodes, quantityNode, locationTitle }
     const choices = uniqueNodes(
       nodes.filter((node) => node.nodeType === "WORK")
@@ -569,7 +585,12 @@ export function RepairEstimateCatalogPicker({
     setMessage("Элемент нельзя добавить в смету")
   }
 
-  function finishAdd(quantity: number, comment: string) {
+  function finishAdd(
+    quantity: number,
+    comment: string,
+    workNodeId: string | null,
+    workMediaReferences: ReadyMediaReference[]
+  ) {
     if (!addContext || !catalog) {
       return
     }
@@ -590,23 +611,54 @@ export function RepairEstimateCatalogPicker({
 
     onChange(
       applyCatalogNodesToEstimateLines({
-        lines,
+        lines: provisionalBaseLines ?? lines,
         nodes: addContext.nodes,
         quantity,
         comment,
         locationTitle: addContext.locationTitle,
         targetWorkLineIdsByCatalogNodeId:
           addContext.targetWorkLineIdsByCatalogNodeId,
+        workMediaReferencesByCatalogNodeId:
+          workNodeId === null
+            ? undefined
+            : { [workNodeId]: workMediaReferences },
       })
     )
     setAddContext(null)
     setDuplicateWorkContext(null)
+    setProvisionalBaseLines(null)
     setPendingWork(null)
     setPendingMaterial(null)
     setPath([])
     setCommonOpen(false)
     setMessage("Позиция добавлена в смету")
     setPage(0)
+  }
+
+  async function ensureOwnerForPendingAdd(
+    quantity: number,
+    comment: string
+  ) {
+    if (!addContext || !catalog || !ensureMediaOwner) {
+      throw new Error("Сначала сохраните документ, чтобы прикрепить фото")
+    }
+    const baseLines = provisionalBaseLines ?? lines
+    const workNodeId =
+      addContext.nodes.find((node) => node.nodeType === "WORK")?.id ?? null
+    const provisionalLines = applyCatalogNodesToEstimateLines({
+      lines: baseLines,
+      nodes: addContext.nodes,
+      quantity,
+      comment,
+      locationTitle: addContext.locationTitle,
+      targetWorkLineIdsByCatalogNodeId:
+        addContext.targetWorkLineIdsByCatalogNodeId,
+      workMediaReferencesByCatalogNodeId:
+        workNodeId === null ? undefined : { [workNodeId]: [] },
+    })
+    const owner = await ensureMediaOwner(provisionalLines)
+    setProvisionalBaseLines(baseLines)
+    return owner
   }
 
   if (readOnly) {
@@ -832,7 +884,26 @@ export function RepairEstimateCatalogPicker({
       <CatalogAddDialog
         key={addContext?.quantityNode.id ?? "closed"}
         context={addContext}
-        onOpenChange={(open) => !open && setAddContext(null)}
+        accessToken={accessToken}
+        mediaOwner={mediaOwner}
+        ensureMediaOwner={
+          ensureMediaOwner ? ensureOwnerForPendingAdd : undefined
+        }
+        excludedMediaIds={
+          new Set(
+            lines.flatMap((line) =>
+              (line.maintenanceMediaReferences ?? []).map(
+                (reference) => reference.mediaId
+              )
+            )
+          )
+        }
+        onOpenChange={(open) => {
+          if (open) return
+          if (provisionalBaseLines) onChange(provisionalBaseLines)
+          setProvisionalBaseLines(null)
+          setAddContext(null)
+        }}
         onConfirm={finishAdd}
       />
     </section>
@@ -908,28 +979,47 @@ function DuplicateCatalogWorkDialog({
 
 function CatalogAddDialog({
   context,
+  accessToken,
+  mediaOwner,
+  ensureMediaOwner,
+  excludedMediaIds,
   onOpenChange,
   onConfirm,
 }: {
   context: AddContext | null
+  accessToken: string | null
+  mediaOwner: ServiceMediaOwner | null
+  ensureMediaOwner?: (
+    quantity: number,
+    comment: string
+  ) => Promise<ServiceMediaOwner>
+  excludedMediaIds: ReadonlySet<string>
   onOpenChange: (open: boolean) => void
-  onConfirm: (quantity: number, comment: string) => void
+  onConfirm: (
+    quantity: number,
+    comment: string,
+    workNodeId: string | null,
+    workMediaReferences: ReadyMediaReference[]
+  ) => void
 }) {
   const [quantity, setQuantity] = useState(1)
   const [comment, setComment] = useState("")
+  const [workMediaReferences, setWorkMediaReferences] = useState<
+    ReadyMediaReference[]
+  >([])
+  const [photosPending, setPhotosPending] = useState(false)
   const quantityError = context
     ? getRepairEstimateCatalogQuantityError(context.quantityNode, quantity)
     : null
   const quantityInvalid = quantityError !== null
   const hasWork = context?.nodes.some((node) => node.nodeType === "WORK")
+  const photoWorkNode = context?.nodes.find((node) => node.nodeType === "WORK")
   return (
     <Dialog open={context !== null} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            {context?.quantityNode.nodeType === "WORK"
-              ? "Добавить работу"
-              : "Добавить материал"}
+            {hasWork ? "Добавить работу" : "Добавить материал"}
           </DialogTitle>
           <DialogDescription>
             {context?.quantityNode.name ?? "Позиция каталога"}
@@ -954,17 +1044,32 @@ function CatalogAddDialog({
             {quantityError && <FieldError>{quantityError}</FieldError>}
           </Field>
           {hasWork ? (
-            <Field>
-              <FieldLabel htmlFor="catalog-add-comment">
-                Комментарий к работе
-              </FieldLabel>
-              <Textarea
-                id="catalog-add-comment"
-                aria-label="Комментарий к работе"
-                value={comment}
-                onChange={(event) => setComment(event.target.value)}
+            <>
+              <Field>
+                <FieldLabel htmlFor="catalog-add-comment">
+                  Комментарий к работе
+                </FieldLabel>
+                <Textarea
+                  id="catalog-add-comment"
+                  aria-label="Комментарий к работе"
+                  value={comment}
+                  onChange={(event) => setComment(event.target.value)}
+                />
+              </Field>
+              <WorkLinePhotoControls
+                accessToken={accessToken}
+                owner={mediaOwner}
+                ensureOwner={
+                  ensureMediaOwner
+                    ? () => ensureMediaOwner(quantity, comment)
+                    : undefined
+                }
+                excludedMediaIds={excludedMediaIds}
+                value={workMediaReferences}
+                onChange={setWorkMediaReferences}
+                onPendingChange={setPhotosPending}
               />
-            </Field>
+            </>
           ) : null}
         </div>
 
@@ -978,10 +1083,17 @@ function CatalogAddDialog({
           </Button>
           <Button
             type="button"
-            disabled={quantityInvalid}
-            onClick={() => onConfirm(quantity, comment)}
+            disabled={quantityInvalid || photosPending}
+            onClick={() =>
+              onConfirm(
+                quantity,
+                comment,
+                photoWorkNode?.id ?? null,
+                workMediaReferences
+              )
+            }
           >
-            Добавить
+            Далее
           </Button>
         </DialogFooter>
       </DialogContent>

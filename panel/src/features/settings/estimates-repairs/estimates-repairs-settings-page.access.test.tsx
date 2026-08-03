@@ -246,6 +246,7 @@ function metadataCanvasFixture(): RepairEstimateCatalogCanvasDto {
     includeInEstimate: false,
     canvasX: 720,
     canvasY: 320,
+    comment: "Старый комментарий материала",
   }
 
   return {
@@ -725,6 +726,9 @@ describe("maintenance catalog settings", () => {
     expect(getCanvasMetric(materialNode, "Активно")).toBe("Да")
     expect(getCanvasMetric(materialNode, "Учёт в смете")).toBe("Нет")
     expect(within(materialNode).queryByText("Длительность")).toBeNull()
+    expect(
+      within(materialNode).queryByText("Старый комментарий материала")
+    ).toBeNull()
   })
 
   it("binds a category to an exact global queue definition", async () => {
@@ -950,11 +954,10 @@ describe("maintenance catalog settings", () => {
     const characteristicCheckbox = within(dialog).getByRole("checkbox", {
       name: "Сопоставить с характеристикой бытовки",
     })
+    expect(within(dialog).queryByLabelText("Комментарий")).toBeNull()
     expect(characteristicCheckbox.className).toContain("size-5")
     expect(characteristicCheckbox.className).toContain("border-primary")
-    await user.click(
-      characteristicCheckbox
-    )
+    await user.click(characteristicCheckbox)
     expect(
       await within(dialog).findByRole("combobox", {
         name: "Характеристика бытовки",
@@ -974,6 +977,7 @@ describe("maintenance catalog settings", () => {
           id: MATERIAL_ID,
           forcesCapitalRepair: false,
           characteristicId: CHARACTERISTIC_ID,
+          comment: null,
         })
       )
     )
@@ -1013,9 +1017,7 @@ describe("maintenance catalog settings", () => {
       })
     ).toBeNull()
 
-    await user.click(
-      within(dialog).getByRole("button", { name: "Материалы" })
-    )
+    await user.click(within(dialog).getByRole("button", { name: "Материалы" }))
     await user.click(
       within(dialog).getByRole("button", {
         name: "Добавить: Общая монтажная пена",
@@ -1048,7 +1050,7 @@ describe("maintenance catalog settings", () => {
           characteristicId: CHARACTERISTIC_ID,
           canvasX: null,
           canvasY: null,
-          comment: "Повторно используемый материал",
+          comment: null,
         })
       )
     })

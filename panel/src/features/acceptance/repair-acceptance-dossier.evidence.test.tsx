@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { cleanup, render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -49,6 +50,7 @@ const mediaId = "00000000-0000-4000-8000-000000000007"
 const workerId = "00000000-0000-4000-8000-000000000008"
 const workerGroupId = "00000000-0000-4000-8000-000000000009"
 const workLineId = "00000000-0000-4000-8000-000000000010"
+const sourceMediaId = "00000000-0000-4000-8000-000000000012"
 const capturedAt = "2026-07-18T09:45:00Z"
 const recordedAt = "2026-07-18T10:00:00Z"
 
@@ -70,6 +72,7 @@ const task: RepairTaskDto = {
   subtasks: [
     {
       id: stageId,
+      taskBoardEntryId: entryId,
       kind: "REPAIR_WORK",
       status: "DONE",
       workLines: [
@@ -84,6 +87,9 @@ const task: RepairTaskDto = {
           unitPrice: "100.00",
           lineTotal: "100.00",
           catalogSnapshot: null,
+          maintenanceMediaReferences: [
+            { mediaId: sourceMediaId, generation: 3 },
+          ],
         },
       ],
       materialLines: [],
@@ -131,15 +137,15 @@ const task: RepairTaskDto = {
   updatedAt: recordedAt,
 }
 
-function renderDossier() {
+function renderDossier(canEdit = false, dossierTask: RepairTaskDto = task) {
   return render(
     <MemoryRouter>
       <QueryClientProvider client={new QueryClient()}>
         <RepairAcceptanceDossier
           accessToken="token"
-          task={task}
+          task={dossierTask}
           mode="ACCEPTANCE"
-          canEdit={false}
+          canEdit={canEdit}
           canManage={false}
         />
       </QueryClientProvider>
@@ -182,9 +188,7 @@ describe("repair acceptance worker evidence", () => {
     renderDossier()
 
     expect(screen.getByText("БТ-42")).toBeTruthy()
-    expect(screen.getAllByText("Заменить окно").length).toBeGreaterThanOrEqual(
-      2
-    )
+    expect(screen.getByText("Заменить окно")).toBeTruthy()
     expect(screen.getByText("Основная")).toBeTruthy()
     expect(screen.getByText("Проверить герметичность")).toBeTruthy()
     expect(screen.getByText("Иван Петров")).toBeTruthy()
@@ -194,11 +198,11 @@ describe("repair acceptance worker evidence", () => {
     expect(screen.getByText("Активное время")).toBeTruthy()
     expect(screen.getByText("1 ч 0 мин")).toBeTruthy()
     expect(screen.getByText("Фото приёмки")).toBeTruthy()
-    expect(screen.getByText("Фото этапа 1")).toBeTruthy()
+    expect(screen.getByText("Фото после · этап 1")).toBeTruthy()
     expect(screen.getByText("Этап 1: ремонтные работы")).toBeTruthy()
     expect(screen.queryByText("Этапы ремонта")).toBeNull()
     expect(screen.queryByText("Фото ремонта")).toBeNull()
-    expect(screen.getByLabelText("Комментариев: 2").textContent).toBe("2")
+    expect(screen.getByLabelText("Комментариев: 1").textContent).toBe("1")
     expect(screen.getByText(formatAcceptanceDateTime(capturedAt))).toBeTruthy()
     expect(
       screen.getAllByText(formatAcceptanceDateTime(recordedAt)).length
@@ -215,7 +219,6 @@ describe("repair acceptance worker evidence", () => {
         context: "WORK_RESULT",
       },
     })
-    expect(serviceOwnerPhotos).toHaveBeenCalledTimes(1)
     expect(serviceOwnerPhotos).toHaveBeenCalledWith(
       expect.objectContaining({
         owner: {
@@ -224,6 +227,64 @@ describe("repair acceptance worker evidence", () => {
           warehouseId,
           context: "ACCEPTANCE",
         },
+      })
+    )
+    expect(serviceOwnerPhotos).toHaveBeenCalledWith(
+      expect.objectContaining({
+        owner: {
+          ownerType: "TASK_BOARD_ENTRY",
+          ownerId: entryId,
+          warehouseId,
+          context: "WORK_RESULT",
+        },
+        authoritativeReadyReferences: [
+          { mediaId: sourceMediaId, generation: 3 },
+        ],
+      })
+    )
+  })
+
+  it("records a decision for each work and opens rework for the selected line", async () => {
+    const user = userEvent.setup()
+    renderDossier(true)
+
+    await user.click(screen.getByRole("button", { name: "Переделать" }))
+    expect(
+      screen.getByRole("button", { name: "Создать доработку (1)" })
+    ).toBeTruthy()
+    await user.click(
+      screen.getByRole("button", { name: "Создать доработку (1)" })
+    )
+    expect(screen.getByText("Создать доработку")).toBeTruthy()
+    expect(
+      screen.getByText(/автоматически попадут отмеченные для переделки работы/)
+    ).toBeTruthy()
+  })
+
+  it("reads capital work photos from the estimate when no task-board entry exists", () => {
+    const capitalTask: RepairTaskDto = {
+      ...task,
+      origin: "ESTIMATE",
+      sourceEstimateId: "00000000-0000-4000-8000-000000000013",
+      subtasks: task.subtasks.map((subtask) => ({
+        ...subtask,
+        taskBoardEntryId: null,
+      })),
+    }
+
+    renderDossier(false, capitalTask)
+
+    expect(serviceOwnerPhotos).toHaveBeenCalledWith(
+      expect.objectContaining({
+        owner: {
+          ownerType: "MAINTENANCE_ESTIMATE",
+          ownerId: capitalTask.sourceEstimateId,
+          warehouseId,
+          context: "ESTIMATE",
+        },
+        authoritativeReadyReferences: [
+          { mediaId: sourceMediaId, generation: 3 },
+        ],
       })
     )
   })

@@ -36,9 +36,6 @@ import org.hibernate.proxy.HibernateProxy;
           name = "uk_driver_logistics_task_external",
           columnNames = "external_task_id"),
       @UniqueConstraint(
-          name = "uk_driver_logistics_task_source_kind",
-          columnNames = {"source_type", "source_id", "task_kind"}),
-      @UniqueConstraint(
           name = "uk_driver_logistics_task_creator_key",
           columnNames = {"created_by_subject_id", "idempotency_key"})
     })

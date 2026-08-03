@@ -54,6 +54,8 @@ PROMPT_PANEL_RENTAL_TABLE_MIGRATION.md
 /\.playwright-cli/
 /\.playwright-mcp/
 /services/auth-service/ui/.playwright-cli/
+/page-*.yml
+/tmp/
 
 ### Local IDE and legacy runtime artifacts ###
 /amplicode.xml

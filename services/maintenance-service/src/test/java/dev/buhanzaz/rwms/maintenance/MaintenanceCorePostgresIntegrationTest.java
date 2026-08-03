@@ -2348,7 +2348,6 @@ class MaintenanceCorePostgresIntegrationTest {
     RepairFixture fixture = createDirectRepair();
     UUID repairMediaId = UUID.randomUUID();
     UUID workMediaId = UUID.randomUUID();
-    UUID materialMediaId = UUID.randomUUID();
     OffsetDateTime capturedAt = OffsetDateTime.parse("2026-07-23T10:15:30+03:00");
     new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
       service.applyInboundMediaFact(
@@ -2369,21 +2368,11 @@ class MaintenanceCorePostgresIntegrationTest {
           "READY",
           "{\"contentType\":\"image/png\"}",
           2);
-      service.applyInboundMediaFact(
-          materialMediaId,
-          3,
-          "MAINTENANCE_REPAIR",
-          fixture.repairId(),
-          fixture.warehouseId(),
-          "READY",
-          "{\"contentType\":\"image/webp\"}",
-          3);
     });
     CreateDirectRepairRequest content = workerTaskContent(
         fixture.warehouseId(),
         fixture.rentalItemId(),
-        workMediaId,
-        materialMediaId);
+        workMediaId);
     service.updateRepairPlan(
         fixture.repairId(),
         new UpdateRepairPlanRequest(
@@ -2432,6 +2421,7 @@ class MaintenanceCorePostgresIntegrationTest {
               assertThat(work.unit()).isEqualTo("шт");
               assertThat(work.durationMinutes()).isEqualTo(15);
               assertThat(work.comment()).isEqualTo("Проверить внешний угол");
+              assertThat(work.sourceMediaIds()).containsExactly(workMediaId);
             });
     assertThat(snapshot.materials())
         .singleElement()
@@ -2444,10 +2434,10 @@ class MaintenanceCorePostgresIntegrationTest {
             });
     assertThat(snapshot.comments())
         .extracting(MaintenanceDependencyGateway.TaskComment::text)
-        .containsExactly("Проверить внешний угол", "Принять по количеству", "Срочно");
+        .containsExactly("Проверить внешний угол", "Срочно");
     assertThat(snapshot.sourceMedia())
         .extracting(MaintenanceDependencyGateway.TaskSourceMedia::mediaId)
-        .containsExactlyInAnyOrder(repairMediaId, workMediaId, materialMediaId);
+        .containsExactlyInAnyOrder(repairMediaId, workMediaId);
     assertThat(snapshot.sourceMedia())
         .filteredOn(media -> media.mediaId().equals(repairMediaId))
         .singleElement()
@@ -4021,6 +4011,59 @@ class MaintenanceCorePostgresIntegrationTest {
   }
 
   @Test
+  void repairPhotosBelongToOneWorkAndMaterialsNeverCarryPhotosOrComments() {
+    RepairFixture fixture = createDirectRepair();
+    CreateDirectRepairRequest content =
+        directRepairRequest(
+            fixture.warehouseId(),
+            fixture.rentalItemId(),
+            LocalDate.of(2026, 7, 17),
+            null);
+    UUID mediaId = UUID.randomUUID();
+    new TransactionTemplate(transactionManager).executeWithoutResult(status ->
+        service.applyInboundMediaFact(
+            mediaId,
+            1,
+            "MAINTENANCE_REPAIR",
+            fixture.repairId(),
+            fixture.warehouseId(),
+            "READY",
+            "{}",
+            1));
+    MediaReferenceInput reference = new MediaReferenceInput(mediaId, 1L);
+    EstimateLineInput work = content.lines().stream()
+        .filter(line -> line.lineType() == EstimateLineType.WORK)
+        .findFirst()
+        .orElseThrow();
+    EstimateLineInput firstWork = new EstimateLineInput(
+        work.id(), work.catalogSnapshot(), work.lineType(), work.description(), work.unit(),
+        work.quantity(), work.unitPrice(), work.normativeMinutes(), work.comment(),
+        List.of(reference));
+    EstimateLineInput secondWork = new EstimateLineInput(
+        UUID.randomUUID(), work.catalogSnapshot(), work.lineType(), work.description(), work.unit(),
+        work.quantity(), work.unitPrice(), work.normativeMinutes(), work.comment(),
+        List.of(reference));
+
+    assertThatThrownBy(() -> service.updateRepairPlan(
+        fixture.repairId(),
+        new UpdateRepairPlanRequest(
+            0L, List.of(firstWork, secondWork), content.plan(), List.of(), null)))
+        .isInstanceOf(MaintenanceValidationException.class)
+        .hasMessageContaining("cannot be assigned to multiple work lines");
+
+    EstimateLineInput materialWithLegacyFields = new EstimateLineInput(
+        UUID.randomUUID(), null, EstimateLineType.MATERIAL, "Материал",
+        "шт", "1", "10.00", 0,
+        "legacy material comment", List.of(reference));
+    assertThatThrownBy(() -> service.updateRepairPlan(
+        fixture.repairId(),
+        new UpdateRepairPlanRequest(
+            0L, List.of(work, materialWithLegacyFields), content.plan(), List.of(), null)))
+        .isInstanceOf(MaintenanceValidationException.class)
+        .hasMessageContaining("Photos can only be assigned to work lines");
+  }
+
+  @Test
   void acceptancePersistsOnlyAcceptanceOwnedMediaAndReplaysIdempotently() {
     RepairFixture fixture = createQueuedPendingAcceptanceRepair();
     UUID wrongMediaId = UUID.randomUUID();
@@ -5268,6 +5311,10 @@ class MaintenanceCorePostgresIntegrationTest {
             fixture.externalTaskId(), 0, "ACTIVE",
             List.of(new MaintenanceDependencyGateway.TaskStageSnapshot(0, entryId, 0))));
     assertThat(service.reconcileOneTask()).isTrue();
+    assertThat(
+            service.repair(fixture.repairId())
+                .plan().stages().getFirst().taskSync().taskBoardEntryId())
+        .isEqualTo(entryId);
     return new RegisteredRepairFixture(fixture, entryId);
   }
 
@@ -5706,7 +5753,7 @@ class MaintenanceCorePostgresIntegrationTest {
   }
 
   private CreateDirectRepairRequest workerTaskContent(
-      UUID warehouseId, UUID rentalItemId, UUID workMediaId, UUID materialMediaId) {
+      UUID warehouseId, UUID rentalItemId, UUID workMediaId) {
     TestCatalogWork work = ensureTestCatalogWork(warehouseId);
     TestCatalogMaterial material = ensureTestCatalogMaterial(work);
     UUID workLineId = UUID.randomUUID();
@@ -5756,7 +5803,7 @@ class MaintenanceCorePostgresIntegrationTest {
         "250.00",
         0,
         "Принять по количеству",
-        List.of(new MediaReferenceInput(materialMediaId, 3L)));
+        List.of());
     PlanStageInput plan = new PlanStageInput(
         UUID.randomUUID(),
         RepairStageKind.REPAIR_WORK,

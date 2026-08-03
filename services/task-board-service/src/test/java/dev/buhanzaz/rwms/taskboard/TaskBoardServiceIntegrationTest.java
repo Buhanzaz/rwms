@@ -936,6 +936,60 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
+  void workSourceMediaMustBelongToTheStepAndToOneWorkOnly() {
+    var queue = QueueRegistryTestFixtures.create(
+        registry, jdbc, W1, queue("WORK_MEDIA", QueueType.REPAIR, List.of()));
+    UUID mediaId = UUID.randomUUID();
+    UUID firstWorkId = UUID.randomUUID();
+    UUID secondWorkId = UUID.randomUUID();
+    var source = new TaskSourceMediaSnapshotRequest(
+        mediaId, 1, "image/jpeg", null, OffsetDateTime.now(ZoneOffset.UTC));
+
+    var missingSource = new CreateBoardTaskRequest(
+        null,
+        "missing source",
+        null,
+        null,
+        null,
+        null,
+        List.of(new RouteStepRequest(
+            queue.definitionId(),
+            null,
+            null,
+            List.of(new TaskWorkSnapshotRequest(
+                firstWorkId, "Работа", 1, "шт.", 30, null, List.of(mediaId))),
+            List.of(),
+            List.of(),
+            List.of())));
+    assertThatThrownBy(() -> board.createTask(W1, missingSource))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("отсутствует в исходных материалах");
+
+    var duplicatedSource = new CreateBoardTaskRequest(
+        null,
+        "duplicate source",
+        null,
+        null,
+        null,
+        null,
+        List.of(new RouteStepRequest(
+            queue.definitionId(),
+            null,
+            null,
+            List.of(
+                new TaskWorkSnapshotRequest(
+                    firstWorkId, "Первая", 1, "шт.", 30, null, List.of(mediaId)),
+                new TaskWorkSnapshotRequest(
+                    secondWorkId, "Вторая", 1, "шт.", 30, null, List.of(mediaId))),
+            List.of(),
+            List.of(),
+            List.of(source))));
+    assertThatThrownBy(() -> board.createTask(W1, duplicatedSource))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("не может принадлежать двум работам");
+  }
+
+  @Test
   void concurrentExternalTaskRetryCreatesOneTaskAndOneEvent() throws Exception {
     var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("IDEMPOTENT_RACE", QueueType.REPAIR, List.of()));
     UUID externalTaskId = UUID.randomUUID();

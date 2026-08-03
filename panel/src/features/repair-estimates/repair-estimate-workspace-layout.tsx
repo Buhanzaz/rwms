@@ -85,7 +85,7 @@ export function RepairEstimateWorkspaceLayout({
 
         <WorkspacePanel
           className="order-3 xl:col-start-1 xl:row-start-2"
-          contentClassName="overflow-hidden"
+          contentClassName="overflow-y-auto"
         >
           {estimate}
         </WorkspacePanel>

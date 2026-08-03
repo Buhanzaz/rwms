@@ -1360,10 +1360,14 @@ public class MaintenanceApplicationService {
         request.dispatchDate(), request.sourceParty(), actorJson());
     draft.replaceCoverMediaId(request.coverMediaId());
     MaintenanceRepair repair = repairs.saveAndFlush(draft);
+    List<EstimateLineResponse> canonicalLines =
+        canonicalRepairLines(request.warehouseId(), request.lines());
+    validateLineMediaReferences(
+        "MAINTENANCE_REPAIR", repair.getId(), repair.getWarehouseId(), canonicalLines);
     replaceRepairStages(
         repair,
         request.plan(),
-        canonicalRepairLines(request.warehouseId(), request.lines()));
+        canonicalLines);
     replaceMedia("REPAIR", "MAINTENANCE_REPAIR", repair.getId(), repair.getWarehouseId(),
         request.mediaReferences());
     events.initialize(
@@ -1406,6 +1410,7 @@ public class MaintenanceApplicationService {
         repair.getExecutionState() == RepairExecutionState.QUEUED;
     List<EstimateLineResponse> canonicalLines =
         canonicalRepairLines(repair.getWarehouseId(), request.lines());
+    validateUpdatedRepairLineMediaReferences(repair, canonicalLines);
     RepairComplexitySnapshot updatedComplexity =
         repairComplexityForLines(repair.getWarehouseId(), canonicalLines);
     boolean reclassifyingCapital =
@@ -1669,10 +1674,19 @@ public class MaintenanceApplicationService {
         MaintenanceRepair.rework(source, request.reason(), actorJson());
     childDraft.replaceCoverMediaId(request.coverMediaId());
     MaintenanceRepair child = repairs.saveAndFlush(childDraft);
+    List<EstimateLineResponse> canonicalLines =
+        canonicalReworkLines(source, request.lines());
+    validateLineMediaReferences(
+        "MAINTENANCE_REPAIR",
+        child.getId(),
+        child.getWarehouseId(),
+        canonicalLines.stream()
+            .filter(line -> line.disposition() == ReworkLineDisposition.ADDED)
+            .toList());
     replaceRepairStages(
         child,
         request.plan(),
-        canonicalReworkLines(source, request.lines()));
+        canonicalLines);
     replaceMedia("REPAIR", "MAINTENANCE_REPAIR", child.getId(), child.getWarehouseId(),
         request.mediaReferences());
     events.initialize(
@@ -2320,7 +2334,7 @@ public class MaintenanceApplicationService {
           catalogSnapshot == null || catalogSnapshot.routing() == null
               ? null : catalogSnapshot.routing().queueId().toString(),
           catalogSnapshot == null ? null : write(catalogSnapshot),
-          input.comment(), write(input.mediaReferences())));
+          workLineComment(lineType, input.comment()), write(input.mediaReferences())));
       canonicalLines.add(
           new EstimateLineResponse(
               input.id(),
@@ -2332,9 +2346,10 @@ public class MaintenanceApplicationService {
               money(unitPriceMinor),
               money(quantity.multiply(BigDecimal.valueOf(unitPriceMinor))),
               normativeMinutes,
-              input.comment(),
+              workLineComment(lineType, input.comment()),
               List.copyOf(input.mediaReferences())));
     }
+    validateWorkLineMediaIsolation(canonicalLines);
     List<PlanStageInput> resolvedPlanInputs =
         resolvePlanContent(canonicalLines, planInputs);
     validateEstimateRouting(canonicalSnapshots, resolvedPlanInputs);
@@ -2662,10 +2677,36 @@ public class MaintenanceApplicationService {
               money(unitPriceMinor),
               money(quantity.multiply(BigDecimal.valueOf(unitPriceMinor))),
               normativeMinutes,
-              input.comment(),
+              workLineComment(lineType, input.comment()),
               List.copyOf(input.mediaReferences())));
     }
+    validateWorkLineMediaIsolation(result);
     return List.copyOf(result);
+  }
+
+  private static void validateWorkLineMediaIsolation(
+      List<EstimateLineResponse> lines) {
+    Set<UUID> assigned = new HashSet<>();
+    for (EstimateLineResponse line : lines) {
+      if (line.lineType() != EstimateLineType.WORK
+          && !line.mediaReferences().isEmpty()) {
+        throw invalid("Photos can only be assigned to work lines");
+      }
+      if (line.lineType() != EstimateLineType.WORK) continue;
+      for (MediaReferenceInput reference : line.mediaReferences()) {
+        if (!assigned.add(reference.mediaId())) {
+          throw invalid("One photo cannot be assigned to multiple work lines");
+        }
+      }
+    }
+  }
+
+  private static String workLineComment(
+      EstimateLineType lineType, String comment) {
+    if (lineType != EstimateLineType.WORK || comment == null || comment.isBlank()) {
+      return null;
+    }
+    return comment.trim();
   }
 
   private List<EstimateLineResponse> canonicalReworkLines(
@@ -2757,7 +2798,7 @@ public class MaintenanceApplicationService {
           && quantity.stripTrailingZeros().scale() > 0) {
         throw invalid("Furniture quantity must be a whole number");
       }
-      String comment = repeat.comment();
+      String comment = workLineComment(inherited.lineType(), repeat.comment());
       if (comment != null) {
         comment = comment.isBlank() ? null : comment.trim();
         if (comment != null && comment.length() > 2000) {
@@ -2783,6 +2824,7 @@ public class MaintenanceApplicationService {
               candidate.sourceLineId(),
               candidate.lineageRootLineId()));
     }
+    validateWorkLineMediaIsolation(result);
     return List.copyOf(result);
   }
 
@@ -2889,7 +2931,7 @@ public class MaintenanceApplicationService {
               money(unitPriceMinor),
               money(quantity.multiply(BigDecimal.valueOf(unitPriceMinor))),
               normativeMinutes,
-              input.comment(),
+              workLineComment(lineType, input.comment()),
               List.copyOf(input.mediaReferences())));
     }
     return List.copyOf(result);
@@ -3127,6 +3169,67 @@ public class MaintenanceApplicationService {
       }
     }
   }
+
+  private void validateLineMediaReferences(
+      String ownerType,
+      UUID ownerId,
+      UUID warehouseId,
+      List<EstimateLineResponse> lines) {
+    validateMediaReferences(
+        ownerType,
+        ownerId,
+        warehouseId,
+        lines.stream()
+            .flatMap(line -> line.mediaReferences().stream())
+            .toList());
+  }
+
+  private void validateUpdatedRepairLineMediaReferences(
+      MaintenanceRepair repair, List<EstimateLineResponse> requestedLines) {
+    Map<UUID, StoredLineMedia> storedByMediaId = new HashMap<>();
+    for (RepairStage stage : repairStages.findAllByRepairIdOrderByStageNo(repair.getId())) {
+      java.util.stream.Stream.concat(
+              readList(stage.getWorkLines(), EstimateLineResponse.class).stream(),
+              readList(stage.getMaterialLines(), EstimateLineResponse.class).stream())
+          .forEach(
+              line ->
+                  line.mediaReferences()
+                      .forEach(
+                          reference -> {
+                            StoredLineMedia previous =
+                                storedByMediaId.putIfAbsent(
+                                    reference.mediaId(),
+                                    new StoredLineMedia(line.id(), reference));
+                            if (previous != null
+                                && (!previous.lineId().equals(line.id())
+                                    || !previous.reference().equals(reference))) {
+                              throw new IllegalStateException(
+                                  "Stored repair photo belongs to multiple work lines");
+                            }
+                          }));
+    }
+
+    List<MediaReferenceInput> newlyAssigned = new ArrayList<>();
+    for (EstimateLineResponse line : requestedLines) {
+      for (MediaReferenceInput reference : line.mediaReferences()) {
+        StoredLineMedia stored = storedByMediaId.get(reference.mediaId());
+        if (stored == null) {
+          newlyAssigned.add(reference);
+          continue;
+        }
+        if (!stored.lineId().equals(line.id()) || !stored.reference().equals(reference)) {
+          throw invalid("A photo already assigned to another work cannot be moved");
+        }
+      }
+    }
+    validateMediaReferences(
+        "MAINTENANCE_REPAIR",
+        repair.getId(),
+        repair.getWarehouseId(),
+        newlyAssigned);
+  }
+
+  private record StoredLineMedia(UUID lineId, MediaReferenceInput reference) {}
 
   private static void validateCoverMediaSelection(
       List<MediaReferenceInput> requested, UUID coverMediaId) {
@@ -5187,7 +5290,7 @@ public class MaintenanceApplicationService {
                                   line.unit()))
                       .toList();
               List<MaintenanceDependencyGateway.TaskComment> comments = new ArrayList<>();
-              java.util.stream.Stream.concat(work.stream(), materials.stream())
+              work.stream()
                   .filter(line -> line.comment() != null && !line.comment().isBlank())
                   .map(
                       line ->
@@ -5240,7 +5343,11 @@ public class MaintenanceApplicationService {
                   taskLineQuantity(line).doubleValue(),
                   line.unit(),
                   line.normativeMinutes(),
-                  taskLineComment(line.comment()));
+                  taskLineComment(line.comment()),
+                  line.mediaReferences().stream()
+                      .map(MediaReferenceInput::mediaId)
+                      .distinct()
+                      .toList());
             })
         .toList();
   }
@@ -5888,7 +5995,8 @@ public class MaintenanceApplicationService {
             stage.getGroupComment(),
             List.copyOf(evidenceByStage.getOrDefault(stage.getId(), List.of())),
             stage.getTaskDeadline(), new TaskSyncSnapshot(
-                value.getExternalTaskId(), stage.getTaskBoardVersion(),
+                value.getExternalTaskId(), stage.getExternalQueueEntryId(),
+                stage.getTaskBoardVersion(),
                 GenerationState.valueOf(stage.getTaskGenerationState()),
                 new DeliverySnapshot(
                     DeliveryState.valueOf(stage.getDeliveryState()),

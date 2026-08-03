@@ -200,7 +200,8 @@ public class WorkerTaskBoardService {
                         work.quantity(),
                         work.unit(),
                         work.durationMinutes(),
-                        work.comment()))
+                        work.comment(),
+                        work.sourceMediaIds()))
             .toList();
     List<WorkerMaterial> materials =
         workerContent.materials().stream()

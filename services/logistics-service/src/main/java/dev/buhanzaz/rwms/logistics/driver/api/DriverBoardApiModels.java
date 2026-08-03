@@ -84,4 +84,8 @@ public final class DriverBoardApiModels {
       @NotNull @Min(0) Integer targetIndex) {}
 
   public record PromoteCapitalRepairRequest(@NotNull UUID warehouseId) {}
+
+  public record ReturnCapitalRepairRequest(
+      @NotNull UUID warehouseId,
+      @NotNull @Min(0) Long expectedTaskVersion) {}
 }

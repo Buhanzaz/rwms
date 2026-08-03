@@ -11,6 +11,7 @@ import dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.FreezeInventoryPla
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.FrozenInventoryPlanSnapshot;
 import dev.buhanzaz.rwms.maintenance.domain.RepairLogisticsPlanningMode;
 import java.util.List;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.json.JsonMapper;
@@ -46,6 +47,16 @@ class MaintenanceApiModelDefaultsTest {
         .isInstanceOf(JacksonException.class);
     assertThatThrownBy(() -> mapper.readValue(explicitNull, CatalogNodeInput.class))
         .isInstanceOf(JacksonException.class);
+  }
+
+  @Test
+  void catalogMaterialDropsLegacyComment() throws JacksonException {
+    CatalogNodeInput value = mapper.readValue(
+        requiredNodeJson(",\"comment\":\"устаревший комментарий\"")
+            .replace("\"nodeType\":\"WORK\"", "\"nodeType\":\"MATERIAL\""),
+        CatalogNodeInput.class);
+
+    assertThat(value.comment()).isNull();
   }
 
   @Test
@@ -139,6 +150,24 @@ class MaintenanceApiModelDefaultsTest {
     assertThatThrownBy(
             () -> mapper.readValue(complete.replace("\"unit\":\"шт.\",", ""), EstimateLineInput.class))
         .isInstanceOf(JacksonException.class);
+  }
+
+  @Test
+  void materialLineDropsLegacyComment() {
+    EstimateLineResponse value = new EstimateLineResponse(
+        UUID.randomUUID(),
+        null,
+        EstimateLineType.MATERIAL,
+        "Материал",
+        "шт.",
+        "1",
+        "10.00",
+        "10.00",
+        0,
+        "устаревший комментарий",
+        List.of());
+
+    assertThat(value.comment()).isNull();
   }
 
   @Test

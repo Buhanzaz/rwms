@@ -134,8 +134,8 @@ export function InventoryStatistics({
             <DialogHeader>
               <DialogTitle>Позиции текущей инвентаризации</DialogTitle>
               <DialogDescription>
-                Работы и материалы сгруппированы по бытовкам, в которых они
-                были зафиксированы.
+                Работы и материалы сгруппированы по бытовкам, в которых они были
+                зафиксированы.
               </DialogDescription>
             </DialogHeader>
             <ToggleGroup
@@ -177,10 +177,9 @@ export function InventoryStatistics({
                               {line.description || "Без названия"}
                             </p>
                             <p className="text-xs text-muted-foreground">
-                              {line.lineType === "WORK"
-                                ? "Работа"
-                                : "Материал"}
-                              {line.lineComment.trim()
+                              {line.lineType === "WORK" ? "Работа" : "Материал"}
+                              {line.lineType === "WORK" &&
+                              line.lineComment.trim()
                                 ? ` · ${line.lineComment}`
                                 : ""}
                             </p>

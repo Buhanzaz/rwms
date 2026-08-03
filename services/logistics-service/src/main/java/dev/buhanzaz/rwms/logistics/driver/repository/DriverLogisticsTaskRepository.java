@@ -20,8 +20,19 @@ public interface DriverLogisticsTaskRepository
   Optional<DriverLogisticsTask> findByCreatedBySubjectIdAndIdempotencyKey(
       UUID createdBySubjectId, UUID idempotencyKey);
 
-  Optional<DriverLogisticsTask> findBySourceTypeAndSourceIdAndKind(
-      DriverTaskSourceType sourceType, UUID sourceId, DriverTaskKind kind);
+  @Query(
+      """
+      select task
+      from DriverLogisticsTask task
+      where task.sourceType = :sourceType
+        and task.sourceId = :sourceId
+        and task.kind = :kind
+        and task.state <> dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState.CANCELLED
+      """)
+  Optional<DriverLogisticsTask> findActiveBySourceTypeAndSourceIdAndKind(
+      @Param("sourceType") DriverTaskSourceType sourceType,
+      @Param("sourceId") UUID sourceId,
+      @Param("kind") DriverTaskKind kind);
 
   Optional<DriverLogisticsTask> findByExternalTaskId(UUID externalTaskId);
 

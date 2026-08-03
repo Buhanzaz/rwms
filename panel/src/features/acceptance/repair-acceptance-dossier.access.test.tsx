@@ -71,17 +71,14 @@ describe("repair acceptance command access", () => {
     expect(screen.queryByRole("button", { name: "Списать" })).toBeNull()
   })
 
-  it("keeps rework available but waits for an acceptance photo for EDIT access", () => {
+  it("waits for an acceptance photo for an EDIT decision without work lines", () => {
     renderDossier(true, false)
 
     expect(
       (screen.getByRole("button", { name: "Принять" }) as HTMLButtonElement)
         .disabled
     ).toBe(true)
-    expect(
-      (screen.getByRole("button", { name: "Переделать" }) as HTMLButtonElement)
-        .disabled
-    ).toBe(false)
+    expect(screen.queryByRole("button", { name: "Переделать" })).toBeNull()
     expect(
       screen.getByText(
         "Для приёмки добавьте хотя бы одну фотографию. На доработку можно отправить без нового фото."
@@ -97,7 +94,7 @@ describe("repair acceptance command access", () => {
       (screen.getByRole("button", { name: "Принять" }) as HTMLButtonElement)
         .disabled
     ).toBe(true)
-    expect(screen.getByRole("button", { name: "Переделать" })).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Переделать" })).toBeNull()
     expect(screen.getByRole("button", { name: "Списать" })).toBeTruthy()
   })
 })

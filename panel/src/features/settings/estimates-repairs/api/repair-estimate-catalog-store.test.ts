@@ -223,6 +223,35 @@ describe("maintenance-backed repair catalog store", () => {
     expect(saved.name).toBe("Новые окна")
   })
 
+  it("removes material comments at the catalog service boundary", async () => {
+    const material = {
+      ...node,
+      nodeType: "MATERIAL" as const,
+      name: "Монтажная пена",
+      comment: "Старый комментарий материала",
+    }
+    http.listMaintenanceCatalogNodes.mockResolvedValue([material])
+
+    const snapshot = await getRepairEstimateCatalogSnapshot(request)
+    await saveRepairEstimateCatalogNode(
+      request,
+      mutation({
+        nodeType: "MATERIAL",
+        name: "Монтажная пена",
+        comment: "Новый комментарий материала",
+      })
+    )
+
+    expect(snapshot.nodes[0]?.comment).toBeNull()
+    expect(http.replaceMaintenanceCatalogNodes).toHaveBeenCalledWith(
+      "catalog-token",
+      warehouseId,
+      versionId,
+      7,
+      [expect.objectContaining({ nodeType: "MATERIAL", comment: null })]
+    )
+  })
+
   it("replaces an existing category routing with the selected exact queue", async () => {
     const replacementRouting = {
       queueId: "00000000-0000-4000-8000-000000000007",
@@ -498,9 +527,9 @@ describe("maintenance-backed repair catalog store", () => {
       getRepairEstimateCatalogSection(request, "materials"),
     ])
 
-    expect(getItemsForCategory(works, commonRoot.id).map((item) => item.id)).toEqual(
-      [regularWork.id]
-    )
+    expect(
+      getItemsForCategory(works, commonRoot.id).map((item) => item.id)
+    ).toEqual([regularWork.id])
     expect(
       getItemsForCategory(materials, commonRoot.id).map((item) => item.id)
     ).toEqual([regularMaterial.id])
