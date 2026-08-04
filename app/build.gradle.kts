@@ -32,8 +32,8 @@ android {
         applicationId = "dev.buhanzaz.rwms.manager"
         minSdk = 23
         targetSdk = 36
-        versionCode = 29
-        versionName = "0.3.26"
+        versionCode = 34
+        versionName = "0.3.31"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["appAuthRedirectScheme"] = "rwms-manager-auth"
@@ -80,7 +80,7 @@ kotlin {
 }
 
 dependencies {
-    val cameraVersion = "1.5.0"
+    val cameraVersion = "1.6.1"
     val retrofitVersion = "3.0.0"
     val okHttpVersion = "5.3.2"
     val moshiVersion = "1.15.2"
@@ -115,6 +115,7 @@ dependencies {
     implementation("com.squareup.moshi:moshi-kotlin:$moshiVersion")
 
     implementation("androidx.camera:camera-camera2:$cameraVersion")
+    implementation("androidx.camera:camera-extensions:$cameraVersion")
     implementation("androidx.camera:camera-lifecycle:$cameraVersion")
     implementation("androidx.camera:camera-view:$cameraVersion")
     implementation("androidx.camera:camera-video:$cameraVersion")
