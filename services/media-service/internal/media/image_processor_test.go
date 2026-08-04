@@ -109,6 +109,47 @@ func TestImageProcessorAutoRotatesEXIFJPEGBeforeGeneratingVariants(t *testing.T)
 	assertEXIFOrientationSix(t, decodeWebP(t, store.objects[large.ObjectKey]))
 }
 
+func TestImageProcessorAutoRotatesAndroidLongEXIFOrientation(t *testing.T) {
+	const (
+		sourceWidth  = 80
+		sourceHeight = 40
+	)
+	source := testJPEGWithLongEXIFOrientation(t, sourceWidth, sourceHeight, 6)
+	metadata, err := bimg.NewImage(source).Metadata()
+	if err != nil {
+		t.Fatalf("read Android EXIF orientation: %v", err)
+	}
+	if got, want := metadata.Orientation, 6; got != want {
+		t.Fatalf("source Android EXIF orientation = %d, want %d", got, want)
+	}
+
+	store := newMemoryObjectStore(map[string][]byte{
+		"media/m-android/source/upload.jpg": source,
+	})
+	result, err := (ImageProcessor{Store: store, Limits: testProcessingLimits()}).Process(
+		context.Background(),
+		ImageProcessRequest{
+			MediaID:         "m-android",
+			SourceObjectKey: "media/m-android/source/upload.jpg",
+			SourceVersionID: "version-android",
+			Generation:      1,
+			Rotation:        Rotation0,
+			Variants: VariantConfiguration{
+				SmallLongEdge:  80,
+				MediumLongEdge: 80,
+				LargeLongEdge:  80,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if got, want := [2]int{result.Original.Width, result.Original.Height}, [2]int{sourceHeight, sourceWidth}; got != want {
+		t.Fatalf("canonical dimensions = %v, want %v after Android EXIF rotation", got, want)
+	}
+	assertEXIFOrientationSix(t, decodeJPEG(t, store.objects[result.Original.ObjectKey]))
+}
+
 func TestImageProcessorAppliesExplicitRotationAfterEXIFOrientation(t *testing.T) {
 	const (
 		sourceWidth  = 80
@@ -266,6 +307,21 @@ func testJPEGWithEXIFOrientation(t *testing.T, width, height int, orientation ui
 	return withEXIFOrientation(t, output.Bytes(), orientation)
 }
 
+func testJPEGWithLongEXIFOrientation(t *testing.T, width, height int, orientation uint32) []byte {
+	t.Helper()
+	canvas := image.NewRGBA(image.Rect(0, 0, width, height))
+	for x := 0; x < width; x++ {
+		for y := 0; y < height; y++ {
+			canvas.Set(x, y, testQuadrantColour(x, y, width, height))
+		}
+	}
+	var output bytes.Buffer
+	if err := jpeg.Encode(&output, canvas, &jpeg.Options{Quality: 100}); err != nil {
+		t.Fatalf("encode Android EXIF-oriented test JPEG: %v", err)
+	}
+	return withLongEXIFOrientation(t, output.Bytes(), orientation)
+}
+
 func testQuadrantColour(x, y, width, height int) color.RGBA {
 	switch {
 	case x < width/2 && y < height/2:
@@ -293,6 +349,28 @@ func withEXIFOrientation(t *testing.T, source []byte, orientation uint16) []byte
 		0x01, 0x00,
 		0x12, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00,
 		byte(orientation), byte(orientation >> 8), 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+	}
+	withEXIF := make([]byte, 0, len(source)+len(exif))
+	withEXIF = append(withEXIF, source[:2]...)
+	withEXIF = append(withEXIF, exif...)
+	return append(withEXIF, source[2:]...)
+}
+
+func withLongEXIFOrientation(t *testing.T, source []byte, orientation uint32) []byte {
+	t.Helper()
+	if len(source) < 2 || source[0] != 0xff || source[1] != 0xd8 {
+		t.Fatal("test JPEG is missing the SOI marker")
+	}
+
+	// CameraX files observed on Nothing OS encode Orientation as TIFF LONG.
+	exif := []byte{
+		0xff, 0xe1, 0x00, 0x22,
+		'E', 'x', 'i', 'f', 0x00, 0x00,
+		'I', 'I', 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00,
+		0x01, 0x00,
+		0x12, 0x01, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00,
+		byte(orientation), byte(orientation >> 8), byte(orientation >> 16), byte(orientation >> 24),
 		0x00, 0x00, 0x00, 0x00,
 	}
 	withEXIF := make([]byte, 0, len(source)+len(exif))
