@@ -7,6 +7,8 @@ import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.InventoryActorView;
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.SessionView;
+import dev.buhanzaz.rwms.inventory.domain.FurnitureReconciliationState;
+import dev.buhanzaz.rwms.inventory.domain.InventoryReviewStage;
 import dev.buhanzaz.rwms.inventory.domain.SessionLifecycle;
 import dev.buhanzaz.rwms.inventory.service.InventoryApplicationService;
 import java.time.LocalDate;
@@ -112,6 +114,8 @@ class InventoryControllerConditionalGetTest {
             UUID.fromString("00000000-0000-0000-0000-000000000704"), "Inventory operator"),
         LocalDate.of(2026, 7, 30),
         SessionLifecycle.ACTIVE,
+        InventoryReviewStage.CABINS,
+        FurnitureReconciliationState.NOT_REQUIRED,
         expectedCount,
         3,
         2,

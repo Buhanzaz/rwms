@@ -11,9 +11,14 @@ import org.springframework.data.repository.query.Param;
 public interface FindingPlanLineRepository extends JpaRepository<FindingPlanLine, UUID> {
   @Query(
       """
-      select line from FindingPlanLine line, InventoryFinding finding
+      select line from FindingPlanLine line, InventoryFinding finding, FindingPlanSnapshot snapshot
        where finding.inventoryId=:inventoryId and finding.id=line.findingId
-         and finding.revision=line.findingRevision
+         and snapshot.findingId=line.findingId and snapshot.findingRevision=line.findingRevision
+         and snapshot.fingerprint=finding.maintenancePlanFingerprintSha256
+         and snapshot.findingRevision=(
+           select max(candidate.findingRevision) from FindingPlanSnapshot candidate
+            where candidate.findingId=finding.id
+              and candidate.fingerprint=finding.maintenancePlanFingerprintSha256)
        order by line.lineType,line.lineNo
       """)
   List<FindingPlanLine> findActiveByInventoryId(@Param("inventoryId") UUID inventoryId);

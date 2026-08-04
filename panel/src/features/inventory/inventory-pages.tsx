@@ -37,17 +37,21 @@ import { Textarea } from "@/components/ui/textarea"
 import {
   INVENTORY_QUERY_KEY,
   completeInventory,
+  getInventoryFurnitureReview,
   getActiveInventory,
   getInventory,
   inventoryActiveQueryKey,
   inventoryDetailQueryKey,
   inventoryFinishPreviewQueryKey,
+  inventoryFurnitureReviewQueryKey,
   inventoryListQueryKey,
   listInventories,
   previewInventoryCompletion,
   publishInventoryWorks,
   resolveInventoryFindingConflict,
+  saveInventoryFurnitureReview,
   saveInventoryFinding,
+  startInventoryFurnitureReview,
   startInventory,
   subscribeInventory,
 } from "@/features/inventory/api/inventory-api"
@@ -62,6 +66,11 @@ import {
 } from "@/features/inventory/inventory-finding-filtering"
 import { InventoryFindingFilters } from "@/features/inventory/inventory-finding-filters"
 import { InventoryFindingsList } from "@/features/inventory/inventory-findings-list"
+import { InventoryFurnitureReview } from "@/features/inventory/inventory-furniture-review"
+import {
+  inventoryFurnitureReconciliationCompletionNotice,
+  inventoryFurnitureReconciliationPresentation,
+} from "@/features/inventory/inventory-furniture-reconciliation-presentation"
 import { InventoryInspectionWorkspace } from "@/features/inventory/inventory-inspection-workspace"
 import { InventoryMembershipMovements } from "@/features/inventory/inventory-membership-movements"
 import {
@@ -83,6 +92,7 @@ import {
 } from "@/features/inventory/domain/inventory-domain"
 import type {
   InventoryFindingDto,
+  InventoryFurnitureReviewDto,
   InventorySessionDto,
 } from "@/features/inventory/model/inventory"
 import { RENTAL_ITEM_STATUS_LABEL } from "@/features/rental-items/model/rental-item"
@@ -118,8 +128,156 @@ function showPublicationNotice(session: InventorySessionDto) {
   toast[notice.kind](notice.message)
 }
 
+function showFurnitureReconciliationNotice(session: InventorySessionDto) {
+  const notice = inventoryFurnitureReconciliationCompletionNotice(
+    session.furnitureReconciliationState
+  )
+  if (notice) toast[notice.kind](notice.message)
+}
+
 function conflictValue(value: string | null) {
   return value?.trim() || "—"
+}
+
+function structuredConflictValue(value: string | null) {
+  const normalized = value?.trim()
+  if (!normalized) return null
+  try {
+    const parsed: unknown = JSON.parse(normalized)
+    return parsed !== null && typeof parsed === "object"
+      ? JSON.stringify(parsed, null, 2)
+      : null
+  } catch {
+    return null
+  }
+}
+
+function ConflictValue({ value }: { value: string | null }) {
+  const structured = structuredConflictValue(value)
+  if (structured) {
+    return (
+      <pre className="mt-1 max-w-full overflow-x-auto rounded-md bg-muted p-2 font-mono text-xs break-words whitespace-pre-wrap text-foreground">
+        {structured}
+      </pre>
+    )
+  }
+  return <span className="text-foreground">{conflictValue(value)}</span>
+}
+
+function InventoryConflictResolution({
+  findings,
+  pending,
+  error,
+  onAcceptRegistry,
+  onKeepInspection,
+  onOpenFinding,
+}: {
+  findings: InventoryFindingDto[]
+  pending: boolean
+  error: string | null
+  onAcceptRegistry: (finding: InventoryFindingDto) => void
+  onKeepInspection: (finding: InventoryFindingDto) => void
+  onOpenFinding: (finding: InventoryFindingDto) => void
+}) {
+  if (findings.length === 0) return null
+  return (
+    <section
+      className="flex flex-col gap-3"
+      aria-labelledby="conflicts-title"
+    >
+      <h2 id="conflicts-title" className="text-lg font-semibold">
+        Конфликты реестра
+      </h2>
+      {findings.map((finding) => (
+        <Card key={finding.id} size="sm">
+          <CardHeader>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <CardTitle>{finding.cabinNumber}</CardTitle>
+              {finding.currentSnapshot ? (
+                <Badge variant="outline">
+                  {RENTAL_ITEM_STATUS_LABEL[finding.currentSnapshot.status]}
+                </Badge>
+              ) : null}
+            </div>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3 text-sm">
+            {finding.currentSnapshot?.status === "RENTED" ? (
+              <p>
+                <span className="text-muted-foreground">Арендатор:</span>
+                {finding.currentSnapshot.tenant?.trim() || "не указан"}
+              </p>
+            ) : null}
+            <ul className="flex flex-col gap-2">
+              {finding.conflicts.map((conflict) => (
+                <li key={conflict.code} className="rounded-md border p-3">
+                  <p className="font-medium">{conflict.message}</p>
+                  <div
+                    className="mt-2 grid gap-2 text-muted-foreground sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:items-start"
+                    aria-label="Было → Стало"
+                  >
+                    <div className="min-w-0">
+                      <span className="block text-xs">Было</span>
+                      <ConflictValue value={conflict.expected} />
+                    </div>
+                    <span aria-hidden="true" className="self-center">
+                      →
+                    </span>
+                    <div className="min-w-0">
+                      <span className="block text-xs">Стало</span>
+                      <ConflictValue value={conflict.actual} />
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <div className="flex flex-col gap-1 text-muted-foreground">
+              <p>
+                «Сохранить актуальные данные реестра» — работы и материалы
+                этого осмотра не будут переданы.
+              </p>
+              <p>
+                «Применить данные инвентаризации» — сохраняет работы и
+                материалы этого осмотра; потребуется указать причину.
+              </p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-3">
+              <Button
+                type="button"
+                className="w-full"
+                disabled={pending || finding.currentSnapshot === null}
+                onClick={() => onAcceptRegistry(finding)}
+              >
+                Сохранить актуальные данные реестра
+              </Button>
+              <Button
+                type="button"
+                className="w-full"
+                variant="secondary"
+                disabled={pending}
+                onClick={() => onKeepInspection(finding)}
+              >
+                Применить данные инвентаризации
+              </Button>
+              <Button
+                type="button"
+                className="w-full"
+                variant="outline"
+                disabled={pending}
+                onClick={() => onOpenFinding(finding)}
+              >
+                Дополнить осмотр
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+      {error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
+    </section>
+  )
 }
 
 function useInventorySync() {
@@ -332,6 +490,9 @@ function FindingEditor({
     onSuccess: () => {
       setCompletionOpen(false)
       void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
+      void queryClient.invalidateQueries({
+        queryKey: inventoryFurnitureReviewQueryKey(session.id),
+      })
       toast.success(
         lines.length > 0
           ? "Осмотр и работы сохранены"
@@ -694,20 +855,42 @@ export function InventoryFinishPage() {
   const [acknowledgedRiskSignature, setAcknowledgedRiskSignature] = useState<
     string | null
   >(null)
-  const [keepInspectionFinding, setKeepInspectionFinding] =
-    useState<InventoryFindingDto | null>(null)
+  const [keepInspectionFinding, setKeepInspectionFinding] = useState<{
+    finding: InventoryFindingDto
+    reviewSession: InventorySessionDto
+  } | null>(null)
   const [keepInspectionReason, setKeepInspectionReason] = useState("")
   const [keepInspectionSubmitted, setKeepInspectionSubmitted] = useState(false)
+  const [furnitureReviewDirty, setFurnitureReviewDirty] = useState(false)
   const canManage = Boolean(
     session &&
     hasInventoryWarehouseAccess(currentUser, session.warehouseId, "MANAGE")
   )
-  const previewQueryKey = inventoryFinishPreviewQueryKey(
+  const furnitureReviewQueryKey = inventoryFurnitureReviewQueryKey(
+    session?.id ?? null
+  )
+  const furnitureReviewQuery = useQuery({
+    queryKey: furnitureReviewQueryKey,
+    queryFn: () =>
+      session
+        ? getInventoryFurnitureReview(session.id)
+        : Promise.resolve<InventoryFurnitureReviewDto | null>(null),
+    enabled: Boolean(
+      session &&
+      actor &&
+      canManage &&
+      session.status === "ACTIVE" &&
+      session.reviewStage === "FURNITURE"
+    ),
+  })
+  const completionPreviewQueryKey = inventoryFinishPreviewQueryKey(
     session?.id ?? null,
     session?.version ?? null
   )
-  const previewQuery = useQuery({
-    queryKey: previewQueryKey,
+  const furnitureReviewMatchesSession =
+    furnitureReviewQuery.data?.sessionRevision === session?.version
+  const completionPreviewQuery = useQuery({
+    queryKey: completionPreviewQueryKey,
     queryFn: () =>
       session && actor
         ? previewInventoryCompletion({
@@ -717,26 +900,34 @@ export function InventoryFinishPage() {
           })
         : Promise.resolve(null),
     enabled: Boolean(
-      session && actor && canManage && session.status === "ACTIVE"
+      session &&
+      actor &&
+      canManage &&
+      session.status === "ACTIVE" &&
+      session.reviewStage === "FURNITURE" &&
+      furnitureReviewQuery.data?.confirmed &&
+      furnitureReviewMatchesSession &&
+      !furnitureReviewDirty
     ),
     refetchOnWindowFocus: "always",
   })
-  const reviewedSession = previewQuery.data
+  const reviewedFurnitureSession = completionPreviewQuery.data
   const resolutionMutation = useMutation({
     mutationFn: ({
+      reviewSession,
       finding,
       strategy,
       reason,
     }: {
+      reviewSession: InventorySessionDto
       finding: InventoryFindingDto
       strategy: "ACCEPT_REGISTRY" | "KEEP_INSPECTION"
       reason: string | null
     }) => {
-      if (!reviewedSession || !actor)
-        throw new Error("Инвентаризация недоступна")
+      if (!actor) throw new Error("Инвентаризация недоступна")
       return resolveInventoryFindingConflict({
-        inventoryId: reviewedSession.id,
-        expectedVersion: reviewedSession.version,
+        inventoryId: reviewSession.id,
+        expectedVersion: reviewSession.version,
         expectedFindingVersion: finding.version,
         actor,
         findingId: finding.id,
@@ -750,6 +941,11 @@ export function InventoryFinishPage() {
       setKeepInspectionFinding(null)
       setKeepInspectionReason("")
       setKeepInspectionSubmitted(false)
+      setFurnitureReviewDirty(false)
+      void queryClient.removeQueries({
+        queryKey: [...INVENTORY_QUERY_KEY, "finish-preview", updated.id],
+      })
+      void queryClient.invalidateQueries({ queryKey: furnitureReviewQueryKey })
       void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
       toast.success("Конфликт урегулирован")
     },
@@ -757,21 +953,57 @@ export function InventoryFinishPage() {
       void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
     },
   })
-  const mutation = useMutation({
+  const startFurnitureReviewMutation = useMutation({
+    mutationFn: (acknowledgeIncomplete: boolean) => {
+      if (!session) throw new Error("Инвентаризация недоступна")
+      return startInventoryFurnitureReview({
+        session,
+        acknowledgeIncomplete,
+      })
+    },
+    onSuccess: (review) => {
+      queryClient.setQueryData(furnitureReviewQueryKey, review)
+      setAcknowledgedRiskSignature(null)
+      setFurnitureReviewDirty(false)
+      void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
+      toast.success("Проверка бытовок завершена. Перейдите к сверке мебели.")
+    },
+  })
+  const saveFurnitureReviewMutation = useMutation({
+    mutationFn: (review: InventoryFurnitureReviewDto) => {
+      if (!session) throw new Error("Инвентаризация недоступна")
+      return saveInventoryFurnitureReview({
+        review,
+        session: reviewedFurnitureSession ?? session,
+      })
+    },
+    onSuccess: (review) => {
+      queryClient.setQueryData(furnitureReviewQueryKey, review)
+      setFurnitureReviewDirty(false)
+      void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
+      toast.success("Сверка мебели сохранена")
+    },
+  })
+  const completionMutation = useMutation({
     mutationFn: async (publish: boolean) => {
-      if (!reviewedSession || !actor)
+      if (!reviewedFurnitureSession || !actor) {
         throw new Error("Инвентаризация недоступна")
+      }
       const refreshed = await previewInventoryCompletion({
-        inventoryId: reviewedSession.id,
-        expectedVersion: reviewedSession.version,
+        inventoryId: reviewedFurnitureSession.id,
+        expectedVersion: reviewedFurnitureSession.version,
         actor,
       })
-      queryClient.setQueryData(previewQueryKey, refreshed)
+      queryClient.setQueryData(completionPreviewQueryKey, refreshed)
+      if (refreshed.findings.some((finding) => finding.conflicts.length > 0)) {
+        throw new Error(
+          "Урегулируйте все конфликты реестра перед завершением инвентаризации"
+        )
+      }
       const completed = await completeInventory({
         inventoryId: refreshed.id,
         expectedVersion: refreshed.version,
         actor,
-        acknowledgedRiskSignature,
       })
       return publish
         ? publishInventoryWorks({ inventoryId: completed.id, actor })
@@ -782,13 +1014,24 @@ export function InventoryFinishPage() {
       if (publish) {
         showPublicationNotice(completed)
       }
+      showFurnitureReconciliationNotice(completed)
       navigate(`/inventory/history/${completed.id}`, { replace: true })
+    },
+    onError: () => {
+      setFurnitureReviewDirty(false)
+      void completionPreviewQuery.refetch()
+      void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
     },
   })
   const goBack = useWorkspaceBack(
     session ? `/inventory/${session.id}` : "/inventory"
   )
-  if (query.isLoading || previewQuery.isLoading) return <InventoryLoading />
+  if (
+    query.isLoading ||
+    (session?.reviewStage === "FURNITURE" && furnitureReviewQuery.isLoading)
+  ) {
+    return <InventoryLoading />
+  }
   if (!session || !actor || !canManage)
     return (
       <InventoryUnavailable
@@ -803,61 +1046,74 @@ export function InventoryFinishPage() {
         description="Откройте её в истории."
       />
     )
-  if (previewQuery.error || !reviewedSession)
+  if (
+    session.reviewStage === "FURNITURE" &&
+    (furnitureReviewQuery.error || !furnitureReviewQuery.data)
+  )
     return (
       <InventoryUnavailable
-        title="Сверка не обновлена"
+        title="Сверка мебели недоступна"
         description={
-          previewQuery.error
-            ? errorMessage(previewQuery.error)
-            : "Не удалось получить актуальное состояние реестра."
+          furnitureReviewQuery.error
+            ? errorMessage(furnitureReviewQuery.error)
+            : "Не удалось получить снимок мебели для этой инвентаризации."
         }
       />
     )
-  const missing = reviewedSession.findings.filter(
+  const furnitureReview = furnitureReviewQuery.data
+  const activeReviewSession =
+    session.reviewStage === "FURNITURE" &&
+    furnitureReview?.confirmed &&
+    furnitureReviewMatchesSession &&
+    !furnitureReviewDirty &&
+    reviewedFurnitureSession
+      ? reviewedFurnitureSession
+      : session
+  const missing = activeReviewSession.findings.filter(
     (item) => item.reconciliationStatus === "MISSING"
   ).length
-  const notInspected = reviewedSession.findings.filter(
+  const notInspected = activeReviewSession.findings.filter(
     (item) => item.inspectionStatus === "NOT_INSPECTED"
   ).length
-  const conflictingFindings = reviewedSession.findings.filter(
+  const conflictingFindings = activeReviewSession.findings.filter(
     (item) => item.conflicts.length > 0
   )
   const unresolvedConflicts = conflictingFindings.length > 0
-  const withWork = reviewedSession.findings.filter(
+  const withWork = activeReviewSession.findings.filter(
     (item) => item.lines.length > 0
   )
   const repairMovementCount = inventoryRepairMovementCount(
-    reviewedSession.findings
+    activeReviewSession.findings
   )
   const completionCounters = [
-    ["Всего", reviewedSession.findings.length],
+    ["Всего", activeReviewSession.findings.length],
     [
       "Ожидалось",
-      reviewedSession.statistics?.expectedCount ??
-        reviewedSession.findings.length,
+      activeReviewSession.statistics?.expectedCount ??
+        activeReviewSession.findings.length,
     ],
     [
       "Проверено",
-      reviewedSession.statistics?.inspectedCount ??
-        reviewedSession.findings.length - notInspected,
+      activeReviewSession.statistics?.inspectedCount ??
+        activeReviewSession.findings.length - notInspected,
     ],
-    ["Не найдено", reviewedSession.statistics?.missingCount ?? missing],
+    ["Не найдено", activeReviewSession.statistics?.missingCount ?? missing],
     ["Не проверено", notInspected],
-    ["Готовы", reviewedSession.statistics?.readyCount ?? 0],
+    ["Готовы", activeReviewSession.statistics?.readyCount ?? 0],
     [
       "С работами",
-      reviewedSession.statistics?.withWorkCount ?? withWork.length,
+      activeReviewSession.statistics?.withWorkCount ?? withWork.length,
     ],
-    ["Добавлено", reviewedSession.statistics?.addedCount ?? 0],
+    ["Добавлено", activeReviewSession.statistics?.addedCount ?? 0],
     [
       "Конфликты",
-      reviewedSession.statistics?.conflictCount ?? conflictingFindings.length,
+      activeReviewSession.statistics?.conflictCount ??
+        conflictingFindings.length,
     ],
     ["Перемещения на ремонт и вывозы", repairMovementCount],
   ] as const
   const riskSignature = inventoryCompletionRiskSignature(
-    reviewedSession.findings
+    activeReviewSession.findings
   )
   const confirmationRequired = riskSignature.length > 0
   const confirmed =
@@ -870,238 +1126,281 @@ export function InventoryFinishPage() {
           Назад
         </Button>
       </PageToolbar>
-      <Card>
-        <CardHeader>
-          <CardTitle>Итоговая сверка</CardTitle>
-          <CardDescription>
-            Завершение зафиксирует неизменяемый снимок результатов.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <div className="flex flex-wrap gap-2">
-            {completionCounters.map(([label, value]) => (
-              <Badge key={label} variant="secondary">
-                {label}: {value}
-              </Badge>
-            ))}
-          </div>
-          {confirmationRequired ? (
-            <Field orientation="horizontal">
-              <Checkbox
-                id="inventory-finish-confirm"
-                checked={confirmed}
-                onCheckedChange={(value) =>
-                  setAcknowledgedRiskSignature(
-                    value === true ? riskSignature : null
-                  )
-                }
-              />
-              <FieldLabel
-                htmlFor="inventory-finish-confirm"
-                className="font-normal"
-              >
-                Я проверил непроверенные и ненайденные бытовки
-              </FieldLabel>
-            </Field>
-          ) : null}
-          {unresolvedConflicts ? (
-            <p role="alert" className="text-sm text-destructive">
-              Урегулируйте все конфликты реестра перед завершением
-              инвентаризации.
-            </p>
-          ) : null}
-          {mutation.error ? (
-            <p role="alert" className="text-sm text-destructive">
-              {errorMessage(mutation.error)}
-            </p>
-          ) : null}
-          <div className="flex flex-wrap gap-2">
-            {withWork.length > 0 ? (
-              <>
-                <Button
-                  type="button"
-                  disabled={
-                    mutation.isPending ||
-                    previewQuery.isFetching ||
-                    unresolvedConflicts ||
-                    (confirmationRequired && !confirmed)
-                  }
-                  onClick={() => mutation.mutate(true)}
-                >
-                  <HugeiconsIcon icon={SentIcon} data-icon="inline-start" />
-                  Завершить и передать работы
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={
-                    mutation.isPending ||
-                    previewQuery.isFetching ||
-                    unresolvedConflicts ||
-                    (confirmationRequired && !confirmed)
-                  }
-                  onClick={() => mutation.mutate(false)}
-                >
-                  Завершить без передачи
-                </Button>
-              </>
-            ) : (
+      {session.reviewStage === "CABINS" ? (
+        <>
+          <Card>
+            <CardHeader>
+              <CardTitle>Итоговая сверка бытовок</CardTitle>
+              <CardDescription>
+                Проверьте результаты по бытовкам, затем перейдите к сверке
+                мебели.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <div className="flex flex-wrap gap-2">
+                {completionCounters.map(([label, value]) => (
+                  <Badge key={label} variant="secondary">
+                    {label}: {value}
+                  </Badge>
+                ))}
+              </div>
+              {confirmationRequired ? (
+                <Field orientation="horizontal">
+                  <Checkbox
+                    id="inventory-finish-confirm"
+                    checked={confirmed}
+                    onCheckedChange={(value) =>
+                      setAcknowledgedRiskSignature(
+                        value === true ? riskSignature : null
+                      )
+                    }
+                  />
+                  <FieldLabel
+                    htmlFor="inventory-finish-confirm"
+                    className="font-normal"
+                  >
+                    Я проверил непроверенные и ненайденные бытовки
+                  </FieldLabel>
+                </Field>
+              ) : null}
+              {unresolvedConflicts ? (
+                <p role="alert" className="text-sm text-destructive">
+                  Урегулируйте все конфликты реестра перед переходом к сверке
+                  мебели.
+                </p>
+              ) : null}
+              {startFurnitureReviewMutation.error ? (
+                <p role="alert" className="text-sm text-destructive">
+                  {errorMessage(startFurnitureReviewMutation.error)}
+                </p>
+              ) : null}
               <Button
                 type="button"
                 disabled={
-                  mutation.isPending ||
-                  previewQuery.isFetching ||
+                  startFurnitureReviewMutation.isPending ||
                   unresolvedConflicts ||
                   (confirmationRequired && !confirmed)
                 }
-                onClick={() => mutation.mutate(false)}
+                onClick={() =>
+                  startFurnitureReviewMutation.mutate(confirmationRequired)
+                }
               >
-                Завершить
+                Завершить проверку бытовок и перейти к мебели
               </Button>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-      {reviewedSession.statistics ? (
-        <section
-          className="flex flex-col gap-3"
-          aria-labelledby="preview-title"
-        >
-          <h2 id="preview-title" className="text-lg font-semibold">
-            Предварительные итоги
-          </h2>
-          <InventoryStatistics
-            statistics={reviewedSession.statistics}
-            findings={reviewedSession.findings}
-            showCounters={false}
+            </CardContent>
+          </Card>
+          {activeReviewSession.statistics ? (
+            <section
+              className="flex flex-col gap-3"
+              aria-labelledby="preview-title"
+            >
+              <h2 id="preview-title" className="text-lg font-semibold">
+                Предварительные итоги
+              </h2>
+              <InventoryStatistics
+                statistics={activeReviewSession.statistics}
+                findings={activeReviewSession.findings}
+                showCounters={false}
+              />
+            </section>
+          ) : null}
+          <InventoryMembershipMovements
+            movements={activeReviewSession.membershipMovements}
+            warehouse={activeReviewSession.warehouse}
           />
-        </section>
-      ) : null}
-      <InventoryMembershipMovements
-        movements={reviewedSession.membershipMovements}
-        warehouse={reviewedSession.warehouse}
-      />
-      {conflictingFindings.length > 0 ? (
-        <section
-          className="flex flex-col gap-3"
-          aria-labelledby="conflicts-title"
-        >
-          <h2 id="conflicts-title" className="text-lg font-semibold">
-            Конфликты реестра
-          </h2>
-          {conflictingFindings.map((finding) => (
-            <Card key={finding.id} size="sm">
+          <InventoryConflictResolution
+            findings={conflictingFindings}
+            pending={resolutionMutation.isPending}
+            error={
+              resolutionMutation.error && !keepInspectionFinding
+                ? errorMessage(resolutionMutation.error)
+                : null
+            }
+            onAcceptRegistry={(finding) => {
+              resolutionMutation.reset()
+              resolutionMutation.mutate({
+                reviewSession: activeReviewSession,
+                finding,
+                strategy: "ACCEPT_REGISTRY",
+                reason: null,
+              })
+            }}
+            onKeepInspection={(finding) => {
+              resolutionMutation.reset()
+              setKeepInspectionFinding({
+                finding,
+                reviewSession: activeReviewSession,
+              })
+              setKeepInspectionReason("")
+              setKeepInspectionSubmitted(false)
+            }}
+            onOpenFinding={(finding) =>
+              navigate(
+                `/inventory/${activeReviewSession.id}?findingId=${finding.id}`,
+                workspaceEntryNavigationOptions
+              )
+            }
+          />
+          <InventoryFindingsList
+            findings={activeReviewSession.findings}
+            canInspect={false}
+            statusMode="COMPLETION"
+            onOpen={(finding) =>
+              navigate(
+                `/inventory/${activeReviewSession.id}?findingId=${finding.id}`,
+                workspaceEntryNavigationOptions
+              )
+            }
+          />
+        </>
+      ) : (
+        <>
+          <Card>
+            <CardHeader>
+              <CardTitle>Проверка мебели</CardTitle>
+              <CardDescription>
+                Сначала сохраните полную сверку мебели. После подтверждения
+                станут доступны завершающие действия.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+          <InventoryFurnitureReview
+            review={furnitureReview!}
+            pending={saveFurnitureReviewMutation.isPending}
+            error={
+              saveFurnitureReviewMutation.error
+                ? errorMessage(saveFurnitureReviewMutation.error)
+                : null
+            }
+            onSave={(review) => saveFurnitureReviewMutation.mutate(review)}
+            onDraftChange={setFurnitureReviewDirty}
+          />
+          {furnitureReview!.confirmed && !furnitureReviewDirty ? (
+            <>
+              {!furnitureReviewMatchesSession ? (
+                <InventoryLoading>
+                  Обновляем версию инвентаризации...
+                </InventoryLoading>
+              ) : completionPreviewQuery.isLoading ? (
+                <InventoryLoading>
+                  Проверяем актуальное состояние реестра...
+                </InventoryLoading>
+              ) : null}
+              {completionPreviewQuery.error ? (
+                <p role="alert" className="text-sm text-destructive">
+                  {errorMessage(completionPreviewQuery.error)}
+                </p>
+              ) : null}
+            </>
+          ) : null}
+          <InventoryConflictResolution
+            findings={conflictingFindings}
+            pending={resolutionMutation.isPending}
+            error={
+              resolutionMutation.error && !keepInspectionFinding
+                ? errorMessage(resolutionMutation.error)
+                : null
+            }
+            onAcceptRegistry={(finding) => {
+              resolutionMutation.reset()
+              resolutionMutation.mutate({
+                reviewSession: activeReviewSession,
+                finding,
+                strategy: "ACCEPT_REGISTRY",
+                reason: null,
+              })
+            }}
+            onKeepInspection={(finding) => {
+              resolutionMutation.reset()
+              setKeepInspectionFinding({
+                finding,
+                reviewSession: activeReviewSession,
+              })
+              setKeepInspectionReason("")
+              setKeepInspectionSubmitted(false)
+            }}
+            onOpenFinding={(finding) =>
+              navigate(
+                `/inventory/${activeReviewSession.id}?findingId=${finding.id}`,
+                workspaceEntryNavigationOptions
+              )
+            }
+          />
+          {furnitureReview!.confirmed &&
+          !furnitureReviewDirty &&
+          furnitureReviewMatchesSession &&
+          reviewedFurnitureSession &&
+          !completionPreviewQuery.error ? (
+            <Card>
               <CardHeader>
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <CardTitle>{finding.cabinNumber}</CardTitle>
-                  {finding.currentSnapshot ? (
-                    <Badge variant="outline">
-                      {RENTAL_ITEM_STATUS_LABEL[finding.currentSnapshot.status]}
-                    </Badge>
-                  ) : null}
-                </div>
+                <CardTitle>Завершение инвентаризации</CardTitle>
+                <CardDescription>
+                  Сверка мебели подтверждена. Завершение зафиксирует
+                  неизменяемый снимок результатов.
+                </CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-col gap-3 text-sm">
-                {finding.currentSnapshot?.status === "RENTED" ? (
-                  <p>
-                    <span className="text-muted-foreground">Арендатор: </span>
-                    {finding.currentSnapshot.tenant?.trim() || "не указан"}
+              <CardContent className="flex flex-col gap-3">
+                {unresolvedConflicts ? (
+                  <p role="alert" className="text-sm text-destructive">
+                    Урегулируйте все конфликты реестра перед завершением
+                    инвентаризации.
                   </p>
                 ) : null}
-                <ul className="flex flex-col gap-2">
-                  {finding.conflicts.map((conflict) => (
-                    <li key={conflict.code} className="rounded-md border p-3">
-                      <p className="font-medium">{conflict.message}</p>
-                      <div
-                        className="mt-2 grid grid-cols-[1fr_auto_1fr] items-center gap-2 text-muted-foreground"
-                        aria-label="Было → Стало"
+                {completionMutation.error ? (
+                  <p role="alert" className="text-sm text-destructive">
+                    {errorMessage(completionMutation.error)}
+                  </p>
+                ) : null}
+                <div className="flex flex-wrap gap-2">
+                  {withWork.length > 0 ? (
+                    <>
+                      <Button
+                        type="button"
+                        disabled={
+                          completionMutation.isPending ||
+                          completionPreviewQuery.isFetching ||
+                          unresolvedConflicts
+                        }
+                        onClick={() => completionMutation.mutate(true)}
                       >
-                        <p>
-                          <span className="block text-xs">Было</span>
-                          <span className="text-foreground">
-                            {conflictValue(conflict.expected)}
-                          </span>
-                        </p>
-                        <span aria-hidden="true">→</span>
-                        <p>
-                          <span className="block text-xs">Стало</span>
-                          <span className="text-foreground">
-                            {conflictValue(conflict.actual)}
-                          </span>
-                        </p>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-                <div className="grid gap-2 sm:grid-cols-3">
-                  <Button
-                    type="button"
-                    className="w-full"
-                    disabled={
-                      resolutionMutation.isPending ||
-                      finding.currentSnapshot === null
-                    }
-                    onClick={() => {
-                      resolutionMutation.reset()
-                      resolutionMutation.mutate({
-                        finding,
-                        strategy: "ACCEPT_REGISTRY",
-                        reason: null,
-                      })
-                    }}
-                  >
-                    Принять реестр
-                  </Button>
-                  <Button
-                    type="button"
-                    className="w-full"
-                    variant="secondary"
-                    disabled={resolutionMutation.isPending}
-                    onClick={() => {
-                      resolutionMutation.reset()
-                      setKeepInspectionFinding(finding)
-                      setKeepInspectionReason("")
-                      setKeepInspectionSubmitted(false)
-                    }}
-                  >
-                    Оставить данные осмотра
-                  </Button>
-                  <Button
-                    type="button"
-                    className="w-full"
-                    variant="outline"
-                    disabled={resolutionMutation.isPending}
-                    onClick={() =>
-                      navigate(
-                        `/inventory/${reviewedSession.id}?findingId=${finding.id}`,
-                        workspaceEntryNavigationOptions
-                      )
-                    }
-                  >
-                    Дополнить осмотр
-                  </Button>
+                        <HugeiconsIcon
+                          icon={SentIcon}
+                          data-icon="inline-start"
+                        />
+                        Завершить и передать работы
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={
+                          completionMutation.isPending ||
+                          completionPreviewQuery.isFetching ||
+                          unresolvedConflicts
+                        }
+                        onClick={() => completionMutation.mutate(false)}
+                      >
+                        Завершить без передачи
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      type="button"
+                      disabled={
+                        completionMutation.isPending ||
+                        completionPreviewQuery.isFetching ||
+                        unresolvedConflicts
+                      }
+                      onClick={() => completionMutation.mutate(false)}
+                    >
+                      Завершить
+                    </Button>
+                  )}
                 </div>
               </CardContent>
             </Card>
-          ))}
-          {resolutionMutation.error && !keepInspectionFinding ? (
-            <p role="alert" className="text-sm text-destructive">
-              {errorMessage(resolutionMutation.error)}
-            </p>
           ) : null}
-        </section>
-      ) : null}
-      <InventoryFindingsList
-        findings={reviewedSession.findings}
-        canInspect={false}
-        statusMode="COMPLETION"
-        onOpen={(finding) =>
-          navigate(
-            `/inventory/${reviewedSession.id}?findingId=${finding.id}`,
-            workspaceEntryNavigationOptions
-          )
-        }
-      />
+        </>
+      )}
       <Dialog
         open={keepInspectionFinding !== null}
         onOpenChange={(open) => {
@@ -1114,10 +1413,11 @@ export function InventoryFinishPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Оставить данные осмотра</DialogTitle>
+            <DialogTitle>Применить данные инвентаризации</DialogTitle>
             <DialogDescription>
-              Укажите причину, по которой данные осмотра должны иметь приоритет
-              над актуальным реестром.
+              Укажите причину, по которой наблюдения инвентаризации должны быть
+              применены вместо актуальных данных реестра. Работы и материалы
+              этого осмотра будут сохранены для передачи.
             </DialogDescription>
           </DialogHeader>
           <Field
@@ -1161,7 +1461,8 @@ export function InventoryFinishPage() {
                 const reason = keepInspectionReason.trim()
                 if (!keepInspectionFinding || !reason) return
                 resolutionMutation.mutate({
-                  finding: keepInspectionFinding,
+                  reviewSession: keepInspectionFinding.reviewSession,
+                  finding: keepInspectionFinding.finding,
                   strategy: "KEEP_INSPECTION",
                   reason,
                 })
@@ -1282,6 +1583,9 @@ export function InventoryHistoryDetailPage() {
   const unpublished = session.findings.some(
     (item) => item.lines.length > 0 && item.publicationStatus !== "PUBLISHED"
   )
+  const furnitureReconciliation = inventoryFurnitureReconciliationPresentation(
+    session.furnitureReconciliationState
+  )
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto">
       <PageToolbar>
@@ -1348,6 +1652,26 @@ export function InventoryHistoryDetailPage() {
           <Badge variant="secondary">
             {inventoryPublicationLabel(session)}
           </Badge>
+        </CardContent>
+      </Card>
+      <Card
+        size="sm"
+        className={
+          furnitureReconciliation.problem ? "border-destructive" : undefined
+        }
+      >
+        <CardHeader>
+          <CardTitle>Статус сверки мебели</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col items-start gap-2">
+          <Badge variant={furnitureReconciliation.badgeVariant}>
+            {furnitureReconciliation.label}
+          </Badge>
+          {furnitureReconciliation.problem ? (
+            <p role="alert" className="text-sm text-destructive">
+              {furnitureReconciliation.problem}
+            </p>
+          ) : null}
         </CardContent>
       </Card>
     </div>

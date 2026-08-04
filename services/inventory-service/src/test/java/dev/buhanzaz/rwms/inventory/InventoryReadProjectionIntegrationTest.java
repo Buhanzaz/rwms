@@ -9,6 +9,7 @@ import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.CompletionRisk;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.ConflictView;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.CreateFindingAssetRequest;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.FindingView;
+import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.FurnitureReviewView;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.PageResponse;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.Observation;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.PlanLineInput;
@@ -19,11 +20,14 @@ import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.ResolveNumberRe
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.RevisionExpectation;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.RetryPublicationRequest;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.SaveInspectionRequest;
+import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.SaveFurnitureReviewRequest;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.SessionSummary;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.SessionView;
+import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.StartFurnitureReviewRequest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.inventory.domain.ConflictResolutionStrategy;
@@ -493,14 +497,18 @@ class InventoryReadProjectionIntegrationTest {
               assertThat(line.quantity()).isEqualTo("2");
             });
 
+    FurnitureReviewState furnitureReview =
+        confirmEmptyFurnitureReview(
+            inventoryId,
+            warehouseId,
+            List.of(new RevisionExpectation(finding.getId(), saved.findingRevision())));
     CompletionPreview preview =
         service.preview(
             jwt(),
             inventoryId,
             UUID.randomUUID(),
             new CompletionPreviewRequest(
-                0,
-                List.of(new RevisionExpectation(finding.getId(), saved.findingRevision()))));
+                furnitureReview.sessionRevision(), furnitureReview.findingRevisions()));
     assertThat(preview.statistics().workLineCount()).isZero();
     assertThat(preview.statistics().materialLineCount()).isOne();
     assertThat(preview.statistics().materialTotalMinor()).isEqualTo(250);
@@ -962,13 +970,18 @@ class InventoryReadProjectionIntegrationTest {
                     new InventoryDependencyGateway.RepairAssetSnapshot(
                         assetId, List.of()))));
 
+    FurnitureReviewState furnitureReview =
+        confirmEmptyFurnitureReview(
+            inventoryId,
+            warehouseId,
+            List.of(new RevisionExpectation(finding.getId(), finding.getRevision())));
     CompletionPreview preview =
         service.preview(
             jwt(),
             inventoryId,
             UUID.randomUUID(),
             new CompletionPreviewRequest(
-                0, List.of(new RevisionExpectation(finding.getId(), finding.getRevision()))));
+                furnitureReview.sessionRevision(), furnitureReview.findingRevisions()));
 
     assertThat(preview.validatedFindings()).singleElement();
     assertThat(preview.validationSha256()).isNotEqualTo(providerDigest);
@@ -1039,16 +1052,18 @@ class InventoryReadProjectionIntegrationTest {
                     new InventoryDependencyGateway.RepairAssetSnapshot(
                         assetId, List.of()))));
 
+    FurnitureReviewState furnitureReview =
+        confirmEmptyFurnitureReview(
+            inventoryId,
+            warehouseId,
+            List.of(new RevisionExpectation(finding.getId(), finding.getRevision())));
     CompletionPreview versionPreview =
         service.preview(
             jwt(),
             inventoryId,
             UUID.randomUUID(),
             new CompletionPreviewRequest(
-                0,
-                List.of(
-                    new RevisionExpectation(
-                        finding.getId(), finding.getRevision()))));
+                furnitureReview.sessionRevision(), furnitureReview.findingRevisions()));
 
     assertThat(versionPreview.validatedFindings().getFirst().conflicts()).isEmpty();
     assertThat(versionPreview.risks()).isEmpty();
@@ -1080,10 +1095,7 @@ class InventoryReadProjectionIntegrationTest {
             inventoryId,
             UUID.randomUUID(),
             new CompletionPreviewRequest(
-                0,
-                List.of(
-                    new RevisionExpectation(
-                        finding.getId(), finding.getRevision()))));
+                furnitureReview.sessionRevision(), furnitureReview.findingRevisions()));
 
     assertThat(laterTechnicalVersionPreview.validationSha256())
         .isEqualTo(versionPreview.validationSha256());
@@ -1114,10 +1126,7 @@ class InventoryReadProjectionIntegrationTest {
             inventoryId,
             UUID.randomUUID(),
             new CompletionPreviewRequest(
-                0,
-                List.of(
-                    new RevisionExpectation(
-                        finding.getId(), finding.getRevision()))));
+                furnitureReview.sessionRevision(), furnitureReview.findingRevisions()));
 
     assertThat(changedPreview.validatedFindings().getFirst().conflicts())
         .extracting(ConflictView::code)
@@ -1132,8 +1141,8 @@ class InventoryReadProjectionIntegrationTest {
             inventoryId,
             finding.getId(),
             new ResolveConflictRequest(
-                0,
-                finding.getRevision(),
+                furnitureReview.sessionRevision(),
+                furnitureReview.findingRevision(finding.getId()),
                 ConflictResolutionStrategy.KEEP_INSPECTION,
                 "Данные осмотра подтверждены кладовщиком"));
     assertThat(keptInspection.conflicts()).isEmpty();
@@ -1142,16 +1151,19 @@ class InventoryReadProjectionIntegrationTest {
     assertThat(keptInspection.conflictResolution().strategy())
         .isEqualTo(ConflictResolutionStrategy.KEEP_INSPECTION);
 
+    FurnitureReviewState resumedFurnitureReview =
+        confirmEmptyFurnitureReview(
+            inventoryId,
+            warehouseId,
+            List.of(new RevisionExpectation(finding.getId(), keptInspection.findingRevision())));
     CompletionPreview resolvedPreview =
         service.preview(
             jwt(),
             inventoryId,
             UUID.randomUUID(),
             new CompletionPreviewRequest(
-                0,
-                List.of(
-                    new RevisionExpectation(
-                        finding.getId(), keptInspection.findingRevision()))));
+                resumedFurnitureReview.sessionRevision(),
+                resumedFurnitureReview.findingRevisions()));
     assertThat(resolvedPreview.risks()).isEmpty();
 
     InventoryDependencyGateway.ValidationItem laterChange =
@@ -1180,10 +1192,8 @@ class InventoryReadProjectionIntegrationTest {
             inventoryId,
             UUID.randomUUID(),
             new CompletionPreviewRequest(
-                0,
-                List.of(
-                    new RevisionExpectation(
-                        finding.getId(), keptInspection.findingRevision()))));
+                resumedFurnitureReview.sessionRevision(),
+                resumedFurnitureReview.findingRevisions()));
     assertThat(staleResolutionPreview.validatedFindings().getFirst().conflicts())
         .extracting(ConflictView::code)
         .containsExactly("STATUS_CHANGED");
@@ -1266,16 +1276,18 @@ class InventoryReadProjectionIntegrationTest {
                     new InventoryDependencyGateway.RepairAssetSnapshot(
                         assetId, List.of()))));
 
+    FurnitureReviewState furnitureReview =
+        confirmEmptyFurnitureReview(
+            inventoryId,
+            warehouseId,
+            List.of(new RevisionExpectation(finding.getId(), finding.getRevision())));
     CompletionPreview preview =
         service.preview(
             jwt(),
             inventoryId,
             UUID.randomUUID(),
             new CompletionPreviewRequest(
-                0,
-                List.of(
-                    new RevisionExpectation(
-                        finding.getId(), finding.getRevision()))));
+                furnitureReview.sessionRevision(), furnitureReview.findingRevisions()));
 
     InventoryDependencyGateway.ValidationItem completionItem =
         new InventoryDependencyGateway.ValidationItem(
@@ -1352,16 +1364,18 @@ class InventoryReadProjectionIntegrationTest {
                 canonicalJson.sha256(changedItems),
                 changedItems));
 
+    FurnitureReviewState furnitureReview =
+        confirmEmptyFurnitureReview(
+            inventoryId,
+            warehouseId,
+            List.of(new RevisionExpectation(finding.getId(), finding.getRevision())));
     CompletionPreview preview =
         service.preview(
             jwt(),
             inventoryId,
             UUID.randomUUID(),
             new CompletionPreviewRequest(
-                0,
-                List.of(
-                    new RevisionExpectation(
-                        finding.getId(), finding.getRevision()))));
+                furnitureReview.sessionRevision(), furnitureReview.findingRevisions()));
 
     assertThat(preview.validatedFindings().getFirst().conflicts()).isEmpty();
     assertThat(preview.validatedFindings().getFirst().currentSnapshot().status())
@@ -1712,6 +1726,33 @@ class InventoryReadProjectionIntegrationTest {
     return values.stream().filter(value -> value.id().equals(findingId)).findFirst().orElseThrow();
   }
 
+  private FurnitureReviewState confirmEmptyFurnitureReview(
+      UUID inventoryId, UUID warehouseId, List<RevisionExpectation> findingRevisions) {
+    String snapshotSha256 = "f".repeat(64);
+    when(dependencies.furnitureSnapshot(eq(warehouseId), any()))
+        .thenReturn(
+            new InventoryDependencyGateway.FurnitureSnapshot(
+                warehouseId, snapshotSha256, List.of()));
+    long sessionRevision = service.session(jwt(), inventoryId).sessionRevision();
+    FurnitureReviewView started =
+        service.startFurnitureReview(
+            jwt(),
+            inventoryId,
+            UUID.randomUUID(),
+            new StartFurnitureReviewRequest(sessionRevision, findingRevisions, true));
+    FurnitureReviewView confirmed =
+        service.saveFurnitureReview(
+            jwt(),
+            inventoryId,
+            new SaveFurnitureReviewRequest(
+                started.sessionRevision(), snapshotSha256, List.of()));
+    List<RevisionExpectation> updatedFindingRevisions =
+        findings.findAllByInventoryIdAndMembershipActiveTrueOrderById(inventoryId).stream()
+            .map(value -> new RevisionExpectation(value.getId(), value.getRevision()))
+            .toList();
+    return new FurnitureReviewState(confirmed.sessionRevision(), updatedFindingRevisions);
+  }
+
   private void seedSession(UUID inventoryId, UUID warehouseId) {
     OffsetDateTime current = OffsetDateTime.now(ZoneOffset.UTC);
     UUID operationId = UUID.randomUUID();
@@ -1816,4 +1857,15 @@ class InventoryReadProjectionIntegrationTest {
       UUID readyAssetId,
       UUID untouchedFindingId,
       UUID untouchedAssetId) {}
+
+  private record FurnitureReviewState(
+      long sessionRevision, List<RevisionExpectation> findingRevisions) {
+    long findingRevision(UUID findingId) {
+      return findingRevisions.stream()
+          .filter(value -> value.findingId().equals(findingId))
+          .findFirst()
+          .orElseThrow()
+          .expectedFindingRevision();
+    }
+  }
 }

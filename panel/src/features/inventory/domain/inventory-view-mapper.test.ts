@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   applyInventoryCompletionPreview,
+  toInventoryFurnitureReviewView,
   toInventoryFindingView,
   toInventorySessionView,
 } from "@/features/inventory/domain/inventory-view-mapper"
@@ -174,6 +175,8 @@ const session: InventorySessionDetail = {
   startedAt: "2026-07-22T08:00:00Z",
   terminalAt: "2026-07-22T09:00:00Z",
   publicationState: "SUCCEEDED",
+  reviewStage: "FURNITURE",
+  furnitureReconciliationState: "SUCCEEDED",
   statistics,
   cancellation: null,
   membershipMovements: [
@@ -281,6 +284,8 @@ describe("inventory service view mapper", () => {
 
     expect(result.author.displayName).toBe("Кладовщик Иван")
     expect(result.version).toBe(6)
+    expect(result.reviewStage).toBe("FURNITURE")
+    expect(result.furnitureReconciliationState).toBe("SUCCEEDED")
     expect(result.findings[0]).toMatchObject({
       currentSnapshot: { status: "RENTED" },
       reconciliationStatus: "CONFLICT",
@@ -293,5 +298,57 @@ describe("inventory service view mapper", () => {
         status: "WAREHOUSE",
       }),
     ])
+  })
+
+  it("maps the authoritative furniture review without a second browser data source", () => {
+    const review = toInventoryFurnitureReviewView({
+      inventoryId: session.id,
+      sessionRevision: 6,
+      stage: "FURNITURE",
+      assetSnapshotSha256: "e".repeat(64),
+      reviewSha256: null,
+      confirmed: false,
+      items: [
+        {
+          equipmentId: "00000000-0000-4000-8000-000000000230",
+          catalogVersion: 231,
+          equipmentName: "Стол",
+          currentStockQuantity: 4,
+          observedStockQuantity: 3,
+          cabins: [
+            {
+              findingId: finding.id,
+              assetId: finding.assetId!,
+              cabinNumber: finding.displayCanonicalNumber,
+              status: "WAREHOUSE",
+              currentQuantity: 1,
+              observedQuantity: 0,
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(review).toEqual({
+      inventoryId: session.id,
+      sessionRevision: 6,
+      stage: "FURNITURE",
+      assetSnapshotSha256: "e".repeat(64),
+      reviewSha256: null,
+      confirmed: false,
+      items: [
+        expect.objectContaining({
+          equipmentName: "Стол",
+          currentStockQuantity: 4,
+          observedStockQuantity: 3,
+          cabins: [
+            expect.objectContaining({
+              findingId: finding.id,
+              observedQuantity: 0,
+            }),
+          ],
+        }),
+      ],
+    })
   })
 })

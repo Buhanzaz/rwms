@@ -22,7 +22,8 @@ class InventoryPersistenceSourcePolicyTest {
           "eventing/InventoryAssetRetryStore.java",
           "eventing/InventoryMediaInboxProcessor.java",
           "eventing/InventoryMediaRetryStore.java",
-          "eventing/InventoryOutboxStore.java");
+          "eventing/InventoryOutboxStore.java",
+          "service/InventoryFrozenPlanFingerprint.java");
   private static final Pattern BUSINESS_TABLE_SQL =
       Pattern.compile(
           "(?is)\\b(?:from|join|into|update|delete\\s+from|merge\\s+into)\\s+(?:public\\.)?"
@@ -41,7 +42,7 @@ class InventoryPersistenceSourcePolicyTest {
     }
     assertThat(lowLevelSqlUsers)
         .as(
-            "Only exact CAS/outbox/inbox/checkpoint/DLT adapters may use Spring JDBC or java.sql")
+            "Only exact CAS/outbox/inbox/checkpoint/DLT or immutable JSONB canonicalization adapters may use Spring JDBC or java.sql")
         .containsExactlyInAnyOrderElementsOf(LOW_LEVEL_SQL_ADAPTERS);
   }
 

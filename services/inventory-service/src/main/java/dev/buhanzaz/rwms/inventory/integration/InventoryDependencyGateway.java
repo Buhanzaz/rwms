@@ -25,6 +25,11 @@ public interface InventoryDependencyGateway {
 
   RepairSnapshots repairSnapshots(List<UUID> assetIds);
 
+  FurnitureSnapshot furnitureSnapshot(UUID warehouseId, List<UUID> assetIds);
+
+  void reconcileFurniture(
+      UUID inventoryId, UUID idempotencyKey, FurnitureReconciliationRequest request);
+
   FrozenPlan freezePlan(UUID idempotencyKey, JsonNode request);
 
   RepairUpsert upsertRepair(
@@ -139,6 +144,37 @@ public interface InventoryDependencyGateway {
   record RepairAssetSnapshot(UUID assetId, List<RepairRegistryFact> repairs) {}
 
   record RepairSnapshots(List<RepairAssetSnapshot> assets) {}
+
+  record FurnitureSnapshot(
+      UUID warehouseId, String snapshotSha256, List<FurnitureSnapshotItem> items) {}
+
+  record FurnitureSnapshotItem(
+      UUID equipmentId,
+      long catalogVersion,
+      String equipmentName,
+      long currentStockQuantity,
+      List<FurnitureSnapshotCabin> cabins) {}
+
+  record FurnitureSnapshotCabin(
+      UUID assetId,
+      long assetVersion,
+      String displayCanonicalNumber,
+      String status,
+      long currentQuantity) {}
+
+  record FurnitureReconciliationRequest(
+      UUID warehouseId,
+      String expectedSnapshotSha256,
+      String reviewSha256,
+      List<FurnitureReconciliationItem> items) {}
+
+  record FurnitureReconciliationItem(
+      UUID equipmentId,
+      long catalogVersion,
+      long stockQuantity,
+      List<FurnitureReconciliationCabin> cabins) {}
+
+  record FurnitureReconciliationCabin(UUID assetId, long quantity) {}
 
   record FrozenPlan(
       UUID warehouseId,

@@ -30,6 +30,25 @@ class InventoryDomainStateMachineTest {
   }
 
   @Test
+  void registryConflictResolutionCanInvalidateFurnitureReviewWithoutChangingLifecycle() {
+    InventorySession session = session();
+
+    session.beginFurnitureReview("1".repeat(64), "{\"snapshot\":true}");
+    session.confirmFurnitureReview(
+        "1".repeat(64), "2".repeat(64), "{\"items\":[]}", ACTOR);
+    session.restartCabinReview();
+
+    assertThat(session.getLifecycle()).isEqualTo(SessionLifecycle.ACTIVE);
+    assertThat(session.getReviewStage()).isEqualTo(InventoryReviewStage.CABINS);
+    assertThat(session.getFurnitureAssetSnapshotSha256()).isNull();
+    assertThat(session.getFurnitureAssetSnapshot()).isNull();
+    assertThat(session.getFurnitureReviewSha256()).isNull();
+    assertThat(session.getFurnitureStockObservation()).isNull();
+    assertThat(session.getFurnitureReviewedByActorRef()).isNull();
+    assertThat(session.getFurnitureReviewedAt()).isNull();
+  }
+
+  @Test
   void findingKeepsObservationPresenceAndRequiresFrozenWorkPlan() {
     UUID warehouseId = UUID.randomUUID();
     InventoryFinding finding =
@@ -171,6 +190,58 @@ class InventoryDomainStateMachineTest {
     assertThat(finding.getInspectionPassportSnapshot()).isEqualTo("{\"finish\":\"OSB\"}");
     assertThat(finding.getConflictResolutionStrategy())
         .isEqualTo(ConflictResolutionStrategy.ACCEPT_REGISTRY);
+  }
+
+  @Test
+  void acceptingRegistryDropsStagedPlanButKeepingInspectionRetainsItsFingerprint() {
+    UUID warehouseId = UUID.randomUUID();
+    InventoryFinding finding =
+        InventoryFinding.unexpected(
+            UUID.randomUUID(),
+            FindingOrigin.UNEXPECTED_EXISTING,
+            UUID.randomUUID(),
+            1L,
+            warehouseId,
+            "WAREHOUSE",
+            null,
+            "БЫТ-302",
+            "БЫТ302",
+            ReconciliationState.MATCHED,
+            ACTOR);
+    String planFingerprint = "3".repeat(64);
+    finding.saveInspection(
+        InspectionState.WORK_STAGED,
+        ReconciliationState.MATCHED,
+        ObservationPresence.EXPLICIT_EMPTY,
+        "{}",
+        ObservationPresence.EXPLICIT_EMPTY,
+        "[]",
+        planFingerprint,
+        "Замена пола",
+        ACTOR);
+    finding.refreshCurrentAsset(
+        2L,
+        warehouseId,
+        "REPAIR",
+        null,
+        "БЫТ-302",
+        "{}",
+        "[]",
+        "[]",
+        ReconciliationState.CONFLICT);
+
+    finding.resolveConflict(
+        ConflictResolutionStrategy.KEEP_INSPECTION,
+        "4".repeat(64),
+        "Работы остаются актуальными",
+        ACTOR);
+    assertThat(finding.getInspection()).isEqualTo(InspectionState.WORK_STAGED);
+    assertThat(finding.getMaintenancePlanFingerprintSha256()).isEqualTo(planFingerprint);
+
+    finding.resolveConflict(
+        ConflictResolutionStrategy.ACCEPT_REGISTRY, "5".repeat(64), null, ACTOR);
+    assertThat(finding.getInspection()).isEqualTo(InspectionState.READY);
+    assertThat(finding.getMaintenancePlanFingerprintSha256()).isNull();
   }
 
   private InventorySession session() {

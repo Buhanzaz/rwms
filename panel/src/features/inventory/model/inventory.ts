@@ -10,6 +10,14 @@ import type { RentalItemStatus } from "@/features/rental-items/model/rental-item
 
 export type InventoryPermission = "VIEW" | "EDIT" | "MANAGE"
 export type InventorySessionStatus = "ACTIVE" | "COMPLETED" | "CANCELLED"
+export type InventoryReviewStage = "CABINS" | "FURNITURE"
+export type InventoryFurnitureReconciliationState =
+  | "NOT_REQUIRED"
+  | "READY"
+  | "PENDING"
+  | "SUCCEEDED"
+  | "TRANSIENT_FAILED"
+  | "BLOCKED"
 export type InventoryFindingOrigin =
   "EXPECTED" | "ADDED_NEW" | "ADDED_USED" | "UNEXPECTED_EXISTING"
 export type InventoryInspectionStatus =
@@ -191,6 +199,36 @@ export type InventorySessionDto = {
   membershipMovements: InventoryMembershipMovementDto[]
   statistics: InventoryStatisticsDto | null
   publicationStatus: InventoryPublicationStatus
+  reviewStage: InventoryReviewStage
+  furnitureReconciliationState: InventoryFurnitureReconciliationState
+}
+
+export type InventoryFurnitureReviewCabinDto = {
+  findingId: string
+  assetId: string
+  cabinNumber: string
+  status: string
+  currentQuantity: number
+  observedQuantity: number
+}
+
+export type InventoryFurnitureReviewItemDto = {
+  equipmentId: string
+  catalogVersion: number
+  equipmentName: string
+  currentStockQuantity: number
+  observedStockQuantity: number
+  cabins: InventoryFurnitureReviewCabinDto[]
+}
+
+export type InventoryFurnitureReviewDto = {
+  inventoryId: string
+  sessionRevision: number
+  stage: InventoryReviewStage
+  assetSnapshotSha256: string
+  reviewSha256: string | null
+  confirmed: boolean
+  items: InventoryFurnitureReviewItemDto[]
 }
 
 export type InventoryCreateRentalItem = {

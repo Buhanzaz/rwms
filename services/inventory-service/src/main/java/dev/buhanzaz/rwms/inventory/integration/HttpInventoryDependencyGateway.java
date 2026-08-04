@@ -263,6 +263,82 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
     return response;
   }
 
+  @Override
+  public FurnitureSnapshot furnitureSnapshot(UUID warehouseId, List<UUID> assetIds) {
+    FurnitureSnapshot response =
+        post(
+            assetBase + "/api/internal/asset/v1/inventory/furniture-snapshots",
+            null,
+            new FurnitureSnapshotRequest(warehouseId, assetIds),
+            FurnitureSnapshot.class,
+            ASSET_CLIENT,
+            ASSET_SCOPE);
+    if (!warehouseId.equals(response.warehouseId())
+        || !sha256(response.snapshotSha256())
+        || response.items() == null) {
+      throw malformed("Asset-service returned malformed furniture snapshot");
+    }
+    Set<UUID> requested = Set.copyOf(assetIds);
+    Set<UUID> equipmentIds = new java.util.HashSet<>();
+    for (FurnitureSnapshotItem item : response.items()) {
+      if (item == null
+          || item.equipmentId() == null
+          || item.catalogVersion() < 0
+          || item.equipmentName() == null
+          || item.equipmentName().isBlank()
+          || item.currentStockQuantity() < 0
+          || item.cabins() == null
+          || !equipmentIds.add(item.equipmentId())) {
+        throw malformed("Asset-service returned malformed furniture snapshot item");
+      }
+      Set<UUID> cabinIds = new java.util.HashSet<>();
+      for (FurnitureSnapshotCabin cabin : item.cabins()) {
+        if (cabin == null
+            || cabin.assetId() == null
+            || !requested.contains(cabin.assetId())
+            || cabin.assetVersion() < 0
+            || cabin.displayCanonicalNumber() == null
+            || cabin.displayCanonicalNumber().isBlank()
+            || cabin.status() == null
+            || cabin.status().isBlank()
+            || cabin.currentQuantity() < 0
+            || !cabinIds.add(cabin.assetId())) {
+          throw malformed("Asset-service returned malformed furniture cabin snapshot");
+        }
+      }
+    }
+    return response;
+  }
+
+  @Override
+  public void reconcileFurniture(
+      UUID inventoryId, UUID idempotencyKey, FurnitureReconciliationRequest request) {
+    if (inventoryId == null
+        || idempotencyKey == null
+        || request == null
+        || request.warehouseId() == null
+        || !sha256(request.expectedSnapshotSha256())
+        || !sha256(request.reviewSha256())
+        || request.items() == null) {
+      throw malformed("Furniture reconciliation request is incomplete");
+    }
+    try {
+      client
+          .put()
+          .uri(
+              assetBase
+                  + "/api/internal/asset/v1/inventory/furniture-reconciliations/"
+                  + inventoryId)
+          .header("Idempotency-Key", idempotencyKey.toString())
+          .header(HttpHeaders.AUTHORIZATION, bearer(ASSET_CLIENT, ASSET_SCOPE))
+          .body(request)
+          .retrieve()
+          .toBodilessEntity();
+    } catch (RuntimeException exception) {
+      throw dependencyFailure(exception);
+    }
+  }
+
   private boolean malformedRepairAssetSnapshot(RepairAssetSnapshot asset) {
     if (asset.assetId() == null || asset.repairs() == null) return true;
     UUID previous = null;
@@ -439,6 +515,8 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
       throw malformed("Dependency response has invalid " + field);
     }
   }
+
+  private record FurnitureSnapshotRequest(UUID warehouseId, List<UUID> assetIds) {}
 
   private record NumberRequest(UUID warehouseId, String number) {}
 

@@ -14,6 +14,9 @@ public interface FindingPlanSnapshotRepository
   Optional<FindingPlanSnapshot> findByFindingIdAndFindingRevision(
       UUID findingId, long findingRevision);
 
+  Optional<FindingPlanSnapshot> findFirstByFindingIdAndFingerprintOrderByFindingRevisionDesc(
+      UUID findingId, String fingerprint);
+
   @Query(
       """
       select snapshot from FindingPlanSnapshot snapshot, InventoryFinding finding

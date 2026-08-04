@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { CurrentUser } from "@/features/auth/auth-model"
 import type {
   InventoryFindingDto,
+  InventoryFurnitureReviewDto,
   InventorySessionDto,
   InventoryStatisticsDto,
 } from "@/features/inventory/model/inventory"
@@ -20,16 +21,23 @@ import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/re
 
 const inventoryApi = vi.hoisted(() => ({
   completeInventory: vi.fn(),
+  getInventoryFurnitureReview: vi.fn(),
   getInventory: vi.fn(),
   previewInventoryCompletion: vi.fn(),
   resolveInventoryFindingConflict: vi.fn(),
+  saveInventoryFurnitureReview: vi.fn(),
   saveInventoryFinding: vi.fn(),
+  startInventoryFurnitureReview: vi.fn(),
   subscribeInventory: vi.fn(() => () => undefined),
 }))
 const inspectionWorkspace = vi.hoisted(() => ({
   readyReferences: [] as Array<{ mediaId: string; generation: number }>,
 }))
-const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
+const toast = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+  warning: vi.fn(),
+}))
 const auth = vi.hoisted(() => ({ useAuth: vi.fn() }))
 const warehouse = vi.hoisted(() => ({ useWarehouse: vi.fn() }))
 const viewport = vi.hoisted(() => ({ isMobile: false }))
@@ -49,10 +57,13 @@ vi.mock("@/features/inventory/api/inventory-api", async () => {
     ...actual,
     getInventory: inventoryApi.getInventory,
     completeInventory: inventoryApi.completeInventory,
+    getInventoryFurnitureReview: inventoryApi.getInventoryFurnitureReview,
     previewInventoryCompletion: inventoryApi.previewInventoryCompletion,
     resolveInventoryFindingConflict:
       inventoryApi.resolveInventoryFindingConflict,
+    saveInventoryFurnitureReview: inventoryApi.saveInventoryFurnitureReview,
     saveInventoryFinding: inventoryApi.saveInventoryFinding,
+    startInventoryFurnitureReview: inventoryApi.startInventoryFurnitureReview,
     subscribeInventory: inventoryApi.subscribeInventory,
   }
 })
@@ -156,6 +167,7 @@ vi.mock("@/features/repair-estimates/repair-work-completion-dialog", () => ({
 
 import {
   InventoryFinishPage,
+  InventoryHistoryDetailPage,
   InventorySessionPage,
 } from "@/features/inventory/inventory-pages"
 
@@ -303,6 +315,41 @@ function activeSession(
     membershipMovements: [],
     statistics: null,
     publicationStatus: "NOT_REQUESTED",
+    reviewStage: "CABINS",
+    furnitureReconciliationState: "NOT_REQUIRED",
+    ...overrides,
+  }
+}
+
+function furnitureReview(
+  overrides: Partial<InventoryFurnitureReviewDto> = {}
+): InventoryFurnitureReviewDto {
+  return {
+    inventoryId: INVENTORY_ID,
+    sessionRevision: 2,
+    stage: "FURNITURE",
+    assetSnapshotSha256: "a".repeat(64),
+    reviewSha256: null,
+    confirmed: false,
+    items: [
+      {
+        equipmentId: "77777777-7777-4777-8777-777777777777",
+        catalogVersion: 888,
+        equipmentName: "Стол",
+        currentStockQuantity: 2,
+        observedStockQuantity: 2,
+        cabins: [
+          {
+            findingId: FINDING_ID,
+            assetId: "55555555-5555-4555-8555-555555555555",
+            cabinNumber: "БЫТ-001",
+            status: "WAREHOUSE",
+            currentQuantity: 1,
+            observedQuantity: 1,
+          },
+        ],
+      },
+    ],
     ...overrides,
   }
 }
@@ -328,6 +375,10 @@ function renderPage(
           <Route
             path="/inventory/:inventoryId/finish"
             element={<InventoryFinishPage />}
+          />
+          <Route
+            path="/inventory/history/:inventoryId"
+            element={<InventoryHistoryDetailPage />}
           />
         </Routes>
       </QueryClientProvider>
@@ -751,6 +802,313 @@ describe("InventoryFinishPage conflict resolution", () => {
     }
   }
 
+  it("moves from cabin review without a completion preview and sends the incomplete acknowledgement", async () => {
+    const user = userEvent.setup()
+    const reviewed = activeSession(finding("FREE"), { version: 8 })
+    inventoryApi.getInventory.mockResolvedValue(reviewed)
+    inventoryApi.startInventoryFurnitureReview.mockResolvedValue(
+      furnitureReview()
+    )
+
+    renderPage(`/inventory/${INVENTORY_ID}/finish`)
+
+    const transition = (await screen.findByRole("button", {
+      name: "Завершить проверку бытовок и перейти к мебели",
+    })) as HTMLButtonElement
+    expect(transition.disabled).toBe(true)
+    expect(screen.queryByRole("button", { name: "Завершить" })).toBeNull()
+
+    await user.click(screen.getByRole("checkbox"))
+    await user.click(transition)
+
+    await waitFor(() =>
+      expect(inventoryApi.startInventoryFurnitureReview).toHaveBeenCalledWith({
+        session: reviewed,
+        acknowledgeIncomplete: true,
+      })
+    )
+    expect(inventoryApi.previewInventoryCompletion).not.toHaveBeenCalled()
+  })
+
+  it("does not acknowledge incomplete cabins when every cabin has been inspected", async () => {
+    const user = userEvent.setup()
+    const reviewed = activeSession(
+      finding("FREE", { inspectionStatus: "READY" }),
+      { version: 8 }
+    )
+    inventoryApi.getInventory.mockResolvedValue(reviewed)
+    inventoryApi.startInventoryFurnitureReview.mockResolvedValue(
+      furnitureReview()
+    )
+
+    renderPage(`/inventory/${INVENTORY_ID}/finish`)
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Завершить проверку бытовок и перейти к мебели",
+      })
+    )
+
+    await waitFor(() =>
+      expect(inventoryApi.startInventoryFurnitureReview).toHaveBeenCalledWith({
+        session: reviewed,
+        acknowledgeIncomplete: false,
+      })
+    )
+  })
+
+  it("shows completion actions only after the full furniture review is confirmed", async () => {
+    const user = userEvent.setup()
+    const staged = activeSession(
+      finding("FREE", { inspectionStatus: "READY" }),
+      {
+        version: 2,
+        reviewStage: "FURNITURE",
+        furnitureReconciliationState: "READY",
+      }
+    )
+    const pendingReview = furnitureReview()
+    const confirmedReview = furnitureReview({
+      confirmed: true,
+      reviewSha256: "b".repeat(64),
+    })
+    inventoryApi.getInventory.mockResolvedValue(staged)
+    inventoryApi.getInventoryFurnitureReview
+      .mockResolvedValueOnce(pendingReview)
+      .mockResolvedValue(confirmedReview)
+    inventoryApi.saveInventoryFurnitureReview.mockResolvedValue(confirmedReview)
+    inventoryApi.previewInventoryCompletion.mockResolvedValue(staged)
+
+    renderPage(`/inventory/${INVENTORY_ID}/finish`)
+
+    expect(await screen.findByText("Сверка мебели")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Завершить" })).toBeNull()
+
+    await user.click(
+      screen.getByRole("button", { name: "Сохранить сверку мебели" })
+    )
+
+    await waitFor(() =>
+      expect(inventoryApi.saveInventoryFurnitureReview).toHaveBeenCalledWith({
+        review: expect.objectContaining({
+          inventoryId: INVENTORY_ID,
+          sessionRevision: 2,
+        }),
+        session: staged,
+      })
+    )
+    expect(
+      await screen.findByRole("button", { name: "Завершить" })
+    ).toBeTruthy()
+
+    const stock = screen.getByLabelText(
+      "Посчитано на складе"
+    ) as HTMLInputElement
+    await user.clear(stock)
+    await user.type(stock, "1")
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Завершить" })).toBeNull()
+    )
+
+    await user.click(
+      screen.getByRole("button", { name: "Сохранить изменения сверки" })
+    )
+    await waitFor(() =>
+      expect(inventoryApi.saveInventoryFurnitureReview).toHaveBeenCalledTimes(2)
+    )
+    expect(
+      await screen.findByRole("button", { name: "Завершить" })
+    ).toBeTruthy()
+  })
+
+  it("waits for the matching detail revision before previewing a confirmed furniture review", async () => {
+    const staged = activeSession(
+      finding("FREE", { inspectionStatus: "READY" }),
+      {
+        version: 2,
+        reviewStage: "FURNITURE",
+        furnitureReconciliationState: "READY",
+      }
+    )
+    inventoryApi.getInventory.mockResolvedValue(staged)
+    inventoryApi.getInventoryFurnitureReview.mockResolvedValue(
+      furnitureReview({
+        sessionRevision: 3,
+        confirmed: true,
+        reviewSha256: "b".repeat(64),
+      })
+    )
+
+    renderPage(`/inventory/${INVENTORY_ID}/finish`)
+
+    expect(
+      await screen.findByText("Обновляем версию инвентаризации...")
+    ).toBeTruthy()
+    expect(inventoryApi.previewInventoryCompletion).not.toHaveBeenCalled()
+    expect(screen.queryByRole("button", { name: "Завершить" })).toBeNull()
+  })
+
+  it("reports a blocked furniture reconciliation after completion", async () => {
+    const user = userEvent.setup()
+    const staged = activeSession(
+      finding("FREE", { inspectionStatus: "READY" }),
+      {
+        version: 2,
+        reviewStage: "FURNITURE",
+        furnitureReconciliationState: "READY",
+      }
+    )
+    const completed = activeSession(
+      finding("FREE", { inspectionStatus: "READY" }),
+      {
+        version: 3,
+        status: "COMPLETED",
+        completedAt: "2026-07-27T09:00:00Z",
+        reviewStage: "FURNITURE",
+        furnitureReconciliationState: "BLOCKED",
+      }
+    )
+    inventoryApi.getInventory
+      .mockResolvedValueOnce(staged)
+      .mockResolvedValue(completed)
+    inventoryApi.getInventoryFurnitureReview.mockResolvedValue(
+      furnitureReview({ confirmed: true, reviewSha256: "b".repeat(64) })
+    )
+    inventoryApi.previewInventoryCompletion.mockResolvedValue(staged)
+    inventoryApi.completeInventory.mockResolvedValue(completed)
+
+    renderPage(`/inventory/${INVENTORY_ID}/finish`)
+
+    await user.click(await screen.findByRole("button", { name: "Завершить" }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "Применение мебельных остатков заблокировано конфликтом актуальных данных."
+      )
+    )
+  })
+
+  it("shows and resolves a fresh registry conflict from the furniture preview", async () => {
+    const user = userEvent.setup()
+    const staged = activeSession(
+      finding("FREE", { inspectionStatus: "READY" }),
+      {
+        version: 2,
+        reviewStage: "FURNITURE",
+        furnitureReconciliationState: "READY",
+      }
+    )
+    const conflictedFurniture = activeSession(conflictFinding(), {
+      version: 3,
+      reviewStage: "FURNITURE",
+      furnitureReconciliationState: "READY",
+    })
+    const resolvedCabins = activeSession(
+      {
+        ...conflictFinding(),
+        version: 7,
+        reconciliationStatus: "MATCHED",
+        conflicts: [],
+        conflictResolution: {
+          strategy: "ACCEPT_REGISTRY",
+          reason: null,
+          resolvedAt: "2026-07-27T10:00:00Z",
+        },
+      },
+      {
+        version: 4,
+        reviewStage: "CABINS",
+        furnitureReconciliationState: "NOT_REQUIRED",
+      }
+    )
+    inventoryApi.getInventory.mockResolvedValue(staged)
+    inventoryApi.getInventoryFurnitureReview.mockResolvedValue(
+      furnitureReview({ confirmed: true, reviewSha256: "b".repeat(64) })
+    )
+    inventoryApi.previewInventoryCompletion
+      .mockResolvedValueOnce(staged)
+      .mockResolvedValueOnce(staged)
+      .mockResolvedValue(conflictedFurniture)
+    inventoryApi.completeInventory.mockRejectedValue(
+      new Error("Реестр изменился во время завершения")
+    )
+    inventoryApi.resolveInventoryFindingConflict.mockResolvedValue(resolvedCabins)
+
+    renderPage(`/inventory/${INVENTORY_ID}/finish`)
+
+    await user.click(await screen.findByRole("button", { name: "Завершить" }))
+
+    await waitFor(() =>
+      expect(inventoryApi.completeInventory).toHaveBeenCalledWith({
+        inventoryId: INVENTORY_ID,
+        expectedVersion: 2,
+        actor: expect.objectContaining({ id: currentUser.id }),
+      })
+    )
+    expect(
+      await screen.findByRole("button", {
+        name: "Сохранить актуальные данные реестра",
+      })
+    ).toBeTruthy()
+    expect(
+      screen.getByRole("button", {
+        name: "Применить данные инвентаризации",
+      })
+    ).toBeTruthy()
+
+    inventoryApi.getInventory.mockResolvedValue(resolvedCabins)
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Сохранить актуальные данные реестра",
+      })
+    )
+
+    await waitFor(() =>
+      expect(inventoryApi.resolveInventoryFindingConflict).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expectedVersion: 3,
+          expectedFindingVersion: 6,
+          strategy: "ACCEPT_REGISTRY",
+        })
+      )
+    )
+    expect(await screen.findByText("Итоговая сверка бытовок")).toBeTruthy()
+  })
+
+  it("formats structured conflict values without breaking ordinary text", async () => {
+    const conflict = conflictFinding()
+    const reviewed = activeSession(
+      {
+        ...conflict,
+        conflicts: [
+          {
+            ...conflict.conflicts[0],
+            expected: '{"status":"old","equipment":{"table":1}}',
+            actual: '{"status":"new","equipment":{"table":0}}',
+          },
+        ],
+      },
+      { version: 8 }
+    )
+    inventoryApi.getInventory.mockResolvedValue(reviewed)
+
+    renderPage(`/inventory/${INVENTORY_ID}/finish`)
+
+    const [structured] = await screen.findAllByText(
+      (_, node) =>
+        node?.tagName === "PRE" && node.textContent?.includes('"status": "old"')
+    )
+    expect(structured.className).toContain("break-words")
+    const plainValue = screen
+      .getAllByText("Свободна")
+      .find(
+        (candidate) =>
+          candidate.tagName === "SPAN" && candidate.textContent === "Свободна"
+      )
+    expect(plainValue?.className).not.toContain("break-words")
+  })
+
   it("keeps all completion counters together and does not render line snapshots behind findings", async () => {
     const reviewed = activeSession(
       finding("FREE", {
@@ -761,12 +1119,11 @@ describe("InventoryFinishPage conflict resolution", () => {
       { statistics: finishStatistics }
     )
     inventoryApi.getInventory.mockResolvedValue(reviewed)
-    inventoryApi.previewInventoryCompletion.mockResolvedValue(reviewed)
 
     renderPage(`/inventory/${INVENTORY_ID}/finish`)
 
     const completionSummary = (
-      await screen.findByText("Итоговая сверка")
+      await screen.findByText("Итоговая сверка бытовок")
     ).closest('[data-slot="card"]')
     if (!(completionSummary instanceof HTMLElement)) {
       throw new Error("Не найдена карточка итоговой сверки")
@@ -805,20 +1162,17 @@ describe("InventoryFinishPage conflict resolution", () => {
     inventoryApi.getInventory
       .mockResolvedValueOnce(reviewed)
       .mockResolvedValue(resolved)
-    inventoryApi.previewInventoryCompletion
-      .mockResolvedValueOnce(reviewed)
-      .mockResolvedValue(resolved)
     inventoryApi.resolveInventoryFindingConflict.mockResolvedValue(resolved)
 
     renderPage(`/inventory/${INVENTORY_ID}/finish`)
 
-    const complete = (await screen.findByRole("button", {
-      name: "Завершить",
+    const moveToFurniture = (await screen.findByRole("button", {
+      name: "Завершить проверку бытовок и перейти к мебели",
     })) as HTMLButtonElement
-    expect(complete.disabled).toBe(true)
+    expect(moveToFurniture.disabled).toBe(true)
     expect(
       screen.getByText(
-        "Урегулируйте все конфликты реестра перед завершением инвентаризации."
+        "Урегулируйте все конфликты реестра перед переходом к сверке мебели."
       )
     ).toBeTruthy()
     expect(screen.queryByText(/Я проверил.*конфликт/i)).toBeNull()
@@ -826,7 +1180,11 @@ describe("InventoryFinishPage conflict resolution", () => {
     expect(screen.getByText("Ожидает осмотра")).toBeTruthy()
     expect(screen.getAllByText("Свободна").length).toBeGreaterThan(0)
 
-    await user.click(screen.getByRole("button", { name: "Принять реестр" }))
+    await user.click(
+      screen.getByRole("button", {
+        name: "Сохранить актуальные данные реестра",
+      })
+    )
 
     await waitFor(() =>
       expect(inventoryApi.resolveInventoryFindingConflict).toHaveBeenCalledWith(
@@ -864,18 +1222,17 @@ describe("InventoryFinishPage conflict resolution", () => {
       { version: 9 }
     )
     inventoryApi.getInventory.mockResolvedValue(reviewed)
-    inventoryApi.previewInventoryCompletion.mockResolvedValue(reviewed)
     inventoryApi.resolveInventoryFindingConflict.mockResolvedValue(resolved)
 
     renderPage(`/inventory/${INVENTORY_ID}/finish`)
 
     await user.click(
       await screen.findByRole("button", {
-        name: "Оставить данные осмотра",
+        name: "Применить данные инвентаризации",
       })
     )
     const dialog = screen.getByRole("dialog", {
-      name: "Оставить данные осмотра",
+      name: "Применить данные инвентаризации",
     })
     await user.click(
       within(dialog).getByRole("button", { name: "Сохранить решение" })
@@ -907,7 +1264,6 @@ describe("InventoryFinishPage conflict resolution", () => {
     const user = userEvent.setup()
     const reviewed = activeSession(conflictFinding(), { version: 8 })
     inventoryApi.getInventory.mockResolvedValue(reviewed)
-    inventoryApi.previewInventoryCompletion.mockResolvedValue(reviewed)
 
     renderPage(`/inventory/${INVENTORY_ID}/finish`)
 
@@ -918,5 +1274,39 @@ describe("InventoryFinishPage conflict resolution", () => {
     expect(
       await screen.findByRole("region", { name: "Редактор осмотра" })
     ).toBeTruthy()
+  })
+})
+
+describe("InventoryHistoryDetailPage furniture reconciliation", () => {
+  it("shows a prominent blocked furniture reconciliation status without a retry control", async () => {
+    const completed = activeSession(
+      finding("FREE", { inspectionStatus: "READY" }),
+      {
+        status: "COMPLETED",
+        completedAt: "2026-07-27T09:00:00Z",
+        reviewStage: "FURNITURE",
+        furnitureReconciliationState: "BLOCKED",
+      }
+    )
+    inventoryApi.getInventory.mockResolvedValue(completed)
+
+    renderPage(`/inventory/history/${INVENTORY_ID}`)
+
+    const statusCard = (
+      await screen.findByText("Статус сверки мебели")
+    ).closest('[data-slot="card"]')
+    if (!(statusCard instanceof HTMLElement)) {
+      throw new Error("Не найдена карточка статуса сверки мебели")
+    }
+    const statusBadge = within(statusCard).getByText(
+      "Применение мебельных остатков заблокировано"
+    )
+    expect(statusBadge.getAttribute("data-variant")).toBe("destructive")
+    expect(
+      within(statusCard).getByRole("alert").textContent
+    ).toContain("заблокировано конфликтом актуальных данных")
+    expect(
+      within(statusCard).queryByRole("button", { name: /повтор/i })
+    ).toBeNull()
   })
 })

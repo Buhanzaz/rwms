@@ -1,12 +1,10 @@
 import { getUserManager } from "@/features/auth/oidc-client"
 import * as inventoryHttp from "@/features/inventory/adapters/http-inventory-adapter"
-import {
-  inventoryCompletionRiskSignature,
-  toInventoryRepairPlanSnapshot,
-} from "@/features/inventory/domain/inventory-domain"
+import { toInventoryRepairPlanSnapshot } from "@/features/inventory/domain/inventory-domain"
 import { buildInventoryPlanSelection } from "@/features/inventory/domain/inventory-plan-mapper"
 import {
   applyInventoryCompletionPreview,
+  toInventoryFurnitureReviewView,
   toInventoryFindingView,
   toInventorySessionView,
 } from "@/features/inventory/domain/inventory-view-mapper"
@@ -14,6 +12,7 @@ import type {
   InventoryActorSnapshot,
   InventoryCreateRentalItem,
   InventoryFindingDto,
+  InventoryFurnitureReviewDto,
   InventorySessionDto,
   InventoryWarehouseSnapshot,
 } from "@/features/inventory/model/inventory"
@@ -40,6 +39,10 @@ export function inventoryActiveQueryKey(warehouseId: string) {
 
 export function inventoryDetailQueryKey(inventoryId: string | null) {
   return [...INVENTORY_QUERY_KEY, "detail", inventoryId] as const
+}
+
+export function inventoryFurnitureReviewQueryKey(inventoryId: string | null) {
+  return [...INVENTORY_QUERY_KEY, "furniture-review", inventoryId] as const
 }
 
 export function inventoryFinishPreviewQueryKey(
@@ -416,6 +419,70 @@ export async function resolveInventoryFindingConflict(input: {
   )
 }
 
+export async function startInventoryFurnitureReview(input: {
+  session: InventorySessionDto
+  acknowledgeIncomplete: boolean
+}) {
+  const token = await accessToken()
+  const review = await inventoryHttp.startFurnitureReview({
+    accessToken: token,
+    inventoryId: input.session.id,
+    request: {
+      expectedSessionRevision: input.session.version,
+      findingRevisions: input.session.findings.map((finding) => ({
+        findingId: finding.id,
+        expectedFindingRevision: finding.version,
+      })),
+      acknowledgeIncomplete: input.acknowledgeIncomplete,
+    },
+    idempotencyKey: commandKey(),
+  })
+  return toInventoryFurnitureReviewView(review)
+}
+
+export async function getInventoryFurnitureReview(inventoryId: string) {
+  return toInventoryFurnitureReviewView(
+    await inventoryHttp.getFurnitureReview(await accessToken(), inventoryId)
+  )
+}
+
+export async function saveInventoryFurnitureReview(input: {
+  review: InventoryFurnitureReviewDto
+  session: InventorySessionDto
+}) {
+  const findingRevisions = new Map(
+    input.session.findings.map((finding) => [finding.id, finding.version])
+  )
+  const expectedFindingRevision = (findingId: string) => {
+    const revision = findingRevisions.get(findingId)
+    if (revision === undefined) {
+      throw new Error(
+        "Бытовка отсутствует в актуальных результатах инвентаризации"
+      )
+    }
+    return revision
+  }
+  const saved = await inventoryHttp.saveFurnitureReview({
+    accessToken: await accessToken(),
+    inventoryId: input.review.inventoryId,
+    request: {
+      expectedSessionRevision: input.review.sessionRevision,
+      assetSnapshotSha256: input.review.assetSnapshotSha256,
+      items: input.review.items.map((item) => ({
+        equipmentId: item.equipmentId,
+        catalogVersion: item.catalogVersion,
+        observedStockQuantity: item.observedStockQuantity,
+        cabins: item.cabins.map((cabin) => ({
+          findingId: cabin.findingId,
+          expectedFindingRevision: expectedFindingRevision(cabin.findingId),
+          observedQuantity: cabin.observedQuantity,
+        })),
+      })),
+    },
+  })
+  return toInventoryFurnitureReviewView(saved)
+}
+
 async function previewWithSession(inventoryId: string) {
   const token = await accessToken()
   const rawSession = await inventoryHttp.getInventorySession(token, inventoryId)
@@ -448,28 +515,21 @@ export async function completeInventory(input: {
   inventoryId: string
   expectedVersion: number
   actor: InventoryActorSnapshot
-  acknowledgedRiskSignature: string | null
 }) {
   const result = await previewWithSession(input.inventoryId)
   if (result.rawSession.sessionRevision !== input.expectedVersion) {
     throw new Error("Инвентаризация была изменена. Обновите данные")
+  }
+  if (result.rawSession.reviewStage !== "FURNITURE") {
+    throw new Error(
+      "Сначала завершите проверку бытовок и перейдите к сверке мебели"
+    )
   }
   if (
     result.reviewed.findings.some((finding) => finding.conflicts.length > 0)
   ) {
     throw new Error(
       "Урегулируйте все конфликты реестра перед завершением инвентаризации"
-    )
-  }
-  const currentRiskSignature = inventoryCompletionRiskSignature(
-    result.reviewed.findings
-  )
-  if (
-    currentRiskSignature &&
-    currentRiskSignature !== input.acknowledgedRiskSignature
-  ) {
-    throw new Error(
-      "Сверка изменилась. Проверьте непроверенные и ненайденные бытовки повторно"
     )
   }
   await inventoryHttp.completeInventorySession({

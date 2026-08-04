@@ -4,6 +4,7 @@ import {
   closeBlockedFindingPublication,
   completeInventorySession,
   createAndAttachInventoryAsset,
+  getFurnitureReview,
   getActiveInventorySession,
   getInventorySession,
   getInventoryStatisticsSummary,
@@ -14,7 +15,9 @@ import {
   resolveInventoryFindingConflict,
   retryFindingPublication,
   saveInventoryInspection,
+  saveFurnitureReview,
   startInventorySession,
+  startFurnitureReview,
 } from "@/features/inventory/adapters/http-inventory-adapter"
 import type {
   InventoryCompletionPreview,
@@ -39,6 +42,8 @@ const session = {
   startedAt: "2026-07-17T10:00:00Z",
   terminalAt: null,
   publicationState: "NOT_REQUESTED",
+  reviewStage: "CABINS",
+  furnitureReconciliationState: "NOT_REQUIRED",
   statistics: null,
   cancellation: null,
   membershipMovements: [],
@@ -284,6 +289,128 @@ describe("http inventory adapter", () => {
       expectedFindingRevision: 8,
       strategy: "KEEP_INSPECTION",
       reason: "Осмотр подтверждён кладовщиком",
+    })
+  })
+
+  it("uses the public furniture-review routes and preserves all review revisions", async () => {
+    const findingId = "00000000-0000-4000-8000-000000000150"
+    const review = {
+      inventoryId: session.id,
+      sessionRevision: 5,
+      stage: "FURNITURE",
+      assetSnapshotSha256: "a".repeat(64),
+      reviewSha256: null,
+      confirmed: false,
+      items: [
+        {
+          equipmentId: "00000000-0000-4000-8000-000000000151",
+          catalogVersion: 152,
+          equipmentName: "Стол",
+          currentStockQuantity: 8,
+          observedStockQuantity: 7,
+          cabins: [
+            {
+              findingId,
+              assetId: "00000000-0000-4000-8000-000000000153",
+              cabinNumber: "БЫТ-001",
+              status: "WAREHOUSE",
+              currentQuantity: 1,
+              observedQuantity: 0,
+            },
+          ],
+        },
+      ],
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(review), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(review), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ...review, confirmed: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await startFurnitureReview({
+      accessToken: "inventory-token",
+      inventoryId: session.id,
+      request: {
+        expectedSessionRevision: 3,
+        findingRevisions: [{ findingId, expectedFindingRevision: 8 }],
+        acknowledgeIncomplete: true,
+      },
+      idempotencyKey: "00000000-0000-4000-8000-000000000154",
+    })
+    await getFurnitureReview("inventory-token", session.id)
+    await saveFurnitureReview({
+      accessToken: "inventory-token",
+      inventoryId: session.id,
+      request: {
+        expectedSessionRevision: 5,
+        assetSnapshotSha256: review.assetSnapshotSha256,
+        items: [
+          {
+            equipmentId: review.items[0].equipmentId,
+            catalogVersion: review.items[0].catalogVersion,
+            observedStockQuantity: 7,
+            cabins: [
+              {
+                findingId,
+                expectedFindingRevision: 8,
+                observedQuantity: 0,
+              },
+            ],
+          },
+        ],
+      },
+    })
+
+    const start = fetchMock.mock.calls[0]
+    expect(start[0]).toContain(`/sessions/${session.id}/furniture-review/start`)
+    expect(start[1].method).toBe("POST")
+    expect(new Headers(start[1].headers).get("Idempotency-Key")).toBe(
+      "00000000-0000-4000-8000-000000000154"
+    )
+    expect(JSON.parse(start[1].body)).toEqual({
+      expectedSessionRevision: 3,
+      findingRevisions: [{ findingId, expectedFindingRevision: 8 }],
+      acknowledgeIncomplete: true,
+    })
+    expect(fetchMock.mock.calls[1][0]).toContain(
+      `/sessions/${session.id}/furniture-review`
+    )
+    const save = fetchMock.mock.calls[2]
+    expect(save[1].method).toBe("PUT")
+    expect(new Headers(save[1].headers).get("Idempotency-Key")).toBeNull()
+    expect(JSON.parse(save[1].body)).toEqual({
+      expectedSessionRevision: 5,
+      assetSnapshotSha256: review.assetSnapshotSha256,
+      items: [
+        {
+          equipmentId: review.items[0].equipmentId,
+          catalogVersion: review.items[0].catalogVersion,
+          observedStockQuantity: 7,
+          cabins: [
+            {
+              findingId,
+              expectedFindingRevision: 8,
+              observedQuantity: 0,
+            },
+          ],
+        },
+      ],
     })
   })
 

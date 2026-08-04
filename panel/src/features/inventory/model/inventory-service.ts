@@ -1,4 +1,12 @@
 export type InventorySessionLifecycle = "ACTIVE" | "COMPLETED" | "CANCELLED"
+export type InventoryReviewStage = "CABINS" | "FURNITURE"
+export type InventoryFurnitureReconciliationState =
+  | "NOT_REQUIRED"
+  | "READY"
+  | "PENDING"
+  | "SUCCEEDED"
+  | "TRANSIENT_FAILED"
+  | "BLOCKED"
 export type InventoryFindingOrigin =
   "EXPECTED" | "ADDED_NEW" | "ADDED_USED" | "UNEXPECTED_EXISTING"
 export type InventoryInspectionState = "NOT_INSPECTED" | "READY" | "WORK_STAGED"
@@ -39,6 +47,8 @@ export type InventorySessionSummary = {
   startedAt: string
   terminalAt: string | null
   publicationState: InventoryAggregatePublicationState
+  reviewStage: InventoryReviewStage
+  furnitureReconciliationState: InventoryFurnitureReconciliationState
 }
 
 export type InventoryObservation =
@@ -272,6 +282,55 @@ export type InventoryNumberResolution = {
 export type InventoryRevisionExpectation = {
   findingId: string
   expectedFindingRevision: number
+}
+
+export type FurnitureReviewCabin = {
+  findingId: string
+  assetId: string
+  cabinNumber: string
+  status: string
+  currentQuantity: number
+  observedQuantity: number
+}
+
+export type FurnitureReviewItem = {
+  equipmentId: string
+  catalogVersion: number
+  equipmentName: string
+  currentStockQuantity: number
+  observedStockQuantity: number
+  cabins: FurnitureReviewCabin[]
+}
+
+export type FurnitureReviewView = {
+  inventoryId: string
+  sessionRevision: number
+  stage: InventoryReviewStage
+  assetSnapshotSha256: string
+  reviewSha256: string | null
+  confirmed: boolean
+  items: FurnitureReviewItem[]
+}
+
+export type StartFurnitureReviewRequest = {
+  expectedSessionRevision: number
+  findingRevisions: InventoryRevisionExpectation[]
+  acknowledgeIncomplete: boolean
+}
+
+export type SaveFurnitureReviewRequest = {
+  expectedSessionRevision: number
+  assetSnapshotSha256: string
+  items: Array<{
+    equipmentId: string
+    catalogVersion: number
+    observedStockQuantity: number
+    cabins: Array<{
+      findingId: string
+      expectedFindingRevision: number
+      observedQuantity: number
+    }>
+  }>
 }
 
 export type InventoryCompletionPreview = {
