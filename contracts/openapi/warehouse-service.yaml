@@ -3,10 +3,13 @@ info:
   title: RWMS Warehouse Service API
   version: 1.0.0
   description: >-
-    Canonical Stage 1 warehouse identity API. Public endpoints require a USER
-    JWT and local issuer/audience validation. Internal existence validation has
-    separate least-privilege paths for auth-service, asset-service,
-    inventory-service and logistics-service client credentials.
+    Canonical warehouse identity API. Public directory reads require a USER JWT
+    with warehouse.read and intentionally expose the same warehouse registry to
+    every such user, independently of warehouse_access grants. This approved
+    global directory includes name, city and address. Internal validation has
+    separate least-privilege paths for service credentials. Warehouse UUID is
+    the stable external business reference; display names are unique only after
+    the documented normalization and are never used as integration identity.
 servers:
   - url: /
 security:
@@ -15,7 +18,10 @@ paths:
   /api/warehouse/v1/warehouses:
     get:
       operationId: listWarehouses
-      description: Requires USER and warehouse.read. includeInactive is SYSTEM_ADMIN-only.
+      description: >-
+        Requires USER and warehouse.read. This is an approved global directory:
+        warehouse_access grants do not filter the result. The default remains
+        active-only; includeInactive is SYSTEM_ADMIN-only.
       parameters:
         - name: includeInactive
           in: query
@@ -23,7 +29,7 @@ paths:
           schema: { type: boolean, default: false }
       responses:
         '200':
-          description: Active warehouses ordered by nullable sortOrder, name and UUID.
+          description: Warehouses ordered by nullable sortOrder, name and stable UUID.
           content:
             application/json:
               schema:
@@ -60,7 +66,11 @@ paths:
       - $ref: '#/components/parameters/WarehouseId'
     get:
       operationId: getWarehouse
-      description: Requires USER and warehouse.read. Inactive warehouses are hidden from non-admin users.
+      description: >-
+        Requires USER and warehouse.read. The stable UUID lookup also returns an
+        inactive warehouse so historical asset, repair and logistics references
+        remain resolvable. warehouse_access grants do not filter this approved
+        global directory read.
       responses:
         '200':
           description: Warehouse metadata.
@@ -221,7 +231,7 @@ components:
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, minimum: 0 }
-        name: { type: string, minLength: 1, maxLength: 255 }
+        name: { type: string, minLength: 1, maxLength: 255, description: Unique after trim, internal-whitespace collapse and Unicode-aware lowercase normalization. }
         city: { type: string, minLength: 1, maxLength: 255 }
         address: { type: [string, 'null'], maxLength: 1000 }
         timeZone: { type: string, minLength: 1, maxLength: 64 }
@@ -232,7 +242,7 @@ components:
       additionalProperties: false
       required: [name, city, timeZone]
       properties:
-        name: { type: string, minLength: 1, maxLength: 255 }
+        name: { type: string, minLength: 1, maxLength: 255, description: Unique after trim, internal-whitespace collapse and Unicode-aware lowercase normalization. }
         city: { type: string, minLength: 1, maxLength: 255 }
         address: { type: [string, 'null'], maxLength: 1000 }
         timeZone: { type: string, minLength: 1, maxLength: 64 }
@@ -243,7 +253,7 @@ components:
       required: [expectedVersion, name, city, timeZone, active]
       properties:
         expectedVersion: { type: integer, minimum: 0 }
-        name: { type: string, minLength: 1, maxLength: 255 }
+        name: { type: string, minLength: 1, maxLength: 255, description: Unique after trim, internal-whitespace collapse and Unicode-aware lowercase normalization. }
         city: { type: string, minLength: 1, maxLength: 255 }
         address: { type: [string, 'null'], maxLength: 1000 }
         timeZone: { type: string, minLength: 1, maxLength: 64 }

@@ -52,6 +52,10 @@ public class DriverQueueScheduler {
     LogisticsDependencyGateway.RepairPlaceProjection repairPlaces =
         dependencies.readRepairPlaces(warehouseId);
     discoverRemovalTasks(repairPlaces);
+    // A current -> scheduled move is an explicit operator decision. Freeze both automatic
+    // promotion and rolling reflow while the maintenance-owned hold is active so the relay cannot
+    // alter the entry version between two manual drag-and-drop operations.
+    if (hasActiveManualPromotionHold(warehouseId)) return;
     LocalDate today = warehouseToday(warehouseId);
     reflowScheduledQueue(warehouseId, today, repairPlaces.repairPlaceCount());
 
@@ -64,10 +68,6 @@ public class DriverQueueScheduler {
       DriverLogisticsTask local = local(current.externalTaskId());
       if (local != null) processor.processUntilIdle(local.getId());
     }
-
-    // A current -> scheduled move is an explicit operator decision. The maintenance-owned delay
-    // pauses only automatic filling; it never blocks a manual replacement.
-    if (hasActiveManualPromotionHold(warehouseId)) return;
 
     Set<UUID> promotedInPass = new HashSet<>();
     long remainingInboundSlots = schedulableInboundSlots(repairPlaces);
@@ -274,8 +274,11 @@ public class DriverQueueScheduler {
       if (!"READY_TO_RELEASE".equals(allocation.state())) continue;
       DriverTaskService.CreateResult result =
           taskService.ensureRemovalTask(
-              projection.warehouseId(), allocation.repairId(), allocation.rentalItemId());
-      store.bindRemovalAllocation(result.response().id(), allocation);
+              projection.warehouseId(),
+              allocation.repairId(),
+              allocation.rentalItemId(),
+              allocation.priority());
+      store.bindReleaseAllocation(result.response().id(), allocation);
       processor.processUntilIdle(result.response().id());
     }
   }
@@ -315,12 +318,12 @@ public class DriverQueueScheduler {
               .orElse(null);
     }
 
-    if (previousKind == DriverTaskKind.REMOVE_FROM_REPAIR) {
+    if (previousKind != null && previousKind.releasesRepairPlace()) {
       Candidate inbound = firstEligibleInbound(candidates, availableInboundSlots);
       if (inbound != null) return inbound;
     }
 
-    if (previousKind != DriverTaskKind.REMOVE_FROM_REPAIR) {
+    if (previousKind == null || !previousKind.releasesRepairPlace()) {
       Candidate outbound =
           candidates.stream()
               .filter(candidate -> candidate.task().getKind().releasesRepairPlace())
@@ -390,7 +393,35 @@ public class DriverQueueScheduler {
     LogisticsDependencyGateway.DriverBoardTask current =
         dependencies.setDriverTaskLane(
             fresh.externalTaskId(), fresh.taskVersion(), "CURRENT");
+    if (task.getKind().releasesRepairPlace()) {
+      current = insertRepairReturnAfterLeadingPins(task, current);
+    }
     store.confirmCurrent(task.getId(), current);
+  }
+
+  /**
+   * A completed repair is actionable immediately. It therefore leads the driver's waiting queue,
+   * but never displaces the operator's leading pinned work (or task-board's protected active
+   * prefix, which is enforced again by the downstream optimistic command).
+   */
+  private LogisticsDependencyGateway.DriverBoardTask insertRepairReturnAfterLeadingPins(
+      DriverLogisticsTask task, LogisticsDependencyGateway.DriverBoardTask current) {
+    LogisticsDependencyGateway.DriverBoardSnapshot board =
+        dependencies.readDriverBoard(task.getWarehouseId());
+    int targetIndex = 0;
+    for (LogisticsDependencyGateway.DriverBoardTask candidate : board.current()) {
+      if (task.getExternalTaskId().equals(candidate.externalTaskId())) break;
+      if (!candidate.pinned()) break;
+      targetIndex++;
+    }
+    if (current.queuePosition() == targetIndex) return current;
+    return dependencies.moveDriverTask(
+        current.externalTaskId(),
+        current.taskVersion(),
+        current.entryVersion(),
+        "CURRENT",
+        current.scheduledDate(),
+        targetIndex);
   }
 
   private static void ensureManualPromotionCanUseCapacity(

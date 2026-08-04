@@ -30,6 +30,7 @@ import dev.buhanzaz.rwms.asset.repository.OrderUnitReservationRepository;
 import dev.buhanzaz.rwms.asset.repository.PresentationUnitHoldRepository;
 import dev.buhanzaz.rwms.asset.service.AssetService;
 import dev.buhanzaz.rwms.asset.service.AssetInvalidationHub;
+import dev.buhanzaz.rwms.asset.service.AssetNotFoundException;
 import dev.buhanzaz.rwms.asset.service.OrderUnitReservationConflictException;
 import dev.buhanzaz.rwms.asset.service.PresentationHoldService;
 import dev.buhanzaz.rwms.asset.service.RentalAvailabilityInvalidationPublisher;
@@ -493,6 +494,73 @@ class PresentationHoldServiceIntegrationTest {
   }
 
   @Test
+  void manualDraftHoldsTransferAtomicallyAndReleaseUnselectedCabins() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID manualDraftId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID actorSubjectId = UUID.randomUUID();
+    RentalItemResponse selected =
+        freeRental(actorSubjectId, warehouseId, "MANUAL-SELECTED");
+    RentalItemResponse unselected =
+        freeRental(actorSubjectId, warehouseId, "MANUAL-UNSELECTED");
+    var manual =
+        presentationHolds.replace(
+            UUID.randomUUID(),
+            manualDraftId,
+            replaceRequest(
+                warehouseId,
+                List.of(selected.id(), unselected.id()),
+                OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(30),
+                actorSubjectId));
+    UUID selectedHoldId = holdIdFor(manual.response().holds(), selected.id());
+    UUID unselectedHoldId = holdIdFor(manual.response().holds(), unselected.id());
+
+    assertThatThrownBy(
+            () ->
+                presentationHolds.holds(
+                    manualDraftId, UUID.randomUUID(), "RENTAL_MANAGER"))
+        .isInstanceOf(AssetNotFoundException.class);
+    assertThatThrownBy(
+            () ->
+                presentationHolds.replace(
+                    UUID.randomUUID(),
+                    manualDraftId,
+                    replaceRequest(
+                        warehouseId,
+                        List.of(selected.id()),
+                        OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(30),
+                        UUID.randomUUID())))
+        .isInstanceOf(AssetNotFoundException.class);
+
+    OffsetDateTime presentationExpiry =
+        OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(60);
+    var transferred =
+        presentationHolds.replace(
+            UUID.randomUUID(),
+            inquiryId,
+            replaceRequest(
+                warehouseId,
+                List.of(selected.id()),
+                presentationExpiry,
+                actorSubjectId,
+                manualDraftId));
+
+    assertThat(transferred.response().holds())
+        .singleElement()
+        .satisfies(
+            hold -> {
+              assertThat(hold.holdId()).isEqualTo(selectedHoldId);
+              assertThat(hold.presentationId()).isEqualTo(inquiryId);
+              assertThat(hold.expiresAt()).isEqualTo(presentationExpiry);
+            });
+    assertThat(presentationHolds.holds(manualDraftId).holds()).isEmpty();
+    assertThat(holdRepository.findById(unselectedHoldId).orElseThrow().getState())
+        .isEqualTo(PresentationUnitHoldState.RELEASED);
+    assertThat(holdRepository.findById(selectedHoldId).orElseThrow().getPresentationId())
+        .isEqualTo(inquiryId);
+  }
+
+  @Test
   void conversionBooksSelectedCabinAndReleasesTheRestOfThePresentation() {
     UUID actorSubjectId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
@@ -616,8 +684,22 @@ class PresentationHoldServiceIntegrationTest {
 
   private static ReplacePresentationHoldsRequest replaceRequest(
       UUID warehouseId, List<UUID> rentalItemIds, OffsetDateTime expiresAt, UUID actorSubjectId) {
+    return replaceRequest(warehouseId, rentalItemIds, expiresAt, actorSubjectId, null);
+  }
+
+  private static ReplacePresentationHoldsRequest replaceRequest(
+      UUID warehouseId,
+      List<UUID> rentalItemIds,
+      OffsetDateTime expiresAt,
+      UUID actorSubjectId,
+      UUID sourceHoldScopeId) {
     return new ReplacePresentationHoldsRequest(
-        warehouseId, rentalItemIds, expiresAt, actorSubjectId, "RENTAL_MANAGER");
+        warehouseId,
+        rentalItemIds,
+        expiresAt,
+        actorSubjectId,
+        "RENTAL_MANAGER",
+        sourceHoldScopeId);
   }
 
   private static UUID holdIdFor(

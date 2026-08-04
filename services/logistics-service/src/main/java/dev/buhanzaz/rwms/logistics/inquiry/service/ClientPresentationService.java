@@ -170,7 +170,8 @@ public class ClientPresentationService {
               cabinIds,
               expiresAt,
               actor.subjectId(),
-              actor.role());
+              actor.role(),
+              request.manualBookingDraftId());
       if (!holdScopeId.equals(held.presentationId())
           || held.holds().size() != cabinIds.size()
           || !Set.copyOf(

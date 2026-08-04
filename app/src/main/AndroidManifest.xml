@@ -15,10 +15,28 @@
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
+        android:name=".ManagerApplication"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:usesCleartextTraffic="false"
         android:theme="@style/Theme.RwmsManager">
+        <!--
+          OkHttp 5 registers this initializer through its library manifest.  It eagerly probes
+          TLS providers before MainActivity and was the dominant cold-start main-thread stack.
+          RWMS creates its transport lazily after authentication, so leave that probe to the
+          first real transport use instead of blocking every signed-out launch.
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            tools:node="merge">
+            <meta-data
+                android:name="okhttp3.internal.platform.PlatformInitializer"
+                tools:node="remove" />
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                tools:node="remove" />
+        </provider>
         <activity
             android:name="net.openid.appauth.RedirectUriReceiverActivity"
             tools:node="remove" />

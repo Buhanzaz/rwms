@@ -25,6 +25,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Add01Icon,
   Calendar03Icon,
+  ChevronDownIcon,
   DragDropVerticalIcon,
   PinIcon,
   PinOffIcon,
@@ -83,12 +84,14 @@ import {
   pinDriverBoardTask,
   promoteCapitalRepair,
   returnCapitalRepair,
+  scheduleCapitalRepair,
 } from "@/features/logistics/driver-board/driver-board-api"
 import type {
   CapitalRepairCard,
   DriverBoard,
   DriverBoardCard,
   DriverTaskKind,
+  RepairPlaceCard,
 } from "@/features/logistics/driver-board/driver-board-model"
 import { listAssetRentalItems } from "@/features/rental-items/api/asset-rental-items-api"
 import { useWarehouse } from "@/hooks/use-warehouse"
@@ -110,6 +113,30 @@ type CapitalDragItem = {
 
 type DriverDragItem = TaskDragItem | CapitalDragItem
 
+type DriverBoardMove = {
+  item: TaskDragItem
+  targetLane: "SCHEDULED" | "CURRENT"
+  targetDate: string
+  targetIndex: number
+}
+
+type CapitalRepairSchedule = {
+  repair: CapitalRepairCard
+  targetDate: string
+  targetIndex: number
+  temporaryExternalTaskId: string
+}
+
+type OptimisticMoveContext = {
+  queryKey: ReturnType<typeof driverBoardQueryKey>
+  previousBoard: DriverBoard | undefined
+}
+
+type OptimisticCapitalScheduleContext = {
+  queryKey: ReturnType<typeof driverBoardQueryKey>
+  previousBoard: DriverBoard | undefined
+}
+
 const entryStatusLabels: Record<DriverBoardCard["entryStatus"], string> = {
   WAITING: "Ожидает",
   IN_PROGRESS: "В работе",
@@ -122,8 +149,47 @@ const kindLabels: Record<DriverTaskKind, string> = {
   DELIVER_TO_REPAIR: "Доставить в ремонт",
   REMOVE_FROM_REPAIR: "Вывезти после ремонта",
   CAPITAL_TO_PRODUCTION: "Переместить на производство",
-  MOVE_TO_SHIPMENT: "Переместить на отгрузку",
   GENERAL_MOVEMENT: "Свободное перемещение",
+}
+
+type RepairPlaceDisplayStatus = {
+  label: string
+  badgeVariant: "default" | "secondary" | "outline" | "destructive"
+  stageName: string | null
+}
+
+function isPhysicalRepairPlace(repairPlace: RepairPlaceCard) {
+  return (
+    repairPlace.allocationState === "OCCUPIED" ||
+    repairPlace.allocationState === "READY_TO_RELEASE"
+  )
+}
+
+function repairPlaceDisplayStatus(
+  repairPlace: RepairPlaceCard
+): RepairPlaceDisplayStatus {
+  if (repairPlace.allocationState === "READY_TO_RELEASE") {
+    return {
+      label: "Ожидает вывоза",
+      badgeVariant: "secondary",
+      stageName: null,
+    }
+  }
+
+  const stageName = repairPlace.repairStageName?.trim() || null
+  switch (repairPlace.repairStageState) {
+    case "PLANNED":
+    case "QUEUED":
+      return { label: "Ожидает", badgeVariant: "outline", stageName }
+    case "IN_PROGRESS":
+      return { label: "В работе", badgeVariant: "default", stageName }
+    case "DONE":
+      return { label: "Этап завершён", badgeVariant: "secondary", stageName }
+    case "CANCELLED":
+      return { label: "Этап отменён", badgeVariant: "destructive", stageName }
+    default:
+      return { label: "В ремонте", badgeVariant: "secondary", stageName }
+  }
 }
 
 function formatDate(value: string) {
@@ -172,6 +238,154 @@ function orderCards(cards: DriverBoardCard[]) {
 
 function isTaskMovable(card: DriverBoardCard) {
   return card.taskStatus === "ACTIVE" && card.entryStatus === "WAITING"
+}
+
+function normalizeCardPositions(cards: DriverBoardCard[]) {
+  return cards.map((card, position) =>
+    card.position === position ? card : { ...card, position }
+  )
+}
+
+/**
+ * Applies the exact destination calculated from the drop target before the
+ * command reaches the server.  The server remains authoritative: this value
+ * is replaced with a fresh board after the command settles.
+ */
+function moveCardOptimistically(
+  board: DriverBoard,
+  { item, targetLane, targetDate, targetIndex }: DriverBoardMove
+): DriverBoard {
+  const current = [...board.current]
+  const dates = board.dates.map((column) => ({
+    ...column,
+    tasks: [...column.tasks],
+  }))
+  const source =
+    item.lane === "CURRENT"
+      ? current
+      : dates.find((column) => column.date === item.date)?.tasks
+  if (!source) return board
+
+  const sourceIndex = source.findIndex(
+    (card) => card.externalTaskId === item.card.externalTaskId
+  )
+  if (sourceIndex < 0) return board
+
+  const [moved] = source.splice(sourceIndex, 1)
+  if (!moved) return board
+
+  let target: DriverBoardCard[]
+  if (targetLane === "CURRENT") {
+    target = current
+  } else {
+    let targetColumn = dates.find((column) => column.date === targetDate)
+    if (!targetColumn) {
+      targetColumn = { date: targetDate, tasks: [] }
+      dates.push(targetColumn)
+    }
+    target = targetColumn.tasks
+  }
+
+  const insertionIndex = Math.max(0, Math.min(targetIndex, target.length))
+  target.splice(insertionIndex, 0, {
+    ...moved,
+    lane: targetLane,
+    scheduledDate: targetDate,
+    position: insertionIndex,
+  })
+
+  return {
+    ...board,
+    current: normalizeCardPositions(current),
+    dates: dates.map((column) => ({
+      ...column,
+      tasks: normalizeCardPositions(column.tasks),
+    })),
+  }
+}
+
+function pendingCapitalCard(schedule: CapitalRepairSchedule): DriverBoardCard {
+  return {
+    driverTaskId: null,
+    externalTaskId: schedule.temporaryExternalTaskId,
+    taskBoardTaskId: schedule.temporaryExternalTaskId,
+    taskBoardTaskVersion: 0,
+    taskBoardEntryId: schedule.temporaryExternalTaskId,
+    taskBoardEntryVersion: 0,
+    title: "Переместить бытовку на производство",
+    taskText: "Переместить бытовку на производство",
+    unitNumber: schedule.repair.unitNumber,
+    kind: "CAPITAL_TO_PRODUCTION",
+    workflowState: "REGISTERING",
+    taskStatus: "ACTIVE",
+    entryStatus: "WAITING",
+    scheduledDate: schedule.targetDate,
+    lane: "SCHEDULED",
+    priority: schedule.repair.priority,
+    pinned: false,
+    position: schedule.targetIndex,
+  }
+}
+
+function scheduleCapitalRepairOptimistically(
+  board: DriverBoard,
+  schedule: CapitalRepairSchedule
+): DriverBoard {
+  const dates = board.dates.map((column) => ({
+    ...column,
+    tasks: [...column.tasks],
+  }))
+  let targetColumn = dates.find((column) => column.date === schedule.targetDate)
+  if (!targetColumn) {
+    targetColumn = { date: schedule.targetDate, tasks: [] }
+    dates.push(targetColumn)
+  }
+  const insertionIndex = Math.max(
+    0,
+    Math.min(schedule.targetIndex, targetColumn.tasks.length)
+  )
+  targetColumn.tasks.splice(insertionIndex, 0, {
+    ...pendingCapitalCard(schedule),
+    position: insertionIndex,
+  })
+
+  return {
+    ...board,
+    dates: dates.map((column) => ({
+      ...column,
+      tasks: normalizeCardPositions(column.tasks),
+    })),
+    capitalRepairs: board.capitalRepairs.filter(
+      (repair) => repair.repairId !== schedule.repair.repairId
+    ),
+  }
+}
+
+function resolveOptimisticCapitalSchedule(
+  board: DriverBoard,
+  schedule: CapitalRepairSchedule,
+  card: DriverBoardCard
+): DriverBoard {
+  let replaced = false
+  const dates = board.dates.map((column) => ({
+    ...column,
+    tasks: column.tasks.map((candidate) => {
+      if (candidate.externalTaskId !== schedule.temporaryExternalTaskId) {
+        return candidate
+      }
+      replaced = true
+      return card
+    }),
+  }))
+  if (!replaced) return board
+
+  return {
+    ...board,
+    dates: dates.map((column) => ({
+      ...column,
+      tasks: normalizeCardPositions(column.tasks),
+    })),
+  }
 }
 
 function DriverTaskCardContent({
@@ -225,7 +439,7 @@ function DriverTaskCardContent({
           {taskKindLabel(card.kind)}
         </p>
         {card.taskText?.trim() && card.taskText.trim() !== card.title.trim() ? (
-          <p className="whitespace-pre-wrap text-sm">{card.taskText.trim()}</p>
+          <p className="text-sm whitespace-pre-wrap">{card.taskText.trim()}</p>
         ) : null}
         <div className="flex flex-wrap gap-1">
           <Badge
@@ -240,6 +454,34 @@ function DriverTaskCardContent({
         </div>
       </CardContent>
     </>
+  )
+}
+
+function RepairPlaceDetailsCard({
+  repairPlace,
+}: {
+  repairPlace: RepairPlaceCard
+}) {
+  const status = repairPlaceDisplayStatus(repairPlace)
+
+  return (
+    <Card
+      size="sm"
+      aria-label={`Ремонтное место бытовки ${repairPlace.unitNumber}`}
+    >
+      <CardHeader>
+        <CardTitle>Бытовка {repairPlace.unitNumber}</CardTitle>
+        {status.stageName ? (
+          <CardDescription>Этап: {status.stageName}</CardDescription>
+        ) : null}
+      </CardHeader>
+      <CardContent className="flex flex-wrap gap-1">
+        <Badge variant={status.badgeVariant}>{status.label}</Badge>
+        <Badge variant={repairPlace.priority <= 2 ? "default" : "secondary"}>
+          Приоритет {repairPlace.priority}
+        </Badge>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -614,6 +856,8 @@ function CurrentColumn({
 }) {
   const currentDate = board.currentDate
   const currentTasks = orderCards(board.current)
+  const physicalRepairPlaces = board.repairPlaces.filter(isPhysicalRepairPlace)
+  const [repairPlacesExpanded, setRepairPlacesExpanded] = useState(false)
   const { setNodeRef, isOver } = useDroppable({
     id: "driver-current",
     disabled,
@@ -638,7 +882,7 @@ function CurrentColumn({
         <div className="flex items-center justify-between gap-2">
           <div>
             <h2 className="font-heading font-semibold">Текущие задания</h2>
-            <p className="text-xs capitalize text-muted-foreground">
+            <p className="text-xs text-muted-foreground capitalize">
               {formatDate(currentDate)}
             </p>
           </div>
@@ -648,7 +892,7 @@ function CurrentColumn({
         </div>
         <div
           className="rounded-lg border bg-muted/35 p-2 text-xs"
-          aria-label={`Ремонтные места: ${board.usedRepairPlaceCount} из ${board.repairPlaceCount} используется`}
+          aria-label={`Ремонтные места: ${board.occupiedRepairPlaceCount} из ${board.repairPlaceCount} занято`}
         >
           <div className="flex items-center justify-between gap-2">
             <span className="font-medium">Ремонтные места</span>
@@ -657,15 +901,61 @@ function CurrentColumn({
                 board.repairPlacesOverCapacity ? "destructive" : "outline"
               }
             >
-              {board.usedRepairPlaceCount}/{board.repairPlaceCount}
+              {board.occupiedRepairPlaceCount} из {board.repairPlaceCount}
             </Badge>
           </div>
           <p className="mt-1 text-muted-foreground">
-            Свободно: {board.availableRepairPlaceCount}
+            Физически свободно:{" "}
+            {Math.max(
+              0,
+              board.repairPlaceCount - board.occupiedRepairPlaceCount
+            )}
           </p>
-          <p className="mt-1 text-muted-foreground">
-            Учитываются занятые места и уже назначенные доставки в ремонт.
-          </p>
+          <div className="mt-1 flex items-start justify-between gap-1">
+            <p className="text-muted-foreground">
+              В списке — только бытовки, уже доставленные в ремонт. Назначенные
+              доставки остаются среди запланированных заданий.
+            </p>
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="ghost"
+              aria-controls="driver-repair-places"
+              aria-expanded={repairPlacesExpanded}
+              aria-label={
+                repairPlacesExpanded
+                  ? "Свернуть список ремонтных мест"
+                  : "Развернуть список ремонтных мест"
+              }
+              onClick={() => setRepairPlacesExpanded((expanded) => !expanded)}
+            >
+              <HugeiconsIcon
+                icon={ChevronDownIcon}
+                data-icon="inline-start"
+                aria-hidden="true"
+              />
+            </Button>
+          </div>
+          {repairPlacesExpanded ? (
+            <div
+              id="driver-repair-places"
+              className="mt-2 flex max-h-72 flex-col gap-2 overflow-y-auto"
+              aria-label="Бытовки в ремонтных местах"
+            >
+              {physicalRepairPlaces.length > 0 ? (
+                physicalRepairPlaces.map((repairPlace) => (
+                  <RepairPlaceDetailsCard
+                    key={repairPlace.repairId}
+                    repairPlace={repairPlace}
+                  />
+                ))
+              ) : (
+                <p role="status" className="text-muted-foreground">
+                  В ремонтных местах пока нет бытовок.
+                </p>
+              )}
+            </div>
+          ) : null}
           {board.repairPlacesOverCapacity ? (
             <p className="mt-1 text-destructive">
               Превышена вместимость склада
@@ -675,7 +965,9 @@ function CurrentColumn({
       </header>
       <div className="min-h-44 flex-1 rounded-xl border border-dashed p-2">
         <SortableContext
-          items={currentTasks.map((card) => `driver-task:${card.externalTaskId}`)}
+          items={currentTasks.map(
+            (card) => `driver-task:${card.externalTaskId}`
+          )}
           strategy={verticalListSortingStrategy}
         >
           {currentTasks.length > 0 ? (
@@ -713,8 +1005,8 @@ function CurrentColumn({
         </SortableContext>
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
-        Перетащите сюда запланированное перемещение или капитальный ремонт.
-        Карточку можно вручную перенести обратно на выбранную дату.
+        Перетащите сюда капитальный ремонт. Карточку можно вручную перенести
+        обратно на выбранную дату.
       </p>
       <p className="mt-1 text-xs text-muted-foreground">
         После ручного освобождения очередь заполнится автоматически через{" "}
@@ -745,7 +1037,7 @@ function CapitalColumn({
       aria-label="Капитальные ремонты"
       className={cn(
         "sticky right-0 z-20 flex min-h-0 flex-col border-l bg-background p-3 transition-colors",
-        isOver && !disabled && "bg-primary/10 ring-2 ring-inset ring-primary"
+        isOver && !disabled && "bg-primary/10 ring-2 ring-primary ring-inset"
       )}
     >
       <header className="mb-3 flex items-center justify-between gap-2">
@@ -812,12 +1104,14 @@ function DatePickerDialog({
   onClose,
   onConfirm,
 }: {
-  item: TaskDragItem | null
+  item: DriverDragItem | null
   minimumDate: string
   onClose: () => void
   onConfirm: (date: string) => void
 }) {
   const [date, setDate] = useState("")
+  const unitNumber =
+    item?.type === "capital" ? item.repair.unitNumber : item?.card.unitNumber
   const canSubmit = Boolean(
     item && isIsoCalendarDate(date) && date >= minimumDate
   )
@@ -834,8 +1128,9 @@ function DatePickerDialog({
           <DialogHeader>
             <DialogTitle>Выберите новую дату</DialogTitle>
             <DialogDescription>
-              Задание бытовки {item.card.unitNumber || "без номера"} будет
-              добавлено в конец очереди выбранной даты.
+              {item.type === "capital"
+                ? `Капитальный ремонт бытовки ${unitNumber || "без номера"} будет добавлен в конец очереди выбранной даты.`
+                : `Задание бытовки ${unitNumber || "без номера"} будет добавлено в конец очереди выбранной даты.`}
             </DialogDescription>
           </DialogHeader>
           <FieldGroup>
@@ -929,7 +1224,11 @@ function ManualMovementDialog({
     }
 
     setValidationError(null)
-    onSubmit({ cabinId, comment: normalizedComment, priority: Number(priority) })
+    onSubmit({
+      cabinId,
+      comment: normalizedComment,
+      priority: Number(priority),
+    })
   }
 
   return (
@@ -938,8 +1237,8 @@ function ManualMovementDialog({
         <DialogHeader>
           <DialogTitle>Создать перемещение</DialogTitle>
           <DialogDescription>
-            Свободное перемещение не занимает ремонтное место и сразу попадает
-            в текущую очередь водителей.
+            Свободное перемещение не занимает ремонтное место и сразу попадает в
+            текущую очередь водителей.
           </DialogDescription>
         </DialogHeader>
         <FieldGroup>
@@ -1014,10 +1313,19 @@ function ManualMovementDialog({
           {validationError ? <FieldError>{validationError}</FieldError> : null}
         </FieldGroup>
         <DialogFooter>
-          <Button type="button" variant="outline" disabled={saving} onClick={onClose}>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={saving}
+            onClick={onClose}
+          >
             Отмена
           </Button>
-          <Button type="button" disabled={saving || cabinsQuery.isLoading} onClick={submit}>
+          <Button
+            type="button"
+            disabled={saving || cabinsQuery.isLoading}
+            onClick={submit}
+          >
             Создать
           </Button>
         </DialogFooter>
@@ -1054,8 +1362,9 @@ export function DriverBoardPage() {
     warehouseId && hasWarehouseAccess(currentUser, warehouseId, "EDIT")
   )
   const [activeItem, setActiveItem] = useState<DriverDragItem | null>(null)
-  const [datePickerItem, setDatePickerItem] =
-    useState<TaskDragItem | null>(null)
+  const [datePickerItem, setDatePickerItem] = useState<DriverDragItem | null>(
+    null
+  )
   const [manualMovementOpen, setManualMovementOpen] = useState(false)
   const [commandError, setCommandError] = useState<unknown>(null)
   const sensors = useSensors(
@@ -1089,18 +1398,13 @@ export function DriverBoardPage() {
     setCommandError(error)
   }
 
-  const moveMutation = useMutation({
-    mutationFn: ({
-      item,
-      targetLane,
-      targetDate,
-      targetIndex,
-    }: {
-      item: TaskDragItem
-      targetLane: "SCHEDULED" | "CURRENT"
-      targetDate: string
-      targetIndex: number
-    }) =>
+  const moveMutation = useMutation<
+    DriverBoardCard,
+    unknown,
+    DriverBoardMove,
+    OptimisticMoveContext
+  >({
+    mutationFn: ({ item, targetLane, targetDate, targetIndex }) =>
       moveDriverBoardTask({
         accessToken: accessToken!,
         externalTaskId: item.card.externalTaskId,
@@ -1113,11 +1417,30 @@ export function DriverBoardPage() {
           targetIndex,
         },
       }),
-    onSuccess: () => {
+    onMutate: async (move) => {
+      const queryKey = driverBoardQueryKey(warehouseId!)
+      await queryClient.cancelQueries({ queryKey, exact: true })
+      const previousBoard = queryClient.getQueryData<DriverBoard>(queryKey)
+      if (previousBoard) {
+        queryClient.setQueryData(
+          queryKey,
+          moveCardOptimistically(previousBoard, move)
+        )
+      }
       setCommandError(null)
-      void refreshBoard()
+      return { queryKey, previousBoard }
     },
-    onError: handleCommandError,
+    onSuccess: async () => {
+      setCommandError(null)
+      await refreshBoard()
+    },
+    onError: async (error, _move, context) => {
+      if (context?.previousBoard) {
+        queryClient.setQueryData(context.queryKey, context.previousBoard)
+      }
+      setCommandError(error)
+      await refreshBoard()
+    },
   })
 
   const promoteMutation = useMutation({
@@ -1133,6 +1456,54 @@ export function DriverBoardPage() {
       void refreshBoard()
     },
     onError: handleCommandError,
+  })
+
+  const scheduleCapitalMutation = useMutation<
+    DriverBoardCard,
+    unknown,
+    CapitalRepairSchedule,
+    OptimisticCapitalScheduleContext
+  >({
+    mutationFn: (schedule) =>
+      scheduleCapitalRepair({
+        accessToken: accessToken!,
+        repairId: schedule.repair.repairId,
+        warehouseId: warehouseId!,
+        targetDate: schedule.targetDate,
+        targetIndex: schedule.targetIndex,
+        idempotencyKey: crypto.randomUUID(),
+      }),
+    onMutate: async (schedule) => {
+      const queryKey = driverBoardQueryKey(warehouseId!)
+      await queryClient.cancelQueries({ queryKey, exact: true })
+      const previousBoard = queryClient.getQueryData<DriverBoard>(queryKey)
+      if (previousBoard) {
+        queryClient.setQueryData(
+          queryKey,
+          scheduleCapitalRepairOptimistically(previousBoard, schedule)
+        )
+      }
+      setCommandError(null)
+      return { queryKey, previousBoard }
+    },
+    onSuccess: async (card, schedule, context) => {
+      if (context) {
+        queryClient.setQueryData<DriverBoard>(context.queryKey, (current) =>
+          current
+            ? resolveOptimisticCapitalSchedule(current, schedule, card)
+            : current
+        )
+      }
+      setCommandError(null)
+      await refreshBoard()
+    },
+    onError: async (error, _schedule, context) => {
+      if (context?.previousBoard) {
+        queryClient.setQueryData(context.queryKey, context.previousBoard)
+      }
+      setCommandError(error)
+      await refreshBoard()
+    },
   })
 
   const returnCapitalMutation = useMutation({
@@ -1206,6 +1577,7 @@ export function DriverBoardPage() {
     !canEdit ||
     moveMutation.isPending ||
     promoteMutation.isPending ||
+    scheduleCapitalMutation.isPending ||
     returnCapitalMutation.isPending ||
     createMutation.isPending ||
     pinMutation.isPending
@@ -1219,13 +1591,12 @@ export function DriverBoardPage() {
     if (!board || disabled) return
     if (
       targetLane === "CURRENT" &&
-      item.lane !== "CURRENT" &&
-      item.card.kind === "DELIVER_TO_REPAIR" &&
-      !board.inboundRepairPlaceAvailable
+      item.lane === "SCHEDULED" &&
+      item.card.kind !== "CAPITAL_TO_PRODUCTION"
     ) {
       setCommandError(
         new Error(
-          "На складе нет свободного или освобождаемого ремонтного места. Сначала завершите или вывезите текущий ремонт."
+          "В текущие задания можно добавить только капитальный ремонт. Обычные запланированные задания остаются на выбранной дате."
         )
       )
       return
@@ -1240,7 +1611,8 @@ export function DriverBoardPage() {
       targetLane === "CURRENT"
         ? orderCards(board.current)
         : orderCards(
-            board.dates.find((column) => column.date === targetDate)?.tasks ?? []
+            board.dates.find((column) => column.date === targetDate)?.tasks ??
+              []
           )
     const resolvedSourceIndex = sourceCards.findIndex(
       (candidate) => candidate.externalTaskId === item.card.externalTaskId
@@ -1249,10 +1621,7 @@ export function DriverBoardPage() {
       resolvedSourceIndex === undefined || resolvedSourceIndex < 0
         ? item.index
         : resolvedSourceIndex
-    let targetIndex = Math.max(
-      0,
-      Math.min(rawTargetIndex, targetCards.length)
-    )
+    let targetIndex = Math.max(0, Math.min(rawTargetIndex, targetCards.length))
 
     if (
       item.lane === targetLane &&
@@ -1271,6 +1640,20 @@ export function DriverBoardPage() {
     }
 
     moveMutation.mutate({ item, targetLane, targetDate, targetIndex })
+  }
+
+  function scheduleCapitalItem(
+    repair: CapitalRepairCard,
+    targetDate: string,
+    targetIndex: number
+  ) {
+    if (!board || disabled) return
+    scheduleCapitalMutation.mutate({
+      repair,
+      targetDate,
+      targetIndex,
+      temporaryExternalTaskId: `pending-capital-repair:${repair.repairId}`,
+    })
   }
 
   function handleDragStart(event: DragStartEvent) {
@@ -1295,12 +1678,39 @@ export function DriverBoardPage() {
         }
       | undefined
 
-    const overCurrent = overData?.lane === "CURRENT" || overData?.type === "current"
+    const overCurrent =
+      overData?.lane === "CURRENT" || overData?.type === "current"
 
     if (item.type === "capital") {
       if (overCurrent) {
         promoteMutation.mutate(item.repair)
+        return
       }
+      if (!event.over || overData?.type === "new-date") {
+        setDatePickerItem(item)
+        return
+      }
+      if (!overData) return
+      const targetDate =
+        typeof overData.date === "string" && isIsoCalendarDate(overData.date)
+          ? overData.date
+          : null
+      if (!targetDate) return
+      const targetColumn = board?.dates.find(
+        (column) => column.date === targetDate
+      )
+      const targetIndex =
+        overData.type === "scheduled-slot" &&
+        typeof overData.index === "number" &&
+        Number.isInteger(overData.index)
+          ? overData.index
+          : overData.type === "task" &&
+              overData.lane === "SCHEDULED" &&
+              typeof overData.index === "number" &&
+              Number.isInteger(overData.index)
+            ? overData.index
+            : (targetColumn?.tasks.length ?? 0)
+      scheduleCapitalItem(item.repair, targetDate, targetIndex)
       return
     }
 
@@ -1313,10 +1723,9 @@ export function DriverBoardPage() {
 
     if (overCurrent) {
       let currentTargetIndex =
-        typeof overData?.index === "number" &&
-        Number.isInteger(overData.index)
+        typeof overData?.index === "number" && Number.isInteger(overData.index)
           ? overData.index
-          : board?.current.length ?? 0
+          : (board?.current.length ?? 0)
       if (
         overData?.type === "task" &&
         item.lane === "CURRENT" &&
@@ -1324,7 +1733,12 @@ export function DriverBoardPage() {
       ) {
         currentTargetIndex += 1
       }
-      moveItem(item, "CURRENT", board?.currentDate ?? item.date, currentTargetIndex)
+      moveItem(
+        item,
+        "CURRENT",
+        board?.currentDate ?? item.date,
+        currentTargetIndex
+      )
       return
     }
 
@@ -1352,7 +1766,7 @@ export function DriverBoardPage() {
             typeof overData.index === "number" &&
             Number.isInteger(overData.index)
           ? overData.index
-        : (targetColumn?.tasks.length ?? 0)
+          : (targetColumn?.tasks.length ?? 0)
     if (
       overData.type === "task" &&
       overData.lane === "SCHEDULED" &&
@@ -1473,7 +1887,15 @@ export function DriverBoardPage() {
       </DndContext>
 
       <DatePickerDialog
-        key={datePickerItem?.card.externalTaskId ?? "closed"}
+        key={
+          datePickerItem
+            ? `${datePickerItem.type}:${
+                datePickerItem.type === "task"
+                  ? datePickerItem.card.externalTaskId
+                  : datePickerItem.repair.repairId
+              }`
+            : "closed"
+        }
         item={datePickerItem}
         minimumDate={board.currentDate}
         onClose={() => setDatePickerItem(null)}
@@ -1483,6 +1905,10 @@ export function DriverBoardPage() {
             (column) => column.date === date
           )
           const targetIndex = targetColumn?.tasks.length ?? 0
+          if (datePickerItem.type === "capital") {
+            scheduleCapitalItem(datePickerItem.repair, date, targetIndex)
+            return
+          }
           moveItem(datePickerItem, "SCHEDULED", date, targetIndex)
         }}
       />

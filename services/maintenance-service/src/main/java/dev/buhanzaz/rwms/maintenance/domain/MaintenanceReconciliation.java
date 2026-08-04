@@ -346,6 +346,18 @@ public class MaintenanceReconciliation {
     updatedAt = now;
   }
 
+  /** Cancels only work that has not been externally confirmed. Historical work rows remain. */
+  public boolean cancelPending() {
+    if ("CANCELLED".equals(state)) return false;
+    if (!CLAIMABLE_STATES.contains(state)) {
+      throw new IllegalStateException("Only pending reconciliation work can be cancelled");
+    }
+    state = "CANCELLED";
+    lastErrorCode = null;
+    updatedAt = MaintenanceTime.now();
+    return true;
+  }
+
   public void requireStableIdentity(UUID repairId) {
     if (!java.util.Objects.equals(this.repairId, repairId)) {
       throw new IllegalArgumentException("STABLE_IDENTITY");

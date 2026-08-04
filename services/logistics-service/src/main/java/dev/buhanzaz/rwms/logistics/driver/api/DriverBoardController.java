@@ -5,6 +5,7 @@ import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardRe
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.MoveDriverBoardTaskRequest;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.PromoteCapitalRepairRequest;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.ReturnCapitalRepairRequest;
+import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.ScheduleCapitalRepairRequest;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.DriverTaskResponse;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverBoardService;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverQueueScheduler;
@@ -86,5 +87,25 @@ public class DriverBoardController {
       builder.header("Idempotency-Replayed", "true");
     }
     return builder.body(response);
+  }
+
+  @PostMapping("/capital-repairs/{repairId}/schedule")
+  public ResponseEntity<DriverBoardCardResponse> scheduleCapitalRepair(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID repairId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody ScheduleCapitalRepairRequest request) {
+    access.requireEdit(jwt, request.warehouseId());
+    DriverBoardService.CapitalRepairScheduleResult result =
+        board.scheduleCapitalRepair(access.subjectId(jwt), idempotencyKey, repairId, request);
+    ResponseEntity.BodyBuilder builder =
+        ResponseEntity.status(result.replayed() ? HttpStatus.OK : HttpStatus.CREATED)
+            .header(
+                HttpHeaders.ETAG,
+                '"' + Long.toString(result.card().taskBoardTaskVersion()) + '"');
+    if (result.replayed()) {
+      builder.header("Idempotency-Replayed", "true");
+    }
+    return builder.body(result.card());
   }
 }

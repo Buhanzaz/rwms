@@ -104,7 +104,8 @@ public final class RentalInquiryApiModels {
   public record PublishClientPresentationRequest(
       @NotNull UUID warehouseId,
       @NotNull @Size(min = 1, max = 5)
-          List<@NotNull @Valid PresentationGroupInput> groups) {}
+          List<@NotNull @Valid PresentationGroupInput> groups,
+      UUID manualBookingDraftId) {}
 
   public record PresentationPhoto(
       UUID mediaId,
@@ -147,6 +148,7 @@ public final class RentalInquiryApiModels {
   public record RentalSettingsResponse(
       long version,
       int chatSelectionHoldMinutes,
+      int manualBookingHoldMinutes,
       int presentationHoldMinutes,
       int draftReservationHoldMinutes,
       UUID updatedBy,
@@ -155,8 +157,19 @@ public final class RentalInquiryApiModels {
   public record UpdateRentalSettingsRequest(
       @NotNull @Min(0) Long expectedVersion,
       @NotNull @Min(1) @Max(1_440) Integer chatSelectionHoldMinutes,
+      @NotNull @Min(5) @Max(1_440) Integer manualBookingHoldMinutes,
       @NotNull @Min(5) @Max(1_440) Integer presentationHoldMinutes,
       @NotNull @Min(1_440) @Max(14_400) Integer draftReservationHoldMinutes) {}
+
+  public record ManualBookingDraftHoldsRequest(
+      @NotNull UUID warehouseId,
+      @NotNull @Size(min = 1, max = 100) List<@NotNull UUID> rentalItemIds) {}
+
+  public record ManualBookingDraftHoldsResponse(
+      UUID draftId,
+      UUID warehouseId,
+      OffsetDateTime expiresAt,
+      List<UUID> rentalItemIds) {}
 
   public record ConfirmClientPresentationRequest(
       @NotNull @Size(min = 1, max = 100) List<@NotNull UUID> selectedRentalItemIds) {}

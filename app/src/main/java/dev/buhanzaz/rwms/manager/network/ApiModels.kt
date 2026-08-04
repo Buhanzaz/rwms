@@ -142,8 +142,6 @@ data class PageMetadataDto(
     val totalPages: Int,
 )
 
-data class StartInventoryRequest(val warehouseId: String)
-
 data class ResolveNumberRequest(
     val expectedSessionRevision: Long,
     val submittedNumber: String,
@@ -185,6 +183,7 @@ data class SaveInspectionRequest(
 data class InventoryPlanLineInputDto(
     val aggregationKind: String,
     @param:ExplicitNull val catalogNodeId: String?,
+    @param:ExplicitNull val routingCatalogNodeId: String?,
     @param:ExplicitNull val description: String?,
     @param:ExplicitNull val type: String?,
     @param:ExplicitNull val unit: String?,
@@ -206,7 +205,6 @@ data class InventoryPlanSelectionDto(
     val priority: Int = 3,
     @param:ExplicitNull val coverMediaId: String? = null,
     val movementToRepair: Boolean,
-    val movementToShipment: Boolean,
     @param:ExplicitNull val logisticsPlanningMode: String?,
     @param:ExplicitNull val logisticsScheduledDate: String? = null,
     val lines: List<InventoryPlanLineInputDto>,
@@ -249,7 +247,6 @@ data class InventoryFrozenPlanDto(
     val priority: Int = 3,
     val coverMediaId: String? = null,
     val movementToRepair: Boolean = false,
-    val movementToShipment: Boolean = false,
     val logisticsPlanningMode: String? = null,
     val logisticsScheduledDate: String? = null,
     val lines: List<InventoryFrozenPlanLineDto> = emptyList(),
@@ -266,18 +263,6 @@ data class ResolveInventoryConflictRequest(
 data class InventoryRevisionExpectationDto(
     val findingId: String,
     val expectedFindingRevision: Long,
-)
-
-data class InventoryCompletionPreviewRequest(
-    val expectedSessionRevision: Long,
-    val findingRevisions: List<InventoryRevisionExpectationDto>,
-)
-
-data class CompleteInventorySessionRequest(
-    val expectedSessionRevision: Long,
-    val findingRevisions: List<InventoryRevisionExpectationDto>,
-    val acknowledgementSha256: String,
-    val validationSha256: String,
 )
 
 data class InventoryCompletionRiskDto(
@@ -806,7 +791,6 @@ data class PriorityVersionRequest(
     val expectedVersion: Long,
     val priority: Int,
     val movementToRepair: Boolean,
-    val movementToShipment: Boolean,
     @param:ExplicitNull val logisticsPlanningMode: String?,
     @param:ExplicitNull val logisticsScheduledDate: String?,
 )
@@ -890,7 +874,6 @@ data class RepairDto(
     val priority: Int = 3,
     val sourceParty: String? = null,
     val movementToRepair: Boolean = false,
-    val movementToShipment: Boolean = false,
     val logisticsPlanningMode: String? = null,
     val logisticsScheduledDate: String? = null,
     val plan: RepairPlanDto,

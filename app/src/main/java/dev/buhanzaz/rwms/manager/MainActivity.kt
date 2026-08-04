@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.manager
 
+import android.app.Application
 import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
@@ -7,9 +8,20 @@ import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.work.Configuration
 import dev.buhanzaz.rwms.manager.navigation.ManagerApp
 import dev.buhanzaz.rwms.manager.network.RwmsBackend
 import dev.buhanzaz.rwms.manager.ui.ManagerViewModel
+
+/**
+ * WorkManager is intentionally initialized on demand.  Its library manifest initializer is
+ * removed because it blocks every cold launch before MainActivity; implementing the provider
+ * preserves process-death recovery when Android starts a queued worker in a fresh process.
+ */
+class ManagerApplication : Application(), Configuration.Provider {
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder().build()
+}
 
 class MainActivity : ComponentActivity() {
     private var volumeShutterHandler: (() -> Unit)? = null

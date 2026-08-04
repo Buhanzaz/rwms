@@ -311,7 +311,6 @@ public final class ApiModels {
 
   public record WarehouseQueueCapabilities(
       UUID warehouseId,
-      boolean movementToShipmentAvailable,
       List<MovementQueueCapability> movementQueueDefinitions) {
     public WarehouseQueueCapabilities {
       movementQueueDefinitions = List.copyOf(movementQueueDefinitions);
@@ -622,6 +621,21 @@ public final class ApiModels {
   public record CancelTaskRequest(
       @NotNull @Min(0) Long expectedTaskVersion,
       @NotBlank @Size(max = 1000) String reason) {}
+
+  public enum PreStartCancellationOutcome {
+    CANCELLED,
+    ALREADY_CANCELLED,
+    STARTED,
+    VERSION_CONFLICT
+  }
+
+  public record PreStartCancellationResult(
+      @NotNull PreStartCancellationOutcome outcome,
+      @NotNull UUID taskId,
+      @NotNull UUID externalTaskId,
+      @Min(0) long taskVersion,
+      @NotNull TaskStatus status,
+      OffsetDateTime cancelledAt) {}
 
   public record CancelledTaskDto(
       UUID taskId,

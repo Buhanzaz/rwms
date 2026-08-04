@@ -6,6 +6,7 @@ import static dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceStatusAction
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceStatusAction;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import java.util.List;
 import java.util.UUID;
@@ -66,12 +67,14 @@ class MaintenanceAssetTransitionPolicyTest {
   }
 
   @Test
-  void repairOwnedTransitionRejectsRentedAndInTransferStatuses() {
+  void repairOwnedTransitionRejectsRentedFencedAndTerminalStatuses() {
     UUID repairId = UUID.randomUUID();
 
     for (RentalItemStatus status : RentalItemStatus.values()) {
       if (status == RentalItemStatus.RENTED
-          || status == RentalItemStatus.IN_TRANSFER) {
+          || status == RentalItemStatus.IN_TRANSFER
+          || status == RentalItemStatus.WRITTEN_OFF
+          || status == RentalItemStatus.LOST) {
         assertThatThrownBy(() -> MaintenanceAssetTransitionPolicy.target(
             status, QUEUE_FOR_REPAIR, MAINTENANCE_REPAIR, repairId, null))
             .as("source %s", status)
@@ -82,6 +85,22 @@ class MaintenanceAssetTransitionPolicyTest {
             status, QUEUE_FOR_REPAIR, MAINTENANCE_REPAIR, repairId, null))
             .as("source %s", status)
             .isEqualTo(RentalItemStatus.REPAIR);
+      }
+    }
+  }
+
+  @Test
+  void everyMaintenanceActionRejectsFencedAndTerminalSources() {
+    UUID ownerId = UUID.randomUUID();
+
+    for (RentalItemStatus source : List.of(
+        RentalItemStatus.IN_TRANSFER, RentalItemStatus.WRITTEN_OFF, RentalItemStatus.LOST)) {
+      for (MaintenanceStatusAction action : MaintenanceStatusAction.values()) {
+        assertThatThrownBy(() -> MaintenanceAssetTransitionPolicy.target(
+            source, action, MAINTENANCE_REPAIR, ownerId, null))
+            .as("source %s, action %s", source, action)
+            .isInstanceOf(AssetConflictException.class)
+            .hasMessageContaining("not allowed");
       }
     }
   }
@@ -150,7 +169,8 @@ class MaintenanceAssetTransitionPolicyTest {
         RentalItemStatus.SALE,
         RentalItemStatus.USED_SALE,
         RentalItemStatus.CAPITAL_REPAIR,
-        RentalItemStatus.WRITTEN_OFF);
+        RentalItemStatus.WRITTEN_OFF,
+        RentalItemStatus.LOST);
 
     forbidden.forEach(source -> assertThatThrownBy(() ->
         MaintenanceAssetTransitionPolicy.target(

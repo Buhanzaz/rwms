@@ -1,6 +1,8 @@
 package dev.buhanzaz.rwms.worker.feature.tasks
 
+import dev.buhanzaz.rwms.worker.core.database.WorkerAssignmentEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerCategoryEntity
+import dev.buhanzaz.rwms.worker.core.database.WorkerGroupEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerTaskEntity
 
 internal data class TaskQueueSection(
@@ -9,6 +11,13 @@ internal data class TaskQueueSection(
     val queuePurpose: String,
     val sortOrder: Int,
     val tasks: List<WorkerTaskEntity>,
+)
+
+internal data class WorkBoardColumn(
+    val id: String,
+    val name: String,
+    val personal: Boolean,
+    val sections: List<TaskQueueSection>,
 )
 
 internal data class QueueTaskTimerPresentation(
@@ -79,6 +88,96 @@ internal fun buildTaskQueueSections(
     return projected + upgradedV1Fallback
 }
 
+/**
+ * Projects the service-issued queue/group bindings into worker-facing columns.
+ * A live assignment is more specific than a category audience: once present,
+ * the card is visible only in the assigned group (or in personal work when the
+ * assignment deliberately has no group).
+ */
+internal fun buildWorkBoardColumns(
+    groups: List<WorkerGroupEntity>,
+    categories: List<WorkerCategoryEntity>,
+    tasks: List<WorkerTaskEntity>,
+    assignments: List<WorkerAssignmentEntity>,
+): List<WorkBoardColumn> {
+    val liveAssignmentsByEntry = assignments
+        .filter { it.status == "ACTIVE" || it.status == "PAUSED" }
+        .groupBy { it.entryId }
+    val categoriesByQueue = categories.associateBy { it.queueId }
+
+    fun visibleInGroup(task: WorkerTaskEntity, groupId: String): Boolean {
+        val liveAssignments = liveAssignmentsByEntry[task.entryId].orEmpty()
+        if (liveAssignments.isNotEmpty()) {
+            return liveAssignments.any { it.workerGroupId == groupId }
+        }
+        return groupId in categoriesByQueue[task.categoryId]?.groupIds().orEmpty()
+    }
+
+    fun visibleAsPersonal(task: WorkerTaskEntity): Boolean {
+        val liveAssignments = liveAssignmentsByEntry[task.entryId].orEmpty()
+        if (liveAssignments.isNotEmpty()) {
+            return liveAssignments.any { it.workerGroupId == null }
+        }
+        return categoriesByQueue[task.categoryId]?.groupIds().orEmpty().isEmpty()
+    }
+
+    val personalCategories = categories.filter { it.groupIds().isEmpty() }
+    val personalTasks = tasks.filter(::visibleAsPersonal)
+    val personalSection = personalTasks.takeIf(List<WorkerTaskEntity>::isNotEmpty)?.let {
+        TaskQueueSection(
+            queueId = PERSONAL_COLUMN_ID,
+            name = "Личные задания",
+            queuePurpose = "PERSONAL",
+            sortOrder = Int.MAX_VALUE,
+            tasks = it.sortedWith(
+                compareBy<WorkerTaskEntity> { task -> task.categorySortOrder }
+                    .thenBy { task -> task.queuePosition }
+                    .thenByDescending { task -> task.priority }
+                    .thenBy { task -> task.localId },
+            ),
+        )
+    }
+    val groupColumns = groups
+        .distinctBy { it.groupId }
+        .sortedWith(compareBy(WorkerGroupEntity::name, WorkerGroupEntity::groupId))
+        .mapIndexed { index, group ->
+            val authorizedCategories = categories.filter { category ->
+                group.groupId in category.groupIds() ||
+                    tasks.any { task ->
+                        task.categoryId == category.queueId && visibleInGroup(task, group.groupId)
+                    }
+            }
+            WorkBoardColumn(
+                id = group.groupId,
+                name = group.name,
+                personal = false,
+                sections = buildTaskQueueSections(
+                    categories = authorizedCategories,
+                    tasks = tasks.filter { visibleInGroup(it, group.groupId) },
+                ) + if (index == 0) listOfNotNull(personalSection) else emptyList(),
+            )
+        }
+
+    val personalColumn = if (
+        groupColumns.isEmpty() && (personalCategories.isNotEmpty() || personalTasks.isNotEmpty())
+    ) {
+        WorkBoardColumn(
+            id = PERSONAL_COLUMN_ID,
+            name = "Личные задания",
+            personal = true,
+            sections = buildTaskQueueSections(personalCategories, personalTasks),
+        )
+    } else {
+        null
+    }
+    return groupColumns + listOfNotNull(personalColumn)
+}
+
+internal fun WorkerCategoryEntity.groupIds(): Set<String> =
+    groupIdsKey.splitToSequence(GROUP_IDS_SEPARATOR)
+        .filter(String::isNotBlank)
+        .toSet()
+
 private fun List<WorkerTaskEntity>.orderedWithinQueue(): List<WorkerTaskEntity> =
     sortedWith(
         compareBy<WorkerTaskEntity> { it.queuePosition }
@@ -94,3 +193,6 @@ private fun signedQueueDurationLabel(seconds: Long): String {
     val remainder = value % 60
     return "$sign%d:%02d:%02d".format(hours, minutes, remainder)
 }
+
+private const val GROUP_IDS_SEPARATOR = '\u001F'
+private const val PERSONAL_COLUMN_ID = "personal"

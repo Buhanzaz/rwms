@@ -3,13 +3,11 @@ import type { RepairEstimateCatalogNodeDto } from "@/features/repair-estimate-ca
 import type {
   EstimateRentalItemOptionDto,
   MoneyDecimal,
-  RepairEstimateCompletionMode,
   RepairEstimateDto,
   RepairEstimateEditorDraft,
   RepairEstimateLineDto,
   RepairEstimateLineType,
   RepairEstimateTaskPlanCommandDto,
-  RepairEstimateTaskPlanKind,
   RepairEstimateTaskPlanDto,
 } from "@/features/repair-estimates/model/repair-estimate"
 
@@ -202,14 +200,7 @@ export function assertTaskPlansValid(
     }
     planIds.add(plan.id)
     if (plan.kind !== "REPAIR_WORK") {
-      if (
-        !["MOVE_TO_REPAIR", "MOVE_FROM_REPAIR"].includes(plan.kind) ||
-        plan.primaryLineId !== null ||
-        plan.includedLineIds.length !== 0
-      ) {
-        throw new Error(`${label}: состав плана перемещения некорректен`)
-      }
-      return
+      throw new Error(`${label}: план может содержать только ремонтные работы`)
     }
     if (
       plan.includedLineIds.length === 0 ||
@@ -665,52 +656,6 @@ export function buildRepairEstimateTaskPlans(
   })
 }
 
-export function createRepairEstimateMovementTaskPlan(
-  kind: Exclude<RepairEstimateTaskPlanKind, "REPAIR_WORK">
-): RepairEstimateTaskPlanDto {
-  return {
-    id: createOpaqueId(
-      kind === "MOVE_TO_REPAIR" ? "move-to-repair" : "move-from-repair"
-    ),
-    kind,
-    includedLineIds: [],
-    primaryLineId: null,
-    groupComment: "",
-    queueId: null,
-    queueName: null,
-    routeQueueKind: "MOVEMENT",
-    sortOrder: 0,
-    generationStatus: "PENDING_GENERATION",
-    workflowRequestRef: null,
-  }
-}
-
-export function applyRepairEstimateMovementPlans(params: {
-  plans: RepairEstimateTaskPlanDto[]
-  movementRequired: boolean
-  movementPlans?: RepairEstimateTaskPlanDto[]
-}) {
-  const workPlans = params.plans.filter((plan) => plan.kind === "REPAIR_WORK")
-  if (!params.movementRequired) {
-    return workPlans.map((plan, index) => ({
-      ...plan,
-      sortOrder: (index + 1) * 10,
-    }))
-  }
-
-  const candidates = [...params.plans, ...(params.movementPlans ?? [])]
-  const moveTo =
-    candidates.find((plan) => plan.kind === "MOVE_TO_REPAIR") ??
-    createRepairEstimateMovementTaskPlan("MOVE_TO_REPAIR")
-  const moveFrom =
-    candidates.find((plan) => plan.kind === "MOVE_FROM_REPAIR") ??
-    createRepairEstimateMovementTaskPlan("MOVE_FROM_REPAIR")
-  return [moveTo, ...workPlans, moveFrom].map((plan, index) => ({
-    ...plan,
-    sortOrder: (index + 1) * 10,
-  }))
-}
-
 export function validateAutoCompletion(
   lines: RepairEstimateLineDto[],
   catalog: RepairEstimateCatalogIndex
@@ -747,19 +692,8 @@ export function validateAutoCompletion(
 
 export function finalizeTaskPlans(params: {
   plans: RepairEstimateTaskPlanDto[]
-  completionMode: RepairEstimateCompletionMode
-  movementRequired?: boolean
 }) {
-  const plans = params.movementRequired
-    ? params.plans.some((plan) => plan.kind !== "REPAIR_WORK")
-      ? params.plans
-      : applyRepairEstimateMovementPlans({
-          plans: params.plans,
-          movementRequired: true,
-        })
-    : params.plans.filter((plan) => plan.kind === "REPAIR_WORK")
-
-  return plans.map((plan, index) => {
+  return params.plans.map((plan, index) => {
     const queueName = plan.queueName?.trim() || null
 
     return {

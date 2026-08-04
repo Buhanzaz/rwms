@@ -24,6 +24,6 @@ rwms:
       enabled: ${LOGISTICS_KAFKA_ENABLED:false}
   logistics:
     security:
-      dev-auth-bypass: ${LOGISTICS_DEV_AUTH_BYPASS:true}
+      dev-auth-bypass: ${LOGISTICS_DEV_AUTH_BYPASS:false}
   cors:
     allowed-origins: ${PANEL_ORIGIN:http://localhost:5173}

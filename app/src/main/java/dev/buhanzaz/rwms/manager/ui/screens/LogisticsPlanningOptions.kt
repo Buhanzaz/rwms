@@ -1,6 +1,8 @@
 package dev.buhanzaz.rwms.manager.ui.screens
 
 import android.app.DatePickerDialog
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -26,8 +28,53 @@ import dev.buhanzaz.rwms.manager.ui.withMovementToRepair
 import java.time.LocalDate
 
 /**
- * The maintenance API owns the logistics request. This component deliberately knows nothing
- * about task-board queues: the selected warehouse resolves the movement through logistics.
+ * Priority belongs to the repair and to both logistics legs selected by movement to repair. The
+ * server assigns repair-board priority 1 once inbound driver delivery finishes.
+ */
+@Composable
+internal fun LogisticsTaskPriorityOptions(
+    editor: MaintenanceEditorState,
+    enabled: Boolean,
+    onEdit: ((MaintenanceEditorState) -> MaintenanceEditorState) -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Приоритет ремонта", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Выберите значение от 1 до 5. При входящем перемещении это же значение " +
+                "передаётся ремонту и заданию логистики; после завершения доставки сервер " +
+                "назначает задаче ремонтной очереди приоритет 1.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            "Без перемещения на ремонт выбранный приоритет применяется напрямую к ремонту. " +
+                "С перемещением после выполнения ремонта автоматически создаётся задание " +
+                "на перемещение с ремонта с этим же приоритетом.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            (1..5).forEach { priority ->
+                FilterChip(
+                    selected = editor.priority == priority,
+                    onClick = { onEdit { current -> current.copy(priority = priority) } },
+                    enabled = enabled,
+                    label = { Text(priority.toString()) },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The maintenance API owns the inbound logistics request. This component only captures its
+ * planning; the server owns repair-board task creation and its post-delivery priority.
  */
 @Composable
 internal fun RepairMovementLogisticsOptions(
@@ -61,7 +108,9 @@ internal fun RepairMovementLogisticsOptions(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
-            "После доставки бытовка появится в очереди ремонтных заданий с системным специальным приоритетом.",
+            "После завершения входящей доставки сервер назначит задаче ремонтной очереди " +
+                "приоритет 1, а после выполнения ремонта автоматически создаст перемещение " +
+                "с ремонта.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

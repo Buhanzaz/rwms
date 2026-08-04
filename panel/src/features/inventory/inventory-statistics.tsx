@@ -2,7 +2,13 @@ import { useMemo, useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -57,6 +63,20 @@ export function InventoryStatistics({
         .filter((finding) => finding.visibleLines.length > 0),
     [findings, lineType]
   )
+  const catalogDescriptions = useMemo(() => {
+    const descriptions = new Map<string, string>()
+
+    for (const finding of findings) {
+      for (const line of finding.lines) {
+        const catalogNodeId = line.catalogSnapshot?.nodeId
+        if (!catalogNodeId || !line.description.trim()) continue
+
+        descriptions.set(`${line.lineType}:${catalogNodeId}`, line.description)
+      }
+    }
+
+    return descriptions
+  }, [findings])
 
   return (
     <section
@@ -223,8 +243,12 @@ export function InventoryStatistics({
         <Card size="sm">
           <CardHeader>
             <CardTitle>Итоговые позиции</CardTitle>
+            <CardDescription>
+              Все работы и материалы: количество, цена и сумма по каждой
+              позиции.
+            </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="overflow-x-auto">
             <Table className="min-w-[40rem]">
               <TableHeader>
                 <TableRow>
@@ -236,23 +260,33 @@ export function InventoryStatistics({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {statistics.aggregates.map((aggregate) => (
-                  <TableRow key={aggregate.key}>
-                    <TableCell>
-                      {aggregate.lineType === "WORK" ? "Работа" : "Материал"}
-                    </TableCell>
-                    <TableCell>{aggregate.description}</TableCell>
-                    <TableCell>
-                      {aggregate.quantity} {aggregate.unit}
-                    </TableCell>
-                    <TableCell>
-                      {formatMoneyDecimal(aggregate.unitPrice)} ₽
-                    </TableCell>
-                    <TableCell>
-                      {formatMoneyDecimal(aggregate.total)} ₽
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {statistics.aggregates.map((aggregate) => {
+                  const description =
+                    aggregate.description !== "Позиция без наименования" ||
+                    !aggregate.catalogNodeId
+                      ? aggregate.description
+                      : (catalogDescriptions.get(
+                          `${aggregate.lineType}:${aggregate.catalogNodeId}`
+                        ) ?? aggregate.description)
+
+                  return (
+                    <TableRow key={aggregate.key}>
+                      <TableCell>
+                        {aggregate.lineType === "WORK" ? "Работа" : "Материал"}
+                      </TableCell>
+                      <TableCell>{description}</TableCell>
+                      <TableCell>
+                        {aggregate.quantity} {aggregate.unit}
+                      </TableCell>
+                      <TableCell>
+                        {formatMoneyDecimal(aggregate.unitPrice)} ₽
+                      </TableCell>
+                      <TableCell>
+                        {formatMoneyDecimal(aggregate.total)} ₽
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
               </TableBody>
               <TableFooter>
                 <TableRow>

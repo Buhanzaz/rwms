@@ -1,6 +1,11 @@
 package dev.buhanzaz.rwms.gateway.config;
 
+import java.net.URI;
+import java.time.Duration;
+import java.util.List;
+
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -9,9 +14,6 @@ import lombok.Getter;
 import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
-
-import java.net.URI;
-import java.util.List;
 
 @Getter
 @Validated
@@ -22,6 +24,7 @@ public class GatewayProperties {
   @Valid private final Security security = new Security();
   @Valid private final Cors cors = new Cors();
   @Valid private final AppLinks appLinks = new AppLinks();
+  @Valid private final Sse sse = new Sse();
   @Setter
   @NotNull private URI publicBaseUri;
 
@@ -69,5 +72,15 @@ public class GatewayProperties {
                 message = "must be a colon-separated SHA-256 certificate fingerprint")
             String>
         sha256CertFingerprints = List.of();
+  }
+
+  @Getter
+  @Setter
+  public static final class Sse {
+    @Min(1)
+    private int maxConnections = 128;
+
+    @NotNull
+    private Duration headerTimeout = Duration.ofSeconds(10);
   }
 }

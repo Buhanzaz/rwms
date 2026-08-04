@@ -1290,7 +1290,7 @@ public class LogisticsDocumentService {
         LogisticsTargetService.MAINTENANCE,
         TRANSFER_MAINTENANCE_PREPARE_DEPARTURE,
         transferMaintenanceDigest(
-            TRANSFER_MAINTENANCE_PREPARE_DEPARTURE, document, line, null, false),
+            TRANSFER_MAINTENANCE_PREPARE_DEPARTURE, document, line, null),
         now);
     createLineAttempt(
         document,
@@ -1364,8 +1364,7 @@ public class LogisticsDocumentService {
     document.beginTransferArrival();
     documentRepository.saveAndFlush(document);
     line.beginArrival();
-    line.configureRepairContinuation(
-        request.priority(), Boolean.TRUE.equals(request.movementToShipment()));
+    line.configureRepairContinuation(request.priority());
     lineRepository.saveAndFlush(line);
     List<LogisticsMediaReference> references =
         request.references().stream()
@@ -1441,7 +1440,6 @@ public class LogisticsDocumentService {
         line.getId(),
         preflight.activeRepairId(),
         preflight.priorityRequired(),
-        preflight.movementToShipmentAvailable(),
         preflight.missingQueueDefinitionIds());
   }
 
@@ -1847,9 +1845,6 @@ public class LogisticsDocumentService {
   }
 
   private static void validateTransferMediaReferences(ArriveTransferLineRequest request) {
-    if (request.movementToShipment() == null) {
-      throw new IllegalArgumentException("movementToShipment is required");
-    }
     if (request.references() == null
         || request.references().isEmpty()
         || request.references().size() > 20) {
@@ -1891,7 +1886,6 @@ public class LogisticsDocumentService {
         || (line.hasActiveRepair() && !preflight.priorityRequired())
         || (!line.hasActiveRepair()
             && (preflight.priorityRequired()
-                || preflight.movementToShipmentAvailable()
                 || !preflight.missingQueueDefinitionIds().isEmpty()))) {
       throw new LogisticsConflictException(
           "Maintenance repair truth changed while the cabin was in transfer");
@@ -1902,15 +1896,12 @@ public class LogisticsDocumentService {
   private static void validateTransferArrivalContinuation(
       ArriveTransferLineRequest request,
       LogisticsDependencyGateway.TransferRepairArrivalPreflight preflight) {
-    if (request.movementToShipment() == null) {
-      throw new IllegalArgumentException("movementToShipment is required");
-    }
     if (!preflight.missingQueueDefinitionIds().isEmpty()) {
       throw new LogisticsConflictException(
           "Target warehouse is missing queues required by the active repair");
     }
     if (preflight.activeRepairId() == null) {
-      if (request.priority() != null || Boolean.TRUE.equals(request.movementToShipment())) {
+      if (request.priority() != null) {
         throw new LogisticsConflictException(
             "A transfer without an active repair has no repair continuation settings");
       }
@@ -1919,11 +1910,6 @@ public class LogisticsDocumentService {
     if (request.priority() == null || request.priority() < 1 || request.priority() > 5) {
       throw new LogisticsConflictException(
           "The accepting employee must select a repair priority");
-    }
-    if (Boolean.TRUE.equals(request.movementToShipment())
-        && !preflight.movementToShipmentAvailable()) {
-      throw new LogisticsConflictException(
-          "Movement to shipment is unavailable at the target warehouse");
     }
   }
 
@@ -2042,8 +2028,7 @@ public class LogisticsDocumentService {
       String operation,
       LogisticsDocument document,
       LogisticsDocumentLine line,
-      Integer priority,
-      boolean movementToShipment) {
+      Integer priority) {
     List<String> values = new ArrayList<>();
     values.add(document.getId().toString());
     values.add(line.getId().toString());
@@ -2051,7 +2036,6 @@ public class LogisticsDocumentService {
     values.add(document.getWarehouseId().toString());
     values.add(transferDestination(document).toString());
     values.add(priority == null ? null : priority.toString());
-    values.add(Boolean.toString(movementToShipment));
     return LogisticsCommandChecksum.sha256(operation, values);
   }
 
@@ -2244,7 +2228,6 @@ public class LogisticsDocumentService {
               values.add(Long.toString(reference.generation()));
             });
     values.add(request.priority() == null ? null : request.priority().toString());
-    values.add(Boolean.toString(request.movementToShipment()));
     return values;
   }
 

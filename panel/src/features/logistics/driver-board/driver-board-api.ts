@@ -59,6 +59,31 @@ export function promoteCapitalRepair(params: {
   )
 }
 
+export function scheduleCapitalRepair(params: {
+  accessToken: string
+  repairId: string
+  warehouseId: string
+  targetDate: string
+  targetIndex: number
+  idempotencyKey: string
+}) {
+  return bearerRequest<DriverBoardCard>(
+    params.accessToken,
+    `${DRIVER_BOARD_API}/capital-repairs/${encodeURIComponent(params.repairId)}/schedule`,
+    {
+      method: "POST",
+      headers: {
+        "Idempotency-Key": params.idempotencyKey,
+      },
+      body: JSON.stringify({
+        warehouseId: params.warehouseId,
+        targetDate: params.targetDate,
+        targetIndex: params.targetIndex,
+      }),
+    }
+  )
+}
+
 export function returnCapitalRepair(params: {
   accessToken: string
   externalTaskId: string

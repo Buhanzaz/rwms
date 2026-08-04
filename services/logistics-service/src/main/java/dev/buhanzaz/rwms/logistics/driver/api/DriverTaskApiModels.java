@@ -82,4 +82,43 @@ public final class DriverTaskApiModels {
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt,
       OffsetDateTime completedAt) {}
+
+  /**
+   * Maintenance-facing result of looking up or compensating a repair movement.
+   *
+   * <p>The outcome is intentionally coarser than the workflow state: it tells maintenance whether
+   * replacement/merge can continue, while the snapshot keeps the logistics and task-board fencing
+   * values needed for a recoverable retry.
+   */
+  public enum MaintenanceDriverTaskCompensationOutcome {
+    ABSENT,
+    PENDING,
+    CANCELLED,
+    STARTED,
+    COMPLETED,
+    RECONCILIATION_REQUIRED
+  }
+
+  /**
+   * Strict private snapshot for one repair-scoped driver task. Fields from a task-board read are
+   * null when no external registration is known or no safe remote reconciliation was attempted.
+   */
+  public record MaintenanceDriverTaskCompensationResponse(
+      UUID repairId,
+      DriverTaskKind kind,
+      MaintenanceDriverTaskCompensationOutcome outcome,
+      UUID taskId,
+      Long taskVersion,
+      DriverTaskState state,
+      UUID externalTaskId,
+      UUID taskBoardTaskId,
+      Long taskBoardTaskVersion,
+      UUID taskBoardEntryId,
+      Long taskBoardEntryVersion,
+      String taskBoardEntryStatus,
+      String taskBoardStatus,
+      String taskBoardLane,
+      OffsetDateTime taskBoardDoneAt,
+      UUID repairPlaceAllocationId,
+      Long repairPlaceAllocationVersion) {}
 }

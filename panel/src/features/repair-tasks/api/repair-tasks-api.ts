@@ -4,7 +4,6 @@ import {
 } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
 import {
   buildRepairEstimateTaskPlans,
-  finalizeTaskPlans,
   validateAutoCompletion,
 } from "@/features/repair-estimates/domain/repair-estimate-domain"
 import type {
@@ -120,7 +119,7 @@ function buildWriteCommand(params: {
   draft: RepairTaskEditorDraft
   warehouseId: string
   subtasks: RepairTaskSubtaskDto[]
-  movementRequired?: boolean
+  movementToRepair?: boolean
   logisticsPlanningMode?: LogisticsPlanningMode
   logisticsScheduledDate?: string | null
   priority?: RepairPriority
@@ -149,16 +148,26 @@ function buildWriteCommand(params: {
     coverMediaId: params.draft.coverMediaId,
     subtasks: params.subtasks,
     priority: params.priority,
+    movementToRepair: params.movementToRepair === true,
     logisticsPlanningMode:
-      params.movementRequired === true
+      params.movementToRepair === true
         ? (params.logisticsPlanningMode ?? "AUTO")
         : "AUTO",
     logisticsScheduledDate:
-      params.movementRequired === true &&
+      params.movementToRepair === true &&
       params.logisticsPlanningMode === "FIXED_DATE"
         ? (params.logisticsScheduledDate ?? null)
         : null,
   }
+}
+
+function requireRepairWorkPlan(plan: RepairEstimateTaskPlanDto) {
+  if (plan.kind !== "REPAIR_WORK") {
+    throw new Error(
+      "План прямого ремонта может содержать только этапы ремонтных работ."
+    )
+  }
+  return plan
 }
 
 async function planSubtasks(params: {
@@ -167,7 +176,7 @@ async function planSubtasks(params: {
   status: "DRAFT" | "QUEUED"
   taskPlans?: RepairEstimateTaskPlanDto[]
   completionMode?: RepairEstimateCompletionMode
-  movementRequired?: boolean
+  movementToRepair?: boolean
   logisticsPlanningMode?: LogisticsPlanningMode
   logisticsScheduledDate?: string | null
   priority?: RepairPriority
@@ -188,6 +197,7 @@ async function planSubtasks(params: {
       return params.taskPlans
         .slice()
         .sort((left, right) => left.sortOrder - right.sortOrder)
+        .map(requireRepairWorkPlan)
         .map((plan, index): RepairTaskSubtaskDto => {
           const current = existingById.get(plan.id)
           return {
@@ -230,11 +240,7 @@ async function planSubtasks(params: {
       : params.taskPlans
   const plans =
     basePlans && params.completionMode
-      ? finalizeTaskPlans({
-          plans: basePlans,
-          completionMode: params.completionMode,
-          movementRequired: Boolean(params.movementRequired),
-        })
+      ? basePlans.map(requireRepairWorkPlan)
       : null
   return plans
     ? buildRepairTaskSubtasks({
@@ -251,7 +257,7 @@ async function persistRepair(params: {
   status: "DRAFT" | "QUEUED"
   taskPlans?: RepairEstimateTaskPlanDto[]
   completionMode?: RepairEstimateCompletionMode
-  movementRequired?: boolean
+  movementToRepair?: boolean
   logisticsPlanningMode?: LogisticsPlanningMode
   logisticsScheduledDate?: string | null
   priority?: RepairPriority
@@ -274,7 +280,7 @@ export function queueRepairTask(params: {
   draft: RepairTaskEditorDraft
   warehouseId: string
   completionMode: RepairEstimateCompletionMode
-  movementRequired: boolean
+  movementToRepair: boolean
   logisticsPlanningMode: LogisticsPlanningMode
   logisticsScheduledDate: string | null
   taskPlans: RepairEstimateTaskPlanDto[]

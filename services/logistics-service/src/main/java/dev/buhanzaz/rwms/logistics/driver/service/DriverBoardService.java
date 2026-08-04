@@ -4,11 +4,14 @@ import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.CapitalRepair
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardCardResponse;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardDateColumnResponse;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardLane;
+import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardRepairPlaceCardResponse;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardResponse;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.MoveDriverBoardTaskRequest;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.ReturnCapitalRepairRequest;
+import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.ScheduleCapitalRepairRequest;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskPlanningMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
@@ -17,6 +20,7 @@ import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -28,12 +32,15 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class DriverBoardService {
   private static final int CAPITAL_PAGE_SIZE = 200;
+  private static final Set<String> PHYSICAL_REPAIR_PLACE_STATES =
+      Set.of("OCCUPIED", "READY_TO_RELEASE");
 
   private final DriverLogisticsTaskRepository tasks;
   private final LogisticsDependencyGateway dependencies;
   private final DriverTaskWorkflowStore workflowStore;
   private final DriverTaskProcessor processor;
   private final DriverQueueScheduler scheduler;
+  private final DriverTaskService driverTaskService;
 
   public DriverBoardResponse board(UUID warehouseId) {
     LogisticsDependencyGateway.WarehouseIdentity warehouse =
@@ -43,6 +50,8 @@ public class DriverBoardService {
     LogisticsDependencyGateway.RepairPlaceProjection places =
         dependencies.readRepairPlaces(warehouseId);
     Map<UUID, DriverLogisticsTask> localTasks = localTasks(warehouseId);
+    List<DriverBoardRepairPlaceCardResponse> repairPlaces =
+        repairPlaces(warehouseId, places);
     List<CapitalRepairCardResponse> capitalRepairs =
         capitalRepairs(warehouseId, localTasks.values());
 
@@ -53,10 +62,12 @@ public class DriverBoardService {
         board.queueVersion(),
         places.repairPlaceCount(),
         DriverQueueScheduler.usedRepairPlaceCount(places),
+        (long) repairPlaces.size(),
         places.availableCount(),
         DriverQueueScheduler.inboundRepairPlaceAvailable(places),
         places.automaticRefillDelayMinutes(),
         places.overCapacity(),
+        repairPlaces,
         board.current().stream()
             .map(value -> card(value, localTasks.get(value.externalTaskId())))
             .toList(),
@@ -76,6 +87,16 @@ public class DriverBoardService {
   public DriverBoardCardResponse move(
       UUID externalTaskId, MoveDriverBoardTaskRequest request) {
     tasks.acquireTransactionLock("driver-queue:" + request.warehouseId());
+    DriverLogisticsTask local =
+        tasks.findForUpdateByExternalTaskId(externalTaskId)
+            .orElseThrow(
+                () ->
+                    new LogisticsConflictException(
+                        "Для задания отсутствует единый логистический workflow"));
+    if (!request.warehouseId().equals(local.getWarehouseId())) {
+      throw new LogisticsConflictException(
+          "Задание не принадлежит выбранному складу");
+    }
     LogisticsDependencyGateway.DriverBoardTask current =
         dependencies.readDriverTask(externalTaskId);
     if (!request.warehouseId().equals(current.warehouseId())) {
@@ -92,13 +113,12 @@ public class DriverBoardService {
       throw new IllegalArgumentException(
           "Дата логистического задания не может быть в прошлом");
     }
-    DriverLogisticsTask local =
-        tasks.findByExternalTaskId(externalTaskId)
-            .orElseThrow(
-                () ->
-                    new LogisticsConflictException(
-                        "Для задания отсутствует единый логистический workflow"));
     if (request.targetLane() == DriverBoardLane.CURRENT) {
+      if (!"CURRENT".equals(current.lane())
+          && local.getKind() != DriverTaskKind.CAPITAL_TO_PRODUCTION) {
+        throw new LogisticsConflictException(
+            "В «Текущие задания» вручную можно добавить только капитальный ремонт");
+      }
       return moveToCurrent(local, current, request);
     }
     LogisticsDependencyGateway.DriverBoardTask moved =
@@ -132,12 +152,63 @@ public class DriverBoardService {
     return card(moved, local);
   }
 
+  /**
+   * Creates the capital-to-production movement directly in the selected calendar lane. The
+   * browser sends one idempotent command; registration and queue insertion stay in the
+   * logistics-owned workflow.
+   */
+  @Transactional
+  public CapitalRepairScheduleResult scheduleCapitalRepair(
+      UUID actorSubjectId,
+      UUID idempotencyKey,
+      UUID repairId,
+      ScheduleCapitalRepairRequest request) {
+    tasks.acquireTransactionLock("driver-queue:" + request.warehouseId());
+    DriverTaskService.CreateResult created =
+        driverTaskService.createCapitalMovement(
+            actorSubjectId,
+            idempotencyKey,
+            request.warehouseId(),
+            repairId,
+            DriverTaskPlanningMode.FIXED_DATE,
+            request.targetDate());
+    processor.processUntilIdle(created.response().id());
+
+    DriverLogisticsTask local =
+        tasks
+            .findForUpdate(created.response().id())
+            .orElseThrow(
+                () ->
+                    new LogisticsConflictException(
+                        "Для капитального ремонта отсутствует единый логистический workflow"));
+    LogisticsDependencyGateway.DriverBoardTask scheduled =
+        dependencies.readDriverTask(local.getExternalTaskId());
+    if (!isSchedulableCapitalSnapshot(scheduled, request.warehouseId())) {
+      throw new LogisticsConflictException(
+          "Капитальный ремонт нельзя поставить в запланированную очередь");
+    }
+    if (!request.targetDate().equals(scheduled.scheduledDate())
+        || request.targetIndex() != scheduled.queuePosition()) {
+      scheduled =
+          dependencies.moveDriverTask(
+              scheduled.externalTaskId(),
+              scheduled.taskVersion(),
+              scheduled.entryVersion(),
+              DriverBoardLane.SCHEDULED.name(),
+              request.targetDate(),
+              request.targetIndex());
+      workflowStore.confirmStatus(local.getId(), scheduled);
+      local = tasks.findById(local.getId()).orElseThrow();
+    }
+    return new CapitalRepairScheduleResult(card(scheduled, local), created.replayed());
+  }
+
   @Transactional
   public void returnToCapitalRepairs(
       UUID externalTaskId, ReturnCapitalRepairRequest request) {
     tasks.acquireTransactionLock("driver-queue:" + request.warehouseId());
     DriverLogisticsTask local =
-        tasks.findByExternalTaskId(externalTaskId)
+        tasks.findForUpdateByExternalTaskId(externalTaskId)
             .orElseThrow(
                 () ->
                     new LogisticsConflictException(
@@ -151,9 +222,18 @@ public class DriverBoardService {
       throw new LogisticsConflictException(
           "Вернуть в капитальные ремонты можно только перемещение капитального ремонта");
     }
+    if (local.getState() == DriverTaskState.CANCELLED) {
+      return;
+    }
     if (local.getState().isTerminal()) {
       throw new LogisticsConflictException(
           "Завершённое или уже отменённое перемещение вернуть нельзя");
+    }
+    LogisticsDependencyGateway.DriverBoardTask current =
+        dependencies.readDriverTask(externalTaskId);
+    if ("CANCELLED".equals(current.status())) {
+      workflowStore.confirmStatus(local.getId(), current);
+      return;
     }
     LogisticsDependencyGateway.DriverBoardTask cancelled =
         dependencies.cancelDriverTask(externalTaskId, request.expectedTaskVersion());
@@ -196,6 +276,15 @@ public class DriverBoardService {
       throw new LogisticsConflictException(
           "Для склада не настроен корректный часовой пояс");
     }
+  }
+
+  private static boolean isSchedulableCapitalSnapshot(
+      LogisticsDependencyGateway.DriverBoardTask board, UUID warehouseId) {
+    return board != null
+        && warehouseId.equals(board.warehouseId())
+        && "SCHEDULED".equals(board.lane())
+        && "ACTIVE".equals(board.status())
+        && "WAITING".equals(board.entryStatus());
   }
 
   private Map<UUID, DriverLogisticsTask> localTasks(UUID warehouseId) {
@@ -256,6 +345,33 @@ public class DriverBoardService {
     return List.copyOf(result);
   }
 
+  private List<DriverBoardRepairPlaceCardResponse> repairPlaces(
+      UUID warehouseId, LogisticsDependencyGateway.RepairPlaceProjection places) {
+    Map<UUID, LogisticsDependencyGateway.RentalItemSnapshot> cabins = new LinkedHashMap<>();
+    java.util.ArrayList<DriverBoardRepairPlaceCardResponse> result = new java.util.ArrayList<>();
+    for (LogisticsDependencyGateway.RepairPlaceAllocation allocation : places.allocations()) {
+      if (!PHYSICAL_REPAIR_PLACE_STATES.contains(allocation.state())) continue;
+      LogisticsDependencyGateway.RentalItemSnapshot cabin =
+          cabins.computeIfAbsent(allocation.rentalItemId(), dependencies::readRentalItemSnapshot);
+      if (!warehouseId.equals(allocation.warehouseId())
+          || !warehouseId.equals(cabin.warehouseId())
+          || !allocation.rentalItemId().equals(cabin.assetId())) {
+        throw new LogisticsConflictException(
+            "Ремонтное место и бытовка принадлежат разным складам");
+      }
+      result.add(
+          new DriverBoardRepairPlaceCardResponse(
+              allocation.repairId(),
+              allocation.rentalItemId(),
+              cabin.number(),
+              allocation.state(),
+              allocation.repairStageName(),
+              allocation.repairStageState(),
+              allocation.priority()));
+    }
+    return List.copyOf(result);
+  }
+
   private static DriverBoardCardResponse card(
       LogisticsDependencyGateway.DriverBoardTask board,
       DriverLogisticsTask local) {
@@ -279,4 +395,7 @@ public class DriverBoardService {
         board.pinned(),
         board.queuePosition());
   }
+
+  public record CapitalRepairScheduleResult(
+      DriverBoardCardResponse card, boolean replayed) {}
 }

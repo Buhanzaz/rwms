@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.worker.feature.taskdetail
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.worker.core.database.WorkerAssignmentEntity
 import dev.buhanzaz.rwms.worker.core.network.WorkerTaskTimerSnapshotDto
+import dev.buhanzaz.rwms.worker.core.network.WorkerMediaReferenceDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerWorkDto
 import dev.buhanzaz.rwms.worker.core.ui.cabinNumberForDisplay
 import java.time.Instant
@@ -112,6 +113,30 @@ class TaskDetailPresentationTest {
         assertThat(fields).contains("id")
         assertThat(fields.contains("code")).isFalse()
         assertThat(fields.contains("price")).isFalse()
+    }
+
+    @Test
+    fun `work photos are separated from general task photos by source media ids`() {
+        val workPhoto = media("media-work")
+        val generalPhoto = media("media-general")
+        val work = WorkerWorkDto(
+            id = "work-1",
+            name = "Замена профлиста",
+            quantity = 1.0,
+            unit = "шт",
+            durationMinutes = 30,
+            comment = null,
+            sourceMediaIds = listOf(workPhoto.mediaId),
+        )
+
+        val presentation = taskSourceMediaPresentation(
+            works = listOf(work),
+            sourceMedia = listOf(generalPhoto, workPhoto),
+        )
+
+        assertThat(presentation.general.map { it.mediaId }).containsExactly("media-general")
+        assertThat(presentation.byWorkId.getValue("work-1").map { it.mediaId })
+            .containsExactly("media-work")
     }
 
     @Test
@@ -226,6 +251,17 @@ class TaskDetailPresentationTest {
         assertThat(disabled.actions).isEmpty()
         assertThat(disabled.message).isEqualTo("Рабочий временно недоступен")
     }
+
+    private fun media(id: String) = WorkerMediaReferenceDto(
+        mediaId = id,
+        generation = 1,
+        kind = "SOURCE",
+        contentType = "image/jpeg",
+        readPath = "/api/media/v1/assets/$id/original",
+        thumbnailPath = null,
+        capturedAt = null,
+        recordedAt = "2026-08-04T10:00:00Z",
+    )
 
     @Test
     fun `take payload can only use the manager selected current group`() {

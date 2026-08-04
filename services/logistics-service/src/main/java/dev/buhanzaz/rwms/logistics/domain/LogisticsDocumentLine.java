@@ -109,9 +109,6 @@ public class LogisticsDocumentLine {
   @Column(name = "repair_continuation_priority")
   private Integer repairContinuationPriority;
 
-  @Column(name = "movement_to_shipment")
-  private Boolean movementToShipment;
-
   @Column(name = "maintenance_prepared_at")
   private OffsetDateTime maintenancePreparedAt;
 
@@ -248,25 +245,22 @@ public class LogisticsDocumentLine {
     maintenancePreparedAt = preparedAt;
   }
 
-  public void configureRepairContinuation(Integer priority, boolean movementRequired) {
+  public void configureRepairContinuation(Integer priority) {
     if (activeRepairId == null) {
-      if (priority != null || movementRequired) {
+      if (priority != null) {
         throw new IllegalArgumentException("A transfer without an active repair has no continuation");
       }
       repairContinuationPriority = null;
-      movementToShipment = false;
       return;
     }
     if (priority == null || priority < 1 || priority > 5) {
       throw new IllegalArgumentException("Repair priority must be between 1 and 5");
     }
     if (repairContinuationPriority != null
-        && (!repairContinuationPriority.equals(priority)
-            || !java.util.Objects.equals(movementToShipment, movementRequired))) {
+        && !repairContinuationPriority.equals(priority)) {
       throw new IllegalStateException("Repair continuation settings are immutable");
     }
     repairContinuationPriority = priority;
-    movementToShipment = movementRequired;
   }
 
   public void completeMaintenanceArrival(long repairVersion, OffsetDateTime completedAt) {

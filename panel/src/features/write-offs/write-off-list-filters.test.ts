@@ -48,6 +48,7 @@ function task(
     createdAt: "2026-07-19T08:00:00Z",
     updatedAt: "2026-07-20T12:00:00Z",
     ...overrides,
+    movementToRepair: overrides.movementToRepair ?? false,
   }
 }
 

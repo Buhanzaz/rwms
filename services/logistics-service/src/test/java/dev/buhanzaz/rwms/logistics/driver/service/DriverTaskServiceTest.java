@@ -32,7 +32,7 @@ class DriverTaskServiceTest {
   private final DriverTaskService service = new DriverTaskService(tasks, mapper, dependencies);
 
   @Test
-  void rediscoveryReusesExistingCurrentRemovalDespiteLegacyChecksumDrift() {
+  void rediscoveryReusesExistingCurrentRemovalDespiteChecksumDrift() {
     UUID warehouseId = UUID.randomUUID();
     UUID repairId = UUID.randomUUID();
     UUID cabinId = UUID.randomUUID();
@@ -43,7 +43,7 @@ class DriverTaskServiceTest {
         .thenReturn(Optional.of(existing));
     when(mapper.toResponse(existing)).thenReturn(response);
 
-    DriverTaskService.CreateResult result = service.ensureRemovalTask(warehouseId, repairId, cabinId);
+    DriverTaskService.CreateResult result = service.ensureRemovalTask(warehouseId, repairId, cabinId, 1);
 
     assertThat(result.replayed()).isTrue();
     assertThat(result.activateNow()).isFalse();
@@ -58,7 +58,7 @@ class DriverTaskServiceTest {
   }
 
   @Test
-  void rediscoveryReusesMatchingLegacyRemovalFoundBySource() {
+  void rediscoveryReusesMatchingRemovalFoundBySource() {
     UUID warehouseId = UUID.randomUUID();
     UUID repairId = UUID.randomUUID();
     UUID cabinId = UUID.randomUUID();
@@ -72,7 +72,7 @@ class DriverTaskServiceTest {
         .thenReturn(Optional.of(existing));
     when(mapper.toResponse(existing)).thenReturn(response);
 
-    DriverTaskService.CreateResult result = service.ensureRemovalTask(warehouseId, repairId, cabinId);
+    DriverTaskService.CreateResult result = service.ensureRemovalTask(warehouseId, repairId, cabinId, 2);
 
     assertThat(result.replayed()).isTrue();
     assertThat(result.response()).isSameAs(response);
@@ -89,7 +89,7 @@ class DriverTaskServiceTest {
         .thenReturn(Optional.of(conflicting));
 
     assertThatThrownBy(
-            () -> service.ensureRemovalTask(warehouseId, repairId, UUID.randomUUID()))
+            () -> service.ensureRemovalTask(warehouseId, repairId, UUID.randomUUID(), 3))
         .isInstanceOf(LogisticsConflictException.class)
         .hasMessageContaining("не совпадает");
 

@@ -39,8 +39,21 @@ public class InventoryPublicationIntent {
   @Column(name = "state", nullable = false, length = 24)
   private PublicationState state;
 
-  @Column(name = "maintenance_source_key", nullable = false, length = 73)
+  @Column(name = "maintenance_source_key", nullable = false, length = 128)
   private String maintenanceSourceKey;
+
+  @Column(name = "final_plan_version")
+  private Long finalPlanVersion;
+
+  @Column(name = "final_plan_sha256", length = 64)
+  private String finalPlanSha256;
+
+  @Enumerated(EnumType.STRING)
+  @Column(name = "target_kind", length = 16)
+  private FinalPlanTargetKind targetKind;
+
+  @Column(name = "target_id")
+  private UUID targetId;
 
   @Column(name = "source_revision", nullable = false)
   private long sourceRevision;
@@ -53,6 +66,19 @@ public class InventoryPublicationIntent {
 
   @Column(name = "maintenance_repair_id")
   private UUID maintenanceRepairId;
+
+  @Column(name = "maintenance_estimate_id")
+  private UUID maintenanceEstimateId;
+
+  /** Immutable maintenance reconciliation outcome for a final-plan publication. */
+  @Enumerated(EnumType.STRING)
+  @Column(name = "maintenance_outcome", length = 16)
+  private MaintenancePublicationOutcome maintenanceOutcome;
+
+  /** Canonical, immutable maintenance reconciliation response retained as audit evidence. */
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "maintenance_result", columnDefinition = "jsonb")
+  private String maintenanceResult;
 
   @Column(name = "attempt_count", nullable = false)
   private int attemptCount;
@@ -99,6 +125,25 @@ public class InventoryPublicationIntent {
     return value;
   }
 
+  public static InventoryPublicationIntent ready(
+      UUID inventoryId,
+      UUID findingId,
+      long sourceRevision,
+      long finalPlanVersion,
+      String finalPlanSha256,
+      FinalPlanTargetKind targetKind) {
+    if (finalPlanVersion < 1 || finalPlanSha256 == null || !finalPlanSha256.matches("^[0-9a-f]{64}$")
+        || targetKind == null) {
+      throw new IllegalArgumentException("Final-plan publication source is invalid");
+    }
+    InventoryPublicationIntent value = ready(inventoryId, findingId, sourceRevision);
+    value.finalPlanVersion = finalPlanVersion;
+    value.finalPlanSha256 = finalPlanSha256;
+    value.targetKind = targetKind;
+    value.maintenanceSourceKey = inventoryId + ":" + finalPlanVersion + ":" + findingId;
+    return value;
+  }
+
   public void request(String requestHash, String preconditionHash) {
     if (state != PublicationState.READY && state != PublicationState.TRANSIENT_FAILED) {
       throw new IllegalStateException("Publication is not requestable");
@@ -113,7 +158,58 @@ public class InventoryPublicationIntent {
     if (state != PublicationState.PENDING || repairId == null) {
       throw new IllegalStateException("Only pending publication may succeed");
     }
+    targetKind = FinalPlanTargetKind.REPAIR;
+    targetId = repairId;
     maintenanceRepairId = repairId;
+    state = PublicationState.SUCCEEDED;
+  }
+
+  public void succeed(PublicationTarget target) {
+    if (state != PublicationState.PENDING || target == null || target.outcome() == null) {
+      throw new IllegalStateException("Only pending publication may succeed");
+    }
+    if (target.maintenanceResult() == null || target.maintenanceResult().isBlank()) {
+      throw new IllegalArgumentException("Maintenance publication result is required");
+    }
+    if (target.outcome() == MaintenancePublicationOutcome.MATCHED) {
+      if (target.targetKind() != null
+          || target.targetId() != null
+          || target.estimateId() != null
+          || target.repairId() != null) {
+        throw new IllegalArgumentException("Matched maintenance publication cannot have a target");
+      }
+      targetKind = null;
+      targetId = null;
+      maintenanceEstimateId = null;
+      maintenanceRepairId = null;
+      maintenanceOutcome = target.outcome();
+      maintenanceResult = target.maintenanceResult();
+      state = PublicationState.SUCCEEDED;
+      return;
+    }
+    if (target.targetId() == null
+        || target.targetKind() == null
+        || (target.outcome() != MaintenancePublicationOutcome.CREATED
+            && target.outcome() != MaintenancePublicationOutcome.SUCCESSOR)
+        || (target.outcome() == MaintenancePublicationOutcome.SUCCESSOR
+            && target.targetKind() != FinalPlanTargetKind.REPAIR)) {
+      throw new IllegalArgumentException("Maintenance publication target is invalid");
+    }
+    if (targetKind != null && targetKind != target.targetKind()) {
+      throw new IllegalStateException("Maintenance returned the wrong final-plan target kind");
+    }
+    if ((target.targetKind() == FinalPlanTargetKind.ESTIMATE
+            && (!target.targetId().equals(target.estimateId()) || target.repairId() != null))
+        || (target.targetKind() == FinalPlanTargetKind.REPAIR
+            && (!target.targetId().equals(target.repairId()) || target.estimateId() != null))) {
+      throw new IllegalArgumentException("Maintenance publication target is invalid");
+    }
+    targetKind = target.targetKind();
+    targetId = target.targetId();
+    maintenanceEstimateId = target.estimateId();
+    maintenanceRepairId = target.repairId();
+    maintenanceOutcome = target.outcome();
+    maintenanceResult = target.maintenanceResult();
     state = PublicationState.SUCCEEDED;
   }
 
@@ -204,12 +300,44 @@ public class InventoryPublicationIntent {
     return sourceRevision;
   }
 
+  public String getMaintenanceSourceKey() {
+    return maintenanceSourceKey;
+  }
+
   public int getAttemptCount() {
     return attemptCount;
   }
 
   public UUID getMaintenanceRepairId() {
     return maintenanceRepairId;
+  }
+
+  public Long getFinalPlanVersion() {
+    return finalPlanVersion;
+  }
+
+  public String getFinalPlanSha256() {
+    return finalPlanSha256;
+  }
+
+  public FinalPlanTargetKind getTargetKind() {
+    return targetKind;
+  }
+
+  public UUID getTargetId() {
+    return targetId;
+  }
+
+  public UUID getMaintenanceEstimateId() {
+    return maintenanceEstimateId;
+  }
+
+  public MaintenancePublicationOutcome getMaintenanceOutcome() {
+    return maintenanceOutcome;
+  }
+
+  public String getMaintenanceResult() {
+    return maintenanceResult;
   }
 
   public String getBlockedFailureCode() {
@@ -226,5 +354,18 @@ public class InventoryPublicationIntent {
 
   public OffsetDateTime getUpdatedAt() {
     return updatedAt;
+  }
+
+  public record PublicationTarget(
+      MaintenancePublicationOutcome outcome,
+      FinalPlanTargetKind targetKind,
+      UUID targetId,
+      UUID estimateId,
+      UUID repairId,
+      String maintenanceResult) {
+    public PublicationTarget(
+        FinalPlanTargetKind targetKind, UUID targetId, UUID estimateId, UUID repairId) {
+      this(null, targetKind, targetId, estimateId, repairId, null);
+    }
   }
 }

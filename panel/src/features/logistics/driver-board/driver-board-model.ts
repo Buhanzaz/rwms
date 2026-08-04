@@ -2,7 +2,6 @@ export type DriverTaskKind =
   | "DELIVER_TO_REPAIR"
   | "REMOVE_FROM_REPAIR"
   | "CAPITAL_TO_PRODUCTION"
-  | "MOVE_TO_SHIPMENT"
   | "GENERAL_MOVEMENT"
 
 export type DriverTaskWorkflowState =
@@ -55,17 +54,30 @@ export type CapitalRepairCard = {
   forcedCapital: boolean
 }
 
+export type RepairPlaceCard = {
+  repairId: string
+  cabinId: string
+  unitNumber: string
+  allocationState: "OCCUPIED" | "READY_TO_RELEASE"
+  repairStageName: string | null
+  repairStageState:
+    "PLANNED" | "QUEUED" | "IN_PROGRESS" | "DONE" | "CANCELLED" | null
+  priority: number
+}
+
 export type DriverBoard = {
   warehouseId: string
   currentDate: string
   queueId: string
   queueVersion: number
   repairPlaceCount: number
+  occupiedRepairPlaceCount: number
   usedRepairPlaceCount: number
   availableRepairPlaceCount: number
   inboundRepairPlaceAvailable: boolean
   automaticRefillDelayMinutes: number
   repairPlacesOverCapacity: boolean
+  repairPlaces: RepairPlaceCard[]
   current: DriverBoardCard[]
   dates: DriverBoardDateColumn[]
   capitalRepairs: CapitalRepairCard[]

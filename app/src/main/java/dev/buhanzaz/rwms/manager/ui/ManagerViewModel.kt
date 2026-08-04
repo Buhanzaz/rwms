@@ -14,7 +14,6 @@ import dev.buhanzaz.rwms.manager.network.AmendEstimateRequest
 import dev.buhanzaz.rwms.manager.network.CatalogLinkDto
 import dev.buhanzaz.rwms.manager.network.CatalogNodeDto
 import dev.buhanzaz.rwms.manager.network.CatalogNodeSnapshotDto
-import dev.buhanzaz.rwms.manager.network.CompleteInventorySessionRequest
 import dev.buhanzaz.rwms.manager.network.CreateCabinFurnitureTaskRequest
 import dev.buhanzaz.rwms.manager.network.CreateDirectRepairRequest
 import dev.buhanzaz.rwms.manager.network.CreateEstimateRequest
@@ -31,8 +30,6 @@ import dev.buhanzaz.rwms.manager.network.EstimateLineInputDto
 import dev.buhanzaz.rwms.manager.network.PlanStageInputDto
 import dev.buhanzaz.rwms.manager.network.PriorityVersionRequest
 import dev.buhanzaz.rwms.manager.network.InventoryFindingDto
-import dev.buhanzaz.rwms.manager.network.InventoryCompletionPreviewDto
-import dev.buhanzaz.rwms.manager.network.InventoryCompletionPreviewRequest
 import dev.buhanzaz.rwms.manager.network.InventorySessionDto
 import dev.buhanzaz.rwms.manager.network.InventoryPlanLineInputDto
 import dev.buhanzaz.rwms.manager.network.InventoryPlanSelectionDto
@@ -42,6 +39,7 @@ import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.network.MoveTaskBoardEntryRequest
 import dev.buhanzaz.rwms.manager.network.ObservationInput
 import dev.buhanzaz.rwms.manager.network.CabinCatalogValueDto
+import dev.buhanzaz.rwms.manager.network.CabinFurnitureRequirementDto
 import dev.buhanzaz.rwms.manager.network.RentalItemCreationOptionsDto
 import dev.buhanzaz.rwms.manager.network.RentalItemDto
 import dev.buhanzaz.rwms.manager.network.RepairDto
@@ -55,7 +53,6 @@ import dev.buhanzaz.rwms.manager.network.ResolveInventoryConflictRequest
 import dev.buhanzaz.rwms.manager.network.ResolveNumberRequest
 import dev.buhanzaz.rwms.manager.network.RoutingSnapshotDto
 import dev.buhanzaz.rwms.manager.network.RwmsBackend
-import dev.buhanzaz.rwms.manager.network.StartInventoryRequest
 import dev.buhanzaz.rwms.manager.network.ShipmentFurnitureReadinessDto
 import dev.buhanzaz.rwms.manager.network.ShipmentPlanRequest
 import dev.buhanzaz.rwms.manager.network.TaskBoardSnapshotDto
@@ -63,7 +60,6 @@ import dev.buhanzaz.rwms.manager.network.TaskBoardDateEntryExpectationDto
 import dev.buhanzaz.rwms.manager.network.SwapTaskBoardDatesRequest
 import dev.buhanzaz.rwms.manager.network.TransferFurnitureReadinessDto
 import dev.buhanzaz.rwms.manager.network.TransferFurnitureReplacementRequest
-import dev.buhanzaz.rwms.manager.network.CabinFurnitureRequirementDto
 import dev.buhanzaz.rwms.manager.network.TransferLineRequest
 import dev.buhanzaz.rwms.manager.network.WarehouseDto
 import dev.buhanzaz.rwms.manager.uploads.AcceptanceUploadCommand
@@ -71,7 +67,6 @@ import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadArea
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadCoordinator
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadDraft
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadOperation
-import dev.buhanzaz.rwms.manager.uploads.InventoryFurnitureUploadCommand
 import dev.buhanzaz.rwms.manager.uploads.InventoryUploadCommand
 import dev.buhanzaz.rwms.manager.uploads.MaintenanceReplaceKind
 import dev.buhanzaz.rwms.manager.uploads.MaintenanceUploadCommand
@@ -87,6 +82,8 @@ import java.net.SocketTimeoutException
 import java.time.LocalDate
 import java.time.ZonedDateTime
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -114,7 +111,6 @@ data class ManagerUiState(
     val inventorySession: InventorySessionDto? = null,
     val inventoryFindings: List<InventoryFindingDto> = emptyList(),
     val inventoryRentalItems: List<RentalItemDto> = emptyList(),
-    val inventoryCompletionPreview: InventoryCompletionPreviewDto? = null,
     val inventoryEditor: InventoryEditorState? = null,
     val returns: List<LogisticsDocumentDto> = emptyList(),
     val selectedReturn: LogisticsDocumentDto? = null,
@@ -217,10 +213,8 @@ data class MaintenanceEditorState(
     val readyMedia: List<MediaReferenceDto>,
     val readyPhotoUris: Map<String, String> = emptyMap(),
     val priority: Int,
-    /** Inbound delivery to the repair zone is owned by logistics, not by a board stage. */
+    /** Delivery to repair and automatic removal after completion are owned by logistics. */
     val movementToRepair: Boolean = false,
-    /** Kept independent from inbound delivery for the maintenance command contract. */
-    val movementToShipment: Boolean = false,
     val logisticsPlanningMode: String? = null,
     val logisticsScheduledDate: String? = null,
     val step: Int,
@@ -309,19 +303,10 @@ data class InventoryEditorState(
     val equipmentCatalog: List<EquipmentCatalogItemDto> = emptyList(),
     val equipmentObservationRequested: Boolean? = null,
     val equipmentQuantities: Map<String, String> = emptyMap(),
-    /**
-     * What to do with the observed furniture after this inspection is saved.
-     * Both choices are reconciled through logistics whenever the inspector supplied a furniture
-     * composition: keeping it preserves the selected total, moving it to stock requests an empty
-     * total. The inspection itself never mutates asset balances.
-     */
-    val furnitureDisposition: InventoryFurnitureDisposition =
-        InventoryFurnitureDisposition.KEEP_IN_CABIN,
     val planLines: List<MaintenanceLineEditorState> = emptyList(),
     val planStages: List<MaintenanceStageEditorState> = emptyList(),
     val planPriority: Int = DEFAULT_MAINTENANCE_PRIORITY,
     val planMovementToRepair: Boolean = false,
-    val planMovementToShipment: Boolean = false,
     val planLogisticsPlanningMode: String? = null,
     val planLogisticsScheduledDate: String? = null,
 ) {
@@ -340,21 +325,6 @@ data class InventoryEditorState(
         get() = rentalType.contains("санблок", ignoreCase = true)
 }
 
-enum class InventoryFurnitureDisposition {
-    KEEP_IN_CABIN,
-    MOVE_TO_STOCK,
-}
-
-data class PendingInventoryFurnitureMove(
-    val inventoryId: String,
-    val findingId: String,
-    val rentalItemId: String,
-    val warehouseId: String,
-    val scheduledDate: String,
-    val idempotencyKey: String,
-    val desiredContents: List<CabinFurnitureRequirementDto> = emptyList(),
-)
-
 class ManagerViewModel(
     application: Application,
     private val backend: RwmsBackend,
@@ -362,12 +332,20 @@ class ManagerViewModel(
     private val preference = WarehousePreference(application)
     private val maintenanceCatalogCache = MaintenanceCatalogCache(application)
     private val managerReadCache = ManagerReadCache(application)
-    private val mediaDownloader = MediaDownloader(backend.api, application.cacheDir)
-    private val backgroundUploads = BackgroundUploadCoordinator(application)
+    /* Remote media is not needed for the signed-out screen.  Avoid building Retrofit merely to
+     * construct a downloader during the first composition. */
+    private val mediaDownloader by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        MediaDownloader(backend.api, application.cacheDir)
+    }
+    private val backgroundUploads = viewModelScope.async(Dispatchers.IO) {
+        BackgroundUploadCoordinator(application).also { coordinator -> coordinator.initialize() }
+    }
     private val mutableState = MutableStateFlow(ManagerUiState())
+    private val mutableUploadOperations =
+        MutableStateFlow<List<BackgroundUploadOperation>>(emptyList())
     val state: StateFlow<ManagerUiState> = mutableState.asStateFlow()
     val uploadOperations: StateFlow<List<BackgroundUploadOperation>> =
-        backgroundUploads.operations
+        mutableUploadOperations.asStateFlow()
     private var maintenanceCatalogWarehouseId: String? = null
     private var maintenanceCatalogNodesById: Map<String, CatalogNodeDto> = emptyMap()
     private var maintenanceCatalogRevision: ActiveMaintenanceCatalogRevision? = null
@@ -380,19 +358,25 @@ class ManagerViewModel(
     private var maintenanceCatalogSchedulerJob: Job? = null
     private var connectivityMonitorJob: Job? = null
     private var connectivityProbeJob: Job? = null
+    private var backgroundUploadsLifecycleJob: Job? = null
     private var assetSearchGeneration = 0L
     private val commandKeys = StableCommandKeys()
 
     init {
         viewModelScope.launch {
+            backgroundUploads.await().operations.collectLatest { operations ->
+                mutableUploadOperations.value = operations
+            }
+        }
+        viewModelScope.launch {
             backend.auth.state.collectLatest { authState ->
                 mutableState.update { it.copy(authState = authState) }
                 if (authState == ManagerAuthState.SignedIn) {
-                    backgroundUploads.resumePending()
+                    resumePendingBackgroundUploads()
                     loadWorkspace()
                     startConnectivityMonitor()
                 } else if (authState == ManagerAuthState.SignedOut) {
-                    backgroundUploads.pause()
+                    pauseBackgroundUploads()
                     stopConnectivityMonitor()
                     clearMaintenanceCatalogMemory()
                     mutableState.value = ManagerUiState(authState = authState)
@@ -407,7 +391,7 @@ class ManagerViewModel(
 
     fun logout() {
         viewModelScope.launch {
-            backgroundUploads.pause()
+            pauseBackgroundUploads()
             stopConnectivityMonitor()
             backend.auth.logout()
             clearMaintenanceCatalogMemory()
@@ -421,11 +405,35 @@ class ManagerViewModel(
     }
 
     fun retryBackgroundUpload(operationId: String) {
-        backgroundUploads.retry(operationId)
+        viewModelScope.launch {
+            backgroundUploads.await().retry(operationId)
+        }
     }
 
     fun retryBackgroundPhoto(operationId: String, photoId: String) {
-        backgroundUploads.retryPhoto(operationId, photoId)
+        viewModelScope.launch {
+            backgroundUploads.await().retryPhoto(operationId, photoId)
+        }
+    }
+
+    private fun resumePendingBackgroundUploads() {
+        backgroundUploadsLifecycleJob?.cancel()
+        backgroundUploadsLifecycleJob = viewModelScope.launch {
+            try {
+                backgroundUploads.await().resumePending()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                handleFailure(failure)
+            }
+        }
+    }
+
+    private fun pauseBackgroundUploads() {
+        backgroundUploadsLifecycleJob?.cancel()
+        backgroundUploadsLifecycleJob = viewModelScope.launch {
+            backgroundUploads.await().pause()
+        }
     }
 
     fun checkServerConnection() {
@@ -453,7 +461,6 @@ class ManagerViewModel(
                 inventorySession = null,
                 inventoryFindings = emptyList(),
                 inventoryRentalItems = emptyList(),
-                inventoryCompletionPreview = null,
                 returns = emptyList(),
                 shipments = emptyList(),
                 selectedShipment = null,
@@ -486,25 +493,15 @@ class ManagerViewModel(
                 assetSearchFailedQuery = null,
             )
         }
-        restoreMaintenanceCatalogFromDisk(warehouseId)
-        startMaintenanceCatalogScheduler()
-        requestMaintenanceCatalogSyncIfDue()
+        viewModelScope.launch {
+            restoreMaintenanceCatalogFromDisk(warehouseId)
+            startMaintenanceCatalogScheduler()
+            requestMaintenanceCatalogSyncIfDue()
+        }
     }
 
     fun loadInventory() = command {
         refreshInventory()
-    }
-
-    fun startInventory() = command {
-        val warehouseId = requireWarehouseId()
-        val signature = "inventory-start:$warehouseId"
-        backend.api.startInventory(
-            logisticsCommandKey(signature),
-            StartInventoryRequest(warehouseId),
-        )
-        commandKeys.complete(signature)
-        refreshInventory()
-        message("Инвентаризация начата")
     }
 
     fun resolveInventoryNumber(number: String, onReady: () -> Unit) = command {
@@ -513,7 +510,6 @@ class ManagerViewModel(
         val normalizedNumber = number.trim()
         if (normalizedNumber.isBlank()) throw IllegalArgumentException("Введите номер бытовки")
         ensureMaintenanceCatalog(session.warehouseId)
-        refreshRepairTaskBoards()
         val signature =
             "inventory-resolve:${session.id}:${session.sessionRevision}:$normalizedNumber"
         val resolution = backend.api.resolveInventoryNumber(
@@ -574,9 +570,14 @@ class ManagerViewModel(
                     planPriority = finding?.frozenPlan?.priority
                         ?: DEFAULT_MAINTENANCE_PRIORITY,
                     planMovementToRepair = finding?.frozenPlan?.movementToRepair ?: false,
-                    planMovementToShipment = finding?.frozenPlan?.movementToShipment ?: false,
-                    planLogisticsPlanningMode = finding?.frozenPlan?.logisticsPlanningMode,
-                    planLogisticsScheduledDate = finding?.frozenPlan?.logisticsScheduledDate,
+                    planLogisticsPlanningMode = if (
+                        finding?.frozenPlan?.movementToRepair == true
+                    ) {
+                        LOGISTICS_PLANNING_MODE_AUTO
+                    } else {
+                        null
+                    },
+                    planLogisticsScheduledDate = null,
                 ),
             )
         }
@@ -593,7 +594,6 @@ class ManagerViewModel(
         onReady: () -> Unit,
     ) = command {
         ensureMaintenanceCatalog(requireWarehouseId())
-        refreshRepairTaskBoards()
         val latest = mutableState.value.inventoryFindings
             .firstOrNull { it.id == finding.id }
             ?: finding
@@ -630,9 +630,12 @@ class ManagerViewModel(
                     planStages = planContent.stages,
                     planPriority = latest.frozenPlan?.priority ?: DEFAULT_MAINTENANCE_PRIORITY,
                     planMovementToRepair = latest.frozenPlan?.movementToRepair ?: false,
-                    planMovementToShipment = latest.frozenPlan?.movementToShipment ?: false,
-                    planLogisticsPlanningMode = latest.frozenPlan?.logisticsPlanningMode,
-                    planLogisticsScheduledDate = latest.frozenPlan?.logisticsScheduledDate,
+                    planLogisticsPlanningMode = if (latest.frozenPlan?.movementToRepair == true) {
+                        LOGISTICS_PLANNING_MODE_AUTO
+                    } else {
+                        null
+                    },
+                    planLogisticsScheduledDate = null,
                 ),
             )
         }
@@ -699,109 +702,6 @@ class ManagerViewModel(
             },
         )
         onResolved()
-    }
-
-    fun previewInventoryCompletion() = command {
-        val current = mutableState.value
-        val session = current.inventorySession
-            ?: throw IllegalStateException("Активная инвентаризация не найдена")
-        val revisions = inventoryCompletionRevisionExpectations(current.inventoryFindings)
-        val signature = buildString {
-            append("inventory-preview:${session.id}:${session.sessionRevision}:")
-            revisions.forEach { append("${it.findingId}:${it.expectedFindingRevision},") }
-        }
-        val preview = try {
-            backend.api.previewInventoryCompletion(
-                inventoryId = session.id,
-                idempotencyKey = logisticsCommandKey(signature),
-                request = InventoryCompletionPreviewRequest(
-                    expectedSessionRevision = session.sessionRevision,
-                    findingRevisions = revisions,
-                ),
-            )
-        } catch (failure: HttpException) {
-            if (failure.code() == 409) {
-                refreshInventory()
-                throw IllegalStateException(
-                    "Инвентаризация изменилась. Данные обновлены — откройте проверку завершения снова",
-                    failure,
-                )
-            }
-            throw failure
-        }
-        check(preview.inventoryId == session.id) {
-            "RWMS вернул проверку другой инвентаризации"
-        }
-        mutableState.update { state ->
-            if (state.inventorySession?.id == preview.inventoryId) {
-                state.copy(
-                    inventoryCompletionPreview = preview,
-                    inventoryFindings = mergeInventoryCompletionValidation(
-                        findings = state.inventoryFindings,
-                        preview = preview,
-                    ),
-                )
-            } else {
-                state
-            }
-        }
-        commandKeys.complete(signature)
-    }
-
-    fun dismissInventoryCompletion() {
-        mutableState.update { it.copy(inventoryCompletionPreview = null) }
-    }
-
-    fun completeInventory(
-        confirmNotInspected: Boolean,
-        confirmMissing: Boolean,
-    ) = command {
-        val current = mutableState.value
-        val session = current.inventorySession
-            ?: throw IllegalStateException("Активная инвентаризация не найдена")
-        val preview = current.inventoryCompletionPreview
-            ?: throw IllegalStateException("Сначала обновите проверку завершения")
-        check(preview.inventoryId == session.id) {
-            "Проверка завершения устарела. Откройте её снова"
-        }
-        inventoryCompletionValidationError(
-            preview = preview,
-            confirmNotInspected = confirmNotInspected,
-            confirmMissing = confirmMissing,
-        )?.let { throw IllegalStateException(it) }
-
-        val signature = buildString {
-            append("inventory-complete:${session.id}:${preview.sessionRevision}:")
-            append("${preview.acknowledgementSha256}:${preview.validationSha256}:")
-            preview.findingRevisions.forEach {
-                append("${it.findingId}:${it.expectedFindingRevision},")
-            }
-        }
-        try {
-            backend.api.completeInventorySession(
-                inventoryId = session.id,
-                idempotencyKey = logisticsCommandKey(signature),
-                request = CompleteInventorySessionRequest(
-                    expectedSessionRevision = preview.sessionRevision,
-                    findingRevisions = preview.findingRevisions,
-                    acknowledgementSha256 = preview.acknowledgementSha256,
-                    validationSha256 = preview.validationSha256,
-                ),
-            )
-        } catch (failure: HttpException) {
-            if (failure.code() == 409) {
-                refreshInventory()
-                throw IllegalStateException(
-                    "Проверка завершения устарела. Данные обновлены — проверьте риски ещё раз",
-                    failure,
-                )
-            }
-            throw failure
-        }
-        commandKeys.complete(signature)
-        mutableState.update { it.copy(inventoryCompletionPreview = null) }
-        refreshInventory()
-        message("Инвентаризация завершена")
     }
 
     fun editInventory(update: (InventoryEditorState) -> InventoryEditorState) {
@@ -888,10 +788,6 @@ class ManagerViewModel(
         editInventory { it.withInventoryCreationOrigin(origin) }
     }
 
-    fun chooseInventoryFurnitureDisposition(disposition: InventoryFurnitureDisposition) {
-        editInventory { editor -> editor.copy(furnitureDisposition = disposition) }
-    }
-
     fun addInventoryPhoto(uri: String) {
         editInventory { editor ->
             if (uri in editor.photoUris) editor
@@ -945,7 +841,6 @@ class ManagerViewModel(
             ?.let { throw IllegalArgumentException(it) }
         val passport = editor.passport()
         val equipmentObservation = editor.inventoryEquipmentObservation()
-        val desiredFurnitureContents = editor.inventoryFurnitureDesiredContents()
         var finding = editor.finding
         var session = initialSession
         var createSignature: String? = null
@@ -980,13 +875,6 @@ class ManagerViewModel(
             session = backend.api.inventory(session.id)
         }
         val attached = requireNotNull(finding) { "Сервис не вернул найденную бытовку" }
-        val furnitureRentalItemId = if (desiredFurnitureContents != null) {
-            requireNotNull(attached.assetId) {
-                "Сервис не вернул бытовку для задания по комплектации мебели"
-            }
-        } else {
-            null
-        }
         val orderedPhotoUris = editor.inventoryPhotoUrisForUpload()
         val pendingPhotoUris = orderedPhotoUris.filterNot(editor.uploadedPhotoMedia::containsKey)
         val photoSortOrderByUri = orderedPhotoUris.withIndex().associate { (index, uri) ->
@@ -1015,42 +903,25 @@ class ManagerViewModel(
                 inventoryReadyPersistedMediaReferences(persisted, readyReferences)
             }
             .orEmpty()
-        val existingMedia = (readyPersistedMedia + editor.uploadedPhotoMedia.values)
-            .distinctBy(MediaReferenceDto::mediaId)
+        val existingMedia = inventoryExistingMediaReferences(
+            persisted = readyPersistedMedia,
+            uploadedByUri = editor.uploadedPhotoMedia,
+        )
+        if (orderedPhotoUris.isEmpty() && existingMedia.isEmpty()) {
+            throw IllegalArgumentException("Добавьте хотя бы одну фотографию")
+        }
         val existingCoverMediaId = editor.coverPhotoUri
             ?.let(editor.uploadedPhotoMedia::get)
             ?.mediaId
-            ?: attached.coverMediaId
+            ?: attached.coverMediaId?.takeIf { mediaId ->
+                existingMedia.any { reference -> reference.mediaId == mediaId }
+            }
             ?: existingMedia.firstOrNull()?.mediaId
         val planSelection = inventoryPlanSelection(
             editor = editor,
             coverMediaId = existingCoverMediaId,
         )
-        val furnitureMove = if (desiredFurnitureContents != null) {
-            val rentalItemId = requireNotNull(furnitureRentalItemId) {
-                "Задание по комплектации мебели не было подготовлено"
-            }
-            val scheduledDate = LocalDate.now().toString()
-            val pendingMove = inventoryFurnitureMovePlan(
-                disposition = editor.furnitureDisposition,
-                inventoryId = session.id,
-                findingId = attached.id,
-                rentalItemId = rentalItemId,
-                warehouseId = session.warehouseId,
-                scheduledDate = scheduledDate,
-                observedContents = desiredFurnitureContents,
-            )
-            InventoryFurnitureUploadCommand(
-                rentalItemId = pendingMove.rentalItemId,
-                warehouseId = pendingMove.warehouseId,
-                scheduledDate = pendingMove.scheduledDate,
-                idempotencyKey = pendingMove.idempotencyKey,
-                desiredContents = pendingMove.desiredContents,
-            )
-        } else {
-            null
-        }
-        backgroundUploads.enqueue(
+        backgroundUploads.await().enqueue(
             BackgroundUploadDraft(
                 area = BackgroundUploadArea.INVENTORY,
                 title = "Проверка бытовки ${editor.number}",
@@ -1098,7 +969,6 @@ class ManagerViewModel(
                         .filter { line -> line.lineType == "WORK" }
                         .map(MaintenanceLineEditorState::id)
                         .toList(),
-                    furnitureMove = furnitureMove,
                 ),
             ),
         )
@@ -1605,7 +1475,7 @@ class ManagerViewModel(
             warehouseId = requireNotNull(document.destinationWarehouseId),
             context = "TRANSFER",
         )
-        backgroundUploads.enqueue(
+        backgroundUploads.await().enqueue(
             BackgroundUploadDraft(
                 area = BackgroundUploadArea.LOGISTICS,
                 title = "Приёмка перемещения",
@@ -2090,7 +1960,7 @@ class ManagerViewModel(
             warehouseId = warehouseId,
             context = "ACCEPTANCE",
         )
-        backgroundUploads.enqueue(
+        backgroundUploads.await().enqueue(
             BackgroundUploadDraft(
                 area = BackgroundUploadArea.ACCEPTANCE,
                 title = "Приёмка ремонта",
@@ -2357,7 +2227,6 @@ class ManagerViewModel(
                     readyPhotoUris = readyPhotoUris,
                     priority = linkedRepair?.priority ?: DEFAULT_MAINTENANCE_PRIORITY,
                     movementToRepair = linkedRepair?.movementToRepair ?: false,
-                    movementToShipment = linkedRepair?.movementToShipment ?: false,
                     logisticsPlanningMode = linkedRepair?.logisticsPlanningMode,
                     logisticsScheduledDate = linkedRepair?.logisticsScheduledDate,
                     step = 1,
@@ -2445,7 +2314,6 @@ class ManagerViewModel(
                     readyPhotoUris = readyPhotoUris,
                     priority = repair.priority,
                     movementToRepair = repair.movementToRepair,
-                    movementToShipment = repair.movementToShipment,
                     logisticsPlanningMode = repair.logisticsPlanningMode,
                     logisticsScheduledDate = repair.logisticsScheduledDate,
                     step = 1,
@@ -2540,7 +2408,11 @@ class ManagerViewModel(
         mutableState.update {
             it.withClosedMaintenanceEditor().copy(maintenanceFurnitureEditor = null)
         }
-        mutableState.value.selectedWarehouseId?.let(::restoreMaintenanceCatalogFromDisk)
+        mutableState.value.selectedWarehouseId?.let { warehouseId ->
+            viewModelScope.launch {
+                restoreMaintenanceCatalogFromDisk(warehouseId)
+            }
+        }
     }
 
     /**
@@ -3466,12 +3338,16 @@ class ManagerViewModel(
         requestMaintenanceCatalogSyncIfDue()
     }
 
-    private fun restoreMaintenanceCatalogFromDisk(warehouseId: String): Boolean {
+    private suspend fun restoreMaintenanceCatalogFromDisk(warehouseId: String): Boolean {
+        if (mutableState.value.selectedWarehouseId != warehouseId) return false
         val cached = maintenanceCatalogCache.read() ?: return false
+        if (mutableState.value.selectedWarehouseId != warehouseId) return false
         if (cached.warehouseId != warehouseId) return false
         val operationalNodes = cached.nodes.filter(CatalogNodeDto::isOperationalEstimateNode)
         if (operationalNodes.isEmpty()) {
-            maintenanceCatalogCache.clear()
+            if (mutableState.value.selectedWarehouseId == warehouseId) {
+                maintenanceCatalogCache.clear()
+            }
             return false
         }
 
@@ -3499,7 +3375,7 @@ class ManagerViewModel(
         return true
     }
 
-    private fun persistMaintenanceCatalog(
+    private suspend fun persistMaintenanceCatalog(
         warehouseId: String,
         catalog: LoadedMaintenanceCatalog,
     ) {
@@ -3518,6 +3394,7 @@ class ManagerViewModel(
         warehouseId: String,
         catalog: LoadedMaintenanceCatalog,
     ) {
+        if (mutableState.value.selectedWarehouseId != warehouseId) return
         maintenanceCatalogWarehouseId = warehouseId
         maintenanceCatalogNodesById = catalog.allNodes.associateBy(CatalogNodeDto::id)
         maintenanceCatalogRevision = catalog.revision
@@ -3562,15 +3439,15 @@ class ManagerViewModel(
         val current = mutableState.value
         val warehouseId = current.selectedWarehouseId ?: return
         if (current.authState != ManagerAuthState.SignedIn) return
-        if (!shouldAttemptMaintenanceCatalogSync(
-                lastAttemptSlot = maintenanceCatalogCache.lastAttemptSlot(),
-                now = ZonedDateTime.now(),
-            )
-        ) {
-            return
-        }
         if (maintenanceCatalogSyncJob?.isActive == true) return
         maintenanceCatalogSyncJob = viewModelScope.launch {
+            if (!shouldAttemptMaintenanceCatalogSync(
+                    lastAttemptSlot = maintenanceCatalogCache.lastAttemptSlot(),
+                    now = ZonedDateTime.now(),
+                )
+            ) {
+                return@launch
+            }
             syncMaintenanceCatalog(warehouseId, scheduled = true)
         }
     }
@@ -3708,7 +3585,7 @@ class ManagerViewModel(
         )
     }
 
-    private fun updateMaintenanceCatalogActiveVersionEtag(
+    private suspend fun updateMaintenanceCatalogActiveVersionEtag(
         warehouseId: String,
         etag: String?,
     ) {
@@ -3802,14 +3679,13 @@ class ManagerViewModel(
                 expectedVersion = expectedVersion,
                 priority = editor.priority,
                 movementToRepair = editor.movementToRepair,
-                movementToShipment = editor.movementToShipment,
                 logisticsPlanningMode = editor.logisticsPlanningMode,
                 logisticsScheduledDate = editor.logisticsScheduledDate,
             )
         } else {
             null
         }
-        backgroundUploads.enqueue(
+        backgroundUploads.await().enqueue(
             BackgroundUploadDraft(
                 area = BackgroundUploadArea.MAINTENANCE,
                 title = if (editor.mode == MaintenanceEditorMode.ESTIMATE) {
@@ -3980,14 +3856,8 @@ class ManagerViewModel(
         if (maintenanceHasPhotos(editor) && !maintenanceHasCoverPhoto(editor)) {
             throw IllegalArgumentException("Выберите титульную фотографию")
         }
-        if (editor.priority !in 1..5) {
-            throw IllegalArgumentException(
-                if (editor.movementToRepair) {
-                    "Выберите приоритет перемещения от 1 до 5"
-                } else {
-                    "Выберите приоритет ремонта от 1 до 5"
-                },
-            )
+        editor.logisticsTaskPriorityValidationError()?.let { error ->
+            throw IllegalArgumentException(error)
         }
         editor.logisticsPlanningValidationError()?.let { error ->
             throw IllegalArgumentException(error)
@@ -4072,23 +3942,40 @@ class ManagerViewModel(
     ): InventoryPlanSelectionDto? {
         if (editor.planLines.isEmpty()) {
             require(!editor.planMovementToRepair) {
-                "Нельзя создать перемещение без работ или материалов"
+                "Передача в ремонт доступна, когда в проверке есть работы или материалы"
             }
             return null
         }
-        val maintenanceEditor = editor.toMaintenancePlanEditor().normalizedLogisticsPlanning()
-        require(maintenanceEditor.priority in 1..5) {
-            if (maintenanceEditor.movementToRepair) {
-                "Выберите приоритет перемещения от 1 до 5"
-            } else {
-                "Выберите приоритет ремонта от 1 до 5"
-            }
+        val maintenanceEditor = editor.toMaintenancePlanEditor()
+            .copy(
+                logisticsPlanningMode = if (editor.planMovementToRepair) {
+                    LOGISTICS_PLANNING_MODE_AUTO
+                } else {
+                    null
+                },
+                logisticsScheduledDate = null,
+            )
+            .normalizedLogisticsPlanning()
+        maintenanceEditor.logisticsTaskPriorityValidationError()?.let { error ->
+            throw IllegalArgumentException(error)
         }
         maintenanceEditor.logisticsPlanningValidationError()?.let { error ->
             throw IllegalArgumentException(error)
         }
         val normalizedLines = maintenanceEditor.lines.associateBy(
             MaintenanceLineEditorState::id,
+        )
+        val normalizedLineInputs = maintenanceEditor.lines.associate { line ->
+            line.id to maintenanceLineInput(line)
+        }
+        val routingCatalogNodeIdByManualLineId = inventoryManualLineRoutingCatalogNodeIds(
+            catalogNodes = maintenanceCatalogNodesById.values,
+            selectedRoutingByLineId = maintenanceEditor.lines
+                .asSequence()
+                .filter { line ->
+                    normalizedLineInputs.getValue(line.id).catalogSnapshot == null
+                }
+                .associate { line -> line.id to line.maintenanceRouting() },
         )
         val stageCommentByLine = maintenanceEditor.stages
             .filter { it.kind == "REPAIR_WORK" }
@@ -4097,11 +3984,12 @@ class ManagerViewModel(
             }
             .toMap()
         val lines = maintenanceEditor.lines.map { line ->
-            val normalized = maintenanceLineInput(line)
+            val normalized = normalizedLineInputs.getValue(line.id)
             if (normalized.catalogSnapshot != null) {
                 InventoryPlanLineInputDto(
                     aggregationKind = "CATALOG",
                     catalogNodeId = normalized.catalogSnapshot.nodeId,
+                    routingCatalogNodeId = null,
                     description = null,
                     type = null,
                     unit = null,
@@ -4122,6 +4010,7 @@ class ManagerViewModel(
                 InventoryPlanLineInputDto(
                     aggregationKind = "MANUAL",
                     catalogNodeId = null,
+                    routingCatalogNodeId = routingCatalogNodeIdByManualLineId.getValue(line.id),
                     description = normalized.description,
                     type = normalized.lineType,
                     unit = normalized.unit,
@@ -4154,18 +4043,12 @@ class ManagerViewModel(
                         .mapNotNull(normalizedLines::get)
                         .mapNotNull(MaintenanceLineEditorState::catalogNodeId)
                         .firstOrNull()
-                    ?: maintenanceCatalogNodesById.values
-                        .asSequence()
-                        .filter { node ->
-                            node.active &&
-                                node.isOperationalEstimateNode() &&
-                                node.routing?.routingKey() == stage.routing.routingKey()
-                        }
-                        .map(CatalogNodeDto::id)
-                        .distinct()
-                        .singleOrNull()
+                    ?: inventoryStageCatalogNodeId(
+                        catalogNodes = maintenanceCatalogNodesById.values,
+                        selectedRouting = stage.routing,
+                    )
                     ?: throw IllegalArgumentException(
-                        "Для пользовательской строки не найден единственный маршрут каталога",
+                        "Для пользовательской строки не найден маршрут каталога",
                     )
 
                 else -> throw IllegalArgumentException("Неподдерживаемый этап инвентаризации")
@@ -4181,7 +4064,6 @@ class ManagerViewModel(
             priority = maintenanceEditor.priority,
             coverMediaId = coverMediaId,
             movementToRepair = maintenanceEditor.movementToRepair,
-            movementToShipment = maintenanceEditor.movementToShipment,
             logisticsPlanningMode = maintenanceEditor.logisticsPlanningMode,
             logisticsScheduledDate = maintenanceEditor.logisticsScheduledDate,
             lines = lines,
@@ -4483,6 +4365,7 @@ class ManagerViewModel(
     private suspend fun loadWorkspace() {
         setBusy(true)
         try {
+            backend.warmUpTransport()
             val user = backend.api.currentUser()
             if (user.principalType != "USER" || user.globalRole !in MANAGER_ROLES) {
                 backend.auth.invalidate(
@@ -4772,7 +4655,6 @@ class ManagerViewModel(
                     inventoryRentalItems = snapshot.rentalItems,
                     inventorySession = snapshot.session,
                     inventoryFindings = snapshot.findings,
-                    inventoryCompletionPreview = null,
                 )
             } else {
                 current
@@ -4808,7 +4690,7 @@ class ManagerViewModel(
                 )
             }
         }
-        backgroundUploads.enqueue(
+        backgroundUploads.await().enqueue(
             BackgroundUploadDraft(
                 area = BackgroundUploadArea.LOGISTICS,
                 title = if (action == ReturnUploadAction.ACCEPT) {
@@ -5297,83 +5179,15 @@ private fun RentalItemCreationOptionsDto.dimensionOptionsForTypeId(
         .toList()
 }
 
-/**
- * Inventory has no cross-service transaction with logistics. A deterministic UUID keeps the
- * exact requested furniture composition idempotent even when the UI retries after the inventory
- * finding has already been saved.
- */
-internal fun inventoryFurnitureReconciliationIdempotencyKey(
-    inventoryId: String,
-    findingId: String,
-    rentalItemId: String,
-    scheduledDate: String,
-    desiredContents: List<CabinFurnitureRequirementDto>,
-): String {
-    val normalizedContents = desiredContents
-        .sortedBy(CabinFurnitureRequirementDto::equipmentId)
-        .joinToString(separator = ",") { requirement ->
-            "${requirement.equipmentId}=${requirement.quantity}"
-        }
-    val seed =
-        "rwms:inventory-furniture-reconciliation:$inventoryId:$findingId:$rentalItemId:" +
-            "$scheduledDate:$normalizedContents"
-    return UUID.nameUUIDFromBytes(seed.toByteArray(Charsets.UTF_8)).toString()
-}
-
-internal fun inventoryFurnitureMoveToStockIdempotencyKey(
-    inventoryId: String,
-    findingId: String,
-    rentalItemId: String,
-    scheduledDate: String,
-): String = inventoryFurnitureReconciliationIdempotencyKey(
-    inventoryId = inventoryId,
-    findingId = findingId,
-    rentalItemId = rentalItemId,
-    scheduledDate = scheduledDate,
-    desiredContents = emptyList(),
-)
-
-/**
- * The inventory observation never writes cabin balances directly. It is always reconciled by
- * logistics: keeping furniture sends the observed total; moving it to stock sends an empty one.
- */
-internal fun inventoryFurnitureMovePlan(
-    disposition: InventoryFurnitureDisposition,
-    inventoryId: String,
-    findingId: String,
-    rentalItemId: String,
-    warehouseId: String,
-    scheduledDate: String,
-    observedContents: List<CabinFurnitureRequirementDto>,
-): PendingInventoryFurnitureMove {
-    val desiredContents = when (disposition) {
-        InventoryFurnitureDisposition.KEEP_IN_CABIN -> observedContents
-        InventoryFurnitureDisposition.MOVE_TO_STOCK -> emptyList()
-    }
-    return PendingInventoryFurnitureMove(
-        inventoryId = inventoryId,
-        findingId = findingId,
-        rentalItemId = rentalItemId,
-        warehouseId = warehouseId,
-        scheduledDate = scheduledDate,
-        idempotencyKey = inventoryFurnitureReconciliationIdempotencyKey(
-            inventoryId = inventoryId,
-            findingId = findingId,
-            rentalItemId = rentalItemId,
-            scheduledDate = scheduledDate,
-            desiredContents = desiredContents,
-        ),
-        desiredContents = desiredContents,
-    )
-}
-
 internal fun InventoryEditorState.inventoryPhotoUrisForUpload(): List<String> {
     if (photoUris.isEmpty()) {
+        if (persistedInventoryMediaReferences().isNotEmpty()) return emptyList()
         throw IllegalArgumentException("Добавьте хотя бы одну фотографию")
     }
     val cover = coverPhotoUri?.takeIf { it in photoUris }
-        ?: throw IllegalArgumentException("Выберите титульную фотографию")
-    return listOf(cover) + photoUris.filterNot { it == cover }
+    if (cover != null) return listOf(cover) + photoUris.filterNot { it == cover }
+    if (persistedInventoryMediaReferences().isNotEmpty()) return photoUris
+    throw IllegalArgumentException("Выберите титульную фотографию")
 }
 
 internal fun InventoryEditorState.pendingInventoryPhotoUris(): List<String> =
@@ -5428,10 +5242,23 @@ internal fun inventoryReadyPersistedMediaReferences(
 ): List<MediaReferenceDto> =
     persisted.filter(readyOwnerReferences::contains)
 
+internal fun InventoryEditorState.persistedInventoryMediaReferences(): List<MediaReferenceDto> =
+    finding?.media.orEmpty().distinctBy(MediaReferenceDto::mediaId)
+
+internal fun inventoryExistingMediaReferences(
+    persisted: List<MediaReferenceDto>,
+    uploadedByUri: Map<String, MediaReferenceDto>,
+): List<MediaReferenceDto> =
+    (persisted + uploadedByUri.values).distinctBy(MediaReferenceDto::mediaId)
+
 internal fun InventoryEditorState.inventoryPhotoValidationError(): String? =
     when {
-        photoUris.isEmpty() -> "Добавьте хотя бы одну фотографию"
-        coverPhotoUri !in photoUris -> "Выберите титульную фотографию"
+        photoUris.isEmpty() && persistedInventoryMediaReferences().isEmpty() ->
+            "Добавьте хотя бы одну фотографию"
+        photoUris.isNotEmpty() &&
+            coverPhotoUri !in photoUris &&
+            persistedInventoryMediaReferences().isEmpty() ->
+            "Выберите титульную фотографию"
         else -> null
     }
 
@@ -5702,6 +5529,66 @@ private fun CatalogNodeDto.isOperationalEstimateNode(): Boolean =
         includeInEstimate &&
         nodeType in setOf("WORK", "MATERIAL", "OPTION")
 
+/**
+ * The user selects a route for a manual inventory line, while an inventory stage still needs
+ * one catalog node as its technical reference. The routing can be inherited from a category,
+ * while catalog administration may legitimately contain several operational descendants on that
+ * route. Choose the lowest stable node id rather than making a valid manual line impossible to
+ * save.
+ */
+internal fun inventoryStageCatalogNodeId(
+    catalogNodes: Collection<CatalogNodeDto>,
+    selectedRouting: RoutingSnapshotDto,
+): String? {
+    val activeNodesById = catalogNodes
+        .asSequence()
+        .filter(CatalogNodeDto::active)
+        .associateBy(CatalogNodeDto::id)
+    return activeNodesById.values
+        .asSequence()
+        .filter { node ->
+            node.isOperationalEstimateNode() && node.nodeType in setOf("WORK", "MATERIAL")
+        }
+        .filter { node ->
+            effectiveCatalogNodeRouting(node.id, activeNodesById)?.routingKey() ==
+                selectedRouting.routingKey()
+        }
+        .map(CatalogNodeDto::id)
+        .minOrNull()
+}
+
+/**
+ * Every manual inventory line keeps its user-selected routing, but the inventory command also
+ * needs an active catalog node as the technical route reference. Resolve each line independently
+ * so materials and works with different inherited routes cannot accidentally share a stage node.
+ */
+internal fun inventoryManualLineRoutingCatalogNodeIds(
+    catalogNodes: Collection<CatalogNodeDto>,
+    selectedRoutingByLineId: Map<String, RoutingSnapshotDto?>,
+): Map<String, String> = selectedRoutingByLineId.mapValues { (_, selectedRouting) ->
+    val routing = selectedRouting
+        ?: throw IllegalArgumentException("Для пользовательской строки назначьте маршрут")
+    if (!routing.isValidMaintenanceRouting()) {
+        throw IllegalArgumentException("Для пользовательской строки назначьте корректный маршрут")
+    }
+    inventoryStageCatalogNodeId(catalogNodes, routing)
+        ?: throw IllegalArgumentException("Для пользовательской строки не найден маршрут каталога")
+}
+
+private fun effectiveCatalogNodeRouting(
+    nodeId: String,
+    activeNodesById: Map<String, CatalogNodeDto>,
+): RoutingSnapshotDto? {
+    var current = activeNodesById[nodeId]
+    val visited = mutableSetOf<String>()
+    while (current != null) {
+        if (!visited.add(current.id)) return null
+        current.routing?.takeIf(RoutingSnapshotDto::isValidMaintenanceRouting)?.let { return it }
+        current = current.parentNodeId?.let(activeNodesById::get)
+    }
+    return null
+}
+
 internal fun CatalogNodeDto.isAvailableForMaintenanceMode(
     mode: MaintenanceEditorMode,
     nodesById: Map<String, CatalogNodeDto>,
@@ -5927,7 +5814,6 @@ internal fun InventoryEditorState.toMaintenancePlanEditor(): MaintenanceEditorSt
         readyMedia = emptyList(),
         priority = planPriority,
         movementToRepair = planMovementToRepair,
-        movementToShipment = planMovementToShipment,
         logisticsPlanningMode = planLogisticsPlanningMode,
         logisticsScheduledDate = planLogisticsScheduledDate,
         step = 3,
@@ -5942,7 +5828,6 @@ internal fun InventoryEditorState.withMaintenancePlanEditor(
     planStages = editor.stages,
     planPriority = editor.priority,
     planMovementToRepair = editor.movementToRepair,
-    planMovementToShipment = editor.movementToShipment,
     planLogisticsPlanningMode = editor.logisticsPlanningMode,
     planLogisticsScheduledDate = editor.logisticsScheduledDate,
 )

@@ -9,9 +9,23 @@ import dev.buhanzaz.rwms.asset.service.AssetDependencyException;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,12 +38,23 @@ class OAuthWarehouseRegistryClientTest {
   private final AtomicBoolean active = new AtomicBoolean(true);
   private final AtomicReference<String> tokenAuthorization = new AtomicReference<>();
   private final AtomicReference<String> tokenBody = new AtomicReference<>();
-  private final AtomicReference<String> registryAuthorization = new AtomicReference<>();
+  private final AtomicReference<String> tokenValue = new AtomicReference<>("registry-token");
+  private final AtomicInteger tokenExpiresIn = new AtomicInteger(300);
+  private final AtomicInteger tokenRequests = new AtomicInteger();
+  private final AtomicInteger tokenResponseDelayMillis = new AtomicInteger();
+  private final AtomicInteger warehouseRequests = new AtomicInteger();
+  private final AtomicInteger unauthorizedWarehouseResponses = new AtomicInteger();
+  private final AtomicInteger warehouseProblemStatus = new AtomicInteger();
+  private final ConcurrentLinkedQueue<String> issuedTokens = new ConcurrentLinkedQueue<>();
+  private final CopyOnWriteArrayList<String> warehouseAuthorizations = new CopyOnWriteArrayList<>();
   private HttpServer server;
+  private ExecutorService serverExecutor;
 
   @BeforeEach
   void startServer() throws IOException {
     server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    serverExecutor = Executors.newCachedThreadPool();
+    server.setExecutor(serverExecutor);
     server.createContext("/oauth2/token", this::token);
     server.createContext(
         "/api/internal/warehouse/v1/warehouses/asset/" + warehouseId + "/existence",
@@ -40,26 +65,144 @@ class OAuthWarehouseRegistryClientTest {
   @AfterEach
   void stopServer() {
     if (server != null) server.stop(0);
+    if (serverExecutor != null) serverExecutor.shutdownNow();
   }
 
   @Test
-  void usesOnlyTheAssetCredentialAndFailsClosedForAnInactiveWarehouse() {
-    OAuthWarehouseRegistryClient client = new OAuthWarehouseRegistryClient(
-        properties().requireEnabledConfiguration(),
-        new ObjectMapper(),
-        OAuthWarehouseRegistryClient.httpClient(Duration.ofSeconds(1)));
+  void cachesAValidTokenAndFailsClosedForAnInactiveWarehouse() {
+    OAuthWarehouseRegistryClient client = client();
 
     client.requireActive(warehouseId);
 
     assertThat(tokenAuthorization.get()).isEqualTo("Basic YXNzZXQtc2VydmljZTpzZWNyZXQ=");
     assertThat(tokenBody.get()).isEqualTo("grant_type=client_credentials&scope=warehouse.read");
-    assertThat(registryAuthorization.get()).isEqualTo("Bearer registry-token");
+    assertThat(warehouseAuthorizations).containsExactly("Bearer registry-token");
+    assertThat(tokenRequests.get()).isEqualTo(1);
 
     active.set(false);
     assertThatThrownBy(() -> client.requireActive(warehouseId))
         .isInstanceOfSatisfying(
             AssetDependencyException.class,
             exception -> assertThat(exception.status()).isEqualTo(HttpStatus.CONFLICT));
+    assertThat(tokenRequests.get()).isEqualTo(1);
+    assertThat(warehouseAuthorizations).containsExactly("Bearer registry-token", "Bearer registry-token");
+  }
+
+  @Test
+  void refreshesTheCachedTokenAtExpiresInMinusSafetySkew() {
+    MutableClock clock = new MutableClock(Instant.parse("2026-01-01T00:00:00Z"));
+    tokenExpiresIn.set(31);
+    issuedTokens.add("first-token");
+    issuedTokens.add("second-token");
+    OAuthWarehouseRegistryClient client = client(clock);
+
+    client.requireActive(warehouseId);
+    client.requireActive(warehouseId);
+    clock.advance(Duration.ofSeconds(1));
+    client.requireActive(warehouseId);
+
+    assertThat(tokenRequests.get()).isEqualTo(2);
+    assertThat(warehouseAuthorizations)
+        .containsExactly("Bearer first-token", "Bearer first-token", "Bearer second-token");
+  }
+
+  @Test
+  void usesASingleTokenRequestForConcurrentLookups() throws Exception {
+    int lookupCount = 12;
+    tokenResponseDelayMillis.set(200);
+    OAuthWarehouseRegistryClient client = client();
+    ExecutorService callers = Executors.newFixedThreadPool(lookupCount);
+    CountDownLatch ready = new CountDownLatch(lookupCount);
+    CountDownLatch start = new CountDownLatch(1);
+    List<Future<Void>> calls = new ArrayList<>();
+
+    try {
+      for (int index = 0; index < lookupCount; index++) {
+        calls.add(callers.submit(() -> {
+          ready.countDown();
+          start.await();
+          client.requireActive(warehouseId);
+          return null;
+        }));
+      }
+      assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+      start.countDown();
+      for (Future<Void> call : calls) call.get(5, TimeUnit.SECONDS);
+    } finally {
+      callers.shutdownNow();
+    }
+
+    assertThat(tokenRequests.get()).isEqualTo(1);
+    assertThat(warehouseRequests.get()).isEqualTo(lookupCount);
+  }
+
+  @Test
+  void invalidatesAndRefreshesOnlyOnceAfterAnUnauthorizedWarehouseResponse() {
+    issuedTokens.add("stale-token");
+    issuedTokens.add("fresh-token");
+    unauthorizedWarehouseResponses.set(1);
+    OAuthWarehouseRegistryClient client = client();
+
+    client.requireActive(warehouseId);
+
+    assertThat(tokenRequests.get()).isEqualTo(2);
+    assertThat(warehouseRequests.get()).isEqualTo(2);
+    assertThat(warehouseAuthorizations).containsExactly("Bearer stale-token", "Bearer fresh-token");
+  }
+
+  @Test
+  void propagatesARepeatedUnauthorizedProblemAfterOneRetry() {
+    issuedTokens.add("stale-token");
+    issuedTokens.add("still-rejected-token");
+    unauthorizedWarehouseResponses.set(2);
+    OAuthWarehouseRegistryClient client = client();
+
+    assertThatThrownBy(() -> client.requireActive(warehouseId))
+        .isInstanceOfSatisfying(
+            AssetDependencyException.class,
+            exception -> assertThat(exception.status()).isEqualTo(HttpStatus.BAD_GATEWAY));
+
+    assertThat(tokenRequests.get()).isEqualTo(2);
+    assertThat(warehouseRequests.get()).isEqualTo(2);
+  }
+
+  @Test
+  void propagatesWarehouseProblemDetailsWithoutTreatingThemAsSuccess() {
+    warehouseProblemStatus.set(503);
+    OAuthWarehouseRegistryClient client = client();
+
+    assertThatThrownBy(() -> client.requireActive(warehouseId))
+        .isInstanceOfSatisfying(
+            AssetDependencyException.class,
+            exception -> assertThat(exception.status()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE));
+
+    assertThat(tokenRequests.get()).isEqualTo(1);
+    assertThat(warehouseRequests.get()).isEqualTo(1);
+  }
+
+  @Test
+  void propagatesWarehouseNetworkFailuresWithoutRetrying() {
+    OAuthWarehouseRegistryClient client = client();
+    client.requireActive(warehouseId);
+    server.stop(0);
+
+    assertThatThrownBy(() -> client.requireActive(warehouseId))
+        .isInstanceOfSatisfying(
+            AssetDependencyException.class,
+            exception -> assertThat(exception.status()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE));
+
+    assertThat(tokenRequests.get()).isEqualTo(1);
+    assertThat(warehouseRequests.get()).isEqualTo(1);
+  }
+
+  private OAuthWarehouseRegistryClient client() { return client(Clock.systemUTC()); }
+
+  private OAuthWarehouseRegistryClient client(Clock clock) {
+    return new OAuthWarehouseRegistryClient(
+        properties().requireEnabledConfiguration(),
+        new ObjectMapper(),
+        OAuthWarehouseRegistryClient.httpClient(Duration.ofSeconds(1)),
+        clock);
   }
 
   private WarehouseRegistryProperties properties() {
@@ -77,19 +220,69 @@ class OAuthWarehouseRegistryClientTest {
   private void token(HttpExchange exchange) throws IOException {
     tokenAuthorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
     tokenBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
-    respond(exchange, 200, "{\"access_token\":\"registry-token\",\"token_type\":\"Bearer\",\"scope\":\"warehouse.read\"}");
+    tokenRequests.incrementAndGet();
+    delay(tokenResponseDelayMillis.get());
+    String issuedToken = issuedTokens.poll();
+    if (issuedToken == null) issuedToken = tokenValue.get();
+    respond(exchange, 200, "{\"access_token\":\"" + issuedToken
+        + "\",\"token_type\":\"Bearer\",\"scope\":\"warehouse.read\",\"expires_in\":" + tokenExpiresIn.get() + "}");
   }
 
   private void warehouse(HttpExchange exchange) throws IOException {
-    registryAuthorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
+    warehouseRequests.incrementAndGet();
+    warehouseAuthorizations.add(exchange.getRequestHeaders().getFirst("Authorization"));
+    int problemStatus = warehouseProblemStatus.get();
+    if (problemStatus != 0) {
+      respondProblem(exchange, problemStatus);
+      return;
+    }
+    if (unauthorizedWarehouseResponses.getAndUpdate(value -> value > 0 ? value - 1 : 0) > 0) {
+      respondProblem(exchange, 401);
+      return;
+    }
     respond(exchange, 200, "{\"id\":\"" + warehouseId + "\",\"version\":0,\"active\":" + active.get() + "}");
   }
 
+  private static void delay(int milliseconds) throws IOException {
+    if (milliseconds == 0) return;
+    try {
+      Thread.sleep(milliseconds);
+    } catch (InterruptedException exception) {
+      Thread.currentThread().interrupt();
+      throw new IOException("Token response delay was interrupted", exception);
+    }
+  }
+
+  private static void respondProblem(HttpExchange exchange, int status) throws IOException {
+    respond(exchange, status, "application/problem+json", "{\"status\":" + status + "}");
+  }
+
   private static void respond(HttpExchange exchange, int status, String body) throws IOException {
+    respond(exchange, status, "application/json", body);
+  }
+
+  private static void respond(HttpExchange exchange, int status, String contentType, String body) throws IOException {
     byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
-    exchange.getResponseHeaders().set("Content-Type", "application/json");
+    exchange.getResponseHeaders().set("Content-Type", contentType);
     exchange.sendResponseHeaders(status, bytes.length);
     exchange.getResponseBody().write(bytes);
     exchange.close();
+  }
+
+  private static final class MutableClock extends Clock {
+    private Instant current;
+
+    private MutableClock(Instant current) { this.current = current; }
+
+    @Override
+    public ZoneId getZone() { return ZoneOffset.UTC; }
+
+    @Override
+    public Clock withZone(ZoneId zone) { return Clock.fixed(current, zone); }
+
+    @Override
+    public Instant instant() { return current; }
+
+    private void advance(Duration duration) { current = current.plus(duration); }
   }
 }

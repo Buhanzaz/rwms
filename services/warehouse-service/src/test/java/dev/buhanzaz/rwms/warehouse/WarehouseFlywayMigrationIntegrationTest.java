@@ -15,6 +15,7 @@ import org.flywaydb.core.api.exception.FlywayValidateException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.testcontainers.junit.jupiter.Container;
@@ -43,7 +44,7 @@ class WarehouseFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndOwnsOnlyWarehouseOutboxAndIdempotencyData() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(2);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(3);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -56,18 +57,43 @@ class WarehouseFlywayMigrationIntegrationTest {
     assertThat(toRegclass("warehouse_location")).isNull();
     assertThat(toRegclass("warehouse_topology")).isNull();
     assertThat(columnExists("warehouse", "code")).isFalse();
+    assertThat(columnExists("warehouse", "normalized_name")).isTrue();
     assertThat(
             jdbc.queryForList(
                 """
-                select id::text || '|' || name || '|' || city || '|'
+                select id::text || '|' || name || '|' || normalized_name || '|' || city || '|'
                        || coalesce(address, '<null>') || '|' || time_zone || '|' || active::text
                        || '|' || coalesce(sort_order::text, '<null>')
                   from warehouse order by id
                 """,
                 String.class))
         .containsExactly(
-            "00000000-0000-0000-0000-000000000001|СПБ|Санкт-Петербург|<null>|Europe/Moscow|true|<null>",
-            "00000000-0000-0000-0000-000000000002|Москва|Москва|<null>|Europe/Moscow|true|<null>");
+            "00000000-0000-0000-0000-000000000001|СПБ|спб|Санкт-Петербург|<null>|Europe/Moscow|true|<null>",
+            "00000000-0000-0000-0000-000000000002|Москва|москва|Москва|<null>|Europe/Moscow|true|<null>");
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from information_schema.table_constraints
+                where table_schema='public' and table_name='warehouse'
+                  and constraint_type='UNIQUE'
+                  and constraint_name='uk_warehouse_normalized_name'
+                """,
+                Integer.class))
+        .isOne();
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    insert into warehouse(
+                      id,version,name,normalized_name,city,address,time_zone,active,sort_order,
+                      created_at,updated_at)
+                    values (?,0,'СПБ','спб','Санкт-Петербург',null,'Europe/Moscow',true,null,
+                      clock_timestamp(),clock_timestamp())
+                    """,
+                    UUID.randomUUID()))
+        .isInstanceOf(DataIntegrityViolationException.class)
+        .hasMessageContaining("uk_warehouse_normalized_name");
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from outbox_event", Integer.class))
@@ -123,7 +149,7 @@ class WarehouseFlywayMigrationIntegrationTest {
         warehouseId);
 
     Flyway versionTwo = flyway(MIGRATIONS);
-    assertThat(versionTwo.migrate().migrationsExecuted).isOne();
+    assertThat(versionTwo.migrate().migrationsExecuted).isEqualTo(2);
     versionTwo.validate();
 
     assertThat(columnExists("warehouse", "code")).isFalse();
@@ -154,6 +180,33 @@ class WarehouseFlywayMigrationIntegrationTest {
                     eventId))
         .isInstanceOf(RuntimeException.class)
         .hasMessageContaining("immutable");
+  }
+
+  @Test
+  void versionThreeFailsFastWhenHistoricalCanonicalNamesCollide() {
+    Flyway versionTwo = configuration(MIGRATIONS).target("2").load();
+    assertThat(versionTwo.migrate().migrationsExecuted).isEqualTo(2);
+
+    jdbc.update(
+        """
+        insert into warehouse(
+          id,version,name,city,address,time_zone,active,sort_order,created_at,updated_at)
+        values (?,0,?,'Москва',null,'Europe/Moscow',true,null,clock_timestamp(),clock_timestamp())
+        """,
+        UUID.randomUUID(),
+        "\u00a0North\u00a0Hub\u00a0");
+    jdbc.update(
+        """
+        insert into warehouse(
+          id,version,name,city,address,time_zone,active,sort_order,created_at,updated_at)
+        values (?,0,?,'Москва',null,'Europe/Moscow',false,null,clock_timestamp(),clock_timestamp())
+        """,
+        UUID.randomUUID(),
+        "north  hub");
+
+    assertThatThrownBy(() -> flyway(MIGRATIONS).migrate())
+        .isInstanceOf(FlywayException.class)
+        .hasMessageContaining("duplicate canonical warehouse names");
   }
 
   @Test

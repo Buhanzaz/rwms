@@ -54,8 +54,6 @@ const planId = "00000000-0000-4000-8000-000000000005"
 const queueId = "00000000-0000-4000-8000-000000000006"
 const workQueueId = "00000000-0000-4000-8000-000000000036"
 const foreignQueueId = "00000000-0000-4000-8000-000000000016"
-const movementQueueId = "00000000-0000-4000-8000-000000000026"
-const movementWorkQueueId = "00000000-0000-4000-8000-000000000046"
 
 function estimate(
   lifecycleState: MaintenanceEstimate["lifecycle"],
@@ -156,7 +154,7 @@ const completeCommand: CompleteRepairEstimateCommand = {
   ...draft,
   priority: 1,
   completionMode: "MANUAL",
-  movementRequired: false,
+  movementToRepair: false,
   logisticsPlanningMode: "AUTO",
   logisticsScheduledDate: null,
   taskPlans: [
@@ -243,6 +241,7 @@ describe("maintenance repair estimates adapter", () => {
       0,
       1,
       expect.any(String),
+      false,
       "AUTO",
       null
     )
@@ -396,74 +395,9 @@ describe("maintenance repair estimates adapter", () => {
         })),
       })
     ).rejects.toThrow(
-      "Очередь «Ремонт» не подключена к выбранному складу"
+      "Очередь «Ремонт» не материализована для выбранного склада или отключена. Проверьте «Настройки доски задач → Каталог очередей» и синхронизацию склада."
     )
     expect(lifecycle.create).not.toHaveBeenCalled()
-  })
-
-  it("resolves a new movement stage to its sole configured queue UUID", async () => {
-    listQueues.mockResolvedValue([
-      {
-        id: workQueueId,
-        definitionId: queueId,
-        name: "Ремонт",
-        type: "REPAIR",
-        active: true,
-        hidden: false,
-      },
-      {
-        id: movementWorkQueueId,
-        definitionId: movementQueueId,
-        name: "Перемещение",
-        type: "MOVEMENT",
-        active: true,
-        hidden: false,
-      },
-    ])
-    lifecycle.create.mockResolvedValue(estimate("DRAFT", 0))
-    lifecycle.complete.mockRejectedValue(new Error("stop after draft"))
-    const adapter = new HttpMaintenanceRepairEstimatesAdapter(
-      rentalItemsClient,
-      async () => "token"
-    )
-
-    await expect(
-      adapter.complete({
-        ...completeCommand,
-        taskPlans: [
-          ...completeCommand.taskPlans,
-          {
-            id: "00000000-0000-4000-8000-000000000027",
-            kind: "MOVE_TO_REPAIR",
-            includedLineIds: [],
-            primaryLineId: null,
-            groupComment: "",
-            queueId: null,
-            queueName: null,
-            routeQueueKind: "MOVEMENT",
-            sortOrder: 20,
-            generationStatus: "PENDING_GENERATION",
-          },
-        ],
-      })
-    ).rejects.toThrow("stop after draft")
-
-    expect(lifecycle.create).toHaveBeenCalledWith(
-      "token",
-      expect.any(String),
-      expect.objectContaining({
-        plan: [
-          expect.anything(),
-          expect.objectContaining({
-            routing: {
-              queueId: movementQueueId,
-              queueName: "Перемещение",
-              queueType: "MOVEMENT",
-            },
-          }),
-        ],
-      })
-    )
   })
 
   it("passes both estimate and linked-repair CAS versions on amendment", async () => {

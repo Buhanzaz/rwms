@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.api;
 
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsNotFoundException;
@@ -53,6 +54,23 @@ public class LogisticsProblemHandler {
   @ExceptionHandler(LogisticsConflictException.class)
   ResponseEntity<ApiProblem> conflict(LogisticsConflictException exception, HttpServletRequest request) {
     return problem(HttpStatus.CONFLICT, "LOGISTICS_CONFLICT", exception.getMessage(), request);
+  }
+
+  @ExceptionHandler(LogisticsDependencyException.class)
+  ResponseEntity<ApiProblem> dependency(
+      LogisticsDependencyException exception, HttpServletRequest request) {
+    if (exception.kind() == LogisticsDependencyException.FailureKind.PERMANENT_REJECTION) {
+      return problem(
+          HttpStatus.CONFLICT,
+          "LOGISTICS_DEPENDENCY_CONFLICT",
+          "A dependent service rejected the logistics operation",
+          request);
+    }
+    return problem(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        "LOGISTICS_DEPENDENCY_UNAVAILABLE",
+        "A service required by logistics is temporarily unavailable",
+        request);
   }
 
   @ExceptionHandler({OptimisticLockingFailureException.class, DataIntegrityViolationException.class})

@@ -331,8 +331,7 @@ class TransferWorkflowStore {
               LogisticsDocumentService.TRANSFER_MAINTENANCE_COMPLETE_ARRIVAL,
               document,
               line,
-              line.getRepairContinuationPriority(),
-              Boolean.TRUE.equals(line.getMovementToShipment())),
+              line.getRepairContinuationPriority()),
           completedAt);
       return;
     }
@@ -531,8 +530,7 @@ class TransferWorkflowStore {
               line.getAssetId(),
               document.getWarehouseId(),
               destinationWarehouseId(document),
-              line.getRepairContinuationPriority(),
-              Boolean.TRUE.equals(line.getMovementToShipment())));
+              line.getRepairContinuationPriority()));
     }
     return Optional.empty();
   }
@@ -1191,8 +1189,7 @@ class TransferWorkflowStore {
       List<LogisticsDependencyGateway.MediaReference> references,
       UUID sourceWarehouseId,
       String transferAssetStatus,
-      Integer priority,
-      boolean movementToShipment) {
+      Integer priority) {
     static Work warehouse(UUID operationId, UUID documentId, UUID lineId, UUID warehouseId) {
       return new Work(
           WorkType.WAREHOUSE,
@@ -1209,8 +1206,7 @@ class TransferWorkflowStore {
           List.of(),
           null,
           null,
-          null,
-          false);
+          null);
     }
 
     static Work snapshot(UUID operationId, UUID assetId) {
@@ -1229,8 +1225,7 @@ class TransferWorkflowStore {
           List.of(),
           null,
           null,
-          null,
-          false);
+          null);
     }
 
     static Work lease(
@@ -1250,8 +1245,7 @@ class TransferWorkflowStore {
           List.of(),
           null,
           null,
-          null,
-          false);
+          null);
     }
 
     static Work media(
@@ -1279,8 +1273,7 @@ class TransferWorkflowStore {
           values,
           null,
           null,
-          null,
-          false);
+          null);
     }
 
     static Work effect(
@@ -1309,8 +1302,7 @@ class TransferWorkflowStore {
           List.of(),
           null,
           transferAssetStatus,
-          null,
-          false);
+          null);
     }
 
     static Work release(
@@ -1335,8 +1327,7 @@ class TransferWorkflowStore {
           List.of(),
           null,
           null,
-          null,
-          false);
+          null);
     }
 
     static Work maintenancePrepare(
@@ -1361,8 +1352,7 @@ class TransferWorkflowStore {
           List.of(),
           sourceWarehouseId,
           null,
-          null,
-          false);
+          null);
     }
 
     static Work maintenanceComplete(
@@ -1372,8 +1362,7 @@ class TransferWorkflowStore {
         UUID assetId,
         UUID sourceWarehouseId,
         UUID destinationWarehouseId,
-        Integer priority,
-        boolean movementToShipment) {
+        Integer priority) {
       return new Work(
           WorkType.MAINTENANCE_COMPLETE,
           operationId,
@@ -1389,8 +1378,7 @@ class TransferWorkflowStore {
           List.of(),
           sourceWarehouseId,
           null,
-          priority,
-          movementToShipment);
+          priority);
     }
   }
 

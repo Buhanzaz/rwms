@@ -23,7 +23,21 @@ function formatDateTime(value: string) {
 }
 
 function sessionStatus(session: InventorySessionDto) {
-  return session.status === "ACTIVE" ? "Активна" : "Завершена"
+  if (session.status === "ACTIVE") return "Активна"
+  if (session.status === "CANCELLED") return "Отменена"
+  return "Завершена"
+}
+
+function sessionStatusVariant(session: InventorySessionDto) {
+  if (session.status === "ACTIVE") return "default" as const
+  if (session.status === "CANCELLED") return "destructive" as const
+  return "secondary" as const
+}
+
+function sessionPublication(session: InventorySessionDto) {
+  return session.status === "CANCELLED"
+    ? "Не применяется"
+    : publicationLabel[session.publicationStatus]
 }
 
 function formatDuration(seconds: number) {
@@ -76,11 +90,7 @@ export function InventorySessionList({
               className: "w-40",
               getSortValue: (session) => session.status,
               render: (session) => (
-                <Badge
-                  variant={
-                    session.status === "ACTIVE" ? "default" : "secondary"
-                  }
-                >
+                <Badge variant={sessionStatusVariant(session)}>
                   {sessionStatus(session)}
                 </Badge>
               ),
@@ -113,7 +123,7 @@ export function InventorySessionList({
               label: "Ремонты",
               className: "w-48",
               getSortValue: (session) => session.publicationStatus,
-              render: (session) => publicationLabel[session.publicationStatus],
+              render: sessionPublication,
             },
             {
               id: "action",
@@ -141,11 +151,7 @@ export function InventorySessionList({
             <CardHeader>
               <CardTitle className="flex flex-wrap items-center gap-2">
                 <span>{formatDateTime(session.startedAt)}</span>
-                <Badge
-                  variant={
-                    session.status === "ACTIVE" ? "default" : "secondary"
-                  }
-                >
+                <Badge variant={sessionStatusVariant(session)}>
                   {sessionStatus(session)}
                 </Badge>
               </CardTitle>
@@ -178,7 +184,7 @@ export function InventorySessionList({
                   </>
                 ) : null}
                 <dt className="text-muted-foreground">Ремонты</dt>
-                <dd>{publicationLabel[session.publicationStatus]}</dd>
+                <dd>{sessionPublication(session)}</dd>
               </dl>
               <Button
                 type="button"

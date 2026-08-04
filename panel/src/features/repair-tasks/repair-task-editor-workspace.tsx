@@ -847,33 +847,12 @@ function RepairTaskEditorContent({
         completeLabel="Создать задание"
         pendingLabel="Создание..."
         previewKey={`direct-repair:${draft.taskId ?? "new"}:${draft.expectedVersion ?? 0}`}
-        initialCompletionMode="MANUAL"
-        initialMovementRequired={planSource?.subtasks.some(
-          (subtask) => subtask.kind !== "REPAIR_WORK"
-        )}
+        initialMovementToRepair={planSource?.movementToRepair ?? false}
         initialLogisticsPlanningMode={
           planSource?.logisticsPlanningMode ?? "AUTO"
         }
         initialLogisticsScheduledDate={
           planSource?.logisticsScheduledDate ?? null
-        }
-        reconcileInitialPlans={
-          draft.lines.length === 0 && planSource
-            ? () =>
-                planSource.subtasks.map((subtask) => ({
-                  id: subtask.id,
-                  kind: subtask.kind,
-                  includedLineIds: [],
-                  primaryLineId: null,
-                  groupComment: subtask.groupComment,
-                  queueId: subtask.queueId ?? null,
-                  queueName: subtask.queueName,
-                  routeQueueKind: subtask.routeQueueKind,
-                  sortOrder: subtask.sortOrder,
-                  generationStatus: "UNKNOWN",
-                  workflowRequestRef: null,
-                }))
-            : undefined
         }
         onOpenChange={(open) => {
           setCompletionOpen(open)

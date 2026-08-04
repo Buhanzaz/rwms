@@ -82,7 +82,8 @@ const finding: InventoryFinding = {
   ],
   frozenPlan: {
     mode: "MANUAL",
-    logisticsPlanningMode: "AUTO",
+    movementToRepair: false,
+    logisticsPlanningMode: null,
     logisticsScheduledDate: null,
     catalogVersionId: "00000000-0000-4000-8000-000000000205",
     fingerprintSha256: "a".repeat(64),
@@ -112,7 +113,6 @@ const finding: InventoryFinding = {
         routingQueueId: "00000000-0000-4000-8000-000000000209",
         routingQueueName: "Ремонт",
         routingQueueType: "REPAIR",
-        movementRequired: false,
         photoRequired: true,
         normativeDurationMinutes: 45,
       },
@@ -213,6 +213,7 @@ describe("inventory service view mapper", () => {
         passportSnapshot: { type: "БК-2" },
       },
       repairCompletionMode: "MANUAL",
+      movementToRepair: false,
       logisticsPlanningMode: "AUTO",
       logisticsScheduledDate: null,
       publicationStatus: "PUBLISHED",
@@ -238,6 +239,22 @@ describe("inventory service view mapper", () => {
     })
   })
 
+  it("reads inbound and outbound movement options from the frozen plan fields", () => {
+    const result = toInventoryFindingView({
+      ...finding,
+      frozenPlan: {
+        ...finding.frozenPlan!,
+        movementToRepair: true,
+        logisticsPlanningMode: "AUTO",
+      },
+    })
+
+    expect(result).toMatchObject({
+      movementToRepair: true,
+      logisticsPlanningMode: "AUTO",
+    })
+  })
+
   it("never exposes conflicts for a finding that has not been inspected", () => {
     const result = toInventoryFindingView({
       ...finding,
@@ -249,6 +266,30 @@ describe("inventory service view mapper", () => {
     expect(result.conflicts).toEqual([])
   })
 
+  it("preserves the cancellation audit in the panel view", () => {
+    const cancelledAt = "2026-07-22T09:15:00Z"
+    const result = toInventorySessionView({
+      session: {
+        ...session,
+        lifecycle: "CANCELLED",
+        terminalAt: cancelledAt,
+        statistics: null,
+        cancellation: {
+          reason: "Сессия открыта для неверного склада",
+          cancelledAt,
+        },
+      },
+      findings: [finding],
+    })
+
+    expect(result.status).toBe("CANCELLED")
+    expect(result.completedAt).toBe(cancelledAt)
+    expect(result.cancellation).toEqual({
+      reason: "Сессия открыта для неверного склада",
+      cancelledAt,
+    })
+  })
+
   it("uses the service-issued author and applies fresh completion conflicts", () => {
     const view = toInventorySessionView({
       session,
@@ -258,6 +299,8 @@ describe("inventory service view mapper", () => {
     const preview: InventoryCompletionPreview = {
       inventoryId: session.id,
       sessionRevision: 6,
+      finalPlanVersion: 1,
+      finalPlanSha256: "a".repeat(64),
       findingRevisions: [{ findingId: finding.id, expectedFindingRevision: 4 }],
       validationSha256: "b".repeat(64),
       validatedAt: "2026-07-22T09:01:00Z",

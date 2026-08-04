@@ -4,6 +4,7 @@ import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.*;
 
 import dev.buhanzaz.rwms.maintenance.security.MaintenanceAuthorizer;
 import dev.buhanzaz.rwms.maintenance.service.InventoryMaintenanceService;
+import dev.buhanzaz.rwms.maintenance.service.InventoryPublicationReconciliationService;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
 import jakarta.validation.Valid;
 import java.util.UUID;
@@ -16,6 +17,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -25,6 +27,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class MaintenanceInventoryController {
   private final InventoryMaintenanceService inventory;
+  private final InventoryPublicationReconciliationService publications;
   private final MaintenanceApplicationService maintenance;
   private final MaintenanceAuthorizer access;
 
@@ -45,6 +48,29 @@ public class MaintenanceInventoryController {
       @Valid @RequestBody InventoryRepairSnapshotRequest request) {
     access.requireInventoryService(jwt);
     return inventory.repairSnapshots(request);
+  }
+
+  @PostMapping("/reconciliations/preflight")
+  public InventoryPublicationPreflightResponse preflightPublication(
+      @AuthenticationPrincipal Jwt jwt,
+      @Valid @RequestBody InventoryPublicationPreflightRequest request) {
+    access.requireInventoryService(jwt);
+    return publications.preflight(request);
+  }
+
+  @PutMapping("/reconciliations/{inventoryId}/findings/{findingId}")
+  public ResponseEntity<InventoryPublicationApplyResult> applyPublication(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID inventoryId,
+      @PathVariable UUID findingId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody InventoryPublicationApplyRequest request) {
+    access.requireInventoryService(jwt);
+    InventoryPublicationReconciliationService.PublicationResult result =
+        publications.apply(inventoryId, findingId, idempotencyKey, request);
+    ResponseEntity.BodyBuilder response = ResponseEntity.ok();
+    if (result.replayed()) response.header("Idempotency-Replayed", "true");
+    return response.body(result.response());
   }
 
   @PutMapping("/sources/{inventoryId}/findings/{findingId}")

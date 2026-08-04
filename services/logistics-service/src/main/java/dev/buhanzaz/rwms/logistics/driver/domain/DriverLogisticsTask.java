@@ -255,6 +255,50 @@ public class DriverLogisticsTask {
     return nextAttemptAt == null || !nextAttemptAt.isAfter(value);
   }
 
+  /**
+   * Cancels an intent before it has crossed the logistics/task-board boundary.
+   *
+   * <p>No row is deleted: the terminal checkpoint prevents the processor from registering the
+   * external task on a later retry and preserves the request history for maintenance recovery.
+   */
+  public void cancelBeforeExternalRegistration() {
+    if (state != DriverTaskState.REGISTERING || taskBoardTaskId != null) {
+      throw new IllegalStateException(
+          "Only an unregistered driver task can be cancelled before registration");
+    }
+    state = DriverTaskState.CANCELLED;
+    manualPromotionHoldUntil = null;
+    clearRetryFailure();
+    nextAttemptAt = null;
+    touch();
+  }
+
+  /**
+   * Records a task-board-confirmed pre-start cancellation after logistics has released a reserved
+   * inbound repair place with its durable compensation key.
+   *
+   * <p>The caller must never invoke this after an ambiguous or started task-board outcome. A
+   * reconciliation checkpoint is accepted solely so a lost remote response can be recovered by a
+   * later {@code ALREADY_CANCELLED} guard result.
+   */
+  public void cancelAfterPreStartCancellation() {
+    if ((state != DriverTaskState.SCHEDULED
+            && state != DriverTaskState.RECONCILIATION_REQUIRED)
+        || taskBoardTaskId == null) {
+      throw new IllegalStateException(
+          "Only a registered pre-start driver task can be cancelled after guard confirmation");
+    }
+    state = DriverTaskState.CANCELLED;
+    manualPromotionHoldUntil = null;
+    if (kind == DriverTaskKind.DELIVER_TO_REPAIR) {
+      repairPlaceAllocationId = null;
+      repairPlaceAllocationVersion = null;
+    }
+    clearRetryFailure();
+    nextAttemptAt = null;
+    touch();
+  }
+
   public void registerBoardTask(
       UUID taskId,
       long taskVersion,
@@ -439,7 +483,12 @@ public class DriverLogisticsTask {
         || allocationVersion < 0) {
       throw new IllegalStateException("Repair-place completion effect is invalid");
     }
-    if (repairPlaceAllocationId != null && !repairPlaceAllocationId.equals(allocationId)) {
+    // The inbound transition response from maintenance is authoritative. It can replace the
+    // prior RESERVED checkpoint with a reassigned OCCUPIED allocation, and compensation must
+    // later return that exact identity/version for maintenance's next fenced command.
+    if (!kind.consumesRepairPlace()
+        && repairPlaceAllocationId != null
+        && !repairPlaceAllocationId.equals(allocationId)) {
       throw new IllegalStateException("Repair-place allocation changed");
     }
     repairPlaceAllocationId = allocationId;

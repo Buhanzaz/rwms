@@ -5,6 +5,7 @@ import type {
   InventoryFrozenPlanLine,
   InventoryFrozenStatistics,
   InventoryMembershipMovement,
+  InventoryRegistryReview,
   InventorySessionDetail,
   InventorySessionSummary,
 } from "@/features/inventory/model/inventory-service"
@@ -226,9 +227,7 @@ export function toInventoryFindingView(
     lines,
     repairCompletionMode: finding.frozenPlan?.mode ?? null,
     repairPriority: finding.frozenPlan?.priority ?? 3,
-    movementRequired:
-      finding.frozenPlan?.stages.some((stage) => stage.movementRequired) ??
-      false,
+    movementToRepair: finding.frozenPlan?.movementToRepair ?? false,
     logisticsPlanningMode: finding.frozenPlan?.logisticsPlanningMode ?? "AUTO",
     logisticsScheduledDate: finding.frozenPlan?.logisticsScheduledDate ?? null,
     repairPlans: viewPlans(finding, lines),
@@ -311,6 +310,9 @@ export function toInventorySessionView(input: {
     businessDate: input.session.businessDate,
     startedAt: input.session.startedAt,
     completedAt: input.session.terminalAt,
+    cancellation: input.session.cancellation
+      ? { ...input.session.cancellation }
+      : null,
     findingCount: input.session.findingCount,
     inspectedCount: input.session.inspectedCount,
     findings,
@@ -420,5 +422,52 @@ export function applyInventoryCompletionPreview(
       }
     }),
     statistics: toInventoryStatisticsView(preview.statistics),
+  }
+}
+
+export function applyInventoryRegistryReview(
+  session: InventorySessionDto,
+  review: InventoryRegistryReview
+): InventorySessionDto {
+  const revisions = new Map(
+    review.findingRevisions.map((revision) => [
+      revision.findingId,
+      revision.expectedFindingRevision,
+    ])
+  )
+  const validatedByFinding = new Map(
+    review.validatedFindings.map((finding) => [finding.findingId, finding])
+  )
+  return {
+    ...session,
+    version: review.sessionRevision,
+    findings: session.findings.map((finding) => {
+      const validated = validatedByFinding.get(finding.id)
+      const conflicts =
+        finding.inspectionStatus === "NOT_INSPECTED"
+          ? []
+          : (validated?.conflicts ?? finding.conflicts)
+      const missing = conflicts.some((conflict) =>
+        ["RENTAL_ITEM_MISSING", "OTHER_WAREHOUSE", "WRITTEN_OFF"].includes(
+          conflict.code
+        )
+      )
+      return {
+        ...finding,
+        version: revisions.get(finding.id) ?? finding.version,
+        currentSnapshot: validated
+          ? viewSnapshot(validated.currentSnapshot)
+          : finding.currentSnapshot,
+        reconciliationStatus:
+          finding.inspectionStatus === "NOT_INSPECTED"
+            ? finding.reconciliationStatus
+            : missing
+              ? ("MISSING" as const)
+              : conflicts.length > 0
+                ? ("CONFLICT" as const)
+                : ("MATCHED" as const),
+        conflicts,
+      }
+    }),
   }
 }

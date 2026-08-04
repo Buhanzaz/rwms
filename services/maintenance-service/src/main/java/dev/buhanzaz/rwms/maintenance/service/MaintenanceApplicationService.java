@@ -147,6 +147,8 @@ public class MaintenanceApplicationService {
   private final RepairComplexitySettingsService repairComplexitySettings;
   private final RepairComplexityColorsService repairComplexityColors;
   private final RepairPlaceService repairPlaces;
+  private final InventoryPublicationSuccessorActivator inventorySuccessors;
+  private final InventoryPublicationPrestartReplacementGuard prestartReplacementGuard;
   private final MaintenanceDependencyGateway dependencies;
   private final JdbcTemplate jdbc;
   private final ObjectMapper mapper;
@@ -180,6 +182,8 @@ public class MaintenanceApplicationService {
       RepairComplexitySettingsService repairComplexitySettings,
       RepairComplexityColorsService repairComplexityColors,
       RepairPlaceService repairPlaces,
+      InventoryPublicationSuccessorActivator inventorySuccessors,
+      InventoryPublicationPrestartReplacementGuard prestartReplacementGuard,
       MaintenanceDependencyGateway dependencies,
       JdbcTemplate jdbc,
       ObjectMapper mapper,
@@ -211,6 +215,8 @@ public class MaintenanceApplicationService {
     this.repairComplexitySettings = repairComplexitySettings;
     this.repairComplexityColors = repairComplexityColors;
     this.repairPlaces = repairPlaces;
+    this.inventorySuccessors = inventorySuccessors;
+    this.prestartReplacementGuard = prestartReplacementGuard;
     this.dependencies = dependencies;
     this.jdbc = jdbc;
     this.mapper = mapper;
@@ -294,7 +300,6 @@ public class MaintenanceApplicationService {
       return new TransferRepairArrivalPreflightResponse(
           null,
           false,
-          capabilities.movementToShipmentAvailable(),
           List.of());
     }
     requirePreparedTransfer(
@@ -370,12 +375,6 @@ public class MaintenanceApplicationService {
       throw new MaintenanceConflictException(
           "MAINTENANCE_TARGET_QUEUE_MISSING",
           "The target warehouse is missing queues required by the active repair");
-    }
-    if (request.movementToShipment()
-        && !capabilities.movementToShipmentAvailable()) {
-      throw new MaintenanceValidationException(
-          "MAINTENANCE_MOVEMENT_UNAVAILABLE",
-          "Movement to shipment is unavailable at the target warehouse");
     }
     lockRepairStreams(chain);
     Map<UUID, Long> versions =
@@ -482,8 +481,7 @@ public class MaintenanceApplicationService {
           transferId,
           lineId,
           request.targetWarehouseId(),
-          request.priority(),
-          request.movementToShipment());
+          request.priority());
       Long taskVersion = relocatedTaskVersions.get(repair.getId());
       if (taskVersion != null) {
         repair.markTaskRelocated(taskVersion);
@@ -1074,7 +1072,6 @@ public class MaintenanceApplicationService {
               currentPlan(estimate),
               request.priority(),
               request.movementToRepair(),
-              request.movementToShipment(),
               request.logisticsPlanningMode(),
               request.logisticsScheduledDate());
       estimate.complete(commandRepair.getId());
@@ -1316,6 +1313,7 @@ public class MaintenanceApplicationService {
         repairs
             .findByIdAndWarehouseId(repairId, warehouseId)
             .orElseThrow(() -> new MaintenanceNotFoundException("Repair not found"));
+    if (prestartReplacementGuard.blocksRepairExecution(repair.getId())) return;
     long expectedVersion =
         events.lockCurrentVersion(MaintenanceAggregateType.REPAIR, repair.getId());
     assertVersion(repair.getVersion(), expectedVersion);
@@ -1496,7 +1494,6 @@ public class MaintenanceApplicationService {
               .orElseThrow(() -> new MaintenanceNotFoundException("Repair not found"));
       assertStreamParity(repair, locked);
       repair.selectPriority(request.priority());
-      repair.selectMovementToShipment(request.movementToShipment());
       repair.selectMovementToRepair(
           request.movementToRepair(),
           request.logisticsPlanningMode(), request.logisticsScheduledDate());
@@ -1561,7 +1558,6 @@ public class MaintenanceApplicationService {
       prepareStagesForQueue(stages, complexity.type() == RepairComplexity.CAPITAL);
       repairStages.saveAllAndFlush(stages);
       repair.selectPriority(request.priority());
-      repair.selectMovementToShipment(request.movementToShipment());
       repair.selectMovementToRepair(
           request.movementToRepair(),
           request.logisticsPlanningMode(), request.logisticsScheduledDate());
@@ -1593,19 +1589,16 @@ public class MaintenanceApplicationService {
       assertVersion(locked.get(stream(id)), request.expectedVersion());
       boolean priorityChanged = repair.getPriority() != request.priority();
       repair.selectPriority(request.priority());
-      boolean movementToShipmentChanged =
-          repair.isMovementToShipment() != request.movementToShipment();
-      repair.selectMovementToShipment(request.movementToShipment());
       boolean inboundMovementChanged =
           repair.selectMovementToRepair(
               request.movementToRepair(),
               request.logisticsPlanningMode(),
               request.logisticsScheduledDate());
       saved =
-          priorityChanged || movementToShipmentChanged || inboundMovementChanged
+          priorityChanged || inboundMovementChanged
               ? repairs.saveAndFlush(repair)
               : repair;
-      if (priorityChanged || movementToShipmentChanged || inboundMovementChanged) {
+      if (priorityChanged || inboundMovementChanged) {
         events.append(
             MaintenanceAggregateType.REPAIR,
             id,
@@ -1631,6 +1624,100 @@ public class MaintenanceApplicationService {
         repairResponse(saved), affected, delivery(saved));
     idempotency.store(subjectId, "repair.queue:" + id, key, requestHash, 200, response);
     return new CreateResult<>(response, false);
+  }
+
+  /**
+   * Reviewed recovery for a single stable inbound logistics intent. Remote logistics truth is
+   * deliberately read between two short local transactions: no HTTP call can hold the repair or
+   * event-stream locks, while the second transaction fences the local state before mutation.
+   */
+  public CreateResult<RepairCommandResult> retryInboundDelivery(
+      UUID subjectId,
+      UUID key,
+      UUID id,
+      UUID warehouseId,
+      RetryInboundDeliveryRequest request) {
+    validateInboundDeliveryRetryRequest(request);
+    String scope = "repair.inbound-delivery-retry:" + id;
+    String requestHash = hash(request);
+
+    CreateResult<RepairCommandResult> replay =
+        transactions.execute(
+            status -> {
+              Optional<JsonNode> stored = idempotency.replay(subjectId, scope, key, requestHash);
+              if (stored.isPresent()) {
+                return new CreateResult<>(read(stored.get(), RepairCommandResult.class), true);
+              }
+              MaintenanceRepair initial =
+                  repairs
+                      .findByIdAndWarehouseId(id, warehouseId)
+                      .orElseThrow(() -> new MaintenanceNotFoundException("Repair not found"));
+              assertVersion(initial.getVersion(), request.expectedVersion());
+              return null;
+            });
+    if (replay != null) return replay;
+
+    requireAbsentInboundDriverTask(id);
+
+    CreateResult<RepairCommandResult> result =
+        transactions.execute(
+            status -> {
+              Optional<JsonNode> stored = idempotency.replay(subjectId, scope, key, requestHash);
+              if (stored.isPresent()) {
+                return new CreateResult<>(read(stored.get(), RepairCommandResult.class), true);
+              }
+              Map<MaintenanceEventStore.StreamRef, Long> locked =
+                  events.lockStreams(List.of(stream(id)));
+              assertVersion(locked.get(stream(id)), request.expectedVersion());
+              MaintenanceRepair repair =
+                  repairs.findAllByIdForUpdate(List.of(id)).stream()
+                      .findFirst()
+                      .orElseThrow(() -> new MaintenanceNotFoundException("Repair not found"));
+              if (!warehouseId.equals(repair.getWarehouseId())) {
+                throw new MaintenanceNotFoundException("Repair not found");
+              }
+              assertVersion(repair.getVersion(), request.expectedVersion());
+              assertStreamParity(repair, locked);
+
+              UUID driverTaskKey = stableOperationKey("driver-logistics-task", repair.getId(), 0);
+              boolean resumed =
+                  reconciliations.resumeStableQuarantined(
+                      repair.getId(),
+                      "LOGISTICS",
+                      "CREATE_DRIVER_TASK",
+                      driverTaskKey,
+                      subjectId,
+                      request.reason());
+              if (!resumed) {
+                throw new MaintenanceConflictException(
+                    "MAINTENANCE_STATE_CONFLICT",
+                    "The exact inbound delivery reconciliation is not quarantined");
+              }
+              try {
+                repair.retryQuarantinedInboundDelivery(
+                    request.logisticsPlanningMode(), request.logisticsScheduledDate());
+              } catch (IllegalStateException exception) {
+                throw new MaintenanceConflictException(
+                    "MAINTENANCE_STATE_CONFLICT", exception.getMessage());
+              }
+              MaintenanceRepair saved = repairs.saveAndFlush(repair);
+              events.append(
+                  MaintenanceAggregateType.REPAIR,
+                  saved.getId(),
+                  request.expectedVersion(),
+                  MaintenanceEventType.REPAIR_PLAN_CHANGED,
+                  repairLocal(saved),
+                  repairFact(MaintenanceEventType.REPAIR_PLAN_CHANGED, saved),
+                  repairSnapshot(saved));
+              RepairCommandResult response =
+                  new RepairCommandResult(repairResponse(saved), List.of(), delivery(saved));
+              idempotency.store(subjectId, scope, key, requestHash, 200, response);
+              return new CreateResult<>(response, false);
+            });
+    if (result == null) {
+      throw new IllegalStateException("Inbound delivery retry transaction was empty");
+    }
+    return result;
   }
 
   @Transactional
@@ -1746,6 +1833,8 @@ public class MaintenanceApplicationService {
         decisionLocal(id, request.comment()),
         repairFact(MaintenanceEventType.REPAIR_ACCEPTED, saved),
         repairSnapshot(saved));
+    inventorySuccessors.releaseAfterAcceptance(
+        saved, lastRepairEventId(saved.getId()), saved.getDecisionRecordedAt());
     enqueueMediaOwnerProof(
         "MAINTENANCE_ACCEPTANCE",
         saved.getId(),
@@ -1931,6 +2020,13 @@ public class MaintenanceApplicationService {
     MaintenanceRepair initial = repairs.findByExternalTaskId(externalTaskId).orElseThrow(() ->
         new MaintenanceConflictException(
             "MAINTENANCE_STATE_CONFLICT", "Task-board fact has no maintenance repair owner"));
+    if (eventType.endsWith("cancelled.v1")
+        && prestartReplacementGuard.ownsTaskCancellation(initial.getId(), externalTaskId)) {
+      // cancel-if-pre-start can publish before the coordinator has persisted compensation or
+      // finalized the replacement. Keep the event as corroborating external audit truth; V31
+      // will atomically mirror its cancellation together with the successor/source outcome.
+      return;
+    }
     LockedTaskOutcome locked = lockTaskOutcome(initial);
     MaintenanceRepair repair = locked.repair();
     long expectedVersion = locked.streamVersions().get(stream(repair.getId()));
@@ -1953,8 +2049,8 @@ public class MaintenanceApplicationService {
           ? MaintenanceEventType.REPAIR_PENDING_ACCEPTANCE
           : MaintenanceEventType.REPAIR_STAGE_COMPLETED;
       if (allDone) {
-        repairPlaces.markReadyToReleaseIfOccupied(
-            repair.getWarehouseId(), repair.getId());
+        repairPlaces.completeAfterRepair(
+            repair.getWarehouseId(), repair.getId(), repair.isMovementToRepair());
         if (repair.getKind() == RepairKind.REWORK) {
           returnSourceFromRework(locked);
         } else {
@@ -2002,6 +2098,7 @@ public class MaintenanceApplicationService {
         repairFact(maintenanceEvent, saved),
         repairSnapshot(saved));
     if (maintenanceEvent == MaintenanceEventType.REPAIR_PENDING_ACCEPTANCE) {
+      inventorySuccessors.releaseAfterTaskBoardCompletion(saved, eventId, occurredAt);
       enqueueMediaOwnerProof(
           "MAINTENANCE_ACCEPTANCE",
           saved.getId(),
@@ -2181,7 +2278,6 @@ public class MaintenanceApplicationService {
         estimatePlan,
         3,
         false,
-        false,
         null,
         null);
   }
@@ -2193,7 +2289,6 @@ public class MaintenanceApplicationService {
         estimatePlan,
         priority,
         false,
-        false,
         null,
         null);
   }
@@ -2203,7 +2298,6 @@ public class MaintenanceApplicationService {
       List<EstimatePlanStage> estimatePlan,
       int priority,
       boolean movementToRepair,
-      boolean movementToShipment,
       RepairLogisticsPlanningMode logisticsPlanningMode,
       LocalDate logisticsScheduledDate) {
     List<PlanStageInput> plan = estimatePlan.stream()
@@ -2221,7 +2315,6 @@ public class MaintenanceApplicationService {
         plan,
         priority,
         movementToRepair,
-        movementToShipment,
         logisticsPlanningMode,
         logisticsScheduledDate);
   }
@@ -2232,7 +2325,6 @@ public class MaintenanceApplicationService {
         estimate,
         plan,
         3,
-        false,
         false,
         null,
         null);
@@ -2245,7 +2337,6 @@ public class MaintenanceApplicationService {
         plan,
         priority,
         false,
-        false,
         null,
         null);
   }
@@ -2255,14 +2346,12 @@ public class MaintenanceApplicationService {
       List<PlanStageInput> plan,
       int priority,
       boolean movementToRepair,
-      boolean movementToShipment,
       RepairLogisticsPlanningMode logisticsPlanningMode,
       LocalDate logisticsScheduledDate) {
     MaintenanceRepair newRepair = MaintenanceRepair.primary(
         estimate.getWarehouseId(), estimate.getRentalItemId(), estimate.getRentalItemVersionSnapshot(),
         estimate.getId(), RepairOrigin.ESTIMATE, estimate.getDispatchDate(), estimate.getSourceParty(), actorJson());
     newRepair.selectPriority(priority);
-    newRepair.selectMovementToShipment(movementToShipment);
     newRepair.selectMovementToRepair(
         movementToRepair,
         logisticsPlanningMode, logisticsScheduledDate);
@@ -4196,6 +4285,10 @@ public class MaintenanceApplicationService {
                   : MaintenanceEventType.REPAIR_WRITTEN_OFF,
               saved),
           repairSnapshot(saved));
+      if (accepted) {
+        inventorySuccessors.releaseAfterAcceptance(
+            saved, lastRepairEventId(saved.getId()), saved.getDecisionRecordedAt());
+      }
     }
   }
 
@@ -4314,6 +4407,21 @@ public class MaintenanceApplicationService {
     return new MaintenanceEventStore.StreamRef(MaintenanceAggregateType.REPAIR, repairId);
   }
 
+  /** Returns the exact maintenance event just appended in this transaction. */
+  private UUID lastRepairEventId(UUID repairId) {
+    UUID eventId = jdbc.queryForObject(
+        """
+        select last_event_id from event_stream_head
+         where aggregate_type='REPAIR' and aggregate_id=?
+        """,
+        UUID.class,
+        repairId.toString());
+    if (eventId == null) {
+      throw new IllegalStateException("Repair event stream has no terminal fact identity");
+    }
+    return eventId;
+  }
+
   private void enqueueRepairQueue(
       MaintenanceRepair repair, UUID key, boolean linkedReturn) {
     reconciliations.enqueue(
@@ -4342,7 +4450,8 @@ public class MaintenanceApplicationService {
    */
   private void enqueueOrdinaryRepairExecution(
       MaintenanceRepair repair, UUID taskRegistrationKey, UUID driverTaskKey) {
-    if (!requiresDriverDeliveryToRepair(repair)) {
+    if (!requiresDriverDeliveryToRepair(repair)
+        || repairPlaces.isOccupied(repair.getWarehouseId(), repair.getId())) {
       enqueueTaskRegistration(repair, taskRegistrationKey);
       return;
     }
@@ -4493,8 +4602,21 @@ public class MaintenanceApplicationService {
     repairStages.saveAllAndFlush(stages);
   }
 
+  /**
+   * A pre-start replacement owns the right to decide whether the old external effect survives.
+   * Do not acknowledge its queued work: deferred work remains recoverable if the saga waits for
+   * an inbound delivery or the remote response is lost.
+   */
+  private Object deferForPrestartReplacement(MaintenanceReconciliationStore.WorkItem work) {
+    reconciliations.defer(work, Duration.ofSeconds(2));
+    return null;
+  }
+
   private Object reconcileRepairQueue(MaintenanceReconciliationStore.WorkItem work) {
     MaintenanceRepair repair = requireWorkRepair(work);
+    if (prestartReplacementGuard.blocksRepairExecution(repair.getId())) {
+      return deferForPrestartReplacement(work);
+    }
     long expectedVersion = events.lockCurrentVersion(MaintenanceAggregateType.REPAIR, repair.getId());
     assertVersion(repair.getVersion(), expectedVersion);
     if (repair.getExecutionState() == RepairExecutionState.QUEUED) {
@@ -4697,6 +4819,9 @@ public class MaintenanceApplicationService {
   private Object reconcileTask(
       MaintenanceReconciliationStore.WorkItem work, boolean update) {
     MaintenanceRepair repair = requireWorkRepair(work);
+    if (prestartReplacementGuard.blocksRepairExecution(repair.getId())) {
+      return deferForPrestartReplacement(work);
+    }
     long expectedVersion = events.lockCurrentVersion(MaintenanceAggregateType.REPAIR, repair.getId());
     assertVersion(repair.getVersion(), expectedVersion);
     if (repair.getExecutionState() != RepairExecutionState.QUEUED) {
@@ -4758,6 +4883,9 @@ public class MaintenanceApplicationService {
           "Stored maintenance driver-task intent is invalid");
     }
     MaintenanceRepair repair = requireWorkRepair(work);
+    if (prestartReplacementGuard.blocksRepairExecution(repair.getId())) {
+      return deferForPrestartReplacement(work);
+    }
     if (repair.getExecutionState() != RepairExecutionState.QUEUED
         || repair.getReclassificationState()
             == RepairReclassificationState.EXTERNAL_CAPITAL) {
@@ -4918,8 +5046,8 @@ public class MaintenanceApplicationService {
         stages.forEach(RepairStage::completeAsExternalCapital);
         repairStages.saveAllAndFlush(stages);
         value.completeAsExternalCapital();
-        repairPlaces.markReadyToReleaseIfOccupied(
-            value.getWarehouseId(), value.getId());
+        repairPlaces.completeAfterRepair(
+            value.getWarehouseId(), value.getId(), value.isMovementToRepair());
         changed.put(value.getId(), value);
       }
     } else {
@@ -6024,7 +6152,6 @@ public class MaintenanceApplicationService {
         aggregateMedia, effectiveCoverMediaId(value.getCoverMediaId(), aggregateMedia),
         complexity,
         value.isMovementToRepair(),
-        value.isMovementToShipment(),
         value.getLogisticsPlanningMode(),
         value.getLogisticsScheduledDate(),
         value.getCreatedAt(), value.getUpdatedAt(),
@@ -6266,7 +6393,6 @@ public class MaintenanceApplicationService {
     return new TransferRepairArrivalPreflightResponse(
         active.getId(),
         true,
-        capabilities.movementToShipmentAvailable(),
         List.copyOf(missing));
   }
 
@@ -6441,6 +6567,44 @@ public class MaintenanceApplicationService {
         "subjectId", "00000000-0000-0000-0000-0000000000d6",
         "principalType", "SYSTEM",
         "profileRevision", "00000000-0000-0000-0000-0000000000d6"));
+  }
+
+  private void requireAbsentInboundDriverTask(UUID repairId) {
+    MaintenanceDependencyGateway.MaintenanceDriverTaskCompensation compensation =
+        dependencies.maintenanceDriverTaskCompensation(
+            repairId,
+            MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR);
+    if (compensation == null
+        || !repairId.equals(compensation.repairId())
+        || compensation.kind()
+            != MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR
+        || compensation.outcome() == null) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Logistics-service omitted valid inbound driver-task truth");
+    }
+    if (compensation.outcome()
+        != MaintenanceDependencyGateway.MaintenanceDriverTaskCompensationOutcome.ABSENT) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Inbound driver task still exists or requires logistics reconciliation");
+    }
+  }
+
+  private static void validateInboundDeliveryRetryRequest(RetryInboundDeliveryRequest request) {
+    if (request == null
+        || request.expectedVersion() == null
+        || request.expectedVersion() < 0
+        || request.logisticsPlanningMode() == null
+        || (request.logisticsPlanningMode() == RepairLogisticsPlanningMode.AUTO
+            && request.logisticsScheduledDate() != null)
+        || (request.logisticsPlanningMode() == RepairLogisticsPlanningMode.FIXED_DATE
+            && request.logisticsScheduledDate() == null)
+        || request.reason() == null
+        || request.reason().isBlank()
+        || request.reason().length() > 2000) {
+      throw invalid("Inbound delivery retry request is invalid");
+    }
   }
 
   private DeliverySnapshot delivery(MaintenanceRepair value) {

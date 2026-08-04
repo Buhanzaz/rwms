@@ -27,12 +27,6 @@ import type {
   RepairEstimateLineDto,
 } from "@/features/repair-estimates/model/repair-estimate"
 
-function repairPlanKindLabel(plan: InventoryRepairPlanSnapshotDto) {
-  if (plan.kind === "MOVE_TO_REPAIR") return "Перемещение на ремонт"
-  if (plan.kind === "MOVE_FROM_REPAIR") return "Перемещение с ремонта"
-  return "Работы"
-}
-
 function repairPlanRouteLabel(plan: InventoryRepairPlanSnapshotDto) {
   if (plan.queueName) return plan.queueName
   if (plan.routeQueueKind === "REPAIR") return "Ремонт"
@@ -43,11 +37,11 @@ function repairPlanRouteLabel(plan: InventoryRepairPlanSnapshotDto) {
 
 function InventoryRepairWorkflowSnapshot({
   completionMode,
-  movementRequired,
+  movementToRepair,
   plans,
 }: {
   completionMode: RepairEstimateCompletionMode | null
-  movementRequired: boolean
+  movementToRepair: boolean
   plans: InventoryRepairPlanSnapshotDto[]
 }) {
   return (
@@ -63,9 +57,12 @@ function InventoryRepairWorkflowSnapshot({
               {completionMode === "AUTO" ? "Автоматически" : "Вручную"}
             </Badge>
           ) : null}
-          <Badge variant="outline">
-            {movementRequired ? "С перемещением" : "Без перемещения"}
-          </Badge>
+          {movementToRepair ? (
+            <Badge variant="outline">На ремонт и с ремонта</Badge>
+          ) : null}
+          {!movementToRepair ? (
+            <Badge variant="outline">Без перемещения</Badge>
+          ) : null}
         </div>
       </div>
       {plans.length === 0 ? (
@@ -80,9 +77,7 @@ function InventoryRepairWorkflowSnapshot({
             <Card key={plan.id} size="sm">
               <CardHeader>
                 <CardTitle className="flex flex-wrap items-center gap-2 text-sm">
-                  <span>
-                    {index + 1}. {repairPlanKindLabel(plan)}
-                  </span>
+                  <span>{index + 1}. Работы</span>
                   <Badge variant="outline">{repairPlanRouteLabel(plan)}</Badge>
                 </CardTitle>
               </CardHeader>
@@ -121,7 +116,7 @@ type InventoryInspectionWorkspaceProps = {
   lines: RepairEstimateLineDto[]
   media: ReadyMediaReference[]
   repairCompletionMode: RepairEstimateCompletionMode | null
-  movementRequired: boolean
+  movementToRepair: boolean
   repairPlans: InventoryRepairPlanSnapshotDto[]
   readOnly: boolean
   coverMediaId: string | null
@@ -145,7 +140,7 @@ export function InventoryInspectionWorkspace({
   lines,
   media,
   repairCompletionMode,
-  movementRequired,
+  movementToRepair,
   repairPlans,
   readOnly,
   coverMediaId,
@@ -265,7 +260,7 @@ export function InventoryInspectionWorkspace({
             <RepairEstimateLinesSnapshot lines={lines} />
             <InventoryRepairWorkflowSnapshot
               completionMode={repairCompletionMode}
-              movementRequired={movementRequired}
+              movementToRepair={movementToRepair}
               plans={repairPlans}
             />
           </div>
@@ -286,6 +281,7 @@ export function InventoryInspectionWorkspace({
             <RepairEstimateCatalogPicker
               lines={lines}
               readOnly={readOnly}
+              warehouseId={warehouseId}
               accessToken={accessToken}
               mediaOwner={inventoryFindingMediaOwner(findingId, warehouseId)}
               onPagerChange={handleCatalogPagerChange}

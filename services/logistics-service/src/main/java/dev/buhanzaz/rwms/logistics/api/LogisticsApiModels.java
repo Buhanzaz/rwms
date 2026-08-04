@@ -180,15 +180,13 @@ public final class LogisticsApiModels {
 
   public record ArriveTransferLineRequest(
       @NotNull @Size(min = 1, max = 20) List<@Valid MediaReferenceInput> references,
-      @Min(1) @Max(5) Integer priority,
-      @NotNull Boolean movementToShipment) {}
+      @Min(1) @Max(5) Integer priority) {}
 
   public record TransferArrivalPreflightView(
       UUID transferId,
       UUID lineId,
       UUID activeRepairId,
       boolean priorityRequired,
-      boolean movementToShipmentAvailable,
       List<UUID> missingQueueDefinitionIds) {}
 
   public record MediaReferenceInput(@NotNull UUID mediaId, @Min(1) long generation) {}

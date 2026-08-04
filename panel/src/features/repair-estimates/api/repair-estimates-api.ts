@@ -180,7 +180,7 @@ export async function prepareRepairEstimateCompletion(
 function completionPlans(
   input: Pick<
     CompleteRepairEstimateInput,
-    "draft" | "completionMode" | "movementRequired" | "taskPlans"
+    "draft" | "completionMode" | "taskPlans"
   >
 ) {
   const emptyEstimate = input.draft.lines.length === 0
@@ -197,18 +197,16 @@ function completionPlans(
         : input.taskPlans
     return finalizeTaskPlans({
       plans: basePlans,
-      completionMode: emptyEstimate ? "MANUAL" : input.completionMode,
-      movementRequired: emptyEstimate ? false : input.movementRequired,
     })
   })
 }
 
 function assertLogisticsPlanningSelection(input: {
-  movementRequired: boolean
+  movementToRepair: boolean
   logisticsPlanningMode: "AUTO" | "FIXED_DATE"
   logisticsScheduledDate: string | null
 }) {
-  if (!input.movementRequired) {
+  if (!input.movementToRepair) {
     if (
       input.logisticsPlanningMode !== "AUTO" ||
       input.logisticsScheduledDate !== null
@@ -244,8 +242,8 @@ export async function completeRepairEstimate(
     ...buildDraftCommand(input),
     completionMode:
       input.draft.lines.length === 0 ? "MANUAL" : input.completionMode,
-    movementRequired:
-      input.draft.lines.length === 0 ? false : input.movementRequired,
+    movementToRepair:
+      input.draft.lines.length === 0 ? false : input.movementToRepair,
     logisticsPlanningMode:
       input.draft.lines.length === 0 ? "AUTO" : input.logisticsPlanningMode,
     logisticsScheduledDate:
@@ -274,8 +272,8 @@ export async function amendCompletedRepairEstimate(
     reason: input.reason,
     completionMode:
       input.draft.lines.length === 0 ? "MANUAL" : input.completionMode,
-    movementRequired:
-      input.draft.lines.length === 0 ? false : input.movementRequired,
+    movementToRepair:
+      input.draft.lines.length === 0 ? false : input.movementToRepair,
     logisticsPlanningMode:
       input.draft.lines.length === 0 ? "AUTO" : input.logisticsPlanningMode,
     logisticsScheduledDate:

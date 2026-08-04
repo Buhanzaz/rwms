@@ -6,6 +6,8 @@ import dev.buhanzaz.rwms.worker.core.network.WorkerContextDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerGroupSummaryDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerIdentityDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerOfflineLeaseDto
+import dev.buhanzaz.rwms.worker.core.network.WorkerKpiPaletteDto
+import dev.buhanzaz.rwms.worker.core.network.WorkerKpiRangeDto
 import org.junit.Test
 
 class LeaseActivationTest {
@@ -19,6 +21,7 @@ class LeaseActivationTest {
         groups = emptyList(),
         qualifications = emptyList(),
         categories = emptyList(),
+        kpiPalette = null,
         serverTime = "2026-07-25T10:00:00Z",
         revision = 9,
         offlineLease = WorkerOfflineLeaseDto(
@@ -89,6 +92,31 @@ class LeaseActivationTest {
         assertThat(session.currentGroupId).isEqualTo("group-current")
         assertThat(session.currentGroupName).isEqualTo("Смена 1")
         assertThat(session.operationalAvailability).isEqualTo("DISABLED")
+    }
+
+    @Test
+    fun `server KPI palette is persisted exactly and null removes it`() {
+        val palette = WorkerKpiPaletteDto(
+            ranges = listOf(WorkerKpiRangeDto(100, 80, "#16803A")),
+            overdueColor = "#C62828",
+        )
+
+        val withPalette = activatedSession(
+            null,
+            context.copy(kpiPalette = palette),
+            now = 2L,
+            elapsedRealtimeMillis = 10L,
+        )
+        val withoutPalette = activatedSession(
+            withPalette,
+            context.copy(kpiPalette = null),
+            now = 3L,
+            elapsedRealtimeMillis = 11L,
+        )
+
+        assertThat(withPalette.kpiPaletteJson).contains("#16803A")
+        assertThat(withPalette.kpiPaletteJson).contains("#C62828")
+        assertThat(withoutPalette.kpiPaletteJson).isNull()
     }
 
     @Test

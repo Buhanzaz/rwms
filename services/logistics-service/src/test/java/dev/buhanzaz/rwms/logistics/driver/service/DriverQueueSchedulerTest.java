@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.logistics.driver.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -9,6 +10,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.DriverTaskResponse;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskPlanningMode;
@@ -60,6 +62,75 @@ class DriverQueueSchedulerTest {
     verify(dependencies, never()).readRepairPlaces(warehouseId);
     verify(dependencies, never()).readDriverBoard(warehouseId);
     verify(dependencies, never()).setDriverTaskLane(any(), any(Long.class), any());
+  }
+
+  @Test
+  void readyRepairCreatesRemovalTaskWithTheRepairPriority() {
+    UUID allocationId = UUID.randomUUID();
+    UUID repairId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    UUID externalTaskId = UUID.randomUUID();
+    LogisticsDependencyGateway.RepairPlaceAllocation allocation =
+        new LogisticsDependencyGateway.RepairPlaceAllocation(
+            allocationId,
+            7,
+            warehouseId,
+            repairId,
+            cabinId,
+            "READY_TO_RELEASE",
+            null,
+            null,
+            1,
+            OffsetDateTime.now(ZoneOffset.UTC),
+            OffsetDateTime.now(ZoneOffset.UTC));
+    LogisticsDependencyGateway.RepairPlaceProjection places =
+        repairPlacesWithAllocations(1, 0, 0, 0, 1, List.of(allocation));
+    DriverTaskResponse response = mock(DriverTaskResponse.class);
+    when(response.id()).thenReturn(externalTaskId);
+    when(taskService.ensureRemovalTask(warehouseId, repairId, cabinId, 1))
+        .thenReturn(new DriverTaskService.CreateResult(response, false, false));
+    when(dependencies.readRepairPlaces(warehouseId)).thenReturn(places);
+    configureBoard(List.of());
+
+    scheduler.reconcileAndPromote(warehouseId);
+
+    verify(taskService).ensureRemovalTask(warehouseId, repairId, cabinId, 1);
+    verify(store).bindReleaseAllocation(externalTaskId, allocation);
+    verify(processor).processUntilIdle(externalTaskId);
+  }
+
+  @Test
+  void everyReadyAllocationCreatesRemovalTask() {
+    UUID allocationId = UUID.randomUUID();
+    UUID repairId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    LogisticsDependencyGateway.RepairPlaceAllocation allocation =
+        new LogisticsDependencyGateway.RepairPlaceAllocation(
+            allocationId,
+            7,
+            warehouseId,
+            repairId,
+            cabinId,
+            "READY_TO_RELEASE",
+            null,
+            null,
+            3,
+            OffsetDateTime.now(ZoneOffset.UTC),
+            OffsetDateTime.now(ZoneOffset.UTC));
+    LogisticsDependencyGateway.RepairPlaceProjection places =
+        repairPlacesWithAllocations(1, 0, 0, 0, 1, List.of(allocation));
+    when(dependencies.readRepairPlaces(warehouseId)).thenReturn(places);
+    DriverTaskResponse response = mock(DriverTaskResponse.class);
+    UUID externalTaskId = UUID.randomUUID();
+    when(response.id()).thenReturn(externalTaskId);
+    when(taskService.ensureRemovalTask(warehouseId, repairId, cabinId, 3))
+        .thenReturn(new DriverTaskService.CreateResult(response, false, false));
+    configureBoard(List.of());
+
+    scheduler.reconcileAndPromote(warehouseId);
+
+    verify(taskService).ensureRemovalTask(warehouseId, repairId, cabinId, 3);
+    verify(store).bindReleaseAllocation(externalTaskId, allocation);
   }
 
   @Test
@@ -175,6 +246,63 @@ class DriverQueueSchedulerTest {
         inbound.getExternalTaskId(), future.taskVersion(), "CURRENT");
     verify(store).confirmReservation(inbound.getId(), reservation);
     verify(store).confirmCurrent(inbound.getId(), current(future));
+  }
+
+  @Test
+  void completedRepairReturnIsPlacedAfterLeadingPinnedCurrentTasks() {
+    DriverLogisticsTask returned = scheduledTask(DriverTaskKind.REMOVE_FROM_REPAIR);
+    DriverLogisticsTask pinnedTask = scheduledTask(DriverTaskKind.CAPITAL_TO_PRODUCTION);
+    DriverLogisticsTask unpinnedTask = scheduledTask(DriverTaskKind.DELIVER_TO_REPAIR);
+    LogisticsDependencyGateway.DriverBoardTask returnedScheduled =
+        boardTask(returned, today, 0);
+    LogisticsDependencyGateway.DriverBoardTask returnedCurrent =
+        current(returnedScheduled, 2, false);
+    LogisticsDependencyGateway.DriverBoardTask moved =
+        current(returnedScheduled, 1, false);
+    LogisticsDependencyGateway.DriverBoardTask pinnedCurrent =
+        current(boardTask(pinnedTask, today, 0), 0, true);
+    LogisticsDependencyGateway.DriverBoardTask unpinnedCurrent =
+        current(boardTask(unpinnedTask, today, 1), 1, false);
+    when(tasks.findById(returned.getId())).thenReturn(Optional.of(returned));
+    when(
+            tasks
+                .findAllByWarehouseIdAndStateAndManualPromotionHoldUntilAfterOrderByManualPromotionHoldUntilAscIdAsc(
+                    eq(warehouseId), eq(DriverTaskState.SCHEDULED), any(OffsetDateTime.class)))
+        .thenReturn(List.of());
+    when(dependencies.readRepairPlaces(warehouseId)).thenReturn(repairPlaces(0));
+    when(dependencies.readDriverTask(returned.getExternalTaskId()))
+        .thenReturn(returnedScheduled, returnedScheduled);
+    when(dependencies.setDriverTaskLane(
+            returned.getExternalTaskId(), returnedScheduled.taskVersion(), "CURRENT"))
+        .thenReturn(returnedCurrent);
+    when(dependencies.readDriverBoard(warehouseId))
+        .thenReturn(
+            new LogisticsDependencyGateway.DriverBoardSnapshot(
+                warehouseId,
+                UUID.randomUUID(),
+                3,
+                List.of(pinnedCurrent, unpinnedCurrent, returnedCurrent),
+                List.of()));
+    when(dependencies.moveDriverTask(
+            returned.getExternalTaskId(),
+            returnedCurrent.taskVersion(),
+            returnedCurrent.entryVersion(),
+            "CURRENT",
+            today,
+            1))
+        .thenReturn(moved);
+
+    scheduler.promoteRequested(returned.getId());
+
+    verify(dependencies)
+        .moveDriverTask(
+            returned.getExternalTaskId(),
+            returnedCurrent.taskVersion(),
+            returnedCurrent.entryVersion(),
+            "CURRENT",
+            today,
+            1);
+    verify(store).confirmCurrent(returned.getId(), moved);
   }
 
   @Test
@@ -308,6 +436,8 @@ class DriverQueueSchedulerTest {
 
     verify(dependencies, never()).setDriverTaskLane(any(), any(Long.class), any());
     verify(dependencies, never())
+        .moveDriverTask(any(), any(Long.class), any(Long.class), any(), any(), anyInt());
+    verify(dependencies, never())
         .transitionRepairPlace(any(), any(), any(), any(Long.class), any());
   }
 
@@ -435,9 +565,11 @@ class DriverQueueSchedulerTest {
                 UUID.randomUUID(),
                 0,
                 List.of(),
-                List.of(
-                    new LogisticsDependencyGateway.DriverBoardDateColumn(
-                        boardTasks.getFirst().scheduledDate(), boardTasks))));
+                boardTasks.isEmpty()
+                    ? List.of()
+                    : List.of(
+                        new LogisticsDependencyGateway.DriverBoardDateColumn(
+                            boardTasks.getFirst().scheduledDate(), boardTasks))));
   }
 
   private LogisticsDependencyGateway.DriverBoardTask boardTask(
@@ -464,6 +596,11 @@ class DriverQueueSchedulerTest {
 
   private LogisticsDependencyGateway.DriverBoardTask current(
       LogisticsDependencyGateway.DriverBoardTask task) {
+    return current(task, 0, task.pinned());
+  }
+
+  private LogisticsDependencyGateway.DriverBoardTask current(
+      LogisticsDependencyGateway.DriverBoardTask task, int position, boolean pinned) {
     return new LogisticsDependencyGateway.DriverBoardTask(
         task.taskId(),
         task.taskVersion() + 1,
@@ -476,12 +613,12 @@ class DriverQueueSchedulerTest {
         task.scheduledDate(),
         "CURRENT",
         task.priority(),
-        task.pinned(),
+        pinned,
         task.doneAt(),
         task.entryId(),
         task.entryVersion(),
         task.entryStatus(),
-        0);
+        position);
   }
 
   private LogisticsDependencyGateway.RepairPlaceProjection repairPlaces(long available) {
@@ -496,6 +633,16 @@ class DriverQueueSchedulerTest {
 
   private LogisticsDependencyGateway.RepairPlaceProjection repairPlaces(
       int capacity, long available, long reserved, long occupied, long ready) {
+    return repairPlacesWithAllocations(capacity, available, reserved, occupied, ready, List.of());
+  }
+
+  private LogisticsDependencyGateway.RepairPlaceProjection repairPlacesWithAllocations(
+      int capacity,
+      long available,
+      long reserved,
+      long occupied,
+      long ready,
+      List<LogisticsDependencyGateway.RepairPlaceAllocation> allocations) {
     return new LogisticsDependencyGateway.RepairPlaceProjection(
         warehouseId,
         capacity,
@@ -505,7 +652,7 @@ class DriverQueueSchedulerTest {
         ready,
         available,
         false,
-        List.of());
+        allocations);
   }
 
   private LogisticsDependencyGateway.RepairPlaceAllocation allocation(
@@ -518,6 +665,9 @@ class DriverQueueSchedulerTest {
         task.getRepairId(),
         task.getCabinId(),
         state,
+        null,
+        null,
+        task.getPriority(),
         now,
         now);
   }

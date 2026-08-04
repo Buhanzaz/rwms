@@ -16,7 +16,7 @@ class DriverTaskApiModelsTest {
     CreateDriverTaskRequest missingComment =
         request(DriverTaskSourceType.MANUAL, DriverTaskKind.GENERAL_MOVEMENT, " ");
     CreateDriverTaskRequest wrongKind =
-        request(DriverTaskSourceType.MANUAL, DriverTaskKind.MOVE_TO_SHIPMENT, "Комментарий");
+        request(DriverTaskSourceType.MANUAL, DriverTaskKind.DELIVER_TO_REPAIR, "Комментарий");
     CreateDriverTaskRequest valid =
         request(DriverTaskSourceType.MANUAL, DriverTaskKind.GENERAL_MOVEMENT, "Комментарий");
 

@@ -22,6 +22,117 @@ export type InventoryPublicationState =
 export type InventoryAggregatePublicationState =
   "NOT_REQUESTED" | "PENDING" | "PARTIAL" | "SUCCEEDED" | "BLOCKED"
 
+export type InventoryWeekday =
+  | "MONDAY"
+  | "TUESDAY"
+  | "WEDNESDAY"
+  | "THURSDAY"
+  | "FRIDAY"
+  | "SATURDAY"
+  | "SUNDAY"
+
+export type InventoryPlanningSettings = {
+  warehouseId: string
+  settingsRevision: number
+  movementDailyCapacity: number
+  repairDailyCapacity: number
+  workingWeekdays: InventoryWeekday[]
+  holidays: string[]
+}
+
+export type UpdateInventoryPlanningSettingsRequest = {
+  expectedSettingsRevision: number
+  movementDailyCapacity: number
+  repairDailyCapacity: number
+  workingWeekdays: InventoryWeekday[]
+  holidays: string[]
+}
+
+export type InventoryScheduleMode = "AUTO" | "MANUAL"
+export type InventoryFinalPlanState = "DRAFT" | "STALE" | "COMPLETED"
+export type InventoryReconciliationStrategy = "CREATE" | "REPLACE" | "MERGE"
+export type InventoryReconciliationTargetKind = "ESTIMATE" | "REPAIR"
+
+export type InventoryCollisionPlanSummary = {
+  workLineCount: number
+  materialLineCount: number
+  grandTotalMinor: number
+}
+
+export type InventoryCollisionCandidate = {
+  targetKind: InventoryReconciliationTargetKind
+  targetId: string
+  estimateId: string | null
+  repairId: string | null
+  version: number
+  state: string
+  started: boolean
+  active: boolean
+  priority: 1 | 2 | 3 | 4 | 5 | null
+  sourceParty: string | null
+  planFingerprintSha256: string | null
+  planSummary: InventoryCollisionPlanSummary
+}
+
+export type InventoryReconciliationDecision = {
+  strategy: InventoryReconciliationStrategy
+  selectedTargetKind: InventoryReconciliationTargetKind | null
+  selectedTargetId: string | null
+}
+
+export type InventoryFinalPlanEntry = {
+  findingId: string
+  findingRevision: number
+  planFingerprintSha256: string | null
+  targetKind: InventoryReconciliationTargetKind | null
+  hasWork: boolean
+  order: number
+  priority: 1 | 2 | 3 | 4 | 5 | null
+  movementToRepair: boolean
+  movementScheduledDate: string | null
+  repairScheduledDate: string | null
+  collisionCandidates: InventoryCollisionCandidate[]
+  reconciliationDecision: InventoryReconciliationDecision | null
+}
+
+export type InventoryFinalPlan = {
+  inventoryId: string
+  sessionRevision: number
+  finalPlanVersion: number
+  finalPlanSha256: string
+  planningSettingsRevision: number
+  state: InventoryFinalPlanState
+  movementScheduleMode: InventoryScheduleMode
+  repairScheduleMode: InventoryScheduleMode
+  entries: InventoryFinalPlanEntry[]
+}
+
+export type PrepareInventoryFinalPlanRequest = {
+  expectedSessionRevision: number
+  expectedSettingsRevision: number
+  movementScheduleMode: InventoryScheduleMode
+  repairScheduleMode: InventoryScheduleMode
+}
+
+export type UpdateInventoryFinalPlanEntryRequest = {
+  findingId: string
+  expectedFindingRevision: number
+  order: number
+  priority: 1 | 2 | 3 | 4 | 5 | null
+  movementToRepair: boolean
+  movementScheduledDate: string | null
+  repairScheduledDate: string | null
+  reconciliationDecision: InventoryReconciliationDecision | null
+}
+
+export type UpdateInventoryFinalPlanRequest = {
+  expectedSessionRevision: number
+  expectedFinalPlanVersion: number
+  movementScheduleMode: InventoryScheduleMode
+  repairScheduleMode: InventoryScheduleMode
+  entries: UpdateInventoryFinalPlanEntryRequest[]
+}
+
 export type InventoryPageMetadata = {
   page: number
   size: number
@@ -92,11 +203,10 @@ export type InventoryFrozenPlanStage = {
   order: number
   catalogNodeId: string
   catalogNodeName: string
-  kind: "REPAIR_WORK" | "MOVE_TO_REPAIR" | "MOVE_FROM_REPAIR"
+  kind: "REPAIR_WORK"
   routingQueueId: string
   routingQueueName: string
   routingQueueType: string
-  movementRequired: boolean
   photoRequired: boolean
   normativeDurationMinutes: number
 }
@@ -166,7 +276,8 @@ export type InventoryFrozenPlan = {
   mode: "AUTO" | "MANUAL"
   priority?: 1 | 2 | 3 | 4 | 5
   coverMediaId?: string | null
-  logisticsPlanningMode: LogisticsPlanningMode
+  movementToRepair: boolean
+  logisticsPlanningMode: LogisticsPlanningMode | null
   logisticsScheduledDate: string | null
   catalogVersionId: string
   fingerprintSha256: string
@@ -333,9 +444,25 @@ export type SaveFurnitureReviewRequest = {
   }>
 }
 
+export type InventoryValidatedFinding = {
+  findingId: string
+  currentSnapshot: InventoryCurrentSnapshot | null
+  conflicts: InventoryConflict[]
+}
+
+export type InventoryRegistryReview = {
+  inventoryId: string
+  sessionRevision: number
+  findingRevisions: InventoryRevisionExpectation[]
+  validatedAt: string
+  validatedFindings: InventoryValidatedFinding[]
+}
+
 export type InventoryCompletionPreview = {
   inventoryId: string
   sessionRevision: number
+  finalPlanVersion: number
+  finalPlanSha256: string
   findingRevisions: InventoryRevisionExpectation[]
   validationSha256: string
   validatedAt: string
@@ -352,16 +479,13 @@ export type InventoryCompletionPreview = {
       | "PLAN_STALE"
       | "MUTATION_IN_FLIGHT"
   }>
-  validatedFindings: Array<{
-    findingId: string
-    currentSnapshot: InventoryCurrentSnapshot | null
-    conflicts: InventoryConflict[]
-  }>
+  validatedFindings: InventoryValidatedFinding[]
 }
 
 export type InventoryCatalogPlanLine = {
   aggregationKind: "CATALOG"
   catalogNodeId: string
+  routingCatalogNodeId: null
   description: null
   type: null
   unit: null
@@ -375,6 +499,7 @@ export type InventoryCatalogPlanLine = {
 export type InventoryManualPlanLine = {
   aggregationKind: "MANUAL"
   catalogNodeId: null
+  routingCatalogNodeId: string
   description: string
   type: "WORK" | "MATERIAL"
   unit: string
@@ -387,7 +512,7 @@ export type InventoryManualPlanLine = {
 
 export type InventoryPlanStageSelection = {
   catalogNodeId: string
-  kind: "REPAIR_WORK" | "MOVE_TO_REPAIR" | "MOVE_FROM_REPAIR"
+  kind: "REPAIR_WORK"
   order: number
 }
 
@@ -397,7 +522,8 @@ export type InventoryPlanSelection =
       mode: "AUTO"
       priority: 1 | 2 | 3 | 4 | 5
       coverMediaId: string | null
-      logisticsPlanningMode: LogisticsPlanningMode
+      movementToRepair: boolean
+      logisticsPlanningMode: LogisticsPlanningMode | null
       logisticsScheduledDate: string | null
       lines: InventoryCatalogPlanLine[]
       stages: InventoryPlanStageSelection[]
@@ -406,7 +532,8 @@ export type InventoryPlanSelection =
       mode: "MANUAL"
       priority: 1 | 2 | 3 | 4 | 5
       coverMediaId: string | null
-      logisticsPlanningMode: LogisticsPlanningMode
+      movementToRepair: boolean
+      logisticsPlanningMode: LogisticsPlanningMode | null
       logisticsScheduledDate: string | null
       lines: Array<InventoryCatalogPlanLine | InventoryManualPlanLine>
       stages: InventoryPlanStageSelection[]

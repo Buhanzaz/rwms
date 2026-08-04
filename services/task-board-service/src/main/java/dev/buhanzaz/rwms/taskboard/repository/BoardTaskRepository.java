@@ -21,6 +21,10 @@ public interface BoardTaskRepository extends JpaRepository<BoardTask, UUID> {
 
   Optional<BoardTask> findByExternalTaskId(UUID externalTaskId);
 
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query("select task from BoardTask task where task.externalTaskId = :externalTaskId")
+  Optional<BoardTask> findByExternalTaskIdForUpdate(@Param("externalTaskId") UUID externalTaskId);
+
   Optional<BoardTask> findByWarehouseIdAndExternalTaskId(UUID warehouseId, UUID externalTaskId);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)

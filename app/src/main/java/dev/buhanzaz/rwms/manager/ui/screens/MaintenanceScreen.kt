@@ -100,6 +100,7 @@ import dev.buhanzaz.rwms.manager.ui.maintenanceReadyPhotoKey
 import dev.buhanzaz.rwms.manager.ui.removeMaintenanceLocalPhoto
 import dev.buhanzaz.rwms.manager.ui.routingLabel
 import dev.buhanzaz.rwms.manager.ui.logisticsPlanningValidationError
+import dev.buhanzaz.rwms.manager.ui.logisticsTaskPriorityValidationError
 import dev.buhanzaz.rwms.manager.ui.components.EmptyState
 import dev.buhanzaz.rwms.manager.ui.components.ManagerMenuCard
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPanel
@@ -656,6 +657,17 @@ private fun MaintenanceDetailsStep(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+            }
+        }
+        item {
+            ManagerPanel {
+                LogisticsTaskPriorityOptions(
+                    editor = editor,
+                    enabled = !editor.readOnly &&
+                        !maintenanceDocumentAlreadySubmitted(editor) &&
+                        !uiState.busy,
+                    onEdit = onEdit,
+                )
             }
         }
         if (!maintenanceDetailsAreValid(editor)) {
@@ -3035,36 +3047,21 @@ private fun MaintenanceReviewStep(
                         onEdit = onEdit,
                     )
                     Text(
-                        if (editor.movementToRepair) {
-                            "Приоритет перемещения"
-                        } else {
-                            "Приоритет ремонта"
-                        },
+                        "Приоритет ремонта: ${editor.priority}",
                         style = MaterialTheme.typography.titleMedium,
                     )
                     Text(
                         if (editor.movementToRepair) {
-                            "Определяет позицию задания водителя. После доставки ремонт " +
-                                "появится в очереди работ с системным приоритетом 1."
+                            "Выбранный приоритет передаётся ремонту и входящему заданию " +
+                                "логистики; после доставки сервер назначит задаче ремонтной " +
+                                "очереди приоритет 1."
                         } else {
-                            "Выберите приоритет ремонта от 1 до 5."
+                            "Без перемещения на ремонт выбранный приоритет применяется напрямую " +
+                                "к ремонту."
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Row(
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        (1..5).forEach { priority ->
-                            FilterChip(
-                                selected = editor.priority == priority,
-                                onClick = { onEdit { current -> current.copy(priority = priority) } },
-                                enabled = !editor.readOnly && !alreadySubmitted,
-                                label = { Text(priority.toString()) },
-                            )
-                        }
-                    }
                 }
             }
         }
@@ -3261,12 +3258,13 @@ internal fun maintenanceCanSubmit(editor: MaintenanceEditorState): Boolean {
         (emptyOutcome ||
             (editor.lines.isNotEmpty() &&
                 editor.lines.all(::maintenanceLineIsValid))) &&
-        editor.priority in 1..5 &&
+        editor.logisticsTaskPriorityValidationError() == null &&
         editor.logisticsPlanningValidationError() == null
 }
 
 private fun maintenanceDetailsAreValid(editor: MaintenanceEditorState): Boolean =
     editor.selectedAsset != null &&
+        editor.logisticsTaskPriorityValidationError() == null &&
         (editor.mode == MaintenanceEditorMode.REPAIR || isMaintenanceDate(editor.dispatchDate)) &&
         (editor.repairKind != "REWORK" ||
             editor.entityId != null ||
@@ -3290,6 +3288,8 @@ internal fun maintenancePhotoStepPolicy(
 
 internal fun maintenanceDetailsValidationMessage(editor: MaintenanceEditorState): String = when {
     editor.selectedAsset == null -> "Выберите бытовку."
+    editor.logisticsTaskPriorityValidationError() != null ->
+        requireNotNull(editor.logisticsTaskPriorityValidationError())
     editor.mode == MaintenanceEditorMode.ESTIMATE && !isMaintenanceDate(editor.dispatchDate) ->
         "Укажите дату осмотра в формате ГГГГ-ММ-ДД."
     editor.repairKind == "REWORK" &&
@@ -3306,11 +3306,8 @@ private fun maintenanceSubmitValidationMessage(editor: MaintenanceEditorState): 
         "Выберите титульную фотографию."
     !isEmptyMaintenanceOutcome(editor) && editor.lines.any { !maintenanceLineIsValid(it) } ->
         "Проверьте количество и цену в строках."
-    editor.priority !in 1..5 -> if (editor.movementToRepair) {
-        "Выберите приоритет перемещения от 1 до 5."
-    } else {
-        "Выберите приоритет ремонта от 1 до 5."
-    }
+    editor.logisticsTaskPriorityValidationError() != null ->
+        requireNotNull(editor.logisticsTaskPriorityValidationError())
     editor.logisticsPlanningValidationError() != null ->
         requireNotNull(editor.logisticsPlanningValidationError())
     else -> "Проверьте данные перед сохранением."

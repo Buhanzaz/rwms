@@ -7,28 +7,59 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import dev.buhanzaz.rwms.manager.network.ExplicitNullJsonAdapterFactory
 import java.io.File
 import java.io.FileOutputStream
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 
 class BackgroundUploadStore private constructor(
     context: Context,
 ) {
-    private val rootDirectory = File(context.filesDir, ROOT_DIRECTORY_NAME).apply { mkdirs() }
-    private val stateFile = AtomicFile(File(rootDirectory, STATE_FILE_NAME))
-    private val adapter = Moshi.Builder()
-        .add(ExplicitNullJsonAdapterFactory)
-        .addLast(KotlinJsonAdapterFactory())
-        .build()
-        .adapter(BackgroundUploadStoreDocument::class.java)
+    private val applicationContext = context.applicationContext
+    private val rootDirectory by lazy {
+        File(applicationContext.filesDir, ROOT_DIRECTORY_NAME)
+    }
+    private val stateFile by lazy {
+        AtomicFile(File(rootDirectory, STATE_FILE_NAME))
+    }
     private val lock = Any()
-    private val mutableOperations = MutableStateFlow(readDocument().operations)
+    private val adapter by lazy {
+        Moshi.Builder()
+            .add(ExplicitNullJsonAdapterFactory)
+            .addLast(KotlinJsonAdapterFactory())
+            .build()
+            .adapter(BackgroundUploadStoreDocument::class.java)
+    }
+    private val mutableOperations = MutableStateFlow<List<BackgroundUploadOperation>>(emptyList())
+
+    @Volatile
+    private var initialized = false
 
     val operations: StateFlow<List<BackgroundUploadOperation>> =
         mutableOperations.asStateFlow()
 
-    fun operation(id: String): BackgroundUploadOperation? =
-        mutableOperations.value.firstOrNull { it.id == id }
+    /**
+     * Restores the durable outbox without making the app's main-thread ViewModel construction
+     * pay for reflective adapter creation or disk IO. The operation is idempotent for all
+     * callers in this process.
+     */
+    suspend fun initialize() {
+        if (initialized) return
+        withContext(Dispatchers.IO) {
+            synchronized(lock) {
+                if (initialized) return@synchronized
+                rootDirectory.mkdirs()
+                mutableOperations.value = readDocument().operations
+                initialized = true
+            }
+        }
+    }
+
+    fun operation(id: String): BackgroundUploadOperation? {
+        requireInitialized()
+        return mutableOperations.value.firstOrNull { it.id == id }
+    }
 
     fun put(operation: BackgroundUploadOperation) {
         updateAll { current ->
@@ -59,12 +90,14 @@ class BackgroundUploadStore private constructor(
         operationDirectory(operationId).deleteRecursively()
     }
 
-    fun operationDirectory(operationId: String): File =
+    fun operationDirectory(operationId: String): File = requireInitialized().let {
         File(rootDirectory, operationId).apply { mkdirs() }
+    }
 
     private fun updateAll(
         transform: (List<BackgroundUploadOperation>) -> List<BackgroundUploadOperation>,
     ) {
+        requireInitialized()
         synchronized(lock) {
             val updated = transform(mutableOperations.value)
             writeDocument(BackgroundUploadStoreDocument(operations = updated))
@@ -72,9 +105,15 @@ class BackgroundUploadStore private constructor(
         }
     }
 
-    private fun readDocument(): BackgroundUploadStoreDocument = synchronized(lock) {
-        if (!stateFile.baseFile.exists()) return@synchronized BackgroundUploadStoreDocument()
-        runCatching {
+    private fun requireInitialized() {
+        check(initialized) {
+            "Очередь фоновых загрузок ещё не восстановлена"
+        }
+    }
+
+    private fun readDocument(): BackgroundUploadStoreDocument {
+        if (!stateFile.baseFile.exists()) return BackgroundUploadStoreDocument()
+        return runCatching {
             stateFile.openRead().bufferedReader().use { reader ->
                 adapter.fromJson(reader.readText())
             }

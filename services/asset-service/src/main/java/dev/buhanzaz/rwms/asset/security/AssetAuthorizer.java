@@ -72,24 +72,18 @@ public class AssetAuthorizer {
     }
   }
 
-  public void requireGlobalCatalogRead(Jwt jwt) {
-    requireUserScope(jwt, "rwms.read");
-  }
-
-  /** Private Asset APIs are usable only by a service credential minted with one exact scope. */
-  public void requireInternalAssetAccess(Jwt jwt) {
-    if (jwt == null
-        || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))
-        || jwt.getClaimAsString("client_id") == null
-        || jwt.getClaimAsString("client_id").isBlank()
-        || !exactScope(jwt, "asset.internal")) {
-      throw new AccessDeniedException("A service credential with exactly asset.internal is required");
+  /** Terminal outbox recovery is a global administrative operation, never a warehouse-local grant. */
+  public void requireOutboxRecovery(Jwt jwt) {
+    if (developmentPublicBypass) return;
+    requireUserScope(jwt, "rwms.write");
+    String role = jwt == null ? null : jwt.getClaimAsString("global_role");
+    if (!"SYSTEM_ADMIN".equals(role) && !"WMS_ADMIN".equals(role)) {
+      throw new AccessDeniedException("Outbox recovery requires an administrator role");
     }
   }
 
-  public UUID internalSubjectId(Jwt jwt) {
-    requireInternalAssetAccess(jwt);
-    return serviceSubjectId(jwt.getClaimAsString("client_id"));
+  public void requireGlobalCatalogRead(Jwt jwt) {
+    requireUserScope(jwt, "rwms.read");
   }
 
   /** The Stage 6 credential can reach only the maintenance lease/fence controller. */

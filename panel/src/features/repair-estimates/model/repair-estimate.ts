@@ -17,8 +17,12 @@ export type LogisticsPlanningMode = "AUTO" | "FIXED_DATE"
 export type RepairPriority = 1 | 2 | 3 | 4 | 5
 export type RepairEstimateTaskPlanGenerationStatus =
   "PENDING_GENERATION" | "GENERATED" | "FAILED" | "UNKNOWN"
-export type RepairEstimateTaskPlanKind =
-  "REPAIR_WORK" | "MOVE_TO_REPAIR" | "MOVE_FROM_REPAIR"
+/**
+ * A maintenance plan contains only work stages. Logistics is a separate
+ * command concern (`movementToRepair`), not a fake repair stage. The same
+ * selection also schedules the movement from repair after completion.
+ */
+export type RepairEstimateTaskPlanKind = "REPAIR_WORK"
 export type RepairEstimateMediaRotationDegrees = 0 | 90 | 180 | 270
 
 export type MaintenanceMediaReferenceDto = {
@@ -148,7 +152,7 @@ export type RepairEstimateDto = {
   repairId?: string | null
   deliveryState?: "PENDING" | "RETRY_PENDING" | "DELIVERED" | "QUARANTINED"
   completionMode: RepairEstimateCompletionMode | null
-  movementRequired: boolean | null
+  movementToRepair: boolean | null
   taskPlans: RepairEstimateTaskPlanDto[]
   createdAt: string
   updatedAt: string
@@ -188,7 +192,7 @@ export type RepairEstimateDraftCommand = {
 
 export type CompleteRepairEstimateCommand = RepairEstimateDraftCommand & {
   completionMode: RepairEstimateCompletionMode
-  movementRequired: boolean
+  movementToRepair: boolean
   logisticsPlanningMode: LogisticsPlanningMode
   logisticsScheduledDate: string | null
   taskPlans: RepairEstimateTaskPlanCommandDto[]
@@ -260,7 +264,7 @@ export type CompleteRepairEstimateInput = {
   draft: RepairEstimateEditorDraft
   warehouseId: string
   completionMode: RepairEstimateCompletionMode
-  movementRequired: boolean
+  movementToRepair: boolean
   logisticsPlanningMode: LogisticsPlanningMode
   logisticsScheduledDate: string | null
   taskPlans: RepairEstimateTaskPlanDto[]

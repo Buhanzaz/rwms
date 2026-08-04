@@ -36,6 +36,27 @@ public interface DriverLogisticsTaskRepository
 
   Optional<DriverLogisticsTask> findByExternalTaskId(UUID externalTaskId);
 
+  Optional<DriverLogisticsTask> findFirstByRepairIdAndKindOrderByCreatedAtDescIdDesc(
+      UUID repairId, DriverTaskKind kind);
+
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      """
+      select task
+      from DriverLogisticsTask task
+      where task.repairId = :repairId
+        and task.kind = :kind
+      order by task.createdAt desc, task.id desc
+      """)
+  List<DriverLogisticsTask> findByRepairIdAndKindForUpdate(
+      @Param("repairId") UUID repairId, @Param("kind") DriverTaskKind kind);
+
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      "select task from DriverLogisticsTask task where task.externalTaskId = :externalTaskId")
+  Optional<DriverLogisticsTask> findForUpdateByExternalTaskId(
+      @Param("externalTaskId") UUID externalTaskId);
+
   List<DriverLogisticsTask> findAllByWarehouseIdOrderByCreatedAtAscIdAsc(
       UUID warehouseId);
 

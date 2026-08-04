@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.logistics.equipment.repository;
 
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTask;
+import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskOwnerType;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
 import jakarta.persistence.LockModeType;
 import java.time.OffsetDateTime;
@@ -16,6 +17,9 @@ import org.springframework.data.repository.query.Param;
 public interface EquipmentMovementTaskRepository extends JpaRepository<EquipmentMovementTask, UUID> {
   Optional<EquipmentMovementTask> findByCreatedBySubjectIdAndIdempotencyKey(
       UUID createdBySubjectId, UUID idempotencyKey);
+
+  Optional<EquipmentMovementTask> findByOwnerTypeAndOwnerId(
+      EquipmentMovementTaskOwnerType ownerType, UUID ownerId);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select task from EquipmentMovementTask task where task.id = :id")

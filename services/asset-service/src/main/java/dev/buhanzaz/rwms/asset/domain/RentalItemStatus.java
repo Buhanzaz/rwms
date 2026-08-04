@@ -1,5 +1,8 @@
 package dev.buhanzaz.rwms.asset.domain;
 
+import java.util.EnumSet;
+import java.util.Set;
+
 /**
  * Canonical target lifecycle vocabulary. The enum intentionally preserves every
  * status currently rendered by the panel; future workflow owners must not add
@@ -11,6 +14,7 @@ public enum RentalItemStatus {
   REPAIR,
   WAITING_REPAIR_CHECK,
   WRITTEN_OFF,
+  LOST,
   CAPITAL_REPAIR,
   AFTER_RENT,
   WAITING_ESTIMATE_CONFIRMATION,
@@ -22,10 +26,14 @@ public enum RentalItemStatus {
   OWN_NEEDS,
   IN_TRANSFER;
 
+  private static final Set<RentalItemStatus> MANUAL_STATUSES =
+      EnumSet.of(SALE, USED_SALE, FREE, WAREHOUSE, OWN_NEEDS);
+
   public boolean acceptsManualStatusChangeTo(RentalItemStatus next) {
-    if (next == null || this == WRITTEN_OFF || this == IN_TRANSFER) return false;
-    // IN_TRANSFER is owned by the future logistics workflow, not by this public
-    // operator endpoint. Cabin write-off has its own fenced command.
-    return next != IN_TRANSFER && next != WRITTEN_OFF;
+    return next != null && MANUAL_STATUSES.contains(this) && MANUAL_STATUSES.contains(next);
+  }
+
+  public boolean isTerminalDispositionStatus() {
+    return this == WRITTEN_OFF || this == LOST;
   }
 }

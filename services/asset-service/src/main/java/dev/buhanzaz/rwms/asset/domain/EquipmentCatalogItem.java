@@ -10,16 +10,26 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import jakarta.persistence.Version;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Objects;
+import java.util.Locale;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import org.hibernate.proxy.HibernateProxy;
 
 @Entity
-@Table(name = "equipment_catalog_item")
+@Table(
+    name = "equipment_catalog_item",
+    uniqueConstraints =
+        @UniqueConstraint(
+            name = "uk_equipment_catalog_normalized_name",
+            columnNames = "normalized_name"))
 public class EquipmentCatalogItem {
+  private static final Pattern DISPLAY_NAME_WHITESPACE =
+      Pattern.compile("\\s+", Pattern.UNICODE_CHARACTER_CLASS);
   @Id
   @GeneratedValue(strategy = GenerationType.UUID)
   @Column(name = "id", nullable = false)
@@ -31,6 +41,9 @@ public class EquipmentCatalogItem {
 
   @Column(name = "name", nullable = false, length = 255)
   private String name;
+
+  @Column(name = "normalized_name", nullable = false, length = 255)
+  private String normalizedName;
 
   @Enumerated(EnumType.STRING)
   @Column(name = "category", nullable = false, length = 32)
@@ -58,12 +71,14 @@ public class EquipmentCatalogItem {
   }
 
   public boolean change(String name, EquipmentCategory category, boolean active, String comment) {
-    String nextName = required(name, "name", 255);
+    CanonicalName canonicalName = canonicalName(name);
     String nextComment = optional(comment, 2000);
     if (category == null) throw new IllegalArgumentException("category is required");
-    if (Objects.equals(this.name, nextName)
+    if (Objects.equals(this.name, canonicalName.displayName())
+        && Objects.equals(this.normalizedName, canonicalName.normalizedName())
         && this.category == category && this.active == active && Objects.equals(this.comment, nextComment)) return false;
-    this.name = nextName;
+    this.name = canonicalName.displayName();
+    this.normalizedName = canonicalName.normalizedName();
     this.category = category;
     this.active = active;
     this.comment = nextComment;
@@ -71,7 +86,9 @@ public class EquipmentCatalogItem {
   }
 
   private void assign(String name, EquipmentCategory category, boolean active, String comment) {
-    this.name = required(name, "name", 255);
+    CanonicalName canonicalName = canonicalName(name);
+    this.name = canonicalName.displayName();
+    this.normalizedName = canonicalName.normalizedName();
     if (category == null) throw new IllegalArgumentException("category is required");
     this.category = category;
     this.active = active;
@@ -79,9 +96,37 @@ public class EquipmentCatalogItem {
   }
 
   @PrePersist
-  void prePersist() { createdAt = updatedAt = OffsetDateTime.now(ZoneOffset.UTC); }
+  void prePersist() {
+    normalizePersistedName();
+    createdAt = updatedAt = OffsetDateTime.now(ZoneOffset.UTC);
+  }
   @PreUpdate
-  void preUpdate() { updatedAt = OffsetDateTime.now(ZoneOffset.UTC); }
+  void preUpdate() {
+    normalizePersistedName();
+    updatedAt = OffsetDateTime.now(ZoneOffset.UTC);
+  }
+
+  private void normalizePersistedName() {
+    CanonicalName canonicalName = canonicalName(name);
+    name = canonicalName.displayName();
+    normalizedName = canonicalName.normalizedName();
+  }
+
+  public static String normalizeName(String value) {
+    return canonicalName(value).normalizedName();
+  }
+
+  private static CanonicalName canonicalName(String value) {
+    if (value == null) throw new IllegalArgumentException("name is required");
+    String displayName = DISPLAY_NAME_WHITESPACE.matcher(value).replaceAll(" ").trim();
+    if (displayName.isEmpty()) throw new IllegalArgumentException("name is required");
+    if (displayName.length() > 255) throw new IllegalArgumentException("name is too long");
+    String normalizedName = displayName.toLowerCase(Locale.ROOT);
+    if (normalizedName.length() > 255) {
+      throw new IllegalArgumentException("name is too long after normalization");
+    }
+    return new CanonicalName(displayName, normalizedName);
+  }
 
   private static String required(String value, String field, int max) {
     String normalized = optional(value, max);
@@ -99,6 +144,7 @@ public class EquipmentCatalogItem {
   public UUID getId() { return id; }
   public long getVersion() { return version; }
   public String getName() { return name; }
+  public String getNormalizedName() { return normalizedName; }
   public EquipmentCategory getCategory() { return category; }
   public boolean isActive() { return active; }
   public String getComment() { return comment; }
@@ -115,4 +161,6 @@ public class EquipmentCatalogItem {
   }
   @Override
   public final int hashCode() { return this instanceof HibernateProxy proxy ? proxy.getHibernateLazyInitializer().getPersistentClass().hashCode() : getClass().hashCode(); }
+
+  private record CanonicalName(String displayName, String normalizedName) {}
 }

@@ -10,6 +10,7 @@ import {
 import { listWarehouses, type WarehouseInfo } from "@/api/warehouse-api"
 import { WarehouseContext } from "@/contexts/warehouse-context"
 import { resolveWarehouseSelection } from "@/contexts/warehouse-selection"
+import type { CurrentUser } from "@/features/auth/auth-model"
 import { useAuth } from "@/features/auth/use-auth"
 
 const STORAGE_KEY = "wms:selected-warehouse-id"
@@ -18,14 +19,35 @@ function getSavedWarehouseId() {
   return window.localStorage.getItem(STORAGE_KEY)
 }
 
+function filterWarehousesByAccess(
+  warehouses: WarehouseInfo[],
+  currentUser: CurrentUser | null
+) {
+  if (currentUser === null) {
+    return []
+  }
+
+  if (currentUser.warehouseAccessAll) {
+    return warehouses
+  }
+
+  const accessibleWarehouseIds = new Set(
+    currentUser.warehouseAccesses.map((access) => access.warehouseId)
+  )
+
+  return warehouses.filter((warehouse) =>
+    accessibleWarehouseIds.has(warehouse.id)
+  )
+}
+
 export function WarehouseProvider({ children }: { children: ReactNode }) {
-  const { accessToken } = useAuth()
+  const { accessToken, currentUser } = useAuth()
   const accessTokenRef = useRef(accessToken)
   const hasLoadedWarehouseListRef = useRef(false)
   const reloadInProgressRef = useRef(false)
   const reloadQueuedRef = useRef(false)
   const [reloadRevision, setReloadRevision] = useState(0)
-  const [warehouses, setWarehouses] = useState<WarehouseInfo[]>([])
+  const [warehouseCatalog, setWarehouseCatalog] = useState<WarehouseInfo[]>([])
   const [selectedWarehouseId, setSelectedWarehouseIdState] = useState<
     string | null
   >(getSavedWarehouseId)
@@ -68,13 +90,17 @@ export function WarehouseProvider({ children }: { children: ReactNode }) {
 
       const data = await listWarehouses(currentAccessToken)
       const activeWarehouses = data.filter((warehouse) => warehouse.active)
+      const accessibleWarehouses = filterWarehousesByAccess(
+        activeWarehouses,
+        currentUser
+      )
       const savedWarehouseId = getSavedWarehouseId()
       const nextSelectedWarehouseId = resolveWarehouseSelection(
         savedWarehouseId,
-        activeWarehouses
+        accessibleWarehouses
       )
 
-      setWarehouses(activeWarehouses)
+      setWarehouseCatalog(activeWarehouses)
       setSelectedWarehouseIdState(nextSelectedWarehouseId)
 
       if (nextSelectedWarehouseId === null) {
@@ -114,7 +140,7 @@ export function WarehouseProvider({ children }: { children: ReactNode }) {
         setReloadRevision((current) => current + 1)
       }
     }
-  }, [])
+  }, [currentUser])
 
   useEffect(() => {
     // Do not perform a request until an actual bearer token is available.
@@ -125,6 +151,31 @@ export function WarehouseProvider({ children }: { children: ReactNode }) {
       void reloadWarehouses()
     }
   }, [accessToken, reloadRevision, reloadWarehouses])
+
+  const warehouses = useMemo(
+    () => filterWarehousesByAccess(warehouseCatalog, currentUser),
+    [currentUser, warehouseCatalog]
+  )
+
+  useEffect(() => {
+    if (!hasLoadedWarehouseListRef.current) {
+      return
+    }
+
+    const savedWarehouseId = getSavedWarehouseId()
+    const nextSelectedWarehouseId = resolveWarehouseSelection(
+      savedWarehouseId,
+      warehouses
+    )
+
+    setSelectedWarehouseIdState(nextSelectedWarehouseId)
+
+    if (nextSelectedWarehouseId === null) {
+      window.localStorage.removeItem(STORAGE_KEY)
+    } else if (savedWarehouseId !== nextSelectedWarehouseId) {
+      window.localStorage.setItem(STORAGE_KEY, nextSelectedWarehouseId)
+    }
+  }, [warehouses])
 
   const selectedWarehouse = useMemo(() => {
     if (selectedWarehouseId === null) {

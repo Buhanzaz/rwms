@@ -32,6 +32,17 @@ public interface InventoryDependencyGateway {
 
   FrozenPlan freezePlan(UUID idempotencyKey, JsonNode request);
 
+  /**
+   * Reads the maintenance-owned candidate set before inventory freezes a final plan version.
+   * The body is deliberately canonical JSON because the frozen plan snapshot remains opaque
+   * evidence owned by maintenance-service.
+   */
+  JsonNode preflightReconciliation(UUID idempotencyKey, JsonNode request);
+
+  /** Applies one already-selected final-plan reconciliation using a stable idempotency key. */
+  JsonNode applyReconciliation(
+      UUID inventoryId, UUID findingId, UUID idempotencyKey, JsonNode request);
+
   RepairUpsert upsertRepair(
       UUID inventoryId, UUID findingId, UUID idempotencyKey, JsonNode request);
 

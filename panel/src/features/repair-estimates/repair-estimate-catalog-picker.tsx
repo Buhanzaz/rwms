@@ -80,6 +80,7 @@ type CatalogBreadcrumb = {
 type RepairEstimateCatalogPickerProps = {
   lines: RepairEstimateLineDto[]
   readOnly: boolean
+  warehouseId?: string | null
   onChange: (lines: RepairEstimateLineDto[]) => void
   onPagerChange?: (pager: RepairEstimateCatalogPager | null) => void
   excludeFurniture?: boolean
@@ -192,6 +193,7 @@ function catalogNavigationNodes(
 export function RepairEstimateCatalogPicker({
   lines,
   readOnly,
+  warehouseId = null,
   onChange,
   onPagerChange,
   excludeFurniture = false,
@@ -200,8 +202,11 @@ export function RepairEstimateCatalogPicker({
   ensureMediaOwner,
 }: RepairEstimateCatalogPickerProps) {
   const catalogQuery = useQuery({
-    queryKey: REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
-    queryFn: getOperationalRepairEstimateCatalog,
+    queryKey: [...REPAIR_ESTIMATE_CATALOG_QUERY_KEY, warehouseId ?? "selected"],
+    queryFn: () =>
+      warehouseId
+        ? getOperationalRepairEstimateCatalog(warehouseId)
+        : getOperationalRepairEstimateCatalog(),
   })
   const catalog = useMemo(
     () =>
@@ -635,10 +640,7 @@ export function RepairEstimateCatalogPicker({
     setPage(0)
   }
 
-  async function ensureOwnerForPendingAdd(
-    quantity: number,
-    comment: string
-  ) {
+  async function ensureOwnerForPendingAdd(quantity: number, comment: string) {
     if (!addContext || !catalog || !ensureMediaOwner) {
       throw new Error("Сначала сохраните документ, чтобы прикрепить фото")
     }

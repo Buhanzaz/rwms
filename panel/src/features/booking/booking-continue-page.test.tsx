@@ -7,7 +7,8 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 const flow = vi.hoisted(() => ({
   conflictAfterPublish: false,
-  check: vi.fn(),
+  expired: false,
+  getHold: vi.fn(),
   create: vi.fn(),
   publish: vi.fn(),
 }))
@@ -43,11 +44,11 @@ vi.mock("@/features/assistant/api/rental-presentations-api", () => ({
   publishClientPresentation: flow.publish,
 }))
 
-vi.mock("@/features/booking/api/booking-availability-api", async () => {
+vi.mock("@/features/booking/api/manual-booking-drafts-api", async () => {
   const actual = await vi.importActual<
-    typeof import("@/features/booking/api/booking-availability-api")
-  >("@/features/booking/api/booking-availability-api")
-  return { ...actual, checkRentalItemsAvailability: flow.check }
+    typeof import("@/features/booking/api/manual-booking-drafts-api")
+  >("@/features/booking/api/manual-booking-drafts-api")
+  return { ...actual, getManualBookingDraftHold: flow.getHold }
 })
 
 vi.mock("@/features/orders/components/order-client-chooser", () => ({
@@ -77,17 +78,24 @@ vi.mock("@/features/booking/booking-cabin-browser", () => ({
   BookingCabinBrowser: ({
     items,
     selectedIds,
+    onToggle,
     actions,
     footer,
   }: {
     items: RentalItemDto[]
     selectedIds: ReadonlySet<string>
+    onToggle: (item: RentalItemDto) => void
     actions: ReactNode
     footer: ReactNode
   }) => (
     <div>
       <span>Показано бытовок: {items.length}</span>
       <span>Финально выбрано: {selectedIds.size}</span>
+      {items[0] ? (
+        <button type="button" onClick={() => onToggle(items[0])}>
+          Изменить первую
+        </button>
+      ) : null}
       {actions}
       {footer}
     </div>
@@ -136,7 +144,16 @@ function SeedSelection({ items }: { items: RentalItemDto[] }) {
     <button
       type="button"
       onClick={() => {
-        items.forEach(selection.select)
+        items.forEach(selection.toggleChecked)
+        selection.addCheckedToStaged()
+        selection.setActiveHold({
+          draftId: selection.draftId,
+          warehouseId: WAREHOUSE_ID,
+          expiresAt: flow.expired
+            ? "2020-08-04T12:00:00Z"
+            : "2099-08-04T12:00:00Z",
+          rentalItemIds: items.map((item) => item.id),
+        })
         navigate("/booking/continue")
       }}
     >
@@ -163,34 +180,29 @@ function renderFlow(items: RentalItemDto[]) {
   )
 }
 
-function availableResponse(params: {
-  warehouseId: string
-  rentalItemIds: readonly string[]
-}) {
-  return {
+function configureHold(items: RentalItemDto[]) {
+  flow.getHold.mockImplementation(async (params) => ({
+    draftId: params.draftId,
     warehouseId: params.warehouseId,
-    items: params.rentalItemIds.map((rentalItemId, index) => ({
-      rentalItemId,
-      available: !(flow.conflictAfterPublish && index === 0),
-      reason:
-        flow.conflictAfterPublish && index === 0
-          ? "PRESENTATION_HELD"
-          : "AVAILABLE",
-    })),
-  }
+    expiresAt: flow.expired ? "2020-08-04T12:00:00Z" : "2099-08-04T12:00:00Z",
+    rentalItemIds: flow.conflictAfterPublish
+      ? items.slice(1).map((item) => item.id)
+      : items.map((item) => item.id),
+  }))
 }
 
 afterEach(() => {
   cleanup()
   flow.conflictAfterPublish = false
+  flow.expired = false
   vi.clearAllMocks()
 })
 
 describe("BookingContinuePage", () => {
-  it("creates a chat inquiry before publishing contract-sized client groups", async () => {
+  it("publishes only the final checked cabins through the owned manual draft", async () => {
     const user = userEvent.setup()
     const items = Array.from({ length: 31 }, (_, index) => cabin(index + 1))
-    flow.check.mockImplementation(async (params) => availableResponse(params))
+    configureHold(items)
     flow.create.mockResolvedValue({
       conversation: { id: "conversation-1" },
       inquiry: {
@@ -203,8 +215,8 @@ describe("BookingContinuePage", () => {
       id: "77777777-7777-4777-8777-777777777777",
       revision: 1,
       state: "ACTIVE",
-      expiresAt: "2026-08-03T12:00:00Z",
-      viewUntil: "2026-08-04T12:00:00Z",
+      expiresAt: "2099-08-04T12:00:00Z",
+      viewUntil: "2099-08-05T12:00:00Z",
       publicPath: "/offer/public-token",
       bookedOrderId: null,
       groups: [],
@@ -213,6 +225,9 @@ describe("BookingContinuePage", () => {
 
     await user.click(screen.getByRole("button", { name: "Подготовить 31" }))
     expect(await screen.findByText("Показано бытовок: 31")).toBeTruthy()
+    expect(screen.getByText(/Резерв действует до/)).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Изменить первую" }))
+    expect(screen.getByText("Финально выбрано: 30")).toBeTruthy()
     await user.click(screen.getByRole("button", { name: "Выбрать клиента" }))
     await user.click(
       screen.getByRole("button", {
@@ -223,28 +238,27 @@ describe("BookingContinuePage", () => {
     expect(
       await screen.findByRole("heading", { name: "Представление готово" })
     ).toBeTruthy()
-    expect(flow.create).toHaveBeenCalledTimes(1)
-    expect(flow.publish).toHaveBeenCalledTimes(1)
     expect(flow.create.mock.invocationCallOrder[0]).toBeLessThan(
       flow.publish.mock.invocationCallOrder[0]
     )
     const publishInput = flow.publish.mock.calls[0][0]
+    expect(publishInput.manualBookingDraftId).toMatch(/^[0-9a-f-]{36}$/)
     expect(
       publishInput.groups.map(
         (group: { rentalItemIds: string[] }) => group.rentalItemIds.length
       )
-    ).toEqual([30, 1])
+    ).toEqual([30])
     expect(
-      publishInput.groups.every(
-        (group: { rentalItemIds: string[] }) => group.rentalItemIds.length <= 30
+      publishInput.groups.flatMap(
+        (group: { rentalItemIds: string[] }) => group.rentalItemIds
       )
-    ).toBe(true)
+    ).not.toContain(items[0].id)
   })
 
-  it("rechecks a publish conflict, removes the lost cabin and shows the apology", async () => {
+  it("rechecks its own hold on conflict and removes a lost staged cabin", async () => {
     const user = userEvent.setup()
-    const items = [cabin(1)]
-    flow.check.mockImplementation(async (params) => availableResponse(params))
+    const items = [cabin(1), cabin(2)]
+    configureHold(items)
     flow.create.mockResolvedValue({
       conversation: { id: "conversation-1" },
       inquiry: {
@@ -259,7 +273,7 @@ describe("BookingContinuePage", () => {
     })
     renderFlow(items)
 
-    await user.click(screen.getByRole("button", { name: "Подготовить 1" }))
+    await user.click(screen.getByRole("button", { name: "Подготовить 2" }))
     await user.click(
       await screen.findByRole("button", { name: "Выбрать клиента" })
     )
@@ -270,13 +284,29 @@ describe("BookingContinuePage", () => {
     )
 
     expect(
-      await screen.findByRole("heading", {
-        name: "Бытовка уже забронирована",
-      })
+      await screen.findByRole("heading", { name: "Бытовка уже недоступна" })
     ).toBeTruthy()
     expect(
-      screen.getByText(/БЫТ-001 уже выбрал другой пользователь/)
-    ).toBeTruthy()
-    expect(flow.check.mock.calls.length).toBeGreaterThanOrEqual(2)
+      screen.getByRole("list", { name: "Недоступные бытовки" }).textContent
+    ).toContain("БЫТ-001 — БК-1 — Новая")
+    expect(flow.getHold.mock.calls.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it("shows the hold expiry and disables publishing", async () => {
+    const user = userEvent.setup()
+    const items = [cabin(1)]
+    flow.expired = true
+    configureHold(items)
+    renderFlow(items)
+
+    await user.click(screen.getByRole("button", { name: "Подготовить 1" }))
+    expect(await screen.findByText("Срок резерва истёк")).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Выбрать клиента" }))
+    expect(
+      screen.getByRole("button", {
+        name: "Создать представление для клиента",
+      })
+    ).toHaveProperty("disabled", true)
+    expect(flow.publish).not.toHaveBeenCalled()
   })
 })

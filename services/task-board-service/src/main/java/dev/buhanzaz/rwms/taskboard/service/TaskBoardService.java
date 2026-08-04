@@ -35,6 +35,8 @@ import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.JsonNode;
@@ -75,6 +77,7 @@ public class TaskBoardService {
   private final TaskBoardEntryOwnerProofService ownerProofs;
   private final WarehouseKpiClock kpiClock;
   private final GroupKpiEvidenceService kpiEvidence;
+  private final WorkerInvalidationHub workerInvalidations;
 
   public TaskBoardService(
       BoardTaskRepository tasks,
@@ -95,7 +98,8 @@ public class TaskBoardService {
       ObjectMapper objectMapper,
       TaskBoardEntryOwnerProofService ownerProofs,
       WarehouseKpiClock kpiClock,
-      GroupKpiEvidenceService kpiEvidence) {
+      GroupKpiEvidenceService kpiEvidence,
+      WorkerInvalidationHub workerInvalidations) {
     this.tasks = tasks;
     this.entries = entries;
     this.queues = queues;
@@ -115,6 +119,7 @@ public class TaskBoardService {
     this.ownerProofs = ownerProofs;
     this.kpiClock = kpiClock;
     this.kpiEvidence = kpiEvidence;
+    this.workerInvalidations = workerInvalidations;
   }
 
   @Transactional(readOnly = true)
@@ -514,7 +519,97 @@ public class TaskBoardService {
       }
     }
     kpiEvidence.refreshWarehouse(warehouseId, now());
+    publishTaskAvailabilityAfterCommit(task);
     return task;
+  }
+
+  private void publishTaskAvailabilityAfterCommit(BoardTask task) {
+    boolean visibleToday =
+        task.getLane() == TaskLane.CURRENT
+            || Objects.equals(
+                task.getScheduledDate(), LocalDate.now(DEFAULT_SCHEDULE_ZONE));
+    if (!visibleToday) return;
+
+    List<TaskAvailabilityNotification> notifications =
+        entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId()).stream()
+            .filter(entry -> entry.getEntryType() == EntryType.REAL)
+            .map(
+                entry ->
+                    new TaskAvailabilityNotification(
+                        entry.getId(),
+                        eligibleWorkerIds(task.getWarehouseId(), entry.getQueue()),
+                        task.getPriority() <= 1))
+            .filter(notification -> !notification.workerIds().isEmpty())
+            .toList();
+    if (notifications.isEmpty()) return;
+
+    Runnable dispatch =
+        () -> {
+          long revision = workerRevision();
+          notifications.forEach(
+              notification ->
+                  workerInvalidations.taskAvailable(
+                      notification.workerIds(),
+                      notification.entryId(),
+                      revision,
+                      notification.urgent()));
+        };
+    if (TransactionSynchronizationManager.isSynchronizationActive()) {
+      TransactionSynchronizationManager.registerSynchronization(
+          new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+              dispatch.run();
+            }
+          });
+    } else {
+      dispatch.run();
+    }
+  }
+
+  private Set<UUID> eligibleWorkerIds(UUID warehouseId, WorkQueue queue) {
+    Set<UUID> workerClassIds =
+        bindings.findAllByQueueId(queue.getId()).stream()
+            .map(binding -> binding.getWorkerClass().getId())
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    if (workerClassIds.isEmpty()) return Set.of();
+
+    List<WorkerDto> activeWorkers =
+        workforce.listWorkers(warehouseId).stream().filter(WorkerDto::active).toList();
+    Set<UUID> activeWorkerIds =
+        activeWorkers.stream()
+            .map(WorkerDto::id)
+            .collect(java.util.stream.Collectors.toSet());
+    Set<UUID> result =
+        activeWorkers.stream()
+            .filter(
+                worker ->
+                    worker.qualifications().stream()
+                        .anyMatch(
+                            qualification ->
+                                qualification.active()
+                                    && workerClassIds.contains(
+                                        qualification.workerClass().id())))
+            .map(WorkerDto::id)
+            .collect(
+                java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    workforce.listGroups(warehouseId).stream()
+        .filter(WorkerGroupDto::active)
+        .filter(group -> workerClassIds.contains(group.workerClass().id()))
+        .flatMap(group -> group.members().stream())
+        .filter(GroupMemberDto::active)
+        .map(GroupMemberDto::workerId)
+        .filter(activeWorkerIds::contains)
+        .forEach(result::add);
+    return Set.copyOf(result);
+  }
+
+  private long workerRevision() {
+    Long revision =
+        jdbc.queryForObject(
+            "select coalesce(sum(current_version + 1), 0)::bigint from event_stream_head",
+            Long.class);
+    return revision == null ? 0 : revision;
   }
 
   @Transactional
@@ -906,6 +1001,56 @@ public class TaskBoardService {
       String sourceClientId, UUID externalTaskId, CancelTaskRequest request) {
     BoardTask task = ownedExternalTask(sourceClientId, externalTaskId);
     return cancelTask(task.getWarehouseId(), externalTaskId, request);
+  }
+
+  /**
+   * Atomically cancels a source-owned task only while every route entry is still waiting.  This is
+   * intentionally separate from the operator cancellation command, which is allowed to interrupt
+   * active work.  Callers use the explicit outcome to reconcile a lost response without ever
+   * turning started physical work into a cancellation.
+   */
+  @Transactional
+  public PreStartCancellationResult cancelExternalTaskIfPreStart(
+      String sourceClientId, UUID externalTaskId, CancelTaskRequest request) {
+    lock("external-task:" + externalTaskId);
+    BoardTask observed = ownedExternalTask(sourceClientId, externalTaskId);
+    // Queue mutations take this warehouse lock before touching task/entry rows.  Keep the same
+    // global order here so a concurrent scheduler move cannot deadlock with compensation.
+    lockQueueMutation(observed.getWarehouseId());
+    BoardTask task =
+        tasks
+            .findByExternalTaskIdForUpdate(externalTaskId)
+            .orElseThrow(() -> new NotFoundException("Задача не найдена"));
+    if (!taskSyncSources.existsByBoardTaskIdAndSourceClientId(task.getId(), sourceClientId)) {
+      throw new NotFoundException("Задача не найдена");
+    }
+    List<QueueEntry> route = entries.findAllByTaskIdForUpdate(task.getId());
+    if (task.getStatus() == TaskStatus.CANCELLED) {
+      return preStartCancellationResult(PreStartCancellationOutcome.ALREADY_CANCELLED, task);
+    }
+    List<UUID> routeIds = route.stream().map(QueueEntry::getId).toList();
+    boolean routeStarted =
+        route.stream()
+            .anyMatch(
+                entry ->
+                    entry.getStatus() != EntryStatus.WAITING
+                        || entry.getActiveStartedAt() != null
+                        || entry.getPausedAt() != null
+                        || entry.getDoneAt() != null
+                        || entry.getActiveWorkSeconds() != 0)
+            || (!routeIds.isEmpty()
+                && assignments.existsByQueueEntryIdInAndStartedAtIsNotNull(routeIds));
+    if (task.getStatus() != TaskStatus.ACTIVE
+        || route.isEmpty()
+        || routeStarted) {
+      return preStartCancellationResult(PreStartCancellationOutcome.STARTED, task);
+    }
+    if (task.getVersion() != request.expectedTaskVersion()) {
+      return preStartCancellationResult(PreStartCancellationOutcome.VERSION_CONFLICT, task);
+    }
+    CancelledTaskDto cancelled = cancelTask(task.getWarehouseId(), externalTaskId, request);
+    BoardTask current = tasks.findById(cancelled.taskId()).orElseThrow();
+    return preStartCancellationResult(PreStartCancellationOutcome.CANCELLED, current);
   }
 
   @Transactional
@@ -1744,7 +1889,10 @@ public class TaskBoardService {
   @Transactional
   public BoardEntryDto take(
       UUID warehouseId, UUID entryId, TakeEntryRequest request, UUID authenticatedWorkerId) {
-    var entry = requireEntry(warehouseId, entryId);
+    // The row lock pairs with cancelExternalTaskIfPreStart.  Whichever transition wins is visible
+    // to the loser before it validates WAITING, so a started entry cannot be cancelled by a
+    // concurrent source compensation command and a cancelled entry cannot be resurrected.
+    var entry = requireEntryForUpdate(warehouseId, entryId);
     checkVersion(entry.getVersion(), request.expectedVersion(), "Этап");
     boolean joiningSecondary = entry.getStatus() == EntryStatus.IN_PROGRESS;
     if (entry.getEntryType() != EntryType.REAL
@@ -2817,6 +2965,15 @@ public class TaskBoardService {
     return e;
   }
 
+  private QueueEntry requireEntryForUpdate(UUID warehouseId, UUID id) {
+    var e =
+        entries.findByIdForUpdate(id).orElseThrow(() -> new NotFoundException("Этап не найден"));
+    if (!e.getTask().getWarehouseId().equals(warehouseId)) {
+      throw new NotFoundException("Этап не найден");
+    }
+    return e;
+  }
+
   private BoardTask requireTask(UUID warehouseId, UUID id) {
     BoardTask task = tasks.findById(id).orElseThrow(() -> new NotFoundException("Задача не найдена"));
     if (!task.getWarehouseId().equals(warehouseId)) {
@@ -3305,6 +3462,17 @@ public class TaskBoardService {
         task.getDoneAt());
   }
 
+  private PreStartCancellationResult preStartCancellationResult(
+      PreStartCancellationOutcome outcome, BoardTask task) {
+    return new PreStartCancellationResult(
+        outcome,
+        task.getId(),
+        task.getExternalTaskId(),
+        task.getVersion(),
+        task.getStatus(),
+        task.getStatus() == TaskStatus.CANCELLED ? task.getDoneAt() : null);
+  }
+
   private BoardTaskRegistrationDto registrationDto(BoardTask task) {
     var route =
         entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId()).stream()
@@ -3351,6 +3519,9 @@ public class TaskBoardService {
   private record PinnedQueueOrdinal(UUID entryId, int ordinal) {}
 
   private record ResolvedRouteStep(RouteStepRequest request, WorkQueue queue) {}
+
+  private record TaskAvailabilityNotification(
+      UUID entryId, Set<UUID> workerIds, boolean urgent) {}
 
   private record NormalizedEquipmentMovementRequest(
       String unitNumber, List<NormalizedEquipmentMovementOperation> operations) {

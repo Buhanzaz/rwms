@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.worker.feature.taskdetail
 
 import dev.buhanzaz.rwms.worker.core.database.WorkerTaskEntity
 import dev.buhanzaz.rwms.worker.core.network.WorkerTaskTimerSnapshotDto
+import dev.buhanzaz.rwms.worker.core.network.WorkerMediaReferenceDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerWorkDto
 import java.math.BigDecimal
 import java.time.Duration
@@ -97,6 +98,26 @@ internal data class WorkPresentation(
     val plannedDuration: String?,
     val comment: String?,
 )
+
+internal data class TaskSourceMediaPresentation(
+    val general: List<WorkerMediaReferenceDto>,
+    val byWorkId: Map<String, List<WorkerMediaReferenceDto>>,
+)
+
+internal fun taskSourceMediaPresentation(
+    works: List<WorkerWorkDto>,
+    sourceMedia: List<WorkerMediaReferenceDto>,
+): TaskSourceMediaPresentation {
+    val mediaById = sourceMedia.associateBy(WorkerMediaReferenceDto::mediaId)
+    val byWorkId = works.associate { work ->
+        work.id to work.sourceMediaIds.mapNotNull(mediaById::get)
+    }
+    val workMediaIds = works.flatMapTo(mutableSetOf()) { it.sourceMediaIds }
+    return TaskSourceMediaPresentation(
+        general = sourceMedia.filterNot { it.mediaId in workMediaIds },
+        byWorkId = byWorkId,
+    )
+}
 
 /** Worker-facing work metadata deliberately has no price/cost field. */
 internal fun workPresentation(work: WorkerWorkDto): WorkPresentation = WorkPresentation(

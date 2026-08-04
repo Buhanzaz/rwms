@@ -18,7 +18,16 @@ public enum MaintenanceEventType {
   REPAIR_TRANSFER_PREPARED("maintenance.repair.transfer-prepared.v1"),
   REPAIR_TRANSFERRED("maintenance.repair.transferred.v1"),
   REPAIR_ACCEPTED("maintenance.repair.accepted.v1"),
-  REPAIR_WRITTEN_OFF("maintenance.repair.written-off.v1");
+  REPAIR_WRITTEN_OFF("maintenance.repair.written-off.v1"),
+  PROPERTY_DISPOSITION_REQUESTED("maintenance.property-disposition.requested.v1"),
+  PROPERTY_DISPOSITION_APPROVED("maintenance.property-disposition.approved.v1"),
+  PROPERTY_DISPOSITION_REJECTED("maintenance.property-disposition.rejected.v1"),
+  PROPERTY_DISPOSITION_MOVEMENT_PENDING(
+      "maintenance.property-disposition.movement-pending.v1"),
+  PROPERTY_DISPOSITION_EFFECT_PENDING("maintenance.property-disposition.effect-pending.v1"),
+  PROPERTY_DISPOSITION_EFFECTIVE("maintenance.property-disposition.effective.v1"),
+  PROPERTY_DISPOSITION_QUARANTINED("maintenance.property-disposition.quarantined.v1"),
+  PROPERTY_DISPOSITION_RECOVERED("maintenance.property-disposition.recovered.v1");
 
   private final String value;
 

@@ -8,8 +8,11 @@ import dev.buhanzaz.rwms.manager.auth.ManagerAuthConfiguration
 import dev.buhanzaz.rwms.manager.auth.ManagerAuthRepository
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import okhttp3.Interceptor
+import okhttp3.OkHttp
 import okhttp3.OkHttpClient
 import okhttp3.Response
 import retrofit2.HttpException
@@ -20,32 +23,55 @@ class RwmsBackend(
     context: Context,
     publicBaseUrl: String,
 ) {
+    private val applicationContext = context.applicationContext
+    private val apiBaseUrl = "${publicBaseUrl.trimEnd('/')}/"
+
     val auth = ManagerAuthRepository(
-        context = context,
+        context = applicationContext,
         configuration = ManagerAuthConfiguration(Uri.parse(publicBaseUrl)),
     )
 
-    private val moshi = Moshi.Builder()
-        .add(ExplicitNullJsonAdapterFactory)
-        .addLast(KotlinJsonAdapterFactory())
-        .build()
-    private val authenticatedClient = OkHttpClient.Builder()
-        .addInterceptor(BearerTokenInterceptor(auth))
-        // A camera original can be several megabytes.  The default ten-second write timeout is
-        // too short for a normal 4G upload, and turns a completed server-side upload into an
-        // indistinguishable "no connection" retry on the device.
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(2, TimeUnit.MINUTES)
-        .readTimeout(2, TimeUnit.MINUTES)
-        .callTimeout(3, TimeUnit.MINUTES)
-        .build()
+    /*
+     * The signed-out screen needs only [auth.state].  Building Moshi, OkHttp and the Retrofit
+     * proxy here used to make their class verification and platform setup part of the first
+     * Compose frame.  Keep the transport identical, but defer it until an authenticated action
+     * actually needs it.
+     */
+    private val moshi: Moshi by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        Moshi.Builder()
+            .add(ExplicitNullJsonAdapterFactory)
+            .addLast(KotlinJsonAdapterFactory())
+            .build()
+    }
+    private val authenticatedClient: OkHttpClient by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        // The manifest initializer is intentionally removed from the signed-out cold path.  The
+        // public OkHttp hook keeps its Android application context available for real requests
+        // (including the public-suffix asset reader) when the transport is first needed.
+        OkHttp.initialize(applicationContext)
+        OkHttpClient.Builder()
+            .addInterceptor(BearerTokenInterceptor(auth))
+            // A camera original can be several megabytes.  The default ten-second write timeout is
+            // too short for a normal 4G upload, and turns a completed server-side upload into an
+            // indistinguishable "no connection" retry on the device.
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(2, TimeUnit.MINUTES)
+            .readTimeout(2, TimeUnit.MINUTES)
+            .callTimeout(3, TimeUnit.MINUTES)
+            .build()
+    }
 
-    val api: RwmsApi = Retrofit.Builder()
-        .baseUrl("${publicBaseUrl.trimEnd('/')}/")
-        .client(authenticatedClient)
-        .addConverterFactory(MoshiConverterFactory.create(moshi))
-        .build()
-        .create(RwmsApi::class.java)
+    val api: RwmsApi by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        Retrofit.Builder()
+            .baseUrl(apiBaseUrl)
+            .client(authenticatedClient)
+            .addConverterFactory(MoshiConverterFactory.create(moshi))
+            .build()
+            .create(RwmsApi::class.java)
+    }
+
+    suspend fun warmUpTransport() {
+        withContext(Dispatchers.IO) { api }
+    }
 
     fun problemMessage(exception: HttpException): String {
         val raw = runCatching { exception.response()?.errorBody()?.string() }.getOrNull()

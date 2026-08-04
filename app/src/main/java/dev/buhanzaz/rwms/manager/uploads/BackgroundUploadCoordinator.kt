@@ -25,7 +25,12 @@ class BackgroundUploadCoordinator(
 
     val operations: StateFlow<List<BackgroundUploadOperation>> = store.operations
 
+    suspend fun initialize() {
+        store.initialize()
+    }
+
     suspend fun enqueue(draft: BackgroundUploadDraft): String = withContext(Dispatchers.IO) {
+        store.initialize()
         val operationId = UUID.randomUUID().toString()
         val operationDirectory = store.operationDirectory(operationId)
         try {
@@ -56,7 +61,8 @@ class BackgroundUploadCoordinator(
         }
     }
 
-    fun resumePending() {
+    suspend fun resumePending() = withContext(Dispatchers.IO) {
+        store.initialize()
         store.operations.value
             .filter { it.status != BackgroundUploadStatus.FAILED }
             .forEach { schedule(it.id, ExistingWorkPolicy.KEEP) }
@@ -66,7 +72,8 @@ class BackgroundUploadCoordinator(
         workManager.cancelAllWorkByTag(BackgroundUploadWorker.WORK_TAG)
     }
 
-    fun retry(operationId: String) {
+    suspend fun retry(operationId: String) = withContext(Dispatchers.IO) {
+        store.initialize()
         val now = System.currentTimeMillis()
         val updated = store.update(operationId) { operation ->
             operation.copy(
@@ -82,11 +89,12 @@ class BackgroundUploadCoordinator(
                     }
                 },
             )
-        } ?: return
+        } ?: return@withContext
         schedule(updated.id, ExistingWorkPolicy.REPLACE)
     }
 
-    fun retryPhoto(operationId: String, photoId: String) {
+    suspend fun retryPhoto(operationId: String, photoId: String) = withContext(Dispatchers.IO) {
+        store.initialize()
         val now = System.currentTimeMillis()
         val updated = store.update(operationId) { operation ->
             operation.copy(
@@ -102,7 +110,7 @@ class BackgroundUploadCoordinator(
                     }
                 },
             )
-        } ?: return
+        } ?: return@withContext
         schedule(updated.id, ExistingWorkPolicy.REPLACE, photoId)
     }
 

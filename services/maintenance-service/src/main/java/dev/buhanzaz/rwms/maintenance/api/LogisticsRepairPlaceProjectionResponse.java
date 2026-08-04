@@ -13,4 +13,4 @@ public record LogisticsRepairPlaceProjectionResponse(
     long readyToReleaseCount,
     long availableCount,
     boolean overCapacity,
-    List<LogisticsRepairPlaceAllocationResponse> allocations) {}
+    List<LogisticsRepairPlaceProjectionAllocationResponse> allocations) {}

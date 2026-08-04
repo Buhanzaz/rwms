@@ -100,6 +100,22 @@ public class PresentationUnitHold {
     return true;
   }
 
+  public void transferTo(
+      UUID targetPresentationId,
+      OffsetDateTime nextExpiresAt,
+      OffsetDateTime now) {
+    requireActive();
+    if (!expiresAt.isAfter(now)) {
+      throw new IllegalStateException("Presentation hold has expired");
+    }
+    if (!nextExpiresAt.isAfter(now)) {
+      throw new IllegalArgumentException("expiresAt must be in the future");
+    }
+    presentationId = Objects.requireNonNull(targetPresentationId, "targetPresentationId");
+    expiresAt = nextExpiresAt;
+    updatedAt = Objects.requireNonNull(now, "now");
+  }
+
   public boolean expire(OffsetDateTime now) {
     if (state != PresentationUnitHoldState.ACTIVE || expiresAt.isAfter(now)) return false;
     end(PresentationUnitHoldState.EXPIRED, null, now);

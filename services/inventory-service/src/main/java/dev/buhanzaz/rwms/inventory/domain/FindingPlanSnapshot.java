@@ -26,8 +26,6 @@ public class FindingPlanSnapshot {
   @Column(name = "plan_mode", nullable = false, length = 16) private String planMode;
   @Column(name = "movement_to_repair", nullable = false)
   private boolean movementToRepair;
-  @Column(name = "movement_to_shipment", nullable = false)
-  private boolean movementToShipment;
   @Enumerated(EnumType.STRING)
   @Column(name = "logistics_planning_mode", length = 16)
   private LogisticsPlanningMode logisticsPlanningMode;
@@ -35,6 +33,8 @@ public class FindingPlanSnapshot {
   @Column(name = "catalog_version_id", nullable = false) private UUID catalogVersionId;
   @Column(name = "plan_fingerprint_sha256", nullable = false, length = 64)
   private String fingerprint;
+  @Column(name = "snapshot_schema_version", nullable = false)
+  private short snapshotSchemaVersion;
   @JdbcTypeCode(SqlTypes.JSON)
   @Column(name = "source_snapshot", nullable = false, columnDefinition = "jsonb")
   private String sourceSnapshot;
@@ -48,24 +48,52 @@ public class FindingPlanSnapshot {
       UUID inventoryId,
       String planMode,
       boolean movementToRepair,
-      boolean movementToShipment,
       LogisticsPlanningMode logisticsPlanningMode,
       LocalDate logisticsScheduledDate,
       UUID catalogVersionId,
       String fingerprint,
       String sourceSnapshot) {
+    this(
+        findingId,
+        findingRevision,
+        inventoryId,
+        planMode,
+        movementToRepair,
+        logisticsPlanningMode,
+        logisticsScheduledDate,
+        catalogVersionId,
+        fingerprint,
+        sourceSnapshot,
+        sourceSnapshot != null && sourceSnapshot.contains("\"movementToShipment\"") ? 1 : 2);
+  }
+
+  public FindingPlanSnapshot(
+      UUID findingId,
+      long findingRevision,
+      UUID inventoryId,
+      String planMode,
+      boolean movementToRepair,
+      LogisticsPlanningMode logisticsPlanningMode,
+      LocalDate logisticsScheduledDate,
+      UUID catalogVersionId,
+      String fingerprint,
+      String sourceSnapshot,
+      int snapshotSchemaVersion) {
     this.findingId = findingId;
     this.findingRevision = findingRevision;
     this.inventoryId = inventoryId;
     this.planMode = planMode;
     validateLogisticsPlanning(movementToRepair, logisticsPlanningMode, logisticsScheduledDate);
     this.movementToRepair = movementToRepair;
-    this.movementToShipment = movementToShipment;
     this.logisticsPlanningMode = logisticsPlanningMode;
     this.logisticsScheduledDate = logisticsScheduledDate;
     this.catalogVersionId = catalogVersionId;
     this.fingerprint = fingerprint;
     this.sourceSnapshot = sourceSnapshot;
+    if (snapshotSchemaVersion != 1 && snapshotSchemaVersion != 2) {
+      throw new IllegalArgumentException("Frozen plan schema version is invalid");
+    }
+    this.snapshotSchemaVersion = (short) snapshotSchemaVersion;
     frozenAt = OffsetDateTime.now(ZoneOffset.UTC);
   }
 
@@ -93,10 +121,6 @@ public class FindingPlanSnapshot {
     return movementToRepair;
   }
 
-  public boolean isMovementToShipment() {
-    return movementToShipment;
-  }
-
   public LogisticsPlanningMode getLogisticsPlanningMode() {
     return logisticsPlanningMode;
   }
@@ -107,6 +131,10 @@ public class FindingPlanSnapshot {
 
   public UUID getCatalogVersionId() {
     return catalogVersionId;
+  }
+
+  public int getSnapshotSchemaVersion() {
+    return snapshotSchemaVersion;
   }
 
   private static void validateLogisticsPlanning(

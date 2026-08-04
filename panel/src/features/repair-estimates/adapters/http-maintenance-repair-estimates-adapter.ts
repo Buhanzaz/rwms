@@ -10,6 +10,7 @@ import {
   createMaintenanceEstimate,
   createMaintenanceIdempotencyKey,
   getMaintenanceEstimate,
+  getMaintenanceRepair,
   listMaintenanceEstimates,
   replaceMaintenanceEstimate,
   type MaintenanceEstimate,
@@ -160,7 +161,8 @@ function toEstimatePlan(
 async function toEstimateDto(
   estimate: MaintenanceEstimate,
   rentalItemsClient: EstimateRentalItemsClient,
-  deliveryState?: RepairEstimateDto["deliveryState"]
+  deliveryState?: RepairEstimateDto["deliveryState"],
+  movementToRepair = false
 ): Promise<RepairEstimateDto> {
   const revision = currentRevision(estimate)
   const customQueueBindings = customQueueBindingsByLineId(revision.plan)
@@ -188,9 +190,7 @@ async function toEstimateDto(
     coverMediaId: estimate.coverMediaId,
     repairId: estimate.repairId,
     completionMode: null,
-    movementRequired: revision.plan.some(
-      (stage) => stage.kind !== "REPAIR_WORK"
-    ),
+    movementToRepair,
     taskPlans: revision.plan
       .map(toEstimatePlan)
       .sort((left, right) => left.sortOrder - right.sortOrder),
@@ -248,15 +248,7 @@ function routeFromPlan(
   const exactByDefinitionId = plan.queueId
     ? active.find((queue) => queue.definitionId === plan.queueId)
     : undefined
-  const movementCandidates =
-    !plan.queueId &&
-    plan.kind !== "REPAIR_WORK" &&
-    plan.routeQueueKind === "MOVEMENT"
-      ? active.filter((queue) => queue.type === "MOVEMENT")
-      : []
-  const exact =
-    exactByDefinitionId ??
-    (movementCandidates.length === 1 ? movementCandidates[0] : undefined)
+  const exact = exactByDefinitionId
   if (exact) {
     if (
       includesCustomWork &&
@@ -277,20 +269,6 @@ function routeFromPlan(
       queueName: exact.name,
       queueType: exact.type,
     }
-  }
-  if (movementCandidates.length > 1) {
-    throw new Error(
-      "Для перемещения подключите к складу ровно одну активную очередь типа «Перемещение»."
-    )
-  }
-  if (
-    !plan.queueId &&
-    plan.kind !== "REPAIR_WORK" &&
-    plan.routeQueueKind === "MOVEMENT"
-  ) {
-    throw new Error(
-      "Для выбранного склада ещё не материализована активная очередь типа «Перемещение». Проверьте «Настройки доски задач → Каталог очередей» и синхронизацию склада."
-    )
   }
   if (plan.queueName?.trim()) {
     throw new Error(
@@ -491,9 +469,15 @@ export class HttpMaintenanceRepairEstimatesAdapter implements RepairEstimatesCli
   async getById(id: string, warehouseId: string) {
     const accessToken = await this.tokenProvider()
     try {
+      const estimate = await getMaintenanceEstimate(accessToken, warehouseId, id)
+      const repair = estimate.repairId
+        ? await getMaintenanceRepair(accessToken, warehouseId, estimate.repairId)
+        : null
       return await toEstimateDto(
-        await getMaintenanceEstimate(accessToken, warehouseId, id),
-        this.rentalItemsClient
+        estimate,
+        this.rentalItemsClient,
+        undefined,
+        repair?.movementToRepair ?? false
       )
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) return null
@@ -552,13 +536,18 @@ export class HttpMaintenanceRepairEstimatesAdapter implements RepairEstimatesCli
         draft.version,
         command.priority,
         createMaintenanceIdempotencyKey(),
+        command.movementToRepair,
         command.logisticsPlanningMode,
         command.logisticsScheduledDate
       )
+      if (!result.repair) {
+        throw new Error("Сервис не вернул созданный ремонт")
+      }
       return toEstimateDto(
         result.estimate,
         this.rentalItemsClient,
-        result.delivery.state
+        result.delivery.state,
+        result.repair.movementToRepair
       )
     } catch (error) {
       throw new Error(
@@ -589,7 +578,8 @@ export class HttpMaintenanceRepairEstimatesAdapter implements RepairEstimatesCli
     return toEstimateDto(
       result.estimate,
       this.rentalItemsClient,
-      result.delivery.state
+      result.delivery.state,
+      result.repair?.movementToRepair ?? false
     )
   }
 }

@@ -1,18 +1,25 @@
 ---
 roadmap: docs/plans/20260712-panel-microservices-decomposition.md
-roadmap_status: APPROVED_WORKING_ROADMAP
-state: STAGE_9_DOSSIER_SERVICE
-status: SERVICE_SIDE_COMPLETE_NEXT_GATE_DEFERRED
+roadmap_status: ARCHIVED
+state: ARCHIVED_MIGRATION_RECORD
+status: SUPERSEDED_BY_DIRECT_PRODUCT_DEVELOPMENT
 sequence: F0 -> F1 -> F2 -> F3 -> F1C -> F4K -> F4MA -> F4MT -> F4A -> F4T -> F4R -> F4G -> W1 -> STAGE_2_TASK_BOARD_SERVICE -> STAGE_3_4_MEDIA_SERVICE -> STAGE_5_ASSET_SERVICE -> STAGE_6_MAINTENANCE_SERVICE -> STAGE_7_INVENTORY_SERVICE -> STAGE_8_LOGISTICS_SERVICE -> STAGE_9_DOSSIER_SERVICE
 service_owner: dossier-service
 delivery_owner: RWMS lead/reviewer
-next_state: STAGE_10_ANALYTICS_SERVICE_DEFERRED_NOT_AUTHORIZED
+next_state: NONE
 ---
 
-# Active RWMS Implementation Stage
+# Archived RWMS Implementation Stage Record
 
-This file is the only operational pointer for stage authority, completion and
-deferral.
+This file is historical evidence only. It is no longer an operational pointer,
+does not select allowed work and does not defer product features. Current work
+is selected directly by the user and follows
+[`AGENTS.md`](../../AGENTS.md) plus the maintained
+[`project knowledge`](../project-knowledge/README.md).
+
+The remaining content is preserved only as a record of the former migration
+sequence. Its stage-specific allowed/forbidden scopes and gates are not current
+instructions.
 
 ## User-confirmed prior stages
 

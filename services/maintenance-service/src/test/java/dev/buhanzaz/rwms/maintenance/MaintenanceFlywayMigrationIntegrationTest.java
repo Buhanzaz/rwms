@@ -42,7 +42,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsTheAuthoritativeMaintenanceSchema() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(28);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(32);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains(
@@ -55,6 +55,8 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "rental_item_fact_projection", "operation_lease_fact_projection",
         "maintenance_idempotency_record", "integration_reconciliation",
         "inventory_repair_source_operation", "inventory_repair_source",
+        "inventory_publication_source_operation", "inventory_publication_source",
+        "inventory_publication_successor", "inventory_publication_prestart_replacement",
         "logistics_return_shortage", "repair_capacity_settings", "repair_task_evidence",
         "repair_complexity_colors", "repair_complexity_settings", "repair_place_allocation");
     assertThat(columnCount("maintenance_estimate", "rental_item_version_snapshot")).isOne();
@@ -82,6 +84,43 @@ class MaintenanceFlywayMigrationIntegrationTest {
         .contains("REPAIR_WORK")
         .doesNotContain("MOVE_TO_REPAIR", "MOVE_FROM_REPAIR");
     assertThat(columnCount("maintenance_estimate", "cover_media_id")).isOne();
+    assertThat(columns("maintenance_estimate")).contains(
+        "priority", "movement_to_repair", "movement_scheduled_date", "inventory_superseded_at");
+    assertThat(constraintDefinition("maintenance_estimate", "ck_maintenance_estimate_priority"))
+        .contains("priority", "1", "5");
+    assertThat(columns("inventory_publication_source")).contains(
+        "inventory_id", "final_plan_version", "finding_id", "plan_snapshot", "media_snapshot",
+        "strategy", "selected_target_kind", "superseded_target_kind", "target_kind",
+        "estimate_id", "repair_id", "idempotency_key", "publication_outcome",
+        "predecessor_repair_id", "delta_snapshot");
+    assertThat(constraintDefinition(
+        "inventory_publication_source", "ck_inventory_publication_source_strategy"))
+        .contains("CREATE", "REPLACE", "MERGE");
+    assertThat(constraintDefinition(
+        "inventory_publication_source", "ck_inventory_publication_source_target"))
+        .contains("ESTIMATE", "REPAIR", "SUCCESSOR", "MATCHED");
+    assertThat(columns("inventory_publication_successor")).containsExactlyInAnyOrder(
+        "inventory_id", "final_plan_version", "finding_id", "version", "predecessor_repair_id",
+        "successor_repair_id", "state", "terminal_fact", "terminal_fact_event_id",
+        "terminal_fact_occurred_at", "created_at", "released_at", "updated_at");
+    assertThat(constraintDefinition(
+        "inventory_publication_successor", "ck_inventory_publication_successor_state"))
+        .contains("WAITING_PREDECESSOR", "RELEASED", "TASK_BOARD_COMPLETION", "REPAIR_ACCEPTANCE");
+    assertThat(columns("inventory_publication_prestart_replacement")).containsExactlyInAnyOrder(
+        "inventory_id", "final_plan_version", "finding_id", "version", "request_sha256",
+        "request_idempotency_key", "request_snapshot", "warehouse_id", "asset_id",
+        "predecessor_repair_id", "predecessor_mode", "driver_kind", "task_external_id",
+        "task_expected_version", "task_guard_required", "remote_attempt_count", "lease_id", "lease_version",
+        "fencing_token", "lease_owner_type", "lease_owner_id", "phase", "driver_outcome",
+        "task_outcome", "occupancy_reassignment_required", "repair_place_allocation_id",
+        "repair_place_allocation_version", "successor_repair_id", "compensated_at",
+        "lease_released_at", "applied_at", "created_at", "updated_at");
+    assertThat(constraintDefinition(
+        "inventory_publication_prestart_replacement",
+        "ck_inventory_publication_prestart_replacement_phase"))
+        .contains("PREPARED", "COMPENSATED", "SUCCESSOR_CREATED", "LEASE_RELEASED", "APPLIED");
+    assertThat(indexDefinition("uk_inventory_publication_prestart_replacement_active_repair"))
+        .contains("UNIQUE INDEX", "predecessor_repair_id", "phase", "APPLIED");
     assertThat(columnCount("maintenance_repair", "cover_media_id")).isOne();
     assertThat(columns("repair_capacity_settings")).containsExactlyInAnyOrder(
         "warehouse_id", "version", "repair_place_count", "automatic_refill_delay_minutes",
@@ -429,7 +468,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         catalogId.toString(),
         "0".repeat(64));
 
-    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(4);
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(8);
 
     assertThat(jdbc.queryForObject(
         "select count(*) from catalog_node where catalog_version_id=? and node_type='WORK'",
@@ -810,7 +849,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "0".repeat(64));
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(5);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(9);
     upgraded.validate();
 
     assertThat(
@@ -973,7 +1012,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
     insertLegacyEstimateStage(estimateId, UUID.randomUUID(), 2, "MOVE_FROM_REPAIR");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(2);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(6);
     upgraded.validate();
 
     assertThat(jdbc.queryForMap(
@@ -1155,7 +1194,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         repairStageId);
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(5);
     upgraded.validate();
 
     assertThat(
@@ -1199,6 +1238,118 @@ class MaintenanceFlywayMigrationIntegrationTest {
                     """,
                     repairId))
         .hasMessageContaining("ck_repair_stage_material_comment");
+  }
+
+  @Test
+  void v29AddsPublicationSourcesAndCanonicalizesHistoricalEstimateSnapshots() {
+    Flyway beforeV29 = Flyway.configure()
+        .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+        .locations(MIGRATIONS)
+        .target("28")
+        .baselineOnMigrate(false)
+        .cleanDisabled(true)
+        .validateOnMigrate(true)
+        .validateMigrationNaming(true)
+        .outOfOrder(false)
+        .load();
+    assertThat(beforeV29.migrate().migrationsExecuted).isEqualTo(28);
+
+    UUID warehouseId = UUID.randomUUID();
+    UUID catalogId = UUID.randomUUID();
+    UUID estimateId = UUID.randomUUID();
+    UUID eventId = UUID.randomUUID();
+    insertCatalogVersion(catalogId, warehouseId, "f".repeat(64));
+    insertEstimateWithRevision(estimateId, catalogId, warehouseId);
+    String state = """
+        {"id":"%s","version":0,"warehouseId":"%s","state":"DRAFT"}
+        """.formatted(estimateId, warehouseId);
+    String payload = """
+        {"model":"maintenance-full-state-v1","event":{},"state":%s}
+        """.formatted(state);
+    jdbc.update(
+        """
+        insert into event_stream_head(
+          aggregate_type,aggregate_id,current_version,last_event_id,updated_at)
+        values ('ESTIMATE',?,0,?,clock_timestamp())
+        """,
+        estimateId.toString(),
+        eventId);
+    jdbc.update(
+        """
+        insert into domain_event(
+          event_id,aggregate_type,aggregate_id,aggregate_version,event_type,event_version,
+          occurred_at,recorded_at,correlation_id,payload,payload_sha256,baseline)
+        values (?,'ESTIMATE',?,0,'maintenance.estimate.created.v1',1,clock_timestamp(),
+          clock_timestamp(),?,?::jsonb,?,false)
+        """,
+        eventId,
+        estimateId.toString(),
+        UUID.randomUUID(),
+        payload,
+        "0".repeat(64));
+    jdbc.update(
+        """
+        insert into aggregate_snapshot(
+          aggregate_type,aggregate_id,aggregate_version,state,state_sha256,recorded_at)
+        values ('ESTIMATE',?,0,?::jsonb,?,clock_timestamp())
+        """,
+        estimateId.toString(),
+        state,
+        "0".repeat(64));
+    jdbc.update(
+        """
+        insert into projection_checkpoint(
+          projection_name,aggregate_type,aggregate_id,aggregate_version,
+          projection_sha256,updated_at)
+        values ('maintenance-live-v1','ESTIMATE',?,0,?,clock_timestamp())
+        """,
+        estimateId.toString(),
+        "0".repeat(64));
+
+    Flyway upgraded = flyway(MIGRATIONS);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(4);
+    upgraded.validate();
+
+    assertThat(jdbc.queryForMap(
+        """
+        select priority,movement_to_repair,movement_scheduled_date,inventory_superseded_at
+          from maintenance_estimate where id=?
+        """, estimateId))
+        .containsEntry("priority", 3)
+        .containsEntry("movement_to_repair", false)
+        .containsEntry("movement_scheduled_date", null)
+        .containsEntry("inventory_superseded_at", null);
+    assertThat(jdbc.queryForObject(
+        """
+        select payload #>> '{state,priority}' = '3'
+          and payload #> '{state,movementToRepair}' = 'false'::jsonb
+          and payload #> '{state,movementScheduledDate}' = 'null'::jsonb
+          and payload #> '{state,inventorySupersededAt}' = 'null'::jsonb
+          and payload_sha256 = encode(sha256(convert_to(payload::text, 'UTF8')), 'hex')
+        from domain_event where event_id=?
+        """, Boolean.class, eventId)).isTrue();
+    assertThat(jdbc.queryForObject(
+        """
+        select state #>> '{priority}' = '3'
+          and state #> '{movementToRepair}' = 'false'::jsonb
+          and state #> '{movementScheduledDate}' = 'null'::jsonb
+          and state #> '{inventorySupersededAt}' = 'null'::jsonb
+          and state_sha256 = encode(sha256(convert_to(state::text, 'UTF8')), 'hex')
+        from aggregate_snapshot
+        where aggregate_type='ESTIMATE' and aggregate_id=? and aggregate_version=0
+        """, Boolean.class, estimateId.toString())).isTrue();
+    assertThat(jdbc.queryForObject(
+        """
+        select checkpoint.projection_sha256 = snapshot.state_sha256
+        from projection_checkpoint checkpoint
+        join aggregate_snapshot snapshot
+          on snapshot.aggregate_type=checkpoint.aggregate_type
+         and snapshot.aggregate_id=checkpoint.aggregate_id
+         and snapshot.aggregate_version=checkpoint.aggregate_version
+        where checkpoint.projection_name='maintenance-live-v1'
+          and checkpoint.aggregate_type='ESTIMATE'
+          and checkpoint.aggregate_id=?
+        """, Boolean.class, estimateId.toString())).isTrue();
   }
 
   @Test
@@ -1256,7 +1407,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
     insertV20CatalogStreamArtifacts(otherCatalogId, otherNodeId, "ACTIVE");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(8);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(12);
     upgraded.validate();
 
     assertThat(jdbc.queryForObject(

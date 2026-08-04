@@ -465,6 +465,80 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
         .andExpect(status().isForbidden());
   }
 
+  @Test
+  void sourceCanCancelOnlyAStillWaitingTaskAndReconcileEveryOutcome() throws Exception {
+    UUID waitingExternalId = UUID.randomUUID();
+    board.registerExternalTask("logistics-service", registration(waitingExternalId));
+
+    CancelTaskRequest stale = new CancelTaskRequest(99L, "inventory replacement");
+    mvc.perform(
+            post(
+                    "/api/internal/task-board/v1/tasks/{externalTaskId}/cancel-if-pre-start",
+                    waitingExternalId)
+                .with(taskSyncJwt("logistics-service", List.of("task-board.logistics")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(stale)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.outcome").value("VERSION_CONFLICT"))
+        .andExpect(jsonPath("$.status").value("ACTIVE"))
+        .andExpect(jsonPath("$.cancelledAt").isEmpty());
+
+    CancelTaskRequest current = new CancelTaskRequest(0L, "inventory replacement");
+    mvc.perform(
+            post(
+                    "/api/internal/task-board/v1/tasks/{externalTaskId}/cancel-if-pre-start",
+                    waitingExternalId)
+                .with(taskSyncJwt("logistics-service", List.of("task-board.logistics")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(current)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.outcome").value("CANCELLED"))
+        .andExpect(jsonPath("$.status").value("CANCELLED"))
+        .andExpect(jsonPath("$.cancelledAt").isNotEmpty());
+    mvc.perform(
+            post(
+                    "/api/internal/task-board/v1/tasks/{externalTaskId}/cancel-if-pre-start",
+                    waitingExternalId)
+                .with(taskSyncJwt("logistics-service", List.of("task-board.logistics")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(current)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.outcome").value("ALREADY_CANCELLED"));
+
+    UUID startedExternalId = UUID.randomUUID();
+    board.registerExternalTask("logistics-service", registration(startedExternalId));
+    jdbc.update(
+        """
+        update queue_entry
+           set status='IN_PROGRESS', active_started_at=clock_timestamp()
+         where task_id=(select id from board_task where external_task_id=?)
+        """,
+        startedExternalId);
+    mvc.perform(
+            post(
+                    "/api/internal/task-board/v1/tasks/{externalTaskId}/cancel-if-pre-start",
+                    startedExternalId)
+                .with(taskSyncJwt("logistics-service", List.of("task-board.logistics")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(current)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.outcome").value("STARTED"))
+        .andExpect(jsonPath("$.status").value("ACTIVE"))
+        .andExpect(jsonPath("$.cancelledAt").isEmpty());
+    assertThat(
+            jdbc.queryForObject(
+                "select status from board_task where external_task_id=?",
+                String.class,
+                startedExternalId))
+        .isEqualTo("ACTIVE");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from outbox_event where event_type=?",
+                Integer.class,
+                TaskBoardEventTypes.BOARD_TASK_CANCELLED))
+        .isOne();
+  }
+
   private RegisterExternalTaskRequest registration(UUID externalTaskId) {
     return new RegisterExternalTaskRequest(
         WAREHOUSE,

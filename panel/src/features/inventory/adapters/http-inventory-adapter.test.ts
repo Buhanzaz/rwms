@@ -1,26 +1,35 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
+  cancelInventorySession,
   closeBlockedFindingPublication,
   completeInventorySession,
   createAndAttachInventoryAsset,
   getFurnitureReview,
   getActiveInventorySession,
+  getInventoryFinalPlan,
+  getInventoryPlanningSettings,
+  getInventoryPreliminaryStatistics,
   getInventorySession,
   getInventoryStatisticsSummary,
   listInventorySessionStatistics,
   listInventorySessions,
   previewInventoryCompletion,
+  prepareInventoryFinalPlan,
   publishInventoryFindings,
   resolveInventoryFindingConflict,
+  reviewInventoryRegistry,
   retryFindingPublication,
   saveInventoryInspection,
   saveFurnitureReview,
   startInventorySession,
   startFurnitureReview,
+  updateInventoryFinalPlan,
+  updateInventoryPlanningSettings,
 } from "@/features/inventory/adapters/http-inventory-adapter"
 import type {
   InventoryCompletionPreview,
+  InventoryFinding,
   InventorySessionView,
 } from "@/features/inventory/model/inventory-service"
 
@@ -52,6 +61,43 @@ const session = {
 afterEach(() => vi.unstubAllGlobals())
 
 describe("http inventory adapter", () => {
+  it("cancels an active session with revision, reason and idempotency", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ...session,
+          lifecycle: "CANCELLED",
+          terminalAt: "2026-07-17T11:00:00Z",
+          cancellation: {
+            reason: "Ошибочно выбран склад",
+            cancelledAt: "2026-07-17T11:00:00Z",
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await cancelInventorySession({
+      accessToken: "inventory-token",
+      inventoryId: session.id,
+      expectedSessionRevision: 3,
+      reason: "Ошибочно выбран склад",
+      idempotencyKey: "00000000-0000-4000-8000-000000000109",
+    })
+
+    const [url, request] = fetchMock.mock.calls[0]
+    expect(url).toContain(`/sessions/${session.id}/cancel`)
+    expect(request.method).toBe("POST")
+    expect(new Headers(request.headers).get("Idempotency-Key")).toBe(
+      "00000000-0000-4000-8000-000000000109"
+    )
+    expect(JSON.parse(request.body)).toEqual({
+      expectedSessionRevision: 3,
+      reason: "Ошибочно выбран склад",
+    })
+  })
+
   it("uses the same-origin gateway with Bearer auth for history and start", async () => {
     const fetchMock = vi
       .fn()
@@ -150,6 +196,44 @@ describe("http inventory adapter", () => {
     )
   })
 
+  it("loads preliminary totals and aggregate positions from the inventory service", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          expectedCount: 1,
+          inspectedCount: 1,
+          missingCount: 0,
+          readyCount: 1,
+          withWorkCount: 1,
+          addedCount: 0,
+          unexpectedExistingCount: 0,
+          conflictCount: 0,
+          workLineCount: 1,
+          materialLineCount: 1,
+          workTotalMinor: 10000,
+          materialTotalMinor: 5000,
+          grandTotalMinor: 15000,
+          roundingAdjustmentMinor: 0,
+          normativeMinutes: "60",
+          durationSeconds: 3600,
+          aggregateLines: [],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await getInventoryPreliminaryStatistics("inventory-token", session.id)
+
+    expect(fetchMock.mock.calls[0][0]).toContain(
+      `/sessions/${session.id}/statistics-preview`
+    )
+    expect(fetchMock.mock.calls[0][1]?.method).toBeUndefined()
+    expect(
+      new Headers(fetchMock.mock.calls[0][1]?.headers).get("Authorization")
+    ).toBe("Bearer inventory-token")
+  })
+
   it("loads the active session and treats a 204 response as empty", async () => {
     const fetchMock = vi
       .fn()
@@ -216,12 +300,14 @@ describe("http inventory adapter", () => {
         mode: "AUTO",
         priority: 3,
         coverMediaId: "00000000-0000-4000-8000-000000000131",
+        movementToRepair: false,
         logisticsPlanningMode: "AUTO",
         logisticsScheduledDate: null,
         lines: [
           {
             aggregationKind: "CATALOG",
             catalogNodeId: "00000000-0000-4000-8000-000000000132",
+            routingCatalogNodeId: null,
             description: null,
             type: null,
             unit: null,
@@ -255,6 +341,7 @@ describe("http inventory adapter", () => {
         mode: "AUTO",
         logisticsPlanningMode: "AUTO",
         logisticsScheduledDate: null,
+        lines: [{ routingCatalogNodeId: null }],
       },
     })
   })
@@ -289,6 +376,42 @@ describe("http inventory adapter", () => {
       expectedFindingRevision: 8,
       strategy: "KEEP_INSPECTION",
       reason: "Осмотр подтверждён кладовщиком",
+    })
+  })
+
+  it("requests a read-only registry review for the exact revision vector", async () => {
+    const findingId = "00000000-0000-4000-8000-000000000149"
+    const rawSession = {
+      ...session,
+      findings: [{ id: findingId, findingRevision: 8 } as InventoryFinding],
+    } satisfies InventorySessionView
+    const review = {
+      inventoryId: session.id,
+      sessionRevision: 3,
+      findingRevisions: [{ findingId, expectedFindingRevision: 8 }],
+      validatedAt: "2026-08-04T10:00:00Z",
+      validatedFindings: [],
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(review), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await reviewInventoryRegistry({
+      accessToken: "inventory-token",
+      session: rawSession,
+    })
+
+    const request = fetchMock.mock.calls[0]
+    expect(request[0]).toContain(`/sessions/${session.id}/registry-review`)
+    expect(request[1].method).toBe("POST")
+    expect(new Headers(request[1].headers).get("Idempotency-Key")).toBeNull()
+    expect(JSON.parse(request[1].body)).toEqual({
+      expectedSessionRevision: 3,
+      findingRevisions: [{ findingId, expectedFindingRevision: 8 }],
     })
   })
 
@@ -414,6 +537,144 @@ describe("http inventory adapter", () => {
     })
   })
 
+  it("round-trips planning settings and the exact server-owned final plan", async () => {
+    const settings = {
+      warehouseId: session.warehouseId,
+      settingsRevision: 4,
+      movementDailyCapacity: 6,
+      repairDailyCapacity: 8,
+      workingWeekdays: ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY"],
+      holidays: ["2026-08-10"],
+    }
+    const finalPlan = {
+      inventoryId: session.id,
+      sessionRevision: 7,
+      finalPlanVersion: 2,
+      finalPlanSha256: "c".repeat(64),
+      planningSettingsRevision: 4,
+      state: "DRAFT",
+      movementScheduleMode: "AUTO",
+      repairScheduleMode: "MANUAL",
+      entries: [],
+    }
+    const fetchMock = vi
+      .fn()
+      .mockImplementation((_url, init) =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify(
+              String(init?.method ?? "GET") === "GET" &&
+                fetchMock.mock.calls.length === 1
+                ? settings
+                : fetchMock.mock.calls.length === 2
+                  ? { ...settings, settingsRevision: 5 }
+                  : finalPlan
+            ),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          )
+        )
+      )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await getInventoryPlanningSettings("token", session.warehouseId)
+    await updateInventoryPlanningSettings({
+      accessToken: "token",
+      warehouseId: session.warehouseId,
+      request: {
+        expectedSettingsRevision: 4,
+        movementDailyCapacity: 7,
+        repairDailyCapacity: 9,
+        workingWeekdays: ["MONDAY", "TUESDAY", "WEDNESDAY"],
+        holidays: ["2026-08-10", "2026-08-11"],
+      },
+    })
+    await prepareInventoryFinalPlan({
+      accessToken: "token",
+      inventoryId: session.id,
+      request: {
+        expectedSessionRevision: 7,
+        expectedSettingsRevision: 5,
+        movementScheduleMode: "AUTO",
+        repairScheduleMode: "AUTO",
+      },
+      idempotencyKey: "00000000-0000-4000-8000-000000000190",
+    })
+    await getInventoryFinalPlan("token", session.id)
+    await updateInventoryFinalPlan({
+      accessToken: "token",
+      inventoryId: session.id,
+      request: {
+        expectedSessionRevision: 7,
+        expectedFinalPlanVersion: 2,
+        movementScheduleMode: "AUTO",
+        repairScheduleMode: "MANUAL",
+        entries: [
+          {
+            findingId: "00000000-0000-4000-8000-000000000191",
+            expectedFindingRevision: 3,
+            order: 0,
+            priority: 2,
+            movementToRepair: true,
+            movementScheduledDate: null,
+            repairScheduledDate: "2026-08-14",
+            reconciliationDecision: {
+              strategy: "REPLACE",
+              selectedTargetKind: "REPAIR",
+              selectedTargetId: "00000000-0000-4000-8000-000000000192",
+            },
+          },
+        ],
+      },
+      idempotencyKey: "00000000-0000-4000-8000-000000000193",
+    })
+
+    expect(fetchMock.mock.calls[0][0]).toContain(
+      `/planning-settings/${session.warehouseId}`
+    )
+    expect(fetchMock.mock.calls[1][1].method).toBe("PUT")
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toMatchObject({
+      expectedSettingsRevision: 4,
+      movementDailyCapacity: 7,
+      repairDailyCapacity: 9,
+    })
+    expect(fetchMock.mock.calls[2][0]).toContain(
+      `/sessions/${session.id}/final-plan/prepare`
+    )
+    expect(
+      new Headers(fetchMock.mock.calls[2][1].headers).get("Idempotency-Key")
+    ).toBe("00000000-0000-4000-8000-000000000190")
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({
+      expectedSessionRevision: 7,
+      expectedSettingsRevision: 5,
+      movementScheduleMode: "AUTO",
+      repairScheduleMode: "AUTO",
+    })
+    expect(fetchMock.mock.calls[3][0]).toContain(
+      `/sessions/${session.id}/final-plan`
+    )
+    expect(fetchMock.mock.calls[3][1]?.method).toBeUndefined()
+    expect(fetchMock.mock.calls[4][1].method).toBe("PUT")
+    expect(
+      new Headers(fetchMock.mock.calls[4][1].headers).get("Idempotency-Key")
+    ).toBe("00000000-0000-4000-8000-000000000193")
+    expect(JSON.parse(fetchMock.mock.calls[4][1].body)).toMatchObject({
+      expectedSessionRevision: 7,
+      expectedFinalPlanVersion: 2,
+      entries: [
+        expect.objectContaining({
+          priority: 2,
+          movementToRepair: true,
+          repairScheduledDate: "2026-08-14",
+          reconciliationDecision: {
+            strategy: "REPLACE",
+            selectedTargetKind: "REPAIR",
+            selectedTargetId: "00000000-0000-4000-8000-000000000192",
+          },
+        }),
+      ],
+    })
+  })
+
   it("round-trips server preview revisions and hashes into completion", async () => {
     const view = {
       ...session,
@@ -427,6 +688,8 @@ describe("http inventory adapter", () => {
     const preview = {
       inventoryId: session.id,
       sessionRevision: 3,
+      finalPlanVersion: 9,
+      finalPlanSha256: "c".repeat(64),
       findingRevisions: [
         {
           findingId: "00000000-0000-0000-0000-000000000030",
@@ -485,11 +748,15 @@ describe("http inventory adapter", () => {
     await previewInventoryCompletion({
       accessToken: "token",
       session: view,
+      finalPlanVersion: preview.finalPlanVersion,
+      finalPlanSha256: preview.finalPlanSha256,
       idempotencyKey: previewIdempotencyKey,
     })
     await previewInventoryCompletion({
       accessToken: "token",
       session: view,
+      finalPlanVersion: preview.finalPlanVersion,
+      finalPlanSha256: preview.finalPlanSha256,
       idempotencyKey: previewIdempotencyKey,
     })
     await completeInventorySession({
@@ -501,6 +768,8 @@ describe("http inventory adapter", () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
       expectedSessionRevision: 3,
       findingRevisions: preview.findingRevisions,
+      finalPlanVersion: preview.finalPlanVersion,
+      finalPlanSha256: preview.finalPlanSha256,
     })
     expect(
       new Headers(fetchMock.mock.calls[0][1].headers).get("Idempotency-Key")
@@ -513,6 +782,8 @@ describe("http inventory adapter", () => {
       findingRevisions: preview.findingRevisions,
       acknowledgementSha256: preview.acknowledgementSha256,
       validationSha256: preview.validationSha256,
+      finalPlanVersion: preview.finalPlanVersion,
+      finalPlanSha256: preview.finalPlanSha256,
     })
     expect(
       new Headers(fetchMock.mock.calls[2][1].headers).get("Idempotency-Key")

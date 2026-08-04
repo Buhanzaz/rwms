@@ -18,6 +18,7 @@ import dev.buhanzaz.rwms.maintenance.config.MaintenanceSecurityProblemWriter;
 import dev.buhanzaz.rwms.maintenance.config.SecurityConfiguration;
 import dev.buhanzaz.rwms.maintenance.security.MaintenanceAuthorizer;
 import dev.buhanzaz.rwms.maintenance.service.InventoryMaintenanceService;
+import dev.buhanzaz.rwms.maintenance.service.InventoryPublicationReconciliationService;
 import dev.buhanzaz.rwms.maintenance.service.LogisticsReturnShortageService;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
 import dev.buhanzaz.rwms.maintenance.service.RepairCapacitySettingsService;
@@ -67,6 +68,7 @@ class MaintenanceBearerSecurityMockMvcTest {
 
   @MockitoBean MaintenanceApplicationService service;
   @MockitoBean InventoryMaintenanceService inventoryService;
+  @MockitoBean InventoryPublicationReconciliationService publicationService;
   @MockitoBean LogisticsReturnShortageService logisticsService;
   @MockitoBean RepairCapacitySettingsService repairCapacitySettingsService;
   @MockitoBean RepairPlaceService repairPlaceService;
@@ -127,7 +129,6 @@ class MaintenanceBearerSecurityMockMvcTest {
           "mediaReferences":[],
           "priority":3,
           "movementToRepair":false,
-          "movementToShipment":false,
           "logisticsPlanningMode":null,
           "logisticsScheduledDate":null,
           "coverMediaId":null

@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.maintenance.service;
 
 import dev.buhanzaz.rwms.maintenance.api.LogisticsRepairPlaceAllocationResponse;
+import dev.buhanzaz.rwms.maintenance.api.LogisticsRepairPlaceProjectionAllocationResponse;
 import dev.buhanzaz.rwms.maintenance.api.LogisticsRepairPlaceProjectionResponse;
 import dev.buhanzaz.rwms.maintenance.api.RepairPlaceAllocationResponse;
 import dev.buhanzaz.rwms.maintenance.api.RepairPlaceProjectionResponse;
@@ -10,9 +11,12 @@ import dev.buhanzaz.rwms.maintenance.domain.RepairExecutionState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairPlaceAllocation;
 import dev.buhanzaz.rwms.maintenance.domain.RepairPlaceAllocationState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairReclassificationState;
+import dev.buhanzaz.rwms.maintenance.domain.RepairStage;
+import dev.buhanzaz.rwms.maintenance.domain.RepairStageState;
 import dev.buhanzaz.rwms.maintenance.mapper.RepairPlaceAllocationResponseMapper;
 import dev.buhanzaz.rwms.maintenance.repository.MaintenanceRepairRepository;
 import dev.buhanzaz.rwms.maintenance.repository.RepairPlaceAllocationRepository;
+import dev.buhanzaz.rwms.maintenance.repository.RepairStageRepository;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
@@ -37,6 +41,7 @@ public class RepairPlaceService {
 
   private final RepairPlaceAllocationRepository allocations;
   private final MaintenanceRepairRepository repairs;
+  private final RepairStageRepository repairStages;
   private final RepairCapacitySettingsService capacity;
   private final MaintenanceIdempotencyStore idempotency;
   private final RepairPlaceAllocationResponseMapper responseMapper;
@@ -46,6 +51,7 @@ public class RepairPlaceService {
   public RepairPlaceService(
       RepairPlaceAllocationRepository allocations,
       MaintenanceRepairRepository repairs,
+      RepairStageRepository repairStages,
       RepairCapacitySettingsService capacity,
       MaintenanceIdempotencyStore idempotency,
       RepairPlaceAllocationResponseMapper responseMapper,
@@ -53,6 +59,7 @@ public class RepairPlaceService {
       ObjectMapper mapper) {
     this.allocations = allocations;
     this.repairs = repairs;
+    this.repairStages = repairStages;
     this.capacity = capacity;
     this.idempotency = idempotency;
     this.responseMapper = responseMapper;
@@ -102,7 +109,9 @@ public class RepairPlaceService {
             .collect(
                 java.util.stream.Collectors.toMap(
                     MaintenanceRepair::getId, value -> value));
-    List<LogisticsRepairPlaceAllocationResponse> values =
+    Map<UUID, RepairStage> activeStageByRepair =
+        activeStagesByRepair(repairById.keySet());
+    List<LogisticsRepairPlaceProjectionAllocationResponse> values =
         allocationEntities.stream()
             .map(
                 allocation -> {
@@ -111,8 +120,13 @@ public class RepairPlaceService {
                     throw new IllegalStateException(
                         "Repair-place allocation refers to a missing repair");
                   }
-                  return responseMapper.toLogisticsResponse(
-                      allocation, repair.getRentalItemId());
+                  RepairStage stage = activeStageByRepair.get(repair.getId());
+                  return responseMapper.toLogisticsProjectionResponse(
+                      allocation,
+                      repair.getRentalItemId(),
+                      stage == null ? null : stage.getRoutingQueueName(),
+                      stage == null ? null : stage.getState(),
+                      repair.getPriority());
                 })
             .toList();
     long reserved = countLogistics(values, RepairPlaceAllocationState.RESERVED);
@@ -133,6 +147,26 @@ public class RepairPlaceService {
         values);
   }
 
+  /**
+   * A repair stage is maintenance-owned. Logistics receives only the earliest unfinished stage
+   * as a read-only progress hint for its repair-place projection; it cannot command that stage.
+   */
+  private Map<UUID, RepairStage> activeStagesByRepair(
+      java.util.Collection<UUID> repairIds) {
+    if (repairIds.isEmpty()) return Map.of();
+    return repairStages.findAllByRepairIdInOrderByRepairIdAscStageNoAscIdAsc(repairIds).stream()
+        .filter(
+            stage ->
+                stage.getState() != RepairStageState.DONE
+                    && stage.getState() != RepairStageState.CANCELLED)
+        .collect(
+            java.util.stream.Collectors.toMap(
+                RepairStage::getRepairId,
+                value -> value,
+                (first, ignored) -> first,
+                java.util.LinkedHashMap::new));
+  }
+
   @Transactional(readOnly = true)
   public boolean isOccupied(UUID warehouseId, UUID repairId) {
     if (warehouseId == null || repairId == null) {
@@ -140,6 +174,99 @@ public class RepairPlaceService {
     }
     return allocations.existsByWarehouseIdAndRepairIdAndState(
         warehouseId, repairId, RepairPlaceAllocationState.OCCUPIED);
+  }
+
+  /**
+   * Fails closed if an unstarted inventory replacement would leave a live repair-place
+   * allocation behind its cancelled predecessor.
+   */
+  @Transactional
+  public void requireNoActiveAllocationForInventoryReplacement(
+      UUID warehouseId,
+      UUID predecessorRepairId,
+      UUID compensationAllocationId,
+      Long compensationAllocationVersion) {
+    if (warehouseId == null
+        || predecessorRepairId == null
+        || compensationAllocationId != null
+        || compensationAllocationVersion != null) {
+      throw new IllegalArgumentException("Inventory replacement repair-place identity is required");
+    }
+    lockWarehouse(warehouseId);
+    RepairPlaceAllocation allocation =
+        allocations.findByRepairIdForUpdate(predecessorRepairId).orElse(null);
+    if (allocation == null || allocation.getState() == RepairPlaceAllocationState.RELEASED) return;
+    throw new MaintenanceConflictException(
+        "MAINTENANCE_STATE_CONFLICT",
+        "Pre-start inventory replacement cannot release a lease with active repair-place allocation %s"
+            .formatted(allocation.getId()));
+  }
+
+  /**
+   * Transfers an already delivered cabin to the replacement repair without releasing the physical
+   * place. The warehouse advisory lock makes the old/new allocation identity atomic.
+   */
+  @Transactional
+  public void reassignOccupiedForInventoryReplacement(
+      UUID warehouseId,
+      UUID predecessorRepairId,
+      UUID successorRepairId,
+      UUID expectedAllocationId,
+      long expectedAllocationVersion) {
+    if (warehouseId == null
+        || predecessorRepairId == null
+        || successorRepairId == null
+        || predecessorRepairId.equals(successorRepairId)
+        || expectedAllocationId == null
+        || expectedAllocationVersion < 0) {
+      throw new IllegalArgumentException("Inventory replacement repair-place identity is invalid");
+    }
+    lockWarehouse(warehouseId);
+    MaintenanceRepair predecessor = requireOpenRepair(warehouseId, predecessorRepairId);
+    MaintenanceRepair successor = requireOpenRepair(warehouseId, successorRepairId);
+    if (!predecessor.getRentalItemId().equals(successor.getRentalItemId())) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Inventory replacement repair-place allocation must keep the same rental item");
+    }
+    if (successor.getExecutionState() != RepairExecutionState.DRAFT) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Inventory replacement successor must still be a draft");
+    }
+    RepairPlaceAllocation successorAllocation =
+        allocations.findByRepairIdForUpdate(successorRepairId).orElse(null);
+    if (successorAllocation != null) {
+      if (expectedAllocationId.equals(successorAllocation.getId())
+          && successorAllocation.getState() == RepairPlaceAllocationState.OCCUPIED
+          && successorAllocation.getVersion() == Math.addExact(expectedAllocationVersion, 1)) {
+        return;
+      }
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Inventory replacement successor already has an active repair-place allocation");
+    }
+    RepairPlaceAllocation allocation =
+        allocations
+            .findByRepairIdForUpdate(predecessorRepairId)
+            .orElseThrow(
+                () ->
+                    new MaintenanceConflictException(
+                        "MAINTENANCE_STATE_CONFLICT",
+                        "Delivered inventory replacement requires an occupied repair-place allocation"));
+    if (!expectedAllocationId.equals(allocation.getId())
+        || allocation.getVersion() != expectedAllocationVersion) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_VERSION_CONFLICT",
+          "Delivered inventory replacement allocation no longer matches logistics compensation truth");
+    }
+    try {
+      allocation.reassignForInventoryReplacement(successorRepairId);
+    } catch (IllegalStateException exception) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT", exception.getMessage());
+    }
+    allocations.saveAndFlush(allocation);
   }
 
   @Transactional
@@ -248,18 +375,33 @@ public class RepairPlaceService {
                 RepairPlaceAllocationState.RELEASED));
   }
 
+  /**
+   * Finishes an ordinary repair-place allocation.
+   *
+   * <p>A repair that was delivered through the selected repair movement becomes visible to
+   * logistics as ready for the automatic movement from repair. A repair that did not require
+   * delivery releases the place immediately.
+   */
   @Transactional
-  public void markReadyToReleaseIfOccupied(UUID warehouseId, UUID repairId) {
+  public void completeAfterRepair(
+      UUID warehouseId, UUID repairId, boolean removalRequired) {
     lockWarehouse(warehouseId);
     RepairPlaceAllocation value = allocations.findByRepairIdForUpdate(repairId).orElse(null);
-    if (value == null || value.getState() == RepairPlaceAllocationState.READY_TO_RELEASE) {
+    if (value == null || value.getState() == RepairPlaceAllocationState.RELEASED) {
+      return;
+    }
+    if (removalRequired) {
+      if (value.getState() == RepairPlaceAllocationState.OCCUPIED) {
+        value.readyToRelease();
+        allocations.save(value);
+      }
       return;
     }
     if (value.getState() == RepairPlaceAllocationState.OCCUPIED) {
       value.readyToRelease();
-      // Do not flush the whole persistence context here. This method joins the
-      // repair completion transaction, whose aggregate event must observe one
-      // coherent repair version after every completion mutation is applied.
+    }
+    if (value.getState() == RepairPlaceAllocationState.READY_TO_RELEASE) {
+      value.release();
       allocations.save(value);
     }
   }
@@ -358,7 +500,7 @@ public class RepairPlaceService {
   }
 
   private static long countLogistics(
-      List<LogisticsRepairPlaceAllocationResponse> values,
+      List<LogisticsRepairPlaceProjectionAllocationResponse> values,
       RepairPlaceAllocationState state) {
     return values.stream().filter(value -> value.state() == state).count();
   }

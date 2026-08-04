@@ -45,6 +45,13 @@ import tools.jackson.databind.ObjectMapper;
 public class PresentationHoldService {
   private static final int MAX_SEARCH_POOL = 2_000;
   private static final int MAX_CHAT_HOLD_MINUTES = 1_440;
+  private static final Set<String> ACTOR_ROLES =
+      Set.of(
+          "SYSTEM_ADMIN",
+          "WMS_ADMIN",
+          "WAREHOUSE_MANAGER",
+          "RENTAL_MANAGER",
+          "VIEWER");
   private static final Set<RentalItemStatus> RENTABLE_STATUSES =
       Set.of(RentalItemStatus.FREE);
 
@@ -285,11 +292,26 @@ public class PresentationHoldService {
 
   @Transactional
   public ReplacePresentationHoldsResponse holds(UUID presentationId) {
+    return holds(presentationId, null, null);
+  }
+
+  @Transactional
+  public ReplacePresentationHoldsResponse holds(
+      UUID presentationId, UUID actorSubjectId, String actorRole) {
+    if ((actorSubjectId == null) != (actorRole == null)
+        || (actorRole != null && !ACTOR_ROLES.contains(actorRole))) {
+      throw new IllegalArgumentException("Actor identity is invalid");
+    }
     OffsetDateTime timestamp = now();
     holds.expireDue(timestamp);
     List<PresentationUnitHold> active =
         holds.findAllByPresentationIdAndStateOrderByCreatedAtAscIdAsc(
             presentationId, PresentationUnitHoldState.ACTIVE);
+    if (actorSubjectId != null
+        && active.stream()
+            .anyMatch(hold -> !actorSubjectId.equals(hold.getCreatedBySubjectId()))) {
+      throw new AssetNotFoundException("Presentation holds were not found");
+    }
     OffsetDateTime expiry =
         active.stream()
             .map(PresentationUnitHold::getExpiresAt)
@@ -317,12 +339,37 @@ public class PresentationHoldService {
       throw new IllegalArgumentException("expiresAt must be within the next 24 hours");
     }
     List<UUID> requestedIds = uniqueIds(request.rentalItemIds(), 100);
-    holds.acquireTransactionLock("presentation-holds:" + presentationId);
+    UUID sourceHoldScopeId = request.sourceHoldScopeId();
+    if (presentationId.equals(sourceHoldScopeId)) {
+      throw new IllegalArgumentException("sourceHoldScopeId must differ from presentationId");
+    }
+    List<UUID> holdScopes = new ArrayList<>();
+    holdScopes.add(presentationId);
+    if (sourceHoldScopeId != null) holdScopes.add(sourceHoldScopeId);
+    holdScopes.stream()
+        .sorted()
+        .forEach(scope -> holds.acquireTransactionLock("presentation-holds:" + scope));
     holds.expireDue(timestamp);
     List<PresentationUnitHold> current =
         holds.findAllActiveForUpdate(presentationId, PresentationUnitHoldState.ACTIVE);
+    List<PresentationUnitHold> source =
+        sourceHoldScopeId == null
+            ? List.of()
+            : holds.findAllActiveForUpdate(
+                sourceHoldScopeId, PresentationUnitHoldState.ACTIVE);
+    if (current.stream()
+            .anyMatch(
+                hold ->
+                    !request.actorSubjectId().equals(hold.getCreatedBySubjectId()))
+        || source.stream()
+            .anyMatch(
+                hold ->
+                    !request.actorSubjectId().equals(hold.getCreatedBySubjectId()))) {
+      throw new AssetNotFoundException("Presentation holds were not found");
+    }
     Set<UUID> lockIds = new LinkedHashSet<>(requestedIds);
     current.stream().map(PresentationUnitHold::getRentalItemId).forEach(lockIds::add);
+    source.stream().map(PresentationUnitHold::getRentalItemId).forEach(lockIds::add);
     List<RentalItem> lockedItems =
         lockIds.isEmpty()
             ? List.of()
@@ -336,10 +383,18 @@ public class PresentationHoldService {
     Map<UUID, PresentationUnitHold> currentByItem =
         current.stream()
             .collect(Collectors.toMap(PresentationUnitHold::getRentalItemId, Function.identity()));
+    Map<UUID, PresentationUnitHold> sourceByItem =
+        source.stream()
+            .collect(Collectors.toMap(PresentationUnitHold::getRentalItemId, Function.identity()));
     Set<UUID> requested = Set.copyOf(requestedIds);
     Set<UUID> changedAvailability = new LinkedHashSet<>();
 
     for (PresentationUnitHold hold : current) {
+      if (!requested.contains(hold.getRentalItemId()) && hold.release(timestamp)) {
+        changedAvailability.add(hold.getRentalItemId());
+      }
+    }
+    for (PresentationUnitHold hold : source) {
       if (!requested.contains(hold.getRentalItemId()) && hold.release(timestamp)) {
         changedAvailability.add(hold.getRentalItemId());
       }
@@ -361,7 +416,17 @@ public class PresentationHoldService {
           holds
               .findActiveByRentalItemForUpdate(rentalItemId, PresentationUnitHoldState.ACTIVE)
               .orElse(null);
-      if (existing != null && !existing.getPresentationId().equals(presentationId)) {
+      PresentationUnitHold own = currentByItem.get(rentalItemId);
+      PresentationUnitHold sourceHold = sourceByItem.get(rentalItemId);
+      if (sourceHoldScopeId != null && own == null && sourceHold == null) {
+        throw conflict(
+            "MANUAL_BOOKING_HOLD_MISSING",
+            "Временный резерв выбранной бытовки уже истёк");
+      }
+      if (existing != null
+          && existing != own
+          && existing != sourceHold
+          && !existing.getPresentationId().equals(presentationId)) {
         if (existing.expire(timestamp)) {
           holds.save(existing);
           changedAvailability.add(rentalItemId);
@@ -370,8 +435,14 @@ public class PresentationHoldService {
               "UNIT_PRESENTATION_HELD", "Бытовка уже показана другому клиенту");
         }
       }
-      PresentationUnitHold own = currentByItem.get(rentalItemId);
-      if (own == null) {
+      if (own != null) {
+        if (own.renew(request.expiresAt(), timestamp)) {
+          changedAvailability.add(rentalItemId);
+        }
+      } else if (sourceHold != null) {
+        sourceHold.transferTo(presentationId, request.expiresAt(), timestamp);
+        current.add(sourceHold);
+      } else {
         current.add(
             PresentationUnitHold.create(
                 presentationId,
@@ -382,14 +453,12 @@ public class PresentationHoldService {
                 request.actorRole(),
                 timestamp));
         changedAvailability.add(rentalItemId);
-      } else {
-        if (own.renew(request.expiresAt(), timestamp)) {
-          changedAvailability.add(rentalItemId);
-        }
       }
     }
     try {
-      holds.saveAllAndFlush(current);
+      LinkedHashSet<PresentationUnitHold> changed = new LinkedHashSet<>(current);
+      changed.addAll(source);
+      holds.saveAllAndFlush(changed);
     } catch (DataIntegrityViolationException exception) {
       throw conflict("UNIT_PRESENTATION_HELD", "Бытовка уже показана другому клиенту");
     }

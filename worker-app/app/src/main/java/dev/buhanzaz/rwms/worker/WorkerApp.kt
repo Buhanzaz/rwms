@@ -59,6 +59,9 @@ fun WorkerApp(
 }
 
 @Serializable
+private data object MenuRoute : NavKey
+
+@Serializable
 private data object BoardRoute : NavKey
 
 @Serializable
@@ -84,11 +87,14 @@ internal fun newCameraRoute(entryId: String, routeIndex: Int): CameraRoute =
 private data object ProfileRoute : NavKey
 
 @Serializable
+private data object DownloadsRoute : NavKey
+
+@Serializable
 private data class PhotoRoute(val title: String, val readPaths: List<String>) : NavKey
 
 @Composable
 private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -> Unit) {
-    val backStack = rememberNavBackStack(BoardRoute)
+    val backStack = rememberNavBackStack(MenuRoute)
     val listDetailStrategy = rememberWorkerListDetailSceneStrategy<NavKey>()
     NavDisplay(
         backStack = backStack,
@@ -103,6 +109,15 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
             rememberViewModelStoreNavEntryDecorator(),
         ),
         entryProvider = entryProvider {
+            entry<MenuRoute> {
+                WorkerMainMenuScreen(
+                    userId = userId,
+                    displayName = displayName,
+                    onWorks = dropUnlessResumed { backStack.add(BoardRoute) },
+                    onDownloads = dropUnlessResumed { backStack.add(DownloadsRoute) },
+                    onProfile = dropUnlessResumed { backStack.add(ProfileRoute) },
+                )
+            }
             entry<BoardRoute>(metadata = WorkerListDetailScene.listPane()) {
                 val openTask: (String) -> Unit = dropUnlessResumedWithArgument { entryId ->
                     backStack.removeAll { it is TaskRoute }
@@ -111,7 +126,7 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
                 TasksScreen(
                     userId = userId,
                     onTask = openTask,
-                    onProfile = dropUnlessResumed { backStack.add(ProfileRoute) },
+                    onBack = { backStack.removeLastOrNull() },
                 )
             }
             entry<TaskRoute>(metadata = WorkerListDetailScene.detailPane()) { route ->
@@ -141,6 +156,9 @@ private fun WorkerNavigation(userId: String, displayName: String, onLogout: () -
             }
             entry<ProfileRoute> {
                 ProfileScreen(userId, displayName, onBack = { backStack.removeLastOrNull() }, onLogout = onLogout)
+            }
+            entry<DownloadsRoute> {
+                WorkerDownloadsScreen(userId, onBack = { backStack.removeLastOrNull() })
             }
             entry<PhotoRoute> { route ->
                 PhotoPagerScreen(route.title, route.readPaths, onBack = { backStack.removeLastOrNull() })

@@ -63,9 +63,12 @@ public class PresentationHoldController {
 
   @GetMapping("/presentations/{presentationId}/holds")
   public ReplacePresentationHoldsResponse holds(
-      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID presentationId) {
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID presentationId,
+      @RequestParam(required = false) UUID actorSubjectId,
+      @RequestParam(required = false) String actorRole) {
     access.requireLogisticsAssetAccess(jwt);
-    return service.holds(presentationId);
+    return service.holds(presentationId, actorSubjectId, actorRole);
   }
 
   @PutMapping("/presentations/{presentationId}/holds")

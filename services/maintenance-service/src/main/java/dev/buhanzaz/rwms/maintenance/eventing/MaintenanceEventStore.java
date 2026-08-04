@@ -12,7 +12,9 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -114,6 +116,35 @@ public class MaintenanceEventStore {
     return version;
   }
 
+  /**
+   * Reads a persisted terminal fact while the caller already owns the aggregate's local lock.
+   * This is deliberately event-store truth rather than a reconstructed projection timestamp.
+   */
+  @Transactional(propagation = Propagation.MANDATORY)
+  public Optional<EventFact> latestFact(
+      MaintenanceAggregateType type, UUID id, MaintenanceEventType eventType) {
+    if (type == null || id == null || eventType == null) {
+      throw new IllegalArgumentException("Maintenance event fact identity is required");
+    }
+    List<EventFact> facts =
+        jdbc.query(
+            """
+            select event_id, occurred_at
+              from domain_event
+             where aggregate_type=? and aggregate_id=? and event_type=?
+             order by aggregate_version desc
+             limit 1
+            """,
+            (result, row) ->
+                new EventFact(
+                    result.getObject("event_id", UUID.class),
+                    result.getObject("occurred_at", OffsetDateTime.class)),
+            type.name(),
+            id.toString(),
+            eventType.value());
+    return facts.stream().findFirst();
+  }
+
   private void persist(
       UUID eventId,
       MaintenanceAggregateType type,
@@ -210,6 +241,14 @@ public class MaintenanceEventStore {
   public record StreamRef(MaintenanceAggregateType type, UUID id) {
     public StreamRef {
       if (type == null || id == null) throw new IllegalArgumentException("Stream reference is required");
+    }
+  }
+
+  public record EventFact(UUID eventId, OffsetDateTime occurredAt) {
+    public EventFact {
+      if (eventId == null || occurredAt == null) {
+        throw new IllegalArgumentException("Maintenance event fact is incomplete");
+      }
     }
   }
 }

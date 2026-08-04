@@ -4,8 +4,10 @@ import { toInventoryRepairPlanSnapshot } from "@/features/inventory/domain/inven
 import { buildInventoryPlanSelection } from "@/features/inventory/domain/inventory-plan-mapper"
 import {
   applyInventoryCompletionPreview,
+  applyInventoryRegistryReview,
   toInventoryFurnitureReviewView,
   toInventoryFindingView,
+  toInventoryStatisticsView,
   toInventorySessionView,
 } from "@/features/inventory/domain/inventory-view-mapper"
 import type {
@@ -16,7 +18,14 @@ import type {
   InventorySessionDto,
   InventoryWarehouseSnapshot,
 } from "@/features/inventory/model/inventory"
-import type { InventorySessionView } from "@/features/inventory/model/inventory-service"
+import type {
+  InventoryCompletionPreview,
+  InventoryFinalPlan,
+  InventoryPlanningSettings,
+  InventorySessionView,
+  UpdateInventoryFinalPlanRequest,
+  UpdateInventoryPlanningSettingsRequest,
+} from "@/features/inventory/model/inventory-service"
 import type {
   LogisticsPlanningMode,
   RepairEstimateCompletionMode,
@@ -24,8 +33,8 @@ import type {
   RepairPriority,
   RepairEstimateTaskPlanDto,
 } from "@/features/repair-estimates/model/repair-estimate"
-import { getOperationalRepairEstimateCatalog } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
 import { getWarehouseQueueCapabilities } from "@/features/repair-estimates/api/warehouse-queue-capabilities"
+import { ApiError } from "@/lib/api-client"
 
 export const INVENTORY_QUERY_KEY = ["inventory-service"] as const
 
@@ -45,13 +54,43 @@ export function inventoryFurnitureReviewQueryKey(inventoryId: string | null) {
   return [...INVENTORY_QUERY_KEY, "furniture-review", inventoryId] as const
 }
 
+export function inventoryPlanningSettingsQueryKey(warehouseId: string | null) {
+  return [...INVENTORY_QUERY_KEY, "planning-settings", warehouseId] as const
+}
+
+export function inventoryFinalPlanQueryKey(
+  inventoryId: string | null,
+  sessionRevision: number | null = null
+) {
+  return [
+    ...INVENTORY_QUERY_KEY,
+    "final-plan",
+    inventoryId,
+    sessionRevision,
+  ] as const
+}
+
 export function inventoryFinishPreviewQueryKey(
+  inventoryId: string | null,
+  version: number | null,
+  finalPlanVersion: number | null = null
+) {
+  return [
+    ...INVENTORY_QUERY_KEY,
+    "finish-preview",
+    inventoryId,
+    version,
+    finalPlanVersion,
+  ] as const
+}
+
+export function inventoryPreliminaryStatisticsQueryKey(
   inventoryId: string | null,
   version: number | null
 ) {
   return [
     ...INVENTORY_QUERY_KEY,
-    "finish-preview",
+    "statistics-preview",
     inventoryId,
     version,
   ] as const
@@ -115,6 +154,40 @@ export async function getInventory(inventoryId: string) {
     inventoryId
   )
   return sessionView(session)
+}
+
+export async function reviewInventoryRegistry(inventoryId: string) {
+  const token = await accessToken()
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const rawSession = await inventoryHttp.getInventorySession(token, inventoryId)
+    try {
+      const review = await inventoryHttp.reviewInventoryRegistry({
+        accessToken: token,
+        session: rawSession,
+      })
+      if (
+        review.inventoryId !== rawSession.id ||
+        review.sessionRevision !== rawSession.sessionRevision
+      ) {
+        throw new Error("Сверка реестра относится к другой версии инвентаризации")
+      }
+      return applyInventoryRegistryReview(sessionView(rawSession), review)
+    } catch (error) {
+      if (!(error instanceof ApiError && error.status === 409 && attempt === 0)) {
+        throw error
+      }
+    }
+  }
+  throw new Error("Не удалось получить актуальную сверку реестра")
+}
+
+export async function getInventoryPreliminaryStatistics(inventoryId: string) {
+  return toInventoryStatisticsView(
+    await inventoryHttp.getInventoryPreliminaryStatistics(
+      await accessToken(),
+      inventoryId
+    )
+  )
 }
 
 export async function getActiveInventory(input: {
@@ -296,6 +369,7 @@ export async function addInventoryRentalItem(input: {
 export async function saveInventoryFinding(input: {
   inventoryId: string
   expectedVersion: number
+  expectedFindingVersion: number
   actor: InventoryActorSnapshot
   findingId: string
   comment: string
@@ -304,7 +378,7 @@ export async function saveInventoryFinding(input: {
   lines: RepairEstimateLineDto[]
   repairPlans: ReturnType<typeof toInventoryRepairPlanSnapshot>[]
   repairCompletionMode?: RepairEstimateCompletionMode | null
-  movementRequired?: boolean
+  movementToRepair?: boolean
   logisticsPlanningMode?: LogisticsPlanningMode
   logisticsScheduledDate?: string | null
   priority?: RepairPriority
@@ -321,40 +395,15 @@ export async function saveInventoryFinding(input: {
   const inspection = input.lines.length > 0 ? "WORK_STAGED" : "READY"
   let planSelection = null
   if (inspection === "WORK_STAGED") {
-    const movementRequired = input.movementRequired === true
-    let movementCatalogNodeId: string | null = null
-    if (movementRequired) {
+    const movementToRepair = input.movementToRepair === true
+    if (movementToRepair) {
       const capabilities = await getWarehouseQueueCapabilities(
         token,
         rawSession.warehouseId
       )
-      if (!capabilities.movementToShipmentAvailable) {
-        throw new Error(
-          "На складе не подключена очередь для перемещения на отгрузку."
-        )
+      if (capabilities.movementQueueDefinitions.length === 0) {
+        throw new Error("На складе не подключена очередь для перемещений.")
       }
-      const connectedMovementDefinitions = new Set(
-        capabilities.movementQueueDefinitions.map(
-          (binding) => binding.queueDefinitionId
-        )
-      )
-      const catalog = await getOperationalRepairEstimateCatalog()
-      const movementNodes = catalog.nodes.filter(
-        (node) =>
-          node.active &&
-          node.nodeType === "LOCATION" &&
-          node.routeQueueKind === "MOVEMENT" &&
-          node.queueDefinitionId !== null &&
-          connectedMovementDefinitions.has(node.queueDefinitionId)
-      )
-      if (movementNodes.length !== 1) {
-        throw new Error(
-          movementNodes.length === 0
-            ? "В каталоге нет расположения для подключённой очереди перемещения этого склада."
-            : "Для подключённой очереди перемещения должно быть настроено одно активное расположение."
-        )
-      }
-      movementCatalogNodeId = movementNodes[0].id
     }
     const taskPlans: RepairEstimateTaskPlanDto[] = input.repairPlans.map(
       (plan) => ({
@@ -365,15 +414,14 @@ export async function saveInventoryFinding(input: {
     )
     planSelection = buildInventoryPlanSelection({
       completionMode: input.repairCompletionMode ?? "MANUAL",
-      movementRequired,
-      logisticsPlanningMode: movementRequired
+      movementToRepair,
+      logisticsPlanningMode: movementToRepair
         ? (input.logisticsPlanningMode ?? "AUTO")
-        : "AUTO",
+        : null,
       logisticsScheduledDate:
-        movementRequired && input.logisticsPlanningMode === "FIXED_DATE"
+        movementToRepair && input.logisticsPlanningMode === "FIXED_DATE"
           ? (input.logisticsScheduledDate ?? null)
           : null,
-      movementCatalogNodeId,
       priority: input.priority ?? 3,
       coverMediaId: input.coverMediaId,
       taskPlans,
@@ -385,7 +433,7 @@ export async function saveInventoryFinding(input: {
     inventoryId: input.inventoryId,
     findingId: input.findingId,
     expectedSessionRevision: input.expectedVersion,
-    expectedFindingRevision: finding.findingRevision,
+    expectedFindingRevision: input.expectedFindingVersion,
     inspection,
     comment: input.comment,
     media: input.media,
@@ -483,19 +531,99 @@ export async function saveInventoryFurnitureReview(input: {
   return toInventoryFurnitureReviewView(saved)
 }
 
-async function previewWithSession(inventoryId: string) {
+export async function getInventoryPlanningSettings(
+  warehouseId: string
+): Promise<InventoryPlanningSettings> {
+  return inventoryHttp.getInventoryPlanningSettings(
+    await accessToken(),
+    warehouseId
+  )
+}
+
+export async function saveInventoryPlanningSettings(
+  warehouseId: string,
+  request: UpdateInventoryPlanningSettingsRequest
+) {
+  return inventoryHttp.updateInventoryPlanningSettings({
+    accessToken: await accessToken(),
+    warehouseId,
+    request,
+  })
+}
+
+export async function getInventoryFinalPlan(inventoryId: string) {
+  try {
+    return await inventoryHttp.getInventoryFinalPlan(
+      await accessToken(),
+      inventoryId
+    )
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null
+    throw error
+  }
+}
+
+export async function prepareInventoryFinalPlan(input: {
+  inventoryId: string
+  expectedSessionRevision: number
+  expectedSettingsRevision: number
+  movementScheduleMode: "AUTO" | "MANUAL"
+  repairScheduleMode: "AUTO" | "MANUAL"
+}) {
+  return inventoryHttp.prepareInventoryFinalPlan({
+    accessToken: await accessToken(),
+    inventoryId: input.inventoryId,
+    request: {
+      expectedSessionRevision: input.expectedSessionRevision,
+      expectedSettingsRevision: input.expectedSettingsRevision,
+      movementScheduleMode: input.movementScheduleMode,
+      repairScheduleMode: input.repairScheduleMode,
+    },
+    idempotencyKey: commandKey(),
+  })
+}
+
+export async function saveInventoryFinalPlan(input: {
+  inventoryId: string
+  request: UpdateInventoryFinalPlanRequest
+}) {
+  return inventoryHttp.updateInventoryFinalPlan({
+    accessToken: await accessToken(),
+    inventoryId: input.inventoryId,
+    request: input.request,
+    idempotencyKey: commandKey(),
+  })
+}
+
+export type InventoryCompletionReview = InventorySessionDto & {
+  completionEvidence: InventoryCompletionPreview
+}
+
+async function previewWithSession(
+  inventoryId: string,
+  finalPlan: InventoryFinalPlan
+) {
   const token = await accessToken()
   const rawSession = await inventoryHttp.getInventorySession(token, inventoryId)
   const preview = await inventoryHttp.previewInventoryCompletion({
     accessToken: token,
     session: rawSession,
+    finalPlanVersion: finalPlan.finalPlanVersion,
+    finalPlanSha256: finalPlan.finalPlanSha256,
     idempotencyKey: commandKey(),
   })
+  const reviewed = applyInventoryCompletionPreview(
+    sessionView(rawSession),
+    preview
+  )
   return {
     token,
     rawSession,
     preview,
-    reviewed: applyInventoryCompletionPreview(sessionView(rawSession), preview),
+    reviewed: {
+      ...reviewed,
+      completionEvidence: preview,
+    } satisfies InventoryCompletionReview,
   }
 }
 
@@ -503,8 +631,9 @@ export async function previewInventoryCompletion(input: {
   inventoryId: string
   expectedVersion: number
   actor: InventoryActorSnapshot
+  finalPlan: InventoryFinalPlan
 }) {
-  const result = await previewWithSession(input.inventoryId)
+  const result = await previewWithSession(input.inventoryId, input.finalPlan)
   if (result.rawSession.sessionRevision !== input.expectedVersion) {
     throw new Error("Инвентаризация была изменена. Обновите данные")
   }
@@ -515,29 +644,37 @@ export async function completeInventory(input: {
   inventoryId: string
   expectedVersion: number
   actor: InventoryActorSnapshot
+  completionEvidence: InventoryCompletionPreview
 }) {
-  const result = await previewWithSession(input.inventoryId)
-  if (result.rawSession.sessionRevision !== input.expectedVersion) {
+  if (
+    input.completionEvidence.inventoryId !== input.inventoryId ||
+    input.completionEvidence.sessionRevision !== input.expectedVersion
+  ) {
     throw new Error("Инвентаризация была изменена. Обновите данные")
   }
-  if (result.rawSession.reviewStage !== "FURNITURE") {
-    throw new Error(
-      "Сначала завершите проверку бытовок и перейдите к сверке мебели"
-    )
-  }
-  if (
-    result.reviewed.findings.some((finding) => finding.conflicts.length > 0)
-  ) {
-    throw new Error(
-      "Урегулируйте все конфликты реестра перед завершением инвентаризации"
-    )
-  }
   await inventoryHttp.completeInventorySession({
-    accessToken: result.token,
-    preview: result.preview,
+    accessToken: await accessToken(),
+    preview: input.completionEvidence,
     idempotencyKey: commandKey(),
   })
   return sessionView(await refreshedSession(input.inventoryId))
+}
+
+export async function cancelInventory(input: {
+  inventoryId: string
+  expectedVersion: number
+  reason: string
+}) {
+  const reason = input.reason.trim()
+  if (!reason) throw new Error("Укажите причину отмены инвентаризации")
+  const cancelled = await inventoryHttp.cancelInventorySession({
+    accessToken: await accessToken(),
+    inventoryId: input.inventoryId,
+    expectedSessionRevision: input.expectedVersion,
+    reason,
+    idempotencyKey: commandKey(),
+  })
+  return sessionView({ ...cancelled, findings: [] })
 }
 
 export async function publishInventoryWorks(input: {

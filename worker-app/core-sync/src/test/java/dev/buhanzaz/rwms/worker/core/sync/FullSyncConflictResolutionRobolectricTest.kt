@@ -177,6 +177,7 @@ class FullSyncConflictResolutionRobolectricTest {
         groups = emptyList(),
         qualifications = emptyList(),
         categories = categories,
+        kpiPalette = null,
         serverTime = "2026-07-26T10:00:00Z",
         revision = revision,
         offlineLease = WorkerOfflineLeaseDto(
@@ -192,6 +193,7 @@ class FullSyncConflictResolutionRobolectricTest {
         name = name,
         type = "REPAIR",
         queuePurpose = "GENERAL",
+        groupIds = emptyList(),
         sortOrder = sortOrder,
         audienceModes = listOf("AVAILABLE"),
         resultPhotoMinCount = 1,

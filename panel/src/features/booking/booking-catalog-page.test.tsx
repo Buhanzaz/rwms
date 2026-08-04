@@ -9,6 +9,7 @@ const api = vi.hoisted(() => ({
   available: true,
   list: vi.fn(),
   check: vi.fn(),
+  hold: vi.fn(),
 }))
 
 vi.mock("@/features/auth/use-auth", () => ({
@@ -42,6 +43,13 @@ vi.mock("@/features/booking/api/booking-availability-api", async () => {
     listAvailableRentalItems: api.list,
     checkRentalItemsAvailability: api.check,
   }
+})
+
+vi.mock("@/features/booking/api/manual-booking-drafts-api", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/features/booking/api/manual-booking-drafts-api")
+  >("@/features/booking/api/manual-booking-drafts-api")
+  return { ...actual, putManualBookingDraftHold: api.hold }
 })
 
 vi.mock("@/features/booking/booking-cabin-browser", () => ({
@@ -97,6 +105,32 @@ const item: RentalItemDto = {
   tags: [],
 }
 
+function configureAvailableItem() {
+  api.list.mockResolvedValue({
+    content: [item],
+    page: 0,
+    size: 200,
+    totalElements: 1,
+    totalPages: 1,
+  })
+  api.check.mockImplementation(async () => ({
+    warehouseId: item.warehouseId,
+    items: [
+      {
+        rentalItemId: item.id,
+        available: api.available,
+        reason: api.available ? "AVAILABLE" : "PRESENTATION_HELD",
+      },
+    ],
+  }))
+  api.hold.mockImplementation(async (params) => ({
+    draftId: params.draftId,
+    warehouseId: params.warehouseId,
+    expiresAt: "2099-08-04T12:00:00Z",
+    rentalItemIds: [...params.rentalItemIds],
+  }))
+}
+
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -125,78 +159,82 @@ afterEach(() => {
 })
 
 describe("BookingCatalogPage", () => {
-  it("updates the selected count and starts booking with the in-memory selection", async () => {
+  it("stages checked cabins without a hold and reserves only on Continue", async () => {
     const user = userEvent.setup()
-    api.list.mockResolvedValue({
-      content: [item],
-      page: 0,
-      size: 200,
-      totalElements: 1,
-      totalPages: 1,
-    })
-    api.check.mockImplementation(async () => ({
-      warehouseId: item.warehouseId,
-      items: [
-        {
-          rentalItemId: item.id,
-          available: api.available,
-          reason: api.available ? "AVAILABLE" : "PRESENTATION_HELD",
-        },
-      ],
-    }))
+    configureAvailableItem()
     renderPage()
 
     await user.click(
       await screen.findByRole("button", { name: "Выбрать БЫТ-001" })
     )
     expect(
-      screen.getByRole("button", { name: "Забронировать 1 выбранных" })
+      screen.getByRole("button", { name: "Добавить 1 выбранных" })
     ).toBeTruthy()
+    expect(api.hold).not.toHaveBeenCalled()
 
     await user.click(
-      screen.getByRole("button", { name: "Забронировать 1 выбранных" })
+      screen.getByRole("button", { name: "Добавить 1 выбранных" })
     )
-    expect(screen.getByText("Страница продолжения")).toBeTruthy()
+    expect(
+      screen.getByRole("button", { name: "Добавить 0 выбранных" })
+    ).toHaveProperty("disabled", true)
+    expect(api.hold).not.toHaveBeenCalled()
+
+    await user.click(
+      screen.getByRole("button", { name: "Продолжить бронирование" })
+    )
+    expect(await screen.findByText("Страница продолжения")).toBeTruthy()
+    expect(api.hold).toHaveBeenCalledTimes(1)
+    expect(api.hold.mock.calls[0][0]).toMatchObject({
+      warehouseId: item.warehouseId,
+      rentalItemIds: [item.id],
+    })
+    expect(api.hold.mock.calls[0][0].draftId).toMatch(/^[0-9a-f-]{36}$/)
   })
 
-  it("removes a cabin and apologizes when the authoritative check loses it", async () => {
+  it("does not navigate when the server reserve fails", async () => {
     const user = userEvent.setup()
+    configureAvailableItem()
+    api.hold.mockRejectedValue(new Error("Резерв не создан"))
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Выбрать БЫТ-001" })
+    )
+    await user.click(
+      screen.getByRole("button", { name: "Добавить 1 выбранных" })
+    )
+    await user.click(
+      screen.getByRole("button", { name: "Продолжить бронирование" })
+    )
+
+    await waitFor(() => expect(api.hold).toHaveBeenCalledTimes(1))
+    expect(screen.queryByText("Страница продолжения")).toBeNull()
+    expect(
+      screen.getByRole("button", { name: "Продолжить бронирование" })
+    ).toBeTruthy()
+  })
+
+  it("removes a lost preliminary cabin and shows its full details", async () => {
+    const user = userEvent.setup()
+    configureAvailableItem()
     api.available = false
-    api.list.mockResolvedValue({
-      content: [item],
-      page: 0,
-      size: 200,
-      totalElements: 1,
-      totalPages: 1,
-    })
-    api.check.mockImplementation(async () => ({
-      warehouseId: item.warehouseId,
-      items: [
-        {
-          rentalItemId: item.id,
-          available: false,
-          reason: "PRESENTATION_HELD",
-        },
-      ],
-    }))
     renderPage()
 
     await user.click(
       await screen.findByRole("button", { name: "Выбрать БЫТ-001" })
     )
     expect(
-      await screen.findByRole("heading", {
-        name: "Бытовка уже забронирована",
-      })
+      await screen.findByRole("heading", { name: "Бытовка уже недоступна" })
     ).toBeTruthy()
     expect(
-      screen.getByText(/БЫТ-001 уже выбрал другой пользователь/)
-    ).toBeTruthy()
+      screen.getByRole("list", { name: "Недоступные бытовки" }).textContent
+    ).toContain("БЫТ-001 — БК-1 — Новая")
 
     await user.click(screen.getByRole("button", { name: "ОК" }))
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Забронировать 0 выбранных" })
+        screen.getByRole("button", { name: "Добавить 0 выбранных" })
       ).toHaveProperty("disabled", true)
     )
   })

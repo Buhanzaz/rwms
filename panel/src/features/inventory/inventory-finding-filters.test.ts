@@ -51,7 +51,7 @@ function finding(
     lines: [],
     repairCompletionMode: null,
     repairPriority: 3,
-    movementRequired: false,
+    movementToRepair: false,
     logisticsPlanningMode: "AUTO",
     logisticsScheduledDate: null,
     repairPlans: [],

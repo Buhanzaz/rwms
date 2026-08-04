@@ -80,8 +80,6 @@ export function getRepairTaskLabel(repair: RepairTaskDto) {
   if (!subtask) return "Задание ещё не сформировано"
   if (subtask.taskText) return subtask.taskText
   if (subtask.taskTitle) return subtask.taskTitle
-  if (subtask.kind === "MOVE_TO_REPAIR") return "Переместить на ремонт"
-  if (subtask.kind === "MOVE_FROM_REPAIR") return "Вернуть после ремонта"
   return repair.kind === "REWORK" ? "Доработка" : "Ремонтные работы"
 }
 

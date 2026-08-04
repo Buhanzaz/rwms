@@ -23,19 +23,32 @@ public final class DriverBoardApiModels {
       long queueVersion,
       int repairPlaceCount,
       long usedRepairPlaceCount,
+      long occupiedRepairPlaceCount,
       long availableRepairPlaceCount,
       boolean inboundRepairPlaceAvailable,
       int automaticRefillDelayMinutes,
       boolean repairPlacesOverCapacity,
+      List<DriverBoardRepairPlaceCardResponse> repairPlaces,
       List<DriverBoardCardResponse> current,
       List<DriverBoardDateColumnResponse> dates,
       List<CapitalRepairCardResponse> capitalRepairs) {
     public DriverBoardResponse {
+      repairPlaces = List.copyOf(repairPlaces);
       current = List.copyOf(current);
       dates = List.copyOf(dates);
       capitalRepairs = List.copyOf(capitalRepairs);
     }
   }
+
+  /** Read-only repair-place fact assembled by logistics for the public driver board. */
+  public record DriverBoardRepairPlaceCardResponse(
+      UUID repairId,
+      UUID cabinId,
+      String unitNumber,
+      String allocationState,
+      String repairStageName,
+      String repairStageState,
+      int priority) {}
 
   public record DriverBoardDateColumnResponse(
       LocalDate date, List<DriverBoardCardResponse> tasks) {
@@ -84,6 +97,11 @@ public final class DriverBoardApiModels {
       @NotNull @Min(0) Integer targetIndex) {}
 
   public record PromoteCapitalRepairRequest(@NotNull UUID warehouseId) {}
+
+  public record ScheduleCapitalRepairRequest(
+      @NotNull UUID warehouseId,
+      @NotNull LocalDate targetDate,
+      @NotNull @Min(0) Integer targetIndex) {}
 
   public record ReturnCapitalRepairRequest(
       @NotNull UUID warehouseId,

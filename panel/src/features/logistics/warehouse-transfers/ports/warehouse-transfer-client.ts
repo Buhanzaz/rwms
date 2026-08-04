@@ -33,7 +33,6 @@ export type TransferLineCommand = TransferVersionedCommand & {
 export type TransferArrivalCommand = TransferLineCommand & {
   references: TransferMediaReference[]
   priority: number | null
-  movementToShipment: boolean
 }
 
 export type TransferReconcileCommand = TransferVersionedCommand & {

@@ -33,6 +33,8 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   private static final String MAINTENANCE_SCOPE = "maintenance.logistics";
   private static final String MEDIA_SCOPE = "media.logistics";
   private static final String TASK_BOARD_SCOPE = "task-board.logistics";
+  private static final Set<String> REPAIR_STAGE_STATES =
+      Set.of("PLANNED", "QUEUED", "IN_PROGRESS", "DONE", "CANCELLED");
 
   private final RestClient client;
   private final OAuth2AuthorizedClientManager authorizedClients;
@@ -430,8 +432,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID rentalItemId,
       UUID sourceWarehouseId,
       UUID targetWarehouseId,
-      Integer priority,
-      boolean movementToShipment) {
+      Integer priority) {
     TransferRepairArrivalCompletionResponse response =
         post(
             maintenanceTransferLineBase(transferId, lineId) + "/complete-arrival",
@@ -440,8 +441,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
                 rentalItemId,
                 sourceWarehouseId,
                 targetWarehouseId,
-                priority,
-                movementToShipment),
+                priority),
             TransferRepairArrivalCompletionResponse.class,
             MAINTENANCE_CLIENT,
             MAINTENANCE_SCOPE);
@@ -914,6 +914,26 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   }
 
   @Override
+  public DriverTaskPreStartCancellation cancelDriverTaskIfPreStart(
+      UUID externalTaskId, long expectedTaskVersion, String reason) {
+    if (externalTaskId == null
+        || expectedTaskVersion < 0
+        || reason == null
+        || reason.isBlank()
+        || reason.length() > 1_000) {
+      throw new IllegalArgumentException("Invalid pre-start driver task cancellation command");
+    }
+    return preStartDriverTaskCancellation(
+        postWithoutIdempotency(
+            taskBoardTaskBase + "/" + externalTaskId + "/cancel-if-pre-start",
+            new CancelDriverTaskRequest(expectedTaskVersion, reason),
+            PreStartDriverTaskCancellationResponse.class,
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE),
+        externalTaskId);
+  }
+
+  @Override
   public DriverBoardTask setDriverTaskLane(
       UUID externalTaskId, long expectedTaskVersion, String lane) {
     return driverBoardTask(
@@ -1079,7 +1099,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
         response.availableCount(),
         response.overCapacity(),
         response.allocations().stream()
-            .map(HttpLogisticsDependencyGateway::repairPlaceAllocation)
+            .map(HttpLogisticsDependencyGateway::repairPlaceProjectionAllocation)
             .toList());
   }
 
@@ -1427,6 +1447,27 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       OffsetDateTime expiresAt,
       UUID actorSubjectId,
       String actorRole) {
+    return replacePresentationHolds(
+        idempotencyKey,
+        presentationId,
+        warehouseId,
+        rentalItemIds,
+        expiresAt,
+        actorSubjectId,
+        actorRole,
+        null);
+  }
+
+  @Override
+  public PresentationHolds replacePresentationHolds(
+      UUID idempotencyKey,
+      UUID presentationId,
+      UUID warehouseId,
+      List<UUID> rentalItemIds,
+      OffsetDateTime expiresAt,
+      UUID actorSubjectId,
+      String actorRole,
+      UUID sourceHoldScopeId) {
     PresentationHoldsResponse response =
         put(
             assetBase + "/presentations/" + presentationId + "/holds",
@@ -1436,7 +1477,8 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
                 rentalItemIds,
                 expiresAt,
                 actorSubjectId,
-                actorRole),
+                actorRole,
+                sourceHoldScopeId),
             PresentationHoldsResponse.class,
             ASSET_CLIENT,
             ASSET_SCOPE);
@@ -1445,9 +1487,19 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
 
   @Override
   public PresentationHolds readPresentationHolds(UUID presentationId) {
+    return readPresentationHolds(presentationId, null, null);
+  }
+
+  @Override
+  public PresentationHolds readPresentationHolds(
+      UUID presentationId, UUID actorSubjectId, String actorRole) {
+    String query =
+        actorSubjectId == null
+            ? ""
+            : "?actorSubjectId=" + actorSubjectId + "&actorRole=" + actorRole;
     PresentationHoldsResponse response =
         get(
-            assetBase + "/presentations/" + presentationId + "/holds",
+            assetBase + "/presentations/" + presentationId + "/holds" + query,
             PresentationHoldsResponse.class,
             ASSET_CLIENT,
             ASSET_SCOPE);
@@ -1940,6 +1992,43 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
         entry.queuePosition());
   }
 
+  private static DriverTaskPreStartCancellation preStartDriverTaskCancellation(
+      PreStartDriverTaskCancellationResponse response, UUID externalTaskId) {
+    if (response == null
+        || response.outcome() == null
+        || response.taskId() == null
+        || response.externalTaskId() == null
+        || !externalTaskId.equals(response.externalTaskId())
+        || response.taskVersion() < 0
+        || response.status() == null) {
+      throw malformed("Task-board returned an invalid pre-start cancellation outcome");
+    }
+    DriverTaskPreStartCancellationOutcome outcome;
+    try {
+      outcome = DriverTaskPreStartCancellationOutcome.valueOf(response.outcome());
+    } catch (IllegalArgumentException exception) {
+      throw malformed("Task-board returned an unknown pre-start cancellation outcome");
+    }
+    boolean cancelled =
+        outcome == DriverTaskPreStartCancellationOutcome.CANCELLED
+            || outcome == DriverTaskPreStartCancellationOutcome.ALREADY_CANCELLED;
+    if ((cancelled && (!"CANCELLED".equals(response.status()) || response.cancelledAt() == null))
+        || (outcome == DriverTaskPreStartCancellationOutcome.STARTED
+            && (!("ACTIVE".equals(response.status()) || "DONE".equals(response.status()))
+                || response.cancelledAt() != null))
+        || (outcome == DriverTaskPreStartCancellationOutcome.VERSION_CONFLICT
+            && (!"ACTIVE".equals(response.status()) || response.cancelledAt() != null))) {
+      throw malformed("Task-board returned an inconsistent pre-start cancellation outcome");
+    }
+    return new DriverTaskPreStartCancellation(
+        outcome,
+        response.taskId(),
+        response.externalTaskId(),
+        response.taskVersion(),
+        response.status(),
+        response.cancelledAt());
+  }
+
   private static DriverBoardTask driverBoardEntry(
       DriverBoardEntryResponse response, UUID warehouseId) {
     if (response == null
@@ -1997,6 +2086,41 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
         response.repairId(),
         response.rentalItemId(),
         response.state(),
+        null,
+        null,
+        3,
+        response.createdAt(),
+        response.updatedAt());
+  }
+
+  private static RepairPlaceAllocation repairPlaceProjectionAllocation(
+      RepairPlaceProjectionAllocationResponse response) {
+    if (response == null
+        || response.id() == null
+        || response.version() < 0
+        || response.warehouseId() == null
+        || response.repairId() == null
+        || response.rentalItemId() == null
+        || response.state() == null
+        || (response.repairStageName() == null) != (response.repairStageState() == null)
+        || (response.repairStageState() != null
+            && !REPAIR_STAGE_STATES.contains(response.repairStageState()))
+        || response.priority() < 1
+        || response.priority() > 5
+        || response.createdAt() == null
+        || response.updatedAt() == null) {
+      throw malformed("Maintenance-service returned invalid repair-place projection allocation");
+    }
+    return new RepairPlaceAllocation(
+        response.id(),
+        response.version(),
+        response.warehouseId(),
+        response.repairId(),
+        response.rentalItemId(),
+        response.state(),
+        response.repairStageName(),
+        response.repairStageState(),
+        response.priority(),
         response.createdAt(),
         response.updatedAt());
   }
@@ -2415,7 +2539,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
             != Set.copyOf(response.missingQueueDefinitionIds()).size()
         || (response.activeRepairId() == null
             && (response.priorityRequired()
-                || response.movementToShipmentAvailable()
                 || !response.missingQueueDefinitionIds().isEmpty()))
         || (response.activeRepairId() != null && !response.priorityRequired())) {
       throw malformed("Maintenance-service returned invalid transfer arrival preflight");
@@ -2423,7 +2546,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
     return new TransferRepairArrivalPreflight(
         response.activeRepairId(),
         response.priorityRequired(),
-        response.movementToShipmentAvailable(),
         List.copyOf(response.missingQueueDefinitionIds()));
   }
 
@@ -2496,8 +2618,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID rentalItemId,
       UUID sourceWarehouseId,
       UUID targetWarehouseId,
-      Integer priority,
-      boolean movementToShipment) {}
+      Integer priority) {}
 
   private record TransferRepairDepartureResponse(
       UUID activeRepairId, Long activeRepairVersion, String assetStatus) {}
@@ -2505,7 +2626,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   private record TransferRepairArrivalPreflightResponse(
       UUID activeRepairId,
       boolean priorityRequired,
-      boolean movementToShipmentAvailable,
       List<UUID> missingQueueDefinitionIds) {}
 
   private record TransferRepairArrivalCompletionResponse(
@@ -2699,6 +2819,14 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       String status,
       OffsetDateTime cancelledAt) {}
 
+  private record PreStartDriverTaskCancellationResponse(
+      String outcome,
+      UUID taskId,
+      UUID externalTaskId,
+      long taskVersion,
+      String status,
+      OffsetDateTime cancelledAt) {}
+
   private record EquipmentMovementBoardTaskResponse(
       UUID taskId,
       long taskVersion,
@@ -2712,7 +2840,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
 
   private record WarehouseQueueCapabilitiesResponse(
       UUID warehouseId,
-      boolean movementToShipmentAvailable,
       List<MovementQueueCapabilityResponse> movementQueueDefinitions) {}
 
   private record DriverTaskSourceRequest(String type, UUID sourceId) {}
@@ -2826,6 +2953,19 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt) {}
 
+  private record RepairPlaceProjectionAllocationResponse(
+      UUID id,
+      long version,
+      UUID warehouseId,
+      UUID repairId,
+      UUID rentalItemId,
+      String state,
+      String repairStageName,
+      String repairStageState,
+      int priority,
+      OffsetDateTime createdAt,
+      OffsetDateTime updatedAt) {}
+
   private record RepairPlaceProjectionResponse(
       UUID warehouseId,
       int repairPlaceCount,
@@ -2835,7 +2975,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       long readyToReleaseCount,
       long availableCount,
       boolean overCapacity,
-      List<RepairPlaceAllocationResponse> allocations) {}
+      List<RepairPlaceProjectionAllocationResponse> allocations) {}
 
   private record RepairComplexitySnapshotResponse(
       String type,
@@ -3051,7 +3191,8 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       List<UUID> rentalItemIds,
       OffsetDateTime expiresAt,
       UUID actorSubjectId,
-      String actorRole) {}
+      String actorRole,
+      UUID sourceHoldScopeId) {}
 
   private record PresentationHoldResponse(
       UUID holdId,

@@ -212,6 +212,7 @@ class BlockedMediaFeedReconciliationRobolectricTest {
                 groups = emptyList(),
                 qualifications = emptyList(),
                 categories = emptyList(),
+                kpiPalette = null,
                 serverTime = "2026-07-26T16:53:14Z",
                 revision = 11,
                 offlineLease = WorkerOfflineLeaseDto(

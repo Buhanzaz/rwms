@@ -14,8 +14,7 @@ export type RepairTaskKind = "REPAIR" | "REWORK"
 export type RepairTaskOrigin = "ESTIMATE" | "DIRECT_REPAIR" | "INVENTORY"
 export type RepairTaskAcceptanceStatus =
   "NOT_READY" | "PENDING" | "IN_REWORK" | "ACCEPTED" | "WRITTEN_OFF"
-export type RepairTaskSubtaskKind =
-  "REPAIR_WORK" | "MOVE_TO_REPAIR" | "MOVE_FROM_REPAIR"
+export type RepairTaskSubtaskKind = "REPAIR_WORK"
 export type RepairTaskSubtaskStatus =
   "WAITING" | "IN_PROGRESS" | "PAUSED" | "DONE" | "CANCELLED"
 export type RepairTaskAssignmentStatus =
@@ -117,6 +116,7 @@ export type RepairTaskDto = {
   decisionActorId?: string | null
   taskBoardAvailable?: boolean
   awaitingMovement?: boolean
+  movementToRepair: boolean
   logisticsPlanningMode: LogisticsPlanningMode
   logisticsScheduledDate: string | null
   createdAt: string
@@ -162,6 +162,7 @@ export type RepairTaskWriteCommand = {
   coverMediaId: string | null
   subtasks: RepairTaskSubtaskDto[]
   priority?: RepairPriority
+  movementToRepair: boolean
   logisticsPlanningMode: LogisticsPlanningMode
   logisticsScheduledDate: string | null
 }

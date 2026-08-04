@@ -17,11 +17,13 @@ import static org.mockito.Mockito.when;
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.NumberResolutionView;
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.CompletionPreviewRequest;
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.FurnitureReviewView;
+import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.PrepareFinalPlanRequest;
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.RevisionExpectation;
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.SaveFurnitureReviewRequest;
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.StartFurnitureReviewRequest;
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.StartSessionRequest;
 import dev.buhanzaz.rwms.inventory.eventing.InventoryEventStore;
+import dev.buhanzaz.rwms.inventory.domain.FinalPlanScheduleMode;
 import dev.buhanzaz.rwms.inventory.integration.InventoryDependencyGateway;
 import java.time.Duration;
 import java.time.Instant;
@@ -198,13 +200,43 @@ class InventoryIdempotencyRecoveryIntegrationTest {
     long furnitureSessionRevision =
         confirmEmptyFurnitureReview(
             inventoryId, warehouseId, List.of(new RevisionExpectation(findingId, 0)));
+    when(dependencies.preflightReconciliation(any(), any()))
+        .thenAnswer(
+            invocation -> {
+              JsonNode request = invocation.getArgument(1);
+              var response = mapper.createObjectNode();
+              response.put("inventoryId", request.required("inventoryId").asText());
+              response.put("finalPlanVersion", request.required("finalPlanVersion").asLong());
+              response.put("finalPlanSha256", request.required("finalPlanSha256").asText());
+              var findings = response.putArray("findings");
+              for (JsonNode finding : request.required("findings")) {
+                findings
+                    .addObject()
+                    .put("findingId", finding.required("findingId").asText())
+                    .putArray("candidates");
+              }
+              return response;
+            });
+    var finalPlan =
+        application.prepareFinalPlan(
+            jwt(),
+            inventoryId,
+            UUID.randomUUID(),
+            new PrepareFinalPlanRequest(
+                furnitureSessionRevision,
+                0,
+                FinalPlanScheduleMode.AUTO,
+                FinalPlanScheduleMode.AUTO));
     var preview =
         application.preview(
             jwt(),
             inventoryId,
             UUID.randomUUID(),
             new CompletionPreviewRequest(
-                furnitureSessionRevision, List.of(new RevisionExpectation(findingId, 0))));
+                furnitureSessionRevision,
+                finalPlan.finalPlanVersion(),
+                finalPlan.finalPlanSha256(),
+                List.of(new RevisionExpectation(findingId, 0))));
 
     assertThat(preview.statistics().missingCount()).isZero();
     assertThat(preview.statistics().conflictCount()).isZero();

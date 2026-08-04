@@ -86,7 +86,7 @@ function repair(
       plannedMinutes: "30",
       forcedCapital: false,
     },
-    movementToShipment: false,
+    movementToRepair: false,
     logisticsPlanningMode: "AUTO",
     logisticsScheduledDate: null,
     createdAt: updatedAt,

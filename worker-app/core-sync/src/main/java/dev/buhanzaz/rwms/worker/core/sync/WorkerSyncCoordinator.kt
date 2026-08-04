@@ -525,6 +525,7 @@ internal fun cachedFeedMatchesContext(
         cached.name == remote.name &&
             cached.type == remote.type &&
             cached.queuePurpose == remote.queuePurpose &&
+            cached.groupIdsKey == remote.normalizedGroupIdsKey() &&
             cached.sortOrder == remote.sortOrder &&
             cached.audienceModesKey == remote.normalizedAudienceModesKey() &&
             cached.resultPhotoMinCount == remote.resultPhotoMinCount
