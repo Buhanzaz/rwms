@@ -6,6 +6,7 @@ import {
   pinDriverBoardTask,
   promoteCapitalRepair,
   returnCapitalRepair,
+  scheduleCapitalRepair,
 } from "@/features/logistics/driver-board/driver-board-api"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 
@@ -140,6 +141,37 @@ describe("driver board API", () => {
     expect(JSON.parse(String(init?.body))).toEqual({
       warehouseId: WAREHOUSE_ID,
       expectedTaskVersion: 7,
+    })
+  })
+
+  it("schedules a capital repair directly on a selected calendar position", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        jsonResponse({ externalTaskId: EXTERNAL_TASK_ID }, 201)
+      )
+
+    await scheduleCapitalRepair({
+      accessToken: "driver-token",
+      repairId: REPAIR_ID,
+      warehouseId: WAREHOUSE_ID,
+      targetDate: "2026-08-04",
+      targetIndex: 2,
+      idempotencyKey: IDEMPOTENCY_KEY,
+    })
+
+    const [input, init] = fetchMock.mock.calls[0]!
+    expect(String(input)).toBe(
+      `${getGatewayRuntimeConfig().logisticsApiBaseUrl}/v1/driver-board/capital-repairs/${REPAIR_ID}/schedule`
+    )
+    expect(init?.method).toBe("POST")
+    expect(new Headers(init?.headers).get("Idempotency-Key")).toBe(
+      IDEMPOTENCY_KEY
+    )
+    expect(JSON.parse(String(init?.body))).toEqual({
+      warehouseId: WAREHOUSE_ID,
+      targetDate: "2026-08-04",
+      targetIndex: 2,
     })
   })
 

@@ -131,6 +131,7 @@ const task: RepairTaskDto = {
   sourceRepairTaskId: null,
   sourceRepairTaskVersion: null,
   readyAt: recordedAt,
+  movementToRepair: false,
   logisticsPlanningMode: "AUTO",
   logisticsScheduledDate: null,
   createdAt: "2026-07-18T07:00:00Z",

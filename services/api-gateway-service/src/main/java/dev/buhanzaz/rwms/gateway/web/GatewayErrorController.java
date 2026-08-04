@@ -6,6 +6,7 @@ import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
 import dev.buhanzaz.rwms.platform.web.RwmsProblemDetailFactory;
 import jakarta.servlet.RequestDispatcher;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import java.net.URI;
 import java.util.Locale;
 import java.util.UUID;
@@ -25,8 +26,11 @@ public class GatewayErrorController implements ErrorController {
   private final RwmsProblemDetailFactory problems;
 
   @RequestMapping(value = "/error", produces = MediaType.APPLICATION_PROBLEM_JSON_VALUE)
-  ResponseEntity<ApiProblem> error(HttpServletRequest request) {
+  ResponseEntity<ApiProblem> error(HttpServletRequest request, HttpServletResponse response) {
     HttpStatus status = resolveStatus(request);
+    if (response.isCommitted()) {
+      return ResponseEntity.status(status).build();
+    }
     String code = switch (status) {
       case BAD_GATEWAY -> "GATEWAY_UPSTREAM_UNAVAILABLE";
       case GATEWAY_TIMEOUT -> "GATEWAY_UPSTREAM_TIMEOUT";

@@ -57,7 +57,7 @@ function finding(
     ],
     repairCompletionMode: "AUTO",
     repairPriority: 2,
-    movementRequired: true,
+    movementToRepair: true,
     logisticsPlanningMode: "AUTO",
     logisticsScheduledDate: null,
     repairPlans: [],
@@ -97,35 +97,8 @@ describe("InventoryStatistics", () => {
         showCounters={false}
         findings={[
           finding({
-            movementRequired: false,
-            repairPlans: [
-              {
-                id: "move-to-repair",
-                kind: "MOVE_TO_REPAIR",
-                includedLineIds: [],
-                primaryLineId: null,
-                groupComment: "",
-                queueId: "movement-queue",
-                queueName: "Перемещение",
-                routeQueueKind: "MOVEMENT",
-                sortOrder: 1,
-                plannedDurationMinutes: null,
-                photoRequired: true,
-              },
-              {
-                id: "move-from-repair",
-                kind: "MOVE_FROM_REPAIR",
-                includedLineIds: [],
-                primaryLineId: null,
-                groupComment: "",
-                queueId: "movement-queue",
-                queueName: "Перемещение",
-                routeQueueKind: "MOVEMENT",
-                sortOrder: 2,
-                plannedDurationMinutes: null,
-                photoRequired: true,
-              },
-            ],
+            movementToRepair: true,
+            repairPlans: [],
           }),
         ]}
       />
@@ -196,5 +169,54 @@ describe("InventoryStatistics", () => {
     const footer = totalLabel.closest("tfoot")
     expect(footer).not.toBeNull()
     expect(within(footer!).getByText("200,00 ₽")).toBeTruthy()
+  })
+
+  it("uses the saved finding line name for a catalog aggregate", () => {
+    render(
+      <InventoryStatistics
+        statistics={{
+          ...statistics,
+          aggregates: [
+            {
+              key: "material-1",
+              lineType: "MATERIAL",
+              description: "Позиция без наименования",
+              catalogNodeId: "catalog-material-1",
+              unit: "шт",
+              unitPrice: "50.00",
+              quantity: 2,
+              total: "100.00",
+            },
+          ],
+        }}
+        findings={[
+          finding({
+            lines: [
+              {
+                id: "material-1",
+                sourceLineKey: "material-1",
+                lineType: "MATERIAL",
+                description: "Доска",
+                lineComment: "",
+                unit: "шт",
+                quantity: 2,
+                unitPrice: "50.00",
+                lineTotal: "100.00",
+                catalogSnapshot: {
+                  nodeId: "catalog-material-1",
+                  name: "Доска",
+                  nodeType: "MATERIAL",
+                  furnitureEquipment: null,
+                  characteristic: null,
+                },
+              },
+            ],
+          }),
+        ]}
+      />
+    )
+
+    expect(screen.getByText("Доска", { selector: "td" })).toBeTruthy()
+    expect(screen.queryByText("Позиция без наименования")).toBeNull()
   })
 })

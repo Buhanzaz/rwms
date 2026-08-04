@@ -3,7 +3,6 @@ package dev.buhanzaz.rwms.manager.ui.screens
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.border
@@ -66,29 +65,23 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import dev.buhanzaz.rwms.manager.network.InventoryCompletionPreviewDto
 import dev.buhanzaz.rwms.manager.network.InventoryFindingDto
 import dev.buhanzaz.rwms.manager.network.InventorySessionDto
 import dev.buhanzaz.rwms.manager.network.CatalogNodeDto
 import dev.buhanzaz.rwms.manager.network.RentalItemDto
 import dev.buhanzaz.rwms.manager.ui.InventoryEditorState
-import dev.buhanzaz.rwms.manager.ui.InventoryFurnitureDisposition
 import dev.buhanzaz.rwms.manager.ui.InventorySemanticChange
 import dev.buhanzaz.rwms.manager.ui.ManagerUiState
-import dev.buhanzaz.rwms.manager.ui.canCompleteInventory
-import dev.buhanzaz.rwms.manager.ui.inventoryBlockingCompletionRisks
 import dev.buhanzaz.rwms.manager.ui.inventoryBusinessStatus
 import dev.buhanzaz.rwms.manager.ui.inventoryBusinessStatusLabel
 import dev.buhanzaz.rwms.manager.ui.inventoryCategoryOptions
 import dev.buhanzaz.rwms.manager.ui.inventoryCharacteristicOptions
 import dev.buhanzaz.rwms.manager.ui.inventoryCharacteristicsDisplayValue
-import dev.buhanzaz.rwms.manager.ui.inventoryCompletionRiskCounts
-import dev.buhanzaz.rwms.manager.ui.inventoryCompletionRiskLabel
 import dev.buhanzaz.rwms.manager.ui.inventoryCreationValidationError
 import dev.buhanzaz.rwms.manager.ui.inventoryDimensionOptions
 import dev.buhanzaz.rwms.manager.ui.inventoryEquipmentObservationValidationError
 import dev.buhanzaz.rwms.manager.ui.inventoryEquipmentQuantityText
-import dev.buhanzaz.rwms.manager.ui.hasObservedFurniture
+import dev.buhanzaz.rwms.manager.ui.inventoryFurnitureCatalog
 import dev.buhanzaz.rwms.manager.ui.inventoryFinishingOptions
 import dev.buhanzaz.rwms.manager.ui.inventoryInspectionLabel
 import dev.buhanzaz.rwms.manager.ui.inventoryPassportFacts
@@ -96,10 +89,11 @@ import dev.buhanzaz.rwms.manager.ui.inventoryPhotoValidationError
 import dev.buhanzaz.rwms.manager.ui.inventoryRentalItemSuggestions
 import dev.buhanzaz.rwms.manager.ui.inventoryRentalTypeOptions
 import dev.buhanzaz.rwms.manager.ui.inventorySemanticChanges
+import dev.buhanzaz.rwms.manager.ui.persistedInventoryMediaReferences
 import dev.buhanzaz.rwms.manager.ui.hasExactInventoryRentalItemNumber
 import dev.buhanzaz.rwms.manager.ui.withInventoryRentalType
-import dev.buhanzaz.rwms.manager.ui.logisticsPlanningValidationError
 import dev.buhanzaz.rwms.manager.ui.toMaintenancePlanEditor
+import dev.buhanzaz.rwms.manager.ui.LOGISTICS_PLANNING_MODE_AUTO
 import dev.buhanzaz.rwms.manager.ui.components.EmptyState
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPanel
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPhotoPreview
@@ -111,13 +105,27 @@ import dev.buhanzaz.rwms.manager.ui.components.copyManagerPhotoToAppCache
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 
+internal const val INVENTORY_FIELD_ONLY_EMPTY_STATE_DESCRIPTION =
+    "Активную инвентаризацию начинает менеджер в панели. Когда сессия появится для " +
+        "выбранного склада, здесь можно будет проверять бытовки."
+
+internal const val INVENTORY_FIELD_ONLY_SESSION_NOTICE =
+    "Телефон сохраняет только проверку бытовки. Общие задачи ремонта и перемещения " +
+        "появятся после завершения инвентаризации в панели."
+
+internal const val INVENTORY_AFTER_RENT_ESTIMATE_NOTICE =
+    "Замечания по бытовке после аренды станут черновиком сметы после общей сверки " +
+        "инвентаризации. Задача ремонта из этой проверки не создаётся."
+
+internal fun inventoryAfterRentEstimateNotice(status: String?): String? =
+    INVENTORY_AFTER_RENT_ESTIMATE_NOTICE.takeIf { status == "AFTER_RENT" }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun InventoryDashboardScreen(
     uiState: ManagerUiState,
     onBack: () -> Unit,
     onLoadInventory: () -> Unit,
-    onStartInventory: () -> Unit,
     onPrepareNewNumber: (String, () -> Unit) -> Unit,
     onOpenEditor: () -> Unit,
     onResolveConflict: (
@@ -127,15 +135,11 @@ fun InventoryDashboardScreen(
         () -> Unit,
     ) -> Unit,
     onSupplementInspection: (InventoryFindingDto, () -> Unit) -> Unit,
-    onPreviewCompletion: () -> Unit,
-    onDismissCompletion: () -> Unit,
-    onCompleteInventory: (Boolean, Boolean) -> Unit,
 ) {
     LaunchedEffect(uiState.selectedWarehouseId) {
         if (uiState.selectedWarehouseId != null) onLoadInventory()
     }
     var number by remember(uiState.inventorySession?.id) { mutableStateOf("") }
-    var confirmStart by remember { mutableStateOf(false) }
     var selectedConflictFindingId by remember(uiState.inventorySession?.id) {
         mutableStateOf<String?>(null)
     }
@@ -172,22 +176,11 @@ fun InventoryDashboardScreen(
                 item {
                     EmptyState(
                         title = "Нет активной инвентаризации",
-                        description = "Начните сессию для выбранного склада, чтобы сверять номера бытовок и сохранять результаты.",
-                        actionLabel = "Начать инвентаризацию",
-                        onAction = { confirmStart = true },
+                        description = INVENTORY_FIELD_ONLY_EMPTY_STATE_DESCRIPTION,
                     )
                 }
             } else {
                 item { InventorySessionSummary(session) }
-                item {
-                    Button(
-                        onClick = onPreviewCompletion,
-                        enabled = !uiState.busy,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Проверить и завершить")
-                    }
-                }
                 stickyHeader {
                     Column(
                         modifier = Modifier
@@ -253,21 +246,6 @@ fun InventoryDashboardScreen(
         }
     }
 
-    if (confirmStart) {
-        AlertDialog(
-            onDismissRequest = { confirmStart = false },
-            title = { Text("Начать инвентаризацию?") },
-            text = { Text("Будет создана активная сессия для текущего склада.") },
-            confirmButton = {
-                Button(onClick = {
-                    confirmStart = false
-                    onStartInventory()
-                }) { Text("Начать") }
-            },
-            dismissButton = { TextButton(onClick = { confirmStart = false }) { Text("Отмена") } },
-        )
-    }
-
     val selectedConflict = selectedConflictFindingId?.let { findingId ->
         uiState.inventoryFindings.firstOrNull { it.id == findingId }
     }
@@ -292,20 +270,6 @@ fun InventoryDashboardScreen(
         )
     }
 
-    uiState.inventoryCompletionPreview?.let { preview ->
-        InventoryCompletionDialog(
-            preview = preview,
-            findings = uiState.inventoryFindings,
-            busy = uiState.busy,
-            onDismiss = onDismissCompletion,
-            onRefresh = onPreviewCompletion,
-            onResolveConflict = { findingId ->
-                onDismissCompletion()
-                selectedConflictFindingId = findingId
-            },
-            onComplete = onCompleteInventory,
-        )
-    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -572,412 +536,12 @@ private fun InventorySessionSummary(session: InventorySessionDto) {
             "Проверено ${session.inspectedCount} из ${session.expectedCount}; найдено: ${session.findingCount}.",
             style = MaterialTheme.typography.bodyMedium,
         )
-    }
-}
-
-@Composable
-private fun InventoryCompletionDialog(
-    preview: InventoryCompletionPreviewDto,
-    findings: List<InventoryFindingDto>,
-    busy: Boolean,
-    onDismiss: () -> Unit,
-    onRefresh: () -> Unit,
-    onResolveConflict: (String) -> Unit,
-    onComplete: (confirmNotInspected: Boolean, confirmMissing: Boolean) -> Unit,
-) {
-    val riskCounts = preview.inventoryCompletionRiskCounts()
-    val blockingRisks = preview.inventoryBlockingCompletionRisks()
-    val conflictFindingId = preview.risks
-        .firstOrNull { it.code == "CONFLICT" }
-        ?.findingId
-        ?.takeIf { findingId ->
-            findings.any { finding -> finding.id == findingId && finding.conflicts.isNotEmpty() }
-        }
-    var confirmNotInspected by remember(
-        preview.acknowledgementSha256,
-        preview.validationSha256,
-    ) {
-        mutableStateOf(false)
-    }
-    var confirmMissing by remember(
-        preview.acknowledgementSha256,
-        preview.validationSha256,
-    ) {
-        mutableStateOf(false)
-    }
-    var showPositions by remember(preview.validationSha256) { mutableStateOf(false) }
-    var positionFilter by remember(preview.validationSha256) {
-        mutableStateOf(InventoryPositionFilter.ALL)
-    }
-    var expandedFindingId by remember(preview.validationSha256) {
-        mutableStateOf<String?>(null)
-    }
-    val visiblePositionFindings = remember(findings, positionFilter) {
-        findings.mapNotNull { finding ->
-            val lines = finding.frozenPlan?.lines.orEmpty().filter { line ->
-                when (positionFilter) {
-                    InventoryPositionFilter.ALL -> true
-                    InventoryPositionFilter.WORKS -> line.lineType == "WORK"
-                    InventoryPositionFilter.MATERIALS -> line.lineType == "MATERIAL"
-                }
-            }
-            if (lines.isEmpty()) null else finding to lines
-        }
-    }
-    val canComplete = preview.canCompleteInventory(
-        confirmNotInspected = confirmNotInspected,
-        confirmMissing = confirmMissing,
-    )
-
-    AlertDialog(
-        onDismissRequest = {
-            if (!busy) onDismiss()
-        },
-        title = { Text("Завершение инвентаризации") },
-        text = {
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                item {
-                    Text(
-                        "Свежая проверка: ${preview.validatedAt}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                item {
-                    ManagerPanel {
-                        Text("Итог", style = MaterialTheme.typography.titleMedium)
-                        InventoryCompletionMetric(
-                            label = "Ожидалось",
-                            value = preview.statistics.expectedCount.toString(),
-                        )
-                        InventoryCompletionMetric(
-                            label = "Проверено",
-                            value = preview.statistics.inspectedCount.toString(),
-                        )
-                        InventoryCompletionMetric(
-                            label = "Не найдено",
-                            value = preview.statistics.missingCount.toString(),
-                        )
-                        InventoryCompletionMetric(
-                            label = "Добавлено",
-                            value = preview.statistics.addedCount.toString(),
-                        )
-                        InventoryCompletionMetric(
-                            label = "С работами",
-                            value = preview.statistics.withWorkCount.toString(),
-                        )
-                        InventoryCompletionMetric(
-                            label = "Работы",
-                            value = "${preview.statistics.workLineCount} · " +
-                                formatInventoryMinor(preview.statistics.workTotalMinor),
-                        )
-                        InventoryCompletionMetric(
-                            label = "Материалы",
-                            value = "${preview.statistics.materialLineCount} · " +
-                                formatInventoryMinor(preview.statistics.materialTotalMinor),
-                        )
-                        InventoryCompletionMetric(
-                            label = "Плановое время работ",
-                            value = formatInventoryMinutes(preview.statistics.normativeMinutes),
-                        )
-                        InventoryCompletionMetric(
-                            label = "Длительность инвентаризации",
-                            value = formatInventoryDuration(preview.statistics.durationSeconds),
-                        )
-                        InventoryCompletionMetric(
-                            label = "Конфликты",
-                            value = preview.statistics.conflictCount.toString(),
-                        )
-                        InventoryCompletionMetric(
-                            label = "Сумма",
-                            value = formatInventoryMinor(preview.statistics.grandTotalMinor),
-                        )
-                        OutlinedButton(
-                            onClick = { showPositions = !showPositions },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(if (showPositions) "Скрыть позиции" else "Посмотреть позиции")
-                        }
-                    }
-                }
-                if (showPositions) {
-                    item {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(
-                                    androidx.compose.foundation.rememberScrollState(),
-                                ),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            InventoryPositionFilter.entries.forEach { filter ->
-                                FilterChip(
-                                    selected = positionFilter == filter,
-                                    onClick = { positionFilter = filter },
-                                    label = { Text(filter.label) },
-                                )
-                            }
-                        }
-                    }
-                    if (visiblePositionFindings.isEmpty()) {
-                        item {
-                            Text(
-                                "В текущей сессии нет выбранных позиций.",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    } else {
-                        items(
-                            count = visiblePositionFindings.size,
-                            key = { index -> visiblePositionFindings[index].first.id },
-                        ) { index ->
-                            val (finding, lines) = visiblePositionFindings[index]
-                            InventoryCompletionFindingPositions(
-                                finding = finding,
-                                lines = lines,
-                                expanded = expandedFindingId == finding.id,
-                                onToggle = {
-                                    expandedFindingId = if (
-                                        expandedFindingId == finding.id
-                                    ) {
-                                        null
-                                    } else {
-                                        finding.id
-                                    }
-                                },
-                            )
-                        }
-                    }
-                }
-                item {
-                    Text("Риски", style = MaterialTheme.typography.titleMedium)
-                }
-                if (riskCounts.isEmpty()) {
-                    item {
-                        Text(
-                            "Рисков нет. Инвентаризацию можно завершить.",
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                } else {
-                    items(
-                        count = riskCounts.size,
-                        key = { riskCounts.keys.sorted()[it] },
-                    ) { index ->
-                        val code = riskCounts.keys.sorted()[index]
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                inventoryCompletionRiskLabel(code),
-                                modifier = Modifier.weight(1f),
-                            )
-                            StatusPill(
-                                label = riskCounts.getValue(code).toString(),
-                                emphasis = if (code in setOf("MISSING", "NOT_INSPECTED")) {
-                                    StatusPillEmphasis.Warning
-                                } else {
-                                    StatusPillEmphasis.Warning
-                                },
-                            )
-                        }
-                    }
-                }
-                if (blockingRisks.isNotEmpty()) {
-                    item {
-                        Text(
-                            "Завершение заблокировано. Устраните указанные риски и обновите проверку.",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                }
-                if (riskCounts.getOrDefault("NOT_INSPECTED", 0) > 0) {
-                    item {
-                        InventoryCompletionConfirmation(
-                            checked = confirmNotInspected,
-                            enabled = !busy && blockingRisks.isEmpty(),
-                            text = "Подтверждаю завершение с непроверенными бытовками (${riskCounts.getValue("NOT_INSPECTED")})",
-                            onCheckedChange = { confirmNotInspected = it },
-                        )
-                    }
-                }
-                if (riskCounts.getOrDefault("MISSING", 0) > 0) {
-                    item {
-                        InventoryCompletionConfirmation(
-                            checked = confirmMissing,
-                            enabled = !busy && blockingRisks.isEmpty(),
-                            text = "Подтверждаю отсутствующие бытовки (${riskCounts.getValue("MISSING")})",
-                            onCheckedChange = { confirmMissing = it },
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Button(
-                    onClick = {
-                        onComplete(confirmNotInspected, confirmMissing)
-                    },
-                    enabled = canComplete && !busy,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Завершить инвентаризацию")
-                }
-                if (conflictFindingId != null) {
-                    OutlinedButton(
-                        onClick = { onResolveConflict(conflictFindingId) },
-                        enabled = !busy,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Разрешить конфликт")
-                    }
-                }
-                TextButton(
-                    onClick = onRefresh,
-                    enabled = !busy,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Обновить проверку")
-                }
-                TextButton(
-                    onClick = onDismiss,
-                    enabled = !busy,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Закрыть")
-                }
-            }
-        },
-    )
-}
-
-private enum class InventoryPositionFilter(val label: String) {
-    ALL("Все"),
-    WORKS("Работы"),
-    MATERIALS("Материалы"),
-}
-
-@Composable
-private fun InventoryCompletionFindingPositions(
-    finding: InventoryFindingDto,
-    lines: List<dev.buhanzaz.rwms.manager.network.InventoryFrozenPlanLineDto>,
-    expanded: Boolean,
-    onToggle: () -> Unit,
-) {
-    ManagerPanel(onClick = onToggle) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                finding.displayCanonicalNumber,
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text("${lines.size} поз.", style = MaterialTheme.typography.labelLarge)
-        }
-        lines.forEach { line ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(
-                    line.description,
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Text(
-                    "${line.quantity} ${line.unit}",
-                    style = MaterialTheme.typography.labelSmall,
-                )
-            }
-        }
-        if (expanded) {
-            HorizontalDivider()
-            val passport = finding.inventoryPassportFacts()
-            InventoryPassportFact("Тип", passport.rentalType)
-            InventoryPassportFact("Габариты", passport.dimensions)
-            InventoryPassportFact("Отделка", passport.finishing)
-            Text(
-                "Фотографий: ${finding.media.size}",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                finding.comment.ifBlank { "Без комментария" },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            Text(
-                "Нажмите, чтобы открыть данные бытовки",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
-private fun InventoryCompletionMetric(
-    label: String,
-    value: String,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, style = MaterialTheme.typography.labelLarge)
-    }
-}
-
-@Composable
-private fun InventoryCompletionConfirmation(
-    checked: Boolean,
-    enabled: Boolean,
-    text: String,
-    onCheckedChange: (Boolean) -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .clickable(enabled = enabled) { onCheckedChange(!checked) },
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Checkbox(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            enabled = enabled,
+        Text(
+            INVENTORY_FIELD_ONLY_SESSION_NOTICE,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Text(text, modifier = Modifier.weight(1f))
     }
-}
-
-private fun formatInventoryMinor(value: Long): String =
-    "${value / 100},${(value % 100).toString().padStart(2, '0')} ₽"
-
-private fun formatInventoryMinutes(value: String): String {
-    val total = value.toBigDecimalOrNull()?.toLong() ?: 0L
-    val hours = total / 60
-    val minutes = total % 60
-    return if (hours == 0L) "$minutes мин" else "$hours ч $minutes мин"
-}
-
-private fun formatInventoryDuration(seconds: Long): String {
-    val hours = seconds / 3_600
-    val minutes = (seconds % 3_600) / 60
-    return if (hours == 0L) "$minutes мин" else "$hours ч $minutes мин"
 }
 
 @Composable
@@ -1023,6 +587,13 @@ private fun InventoryFindingCard(
             label = "Отделка",
             value = passport.finishing,
         )
+        inventoryAfterRentEstimateNotice(finding.inventoryBusinessStatus())?.let { notice ->
+            Text(
+                notice,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Text(
             finding.comment.ifBlank { "Без комментария" },
             style = MaterialTheme.typography.bodyMedium,
@@ -1359,6 +930,14 @@ fun InventoryEditorScreen(
                         }
                     }
                     Text(editor.number, style = MaterialTheme.typography.headlineSmall)
+                    inventoryAfterRentEstimateNotice(editor.finding?.inventoryBusinessStatus())?.let {
+                        notice ->
+                        Text(
+                            notice,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     if (!editor.canInspect) {
                         Text(
                             editor.finding?.conflicts?.joinToString("\n") { it.message }
@@ -1759,6 +1338,7 @@ fun InventoryPhotosScreen(
     }
     var galleryPhotoUri by remember(editor.findingId) { mutableStateOf<String?>(null) }
     val photoError = editor.inventoryPhotoValidationError()
+    val persistedPhotoCount = editor.persistedInventoryMediaReferences().size
 
     // Inventory uses the same photo step as estimates and repairs.  It is deliberately not
     // labelled as a separate "photo inventory" mode: a tap chooses the cover and a hold opens
@@ -1773,7 +1353,12 @@ fun InventoryPhotosScreen(
                 ManagerPanel {
                     Text("Фото состояния", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Выберите титульное фото.",
+                        if (persistedPhotoCount > 0) {
+                            "Сохранённые фотографии: $persistedPhotoCount. " +
+                                "Они останутся в проверке; новые фото можно добавить при необходимости."
+                        } else {
+                            "Добавьте фото и выберите титульное."
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1924,7 +1509,8 @@ fun InventoryFurnitureDecisionScreen(
             ManagerPanel {
                 Text("Есть мебель в бытовке?", style = MaterialTheme.typography.titleLarge)
                 Text(
-                    "Если мебели нет, состав комплектации не будет изменён.",
+                    "Сохраните фактическое наличие мебели как доказательство осмотра. " +
+                        "Задание на комплектацию или перемещение из телефона не создаётся.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -1944,7 +1530,7 @@ fun InventoryFurnitureScreen(
     busy: Boolean,
     onBack: () -> Unit,
     onEdit: ((InventoryEditorState) -> InventoryEditorState) -> Unit,
-    onContinue: (InventoryFurnitureDisposition) -> Unit,
+    onContinue: () -> Unit,
 ) {
     if (editor == null) {
         ManagerScreenScaffold(title = "Комплектация мебелью", onBack = onBack) { padding ->
@@ -1957,7 +1543,7 @@ fun InventoryFurnitureScreen(
         return
     }
     val validationError = editor.inventoryEquipmentObservationValidationError()
-    var dispositionDialogVisible by remember(editor.findingId) { mutableStateOf(false) }
+    val furnitureCatalog = editor.equipmentCatalog.inventoryFurnitureCatalog()
     ManagerScreenScaffold(title = "Комплектация мебелью", onBack = onBack) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding),
@@ -1970,7 +1556,7 @@ fun InventoryFurnitureScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (editor.equipmentCatalog.isEmpty()) {
+            if (furnitureCatalog.isEmpty()) {
                 item {
                     EmptyState(
                         title = "Номенклатура не найдена",
@@ -1979,10 +1565,10 @@ fun InventoryFurnitureScreen(
                 }
             } else {
                 items(
-                    count = editor.equipmentCatalog.size,
-                    key = { editor.equipmentCatalog[it].id },
+                    count = furnitureCatalog.size,
+                    key = { furnitureCatalog[it].id },
                 ) { index ->
-                    val equipment = editor.equipmentCatalog[index]
+                    val equipment = furnitureCatalog[index]
                     val currentText = editor.inventoryEquipmentQuantityText(equipment.id)
                     ManagerPanel {
                         Text(
@@ -2050,65 +1636,13 @@ fun InventoryFurnitureScreen(
                     Text(error, color = MaterialTheme.colorScheme.error)
                 }
                 Button(
-                    onClick = {
-                        if (editor.hasObservedFurniture()) {
-                            dispositionDialogVisible = true
-                        } else {
-                            onContinue(InventoryFurnitureDisposition.KEEP_IN_CABIN)
-                        }
-                    },
+                    onClick = onContinue,
                     enabled = validationError == null && !busy,
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Продолжить") }
             }
         }
     }
-    if (dispositionDialogVisible) {
-        InventoryFurnitureDispositionDialog(
-            onDismiss = { dispositionDialogVisible = false },
-            onKeepInCabin = {
-                dispositionDialogVisible = false
-                onContinue(InventoryFurnitureDisposition.KEEP_IN_CABIN)
-            },
-            onMoveToStock = {
-                dispositionDialogVisible = false
-                onContinue(InventoryFurnitureDisposition.MOVE_TO_STOCK)
-            },
-        )
-    }
-}
-
-@Composable
-private fun InventoryFurnitureDispositionDialog(
-    onDismiss: () -> Unit,
-    onKeepInCabin: () -> Unit,
-    onMoveToStock: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Что сделать с мебелью?") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    "Сохраните фактическую комплектацию в бытовке или создайте задание " +
-                        "на перемещение всей мебели на склад.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                OutlinedButton(
-                    onClick = onKeepInCabin,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Оставить в бытовке") }
-                Button(
-                    onClick = onMoveToStock,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Переместить на склад") }
-            }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Отмена") }
-        },
-    )
 }
 
 @Composable
@@ -2179,16 +1713,13 @@ fun InventoryConfirmationScreen(
     val photoError = editor.inventoryPhotoValidationError()
     val furnitureError = editor.inventoryEquipmentObservationValidationError()
     val planError = when {
+        editor.planLines.isEmpty() &&
+            editor.planMovementToRepair ->
+            "Передача в ремонт доступна, когда в проверке есть работы или материалы"
         editor.planLines.isEmpty() -> null
         !maintenanceCanAdvance(maintenancePlan, step = 3) ->
             "Проверьте количество, цену и маршрут работ и материалов"
-        editor.planPriority !in 1..5 -> if (maintenancePlan.movementToRepair) {
-            "Выберите приоритет перемещения от 1 до 5"
-        } else {
-            "Выберите приоритет ремонта от 1 до 5"
-        }
-        maintenancePlan.logisticsPlanningValidationError() != null ->
-            requireNotNull(maintenancePlan.logisticsPlanningValidationError())
+        editor.planPriority !in 1..5 -> "Выберите приоритет от 1 до 5"
         else -> null
     }
     val validationError = photoError ?: furnitureError ?: creationError ?: planError
@@ -2208,60 +1739,27 @@ fun InventoryConfirmationScreen(
                 )
                 Text(
                     when (editor.equipmentObservationRequested) {
-                        true -> when (editor.furnitureDisposition) {
-                            InventoryFurnitureDisposition.KEEP_IN_CABIN ->
-                                "После сохранения будет создано задание по комплектации мебели"
-                            InventoryFurnitureDisposition.MOVE_TO_STOCK ->
-                                "После сохранения будет создано задание перемещения мебели на склад"
-                        }
+                        true -> "Комплектация мебели сохранится как доказательство осмотра"
                         false -> "Мебель не проверялась"
                         null -> "Не выбран вариант мебели"
                     },
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                inventoryAfterRentEstimateNotice(editor.finding?.inventoryBusinessStatus())?.let { notice ->
+                    Text(
+                        notice,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             if (editor.planLines.isNotEmpty()) {
                 ManagerPanel {
-                    RepairMovementLogisticsOptions(
+                    InventoryRepairDeliveryOptions(
                         editor = maintenancePlan,
                         enabled = !busy,
                         onEdit = onEditPlan,
                     )
-                    Text(
-                        if (maintenancePlan.movementToRepair) {
-                            "Приоритет перемещения"
-                        } else {
-                            "Приоритет ремонта"
-                        },
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    if (maintenancePlan.movementToRepair) {
-                        Text(
-                            "После доставки ремонт появится в очереди работ с системным " +
-                                "приоритетом 1.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Row(
-                        modifier = Modifier.horizontalScroll(
-                            androidx.compose.foundation.rememberScrollState(),
-                        ),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        (1..5).forEach { priority ->
-                            FilterChip(
-                                selected = editor.planPriority == priority,
-                                onClick = {
-                                    onEditPlan { current ->
-                                        current.copy(priority = priority)
-                                    }
-                                },
-                                enabled = !busy,
-                                label = { Text(priority.toString()) },
-                            )
-                        }
-                    }
                 }
             }
             validationError?.let { error ->
@@ -2276,6 +1774,66 @@ fun InventoryConfirmationScreen(
             }
         }
     }
+}
+
+@Composable
+private fun InventoryRepairDeliveryOptions(
+    editor: dev.buhanzaz.rwms.manager.ui.MaintenanceEditorState,
+    enabled: Boolean,
+    onEdit: ((dev.buhanzaz.rwms.manager.ui.MaintenanceEditorState) ->
+        dev.buhanzaz.rwms.manager.ui.MaintenanceEditorState) -> Unit,
+) {
+    Text("Результат проверки", style = MaterialTheme.typography.titleMedium)
+    Text(
+        "Выберите приоритет для будущей сверки в панели.",
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Row(
+        modifier = Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        (1..5).forEach { priority ->
+            FilterChip(
+                selected = editor.priority == priority,
+                onClick = { onEdit { current -> current.copy(priority = priority) } },
+                enabled = enabled,
+                label = { Text("Приоритет $priority") },
+            )
+        }
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Checkbox(
+            checked = editor.movementToRepair,
+            onCheckedChange = { deliverToRepair ->
+                onEdit { current ->
+                    current.copy(
+                        movementToRepair = deliverToRepair,
+                        logisticsPlanningMode = if (deliverToRepair) {
+                            LOGISTICS_PLANNING_MODE_AUTO
+                        } else {
+                            null
+                        },
+                        logisticsScheduledDate = null,
+                    )
+                }
+            },
+            enabled = enabled,
+        )
+        Text(
+            "Передать бытовку в ремонт после общей сверки",
+            modifier = Modifier.weight(1f),
+        )
+    }
+    Text(
+        "Телефон сохраняет только проверку бытовки. Задача ремонта или перемещения " +
+            "из этой проверки не создаётся.",
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        style = MaterialTheme.typography.bodySmall,
+    )
 }
 
 internal const val INVENTORY_PHOTO_PREVIEW_HOLD_MILLIS = 1_500L

@@ -89,13 +89,7 @@ type RepairAcceptanceDossierProps = {
   onDecision?: () => void
 }
 
-function subtaskTitle(subtask: RepairTaskSubtaskDto, index: number) {
-  if (subtask.kind === "MOVE_TO_REPAIR") {
-    return `Этап ${index + 1}: перемещение в ремонт`
-  }
-  if (subtask.kind === "MOVE_FROM_REPAIR") {
-    return `Этап ${index + 1}: перемещение из ремонта`
-  }
+function subtaskTitle(index: number) {
   return `Этап ${index + 1}: ремонтные работы`
 }
 
@@ -701,7 +695,7 @@ function RepairStageSection({
   canReview: boolean
   onWorkDecision: (lineId: string, decision: WorkReviewDecision) => void
 }) {
-  const title = subtaskTitle(subtask, index)
+  const title = subtaskTitle(index)
   const titleId = `repair-stage-${subtask.id}`
   return (
     <section

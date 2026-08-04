@@ -233,6 +233,43 @@ public class RepairStage {
     return true;
   }
 
+  /** Local cancellation for a never-queued repair superseded before any task-board effect. */
+  public void supersedeForInventoryPublication() {
+    if (state != RepairStageState.PLANNED || externalQueueEntryId != null) {
+      throw new IllegalStateException("Only an unqueued repair stage can be superseded");
+    }
+    state = RepairStageState.CANCELLED;
+    taskGenerationState = "NOT_REQUIRED";
+    deliveryState = "DELIVERED";
+    deliveryUpdatedAt = MaintenanceTime.now();
+  }
+
+  /**
+   * Local terminal mirror of task-board's atomic cancel-if-pre-start result. Task-board keeps
+   * the external entry as audit truth; maintenance keeps the mapping but makes it ineligible for
+   * every local reconciliation worker.
+   */
+  public void supersedeQueuedForInventoryPublication() {
+    if (state != RepairStageState.PLANNED && state != RepairStageState.QUEUED) {
+      throw new IllegalStateException("Only a pre-start repair stage can be superseded");
+    }
+    state = RepairStageState.CANCELLED;
+    taskGenerationState = "NOT_REQUIRED";
+    deliveryState = "DELIVERED";
+    deliveryUpdatedAt = MaintenanceTime.now();
+  }
+
+  /** External-capital stages have no ordinary task-board route to preserve. */
+  public void supersedeExternalCapitalForInventoryPublication() {
+    if (state != RepairStageState.DONE || !"NOT_REQUIRED".equals(taskGenerationState)) {
+      throw new IllegalStateException(
+          "Only an unaccepted external-capital stage can be superseded");
+    }
+    state = RepairStageState.CANCELLED;
+    deliveryState = "DELIVERED";
+    deliveryUpdatedAt = MaintenanceTime.now();
+  }
+
   public UUID getId() { return id; }
   public UUID getRepairId() { return repairId; }
   public int getStageNo() { return stageNo; }

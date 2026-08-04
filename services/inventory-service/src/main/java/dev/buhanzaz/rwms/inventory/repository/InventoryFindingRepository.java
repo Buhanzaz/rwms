@@ -20,7 +20,7 @@ public interface InventoryFindingRepository extends JpaRepository<InventoryFindi
   Optional<InventoryFinding> findByIdAndInventoryIdAndMembershipActiveTrue(
       UUID id, UUID inventoryId);
 
-  Optional<InventoryFinding> findByInventoryIdAndIdentityMatchKey(
+  Optional<InventoryFinding> findByInventoryIdAndIdentityMatchKeyAndMembershipActiveTrue(
       UUID inventoryId, String matchKey);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)
@@ -28,8 +28,9 @@ public interface InventoryFindingRepository extends JpaRepository<InventoryFindi
       """
       select finding from InventoryFinding finding
        where finding.inventoryId = :inventoryId and finding.identityMatchKey = :matchKey
+         and finding.membershipActive = true
       """)
-  Optional<InventoryFinding> findByInventoryIdAndIdentityMatchKeyForUpdate(
+  Optional<InventoryFinding> findActiveByInventoryIdAndIdentityMatchKeyForUpdate(
       @Param("inventoryId") UUID inventoryId, @Param("matchKey") String matchKey);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)
@@ -39,6 +40,7 @@ public interface InventoryFindingRepository extends JpaRepository<InventoryFindi
        where finding.inventoryId = session.id
          and session.lifecycle = dev.buhanzaz.rwms.inventory.domain.SessionLifecycle.ACTIVE
          and finding.assetId = :assetId
+         and finding.membershipActive = true
       """)
   List<InventoryFinding> findInActiveSessionsByAssetIdForUpdate(
       @Param("assetId") UUID assetId);

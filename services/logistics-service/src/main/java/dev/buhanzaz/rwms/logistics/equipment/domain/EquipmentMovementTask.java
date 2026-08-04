@@ -37,7 +37,10 @@ import org.hibernate.proxy.HibernateProxy;
       @UniqueConstraint(
           name = "uk_equipment_movement_task_cancellation_key",
           columnNames = {"cancellation_requested_by_subject_id", "cancellation_idempotency_key"}),
-      @UniqueConstraint(name = "uk_equipment_movement_task_external", columnNames = "external_task_id")
+      @UniqueConstraint(name = "uk_equipment_movement_task_external", columnNames = "external_task_id"),
+      @UniqueConstraint(
+          name = "uk_equipment_movement_task_owner",
+          columnNames = {"owner_type", "owner_id"})
     })
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
@@ -53,6 +56,13 @@ public class EquipmentMovementTask {
 
   @Column(name = "warehouse_id", nullable = false)
   private UUID warehouseId;
+
+  @Enumerated(EnumType.STRING)
+  @Column(name = "owner_type", nullable = false, length = 32)
+  private EquipmentMovementTaskOwnerType ownerType;
+
+  @Column(name = "owner_id")
+  private UUID ownerId;
 
   @Column(name = "external_task_id", nullable = false)
   private UUID externalTaskId;
@@ -129,6 +139,28 @@ public class EquipmentMovementTask {
       UUID createdBySubjectId,
       UUID idempotencyKey,
       String requestSha256) {
+    return create(
+        warehouseId,
+        unitNumber,
+        plannedDurationMinutes,
+        deadlineAt,
+        createdBySubjectId,
+        idempotencyKey,
+        EquipmentMovementTaskOwnerType.USER_REQUEST,
+        null,
+        requestSha256);
+  }
+
+  public static EquipmentMovementTask create(
+      UUID warehouseId,
+      String unitNumber,
+      Integer plannedDurationMinutes,
+      OffsetDateTime deadlineAt,
+      UUID createdBySubjectId,
+      UUID idempotencyKey,
+      EquipmentMovementTaskOwnerType ownerType,
+      UUID ownerId,
+      String requestSha256) {
     if (warehouseId == null
         || deadlineAt == null
         || createdBySubjectId == null
@@ -138,8 +170,11 @@ public class EquipmentMovementTask {
     if (plannedDurationMinutes == null || plannedDurationMinutes < 1) {
       throw new IllegalArgumentException("plannedDurationMinutes is invalid");
     }
+    requireOwner(ownerType, ownerId);
     EquipmentMovementTask task = new EquipmentMovementTask();
     task.warehouseId = warehouseId;
+    task.ownerType = ownerType;
+    task.ownerId = ownerId;
     task.externalTaskId = UUID.randomUUID();
     task.unitNumber = optionalText(unitNumber, 64, "unitNumber");
     task.plannedDurationMinutes = plannedDurationMinutes;
@@ -153,6 +188,27 @@ public class EquipmentMovementTask {
     task.updatedAt = task.createdAt;
     task.nextAttemptAt = task.createdAt;
     return task;
+  }
+
+  public boolean isOwnedBy(EquipmentMovementTaskOwnerType expectedOwnerType, UUID expectedOwnerId) {
+    return ownerType == expectedOwnerType && Objects.equals(ownerId, expectedOwnerId);
+  }
+
+  /**
+   * Asset-service fences a maintenance disposition by its durable decision, not this local task.
+   * Public tasks retain their established task-id fence.
+   */
+  public UUID assetMovementOwnerId() {
+    if (ownerType == EquipmentMovementTaskOwnerType.MAINTENANCE_DISPOSITION) {
+      if (ownerId == null) {
+        throw new IllegalStateException("Maintenance movement task owner is missing");
+      }
+      return ownerId;
+    }
+    if (id == null) {
+      throw new IllegalStateException("Public equipment movement task id is missing");
+    }
+    return id;
   }
 
   public boolean matchesRequest(String checksum) {
@@ -353,6 +409,15 @@ public class EquipmentMovementTask {
       throw new IllegalArgumentException("requestSha256 is invalid");
     }
     return value;
+  }
+
+  private static void requireOwner(EquipmentMovementTaskOwnerType ownerType, UUID ownerId) {
+    if (ownerType == null) {
+      throw new IllegalArgumentException("Equipment movement task owner type is required");
+    }
+    if (ownerType == EquipmentMovementTaskOwnerType.MAINTENANCE_DISPOSITION && ownerId == null) {
+      throw new IllegalArgumentException("Maintenance equipment movement decision is required");
+    }
   }
 
   private static OffsetDateTime now() {

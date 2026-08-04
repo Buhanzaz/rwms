@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.taskboard;
 import static dev.buhanzaz.rwms.taskboard.QueueFixtureModels.*;
 
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
+import static dev.buhanzaz.rwms.taskboard.api.KpiSettingsApiModels.*;
 import static dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.EvidenceReservationRequest;
 import static dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerDeviceRegistrationRequest;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -9,6 +10,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import dev.buhanzaz.rwms.taskboard.domain.QueueType;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
 import dev.buhanzaz.rwms.taskboard.eventing.WorkerMediaEventProcessor;
+import dev.buhanzaz.rwms.taskboard.service.KpiSettingsService;
 import dev.buhanzaz.rwms.taskboard.service.RegistryService;
 import dev.buhanzaz.rwms.taskboard.service.TaskBoardService;
 import dev.buhanzaz.rwms.taskboard.service.WorkerOfflineLeaseCodec;
@@ -36,6 +38,7 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
   @Autowired WorkforceService workforce;
   @Autowired TaskBoardService board;
   @Autowired WorkerTaskBoardService workerBoard;
+  @Autowired KpiSettingsService kpiSettings;
   @Autowired WorkerOfflineLeaseCodec leases;
   @Autowired WorkerMediaEventProcessor mediaEvents;
   @Autowired JdbcTemplate jdbc;
@@ -82,6 +85,9 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
                 null,
                 null,
                 List.of(new QualificationRequest(workerClass.id(), true, null))));
+    jdbc.update(
+        "update worker set app_login='worker-photo' where id=?",
+        worker.id());
     var group =
         workforce.createGroup(
             WAREHOUSE,
@@ -96,6 +102,29 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
         WAREHOUSE,
         worker.id(),
         new SetCurrentGroupRequest(worker.version(), group.id()));
+    kpiSettings.savePalette(
+        WAREHOUSE,
+        new SaveKpiPaletteRequest(
+            0,
+            List.of(
+                new KpiPaletteRangeRequest(0, 60, "#DC2626"),
+                new KpiPaletteRangeRequest(60, 85, "#EAB308"),
+                new KpiPaletteRangeRequest(85, 100, "#16A34A")),
+            "#7F1D1D"));
+    var context = workerBoard.context(worker.id(), WAREHOUSE);
+    assertThat(context.categories())
+        .singleElement()
+        .satisfies(category -> assertThat(category.groupIds()).containsExactly(group.id()));
+    assertThat(context.kpiPalette().ranges())
+        .extracting(
+            dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerKpiPaletteRange::fromPercent,
+            dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerKpiPaletteRange::toPercent,
+            dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerKpiPaletteRange::color)
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(0, 60, "#DC2626"),
+            org.assertj.core.groups.Tuple.tuple(60, 85, "#EAB308"),
+            org.assertj.core.groups.Tuple.tuple(85, 100, "#16A34A"));
+    assertThat(context.kpiPalette().overdueColor()).isEqualTo("#7F1D1D");
     UUID sourceMediaId = UUID.randomUUID();
     UUID workId = UUID.randomUUID();
     UUID materialId = UUID.randomUUID();

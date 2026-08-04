@@ -120,6 +120,60 @@ public class InventoryController {
     return inventory.findings(jwt, inventoryId, page, size, sort);
   }
 
+  @PostMapping("/sessions/{inventoryId}/registry-review")
+  public RegistryReviewView registryReview(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID inventoryId,
+      @Valid @RequestBody RegistryReviewRequest request) {
+    return inventory.registryReview(jwt, inventoryId, request);
+  }
+
+  @GetMapping("/sessions/{inventoryId}/statistics-preview")
+  public FrozenStatistics statisticsPreview(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID inventoryId) {
+    return inventory.preliminaryStatistics(jwt, inventoryId);
+  }
+
+  @GetMapping("/planning-settings/{warehouseId}")
+  public PlanningSettingsView planningSettings(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID warehouseId) {
+    return inventory.planningSettings(jwt, warehouseId);
+  }
+
+  @PutMapping("/planning-settings/{warehouseId}")
+  public PlanningSettingsView updatePlanningSettings(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID warehouseId,
+      @Valid @RequestBody PlanningSettingsUpdateRequest request) {
+    return inventory.updatePlanningSettings(jwt, warehouseId, request);
+  }
+
+  @PostMapping("/sessions/{inventoryId}/final-plan/prepare")
+  public ResponseEntity<FinalPlanView> prepareFinalPlan(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID inventoryId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody PrepareFinalPlanRequest request) {
+    return idempotent(
+        inventory.prepareFinalPlan(jwt, inventoryId, idempotencyKey, request), HttpStatus.OK);
+  }
+
+  @GetMapping("/sessions/{inventoryId}/final-plan")
+  public FinalPlanView finalPlan(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID inventoryId) {
+    return inventory.finalPlan(jwt, inventoryId);
+  }
+
+  @PutMapping("/sessions/{inventoryId}/final-plan")
+  public ResponseEntity<FinalPlanView> updateFinalPlan(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID inventoryId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody FinalPlanUpdateRequest request) {
+    return idempotent(
+        inventory.updateFinalPlan(jwt, inventoryId, idempotencyKey, request), HttpStatus.OK);
+  }
+
   @PostMapping("/sessions/{inventoryId}/number-resolutions")
   public ResponseEntity<NumberResolutionView> resolveNumber(
       @AuthenticationPrincipal Jwt jwt,

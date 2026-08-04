@@ -17,15 +17,27 @@ import type {
   InventorySessionDto,
   InventoryStatisticsDto,
 } from "@/features/inventory/model/inventory"
-import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/repair-estimate"
+import type {
+  RepairEstimateCompletionMode,
+  RepairEstimateLineDto,
+  RepairEstimateTaskPlanDto,
+} from "@/features/repair-estimates/model/repair-estimate"
+import { ApiError } from "@/lib/api-client"
 
 const inventoryApi = vi.hoisted(() => ({
+  cancelInventory: vi.fn(),
   completeInventory: vi.fn(),
+  getInventoryFinalPlan: vi.fn(),
   getInventoryFurnitureReview: vi.fn(),
+  getInventoryPlanningSettings: vi.fn(),
+  getInventoryPreliminaryStatistics: vi.fn(),
   getInventory: vi.fn(),
+  prepareInventoryFinalPlan: vi.fn(),
   previewInventoryCompletion: vi.fn(),
+  reviewInventoryRegistry: vi.fn(),
   resolveInventoryFindingConflict: vi.fn(),
   saveInventoryFurnitureReview: vi.fn(),
+  saveInventoryFinalPlan: vi.fn(),
   saveInventoryFinding: vi.fn(),
   startInventoryFurnitureReview: vi.fn(),
   subscribeInventory: vi.fn(() => () => undefined),
@@ -55,13 +67,21 @@ vi.mock("@/features/inventory/api/inventory-api", async () => {
 
   return {
     ...actual,
+    cancelInventory: inventoryApi.cancelInventory,
     getInventory: inventoryApi.getInventory,
+    getInventoryPreliminaryStatistics:
+      inventoryApi.getInventoryPreliminaryStatistics,
     completeInventory: inventoryApi.completeInventory,
+    getInventoryFinalPlan: inventoryApi.getInventoryFinalPlan,
     getInventoryFurnitureReview: inventoryApi.getInventoryFurnitureReview,
+    getInventoryPlanningSettings: inventoryApi.getInventoryPlanningSettings,
+    prepareInventoryFinalPlan: inventoryApi.prepareInventoryFinalPlan,
     previewInventoryCompletion: inventoryApi.previewInventoryCompletion,
+    reviewInventoryRegistry: inventoryApi.reviewInventoryRegistry,
     resolveInventoryFindingConflict:
       inventoryApi.resolveInventoryFindingConflict,
     saveInventoryFurnitureReview: inventoryApi.saveInventoryFurnitureReview,
+    saveInventoryFinalPlan: inventoryApi.saveInventoryFinalPlan,
     saveInventoryFinding: inventoryApi.saveInventoryFinding,
     startInventoryFurnitureReview: inventoryApi.startInventoryFurnitureReview,
     subscribeInventory: inventoryApi.subscribeInventory,
@@ -121,16 +141,20 @@ vi.mock("@/features/repair-estimates/repair-work-completion-dialog", () => ({
   RepairWorkCompletionDialog: ({
     open,
     movementRouteAvailable,
+    initialCompletionMode,
+    initialTaskPlans,
     onComplete,
   }: {
     open: boolean
     movementRouteAvailable: boolean
+    initialCompletionMode?: RepairEstimateCompletionMode
+    initialTaskPlans?: RepairEstimateTaskPlanDto[]
     onComplete: (result: {
-      completionMode: "AUTO"
-      movementRequired: boolean
+      completionMode: RepairEstimateCompletionMode
+      movementToRepair: boolean
       logisticsPlanningMode: "FIXED_DATE"
       logisticsScheduledDate: string
-      taskPlans: []
+      taskPlans: RepairEstimateTaskPlanDto[]
       priority: 3
     }) => void
   }) =>
@@ -140,21 +164,21 @@ vi.mock("@/features/repair-estimates/repair-work-completion-dialog", () => ({
           <label>
             <input
               type="checkbox"
-              aria-label="Перемещение на отгрузку"
+              aria-label="Создать перемещение на ремонт"
               defaultChecked
             />
-            Перемещение на отгрузку
+            Создать перемещение на ремонт
           </label>
         ) : null}
         <button
           type="button"
           onClick={() =>
             onComplete({
-              completionMode: "AUTO",
-              movementRequired: true,
+              completionMode: initialCompletionMode ?? "AUTO",
+              movementToRepair: true,
               logisticsPlanningMode: "FIXED_DATE",
               logisticsScheduledDate: "2026-08-12",
-              taskPlans: [],
+              taskPlans: initialTaskPlans ?? [],
               priority: 3,
             })
           }
@@ -273,7 +297,7 @@ function finding(
     lines: [],
     repairCompletionMode: null,
     repairPriority: 3,
-    movementRequired: false,
+    movementToRepair: false,
     logisticsPlanningMode: "AUTO",
     logisticsScheduledDate: null,
     repairPlans: [],
@@ -318,6 +342,7 @@ function activeSession(
     reviewStage: "CABINS",
     furnitureReconciliationState: "NOT_REQUIRED",
     ...overrides,
+    cancellation: overrides.cancellation ?? null,
   }
 }
 
@@ -354,6 +379,60 @@ function furnitureReview(
   }
 }
 
+const FINAL_PLAN_SHA256 = "c".repeat(64)
+
+function finalPlan(sessionRevision = 2) {
+  return {
+    inventoryId: INVENTORY_ID,
+    sessionRevision,
+    finalPlanVersion: 1,
+    finalPlanSha256: FINAL_PLAN_SHA256,
+    planningSettingsRevision: 1,
+    state: "DRAFT" as const,
+    movementScheduleMode: "AUTO" as const,
+    repairScheduleMode: "AUTO" as const,
+    entries: [
+      {
+        findingId: FINDING_ID,
+        findingRevision: 1,
+        planFingerprintSha256: null,
+        targetKind: null,
+        hasWork: false,
+        order: 0,
+        priority: null,
+        movementToRepair: false,
+        movementScheduledDate: null,
+        repairScheduledDate: null,
+        collisionCandidates: [],
+        reconciliationDecision: null,
+      },
+    ],
+  }
+}
+
+function completionEvidence(sessionRevision = 2) {
+  return {
+    inventoryId: INVENTORY_ID,
+    sessionRevision,
+    finalPlanVersion: 1,
+    finalPlanSha256: FINAL_PLAN_SHA256,
+    findingRevisions: [{ findingId: FINDING_ID, expectedFindingRevision: 1 }],
+    validationSha256: "d".repeat(64),
+    validatedAt: "2026-07-27T08:30:00Z",
+    acknowledgementSha256: "e".repeat(64),
+    statistics: {},
+    risks: [],
+    validatedFindings: [],
+  }
+}
+
+function completionReview(session: InventorySessionDto) {
+  return {
+    ...session,
+    completionEvidence: completionEvidence(session.version),
+  }
+}
+
 function renderPage(
   initialEntry = `/inventory/${INVENTORY_ID}?findingId=${FINDING_ID}`
 ) {
@@ -364,7 +443,7 @@ function renderPage(
     },
   })
 
-  return render(
+  const rendered = render(
     <MemoryRouter initialEntries={[initialEntry]}>
       <QueryClientProvider client={queryClient}>
         <Routes>
@@ -384,9 +463,15 @@ function renderPage(
       </QueryClientProvider>
     </MemoryRouter>
   )
+  return { ...rendered, queryClient }
 }
 
 beforeEach(() => {
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: vi.fn(),
+    writable: true,
+  })
   auth.useAuth.mockReturnValue({
     accessToken: "inventory-token",
     currentUser,
@@ -401,9 +486,20 @@ beforeEach(() => {
   inspectionWorkspace.readyReferences = []
   viewport.isMobile = false
   inventoryApi.saveInventoryFinding.mockResolvedValue(finding("AFTER_RENT"))
+  inventoryApi.getInventoryPreliminaryStatistics.mockResolvedValue(null)
+  inventoryApi.getInventoryPlanningSettings.mockResolvedValue({
+    warehouseId: WAREHOUSE_ID,
+    settingsRevision: 1,
+    movementDailyCapacity: 6,
+    repairDailyCapacity: 6,
+    workingWeekdays: ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY"],
+    holidays: [],
+  })
+  inventoryApi.getInventoryFinalPlan.mockResolvedValue(finalPlan())
+  inventoryApi.prepareInventoryFinalPlan.mockResolvedValue(finalPlan())
+  inventoryApi.saveInventoryFinalPlan.mockResolvedValue(finalPlan())
   queueCapabilities.get.mockResolvedValue({
     warehouseId: WAREHOUSE_ID,
-    movementToShipmentAvailable: false,
     movementQueueDefinitions: [],
   })
 })
@@ -414,6 +510,66 @@ afterEach(() => {
 })
 
 describe("InventorySessionPage inspection", () => {
+  it("requires a reason, cancels by exact revision and opens the audit history", async () => {
+    const user = userEvent.setup()
+    const active = activeSession(finding("FREE"), { version: 7 })
+    const cancelledAt = "2026-07-27T09:00:00Z"
+    const cancelled = activeSession(finding("FREE"), {
+      version: 8,
+      status: "CANCELLED",
+      completedAt: cancelledAt,
+      cancellation: {
+        reason: "Ошибочно выбран склад",
+        cancelledAt,
+      },
+    })
+    inventoryApi.getInventory
+      .mockResolvedValueOnce(active)
+      .mockResolvedValue(cancelled)
+    inventoryApi.cancelInventory.mockResolvedValue(cancelled)
+
+    renderPage(`/inventory/${INVENTORY_ID}`)
+
+    await user.click(await screen.findByRole("button", { name: "Отменить" }))
+    const dialog = await screen.findByRole("dialog", {
+      name: "Отменить инвентаризацию?",
+    })
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: "Отменить инвентаризацию",
+      })
+    )
+    expect(within(dialog).getByText("Укажите причину отмены.")).toBeTruthy()
+    expect(inventoryApi.cancelInventory).not.toHaveBeenCalled()
+
+    await user.type(
+      within(dialog).getByRole("textbox", { name: "Причина отмены" }),
+      "Ошибочно выбран склад"
+    )
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: "Отменить инвентаризацию",
+      })
+    )
+
+    await waitFor(() =>
+      expect(inventoryApi.cancelInventory).toHaveBeenCalledWith({
+        inventoryId: INVENTORY_ID,
+        expectedVersion: 7,
+        reason: "Ошибочно выбран склад",
+      })
+    )
+    expect(
+      await screen.findByText("Инвентаризация отменена", {
+        selector: "[data-slot='badge']",
+      })
+    ).toBeTruthy()
+    expect(screen.getByText("Ошибочно выбран склад")).toBeTruthy()
+    expect(
+      screen.queryByRole("button", { name: "Передать в ремонты" })
+    ).toBeNull()
+  })
+
   it("requires a ready photo to accept an empty after-rent estimate", async () => {
     const user = userEvent.setup()
     inventoryApi.getInventory.mockResolvedValue(
@@ -521,8 +677,8 @@ describe("InventorySessionPage inspection", () => {
     await waitFor(() =>
       expect(inventoryApi.saveInventoryFinding).toHaveBeenCalledWith(
         expect.objectContaining({
-          movementRequired: false,
-          logisticsPlanningMode: "AUTO",
+          movementToRepair: false,
+          logisticsPlanningMode: undefined,
           logisticsScheduledDate: null,
         })
       )
@@ -530,9 +686,21 @@ describe("InventorySessionPage inspection", () => {
   })
 
   it("shows and preserves inventory movement when the current warehouse capability is available", async () => {
+    const existingPlan = {
+      id: "88888888-8888-4888-8888-888888888888",
+      kind: "REPAIR_WORK" as const,
+      includedLineIds: [workLine.id],
+      primaryLineId: workLine.id,
+      groupComment: "Сохранённая ручная группа",
+      queueId: "repair-queue",
+      queueName: "Ремонт",
+      routeQueueKind: "REPAIR" as const,
+      sortOrder: 10,
+      plannedDurationMinutes: 45,
+      photoRequired: true,
+    }
     queueCapabilities.get.mockResolvedValue({
       warehouseId: WAREHOUSE_ID,
-      movementToShipmentAvailable: true,
       movementQueueDefinitions: [
         {
           queueDefinitionId: "movement-definition",
@@ -542,7 +710,13 @@ describe("InventorySessionPage inspection", () => {
     })
     const user = userEvent.setup()
     inventoryApi.getInventory.mockResolvedValue(
-      activeSession(finding("FREE", { lines: [workLine] }))
+      activeSession(
+        finding("FREE", {
+          lines: [workLine],
+          repairCompletionMode: "MANUAL",
+          repairPlans: [existingPlan],
+        })
+      )
     )
 
     renderPage()
@@ -564,7 +738,7 @@ describe("InventorySessionPage inspection", () => {
 
     expect(
       await screen.findByRole("checkbox", {
-        name: "Перемещение на отгрузку",
+        name: "Создать перемещение на ремонт",
       })
     ).toBeTruthy()
     await user.click(screen.getByRole("button", { name: "Подтвердить работы" }))
@@ -572,9 +746,12 @@ describe("InventorySessionPage inspection", () => {
     await waitFor(() =>
       expect(inventoryApi.saveInventoryFinding).toHaveBeenCalledWith(
         expect.objectContaining({
-          movementRequired: true,
+          repairCompletionMode: "MANUAL",
+          repairPlans: [existingPlan],
+          movementToRepair: true,
           logisticsPlanningMode: "FIXED_DATE",
           logisticsScheduledDate: "2026-08-12",
+          priority: 3,
         })
       )
     )
@@ -611,6 +788,19 @@ describe("InventorySessionPage inspection", () => {
     )
 
     expect(comment.value).toBe("Черновик осмотра")
+    await user.click(
+      screen.getByRole("button", { name: "Обновить готовые фото" })
+    )
+    await user.click(screen.getByRole("button", { name: "Сохранить осмотр" }))
+    await waitFor(() =>
+      expect(inventoryApi.saveInventoryFinding).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expectedVersion: 2,
+          expectedFindingVersion: initialFinding.version,
+          comment: "Черновик осмотра",
+        })
+      )
+    )
   }, 8_000)
 })
 
@@ -700,7 +890,7 @@ describe("Inventory mobile restrictions", () => {
       within(actions as HTMLElement)
         .getAllByRole("button")
         .map((button) => button.textContent?.trim())
-    ).toEqual(["", "Добавить бытовку", "Закончить"])
+    ).toEqual(["", "Добавить бытовку", "Отменить", "Закончить"])
   })
 })
 
@@ -780,7 +970,7 @@ describe("InventorySessionPage filters", () => {
 })
 
 describe("InventoryFinishPage conflict resolution", () => {
-  function conflictFinding() {
+  function conflictFinding(overrides: Partial<InventoryFindingDto> = {}) {
     const base = finding("FREE")
     return {
       ...base,
@@ -799,6 +989,7 @@ describe("InventoryFinishPage conflict resolution", () => {
           actual: "Свободна",
         },
       ],
+      ...overrides,
     }
   }
 
@@ -816,7 +1007,11 @@ describe("InventoryFinishPage conflict resolution", () => {
       name: "Завершить проверку бытовок и перейти к мебели",
     })) as HTMLButtonElement
     expect(transition.disabled).toBe(true)
-    expect(screen.queryByRole("button", { name: "Завершить" })).toBeNull()
+    expect(
+      screen.queryByRole("button", {
+        name: "Завершить и применить итоговый план",
+      })
+    ).toBeNull()
 
     await user.click(screen.getByRole("checkbox"))
     await user.click(transition)
@@ -857,6 +1052,138 @@ describe("InventoryFinishPage conflict resolution", () => {
     )
   })
 
+  it("does not request cabin statistics-preview after moving from CABINS to FURNITURE", async () => {
+    const user = userEvent.setup()
+    const cabins = activeSession(
+      finding("FREE", { inspectionStatus: "READY" }),
+      { version: 8 }
+    )
+    const furniture = activeSession(
+      finding("FREE", { inspectionStatus: "READY" }),
+      {
+        version: 9,
+        reviewStage: "FURNITURE",
+        furnitureReconciliationState: "READY",
+      }
+    )
+    const review = furnitureReview({ sessionRevision: furniture.version })
+    inventoryApi.getInventory
+      .mockResolvedValueOnce(cabins)
+      .mockResolvedValue(furniture)
+    inventoryApi.getInventoryPreliminaryStatistics.mockResolvedValue(
+      finishStatistics
+    )
+    inventoryApi.startInventoryFurnitureReview.mockResolvedValue(review)
+    inventoryApi.getInventoryFurnitureReview.mockResolvedValue(review)
+
+    renderPage(`/inventory/${INVENTORY_ID}/finish`)
+
+    await waitFor(() =>
+      expect(inventoryApi.getInventoryPreliminaryStatistics).toHaveBeenCalledTimes(
+        1
+      )
+    )
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Завершить проверку бытовок и перейти к мебели",
+      })
+    )
+
+    await waitFor(() =>
+      expect(inventoryApi.getInventory).toHaveBeenCalledTimes(2)
+    )
+    expect(await screen.findByText("Сверка мебели")).toBeTruthy()
+    expect(inventoryApi.getInventoryPreliminaryStatistics).toHaveBeenCalledTimes(
+      1
+    )
+  })
+
+  it("opens a stale-data dialog and moves to the refreshed conflict resolution section", async () => {
+    const user = userEvent.setup()
+    const secondFindingId = "66666666-6666-4666-8666-666666666666"
+    const firstInitialFinding = finding("FREE", {
+      inspectionStatus: "READY",
+      version: 6,
+    })
+    const secondInitialFinding = finding("FREE", {
+      id: secondFindingId,
+      canonicalNumber: "БЫТ-002",
+      cabinNumber: "БЫТ-002",
+      inspectionStatus: "READY",
+      version: 6,
+    })
+    const reviewed = activeSession(firstInitialFinding, {
+      version: 8,
+      findings: [firstInitialFinding, secondInitialFinding],
+    })
+    const firstConflict = conflictFinding()
+    const secondConflict = conflictFinding({
+      id: secondFindingId,
+      canonicalNumber: "БЫТ-002",
+      cabinNumber: "БЫТ-002",
+    })
+    const persisted = activeSession(firstConflict, {
+      version: 9,
+      findings: [firstConflict, secondInitialFinding],
+    })
+    const refreshed = activeSession(firstConflict, {
+      version: 9,
+      findings: [firstConflict, secondConflict],
+    })
+    inventoryApi.getInventory
+      .mockResolvedValueOnce(reviewed)
+      .mockResolvedValue(persisted)
+    inventoryApi.startInventoryFurnitureReview.mockRejectedValueOnce(
+      new ApiError("Версия инвентаризации изменилась", 409)
+    )
+    inventoryApi.reviewInventoryRegistry.mockResolvedValue(refreshed)
+
+    const { queryClient } = renderPage(`/inventory/${INVENTORY_ID}/finish`)
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Завершить проверку бытовок и перейти к мебели",
+      })
+    )
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Данные инвентаризации изменились",
+    })
+    expect(
+      within(dialog).getByText(
+        /Перед переходом к мебели сравните данные и разрешите конфликты/
+      )
+    ).toBeTruthy()
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: "Перейти к разрешению конфликтов",
+      })
+    )
+
+    await waitFor(() =>
+      expect(inventoryApi.reviewInventoryRegistry).toHaveBeenCalledWith(
+        INVENTORY_ID
+      )
+    )
+    const conflictSection = (
+      await screen.findByRole("heading", { name: "Конфликты реестра" })
+    ).closest("section")!
+    expect(within(conflictSection).getByText("БЫТ-002")).toBeTruthy()
+    await waitFor(() =>
+      expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({
+        behavior: "smooth",
+        block: "start",
+      })
+    )
+
+    await queryClient.refetchQueries({
+      queryKey: ["inventory-service", "detail", INVENTORY_ID],
+    })
+
+    expect(within(conflictSection).getByText("БЫТ-001")).toBeTruthy()
+    expect(within(conflictSection).getByText("БЫТ-002")).toBeTruthy()
+  })
+
   it("shows completion actions only after the full furniture review is confirmed", async () => {
     const user = userEvent.setup()
     const staged = activeSession(
@@ -876,13 +1203,32 @@ describe("InventoryFinishPage conflict resolution", () => {
     inventoryApi.getInventoryFurnitureReview
       .mockResolvedValueOnce(pendingReview)
       .mockResolvedValue(confirmedReview)
-    inventoryApi.saveInventoryFurnitureReview.mockResolvedValue(confirmedReview)
-    inventoryApi.previewInventoryCompletion.mockResolvedValue(staged)
+    inventoryApi.getInventoryFinalPlan
+      .mockResolvedValueOnce(finalPlan())
+      .mockResolvedValue(null)
+    inventoryApi.saveInventoryFurnitureReview.mockImplementation(
+      async ({ review }: { review: InventoryFurnitureReviewDto }) => {
+        const savedReview = {
+          ...review,
+          confirmed: true,
+          reviewSha256: "b".repeat(64),
+        }
+        inventoryApi.getInventoryFurnitureReview.mockResolvedValue(savedReview)
+        return savedReview
+      }
+    )
+    inventoryApi.previewInventoryCompletion.mockResolvedValue(
+      completionReview(staged)
+    )
 
     renderPage(`/inventory/${INVENTORY_ID}/finish`)
 
     expect(await screen.findByText("Сверка мебели")).toBeTruthy()
-    expect(screen.queryByRole("button", { name: "Завершить" })).toBeNull()
+    expect(
+      screen.queryByRole("button", {
+        name: "Завершить и применить итоговый план",
+      })
+    ).toBeNull()
 
     await user.click(
       screen.getByRole("button", { name: "Сохранить сверку мебели" })
@@ -898,7 +1244,9 @@ describe("InventoryFinishPage conflict resolution", () => {
       })
     )
     expect(
-      await screen.findByRole("button", { name: "Завершить" })
+      await screen.findByRole("button", {
+        name: "Завершить и применить итоговый план",
+      })
     ).toBeTruthy()
 
     const stock = screen.getByLabelText(
@@ -907,7 +1255,11 @@ describe("InventoryFinishPage conflict resolution", () => {
     await user.clear(stock)
     await user.type(stock, "1")
     await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "Завершить" })).toBeNull()
+      expect(
+        screen.queryByRole("button", {
+          name: "Завершить и применить итоговый план",
+        })
+      ).toBeNull()
     )
 
     await user.click(
@@ -916,8 +1268,24 @@ describe("InventoryFinishPage conflict resolution", () => {
     await waitFor(() =>
       expect(inventoryApi.saveInventoryFurnitureReview).toHaveBeenCalledTimes(2)
     )
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Подготовить план и перейти к сверке заданий",
+      })
+    )
+    await waitFor(() =>
+      expect(inventoryApi.prepareInventoryFinalPlan).toHaveBeenCalledWith({
+        inventoryId: INVENTORY_ID,
+        expectedSessionRevision: 2,
+        expectedSettingsRevision: 1,
+        movementScheduleMode: "AUTO",
+        repairScheduleMode: "AUTO",
+      })
+    )
     expect(
-      await screen.findByRole("button", { name: "Завершить" })
+      await screen.findByRole("button", {
+        name: "Завершить и применить итоговый план",
+      })
     ).toBeTruthy()
   })
 
@@ -945,10 +1313,62 @@ describe("InventoryFinishPage conflict resolution", () => {
       await screen.findByText("Обновляем версию инвентаризации...")
     ).toBeTruthy()
     expect(inventoryApi.previewInventoryCompletion).not.toHaveBeenCalled()
-    expect(screen.queryByRole("button", { name: "Завершить" })).toBeNull()
+    expect(
+      screen.queryByRole("button", {
+        name: "Завершить и применить итоговый план",
+      })
+    ).toBeNull()
   })
 
-  it("reports a blocked furniture reconciliation after completion", async () => {
+  it("does not preview or apply a stale final plan and requires rebuilding it", async () => {
+    const user = userEvent.setup()
+    const staged = activeSession(
+      finding("FREE", { inspectionStatus: "READY" }),
+      {
+        version: 2,
+        reviewStage: "FURNITURE",
+        furnitureReconciliationState: "READY",
+      }
+    )
+    inventoryApi.getInventory.mockResolvedValue(staged)
+    inventoryApi.getInventoryFurnitureReview.mockResolvedValue(
+      furnitureReview({
+        confirmed: true,
+        reviewSha256: "b".repeat(64),
+      })
+    )
+    inventoryApi.getInventoryFinalPlan.mockResolvedValue({
+      ...finalPlan(),
+      state: "STALE",
+    })
+
+    renderPage(`/inventory/${INVENTORY_ID}/finish`)
+
+    expect(await screen.findByText("Итоговый план устарел")).toBeTruthy()
+    expect(inventoryApi.previewInventoryCompletion).not.toHaveBeenCalled()
+    expect(
+      screen.queryByRole("button", {
+        name: "Завершить и применить итоговый план",
+      })
+    ).toBeNull()
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Перестроить план по актуальным данным",
+      })
+    )
+    await waitFor(() =>
+      expect(inventoryApi.prepareInventoryFinalPlan).toHaveBeenCalledWith({
+        inventoryId: INVENTORY_ID,
+        expectedSessionRevision: 2,
+        expectedSettingsRevision: 1,
+        movementScheduleMode: "AUTO",
+        repairScheduleMode: "AUTO",
+      })
+    )
+  })
+
+  it("does not refetch the completion preview after successful completion", async () => {
     const user = userEvent.setup()
     const staged = activeSession(
       finding("FREE", { inspectionStatus: "READY" }),
@@ -974,18 +1394,28 @@ describe("InventoryFinishPage conflict resolution", () => {
     inventoryApi.getInventoryFurnitureReview.mockResolvedValue(
       furnitureReview({ confirmed: true, reviewSha256: "b".repeat(64) })
     )
-    inventoryApi.previewInventoryCompletion.mockResolvedValue(staged)
+    inventoryApi.previewInventoryCompletion
+      .mockResolvedValueOnce(completionReview(staged))
+      .mockRejectedValue(
+        new ApiError("Завершённую инвентаризацию нельзя проверять повторно", 409)
+      )
     inventoryApi.completeInventory.mockResolvedValue(completed)
 
     renderPage(`/inventory/${INVENTORY_ID}/finish`)
 
-    await user.click(await screen.findByRole("button", { name: "Завершить" }))
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Завершить и применить итоговый план",
+      })
+    )
 
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
         "Применение мебельных остатков заблокировано конфликтом актуальных данных."
       )
     )
+    await screen.findByText("Статус передачи")
+    expect(inventoryApi.previewInventoryCompletion).toHaveBeenCalledTimes(1)
   })
 
   it("shows and resolves a fresh registry conflict from the furniture preview", async () => {
@@ -1021,28 +1451,36 @@ describe("InventoryFinishPage conflict resolution", () => {
         furnitureReconciliationState: "NOT_REQUIRED",
       }
     )
-    inventoryApi.getInventory.mockResolvedValue(staged)
+    inventoryApi.getInventory
+      .mockResolvedValueOnce(staged)
+      .mockResolvedValue(conflictedFurniture)
     inventoryApi.getInventoryFurnitureReview.mockResolvedValue(
       furnitureReview({ confirmed: true, reviewSha256: "b".repeat(64) })
     )
-    inventoryApi.previewInventoryCompletion
-      .mockResolvedValueOnce(staged)
-      .mockResolvedValueOnce(staged)
-      .mockResolvedValue(conflictedFurniture)
+    inventoryApi.previewInventoryCompletion.mockResolvedValue(
+      completionReview(staged)
+    )
     inventoryApi.completeInventory.mockRejectedValue(
       new Error("Реестр изменился во время завершения")
     )
-    inventoryApi.resolveInventoryFindingConflict.mockResolvedValue(resolvedCabins)
+    inventoryApi.resolveInventoryFindingConflict.mockResolvedValue(
+      resolvedCabins
+    )
 
     renderPage(`/inventory/${INVENTORY_ID}/finish`)
 
-    await user.click(await screen.findByRole("button", { name: "Завершить" }))
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Завершить и применить итоговый план",
+      })
+    )
 
     await waitFor(() =>
       expect(inventoryApi.completeInventory).toHaveBeenCalledWith({
         inventoryId: INVENTORY_ID,
         expectedVersion: 2,
         actor: expect.objectContaining({ id: currentUser.id }),
+        completionEvidence: completionEvidence(2),
       })
     )
     expect(
@@ -1109,16 +1547,47 @@ describe("InventoryFinishPage conflict resolution", () => {
     expect(plainValue?.className).not.toContain("break-words")
   })
 
-  it("keeps all completion counters together and does not render line snapshots behind findings", async () => {
+  it("shows server-issued totals and all aggregate positions before furniture review", async () => {
+    const statisticsWithPositions: InventoryStatisticsDto = {
+      ...finishStatistics,
+      materialLineCount: 1,
+      materialTotal: "50.00",
+      grandTotal: "150.00",
+      aggregates: [
+        {
+          key: "work",
+          lineType: "WORK",
+          description: "Заменить дверь",
+          catalogNodeId: "88888888-8888-4888-8888-888888888888",
+          unit: "шт.",
+          quantity: 1,
+          unitPrice: "100.00",
+          total: "100.00",
+        },
+        {
+          key: "material",
+          lineType: "MATERIAL",
+          description: "Дверь металлическая",
+          catalogNodeId: "99999999-9999-4999-8999-999999999999",
+          unit: "шт.",
+          quantity: 1,
+          unitPrice: "50.00",
+          total: "50.00",
+        },
+      ],
+    }
     const reviewed = activeSession(
       finding("FREE", {
         inspectionStatus: "WORK_STAGED",
         lines: [workLine],
-        movementRequired: true,
+        movementToRepair: true,
       }),
-      { statistics: finishStatistics }
+      { statistics: null }
     )
     inventoryApi.getInventory.mockResolvedValue(reviewed)
+    inventoryApi.getInventoryPreliminaryStatistics.mockResolvedValue(
+      statisticsWithPositions
+    )
 
     renderPage(`/inventory/${INVENTORY_ID}/finish`)
 
@@ -1134,11 +1603,17 @@ describe("InventoryFinishPage conflict resolution", () => {
       within(completionSummary).getByText("Перемещения на ремонт и вывозы: 1")
     ).toBeTruthy()
     expect(
+      await within(completionSummary).findByText("Итого: 150,00 ₽")
+    ).toBeTruthy()
+    expect(
       within(screen.getByLabelText("Статистика инвентаризации")).queryByText(
         "Ожидалось: 1"
       )
     ).toBeNull()
-    expect(screen.queryByText("Заменить дверь")).toBeNull()
+    expect(await screen.findByText("Итоговые позиции")).toBeTruthy()
+    expect(screen.getByText("Заменить дверь")).toBeTruthy()
+    expect(screen.getByText("Дверь металлическая")).toBeTruthy()
+    expect(screen.getAllByText("150,00 ₽").length).toBeGreaterThan(0)
   })
 
   it("blocks completion and resolves a conflict by accepting the registry", async () => {
@@ -1169,7 +1644,7 @@ describe("InventoryFinishPage conflict resolution", () => {
     const moveToFurniture = (await screen.findByRole("button", {
       name: "Завершить проверку бытовок и перейти к мебели",
     })) as HTMLButtonElement
-    expect(moveToFurniture.disabled).toBe(true)
+    expect(moveToFurniture.disabled).toBe(false)
     expect(
       screen.getByText(
         "Урегулируйте все конфликты реестра перед переходом к сверке мебели."
@@ -1302,9 +1777,9 @@ describe("InventoryHistoryDetailPage furniture reconciliation", () => {
       "Применение мебельных остатков заблокировано"
     )
     expect(statusBadge.getAttribute("data-variant")).toBe("destructive")
-    expect(
-      within(statusCard).getByRole("alert").textContent
-    ).toContain("заблокировано конфликтом актуальных данных")
+    expect(within(statusCard).getByRole("alert").textContent).toContain(
+      "заблокировано конфликтом актуальных данных"
+    )
     expect(
       within(statusCard).queryByRole("button", { name: /повтор/i })
     ).toBeNull()

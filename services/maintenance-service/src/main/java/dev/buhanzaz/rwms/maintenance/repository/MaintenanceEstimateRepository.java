@@ -12,9 +12,20 @@ import org.springframework.data.repository.query.Param;
 
 public interface MaintenanceEstimateRepository extends JpaRepository<MaintenanceEstimate, UUID> {
   List<MaintenanceEstimate> findAllByWarehouseIdOrderByCreatedAtDesc(UUID warehouseId);
+  List<MaintenanceEstimate> findAllByRentalItemIdOrderByCreatedAtAscIdAsc(UUID rentalItemId);
   Optional<MaintenanceEstimate> findByIdAndWarehouseId(UUID id, UUID warehouseId);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select value from MaintenanceEstimate value where value.id = :id")
   Optional<MaintenanceEstimate> findByIdForUpdate(@Param("id") UUID id);
+
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      """
+      select value from MaintenanceEstimate value
+       where value.rentalItemId = :rentalItemId
+       order by value.id
+      """)
+  List<MaintenanceEstimate> findAllByRentalItemIdForUpdate(
+      @Param("rentalItemId") UUID rentalItemId);
 }

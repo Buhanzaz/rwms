@@ -62,6 +62,15 @@ class WorkerTaskDetailCompatibilityTest {
     }
 
     @Test
+    fun `legacy work decodes without work level source media ids`() {
+        val work = Json.decodeFromString<WorkerWorkDto>(
+            """{"id":"work-1","name":"Замена листа","quantity":1.0,"unit":"шт","durationMinutes":30,"comment":null}""",
+        )
+
+        assertThat(work.sourceMediaIds).isEmpty()
+    }
+
+    @Test
     fun `server timer snapshot decodes without deriving time on the device`() {
         val detail = Json { explicitNulls = false }.decodeFromString<WorkerTaskDetailDto>(
             """

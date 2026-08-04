@@ -227,9 +227,10 @@ public final class AssetApiModels {
   public record MaintenanceRentalItemSnapshot(
       UUID id, long version, UUID warehouseId, String number, RentalItemStatus status) {}
   public record EnsureMaintenanceFurnitureEquipmentRequest(
+      @NotNull UUID externalReferenceId,
       @NotBlank @Size(max = 255) String equipmentName) {}
   public record MaintenanceFurnitureEquipmentResponse(
-      UUID equipmentId, String equipmentName) {}
+      UUID externalReferenceId, UUID equipmentId, String equipmentName) {}
   public record AcquireMaintenanceOperationLeaseRequest(
       @NotNull UUID rentalItemId,
       @NotNull MaintenanceLeaseOwnerType ownerType,

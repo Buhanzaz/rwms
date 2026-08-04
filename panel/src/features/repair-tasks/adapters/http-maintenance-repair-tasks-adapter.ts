@@ -131,11 +131,23 @@ function toRepairEstimateLine(
   }
 }
 
-function customQueueBindingFromStage(
+type RepairWorkStage = MaintenanceRepairStage & { kind: "REPAIR_WORK" }
+
+function requireRepairWorkStage(
   stage: MaintenanceRepairStage
+): RepairWorkStage {
+  if (stage.kind !== "REPAIR_WORK") {
+    throw new Error(
+      "План прямого ремонта может содержать только этапы ремонтных работ."
+    )
+  }
+  return stage
+}
+
+function customQueueBindingFromStage(
+  stage: RepairWorkStage
 ): NonNullable<RepairEstimateLineDto["customQueueBinding"]> | null {
   if (
-    stage.kind !== "REPAIR_WORK" ||
     !stage.routing.queueId.trim() ||
     !stage.routing.queueName.trim() ||
     (stage.routing.queueType !== "REPAIR" &&
@@ -171,7 +183,7 @@ function plannedDurationFromWorkLines(lines: RepairEstimateLineDto[]) {
 }
 
 function toSubtask(
-  stage: MaintenanceRepairStage,
+  stage: RepairWorkStage,
   entry: TaskBoardEntryDto | null
 ): RepairTaskSubtaskDto {
   const groupIds = new Set(
@@ -300,15 +312,12 @@ function earliest(values: Array<string | null | undefined>) {
 }
 
 function isAwaitingMovementToRepair(repair: MaintenanceRepair) {
-  const repairWorkStages = repair.plan.stages.filter(
-    (stage) => stage.kind === "REPAIR_WORK"
-  )
   return (
     repair.executionState === "QUEUED" &&
     repair.complexity.type !== "CAPITAL" &&
-    repair.plan.stages.some((stage) => stage.kind === "MOVE_TO_REPAIR") &&
-    repairWorkStages.length > 0 &&
-    repairWorkStages.every(
+    repair.movementToRepair &&
+    repair.plan.stages.length > 0 &&
+    repair.plan.stages.every(
       (stage) => stage.taskSync.taskBoardRegistrationVersion === null
     )
   )
@@ -326,7 +335,7 @@ async function toTask(
 ): Promise<RepairTaskDto> {
   const entries = entriesByExternalTaskId(board)
   const subtasks = repair.plan.stages
-    .filter((stage) => stage.kind === "REPAIR_WORK")
+    .map(requireRepairWorkStage)
     .map((stage) =>
       toSubtask(
         stage,
@@ -373,6 +382,7 @@ async function toTask(
     decisionActorId: projection?.decisionActorId ?? null,
     taskBoardAvailable: board !== null,
     awaitingMovement: isAwaitingMovementToRepair(repair),
+    movementToRepair: repair.movementToRepair,
     logisticsPlanningMode: repair.logisticsPlanningMode,
     logisticsScheduledDate: repair.logisticsScheduledDate,
     createdAt: repair.createdAt,
@@ -390,9 +400,9 @@ function routeForSubtask(
   queues: WorkQueueDto[],
   stageNumber: number
 ): MaintenanceRoutingSnapshot {
-  const includesCustomWork =
-    subtask.kind === "REPAIR_WORK" &&
-    subtask.workLines.some((line) => line.catalogSnapshot === null)
+  const includesCustomWork = subtask.workLines.some(
+    (line) => line.catalogSnapshot === null
+  )
   if (
     includesCustomWork &&
     subtask.routeQueueKind !== "REPAIR" &&
@@ -406,15 +416,7 @@ function routeForSubtask(
   const exactByDefinitionId = subtask.queueId
     ? active.find((queue) => queue.definitionId === subtask.queueId)
     : undefined
-  const movementCandidates =
-    !subtask.queueId &&
-    subtask.kind !== "REPAIR_WORK" &&
-    subtask.routeQueueKind === "MOVEMENT"
-      ? active.filter((queue) => queue.type === "MOVEMENT")
-      : []
-  const exact =
-    exactByDefinitionId ??
-    (movementCandidates.length === 1 ? movementCandidates[0] : undefined)
+  const exact = exactByDefinitionId
   if (exact) {
     if (
       includesCustomWork &&
@@ -435,20 +437,6 @@ function routeForSubtask(
       queueName: exact.name,
       queueType: exact.type,
     }
-  }
-  if (movementCandidates.length > 1) {
-    throw new Error(
-      "Для перемещения подключите к складу ровно одну активную очередь типа «Перемещение»."
-    )
-  }
-  if (
-    !subtask.queueId &&
-    subtask.kind !== "REPAIR_WORK" &&
-    subtask.routeQueueKind === "MOVEMENT"
-  ) {
-    throw new Error(
-      "Для выбранного склада ещё не материализована активная очередь типа «Перемещение». Проверьте «Настройки доски задач → Каталог очередей» и синхронизацию склада."
-    )
   }
   if (subtask.queueName?.trim()) {
     throw new Error(
@@ -1049,6 +1037,7 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
         draft.version,
         command.priority,
         createMaintenanceIdempotencyKey(),
+        command.movementToRepair,
         command.logisticsPlanningMode,
         command.logisticsScheduledDate
       )

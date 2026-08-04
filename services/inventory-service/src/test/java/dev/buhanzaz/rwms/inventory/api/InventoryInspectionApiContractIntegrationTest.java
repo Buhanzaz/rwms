@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.inventory.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -304,8 +305,11 @@ class InventoryInspectionApiContractIntegrationTest {
             "select finding_revision from inventory_finding where id=?",
             Long.class,
             fixture.findingId());
+    FinalPlanFixture finalPlan = prepareFinalPlan(fixture, reviewedSessionRevision);
     ObjectNode preview = mapper.createObjectNode();
     preview.put("expectedSessionRevision", reviewedSessionRevision);
+    preview.put("finalPlanVersion", finalPlan.version());
+    preview.put("finalPlanSha256", finalPlan.sha256());
     preview
         .putArray("findingRevisions")
         .addObject()
@@ -526,8 +530,11 @@ class InventoryInspectionApiContractIntegrationTest {
   void emptyConfirmedFurnitureReviewCompletesWithoutReconciliationIntent() throws Exception {
     Fixture fixture = fixture("READY");
     ReviewFixture review = confirmEmptyFurnitureReview(fixture, "6".repeat(64));
+    FinalPlanFixture finalPlan = prepareFinalPlan(fixture, review.sessionRevision());
     ObjectNode previewRequest = mapper.createObjectNode();
     previewRequest.put("expectedSessionRevision", review.sessionRevision());
+    previewRequest.put("finalPlanVersion", finalPlan.version());
+    previewRequest.put("finalPlanSha256", finalPlan.sha256());
     previewRequest
         .putArray("findingRevisions")
         .addObject()
@@ -544,6 +551,8 @@ class InventoryInspectionApiContractIntegrationTest {
 
     ObjectNode completeRequest = mapper.createObjectNode();
     completeRequest.put("expectedSessionRevision", review.sessionRevision());
+    completeRequest.put("finalPlanVersion", previewBody.required("finalPlanVersion").asLong());
+    completeRequest.put("finalPlanSha256", previewBody.required("finalPlanSha256").asText());
     completeRequest.put("acknowledgementSha256", previewBody.required("acknowledgementSha256").asText());
     completeRequest.put("validationSha256", previewBody.required("validationSha256").asText());
     completeRequest
@@ -857,6 +866,41 @@ class InventoryInspectionApiContractIntegrationTest {
             fixture.findingId()));
   }
 
+  private FinalPlanFixture prepareFinalPlan(Fixture fixture, long expectedSessionRevision)
+      throws Exception {
+    doAnswer(
+            invocation -> {
+              JsonNode request = invocation.getArgument(1);
+              ObjectNode response = mapper.createObjectNode();
+              response.put("inventoryId", request.required("inventoryId").asText());
+              response.put("finalPlanVersion", request.required("finalPlanVersion").asLong());
+              response.put("finalPlanSha256", request.required("finalPlanSha256").asText());
+              ArrayNode findings = response.putArray("findings");
+              for (JsonNode finding : request.required("findings")) {
+                findings
+                    .addObject()
+                    .put("findingId", finding.required("findingId").asText())
+                    .putArray("candidates");
+              }
+              return response;
+            })
+        .when(dependencies)
+        .preflightReconciliation(any(), any());
+    ObjectNode request = mapper.createObjectNode();
+    request.put("expectedSessionRevision", expectedSessionRevision);
+    request.put("expectedSettingsRevision", 0);
+    request.put("movementScheduleMode", "AUTO");
+    request.put("repairScheduleMode", "AUTO");
+    HttpResponse<String> response =
+        post(
+            "/api/inventory/v1/sessions/" + fixture.inventoryId() + "/final-plan/prepare",
+            request.toString());
+    assertThat(response.statusCode()).withFailMessage(response.body()).isEqualTo(200);
+    JsonNode body = mapper.readTree(response.body());
+    return new FinalPlanFixture(
+        body.required("finalPlanVersion").asLong(), body.required("finalPlanSha256").asText());
+  }
+
   private byte[] readyMediaFact(Fixture fixture) {
     ObjectNode root = mapper.createObjectNode();
     root.put("envelopeVersion", 2);
@@ -993,4 +1037,6 @@ class InventoryInspectionApiContractIntegrationTest {
       UUID inventoryId, UUID findingId, UUID mediaId, UUID warehouseId, UUID assetId) {}
 
   private record ReviewFixture(long sessionRevision, long findingRevision) {}
+
+  private record FinalPlanFixture(long version, String sha256) {}
 }

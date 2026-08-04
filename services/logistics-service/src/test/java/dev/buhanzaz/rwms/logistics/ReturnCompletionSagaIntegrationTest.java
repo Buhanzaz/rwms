@@ -28,6 +28,7 @@ import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
 import dev.buhanzaz.rwms.logistics.order.repository.OrderClientRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.ReturnCompletionProcessor;
@@ -78,6 +79,7 @@ class ReturnCompletionSagaIntegrationTest {
   @Autowired JdbcTemplate jdbc;
   @Autowired OrderClientRepository clients;
   @Autowired RentalOrderRepository orders;
+  @Autowired LogisticsDocumentRepository logisticsDocuments;
 
   @MockitoBean LogisticsDependencyGateway dependencies;
 
@@ -467,11 +469,21 @@ class ReturnCompletionSagaIntegrationTest {
     order.saveForFulfillment();
     order.fulfill();
     order = orders.saveAndFlush(order);
+    LogisticsDocument shipment =
+        logisticsDocuments.saveAndFlush(
+            LogisticsDocument.createRentalOrderShipment(
+                WAREHOUSE,
+                client.getId(),
+                order.getId(),
+                client.getDisplayName(),
+                SUBJECT,
+                CORRELATION));
     LogisticsDocument returnDocument =
         LogisticsDocument.createRentalOrderReturn(
             WAREHOUSE,
             client.getId(),
             order.getId(),
+            shipment.getId(),
             client.getDisplayName(),
             SUBJECT,
             CORRELATION);
@@ -481,6 +493,7 @@ class ReturnCompletionSagaIntegrationTest {
     returnDocument.requireReturnInspection();
     returnDocument.beginReturnAcceptance();
     returnDocument.acceptReturn();
+    returnDocument = logisticsDocuments.saveAndFlush(returnDocument);
 
     documents.closeRentalOrderReturn(returnDocument);
     documents.closeRentalOrderReturn(returnDocument);

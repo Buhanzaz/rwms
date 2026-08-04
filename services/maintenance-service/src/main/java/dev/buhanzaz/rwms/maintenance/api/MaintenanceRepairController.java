@@ -144,6 +144,20 @@ public class MaintenanceRepairController {
     return idempotentOk(service.queueRepair(access.subjectId(jwt), idempotencyKey, id, request));
   }
 
+  @PostMapping("/repairs/{id}/inbound-delivery/retry")
+  public ResponseEntity<RepairCommandResult> retryInboundDelivery(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID id,
+      @RequestParam UUID warehouseId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody RetryInboundDeliveryRequest request) {
+    access.requireManage(jwt, warehouseId);
+    requireWarehouse(id, warehouseId);
+    return idempotentOk(
+        service.retryInboundDelivery(
+            access.subjectId(jwt), idempotencyKey, id, warehouseId, request));
+  }
+
   @PostMapping("/repairs/{id}/reworks")
   public ResponseEntity<RepairResponse> rework(
       @AuthenticationPrincipal Jwt jwt,

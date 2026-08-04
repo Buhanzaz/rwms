@@ -8,19 +8,27 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import jakarta.persistence.Version;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import org.hibernate.proxy.HibernateProxy;
 
 @Entity
-@Table(name = "warehouse")
+@Table(
+    name = "warehouse",
+    uniqueConstraints =
+        @UniqueConstraint(name = "uk_warehouse_normalized_name", columnNames = "normalized_name"))
 public class Warehouse {
+  private static final Pattern DISPLAY_NAME_WHITESPACE =
+      Pattern.compile("\\s+", Pattern.UNICODE_CHARACTER_CLASS);
 
   @Id
   @GeneratedValue(strategy = GenerationType.UUID)
@@ -34,6 +42,10 @@ public class Warehouse {
   @NotBlank
   @Column(name = "name", nullable = false, length = 255)
   private String name;
+
+  @NotBlank
+  @Column(name = "normalized_name", nullable = false, length = 255)
+  private String normalizedName;
 
   @NotBlank
   @Column(name = "city", nullable = false, length = 255)
@@ -80,21 +92,23 @@ public class Warehouse {
       ZoneId timeZone,
       boolean active,
       Integer sortOrder) {
-    String normalizedName = normalizeRequired(name, "name", 255);
+    CanonicalName canonicalName = canonicalName(name);
     String normalizedCity = normalizeRequired(city, "city", 255);
     String normalizedAddress = normalizeOptional(address, 1000);
     String normalizedTimeZone = normalizeTimeZone(timeZone);
     validateSortOrder(sortOrder);
     boolean deactivating = this.active && !active;
     boolean changed =
-        !Objects.equals(this.name, normalizedName)
+        !Objects.equals(this.name, canonicalName.displayName())
+            || !Objects.equals(this.normalizedName, canonicalName.normalizedName())
             || !Objects.equals(this.city, normalizedCity)
             || !Objects.equals(this.address, normalizedAddress)
             || !Objects.equals(this.timeZone, normalizedTimeZone)
             || this.active != active
             || !Objects.equals(this.sortOrder, sortOrder);
     if (!changed) return Mutation.NONE;
-    this.name = normalizedName;
+    this.name = canonicalName.displayName();
+    this.normalizedName = canonicalName.normalizedName();
     this.city = normalizedCity;
     this.address = normalizedAddress;
     this.timeZone = normalizedTimeZone;
@@ -130,7 +144,9 @@ public class Warehouse {
       ZoneId timeZone,
       boolean active,
       Integer sortOrder) {
-    this.name = normalizeRequired(name, "name", 255);
+    CanonicalName canonicalName = canonicalName(name);
+    this.name = canonicalName.displayName();
+    this.normalizedName = canonicalName.normalizedName();
     this.city = normalizeRequired(city, "city", 255);
     this.address = normalizeOptional(address, 1000);
     this.timeZone = normalizeTimeZone(timeZone);
@@ -140,7 +156,9 @@ public class Warehouse {
   }
 
   private void normalizePersistedState() {
-    name = normalizeRequired(name, "name", 255);
+    CanonicalName canonicalName = canonicalName(name);
+    name = canonicalName.displayName();
+    normalizedName = canonicalName.normalizedName();
     city = normalizeRequired(city, "city", 255);
     address = normalizeOptional(address, 1000);
     timeZone = normalizeTimeZone(ZoneId.of(timeZone));
@@ -152,6 +170,22 @@ public class Warehouse {
     String normalized = value.getId();
     if (normalized.length() > 64) throw new IllegalArgumentException("timeZone is too long");
     return normalized;
+  }
+
+  public static String normalizeName(String value) {
+    return canonicalName(value).normalizedName();
+  }
+
+  private static CanonicalName canonicalName(String value) {
+    if (value == null) throw new IllegalArgumentException("name is required");
+    String displayName = DISPLAY_NAME_WHITESPACE.matcher(value).replaceAll(" ").trim();
+    if (displayName.isEmpty()) throw new IllegalArgumentException("name is required");
+    if (displayName.length() > 255) throw new IllegalArgumentException("name is too long");
+    String normalizedName = displayName.toLowerCase(Locale.ROOT);
+    if (normalizedName.length() > 255) {
+      throw new IllegalArgumentException("name is too long after normalization");
+    }
+    return new CanonicalName(displayName, normalizedName);
   }
 
   private static String normalizeRequired(String value, String field, int maximumLength) {
@@ -182,6 +216,10 @@ public class Warehouse {
 
   public String getName() {
     return name;
+  }
+
+  public String getNormalizedName() {
+    return normalizedName;
   }
 
   public String getCity() {
@@ -241,4 +279,6 @@ public class Warehouse {
     CHANGED,
     DEACTIVATED
   }
+
+  private record CanonicalName(String displayName, String normalizedName) {}
 }

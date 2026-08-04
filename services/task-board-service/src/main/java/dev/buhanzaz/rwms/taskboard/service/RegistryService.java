@@ -263,8 +263,7 @@ public class RegistryService {
             .filter(queue -> queue.getPurpose() == QueuePurpose.LOGISTICS_DRIVER)
             .map(queue -> new MovementQueueCapability(queue.getDefinition().getId(), queue.getId()))
             .toList();
-    return new WarehouseQueueCapabilities(
-        warehouseId, !movementQueues.isEmpty(), movementQueues);
+    return new WarehouseQueueCapabilities(warehouseId, movementQueues);
   }
 
   /**

@@ -41,7 +41,6 @@ class InventoryPlanModelParsingTest {
                         "priority":2,
                         "coverMediaId":"44444444-4444-4444-4444-444444444444",
                         "movementToRepair":true,
-                        "movementToShipment":false,
                         "logisticsPlanningMode":"FIXED_DATE",
                         "logisticsScheduledDate":"2026-08-04",
                         "lines":[{
@@ -85,7 +84,6 @@ class InventoryPlanModelParsingTest {
             .isEqualTo("44444444-4444-4444-4444-444444444444")
         assertThat(finding.frozenPlan?.priority).isEqualTo(2)
         assertThat(finding.frozenPlan?.movementToRepair).isTrue()
-        assertThat(finding.frozenPlan?.movementToShipment).isFalse()
         assertThat(finding.frozenPlan?.logisticsPlanningMode).isEqualTo("FIXED_DATE")
         assertThat(finding.frozenPlan?.logisticsScheduledDate).isEqualTo("2026-08-04")
         assertThat(finding.frozenPlan?.lines?.single()?.description).isEqualTo("Замена ДВП")

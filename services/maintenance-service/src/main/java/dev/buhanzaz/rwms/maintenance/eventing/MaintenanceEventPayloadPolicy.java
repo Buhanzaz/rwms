@@ -5,6 +5,7 @@ import dev.buhanzaz.rwms.maintenance.domain.MaintenanceEventType;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventPayloads.CatalogVersionFact;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventPayloads.EstimateFact;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventPayloads.RepairFact;
+import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventPayloads.PropertyDispositionFact;
 import dev.buhanzaz.rwms.platform.contracts.DomainEventEnvelopeV2;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -61,14 +62,32 @@ public class MaintenanceEventPayloadPolicy {
       "stageId", "kind", "order", "state", "queueId", "taskSync");
   private static final Set<String> TASK_SYNC_FIELDS = Set.of(
       "externalTaskId", "taskBoardRegistrationVersion", "generationState", "deliveryState");
+  private static final Set<String> PROPERTY_DISPOSITION_FIELDS = Set.of(
+      "decisionId",
+      "warehouseId",
+      "assetKind",
+      "assetId",
+      "dispositionKind",
+      "source",
+      "state",
+      "assetEffectState",
+      "rootRepairId",
+      "sourceRepairId",
+      "inventoryId",
+      "findingId",
+      "movementTaskId",
+      "effectId",
+      "recoveryVersion");
   private static final Map<MaintenanceAggregateType, Class<?>> FACT_TYPES = Map.of(
       MaintenanceAggregateType.CATALOG_VERSION, CatalogVersionFact.class,
       MaintenanceAggregateType.ESTIMATE, EstimateFact.class,
-      MaintenanceAggregateType.REPAIR, RepairFact.class);
+      MaintenanceAggregateType.REPAIR, RepairFact.class,
+      MaintenanceAggregateType.PROPERTY_DISPOSITION, PropertyDispositionFact.class);
   private static final Map<MaintenanceAggregateType, String> ID_FIELDS = Map.of(
       MaintenanceAggregateType.CATALOG_VERSION, "catalogVersionId",
       MaintenanceAggregateType.ESTIMATE, "estimateId",
-      MaintenanceAggregateType.REPAIR, "repairId");
+      MaintenanceAggregateType.REPAIR, "repairId",
+      MaintenanceAggregateType.PROPERTY_DISPOSITION, "decisionId");
   private static final Set<String> FORBIDDEN_FIELDS = Set.of(
       "actor",
       "authorization",
@@ -162,6 +181,14 @@ public class MaintenanceEventPayloadPolicy {
           REPAIR_TRANSFERRED,
           REPAIR_ACCEPTED,
           REPAIR_WRITTEN_OFF -> MaintenanceAggregateType.REPAIR;
+      case PROPERTY_DISPOSITION_REQUESTED,
+          PROPERTY_DISPOSITION_APPROVED,
+          PROPERTY_DISPOSITION_REJECTED,
+          PROPERTY_DISPOSITION_MOVEMENT_PENDING,
+          PROPERTY_DISPOSITION_EFFECT_PENDING,
+          PROPERTY_DISPOSITION_EFFECTIVE,
+          PROPERTY_DISPOSITION_QUARANTINED,
+          PROPERTY_DISPOSITION_RECOVERED -> MaintenanceAggregateType.PROPERTY_DISPOSITION;
     };
   }
 
@@ -198,6 +225,7 @@ public class MaintenanceEventPayloadPolicy {
           requireExactFields(stage.get("taskSync"), TASK_SYNC_FIELDS);
         });
       }
+      case PROPERTY_DISPOSITION -> requireExactFields(payload, PROPERTY_DISPOSITION_FIELDS);
     }
   }
 

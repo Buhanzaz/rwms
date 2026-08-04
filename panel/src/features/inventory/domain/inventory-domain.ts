@@ -2,10 +2,7 @@ import type {
   InventoryFindingDto,
   InventoryRepairPlanSnapshotDto,
 } from "@/features/inventory/model/inventory"
-import type {
-  RepairEstimateLineDto,
-  RepairEstimateTaskPlanDto,
-} from "@/features/repair-estimates/model/repair-estimate"
+import type { RepairEstimateTaskPlanDto } from "@/features/repair-estimates/model/repair-estimate"
 
 export function inventoryCompletionRiskSignature(
   findings: InventoryFindingDto[]
@@ -30,14 +27,7 @@ export function inventoryCompletionRiskSignature(
  * independent movements in the completion summary.
  */
 export function inventoryRepairMovementCount(findings: InventoryFindingDto[]) {
-  return findings.filter(
-    (finding) =>
-      finding.movementRequired ||
-      finding.repairPlans.some(
-        (plan) =>
-          plan.kind === "MOVE_TO_REPAIR" || plan.kind === "MOVE_FROM_REPAIR"
-      )
-  ).length
+  return findings.filter((finding) => finding.movementToRepair).length
 }
 
 export function toInventoryRepairPlanSnapshot(
@@ -56,37 +46,4 @@ export function toInventoryRepairPlanSnapshot(
     plannedDurationMinutes: null,
     photoRequired: false,
   }
-}
-
-export function reconcileInventoryRepairTaskPlans(input: {
-  lines: RepairEstimateLineDto[]
-  stored: InventoryRepairPlanSnapshotDto[]
-  prepared: RepairEstimateTaskPlanDto[]
-}) {
-  const lineIds = new Set(input.lines.map((line) => line.id))
-  const preparedByKind = new Map(
-    input.prepared.map((plan) => [plan.kind, plan] as const)
-  )
-  return input.stored.map((plan) => {
-    const fallback = preparedByKind.get(plan.kind)
-    const includedLineIds = plan.includedLineIds.filter((id) => lineIds.has(id))
-    const primaryLineId =
-      plan.primaryLineId && lineIds.has(plan.primaryLineId)
-        ? plan.primaryLineId
-        : (fallback?.primaryLineId ?? null)
-    return {
-      ...fallback,
-      id: plan.id,
-      kind: plan.kind,
-      includedLineIds,
-      primaryLineId,
-      groupComment: plan.groupComment,
-      queueId: plan.queueId,
-      queueName: plan.queueName,
-      routeQueueKind: plan.routeQueueKind,
-      sortOrder: plan.sortOrder,
-      generationStatus: "PENDING_GENERATION" as const,
-      workflowRequestRef: null,
-    } satisfies RepairEstimateTaskPlanDto
-  })
 }

@@ -94,6 +94,7 @@ function createRepair(
     sourceInventoryFindingId: null,
     sourceRepairTaskId: null,
     sourceRepairTaskVersion: null,
+    movementToRepair: false,
     logisticsPlanningMode: "AUTO",
     logisticsScheduledDate: null,
     createdAt: timestamp,

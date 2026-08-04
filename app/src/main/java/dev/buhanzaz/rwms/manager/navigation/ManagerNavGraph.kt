@@ -30,9 +30,9 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import dev.buhanzaz.rwms.manager.auth.ManagerAuthState
 import dev.buhanzaz.rwms.manager.ui.MaintenanceEditorMode
-import dev.buhanzaz.rwms.manager.ui.InventoryFurnitureDisposition
 import dev.buhanzaz.rwms.manager.ui.ManagerUiState
 import dev.buhanzaz.rwms.manager.ui.ManagerViewModel
+import dev.buhanzaz.rwms.manager.ui.inventoryFurnitureCatalog
 import dev.buhanzaz.rwms.manager.ui.components.BusyOverlay
 import dev.buhanzaz.rwms.manager.ui.components.EmptyState
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPhotoCaptureScreen
@@ -321,14 +321,10 @@ private fun AuthenticatedManagerNavGraph(
                 uiState = uiState,
                 onBack = navController::popManagerBackStack,
                 onLoadInventory = viewModel::loadInventory,
-                onStartInventory = viewModel::startInventory,
                 onPrepareNewNumber = viewModel::prepareNewInventoryNumber,
                 onOpenEditor = { navController.navigate(ManagerRoute.InventoryEditor.route) },
                 onResolveConflict = viewModel::resolveInventoryConflict,
                 onSupplementInspection = viewModel::openInventoryFindingForSupplement,
-                onPreviewCompletion = viewModel::previewInventoryCompletion,
-                onDismissCompletion = viewModel::dismissInventoryCompletion,
-                onCompleteInventory = viewModel::completeInventory,
             )
         }
         composable(ManagerRoute.InventoryEditor.route) {
@@ -371,9 +367,12 @@ private fun AuthenticatedManagerNavGraph(
                 onFurnitureAbsent = {
                     viewModel.editInventory { current ->
                         current.copy(
-                            equipmentObservationRequested = false,
-                            equipmentQuantities = emptyMap(),
-                            furnitureDisposition = InventoryFurnitureDisposition.KEEP_IN_CABIN,
+                            equipmentObservationRequested = true,
+                            equipmentQuantities = current.equipmentCatalog
+                                .inventoryFurnitureCatalog()
+                                .associate { equipment ->
+                                    equipment.id to "0"
+                                },
                         )
                     }
                     navController.navigate(ManagerRoute.InventoryCatalog.route)
@@ -392,8 +391,7 @@ private fun AuthenticatedManagerNavGraph(
                 busy = uiState.busy,
                 onBack = navController::popManagerBackStack,
                 onEdit = viewModel::editInventory,
-                onContinue = { disposition ->
-                    viewModel.chooseInventoryFurnitureDisposition(disposition)
+                onContinue = {
                     navController.navigate(ManagerRoute.InventoryCatalog.route) {
                         launchSingleTop = true
                     }

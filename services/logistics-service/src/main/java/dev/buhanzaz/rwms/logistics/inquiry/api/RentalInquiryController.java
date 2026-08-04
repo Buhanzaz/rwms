@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.logistics.inquiry.api;
 import static dev.buhanzaz.rwms.logistics.inquiry.api.RentalInquiryApiModels.*;
 
 import dev.buhanzaz.rwms.logistics.inquiry.service.ClientPresentationService;
+import dev.buhanzaz.rwms.logistics.inquiry.service.ManualBookingDraftService;
 import dev.buhanzaz.rwms.logistics.inquiry.service.RentalBookingAlertService;
 import dev.buhanzaz.rwms.logistics.inquiry.service.RentalInquiryService;
 import dev.buhanzaz.rwms.logistics.inquiry.service.RentalSettingsService;
@@ -23,6 +24,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -34,6 +36,7 @@ public class RentalInquiryController {
   private final ClientPresentationService presentations;
   private final RentalBookingAlertService bookingAlerts;
   private final RentalSettingsService settings;
+  private final ManualBookingDraftService manualBookingDrafts;
   private final OrderAuthorizer access;
 
   @PostMapping("/rental-inquiries")
@@ -81,6 +84,24 @@ public class RentalInquiryController {
       @Valid @RequestBody PublishClientPresentationRequest request) {
     return presentations.publish(
         access.writeActor(jwt), inquiryId, idempotencyKey, request);
+  }
+
+  @GetMapping("/manual-booking-drafts/{draftId}/holds")
+  public ManualBookingDraftHoldsResponse manualBookingDraft(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID draftId,
+      @RequestParam UUID warehouseId) {
+    return manualBookingDrafts.get(access.writeActor(jwt), draftId, warehouseId);
+  }
+
+  @PutMapping("/manual-booking-drafts/{draftId}/holds")
+  public ManualBookingDraftHoldsResponse holdManualBookingDraft(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID draftId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody ManualBookingDraftHoldsRequest request) {
+    return manualBookingDrafts.replace(
+        access.writeActor(jwt), idempotencyKey, draftId, request);
   }
 
   @GetMapping("/rental-inquiries/{inquiryId}/client-presentation")

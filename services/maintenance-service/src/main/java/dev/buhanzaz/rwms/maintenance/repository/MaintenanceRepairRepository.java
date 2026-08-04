@@ -30,6 +30,17 @@ public interface MaintenanceRepairRepository extends JpaRepository<MaintenanceRe
        order by repair.createdAt, repair.id
       """)
   List<MaintenanceRepair> findRepairChain(@Param("rootRepairId") UUID rootRepairId);
+
+  /** Fetches all chains shown on a decision page in one query, avoiding decision-row N+1 reads. */
+  @Query(
+      """
+      select repair from MaintenanceRepair repair
+       where repair.id in :rootRepairIds
+          or repair.rootRepairId in :rootRepairIds
+       order by repair.rootRepairId, repair.createdAt, repair.id
+      """)
+  List<MaintenanceRepair> findAllForDispositionRoots(
+      @Param("rootRepairIds") java.util.Collection<UUID> rootRepairIds);
   Optional<MaintenanceRepair> findByExternalTaskId(UUID externalTaskId);
   List<MaintenanceRepair> findAllByLeaseId(UUID leaseId);
   @Query(
@@ -101,6 +112,11 @@ public interface MaintenanceRepairRepository extends JpaRepository<MaintenanceRe
            dev.buhanzaz.rwms.maintenance.domain.RepairAcceptanceState.ACCEPTED,
            dev.buhanzaz.rwms.maintenance.domain.RepairAcceptanceState.WRITTEN_OFF)
          and repair.leaseExpiresAt <= :deadline
+         and not exists (
+           select replacement.id
+             from InventoryPublicationPrestartReplacement replacement
+            where replacement.predecessorRepairId = repair.id
+              and replacement.phase <> 'APPLIED')
          and not exists (
            select reconciliation.id from MaintenanceReconciliation reconciliation
             where reconciliation.repairId = repair.id

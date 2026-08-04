@@ -8,12 +8,14 @@ import { getUserManager } from "@/features/auth/oidc-client"
 
 const WAREHOUSE_STORAGE_KEY = "wms:selected-warehouse-id"
 
-async function currentRequest() {
+async function currentRequest(authoritativeWarehouseId?: string | null) {
   const user = await getUserManager().getUser()
   if (!user || user.expired || !user.access_token.trim()) {
     throw new Error("Не получен токен доступа к каталогу ремонта.")
   }
-  const warehouseId = window.localStorage.getItem(WAREHOUSE_STORAGE_KEY)
+  const warehouseId =
+    authoritativeWarehouseId?.trim() ||
+    window.localStorage.getItem(WAREHOUSE_STORAGE_KEY)
   if (!warehouseId) {
     throw new Error("Не выбран склад для загрузки каталога ремонта.")
   }
@@ -21,8 +23,10 @@ async function currentRequest() {
 }
 
 export const httpRepairEstimateCatalogClient: RepairEstimateCatalogClient = {
-  async getOperationalCatalog() {
-    const { accessToken, warehouseId } = await currentRequest()
+  async getOperationalCatalog(authoritativeWarehouseId) {
+    const { accessToken, warehouseId } = await currentRequest(
+      authoritativeWarehouseId
+    )
     const versions = await listMaintenanceCatalogVersions(
       accessToken,
       warehouseId,

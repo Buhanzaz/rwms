@@ -15,7 +15,7 @@ rwms:
     kafka:
       enabled: ${ASSET_KAFKA_ENABLED:true}
   security:
-    dev-auth-bypass: ${ASSET_DEV_AUTH_BYPASS:true}
+    dev-auth-bypass: ${ASSET_DEV_AUTH_BYPASS:false}
   asset:
     warehouse-registry:
       enabled: ${ASSET_WAREHOUSE_REGISTRY_ENABLED:false}

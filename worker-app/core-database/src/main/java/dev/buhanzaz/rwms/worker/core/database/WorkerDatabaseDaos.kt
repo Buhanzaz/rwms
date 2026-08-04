@@ -81,6 +81,9 @@ interface WorkerAssignmentDao {
     @Query("SELECT * FROM worker_assignment WHERE userId = :userId AND entryId = :entryId ORDER BY assignedAt")
     fun observeForEntry(userId: String, entryId: String): Flow<List<WorkerAssignmentEntity>>
 
+    @Query("SELECT * FROM worker_assignment WHERE userId = :userId ORDER BY entryId, assignedAt")
+    fun observeAll(userId: String): Flow<List<WorkerAssignmentEntity>>
+
     @Query("DELETE FROM worker_assignment WHERE userId = :userId AND entryId = :entryId")
     suspend fun deleteForEntry(userId: String, entryId: String)
 

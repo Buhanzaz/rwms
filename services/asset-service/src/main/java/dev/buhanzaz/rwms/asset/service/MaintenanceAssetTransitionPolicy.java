@@ -12,7 +12,9 @@ final class MaintenanceAssetTransitionPolicy {
   private static final Set<RentalItemStatus> MAINTENANCE_REPAIR_QUEUE_SOURCES =
       Set.copyOf(EnumSet.complementOf(EnumSet.of(
           RentalItemStatus.RENTED,
-          RentalItemStatus.IN_TRANSFER)));
+          RentalItemStatus.IN_TRANSFER,
+          RentalItemStatus.WRITTEN_OFF,
+          RentalItemStatus.LOST)));
   private static final Set<RentalItemStatus> ESTIMATE_REPAIR_QUEUE_SOURCES = Set.of(
       RentalItemStatus.FREE,
       RentalItemStatus.WAREHOUSE,
@@ -52,6 +54,10 @@ final class MaintenanceAssetTransitionPolicy {
       UUID linkedReturnEstimateId) {
     if (source == null || action == null || ownerType == null || ownerId == null) {
       throw new AssetConflictException("Maintenance status transition is incomplete");
+    }
+    if (source == RentalItemStatus.IN_TRANSFER || source.isTerminalDispositionStatus()) {
+      throw new AssetConflictException(
+          "Maintenance action is not allowed from rental-item status " + source);
     }
     if (source == RentalItemStatus.WAITING_ESTIMATE_CONFIRMATION
         && ownerType == MaintenanceLeaseOwnerType.MAINTENANCE_ESTIMATE

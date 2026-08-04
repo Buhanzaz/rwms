@@ -185,12 +185,6 @@ function taskLabel(item: RepairQueueItem) {
   if (item.entry.title) return item.entry.title
   if (item.subtask.taskText) return item.subtask.taskText
   if (item.subtask.taskTitle) return item.subtask.taskTitle
-  if (item.subtask.kind === "MOVE_TO_REPAIR") {
-    return "Переместить на ремонт"
-  }
-  if (item.subtask.kind === "MOVE_FROM_REPAIR") {
-    return "Вернуть после ремонта"
-  }
   return item.repair.kind === "REWORK" ? "Доработка" : "Ремонтные работы"
 }
 

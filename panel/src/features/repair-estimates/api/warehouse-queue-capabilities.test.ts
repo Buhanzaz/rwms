@@ -16,7 +16,6 @@ describe("warehouse queue capabilities API", () => {
       new Response(
         JSON.stringify({
           warehouseId: "warehouse-1",
-          movementToShipmentAvailable: false,
           movementQueueDefinitions: [],
         }),
         {
@@ -31,7 +30,6 @@ describe("warehouse queue capabilities API", () => {
       getWarehouseQueueCapabilities("token", "warehouse/1")
     ).resolves.toEqual({
       warehouseId: "warehouse-1",
-      movementToShipmentAvailable: false,
       movementQueueDefinitions: [],
     })
 

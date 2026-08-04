@@ -29,14 +29,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.buhanzaz.rwms.worker.core.database.TaskEvidenceEntity
 import dev.buhanzaz.rwms.worker.core.network.TaskEvidenceDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerMediaReferenceDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerWorkDto
 import dev.buhanzaz.rwms.worker.core.ui.TaskStatusChip
+import dev.buhanzaz.rwms.worker.core.ui.WorkerKpiColorRange
 import dev.buhanzaz.rwms.worker.core.ui.WorkerScreenScaffold
 import dev.buhanzaz.rwms.worker.core.ui.cabinNumberForDisplay
+import dev.buhanzaz.rwms.worker.core.ui.workerKpiTimeColor
 import kotlinx.coroutines.delay
 
 @Composable
@@ -92,6 +95,18 @@ fun TaskDetailScreen(
         plannedDurationMinutes = plannedDurationMinutes,
         elapsedSinceSnapshotSeconds = elapsedSinceSnapshotSeconds,
     )
+    val kpiTimeColor = workerKpiTimeColor(
+        remainingPercent = timerSnapshot?.projectedAfter(elapsedSinceSnapshotSeconds)?.remainingPercent,
+        ranges = state.kpiPalette?.ranges.orEmpty().map {
+            WorkerKpiColorRange(it.fromPercent, it.toPercent, it.color)
+        },
+        overdueColor = state.kpiPalette?.overdueColor,
+    )
+    val sourceMediaPresentation = taskSourceMediaPresentation(
+        works = detail?.works.orEmpty(),
+        sourceMedia = detail?.sourceMedia.orEmpty(),
+    )
+    val generalSourceMedia = sourceMediaPresentation.general
     LaunchedEffect(timerSnapshot?.nextTransitionAt, timerSnapshot?.serverTime) {
         val snapshot = timerSnapshot ?: return@LaunchedEffect
         val nextTransitionAt = snapshot.nextTransitionAt ?: return@LaunchedEffect
@@ -137,6 +152,7 @@ fun TaskDetailScreen(
                         }
                     }
                     cabinNumber?.let { Text("Бытовка: $it") }
+                    (detail?.taskId ?: task?.taskId)?.let { Text("Номер задания: $it") }
                     detail?.description?.let { Text(it) }
                     detail?.taskText?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
                     Text(
@@ -151,6 +167,8 @@ fun TaskDetailScreen(
                         Text(
                             "Осталось: $remaining${timing.remainingPercent?.let { " · $it" }.orEmpty()}",
                             style = MaterialTheme.typography.bodyMedium,
+                            color = kpiTimeColor ?: MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = if (kpiTimeColor == null) FontWeight.Normal else FontWeight.Bold,
                         )
                     }
                     state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -280,18 +298,28 @@ fun TaskDetailScreen(
             if (detail?.works?.isNotEmpty() == true) {
                 item { Text("Работы", modifier = Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.titleMedium) }
                 items(detail.works, key = { it.id }) { work ->
-                    WorkRow(work)
+                    val media = sourceMediaPresentation.byWorkId[work.id].orEmpty()
+                    WorkRow(
+                        work = work,
+                        sourceMedia = media,
+                        onMedia = {
+                            onMedia(
+                                "${detail.title} · ${work.name}",
+                                media.map(WorkerMediaReferenceDto::readPath).filter(String::isNotBlank),
+                            )
+                        },
+                    )
                 }
             }
-            if (detail?.sourceMedia?.isNotEmpty() == true) {
-                item { Text("Исходные фото", modifier = Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.titleMedium) }
-                items(detail.sourceMedia, key = { it.mediaId }) { media ->
+            if (generalSourceMedia.isNotEmpty()) {
+                item { Text("Общие фото", modifier = Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.titleMedium) }
+                items(generalSourceMedia, key = { it.mediaId }) { media ->
                     MediaRow(
                         media,
                         onClick = {
                             onMedia(
-                                detail.title,
-                                detail.sourceMedia.map { it.readPath }.filter(String::isNotBlank),
+                                detail?.title ?: task?.title ?: "Задание",
+                                generalSourceMedia.map { it.readPath }.filter(String::isNotBlank),
                             )
                         },
                     )
@@ -382,14 +410,18 @@ private fun ActionButtons(
 private fun MediaRow(media: WorkerMediaReferenceDto, onClick: () -> Unit) {
     MediaThumbnailRow(
         thumbnailPath = media.thumbnailPath ?: media.readPath,
-        title = if (media.kind == "SOURCE") "Фото из ремонта / сметы" else "Фото результата",
+        title = if (media.kind == "SOURCE") "Общее фото задания" else "Фото результата",
         subtitle = media.recordedAt,
         onClick = onClick,
     )
 }
 
 @Composable
-private fun WorkRow(work: WorkerWorkDto) {
+private fun WorkRow(
+    work: WorkerWorkDto,
+    sourceMedia: List<WorkerMediaReferenceDto>,
+    onMedia: () -> Unit,
+) {
     val presentation = workPresentation(work)
     Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -399,6 +431,23 @@ private fun WorkRow(work: WorkerWorkDto) {
                 Text("Плановое время: $it", style = MaterialTheme.typography.bodyMedium)
             }
             presentation.comment?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+            if (sourceMedia.isNotEmpty()) {
+                Text("Фото к работе", style = MaterialTheme.typography.titleSmall)
+                sourceMedia.forEach { media ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clickable(onClick = onMedia)
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RemoteMediaThumbnail(media.thumbnailPath ?: media.readPath)
+                        Column {
+                            Text("Фото работы", style = MaterialTheme.typography.bodyMedium)
+                            Text(media.recordedAt, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
         }
     }
 }

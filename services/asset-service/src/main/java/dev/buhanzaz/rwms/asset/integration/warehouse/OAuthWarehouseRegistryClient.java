@@ -9,7 +9,10 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import java.time.DateTimeException;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.HashSet;
 import java.util.Set;
@@ -21,23 +24,37 @@ import tools.jackson.databind.ObjectMapper;
 
 final class OAuthWarehouseRegistryClient implements WarehouseRegistryClient {
   private static final Set<String> FIELDS = Set.of("id", "version", "active");
+  private static final Duration TOKEN_EXPIRY_SKEW = Duration.ofSeconds(30);
   private final WarehouseRegistryProperties.Validated properties;
   private final ObjectMapper mapper;
   private final HttpClient http;
+  private final Clock clock;
+  private final Object accessTokenLock = new Object();
+  private volatile AccessToken cachedAccessToken;
 
   OAuthWarehouseRegistryClient(WarehouseRegistryProperties.Validated properties, ObjectMapper mapper, HttpClient http) {
+    this(properties, mapper, http, Clock.systemUTC());
+  }
+
+  OAuthWarehouseRegistryClient(
+      WarehouseRegistryProperties.Validated properties, ObjectMapper mapper, HttpClient http, Clock clock) {
     this.properties = properties;
     this.mapper = mapper.rebuild().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).build();
     this.http = http;
+    this.clock = clock;
   }
 
   @Override
   public void requireActive(UUID warehouseId) {
     if (warehouseId == null) throw new IllegalArgumentException("warehouseId is required");
-    String token = accessToken();
     URI uri = URI.create(properties.baseUrl() + "/api/internal/warehouse/v1/warehouses/asset/" + warehouseId + "/existence");
-    HttpResponse<String> response = exchange(HttpRequest.newBuilder(uri).timeout(properties.readTimeout())
-        .header("Accept", "application/json").header("Authorization", "Bearer " + token).GET().build(), "Warehouse Service");
+    AccessToken token = accessToken();
+    HttpResponse<String> response = warehouseResponse(uri, token.value());
+    if (response.statusCode() == 401) {
+      invalidate(token);
+      token = accessToken();
+      response = warehouseResponse(uri, token.value());
+    }
     if (response.statusCode() == 404) throw new AssetDependencyException(HttpStatus.UNPROCESSABLE_CONTENT, "Warehouse does not exist");
     if (response.statusCode() >= 500 || response.statusCode() == 429) throw new AssetDependencyException(HttpStatus.SERVICE_UNAVAILABLE, "Warehouse registry is unavailable");
     if (response.statusCode() < 200 || response.statusCode() >= 300) throw new AssetDependencyException(HttpStatus.BAD_GATEWAY, "Warehouse registry rejected the asset-service lookup");
@@ -45,7 +62,30 @@ final class OAuthWarehouseRegistryClient implements WarehouseRegistryClient {
     validate(warehouseId, response.body());
   }
 
-  private String accessToken() {
+  private HttpResponse<String> warehouseResponse(URI uri, String token) {
+    return exchange(HttpRequest.newBuilder(uri).timeout(properties.readTimeout())
+        .header("Accept", "application/json").header("Authorization", "Bearer " + token).GET().build(), "Warehouse Service");
+  }
+
+  private AccessToken accessToken() {
+    AccessToken token = cachedAccessToken;
+    if (token != null && token.isUsableAt(clock.instant())) return token;
+    synchronized (accessTokenLock) {
+      token = cachedAccessToken;
+      if (token != null && token.isUsableAt(clock.instant())) return token;
+      AccessToken refreshed = requestAccessToken();
+      cachedAccessToken = refreshed;
+      return refreshed;
+    }
+  }
+
+  private void invalidate(AccessToken token) {
+    synchronized (accessTokenLock) {
+      if (cachedAccessToken == token) cachedAccessToken = null;
+    }
+  }
+
+  private AccessToken requestAccessToken() {
     String credentials = URLEncoder.encode(properties.clientId(), StandardCharsets.UTF_8) + ":"
         + URLEncoder.encode(properties.clientSecret(), StandardCharsets.UTF_8);
     HttpRequest request = HttpRequest.newBuilder(properties.tokenUri()).timeout(properties.readTimeout())
@@ -66,11 +106,25 @@ final class OAuthWarehouseRegistryClient implements WarehouseRegistryClient {
           || scope == null || !scope.isTextual() || !Set.of("warehouse.read").equals(scopes(scope.textValue()))) {
         throw new AssetDependencyException(HttpStatus.BAD_GATEWAY, "OAuth token response must grant exactly warehouse.read");
       }
-      return accessToken.textValue();
+      JsonNode expiresIn = body.get("expires_in");
+      if (expiresIn == null || !expiresIn.isIntegralNumber() || !expiresIn.canConvertToLong() || expiresIn.longValue() <= 0) {
+        throw new AssetDependencyException(HttpStatus.BAD_GATEWAY, "OAuth token response must include a positive expires_in");
+      }
+      return new AccessToken(accessToken.textValue(), cacheUntil(expiresIn.longValue()));
     } catch (AssetDependencyException exception) {
       throw exception;
     } catch (tools.jackson.core.JacksonException exception) {
       throw new AssetDependencyException(HttpStatus.BAD_GATEWAY, "OAuth token response is malformed", exception);
+    }
+  }
+
+  private Instant cacheUntil(long expiresInSeconds) {
+    try {
+      Duration lifetime = Duration.ofSeconds(expiresInSeconds);
+      Duration cacheLifetime = lifetime.compareTo(TOKEN_EXPIRY_SKEW) > 0 ? lifetime.minus(TOKEN_EXPIRY_SKEW) : Duration.ZERO;
+      return clock.instant().plus(cacheLifetime);
+    } catch (DateTimeException | ArithmeticException exception) {
+      throw new AssetDependencyException(HttpStatus.BAD_GATEWAY, "OAuth token response has an invalid expires_in", exception);
     }
   }
 
@@ -119,6 +173,10 @@ final class OAuthWarehouseRegistryClient implements WarehouseRegistryClient {
     if (!value.toLowerCase(java.util.Locale.ROOT).matches("application/json(?:\\s*;.*)?")) {
       throw new AssetDependencyException(HttpStatus.BAD_GATEWAY, dependency + " response must be application/json");
     }
+  }
+
+  private record AccessToken(String value, Instant cacheUntil) {
+    boolean isUsableAt(Instant now) { return now.isBefore(cacheUntil); }
   }
 
   static HttpClient httpClient(Duration timeout) { return HttpClient.newBuilder().connectTimeout(timeout).build(); }

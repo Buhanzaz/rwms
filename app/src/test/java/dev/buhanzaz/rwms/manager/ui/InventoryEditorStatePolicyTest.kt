@@ -279,19 +279,6 @@ class InventoryEditorStatePolicyTest {
     }
 
     @Test
-    fun `furniture no sends absent observation without changing equipment`() {
-        val observation = creationEditor()
-            .copy(
-                equipmentCatalog = equipmentCatalog(),
-                equipmentObservationRequested = false,
-            )
-            .inventoryEquipmentObservation()
-
-        assertThat(observation.presence).isEqualTo("ABSENT")
-        assertThat(observation.value).isNull()
-    }
-
-    @Test
     fun `furniture snapshot keeps only positive catalog quantities`() {
         val observation = creationEditor()
             .copy(

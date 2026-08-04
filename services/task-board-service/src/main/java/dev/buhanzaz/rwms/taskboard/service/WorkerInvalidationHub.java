@@ -65,6 +65,28 @@ public class WorkerInvalidationHub {
         });
   }
 
+  /**
+   * Announces a newly available current-day task only to workers whose
+   * current qualifications or group memberships match the queue. The event
+   * remains an invalidation: the app must fetch the authorized feed before it
+   * can display any task data.
+   */
+  public void taskAvailable(
+      Set<UUID> audienceWorkerIds, UUID entryId, long revision, boolean urgent) {
+    if (audienceWorkerIds.isEmpty()) return;
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    String type = urgent ? "URGENT_TASK" : "NEW_TASK";
+    audienceWorkerIds.forEach(
+        workerId -> {
+          Set<SseEmitter> workerEmitters = emitters.get(workerId);
+          if (workerEmitters == null) return;
+          WorkerInvalidationEvent event =
+              new WorkerInvalidationEvent(
+                  UUID.randomUUID(), revision, type, entryId, now);
+          workerEmitters.forEach(emitter -> send(workerId, emitter, event));
+        });
+  }
+
   @Scheduled(fixedDelayString = "PT15S")
   void keepAlive() {
     emitters.forEach(

@@ -44,31 +44,47 @@ function cabin(number = "БЫТ-001"): RentalItemDto {
   }
 }
 
+const STABLE_CABIN = cabin()
+
 function Probe() {
   renderProbe()
   const selection = useBookingSelection()
   return (
     <div>
-      <span data-testid="selected">
-        {selection.selectedItems.map((item) => item.number).join(",")}
+      <span data-testid="draft-id">{selection.draftId}</span>
+      <span data-testid="checked">
+        {selection.checkedItems.map((item) => item.number).join(",")}
       </span>
-      <button type="button" onClick={() => selection.select(STABLE_CABIN)}>
-        Выбрать
+      <span data-testid="staged">
+        {selection.stagedItems.map((item) => item.number).join(",")}
+      </span>
+      <button
+        type="button"
+        onClick={() => selection.toggleChecked(STABLE_CABIN)}
+      >
+        Отметить
       </button>
-      <button type="button" onClick={() => selection.select(STABLE_CABIN)}>
-        Выбрать тот же snapshot
+      <button type="button" onClick={selection.addCheckedToStaged}>
+        Добавить
       </button>
       <button
         type="button"
-        onClick={() => selection.select(cabin("БЫТ-001-ОБНОВЛЕНА"))}
+        onClick={() => selection.syncSnapshot(STABLE_CABIN)}
+      >
+        Тот же snapshot
+      </button>
+      <button
+        type="button"
+        onClick={() => selection.syncSnapshot(cabin("БЫТ-001-ОБНОВЛЕНА"))}
       >
         Обновить snapshot
+      </button>
+      <button type="button" onClick={selection.clear}>
+        Завершить публикацию
       </button>
     </div>
   )
 }
-
-const STABLE_CABIN = cabin()
 
 afterEach(() => {
   cleanup()
@@ -77,7 +93,7 @@ afterEach(() => {
 })
 
 describe("BookingSelectionProvider", () => {
-  it("keeps business selection in memory and updates selected snapshots", async () => {
+  it("keeps checked items preliminary and stages them only on Add", async () => {
     const user = userEvent.setup()
     const storageSpy = vi.spyOn(Storage.prototype, "setItem")
     render(
@@ -86,30 +102,42 @@ describe("BookingSelectionProvider", () => {
       </BookingSelectionProvider>
     )
 
-    await user.click(screen.getByRole("button", { name: "Выбрать" }))
-    expect(screen.getByTestId("selected").textContent).toBe("БЫТ-001")
-    const rendersAfterSelection = renderProbe.mock.calls.length
+    const draftId = screen.getByTestId("draft-id").textContent
+    await user.click(screen.getByRole("button", { name: "Отметить" }))
+    expect(screen.getByTestId("checked").textContent).toBe("БЫТ-001")
+    expect(screen.getByTestId("staged").textContent).toBe("")
 
-    await user.click(
-      screen.getByRole("button", { name: "Выбрать тот же snapshot" })
-    )
-    expect(renderProbe).toHaveBeenCalledTimes(rendersAfterSelection)
+    await user.click(screen.getByRole("button", { name: "Добавить" }))
+    expect(screen.getByTestId("checked").textContent).toBe("")
+    expect(screen.getByTestId("staged").textContent).toBe("БЫТ-001")
+    expect(screen.getByTestId("draft-id").textContent).toBe(draftId)
+
+    const rendersAfterStaging = renderProbe.mock.calls.length
+    await user.click(screen.getByRole("button", { name: "Тот же snapshot" }))
+    expect(renderProbe).toHaveBeenCalledTimes(rendersAfterStaging)
 
     await user.click(screen.getByRole("button", { name: "Обновить snapshot" }))
-    expect(screen.getByTestId("selected").textContent).toBe("БЫТ-001-ОБНОВЛЕНА")
+    expect(screen.getByTestId("staged").textContent).toBe("БЫТ-001-ОБНОВЛЕНА")
     expect(storageSpy).not.toHaveBeenCalled()
+
+    await user.click(
+      screen.getByRole("button", { name: "Завершить публикацию" })
+    )
+    expect(screen.getByTestId("staged").textContent).toBe("")
+    expect(screen.getByTestId("draft-id").textContent).not.toBe(draftId)
     storageSpy.mockRestore()
   })
 
-  it("clears the active selection when the warehouse scope changes", async () => {
+  it("clears the draft selection when the warehouse scope changes", async () => {
     const user = userEvent.setup()
     const view = render(
       <BookingSelectionProvider>
         <Probe />
       </BookingSelectionProvider>
     )
-    await user.click(screen.getByRole("button", { name: "Выбрать" }))
-    expect(screen.getByTestId("selected").textContent).toBe("БЫТ-001")
+    await user.click(screen.getByRole("button", { name: "Отметить" }))
+    await user.click(screen.getByRole("button", { name: "Добавить" }))
+    expect(screen.getByTestId("staged").textContent).toBe("БЫТ-001")
 
     warehouse.id = "99999999-9999-4999-8999-999999999999"
     view.rerender(
@@ -118,6 +146,6 @@ describe("BookingSelectionProvider", () => {
       </BookingSelectionProvider>
     )
 
-    expect(screen.getByTestId("selected").textContent).toBe("")
+    expect(screen.getByTestId("staged").textContent).toBe("")
   })
 })

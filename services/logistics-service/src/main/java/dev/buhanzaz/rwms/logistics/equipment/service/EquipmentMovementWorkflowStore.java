@@ -4,6 +4,7 @@ import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementLineState;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementLocationKind;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTask;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskLine;
+import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskLimits;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
 import dev.buhanzaz.rwms.logistics.equipment.repository.EquipmentMovementTaskLineRepository;
 import dev.buhanzaz.rwms.logistics.equipment.repository.EquipmentMovementTaskRepository;
@@ -114,7 +115,9 @@ class EquipmentMovementWorkflowStore {
       UUID taskId, LogisticsDependencyGateway.EquipmentMovementExecution execution) {
     EquipmentMovementTask task = lockedTask(taskId);
     if (task.getState() != EquipmentMovementTaskState.EXECUTING) return;
-    if (execution == null || !taskId.equals(execution.movementId()) || execution.lines() == null) {
+    if (execution == null
+        || !task.assetMovementOwnerId().equals(execution.movementId())
+        || execution.lines() == null) {
       throw new LogisticsConflictException("Asset-service returned a mismatched equipment movement execution");
     }
     List<EquipmentMovementTaskLine> taskLines = lines.findAllByTask_IdOrderByLineNumberAsc(taskId);
@@ -212,6 +215,7 @@ class EquipmentMovementWorkflowStore {
     return Optional.of(
         new ReserveWork(
             task.getId(),
+            task.assetMovementOwnerId(),
             pending.getId(),
             pending.getEquipmentId(),
             pending.getSourceWarehouseId(),
@@ -264,7 +268,7 @@ class EquipmentMovementWorkflowStore {
                         line.getTargetRentalItemId(),
                         line.getTargetLocationKind().name()))
             .toList();
-    return new ExecuteWork(task.getId(), executionLines);
+    return new ExecuteWork(task.getId(), task.assetMovementOwnerId(), executionLines);
   }
 
   private Optional<Work> cancellingWork(
@@ -282,7 +286,11 @@ class EquipmentMovementWorkflowStore {
     if (reserved != null) {
       return Optional.of(
           new ReleaseWork(
-              task.getId(), reserved.getId(), reserved.getReservationId(), reserved.getReservationVersion()));
+              task.getId(),
+              task.assetMovementOwnerId(),
+              reserved.getId(),
+              reserved.getReservationId(),
+              reserved.getReservationVersion()));
     }
     if (taskLines.stream()
         .anyMatch(
@@ -321,7 +329,7 @@ class EquipmentMovementWorkflowStore {
                 "BRING_TO_CABIN", line.getEquipmentId(), name, line.getQuantity()));
       }
     }
-    if (operations.isEmpty() || operations.size() > 10) {
+    if (operations.isEmpty() || operations.size() > EquipmentMovementTaskLimits.MAX_WORKER_OPERATIONS) {
       throw new LogisticsConflictException("Equipment movement task has too many worker operations");
     }
     return List.copyOf(operations);
@@ -334,7 +342,7 @@ class EquipmentMovementWorkflowStore {
       String expectedState) {
     if (reservation == null
         || !"LOGISTICS_EQUIPMENT_MOVEMENT".equals(reservation.ownerType())
-        || !task.getId().equals(reservation.movementId())
+        || !task.assetMovementOwnerId().equals(reservation.movementId())
         || !line.getId().equals(reservation.lineId())
         || !line.getEquipmentId().equals(reservation.equipmentId())
         || !line.getSourceWarehouseId().equals(reservation.sourceWarehouseId())
@@ -393,6 +401,7 @@ class EquipmentMovementWorkflowStore {
 
   record ReserveWork(
       UUID taskId,
+      UUID assetMovementOwnerId,
       UUID lineId,
       UUID equipmentId,
       UUID sourceWarehouseId,
@@ -416,12 +425,19 @@ class EquipmentMovementWorkflowStore {
   record StatusWork(UUID taskId, UUID externalTaskId) implements Work {}
 
   record ExecuteWork(
-      UUID taskId, List<LogisticsDependencyGateway.EquipmentMovementExecutionRequestLine> lines)
+      UUID taskId,
+      UUID assetMovementOwnerId,
+      List<LogisticsDependencyGateway.EquipmentMovementExecutionRequestLine> lines)
       implements Work {}
 
   record CancelBoardTaskWork(UUID taskId, UUID externalTaskId, long expectedTaskVersion)
       implements Work {}
 
-  record ReleaseWork(UUID taskId, UUID lineId, UUID reservationId, long expectedReservationVersion)
+  record ReleaseWork(
+      UUID taskId,
+      UUID assetMovementOwnerId,
+      UUID lineId,
+      UUID reservationId,
+      long expectedReservationVersion)
       implements Work {}
 }

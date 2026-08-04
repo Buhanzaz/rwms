@@ -258,7 +258,7 @@ function RepairEstimateEditorContent({
   const completeMutation = useMutation({
     mutationFn: async (params: {
       completionMode: RepairEstimateCompletionMode
-      movementRequired: boolean
+      movementToRepair: boolean
       logisticsPlanningMode: LogisticsPlanningMode
       logisticsScheduledDate: string | null
       taskPlans: RepairEstimateTaskPlanDto[]

@@ -30,6 +30,7 @@ dependencies {
     implementation(libs.androidx.hilt.viewmodel.compose)
     implementation(libs.hilt.android)
     implementation(libs.coroutines.android)
+    implementation(libs.serialization.json)
     ksp(libs.hilt.compiler)
     testImplementation(libs.junit)
     testImplementation(libs.truth)

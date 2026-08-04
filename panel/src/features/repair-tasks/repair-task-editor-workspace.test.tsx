@@ -123,7 +123,7 @@ vi.mock("@/features/repair-estimates/repair-work-completion-dialog", () => ({
     open: boolean
     onComplete: (completion: {
       completionMode: "MANUAL"
-      movementRequired: false
+      movementToRepair: false
       logisticsPlanningMode: "AUTO"
       logisticsScheduledDate: null
       taskPlans: []
@@ -136,7 +136,7 @@ vi.mock("@/features/repair-estimates/repair-work-completion-dialog", () => ({
         onClick={() =>
           onComplete({
             completionMode: "MANUAL",
-            movementRequired: false,
+            movementToRepair: false,
             logisticsPlanningMode: "AUTO",
             logisticsScheduledDate: null,
             taskPlans: [],
@@ -197,6 +197,7 @@ const queuedTask: RepairTaskDto = {
   sourceInventoryFindingId: null,
   sourceRepairTaskId: null,
   sourceRepairTaskVersion: null,
+  movementToRepair: false,
   logisticsPlanningMode: "AUTO",
   logisticsScheduledDate: null,
   createdAt: "2026-07-24T10:00:00Z",
@@ -424,6 +425,8 @@ describe("RepairTaskEditorWorkspace queue retry", () => {
           taskId: null,
           expectedVersion: null,
         }),
+        movementToRepair: false,
+        priority: 1,
       })
     )
     expect(invalidateQueries).toHaveBeenCalledWith({
@@ -442,6 +445,8 @@ describe("RepairTaskEditorWorkspace queue retry", () => {
             taskId: repairId,
             expectedVersion: 7,
           }),
+          movementToRepair: false,
+          priority: 1,
         })
       )
     )

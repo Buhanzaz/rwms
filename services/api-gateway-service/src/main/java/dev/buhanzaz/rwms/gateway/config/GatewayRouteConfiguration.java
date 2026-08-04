@@ -47,13 +47,13 @@ public class GatewayRouteConfiguration {
   RouterFunction<ServerResponse> taskBoardWorkerEventsRoute(
       GatewayProperties properties,
       GatewayUpstreamProblemHandler upstreamProblems,
-      WorkerEventsProxyHandler workerEventsProxyHandler) {
+      SseProxyHandler sseProxyHandler) {
     RequestPredicate workerEventsPath =
         path("/api/task-board/worker/v1/events")
             .and(method(HttpMethod.GET))
             .and(request -> safePath(request.path()));
     return route("task-board-worker-events")
-        .route(workerEventsPath, workerEventsProxyHandler)
+        .route(workerEventsPath, sseProxyHandler)
         .before(uri(properties.getRoutes().getTaskBoardUri()))
         .before(stripPrefix(2))
         .before(prefixPath("/api"))
@@ -67,13 +67,13 @@ public class GatewayRouteConfiguration {
   RouterFunction<ServerResponse> assetEventsRoute(
       GatewayProperties properties,
       GatewayUpstreamProblemHandler upstreamProblems,
-      AssetEventsProxyHandler assetEventsProxyHandler) {
+      SseProxyHandler sseProxyHandler) {
     RequestPredicate assetEventsPath =
         path("/api/asset/v1/events")
             .and(method(HttpMethod.GET))
             .and(request -> safePath(request.path()));
     return route("asset-events")
-        .route(assetEventsPath, assetEventsProxyHandler)
+        .route(assetEventsPath, sseProxyHandler)
         .before(uri(properties.getRoutes().getAssetUri()))
         .before(removeRequestHeader(HttpHeaders.COOKIE))
         .onError(upstreamProblems::supports, upstreamProblems::handle)
@@ -85,13 +85,13 @@ public class GatewayRouteConfiguration {
   RouterFunction<ServerResponse> mediaEventsRoute(
       GatewayProperties properties,
       GatewayUpstreamProblemHandler upstreamProblems,
-      MediaEventsProxyHandler mediaEventsProxyHandler) {
+      SseProxyHandler sseProxyHandler) {
     RequestPredicate mediaEventsPath =
         path("/api/media/v1/events")
             .and(method(HttpMethod.GET))
             .and(request -> safePath(request.path()));
     return route("media-events")
-        .route(mediaEventsPath, mediaEventsProxyHandler)
+        .route(mediaEventsPath, sseProxyHandler)
         .before(uri(properties.getRoutes().getMediaUri()))
         .before(removeRequestHeader(HttpHeaders.COOKIE))
         .onError(upstreamProblems::supports, upstreamProblems::handle)

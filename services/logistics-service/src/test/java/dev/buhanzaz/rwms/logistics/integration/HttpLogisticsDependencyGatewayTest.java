@@ -276,7 +276,6 @@ class HttpLogisticsDependencyGatewayTest {
                 {
                   "activeRepairId":"%s",
                   "priorityRequired":true,
-                  "movementToShipmentAvailable":true,
                   "missingQueueDefinitionIds":[]
                 }
                 """
@@ -288,7 +287,7 @@ class HttpLogisticsDependencyGatewayTest {
         .andExpect(header("Authorization", "Bearer test-maintenance.logistics"))
         .andExpect(header("Idempotency-Key", key.toString()))
         .andExpect(jsonPath("$.priority").value(2))
-        .andExpect(jsonPath("$.movementToShipment").value(true))
+        .andExpect(jsonPath("$.movementToShipment").doesNotExist())
         .andRespond(
             withSuccess(
                 """
@@ -321,7 +320,7 @@ class HttpLogisticsDependencyGatewayTest {
                 targetWarehouseId))
         .isEqualTo(
             new LogisticsDependencyGateway.TransferRepairArrivalPreflight(
-                repairId, true, true, List.of()));
+                repairId, true, List.of()));
     assertThat(
             gateway.completeTransferArrival(
                 key,
@@ -330,8 +329,7 @@ class HttpLogisticsDependencyGatewayTest {
                 rentalItemId,
                 sourceWarehouseId,
                 targetWarehouseId,
-                2,
-                true))
+                2))
         .isEqualTo(
             new LogisticsDependencyGateway.TransferRepairArrivalCompletion(
                 repairId, 9L, targetWarehouseId));
@@ -676,6 +674,77 @@ class HttpLogisticsDependencyGatewayTest {
               assertThat(hold.rentalItemId()).isEqualTo(cabinId);
               assertThat(hold.state()).isEqualTo("ACTIVE");
             });
+    server.verify();
+  }
+
+  @Test
+  void readsActorOwnedManualDraftHoldsWithExactActorQuery() {
+    UUID holdScopeId = UUID.randomUUID();
+    UUID actorSubjectId = UUID.randomUUID();
+    server
+        .expect(
+            requestTo(
+                "http://asset.test/api/internal/asset/v1/logistics/presentations/"
+                    + holdScopeId
+                    + "/holds?actorSubjectId="
+                    + actorSubjectId
+                    + "&actorRole=RENTAL_MANAGER"))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header("Authorization", "Bearer test-asset.logistics"))
+        .andRespond(
+            withSuccess(
+                """
+                {"presentationId":"%s","expiresAt":null,"holds":[]}
+                """
+                    .formatted(holdScopeId),
+                MediaType.APPLICATION_JSON));
+
+    assertThat(
+            gateway.readPresentationHolds(
+                holdScopeId, actorSubjectId, "RENTAL_MANAGER"))
+        .satisfies(result -> assertThat(result.holds()).isEmpty());
+    server.verify();
+  }
+
+  @Test
+  void transfersManualDraftScopeWhenReplacingPresentationHolds() {
+    UUID idempotencyKey = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID manualDraftId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    UUID actorSubjectId = UUID.randomUUID();
+    OffsetDateTime expiresAt = OffsetDateTime.parse("2026-07-27T07:00:00Z");
+    server
+        .expect(
+            requestTo(
+                "http://asset.test/api/internal/asset/v1/logistics/presentations/"
+                    + inquiryId
+                    + "/holds"))
+        .andExpect(method(HttpMethod.PUT))
+        .andExpect(header("Authorization", "Bearer test-asset.logistics"))
+        .andExpect(header("Idempotency-Key", idempotencyKey.toString()))
+        .andExpect(jsonPath("$.sourceHoldScopeId").value(manualDraftId.toString()))
+        .andRespond(
+            withSuccess(
+                """
+                {"presentationId":"%s","expiresAt":"%s","holds":[]}
+                """
+                    .formatted(inquiryId, expiresAt),
+                MediaType.APPLICATION_JSON));
+
+    LogisticsDependencyGateway.PresentationHolds result =
+        gateway.replacePresentationHolds(
+            idempotencyKey,
+            inquiryId,
+            warehouseId,
+            List.of(cabinId),
+            expiresAt,
+            actorSubjectId,
+            "RENTAL_MANAGER",
+            manualDraftId);
+
+    assertThat(result.presentationId()).isEqualTo(inquiryId);
     server.verify();
   }
 
@@ -1297,6 +1366,44 @@ class HttpLogisticsDependencyGatewayTest {
   }
 
   @Test
+  void invokesAtomicPreStartDriverCancellationWithTheExactTaskBoardScope() {
+    UUID externalTaskId = UUID.randomUUID();
+    UUID taskId = UUID.randomUUID();
+    OffsetDateTime cancelledAt = OffsetDateTime.parse("2026-08-03T10:00:00Z");
+    server
+        .expect(
+            requestTo(
+                "http://task-board.test/api/internal/task-board/v1/tasks/"
+                    + externalTaskId
+                    + "/cancel-if-pre-start"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(header("Authorization", "Bearer test-task-board.logistics"))
+        .andExpect(jsonPath("$.expectedTaskVersion").value(3))
+        .andExpect(jsonPath("$.reason").value("inventory replacement compensation"))
+        .andRespond(
+            withSuccess(
+                """
+                {
+                  "outcome":"CANCELLED","taskId":"%s","externalTaskId":"%s",
+                  "taskVersion":4,"status":"CANCELLED",
+                  "cancelledAt":"2026-08-03T10:00:00Z"
+                }
+                """
+                    .formatted(taskId, externalTaskId),
+                MediaType.APPLICATION_JSON));
+
+    LogisticsDependencyGateway.DriverTaskPreStartCancellation result =
+        gateway.cancelDriverTaskIfPreStart(externalTaskId, 3, "inventory replacement compensation");
+
+    assertThat(result.outcome())
+        .isEqualTo(LogisticsDependencyGateway.DriverTaskPreStartCancellationOutcome.CANCELLED);
+    assertThat(result.taskId()).isEqualTo(taskId);
+    assertThat(result.taskVersion()).isEqualTo(4);
+    assertThat(result.cancelledAt()).isEqualTo(cancelledAt);
+    server.verify();
+  }
+
+  @Test
   void usesOnlyTheVersionedMaintenanceLogisticsRoutesForCapacityAndCapitalRepair() {
     UUID warehouseId = UUID.randomUUID();
     UUID repairId = UUID.randomUUID();
@@ -1313,11 +1420,17 @@ class HttpLogisticsDependencyGatewayTest {
                 """
                 {
                   "warehouseId":"%s","repairPlaceCount":3,"automaticRefillDelayMinutes":5,"reservedCount":0,
-                  "occupiedCount":2,"readyToReleaseCount":0,"availableCount":1,
-                  "overCapacity":false,"allocations":[]
+                  "occupiedCount":2,"readyToReleaseCount":1,"availableCount":1,
+                  "overCapacity":false,"allocations":[{
+                    "id":"%s","version":4,"warehouseId":"%s","repairId":"%s",
+                    "rentalItemId":"%s","state":"READY_TO_RELEASE",
+                    "repairStageName":"Электрика","repairStageState":"IN_PROGRESS",
+                    "priority":2,
+                    "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"
+                  }]
                 }
                 """
-                    .formatted(warehouseId),
+                    .formatted(warehouseId, UUID.randomUUID(), warehouseId, repairId, cabinId),
                 MediaType.APPLICATION_JSON));
     server
         .expect(
@@ -1347,6 +1460,14 @@ class HttpLogisticsDependencyGatewayTest {
             places -> {
               assertThat(places.availableCount()).isOne();
               assertThat(places.automaticRefillDelayMinutes()).isEqualTo(5);
+              assertThat(places.allocations())
+                  .singleElement()
+                  .satisfies(
+                      allocation -> {
+                        assertThat(allocation.priority()).isEqualTo(2);
+                        assertThat(allocation.repairStageName()).isEqualTo("Электрика");
+                        assertThat(allocation.repairStageState()).isEqualTo("IN_PROGRESS");
+                      });
             });
     assertThat(gateway.readCapitalRepair(repairId))
         .satisfies(

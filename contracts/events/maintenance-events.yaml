@@ -31,6 +31,14 @@ channels:
     description: Primary, direct and rework repair facts keyed by repair aggregateId.
     messages:
       repairFactV1: { $ref: '#/components/messages/RepairFactV1' }
+  propertyDispositionFacts:
+    address: rwms.maintenance.property-disposition.v1
+    description: >-
+      One maintenance-owned decision per root asset, keyed by decisionId. Reasons, evidence links,
+      actor snapshots and display text remain service-local; consumers receive only IDs and fenced
+      lifecycle truth.
+    messages:
+      propertyDispositionFactV1: { $ref: '#/components/messages/PropertyDispositionFactV1' }
   taskBoardBoardTaskFacts:
     address: rwms.task-board.board-task.v1
     description: >-
@@ -93,6 +101,9 @@ operations:
   publishRepairFacts:
     action: send
     channel: { $ref: '#/channels/repairFacts' }
+  publishPropertyDispositionFacts:
+    action: send
+    channel: { $ref: '#/channels/propertyDispositionFacts' }
   consumeBoardTaskOutcomes:
     action: receive
     channel: { $ref: '#/channels/taskBoardBoardTaskFacts' }
@@ -179,6 +190,28 @@ components:
                   - maintenance.repair.transferred.v1
                   - maintenance.repair.accepted.v1
                   - maintenance.repair.written-off.v1
+    PropertyDispositionFactV1:
+      name: maintenance.property-disposition.fact.v1
+      description: >-
+        Sanitized disposition lifecycle fact with eventVersion 1 and decisionId as the Kafka key.
+      correlationId:
+        location: $message.payload#/correlation/correlationId
+      payload:
+        allOf:
+          - { $ref: './maintenance/maintenance-events-v1.schema.json' }
+          - type: object
+            properties:
+              aggregateType: { const: PROPERTY_DISPOSITION }
+              eventType:
+                enum:
+                  - maintenance.property-disposition.requested.v1
+                  - maintenance.property-disposition.approved.v1
+                  - maintenance.property-disposition.rejected.v1
+                  - maintenance.property-disposition.movement-pending.v1
+                  - maintenance.property-disposition.effect-pending.v1
+                  - maintenance.property-disposition.effective.v1
+                  - maintenance.property-disposition.quarantined.v1
+                  - maintenance.property-disposition.recovered.v1
     BoardTaskFactV1:
       name: maintenance.input.task-board.board-task-fact.v1
       payload:

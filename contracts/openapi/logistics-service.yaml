@@ -525,6 +525,106 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Conflict" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/internal/logistics/v1/maintenance/equipment-movement-tasks:
+    post:
+      operationId: createMaintenanceEquipmentMovementTask
+      description: >-
+        Exact maintenance-service boundary requiring the same SERVICE identity and exactly
+        logistics.maintenance. Creates the logistics-owned, worker-confirmed movement that removes
+        the administrator-selected furniture quantities from a cabin and returns them to STOCK in
+        the same warehouse. Source reservations are acquired before board registration; asset
+        balances change only after task-board confirms DONE. decisionId is a permanent owner key.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateMaintenanceEquipmentMovementTaskRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/EquipmentMovementTask" }
+        "201": { $ref: "#/components/responses/EquipmentMovementTask" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/internal/logistics/v1/maintenance/equipment-movement-tasks/{taskId}:
+    parameters:
+      - $ref: "#/components/parameters/EquipmentMovementTaskId"
+    get:
+      operationId: getMaintenanceEquipmentMovementTask
+      description: Exact maintenance-service read of current movement/effect truth.
+      responses:
+        "200": { $ref: "#/components/responses/EquipmentMovementTask" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/internal/logistics/v1/maintenance/driver-tasks/repairs/{repairId}:
+    parameters:
+      - name: repairId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: kind
+        in: query
+        required: true
+        schema:
+          type: string
+          enum: [DELIVER_TO_REPAIR, CAPITAL_TO_PRODUCTION]
+    get:
+      operationId: getMaintenanceDriverTaskCompensation
+      description: >-
+        Reads the newest logistics-owned repair movement for maintenance
+        replacement/merge compensation. This private endpoint is inaccessible
+        to browsers and requires the exact maintenance-service token used by
+        the maintenance driver-task intake.
+      responses:
+        "200":
+          description: Strict current compensation snapshot; ABSENT is a successful empty lookup.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaintenanceDriverTaskCompensation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /api/internal/logistics/v1/maintenance/driver-tasks/repairs/{repairId}/cancel:
+    parameters:
+      - name: repairId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: kind
+        in: query
+        required: true
+        schema:
+          type: string
+          enum: [DELIVER_TO_REPAIR, CAPITAL_TO_PRODUCTION]
+      - $ref: "#/components/parameters/IdempotencyKey"
+    post:
+      operationId: cancelMaintenanceDriverTaskCompensation
+      description: >-
+        Cancels an unregistered local intent, or returns a strict outcome for
+        registered work. A registered task is never sent to the legacy broad
+        task-board cancel command: logistics uses task-board's atomic
+        expected-task-version, WAITING-only pre-start cancellation guard.
+        For DELIVER_TO_REPAIR, CANCELLED or ALREADY_CANCELLED first releases
+        only the same still-RESERVED repair-place allocation with a stable
+        task-owned idempotency key, then records the local terminal
+        cancellation. CAPITAL_TO_PRODUCTION preserves its repair-place
+        allocation for maintenance reassignment/continued work. A lost
+        response, non-RESERVED allocation, release failure, or a second
+        version conflict remains RECONCILIATION_REQUIRED; retry with the same
+        Idempotency-Key. STARTED and COMPLETED are preserved, never cancelled.
+      responses:
+        "200":
+          description: Effective compensation truth; STARTED and COMPLETED are preserved, never cancelled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaintenanceDriverTaskCompensation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
   /api/logistics/v1/driver-tasks/{taskId}:
     parameters:
       - $ref: "#/components/parameters/DriverTaskId"
@@ -582,9 +682,11 @@ paths:
     post:
       operationId: moveDriverBoardTask
       description: >-
-        Reorders a driver task inside a date or moves a CURRENT task back to a
-        calendar date. The task-board versions are mandatory; already-running
-        tasks are rejected.
+        Reorders a driver task inside a date, moves a CURRENT task back to a
+        calendar date, or manually adds a scheduled capital-to-production
+        movement to CURRENT. Ordinary logistics movements enter CURRENT only
+        through the capacity-aware scheduler. The task-board versions are
+        mandatory; already-running tasks are rejected.
       requestBody:
         required: true
         content:
@@ -647,6 +749,34 @@ paths:
       responses:
         "200": { $ref: "#/components/responses/DriverTask" }
         "201": { $ref: "#/components/responses/DriverTask" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/driver-board/capital-repairs/{repairId}/schedule:
+    parameters:
+      - name: repairId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - $ref: "#/components/parameters/IdempotencyKey"
+    post:
+      operationId: scheduleCapitalRepairOnDriverBoard
+      description: >-
+        Creates or replays the single capital-to-production movement directly
+        in a selected calendar date and queue position. The logistics service
+        owns registration and insertion; the browser never promotes and moves
+        the repair as two commands.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ScheduleCapitalRepairRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/DriverBoardCard" }
+        "201": { $ref: "#/components/responses/DriverBoardCard" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -1072,6 +1202,56 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/logistics/v1/manual-booking-drafts/{draftId}/holds:
+    parameters:
+      - name: draftId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getManualBookingDraftHolds
+      description: >-
+        Reads the current manager-owned holds for a manual booking draft.
+        Expired holds are omitted.
+      parameters:
+        - name: warehouseId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Current draft holds, possibly empty after expiry.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManualBookingDraftHolds" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+    put:
+      operationId: replaceManualBookingDraftHolds
+      description: >-
+        Starts or replaces the server-side hold only when the manager continues
+        a manual booking. Checkbox selection before this command is not a hold.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ManualBookingDraftHoldsRequest" }
+      responses:
+        "200":
+          description: All requested cabins are held until expiresAt.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManualBookingDraftHolds" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/rental-inquiries:
     post:
       operationId: createRentalInquiry
@@ -1691,6 +1871,9 @@ components:
           CONFLICT,
           RECONCILIATION_REQUIRED,
         ]
+    EquipmentMovementTaskOwnerType:
+      type: string
+      enum: [USER_REQUEST, MAINTENANCE_DISPOSITION]
     EquipmentMovementLineState:
       type: string
       enum: [PENDING_RESERVATION, RESERVED, EXECUTED, RELEASED]
@@ -1746,9 +1929,45 @@ components:
           minItems: 1
           maxItems: 100
           description: >-
-            At most ten worker operations are accepted. A cabin-to-cabin line produces
+            At most one hundred worker operations are accepted. A cabin-to-cabin line produces
             two operations (take out and bring in); a stock/cabin line produces one.
           items: { $ref: "#/components/schemas/EquipmentMovementLineRequest" }
+    CreateMaintenanceEquipmentMovementTaskRequest:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          decisionId,
+          warehouseId,
+          unitNumber,
+          plannedDurationMinutes,
+          deadlineAt,
+          lines,
+        ]
+      properties:
+        decisionId:
+          { type: string, format: uuid, description: Permanent maintenance disposition owner. }
+        warehouseId: { type: string, format: uuid }
+        unitNumber: { type: string, minLength: 1, maxLength: 64 }
+        plannedDurationMinutes: { type: integer, minimum: 1 }
+        deadlineAt: { type: string, format: date-time }
+        lines:
+          type: array
+          minItems: 1
+          maxItems: 100
+          description: >-
+            Each unique equipment line moves a positive quantity from this decision's cabin
+            CABIN_NON_RENTED balance to STOCK in the same warehouse. Zero lines are omitted.
+          items: { $ref: "#/components/schemas/MaintenanceEquipmentMovementLineRequest" }
+    MaintenanceEquipmentMovementLineRequest:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, sourceRentalItemId, expectedSourceBalanceVersion, quantity]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        sourceRentalItemId: { type: string, format: uuid }
+        expectedSourceBalanceVersion: { type: integer, format: int64, minimum: 0 }
+        quantity: { type: integer, format: int64, minimum: 1 }
     CancelEquipmentMovementTaskRequest:
       type: object
       additionalProperties: false
@@ -1810,6 +2029,8 @@ components:
           id,
           version,
           warehouseId,
+          ownerType,
+          ownerId,
           externalTaskId,
           taskBoardTaskId,
           taskBoardTaskVersion,
@@ -1828,6 +2049,11 @@ components:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         warehouseId: { type: string, format: uuid }
+        ownerType: { $ref: "#/components/schemas/EquipmentMovementTaskOwnerType" }
+        ownerId:
+          type: [string, "null"]
+          format: uuid
+          description: decisionId for MAINTENANCE_DISPOSITION; null for USER_REQUEST.
         externalTaskId: { type: string, format: uuid }
         taskBoardTaskId: { type: [string, "null"], format: uuid }
         taskBoardTaskVersion:
@@ -1850,7 +2076,7 @@ components:
     DriverTaskKind:
       type: string
       enum:
-        [DELIVER_TO_REPAIR, REMOVE_FROM_REPAIR, CAPITAL_TO_PRODUCTION, MOVE_TO_SHIPMENT, GENERAL_MOVEMENT]
+        [DELIVER_TO_REPAIR, REMOVE_FROM_REPAIR, CAPITAL_TO_PRODUCTION, GENERAL_MOVEMENT]
     DriverTaskSourceType:
       type: string
       enum: [REPAIR, ESTIMATE, INVENTORY, REPAIR_PLACE, CAPITAL_REPAIR, MANUAL]
@@ -1861,6 +2087,60 @@ components:
       type: string
       enum:
         [REGISTERING, SCHEDULED, CURRENT, FINALIZING, COMPLETED, CANCELLED, RECONCILIATION_REQUIRED]
+    MaintenanceDriverTaskCompensationOutcome:
+      type: string
+      enum:
+        [ABSENT, PENDING, CANCELLED, STARTED, COMPLETED, RECONCILIATION_REQUIRED]
+    MaintenanceDriverTaskCompensation:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          repairId,
+          kind,
+          outcome,
+          taskId,
+          taskVersion,
+          state,
+          externalTaskId,
+          taskBoardTaskId,
+          taskBoardTaskVersion,
+          taskBoardEntryId,
+          taskBoardEntryVersion,
+          taskBoardEntryStatus,
+          taskBoardStatus,
+          taskBoardLane,
+          taskBoardDoneAt,
+          repairPlaceAllocationId,
+          repairPlaceAllocationVersion,
+        ]
+      properties:
+        repairId: { type: string, format: uuid }
+        kind:
+          type: string
+          enum: [DELIVER_TO_REPAIR, CAPITAL_TO_PRODUCTION]
+        outcome:
+          { $ref: "#/components/schemas/MaintenanceDriverTaskCompensationOutcome" }
+        taskId: { type: [string, "null"], format: uuid }
+        taskVersion: { type: [integer, "null"], format: int64, minimum: 0 }
+        state:
+          oneOf:
+            - { $ref: "#/components/schemas/DriverTaskState" }
+            - { type: "null" }
+        externalTaskId: { type: [string, "null"], format: uuid }
+        taskBoardTaskId: { type: [string, "null"], format: uuid }
+        taskBoardTaskVersion:
+          { type: [integer, "null"], format: int64, minimum: 0 }
+        taskBoardEntryId: { type: [string, "null"], format: uuid }
+        taskBoardEntryVersion:
+          { type: [integer, "null"], format: int64, minimum: 0 }
+        taskBoardEntryStatus: { type: [string, "null"], maxLength: 24 }
+        taskBoardStatus: { type: [string, "null"], maxLength: 24 }
+        taskBoardLane: { type: [string, "null"], maxLength: 24 }
+        taskBoardDoneAt: { type: [string, "null"], format: date-time }
+        repairPlaceAllocationId: { type: [string, "null"], format: uuid }
+        repairPlaceAllocationVersion:
+          { type: [integer, "null"], format: int64, minimum: 0 }
     CreateDriverTaskRequest:
       type: object
       additionalProperties: false
@@ -2028,11 +2308,36 @@ components:
         complexityColor: { type: string, pattern: "^#[0-9A-F]{6}$" }
         plannedMinutes: { type: string, pattern: "^(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,3})?$" }
         forcedCapital: { type: boolean }
+    RepairPlaceStageState:
+      type: string
+      enum: [PLANNED, QUEUED, IN_PROGRESS, DONE, CANCELLED]
+    DriverBoardRepairPlaceCard:
+      type: object
+      additionalProperties: false
+      required: [repairId, cabinId, unitNumber, allocationState, repairStageName, repairStageState, priority]
+      properties:
+        repairId: { type: string, format: uuid }
+        cabinId: { type: string, format: uuid }
+        unitNumber: { type: string, minLength: 1, maxLength: 64 }
+        allocationState:
+          type: string
+          enum: [OCCUPIED, READY_TO_RELEASE]
+        repairStageName:
+          oneOf:
+            - { type: string, minLength: 1, maxLength: 255 }
+            - { type: 'null' }
+          description: Earliest unfinished maintenance stage, when one exists.
+        repairStageState:
+          oneOf:
+            - { $ref: "#/components/schemas/RepairPlaceStageState" }
+            - { type: 'null' }
+          description: State of repairStageName; null when the repair has no unfinished stage.
+        priority: { type: integer, minimum: 1, maximum: 5 }
     DriverBoard:
       type: object
       additionalProperties: false
       required:
-        [warehouseId, currentDate, queueId, queueVersion, repairPlaceCount, usedRepairPlaceCount, availableRepairPlaceCount, inboundRepairPlaceAvailable, automaticRefillDelayMinutes, repairPlacesOverCapacity, current, dates, capitalRepairs]
+        [warehouseId, currentDate, queueId, queueVersion, repairPlaceCount, usedRepairPlaceCount, occupiedRepairPlaceCount, availableRepairPlaceCount, inboundRepairPlaceAvailable, automaticRefillDelayMinutes, repairPlacesOverCapacity, repairPlaces, current, dates, capitalRepairs]
       properties:
         warehouseId: { type: string, format: uuid }
         currentDate: { type: string, format: date }
@@ -2046,6 +2351,12 @@ components:
           description: >-
             Capacity-aware repair-place usage: occupied plus the larger of reservations and ready
             removals, so one paired removal/delivery uses one place.
+        occupiedRepairPlaceCount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Physically occupied places: occupied repairs plus cabins awaiting removal after repair.
         availableRepairPlaceCount: { type: integer, format: int64, minimum: 0 }
         inboundRepairPlaceAvailable:
           type: boolean
@@ -2056,6 +2367,10 @@ components:
           maximum: 1440
           description: Maintenance-owned delay before a manually opened CURRENT hole may be refilled automatically.
         repairPlacesOverCapacity: { type: boolean }
+        repairPlaces:
+          type: array
+          description: Cabins physically moved into the repair zone, including completed repairs awaiting removal.
+          items: { $ref: "#/components/schemas/DriverBoardRepairPlaceCard" }
         current:
           type: array
           items: { $ref: "#/components/schemas/DriverBoardCard" }
@@ -2082,6 +2397,14 @@ components:
       required: [warehouseId]
       properties:
         warehouseId: { type: string, format: uuid }
+    ScheduleCapitalRepairRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, targetDate, targetIndex]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        targetDate: { type: string, format: date }
+        targetIndex: { type: integer, minimum: 0 }
     ReturnCapitalRepairRequest:
       type: object
       additionalProperties: false
@@ -2403,7 +2726,7 @@ components:
     ArriveTransferLineRequest:
       type: object
       additionalProperties: false
-      required: [references, priority, movementToShipment]
+      required: [references, priority]
       properties:
         references:
           type: array
@@ -2415,9 +2738,6 @@ components:
           minimum: 1
           maximum: 5
           description: Required only when the preflight reports an active repair.
-        movementToShipment:
-          type: boolean
-          description: Must be false when the destination has no matching movement queue.
     TransferArrivalPreflight:
       type: object
       additionalProperties: false
@@ -2427,7 +2747,6 @@ components:
           lineId,
           activeRepairId,
           priorityRequired,
-          movementToShipmentAvailable,
           missingQueueDefinitionIds,
         ]
       properties:
@@ -2435,7 +2754,6 @@ components:
         lineId: { type: string, format: uuid }
         activeRepairId: { type: [string, "null"], format: uuid }
         priorityRequired: { type: boolean }
-        movementToShipmentAvailable: { type: boolean }
         missingQueueDefinitionIds:
           type: array
           uniqueItems: true
@@ -3006,6 +3324,12 @@ components:
       required: [warehouseId, groups]
       properties:
         warehouseId: { type: string, format: uuid }
+        manualBookingDraftId:
+          type: [string, "null"]
+          format: uuid
+          description: >-
+            Optional manager-owned manual draft whose selected live holds are
+            atomically transferred to this client presentation.
         groups:
           type: array
           minItems: 1
@@ -3115,6 +3439,7 @@ components:
         [
           version,
           chatSelectionHoldMinutes,
+          manualBookingHoldMinutes,
           presentationHoldMinutes,
           draftReservationHoldMinutes,
           updatedBy,
@@ -3123,6 +3448,7 @@ components:
       properties:
         version: { type: integer, format: int64, minimum: 0 }
         chatSelectionHoldMinutes: { type: integer, minimum: 1, maximum: 1440 }
+        manualBookingHoldMinutes: { type: integer, minimum: 5, maximum: 1440 }
         presentationHoldMinutes: { type: integer, minimum: 5, maximum: 1440 }
         draftReservationHoldMinutes: { type: integer, minimum: 1440, maximum: 14400 }
         updatedBy: { type: string, format: uuid }
@@ -3131,12 +3457,38 @@ components:
       type: object
       additionalProperties: false
       required:
-        [expectedVersion, chatSelectionHoldMinutes, presentationHoldMinutes, draftReservationHoldMinutes]
+        [expectedVersion, chatSelectionHoldMinutes, manualBookingHoldMinutes, presentationHoldMinutes, draftReservationHoldMinutes]
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         chatSelectionHoldMinutes: { type: integer, minimum: 1, maximum: 1440 }
+        manualBookingHoldMinutes: { type: integer, minimum: 5, maximum: 1440 }
         presentationHoldMinutes: { type: integer, minimum: 5, maximum: 1440 }
         draftReservationHoldMinutes: { type: integer, minimum: 1440, maximum: 14400 }
+    ManualBookingDraftHoldsRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, rentalItemIds]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        rentalItemIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+    ManualBookingDraftHolds:
+      type: object
+      additionalProperties: false
+      required: [draftId, warehouseId, expiresAt, rentalItemIds]
+      properties:
+        draftId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        expiresAt: { type: [string, "null"], format: date-time }
+        rentalItemIds:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
     ConfirmClientPresentationRequest:
       type: object
       additionalProperties: false
@@ -3227,6 +3579,18 @@ components:
         status: { type: integer }
         code: { type: string }
   responses:
+    DriverBoardCard:
+      description: Current task-board placement for one driver movement.
+      headers:
+        ETag:
+          required: true
+          schema: { type: string }
+        Idempotency-Replayed:
+          required: false
+          schema: { type: string, const: "true" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/DriverBoardCard" }
     DriverTask:
       description: Current logistics-owned driver task intent and effect checkpoints.
       headers:

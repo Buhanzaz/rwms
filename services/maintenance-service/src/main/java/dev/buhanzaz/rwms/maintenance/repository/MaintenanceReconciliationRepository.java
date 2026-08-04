@@ -37,6 +37,16 @@ public interface MaintenanceReconciliationRepository
       findByDependencyTypeAndOperationTypeAndIdempotencyKey(
           String dependencyType, String operationType, UUID idempotencyKey);
 
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      """
+      select value from MaintenanceReconciliation value
+       where value.repairId = :repairId
+         and value.state in ('PENDING', 'RETRY_PENDING', 'RECONCILIATION_REQUIRED')
+      """)
+  List<MaintenanceReconciliation> findPendingByRepairIdForUpdate(
+      @Param("repairId") UUID repairId);
+
   List<MaintenanceReconciliation>
       findAllByCatalogVersionIdOrderByOperationTypeAscCatalogNodeIdAsc(UUID catalogVersionId);
 

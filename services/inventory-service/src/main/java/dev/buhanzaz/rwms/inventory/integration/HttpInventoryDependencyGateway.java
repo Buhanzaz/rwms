@@ -387,6 +387,47 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
   }
 
   @Override
+  public JsonNode preflightReconciliation(UUID idempotencyKey, JsonNode request) {
+    JsonNode response =
+        post(
+            maintenanceBase
+                + "/api/internal/maintenance/v1/inventory/reconciliations/preflight",
+            idempotencyKey,
+            request,
+            JsonNode.class,
+            MAINTENANCE_CLIENT,
+            MAINTENANCE_SCOPE);
+    if (!response.isObject()
+        || !sha256(response.path("finalPlanSha256").asText())
+        || response.path("finalPlanVersion").asLong(-1) < 1
+        || !response.path("findings").isArray()) {
+      throw malformed("Maintenance-service returned malformed reconciliation preflight");
+    }
+    return response;
+  }
+
+  @Override
+  public JsonNode applyReconciliation(
+      UUID inventoryId, UUID findingId, UUID idempotencyKey, JsonNode request) {
+    JsonNode response =
+        put(
+            maintenanceBase
+                + "/api/internal/maintenance/v1/inventory/reconciliations/"
+                + inventoryId
+                + "/findings/"
+                + findingId,
+            idempotencyKey,
+            request,
+            JsonNode.class,
+            MAINTENANCE_CLIENT,
+            MAINTENANCE_SCOPE);
+    if (!validReconciliationResult(response)) {
+      throw malformed("Maintenance-service returned malformed reconciliation result");
+    }
+    return response;
+  }
+
+  @Override
   public RepairUpsert upsertRepair(
       UUID inventoryId, UUID findingId, UUID idempotencyKey, JsonNode request) {
     JsonNode response =
@@ -498,6 +539,63 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
 
   private static boolean sha256(String value) {
     return value != null && value.matches("^[0-9a-f]{64}$");
+  }
+
+  private static boolean validReconciliationResult(JsonNode response) {
+    if (!response.isObject()
+        || !response.path("source").isObject()
+        || !response.path("delta").path("lines").isArray()
+        || !response.has("successor")) {
+      return false;
+    }
+    String outcome = response.path("outcome").asText();
+    return switch (outcome) {
+      case "MATCHED" ->
+          explicitNull(response, "targetKind")
+              && explicitNull(response, "targetId")
+              && explicitNull(response, "estimateId")
+              && explicitNull(response, "repairId")
+              && explicitNull(response, "successor");
+      case "CREATED" -> explicitNull(response, "successor") && validCreatedTarget(response);
+      case "SUCCESSOR" -> response.path("successor").isObject() && validRepairTarget(response);
+      default -> false;
+    };
+  }
+
+  private static boolean validCreatedTarget(JsonNode response) {
+    return switch (response.path("targetKind").asText()) {
+      case "ESTIMATE" -> validTargetPair(response, "estimateId", "repairId");
+      case "REPAIR" -> validTargetPair(response, "repairId", "estimateId");
+      default -> false;
+    };
+  }
+
+  private static boolean validRepairTarget(JsonNode response) {
+    return "REPAIR".equals(response.path("targetKind").asText())
+        && validTargetPair(response, "repairId", "estimateId");
+  }
+
+  private static boolean validTargetPair(JsonNode response, String matchingId, String absentId) {
+    if (!text(response, "targetId")
+        || !text(response, matchingId)
+        || !explicitNull(response, absentId)) {
+      return false;
+    }
+    try {
+      return UUID.fromString(response.path("targetId").asText())
+          .equals(UUID.fromString(response.path(matchingId).asText()));
+    } catch (IllegalArgumentException exception) {
+      return false;
+    }
+  }
+
+  private static boolean text(JsonNode response, String field) {
+    JsonNode value = response.get(field);
+    return value != null && value.isTextual() && !value.asText().isBlank();
+  }
+
+  private static boolean explicitNull(JsonNode response, String field) {
+    return response.has(field) && response.get(field).isNull();
   }
 
   private static boolean absent(JsonNode value) {

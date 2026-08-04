@@ -24,7 +24,7 @@ class InventoryFurniturePolicyTest {
     }
 
     @Test
-    fun `observed furniture becomes a desired logistics composition rather than an asset write`() {
+    fun `observed furniture is saved as inspection evidence`() {
         val chair = equipment("chair", "Стул")
         val table = equipment("table", "Стол")
         val editor = InventoryEditorState(
@@ -36,20 +36,36 @@ class InventoryFurniturePolicyTest {
             equipmentQuantities = mapOf(chair.id to "2", table.id to "0"),
         )
 
-        assertThat(editor.inventoryFurnitureDesiredContents())
-            .containsExactly(dev.buhanzaz.rwms.manager.network.CabinFurnitureRequirementDto("chair", 2))
+        val observation = editor.inventoryEquipmentObservation()
+
+        assertThat(observation.presence).isEqualTo("PRESENT")
+        @Suppress("UNCHECKED_CAST")
+        val observed = observation.value as List<Map<String, Any?>>
+        assertThat(observed.single()).containsExactly(
+            "equipmentId", "chair",
+            "equipmentName", "Стул",
+            "equipmentCategory", "FURNITURE",
+            "catalogVersion", 1L,
+            "quantity", 2L,
+        )
     }
 
     @Test
-    fun `no furniture assertion does not request a logistics task`() {
+    fun `zero furniture is an explicit empty inspection observation`() {
+        val chair = equipment("chair", "Стул")
         val editor = InventoryEditorState(
             findingId = "finding-1",
             number = "БЫТ-001",
             outcome = "MATCHED",
-            equipmentObservationRequested = false,
+            equipmentCatalog = listOf(chair),
+            equipmentObservationRequested = true,
+            equipmentQuantities = mapOf(chair.id to "0"),
         )
 
-        assertThat(editor.inventoryFurnitureDesiredContents()).isNull()
+        val observation = editor.inventoryEquipmentObservation()
+
+        assertThat(observation.presence).isEqualTo("EXPLICIT_EMPTY")
+        assertThat(observation.value).isEqualTo(emptyList<Map<String, Any?>>())
     }
 
     @Test

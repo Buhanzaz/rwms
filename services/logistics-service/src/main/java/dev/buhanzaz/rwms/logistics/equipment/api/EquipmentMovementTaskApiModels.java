@@ -2,10 +2,13 @@ package dev.buhanzaz.rwms.logistics.equipment.api;
 
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementLineState;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementLocationKind;
+import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskLimits;
+import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskOwnerType;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Future;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.time.OffsetDateTime;
@@ -41,6 +44,26 @@ public final class EquipmentMovementTaskApiModels {
       @NotNull EquipmentMovementLocationKind targetLocationKind,
       @NotNull @Min(1) Long quantity) {}
 
+  /**
+   * Private maintenance intake. Every line represents taking furniture from one non-rented cabin
+   * back into stock at the same warehouse.
+   */
+  public record CreateMaintenanceEquipmentMovementTaskRequest(
+      @NotNull UUID decisionId,
+      @NotNull UUID warehouseId,
+      @NotBlank @Size(max = 64) String unitNumber,
+      @NotNull @Min(1) Integer plannedDurationMinutes,
+      @NotNull @Future OffsetDateTime deadlineAt,
+      @NotNull
+          @Size(min = 1, max = EquipmentMovementTaskLimits.MAX_WORKER_OPERATIONS)
+          List<@Valid MaintenanceEquipmentMovementLineRequest> lines) {}
+
+  public record MaintenanceEquipmentMovementLineRequest(
+      @NotNull UUID equipmentId,
+      @NotNull UUID sourceRentalItemId,
+      @NotNull @Min(0) Long expectedSourceBalanceVersion,
+      @NotNull @Min(1) Long quantity) {}
+
   public record CancelEquipmentMovementTaskRequest(@NotNull @Min(0) Long expectedVersion) {}
 
   public record EquipmentMovementTaskLineResponse(
@@ -67,6 +90,8 @@ public final class EquipmentMovementTaskApiModels {
       UUID id,
       long version,
       UUID warehouseId,
+      EquipmentMovementTaskOwnerType ownerType,
+      UUID ownerId,
       UUID externalTaskId,
       UUID taskBoardTaskId,
       Long taskBoardTaskVersion,
@@ -79,5 +104,44 @@ public final class EquipmentMovementTaskApiModels {
       String failureCode,
       List<EquipmentMovementTaskLineResponse> lines,
       OffsetDateTime createdAt,
-      OffsetDateTime updatedAt) {}
+      OffsetDateTime updatedAt) {
+    /** Source-compatible constructor for existing public callers. */
+    public EquipmentMovementTaskResponse(
+        UUID id,
+        long version,
+        UUID warehouseId,
+        UUID externalTaskId,
+        UUID taskBoardTaskId,
+        Long taskBoardTaskVersion,
+        OffsetDateTime taskBoardDoneAt,
+        String unitNumber,
+        Integer plannedDurationMinutes,
+        OffsetDateTime deadlineAt,
+        EquipmentMovementTaskState state,
+        EquipmentMovementTaskState terminalState,
+        String failureCode,
+        List<EquipmentMovementTaskLineResponse> lines,
+        OffsetDateTime createdAt,
+        OffsetDateTime updatedAt) {
+      this(
+          id,
+          version,
+          warehouseId,
+          EquipmentMovementTaskOwnerType.USER_REQUEST,
+          null,
+          externalTaskId,
+          taskBoardTaskId,
+          taskBoardTaskVersion,
+          taskBoardDoneAt,
+          unitNumber,
+          plannedDurationMinutes,
+          deadlineAt,
+          state,
+          terminalState,
+          failureCode,
+          lines,
+          createdAt,
+          updatedAt);
+    }
+  }
 }

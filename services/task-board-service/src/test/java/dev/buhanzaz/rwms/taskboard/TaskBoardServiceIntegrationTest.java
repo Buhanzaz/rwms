@@ -43,6 +43,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.security.oauth2.server.resource.autoconfigure.OAuth2ResourceServerProperties;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -313,7 +314,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void driverQueueUpdateRemainsWarehouseSpecificAndControlsMovementCapability() {
+  void driverQueueUpdateRemainsWarehouseSpecificInQueueCapabilities() {
     var movementW1 =
         QueueRegistryTestFixtures.create(registry, jdbc,
             W1,
@@ -327,11 +328,10 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         .filteredOn(definition -> definition.purpose() == QueuePurpose.LOGISTICS_DRIVER)
         .extracting(QueueDefinitionDto::id)
         .containsExactly(movementW1.definitionId());
-    assertThat(registry.queueCapabilities(W1).movementToShipmentAvailable()).isTrue();
     assertThat(registry.queueCapabilities(W1).movementQueueDefinitions())
         .containsExactly(
             new MovementQueueCapability(movementW1.definitionId(), movementW1.id()));
-    assertThat(registry.queueCapabilities(W2).movementToShipmentAvailable()).isFalse();
+    assertThat(registry.queueCapabilities(W2).movementQueueDefinitions()).isEmpty();
 
     var movementW2 =
         QueueRegistryTestFixtures.create(registry, jdbc,
@@ -342,7 +342,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                 QueuePurpose.LOGISTICS_DRIVER,
                 List.of()));
     assertThat(movementW2.definitionId()).isEqualTo(movementW1.definitionId());
-    assertThat(registry.queueCapabilities(W2).movementToShipmentAvailable()).isTrue();
+    assertThat(registry.queueCapabilities(W2).movementQueueDefinitions()).hasSize(1);
 
     QueueRegistryTestFixtures.update(registry, jdbc,
         W2,
@@ -359,8 +359,8 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             movementW2.resultPhotoMinCount(),
             List.of()));
 
-    assertThat(registry.queueCapabilities(W2).movementToShipmentAvailable()).isFalse();
-    assertThat(registry.queueCapabilities(W1).movementToShipmentAvailable()).isTrue();
+    assertThat(registry.queueCapabilities(W2).movementQueueDefinitions()).isEmpty();
+    assertThat(registry.queueCapabilities(W1).movementQueueDefinitions()).hasSize(1);
   }
 
   @Test
@@ -1429,6 +1429,84 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                         cancelledDate)))
         .isInstanceOf(ConflictException.class)
         .hasMessageContaining("отмененный");
+  }
+
+  @RepeatedTest(10)
+  void atomicPreStartCancellationNeverCancelsWorkThatWinsTheStartRace() throws Exception {
+    var queue =
+        QueueRegistryTestFixtures.create(
+            registry,
+            jdbc,
+            W1,
+            queue("PRE_START_CANCEL_RACE", QueueType.REPAIR, List.of()));
+    var worker =
+        workforce.createWorker(
+            W1, worker("Pre-start race worker", null, null, List.of()));
+    UUID externalTaskId = UUID.randomUUID();
+    var registration =
+        board.registerExternalTask(
+            "logistics-service",
+            new RegisterExternalTaskRequest(
+                W1,
+                externalTaskId,
+                "Pre-start race",
+                "CABIN-RACE",
+                null,
+                10,
+                null,
+                List.of(new RouteStepRequest(queue.definitionId(), "Repair", 10))));
+    var route = registration.route().getFirst();
+
+    CountDownLatch start = new CountDownLatch(1);
+    Object takeResult;
+    PreStartCancellationResult cancellation;
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var takeFuture =
+          executor.submit(
+              () -> {
+                start.await();
+                try {
+                  return board.take(
+                      W1,
+                      route.entryId(),
+                      new TakeEntryRequest(route.entryVersion(), null, worker.id()),
+                      null);
+                } catch (RuntimeException conflict) {
+                  return conflict;
+                }
+              });
+      var cancelFuture =
+          executor.submit(
+              () -> {
+                start.await();
+                return board.cancelExternalTaskIfPreStart(
+                    "logistics-service",
+                    externalTaskId,
+                    new CancelTaskRequest(
+                        registration.taskVersion(), "inventory replacement"));
+              });
+      start.countDown();
+      takeResult = takeFuture.get(10, TimeUnit.SECONDS);
+      cancellation = cancelFuture.get(10, TimeUnit.SECONDS);
+    }
+
+    var storedTask =
+        tasks.findByWarehouseIdAndExternalTaskId(W1, externalTaskId).orElseThrow();
+    var storedEntry = entries.findById(route.entryId()).orElseThrow();
+    if (cancellation.outcome() == PreStartCancellationOutcome.CANCELLED) {
+      assertThat(takeResult).isInstanceOf(RuntimeException.class);
+      assertThat(storedTask.getStatus()).isEqualTo(TaskStatus.CANCELLED);
+      assertThat(storedEntry.getStatus()).isEqualTo(EntryStatus.CANCELLED);
+      assertThat(assignments.findAllByQueueEntryId(route.entryId())).isEmpty();
+    } else {
+      assertThat(cancellation.outcome()).isEqualTo(PreStartCancellationOutcome.STARTED);
+      assertThat(takeResult).isInstanceOf(BoardEntryDto.class);
+      assertThat(storedTask.getStatus()).isEqualTo(TaskStatus.ACTIVE);
+      assertThat(storedEntry.getStatus()).isEqualTo(EntryStatus.IN_PROGRESS);
+      assertThat(assignments.findAllByQueueEntryId(route.entryId()))
+          .extracting(TaskAssignment::getStatus)
+          .containsExactly(AssignmentStatus.ACTIVE);
+    }
   }
 
   @Test

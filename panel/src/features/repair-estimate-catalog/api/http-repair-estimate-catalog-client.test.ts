@@ -108,6 +108,30 @@ describe("operational maintenance catalog adapter", () => {
     })
   })
 
+  it("uses an authoritative workflow warehouse instead of the stored preference", async () => {
+    const workflowWarehouseId = "00000000-0000-4000-8000-000000000006"
+
+    await httpRepairEstimateCatalogClient.getOperationalCatalog(
+      workflowWarehouseId
+    )
+
+    expect(maintenance.listMaintenanceCatalogVersions).toHaveBeenCalledWith(
+      "catalog-token",
+      workflowWarehouseId,
+      "ACTIVE"
+    )
+    expect(maintenance.listMaintenanceCatalogNodes).toHaveBeenCalledWith(
+      "catalog-token",
+      workflowWarehouseId,
+      versionId
+    )
+    expect(maintenance.listMaintenanceCatalogLinks).toHaveBeenCalledWith(
+      "catalog-token",
+      workflowWarehouseId,
+      versionId
+    )
+  })
+
   it("does not expose legacy material comments to estimate editors", async () => {
     maintenance.listMaintenanceCatalogNodes.mockResolvedValue([
       {

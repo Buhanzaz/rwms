@@ -1,7 +1,16 @@
-# RWMS Legacy Architecture Knowledge
+# Archived RWMS Legacy Architecture Knowledge
 
-This folder is the project memory for migration from `wms-panel-old` to `panel`.
-The source of truth is the legacy Jmix application under `wms-panel-old`.
+This folder preserves the former migration audit from `wms-panel-old` to
+`panel`. It is historical evidence, not a current source of truth or a required
+workflow.
+
+Current architecture and business logic are maintained in
+[`docs/project-knowledge/`](../docs/project-knowledge/README.md). Current tasks
+follow [`AGENTS.md`](../AGENTS.md), canonical contracts and owning-service
+logic.
+
+The legacy Jmix application under `wms-panel-old` was the source examined by
+this historical audit only.
 
 Audit date: 2026-07-09.
 Scope: read-only audit of `wms-panel-old`.
@@ -9,8 +18,9 @@ No legacy source files were changed during this audit.
 
 ## How To Use
 
-Future migration agents must read this folder before making migration decisions.
-Use `UNKNOWN` in migration plans when a behavior is not documented here and is not evident in legacy source.
+Consult this folder only when legacy provenance is directly relevant. Verify
+every useful statement against current contracts and code before relying on it.
+Historical `UNKNOWN` markers are not current product decisions.
 
 Recommended reading order:
 

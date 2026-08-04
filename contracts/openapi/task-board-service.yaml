@@ -120,9 +120,6 @@ paths:
       operationId: getWarehouseQueueCapabilities
       description: >-
         Reports process capabilities from active, visible warehouse bindings.
-        movementToShipmentAvailable is true only when this warehouse has an
-        active visible binding whose queue definition has the stable
-        LOGISTICS_DRIVER purpose.
       responses:
         '200': { $ref: '#/components/responses/WarehouseQueueCapabilitiesOk' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -675,6 +672,34 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CancelledTask' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /internal/task-board/v1/tasks/{externalTaskId}/cancel-if-pre-start:
+    parameters:
+      - $ref: '#/components/parameters/ExternalTaskId'
+    post:
+      operationId: cancelExternalBoardTaskIfPreStart
+      description: >-
+        Atomically cancels a task owned by the authenticated source client only
+        while every route entry is still WAITING. STARTED is returned without a
+        mutation when any physical work has started or completed. A retry after
+        a successful cancellation returns ALREADY_CANCELLED without another
+        cancellation event. VERSION_CONFLICT reports a still-unstarted task
+        whose task version no longer matches the caller snapshot.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CancelTaskRequest' }
+      responses:
+        '200':
+          description: Atomic pre-start cancellation outcome and current task truth.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PreStartCancellationResult' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1663,10 +1688,9 @@ components:
       additionalProperties: false
     WarehouseQueueCapabilities:
       type: object
-      required: [warehouseId, movementToShipmentAvailable, movementQueueDefinitions]
+      required: [warehouseId, movementQueueDefinitions]
       properties:
         warehouseId: { type: string, format: uuid }
-        movementToShipmentAvailable: { type: boolean }
         movementQueueDefinitions:
           type: array
           items: { $ref: '#/components/schemas/MovementQueueCapability' }
@@ -2416,6 +2440,23 @@ components:
         expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
         reason: { type: string, minLength: 1, maxLength: 1000 }
       additionalProperties: false
+    PreStartCancellationOutcome:
+      type: string
+      enum: [CANCELLED, ALREADY_CANCELLED, STARTED, VERSION_CONFLICT]
+    PreStartCancellationResult:
+      type: object
+      required: [outcome, taskId, externalTaskId, taskVersion, status, cancelledAt]
+      properties:
+        outcome: { $ref: '#/components/schemas/PreStartCancellationOutcome' }
+        taskId: { type: string, format: uuid }
+        externalTaskId: { type: string, format: uuid }
+        taskVersion: { type: integer, format: int64, minimum: 0 }
+        status: { type: string, enum: [ACTIVE, DONE, CANCELLED] }
+        cancelledAt:
+          oneOf:
+            - { type: string, format: date-time }
+            - { type: 'null' }
+      additionalProperties: false
     CancelledTask:
       type: object
       required: [taskId, externalTaskId, taskVersion, status, cancelledAt]
@@ -2492,7 +2533,7 @@ components:
       additionalProperties: false
     WorkerCategory:
       type: object
-      required: [queueId, name, type, queuePurpose, sortOrder, audienceModes, resultPhotoMinCount]
+      required: [queueId, name, type, queuePurpose, sortOrder, audienceModes, groupIds, resultPhotoMinCount]
       properties:
         queueId: { type: string, format: uuid }
         name: { type: string, minLength: 1 }
@@ -2502,8 +2543,34 @@ components:
         audienceModes:
           type: array
           uniqueItems: true
-          items: { type: string, enum: [AVAILABLE, MANDATORY, REQUIRED_JOIN, OPTIONAL_JOIN] }
+          items: { type: string, enum: [AVAILABLE, MANDATORY, SECONDARY_PENDING, REQUIRED_JOIN, OPTIONAL_JOIN] }
+        groupIds:
+          description: >-
+            Current worker groups whose worker class is bound to this queue.
+            An empty list denotes a qualification-only or individual queue.
+          type: array
+          uniqueItems: true
+          items: { type: string, format: uuid }
         resultPhotoMinCount: { type: integer, minimum: 0, maximum: 20 }
+      additionalProperties: false
+    WorkerKpiPaletteRange:
+      type: object
+      required: [fromPercent, toPercent, color]
+      properties:
+        fromPercent: { type: integer, minimum: 0, maximum: 100 }
+        toPercent: { type: integer, minimum: 0, maximum: 100 }
+        color: { type: string, pattern: '^#[0-9A-F]{6}$' }
+      additionalProperties: false
+    WorkerKpiPalette:
+      type: object
+      required: [ranges, overdueColor]
+      properties:
+        ranges:
+          type: array
+          minItems: 1
+          maxItems: 6
+          items: { $ref: '#/components/schemas/WorkerKpiPaletteRange' }
+        overdueColor: { type: string, pattern: '^#[0-9A-F]{6}$' }
       additionalProperties: false
     WorkerOfflineLease:
       type: object
@@ -2516,7 +2583,7 @@ components:
       additionalProperties: false
     WorkerContext:
       type: object
-      required: [worker, currentGroup, operationalAvailability, groups, qualifications, categories, serverTime, revision, offlineLease]
+      required: [worker, currentGroup, operationalAvailability, groups, qualifications, categories, kpiPalette, serverTime, revision, offlineLease]
       properties:
         worker: { $ref: '#/components/schemas/WorkerIdentity' }
         currentGroup:
@@ -2533,6 +2600,10 @@ components:
         categories:
           type: array
           items: { $ref: '#/components/schemas/WorkerCategory' }
+        kpiPalette:
+          oneOf:
+            - { $ref: '#/components/schemas/WorkerKpiPalette' }
+            - { type: 'null' }
         serverTime: { type: string, format: date-time }
         revision: { type: integer, format: int64, minimum: 0 }
         offlineLease: { $ref: '#/components/schemas/WorkerOfflineLease' }
@@ -2568,7 +2639,7 @@ components:
         priority: { type: integer, minimum: 1, maximum: 5 }
         queuePosition: { type: integer, minimum: 0 }
         status: { type: string, enum: [WAITING, IN_PROGRESS, PAUSED, DONE, CANCELLED] }
-        availabilityMode: { type: string, enum: [AVAILABLE, MANDATORY] }
+        availabilityMode: { type: string, enum: [AVAILABLE, MANDATORY, SECONDARY_PENDING, REQUIRED_JOIN, OPTIONAL_JOIN] }
         plannedDurationMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
         activeStartedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
         activeWorkSeconds: { type: integer, format: int64, minimum: 0 }
@@ -2719,7 +2790,7 @@ components:
         priority: { type: integer, minimum: 1, maximum: 5 }
         queuePosition: { type: integer, minimum: 0 }
         status: { type: string, enum: [WAITING, IN_PROGRESS, PAUSED, DONE, CANCELLED] }
-        availabilityMode: { type: string, enum: [AVAILABLE, MANDATORY] }
+        availabilityMode: { type: string, enum: [AVAILABLE, MANDATORY, SECONDARY_PENDING, REQUIRED_JOIN, OPTIONAL_JOIN] }
         plannedDurationMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
         activeStartedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
         activeWorkSeconds: { type: integer, format: int64, minimum: 0 }
@@ -2814,7 +2885,7 @@ components:
       properties:
         eventId: { type: string, format: uuid }
         revision: { type: integer, format: int64, minimum: 0 }
-        type: { type: string, enum: [CONTEXT_CHANGED, FEED_CHANGED, ENTRY_CHANGED, TASK_JOIN_AVAILABLE, DEVICE_REVOKED] }
+        type: { type: string, enum: [CONTEXT_CHANGED, FEED_CHANGED, ENTRY_CHANGED, NEW_TASK, URGENT_TASK, TASK_JOIN_AVAILABLE, DEVICE_REVOKED] }
         entryId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
         occurredAt: { type: string, format: date-time }
       additionalProperties: false

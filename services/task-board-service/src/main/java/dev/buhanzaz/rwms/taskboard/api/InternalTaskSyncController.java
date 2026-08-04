@@ -4,6 +4,7 @@ import static dev.buhanzaz.rwms.taskboard.api.ApiModels.BoardTaskRegistrationDto
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.CancelTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.CancelledTaskDto;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.PreStartUpdateTaskRequest;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.PreStartCancellationResult;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RegisterExternalTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RelocateExternalTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.SelectedCompletionEvidenceDto;
@@ -61,6 +62,15 @@ public class InternalTaskSyncController {
       @PathVariable UUID externalTaskId,
       @Valid @RequestBody CancelTaskRequest request) {
     return service.cancelExternalTask(access.requireTaskSync(jwt), externalTaskId, request);
+  }
+
+  @PostMapping("/{externalTaskId}/cancel-if-pre-start")
+  public PreStartCancellationResult cancelIfPreStart(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID externalTaskId,
+      @Valid @RequestBody CancelTaskRequest request) {
+    return service.cancelExternalTaskIfPreStart(
+        access.requireTaskSync(jwt), externalTaskId, request);
   }
 
   @PostMapping("/{externalTaskId}/relocate")

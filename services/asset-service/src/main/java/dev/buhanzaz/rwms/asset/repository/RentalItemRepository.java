@@ -37,6 +37,66 @@ public interface RentalItemRepository extends JpaRepository<RentalItem, UUID> {
   List<RentalItem> findAllByWarehouseIdAndStatusInOrderByIdentityMatchKeyAscIdAsc(
       UUID warehouseId, Collection<RentalItemStatus> statuses);
 
+  @Query(
+      """
+      select item
+      from RentalItem item
+      where item.warehouseId = :warehouseId
+        and (
+          :search = ''
+          or upper(item.number) like concat('%', :search, '%')
+          or upper(coalesce(item.category, '')) like concat('%', :search, '%')
+          or exists (
+            select value.id
+            from CabinCatalogItem value
+            where value.id in (item.rentalTypeId, item.dimensionId, item.finishingId)
+              and upper(value.name) like concat('%', :search, '%')
+          )
+          or exists (
+            select link.id
+            from RentalItemCharacteristic link, CabinCatalogItem characteristic
+            where link.rentalItemId = item.id
+              and characteristic.id = link.characteristicId
+              and upper(characteristic.name) like concat('%', :search, '%')
+          )
+        )
+      """)
+  Page<RentalItem> findPublicPage(
+      @Param("warehouseId") UUID warehouseId,
+      @Param("search") String search,
+      Pageable pageable);
+
+  @Query(
+      """
+      select item
+      from RentalItem item
+      where item.warehouseId = :warehouseId
+        and item.status not in :excludedStatuses
+        and (
+          :search = ''
+          or upper(item.number) like concat('%', :search, '%')
+          or upper(coalesce(item.category, '')) like concat('%', :search, '%')
+          or exists (
+            select value.id
+            from CabinCatalogItem value
+            where value.id in (item.rentalTypeId, item.dimensionId, item.finishingId)
+              and upper(value.name) like concat('%', :search, '%')
+          )
+          or exists (
+            select link.id
+            from RentalItemCharacteristic link, CabinCatalogItem characteristic
+            where link.rentalItemId = item.id
+              and characteristic.id = link.characteristicId
+              and upper(characteristic.name) like concat('%', :search, '%')
+          )
+        )
+      """)
+  Page<RentalItem> findPublicPageExcludingStatuses(
+      @Param("warehouseId") UUID warehouseId,
+      @Param("excludedStatuses") Collection<RentalItemStatus> excludedStatuses,
+      @Param("search") String search,
+      Pageable pageable);
+
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select item from RentalItem item where item.id = :id")
   Optional<RentalItem> findByIdForUpdate(@Param("id") UUID id);

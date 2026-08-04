@@ -383,6 +383,64 @@ class WorkerDatabaseCreateOpenRobolectricTest {
         context.deleteDatabase(name)
     }
 
+    @Test
+    fun migrationFiveToSixAddsNullableKpiPaletteAndEmptyLegacyGroupBindings() {
+        val context = RuntimeEnvironment.getApplication()
+        val name = "worker-room-group-kpi-migration.db"
+        context.deleteDatabase(name)
+        val versionFive = openHelper(
+            context = context,
+            name = name,
+            version = 5,
+            onCreate = { database ->
+                database.execSQL(
+                    """
+                    CREATE TABLE `worker_session` (
+                        `userId` TEXT NOT NULL,
+                        `displayName` TEXT NOT NULL,
+                        PRIMARY KEY(`userId`)
+                    )
+                    """.trimIndent(),
+                )
+                database.execSQL(
+                    """
+                    CREATE TABLE `worker_category` (
+                        `localId` TEXT NOT NULL,
+                        `userId` TEXT NOT NULL,
+                        `queueId` TEXT NOT NULL,
+                        PRIMARY KEY(`localId`)
+                    )
+                    """.trimIndent(),
+                )
+            },
+        )
+        versionFive.writableDatabase.apply {
+            execSQL("INSERT INTO `worker_session` VALUES ('worker', 'Рабочий')")
+            execSQL("INSERT INTO `worker_category` VALUES ('worker:repair', 'worker', 'repair')")
+        }
+        versionFive.close()
+
+        val versionSix = openHelper(
+            context = context,
+            name = name,
+            version = 6,
+            onCreate = { error("Expected the version 5 database to exist") },
+            onUpgrade = { database -> WorkerDatabase.MIGRATION_5_6.migrate(database) },
+        )
+        val database = versionSix.writableDatabase
+
+        database.query("SELECT `kpiPaletteJson` FROM `worker_session`").use { cursor ->
+            assertThat(cursor.moveToFirst()).isTrue()
+            assertThat(cursor.isNull(0)).isTrue()
+        }
+        database.query("SELECT `groupIdsKey` FROM `worker_category`").use { cursor ->
+            assertThat(cursor.moveToFirst()).isTrue()
+            assertThat(cursor.getString(0)).isEmpty()
+        }
+        versionSix.close()
+        context.deleteDatabase(name)
+    }
+
     private fun columns(database: SupportSQLiteDatabase, table: String): List<String> =
         database.query("PRAGMA table_info(`$table`)").use { cursor ->
             buildList {

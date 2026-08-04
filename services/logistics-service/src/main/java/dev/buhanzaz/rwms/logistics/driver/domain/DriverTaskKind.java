@@ -4,7 +4,6 @@ public enum DriverTaskKind {
   DELIVER_TO_REPAIR,
   REMOVE_FROM_REPAIR,
   CAPITAL_TO_PRODUCTION,
-  MOVE_TO_SHIPMENT,
   GENERAL_MOVEMENT;
 
   public boolean consumesRepairPlace() {

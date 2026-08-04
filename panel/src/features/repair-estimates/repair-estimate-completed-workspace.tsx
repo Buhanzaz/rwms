@@ -45,7 +45,6 @@ import {
   repairTaskBySourceEstimateQueryKey,
 } from "@/features/repair-tasks/api/repair-tasks-api"
 import { canEditRepairTaskPlan } from "@/features/repair-tasks/domain/repair-task-domain"
-import type { RepairTaskDto } from "@/features/repair-tasks/model/repair-task"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
 import {
   maintenanceEstimateMediaOwner,
@@ -53,61 +52,6 @@ import {
 } from "@/features/media/media-service"
 import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
 import { ApiError } from "@/lib/api-client"
-
-function plansInTaskOrder(
-  estimate: RepairEstimateDto,
-  task: RepairTaskDto | null
-) {
-  const storedPlans = estimate.taskPlans
-    .slice()
-    .sort((left, right) => left.sortOrder - right.sortOrder)
-  if (!task) {
-    return storedPlans
-  }
-
-  const planById = new Map(storedPlans.map((plan) => [plan.id, plan]))
-  const usedPlanIds = new Set<string>()
-  const orderedPlans: RepairEstimateTaskPlanDto[] = task.subtasks.map(
-    (subtask) => {
-      const stored = planById.get(subtask.id)
-      if (stored) {
-        usedPlanIds.add(stored.id)
-        return {
-          ...stored,
-          kind: subtask.kind,
-          groupComment: subtask.groupComment,
-          queueName: subtask.queueName,
-          queueId: subtask.queueId,
-          routeQueueKind: subtask.routeQueueKind,
-          sortOrder: subtask.sortOrder,
-        }
-      }
-      const includedLines = [...subtask.workLines, ...subtask.materialLines]
-      return {
-        id: subtask.id,
-        kind: subtask.kind,
-        includedLineIds: includedLines.map((line) => line.id),
-        primaryLineId: subtask.workLines[0]?.id ?? null,
-        groupComment: subtask.groupComment,
-        queueName: subtask.queueName,
-        queueId: subtask.queueId,
-        routeQueueKind: subtask.routeQueueKind,
-        sortOrder: subtask.sortOrder,
-        generationStatus: "PENDING_GENERATION" as const,
-        workflowRequestRef: null,
-      }
-    }
-  )
-  storedPlans.forEach((plan) => {
-    if (!usedPlanIds.has(plan.id)) {
-      orderedPlans.push(plan)
-    }
-  })
-  return orderedPlans.map((plan, index) => ({
-    ...plan,
-    sortOrder: (index + 1) * 10,
-  }))
-}
 
 export function RepairEstimateCompletedWorkspace({
   accessToken,
@@ -135,11 +79,8 @@ export function RepairEstimateCompletedWorkspace({
   const [expectedTaskVersion, setExpectedTaskVersion] = useState<number | null>(
     null
   )
-  const [amendmentTaskPlans, setAmendmentTaskPlans] = useState(() =>
-    plansInTaskOrder(estimate, null)
-  )
-  const [amendmentMovementRequired, setAmendmentMovementRequired] = useState(
-    estimate.movementRequired ?? false
+  const [amendmentMovementToRepair, setAmendmentMovementToRepair] = useState(
+    estimate.movementToRepair ?? false
   )
   const mediaOwner = maintenanceEstimateMediaOwner(estimate.id, warehouseId)
   const pendingUploadsRef = useRef(draft.pendingUploads)
@@ -168,7 +109,7 @@ export function RepairEstimateCompletedWorkspace({
   const mutation = useMutation({
     mutationFn: (params: {
       completionMode: RepairEstimateCompletionMode
-      movementRequired: boolean
+      movementToRepair: boolean
       logisticsPlanningMode: LogisticsPlanningMode
       logisticsScheduledDate: string | null
       taskPlans: RepairEstimateTaskPlanDto[]
@@ -251,8 +192,7 @@ export function RepairEstimateCompletedWorkspace({
     setEditing(false)
     setCompletionOpen(false)
     setExpectedTaskVersion(null)
-    setAmendmentTaskPlans(plansInTaskOrder(estimate, null))
-    setAmendmentMovementRequired(estimate.movementRequired ?? false)
+    setAmendmentMovementToRepair(estimate.movementToRepair ?? false)
     setError(null)
     setAmendmentReason("")
   }
@@ -264,11 +204,8 @@ export function RepairEstimateCompletedWorkspace({
 
     setDraft(toEstimateEditorDraft(estimate))
     setExpectedTaskVersion(linkedTask?.version ?? null)
-    setAmendmentTaskPlans(plansInTaskOrder(estimate, linkedTask))
-    setAmendmentMovementRequired(
-      linkedTask
-        ? linkedTask.subtasks.some((subtask) => subtask.kind !== "REPAIR_WORK")
-        : (estimate.movementRequired ?? false)
+    setAmendmentMovementToRepair(
+      linkedTask?.movementToRepair ?? (estimate.movementToRepair ?? false)
     )
     setError(null)
     setAmendmentReason("")
@@ -538,14 +475,13 @@ export function RepairEstimateCompletedWorkspace({
         pending={mutation.isPending}
         error={error}
         mode="AMEND"
-        initialMovementRequired={amendmentMovementRequired}
+        initialMovementToRepair={amendmentMovementToRepair}
         initialLogisticsPlanningMode={
           linkedTask?.logisticsPlanningMode ?? "AUTO"
         }
         initialLogisticsScheduledDate={
           linkedTask?.logisticsScheduledDate ?? null
         }
-        initialTaskPlans={amendmentTaskPlans}
         onOpenChange={setCompletionOpen}
         onComplete={(params) => {
           if (!readOnly) {

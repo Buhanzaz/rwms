@@ -9,11 +9,12 @@ class WorkerContextCompatibilityTest {
     private val json = Json { explicitNulls = false }
 
     @Test
-    fun `legacy context decodes with no selected current group`() {
+    fun `context decodes with no selected current group and nullable KPI palette`() {
         val context = json.decodeFromString<WorkerContextDto>(legacyContextJson())
 
         assertThat(context.currentGroup).isNull()
         assertThat(context.operationalAvailability).isEqualTo("AVAILABLE")
+        assertThat(context.kpiPalette).isNull()
     }
 
     @Test
@@ -36,7 +37,29 @@ class WorkerContextCompatibilityTest {
         assertThat(context.operationalAvailability).isEqualTo("DISABLED")
     }
 
-    private fun legacyContextJson(extra: String = ""): String =
+    @Test
+    fun `context exposes the exact server KPI palette`() {
+        val context = json.decodeFromString<WorkerContextDto>(
+            legacyContextJson(
+                extra = """
+                  ,"kpiPalette":{
+                    "ranges":[
+                      {"fromPercent":100,"toPercent":80,"color":"#16803A"},
+                      {"fromPercent":79,"toPercent":50,"color":"#D99B00"}
+                    ],
+                    "overdueColor":"#C62828"
+                  }
+                """.trimIndent(),
+                includeNullPalette = false,
+            ),
+        )
+
+        assertThat(context.kpiPalette?.ranges).hasSize(2)
+        assertThat(context.kpiPalette?.ranges?.first()?.fromPercent).isEqualTo(100)
+        assertThat(context.kpiPalette?.overdueColor).isEqualTo("#C62828")
+    }
+
+    private fun legacyContextJson(extra: String = "", includeNullPalette: Boolean = true): String =
         """
         {
           "worker":{
@@ -48,6 +71,7 @@ class WorkerContextCompatibilityTest {
           "groups":[],
           "qualifications":[],
           "categories":[],
+          ${if (includeNullPalette) "\"kpiPalette\":null," else ""}
           "serverTime":"2026-07-30T10:00:00Z",
           "revision":1,
           "offlineLease":{

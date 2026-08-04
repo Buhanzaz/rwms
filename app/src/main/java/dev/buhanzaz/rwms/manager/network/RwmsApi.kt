@@ -26,12 +26,6 @@ interface RwmsApi {
         @Header("If-None-Match") ifNoneMatch: String? = null,
     ): Response<InventorySessionDto>
 
-    @POST("api/inventory/v1/sessions")
-    suspend fun startInventory(
-        @Header("Idempotency-Key") idempotencyKey: String,
-        @Body request: StartInventoryRequest,
-    ): InventorySessionDto
-
     @GET("api/inventory/v1/sessions/{inventoryId}")
     suspend fun inventory(
         @Path("inventoryId") inventoryId: String,
@@ -73,20 +67,6 @@ interface RwmsApi {
         @Path("findingId") findingId: String,
         @Body request: ResolveInventoryConflictRequest,
     ): InventoryFindingDto
-
-    @POST("api/inventory/v1/sessions/{inventoryId}/completion-preview")
-    suspend fun previewInventoryCompletion(
-        @Path("inventoryId") inventoryId: String,
-        @Header("Idempotency-Key") idempotencyKey: String,
-        @Body request: InventoryCompletionPreviewRequest,
-    ): InventoryCompletionPreviewDto
-
-    @POST("api/inventory/v1/sessions/{inventoryId}/complete")
-    suspend fun completeInventorySession(
-        @Path("inventoryId") inventoryId: String,
-        @Header("Idempotency-Key") idempotencyKey: String,
-        @Body request: CompleteInventorySessionRequest,
-    ): InventorySessionDto
 
     @GET("api/asset/v1/rental-items")
     suspend fun rentalItems(

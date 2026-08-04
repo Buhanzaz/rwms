@@ -6,11 +6,12 @@ import {
   waitFor,
 } from "@testing-library/react"
 import { useContext, useEffect, useState } from "react"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { WarehouseInfo } from "@/api/warehouse-api"
 import { WarehouseContext } from "@/contexts/warehouse-context"
 import { WarehouseProvider } from "@/contexts/warehouse-provider"
+import type { CurrentUser } from "@/features/auth/auth-model"
 
 const { listWarehouses } = vi.hoisted(() => ({
   listWarehouses: vi.fn(),
@@ -18,6 +19,7 @@ const { listWarehouses } = vi.hoisted(() => ({
 
 const auth = vi.hoisted(() => ({
   accessToken: "access-token" as string | null,
+  currentUser: null as CurrentUser | null,
 }))
 
 vi.mock("@/api/warehouse-api", () => ({
@@ -25,7 +27,10 @@ vi.mock("@/api/warehouse-api", () => ({
 }))
 
 vi.mock("@/features/auth/use-auth", () => ({
-  useAuth: () => ({ accessToken: auth.accessToken }),
+  useAuth: () => ({
+    accessToken: auth.accessToken,
+    currentUser: auth.currentUser,
+  }),
 }))
 
 const warehouse: WarehouseInfo = {
@@ -37,6 +42,26 @@ const warehouse: WarehouseInfo = {
   timeZone: "Europe/Moscow",
   active: true,
   sortOrder: null,
+}
+
+const secondWarehouse: WarehouseInfo = {
+  ...warehouse,
+  id: "00000000-0000-4000-8000-000000000002",
+  name: "Южный",
+}
+
+const currentUser: CurrentUser = {
+  id: "10000000-0000-4000-8000-000000000001",
+  username: "manager",
+  displayName: "Manager",
+  firstName: null,
+  lastName: null,
+  email: null,
+  principalType: "USER",
+  globalRole: "WAREHOUSE_MANAGER",
+  rentalAccess: false,
+  warehouseAccessAll: false,
+  warehouseAccesses: [{ warehouseId: warehouse.id, level: "MANAGE" }],
 }
 
 function deferred<T>() {
@@ -105,11 +130,15 @@ function DraftProbe({ onUnmount }: { onUnmount: () => void }) {
   )
 }
 
-afterEach(() => {
-  cleanup()
+beforeEach(() => {
   listWarehouses.mockReset()
   auth.accessToken = "access-token"
+  auth.currentUser = currentUser
   window.localStorage.clear()
+})
+
+afterEach(() => {
+  cleanup()
 })
 
 describe("WarehouseProvider", () => {
@@ -154,6 +183,68 @@ describe("WarehouseProvider", () => {
     expect(listWarehouses).toHaveBeenCalledWith("access-token")
     expect(window.localStorage.getItem("wms:selected-warehouse-id")).toBe(
       warehouse.id
+    )
+  })
+
+  it("exposes and selects only warehouses granted to the current user", async () => {
+    window.localStorage.setItem("wms:selected-warehouse-id", secondWarehouse.id)
+    listWarehouses.mockResolvedValue([secondWarehouse, warehouse])
+
+    function WarehousesProbe() {
+      const context = useContext(WarehouseContext)
+
+      if (context === null) {
+        throw new Error("WarehouseContext is unavailable")
+      }
+
+      return (
+        <output>
+          {context.warehouses.map((candidate) => candidate.id).join(",")}
+          {"|"}
+          {context.selectedWarehouseId}
+        </output>
+      )
+    }
+
+    render(
+      <WarehouseProvider>
+        <WarehousesProbe />
+      </WarehouseProvider>
+    )
+
+    await waitFor(() =>
+      expect(screen.getByText(`${warehouse.id}|${warehouse.id}`)).toBeTruthy()
+    )
+    expect(window.localStorage.getItem("wms:selected-warehouse-id")).toBe(
+      warehouse.id
+    )
+  })
+
+  it("removes a selected warehouse immediately when refreshed access is revoked", async () => {
+    listWarehouses.mockResolvedValue([warehouse, secondWarehouse])
+    const view = render(
+      <WarehouseProvider>
+        <SelectionProbe />
+      </WarehouseProvider>
+    )
+
+    await waitFor(() => expect(screen.getByText(warehouse.id)).toBeTruthy())
+
+    auth.currentUser = {
+      ...currentUser,
+      warehouseAccesses: [{ warehouseId: secondWarehouse.id, level: "MANAGE" }],
+    }
+    view.rerender(
+      <WarehouseProvider>
+        <SelectionProbe />
+      </WarehouseProvider>
+    )
+
+    await waitFor(() =>
+      expect(screen.getByText(secondWarehouse.id)).toBeTruthy()
+    )
+    expect(window.localStorage.getItem("wms:selected-warehouse-id")).toBe(
+      secondWarehouse.id
     )
   })
 

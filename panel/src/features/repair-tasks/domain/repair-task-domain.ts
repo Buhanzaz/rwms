@@ -86,7 +86,7 @@ function snapshotSubtask(
     | "queueName"
     | "routeQueueKind"
     | "sortOrder"
-  >,
+  > & { kind: "REPAIR_WORK" },
   lines: RepairEstimateLineDto[],
   catalog: RepairEstimateCatalogIndex | null
 ): RepairTaskSubtaskDto {
@@ -129,8 +129,9 @@ export function buildRepairTaskSubtasks(params: {
     .sort((left, right) => left.sortOrder - right.sortOrder)
     .forEach((plan) => {
       if (plan.kind !== "REPAIR_WORK") {
-        subtasks.push(snapshotSubtask(plan, [], params.catalog ?? null))
-        return
+        throw new Error(
+          "План прямого ремонта может содержать только этапы ремонтных работ."
+        )
       }
       const lines = plan.includedLineIds
         .map((lineId) => lineById.get(lineId))
@@ -165,14 +166,7 @@ export function buildRepairTaskSubtasks(params: {
       unassignedLines,
       params.catalog ?? null
     )
-    const moveFromIndex = subtasks.findIndex(
-      (subtask) => subtask.kind === "MOVE_FROM_REPAIR"
-    )
-    subtasks.splice(
-      moveFromIndex >= 0 ? moveFromIndex : subtasks.length,
-      0,
-      fallback
-    )
+    subtasks.push(fallback)
   }
 
   return subtasks.map((subtask, index) => ({
@@ -222,14 +216,6 @@ export function assertRepairTaskSubtasksValid(
       )
     }
     ids.add(subtask.id)
-    if (
-      subtask.kind !== "REPAIR_WORK" &&
-      subtask.workLines.length + subtask.materialLines.length > 0
-    ) {
-      throw new Error(
-        `Подзадание ${index + 1}: перемещение не должно содержать строки сметы`
-      )
-    }
     if (
       subtask.plannedDurationMinutes !== null &&
       (!Number.isFinite(subtask.plannedDurationMinutes) ||

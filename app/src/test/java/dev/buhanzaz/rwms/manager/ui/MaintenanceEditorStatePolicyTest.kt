@@ -8,6 +8,33 @@ import org.junit.Test
 
 class MaintenanceEditorStatePolicyTest {
     @Test
+    fun `repair priority stays selected across the complete repair movement cycle`() {
+        val directRepair = editor().copy(priority = 4)
+        val inbound = directRepair
+            .withMovementToRepair(true)
+            .withLogisticsPlanningMode(LOGISTICS_PLANNING_MODE_FIXED_DATE)
+            .withLogisticsScheduledDate("2026-08-05")
+
+        val withoutInbound = inbound.withMovementToRepair(false)
+
+        assertThat(directRepair.movementToRepair).isFalse()
+        assertThat(directRepair.priority).isEqualTo(4)
+        assertThat(inbound.priority).isEqualTo(4)
+        assertThat(inbound.movementToRepair).isTrue()
+        assertThat(inbound.priority).isEqualTo(4)
+        assertThat(inbound.logisticsPlanningMode)
+            .isEqualTo(LOGISTICS_PLANNING_MODE_FIXED_DATE)
+        assertThat(inbound.logisticsScheduledDate).isEqualTo("2026-08-05")
+        assertThat(withoutInbound.movementToRepair).isFalse()
+        assertThat(withoutInbound.priority).isEqualTo(4)
+        assertThat(withoutInbound.logisticsPlanningMode).isNull()
+        assertThat(withoutInbound.logisticsScheduledDate).isNull()
+        assertThat(inbound.logisticsTaskPriorityValidationError()).isNull()
+        assertThat(inbound.copy(priority = 6).logisticsTaskPriorityValidationError())
+            .isEqualTo("Выберите приоритет ремонта от 1 до 5")
+    }
+
+    @Test
     fun `read only maintenance editor accepts only wizard step changes`() {
         val original = editor(readOnly = true).copy(
             sourceParty = "Original source",

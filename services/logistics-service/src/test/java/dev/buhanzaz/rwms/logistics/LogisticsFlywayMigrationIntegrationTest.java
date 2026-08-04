@@ -1375,6 +1375,69 @@ class LogisticsFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void v34AddsIndependentManualBookingHoldDurationAndValidatesJpa() {
+    Flyway beforeV34 = configuration(MIGRATIONS).target("33").load();
+    assertThat(beforeV34.migrate().migrationsExecuted).isEqualTo(33);
+
+    assertThat(configuration(MIGRATIONS).target("34").load().migrate().migrationsExecuted)
+        .isOne();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select manual_booking_hold_minutes from rental_settings",
+                Integer.class))
+        .isEqualTo(60);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update rental_settings set manual_booking_hold_minutes=4"))
+        .hasMessageContaining("ck_rental_settings_manual_booking_hold_minutes");
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v35ConvertsShipmentMovementHistoryAndRejectsTheRemovedKind() {
+    Flyway beforeV35 = configuration(MIGRATIONS).target("34").load();
+    assertThat(beforeV35.migrate().migrationsExecuted).isEqualTo(34);
+    UUID taskId = UUID.randomUUID();
+    UUID repairId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into driver_logistics_task(
+          id,version,warehouse_id,cabin_id,repair_id,source_type,source_id,task_kind,
+          planning_mode,scheduled_date,priority,unit_number,driver_queue_definition_id,
+          external_task_id,state,created_by_subject_id,idempotency_key,request_sha256,
+          retry_count,created_at,updated_at)
+        values (?,0,?,?,?,'REPAIR_PLACE',?,'MOVE_TO_SHIPMENT','AUTO',current_date,2,
+          'БТ-35',?,?,'SCHEDULED',?,?,?,0,clock_timestamp(),clock_timestamp())
+        """,
+        taskId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        repairId,
+        repairId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "a".repeat(64));
+
+    assertThat(configuration(MIGRATIONS).target("35").load().migrate().migrationsExecuted)
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select task_kind from driver_logistics_task where id=?", String.class, taskId))
+        .isEqualTo("REMOVE_FROM_REPAIR");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update driver_logistics_task set task_kind='MOVE_TO_SHIPMENT' where id=?",
+                    taskId))
+        .hasMessageContaining("ck_driver_logistics_task_kind");
+    assertJpaValidationStarts();
+  }
+
+  @Test
   void modifiedAppliedMigrationIsRejectedByChecksumValidation(@TempDir Path directory)
       throws IOException {
     Path migration = directory.resolve("V1__logistics_schema.sql");

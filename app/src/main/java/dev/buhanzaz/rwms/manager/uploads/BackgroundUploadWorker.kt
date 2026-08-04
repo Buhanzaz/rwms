@@ -43,8 +43,11 @@ class BackgroundUploadWorker(
         PhotoPayloadReader(applicationContext.contentResolver),
     )
 
-    override suspend fun doWork(): Result = operationPermit.withPermit {
-        executeOperation()
+    override suspend fun doWork(): Result {
+        store.initialize()
+        return operationPermit.withPermit {
+            executeOperation()
+        }
     }
 
     private suspend fun executeOperation(): Result {
@@ -559,7 +562,6 @@ class BackgroundUploadWorker(
                         finding.frozenPlan?.let { plan ->
                             plan.priority == command.planSelection.priority &&
                                 plan.movementToRepair == command.planSelection.movementToRepair &&
-                                plan.movementToShipment == command.planSelection.movementToShipment &&
                                 plan.lines.size == command.planSelection.lines.size &&
                                 plan.stages.size == command.planSelection.stages.size
                         } == true

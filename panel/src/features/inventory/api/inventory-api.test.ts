@@ -10,16 +10,18 @@ import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/re
 
 const auth = vi.hoisted(() => ({ getUser: vi.fn() }))
 const inventoryHttp = vi.hoisted(() => ({
+  cancelInventorySession: vi.fn(),
   getFurnitureReview: vi.fn(),
+  getInventoryPreliminaryStatistics: vi.fn(),
   getInventorySession: vi.fn(),
   resolveInventoryNumber: vi.fn(),
   resolveInventoryFindingConflict: vi.fn(),
+  reviewInventoryRegistry: vi.fn(),
   saveFurnitureReview: vi.fn(),
   saveInventoryInspection: vi.fn(),
   startFurnitureReview: vi.fn(),
 }))
 const queueCapabilities = vi.hoisted(() => ({ get: vi.fn() }))
-const catalogApi = vi.hoisted(() => ({ get: vi.fn() }))
 
 vi.mock("@/features/auth/oidc-client", () => ({
   getUserManager: () => ({ getUser: auth.getUser }),
@@ -32,17 +34,14 @@ vi.mock(
 vi.mock("@/features/repair-estimates/api/warehouse-queue-capabilities", () => ({
   getWarehouseQueueCapabilities: queueCapabilities.get,
 }))
-vi.mock(
-  "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api",
-  () => ({
-    getOperationalRepairEstimateCatalog: catalogApi.get,
-  })
-)
 
 import {
+  cancelInventory,
   getInventoryFurnitureReview,
+  getInventoryPreliminaryStatistics,
   resolveInventoryFindingConflict,
   resolveInventoryNumber,
+  reviewInventoryRegistry,
   saveInventoryFurnitureReview,
   saveInventoryFinding,
   startInventoryFurnitureReview,
@@ -145,13 +144,97 @@ describe("inventory API", () => {
       finding: null,
     })
     inventoryHttp.getInventorySession.mockResolvedValue(refreshedSession)
+    inventoryHttp.getInventoryPreliminaryStatistics.mockResolvedValue({
+      expectedCount: 1,
+      inspectedCount: 1,
+      missingCount: 0,
+      readyCount: 1,
+      withWorkCount: 1,
+      addedCount: 0,
+      unexpectedExistingCount: 0,
+      conflictCount: 0,
+      workLineCount: 1,
+      materialLineCount: 1,
+      workTotalMinor: 10000,
+      materialTotalMinor: 5000,
+      grandTotalMinor: 15000,
+      roundingAdjustmentMinor: 0,
+      normativeMinutes: "60",
+      durationSeconds: 3600,
+      aggregateLines: [
+        {
+          aggregationKind: "CATALOG",
+          catalogVersionId: "66666666-6666-4666-8666-666666666666",
+          catalogNodeId: "77777777-7777-4777-8777-777777777777",
+          normalizedDescription: "Дверь металлическая",
+          type: "MATERIAL",
+          unit: "шт.",
+          unitPriceMinor: 5000,
+          quantity: "1",
+          rowTotalMinor: 5000,
+        },
+      ],
+    })
     inventoryHttp.saveInventoryInspection.mockResolvedValue(rawFinding)
     queueCapabilities.get.mockResolvedValue({
       warehouseId: WAREHOUSE_ID,
-      movementToShipmentAvailable: false,
       movementQueueDefinitions: [],
     })
-    catalogApi.get.mockResolvedValue({ nodes: [], links: [] })
+  })
+
+  it("cancels with the exact session revision and a trimmed reason", async () => {
+    const cancelledAt = "2026-07-27T09:00:00Z"
+    inventoryHttp.cancelInventorySession.mockResolvedValue({
+      ...refreshedSession,
+      lifecycle: "CANCELLED",
+      sessionRevision: 9,
+      terminalAt: cancelledAt,
+      cancellation: {
+        reason: "Ошибочно выбран склад",
+        cancelledAt,
+      },
+    })
+
+    const result = await cancelInventory({
+      inventoryId: INVENTORY_ID,
+      expectedVersion: 8,
+      reason: "  Ошибочно выбран склад  ",
+    })
+
+    expect(inventoryHttp.cancelInventorySession).toHaveBeenCalledWith({
+      accessToken: "inventory-token",
+      inventoryId: INVENTORY_ID,
+      expectedSessionRevision: 8,
+      reason: "Ошибочно выбран склад",
+      idempotencyKey: expect.any(String),
+    })
+    expect(result).toMatchObject({
+      status: "CANCELLED",
+      version: 9,
+      cancellation: {
+        reason: "Ошибочно выбран склад",
+        cancelledAt,
+      },
+    })
+  })
+
+  it("maps server-issued preliminary totals without calculating them in the browser", async () => {
+    const result = await getInventoryPreliminaryStatistics(INVENTORY_ID)
+
+    expect(
+      inventoryHttp.getInventoryPreliminaryStatistics
+    ).toHaveBeenCalledWith("inventory-token", INVENTORY_ID)
+    expect(result).toMatchObject({
+      workTotal: "100.00",
+      materialTotal: "50.00",
+      grandTotal: "150.00",
+      aggregates: [
+        expect.objectContaining({
+          description: "Дверь металлическая",
+          total: "50.00",
+        }),
+      ],
+    })
   })
 
   it("refreshes and returns the session revision after a missing-number resolution", async () => {
@@ -211,6 +294,66 @@ describe("inventory API", () => {
       INVENTORY_ID
     )
     expect(result.version).toBe(8)
+  })
+
+  it("loads an exact registry review and exposes its conflicts to the finish page", async () => {
+    const inspectedFinding = { ...rawFinding, inspection: "READY" as const }
+    const currentSnapshot = {
+      assetId: rawFinding.assetId!,
+      assetVersion: 3,
+      warehouseId: WAREHOUSE_ID,
+      status: "REPAIR",
+      displayCanonicalNumber: rawFinding.displayCanonicalNumber,
+      tenantSnapshot: null,
+      passportSnapshot: {},
+      contentsSnapshot: [],
+      repairsSnapshot: [],
+    }
+    inventoryHttp.getInventorySession.mockResolvedValue({
+      ...refreshedSession,
+      findings: [inspectedFinding],
+    })
+    inventoryHttp.reviewInventoryRegistry.mockResolvedValue({
+      inventoryId: INVENTORY_ID,
+      sessionRevision: 8,
+      findingRevisions: [
+        {
+          findingId: rawFinding.id,
+          expectedFindingRevision: rawFinding.findingRevision,
+        },
+      ],
+      validatedAt: "2026-08-04T10:00:00Z",
+      validatedFindings: [
+        {
+          findingId: rawFinding.id,
+          currentSnapshot,
+          conflicts: [
+            {
+              code: "STATUS_CHANGED",
+              message: "Статус бытовки изменился после осмотра",
+              expected: "WAREHOUSE",
+              actual: "REPAIR",
+            },
+          ],
+        },
+      ],
+    })
+
+    const result = await reviewInventoryRegistry(INVENTORY_ID)
+
+    expect(inventoryHttp.reviewInventoryRegistry).toHaveBeenCalledWith({
+      accessToken: "inventory-token",
+      session: expect.objectContaining({
+        id: INVENTORY_ID,
+        sessionRevision: 8,
+        findings: [inspectedFinding],
+      }),
+    })
+    expect(result.findings[0]).toMatchObject({
+      currentSnapshot: { status: "REPAIR" },
+      reconciliationStatus: "CONFLICT",
+      conflicts: [{ code: "STATUS_CHANGED" }],
+    })
   })
 
   it("starts and saves furniture review with the current cabin finding revisions", async () => {
@@ -333,6 +476,7 @@ describe("inventory API", () => {
       saveInventoryFinding({
         inventoryId: INVENTORY_ID,
         expectedVersion: 8,
+        expectedFindingVersion: rawFinding.findingRevision,
         actor,
         findingId: rawFinding.id,
         comment: "",
@@ -341,59 +485,65 @@ describe("inventory API", () => {
         lines: [workLine],
         repairPlans: [],
         repairCompletionMode: "AUTO",
-        movementRequired: true,
+        movementToRepair: true,
         priority: 3,
       })
-    ).rejects.toThrow(
-      "На складе не подключена очередь для перемещения на отгрузку."
-    )
+    ).rejects.toThrow("На складе не подключена очередь для перемещений.")
 
     expect(queueCapabilities.get).toHaveBeenCalledWith(
       "inventory-token",
       WAREHOUSE_ID
     )
-    expect(catalogApi.get).not.toHaveBeenCalled()
     expect(inventoryHttp.saveInventoryInspection).not.toHaveBeenCalled()
   })
 
-  it("selects only a catalog movement node connected to the current warehouse", async () => {
+  it("keeps the draft finding revision instead of masking a concurrent edit", async () => {
+    inventoryHttp.getInventorySession.mockResolvedValue({
+      ...refreshedSession,
+      sessionRevision: 9,
+      findings: [{ ...rawFinding, findingRevision: 5 }],
+    })
+
+    await saveInventoryFinding({
+      inventoryId: INVENTORY_ID,
+      expectedVersion: 9,
+      expectedFindingVersion: 4,
+      actor,
+      findingId: rawFinding.id,
+      comment: "Черновик первого оператора",
+      media: [],
+      coverMediaId: null,
+      lines: [],
+      repairPlans: [],
+      repairCompletionMode: null,
+      movementToRepair: false,
+      priority: 3,
+    })
+
+    expect(inventoryHttp.saveInventoryInspection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedSessionRevision: 9,
+        expectedFindingRevision: 4,
+      })
+    )
+  })
+
+  it("sends the repair movement cycle and selected priority to the inventory contract", async () => {
     inventoryHttp.getInventorySession.mockResolvedValue({
       ...refreshedSession,
       findings: [rawFinding],
     })
     queueCapabilities.get.mockResolvedValue({
       warehouseId: WAREHOUSE_ID,
-      movementToShipmentAvailable: true,
       movementQueueDefinitions: [
-        {
-          queueDefinitionId: "current-warehouse-movement",
-          workQueueId: "current-warehouse-work-queue",
-        },
+        { queueDefinitionId: "movement", workQueueId: "driver" },
       ],
-    })
-    catalogApi.get.mockResolvedValue({
-      nodes: [
-        {
-          id: "allowed-movement-location",
-          active: true,
-          nodeType: "LOCATION",
-          routeQueueKind: "MOVEMENT",
-          queueDefinitionId: "current-warehouse-movement",
-        },
-        {
-          id: "other-warehouse-movement-location",
-          active: true,
-          nodeType: "LOCATION",
-          routeQueueKind: "MOVEMENT",
-          queueDefinitionId: "other-warehouse-movement",
-        },
-      ],
-      links: [],
     })
 
     await saveInventoryFinding({
       inventoryId: INVENTORY_ID,
       expectedVersion: 8,
+      expectedFindingVersion: rawFinding.findingRevision,
       actor,
       findingId: rawFinding.id,
       comment: "",
@@ -402,10 +552,10 @@ describe("inventory API", () => {
       lines: [workLine],
       repairPlans: [],
       repairCompletionMode: "AUTO",
-      movementRequired: true,
+      movementToRepair: true,
       logisticsPlanningMode: "FIXED_DATE",
       logisticsScheduledDate: "2026-08-12",
-      priority: 3,
+      priority: 1,
     })
 
     expect(inventoryHttp.saveInventoryInspection).toHaveBeenCalledWith(
@@ -414,20 +564,46 @@ describe("inventory API", () => {
         inventoryId: INVENTORY_ID,
         findingId: rawFinding.id,
         planSelection: expect.objectContaining({
+          priority: 1,
+          movementToRepair: true,
           logisticsPlanningMode: "FIXED_DATE",
           logisticsScheduledDate: "2026-08-12",
-          stages: [
-            {
-              catalogNodeId: "allowed-movement-location",
-              kind: "MOVE_TO_REPAIR",
-              order: 0,
-            },
-            {
-              catalogNodeId: "allowed-movement-location",
-              kind: "MOVE_FROM_REPAIR",
-              order: 2,
-            },
-          ],
+          stages: [],
+        }),
+      })
+    )
+  })
+
+  it("does not attach logistics planning when repair movement is not selected", async () => {
+    inventoryHttp.getInventorySession.mockResolvedValue({
+      ...refreshedSession,
+      findings: [rawFinding],
+    })
+    await saveInventoryFinding({
+      inventoryId: INVENTORY_ID,
+      expectedVersion: 8,
+      expectedFindingVersion: rawFinding.findingRevision,
+      actor,
+      findingId: rawFinding.id,
+      comment: "",
+      media: [],
+      coverMediaId: null,
+      lines: [workLine],
+      repairPlans: [],
+      repairCompletionMode: "AUTO",
+      movementToRepair: false,
+      logisticsPlanningMode: "FIXED_DATE",
+      logisticsScheduledDate: "2026-08-12",
+      priority: 2,
+    })
+
+    expect(inventoryHttp.saveInventoryInspection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        planSelection: expect.objectContaining({
+          priority: 2,
+          movementToRepair: false,
+          logisticsPlanningMode: null,
+          logisticsScheduledDate: null,
         }),
       })
     )

@@ -15,7 +15,7 @@ import org.junit.Test
 
 class MaintenanceEditorValidationTest {
     @Test
-    fun `movement to repair requires a driver queue priority`() {
+    fun `initial details and submission require a repair priority`() {
         val photoUri = "content://rwms/maintenance/movement-priority.jpg"
         val editor = MaintenanceEditorState(
             mode = MaintenanceEditorMode.REPAIR,
@@ -42,7 +42,9 @@ class MaintenanceEditorValidationTest {
         )
 
         assertThat(maintenanceCanSubmit(editor)).isFalse()
+        assertThat(maintenanceCanAdvance(editor, step = 1)).isFalse()
         assertThat(maintenanceCanSubmit(editor.copy(priority = 4))).isTrue()
+        assertThat(maintenanceCanAdvance(editor.copy(priority = 4), step = 1)).isTrue()
     }
 
     @Test

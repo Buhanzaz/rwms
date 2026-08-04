@@ -162,11 +162,15 @@ public class MaintenanceProjectionSnapshotFactory {
     result.put("lifecycle", value.getState().name());
     result.put("currentRevision", value.getRevision());
     result.put("dispatchDate", text(value.getDispatchDate()));
+    result.put("priority", value.getPriority());
+    result.put("movementToRepair", value.isMovementToRepair());
+    result.put("movementScheduledDate", text(value.getMovementScheduledDate()));
     result.put("sourceParty", value.getSourceParty());
     result.put("comment", value.getComment());
     result.put("repairId", text(value.getRepairId()));
     result.put("coverMediaId", text(value.getCoverMediaId()));
     result.put("completedAt", text(value.getCompletedAt()));
+    result.put("inventorySupersededAt", text(value.getInventorySupersededAt()));
     result.put("actor", json(value.getActorRef()));
     result.put("createdAt", text(value.getCreatedAt()));
     result.put("updatedAt", text(value.getUpdatedAt()));
@@ -238,8 +242,6 @@ public class MaintenanceProjectionSnapshotFactory {
     result.put("coverMediaId", text(value.getCoverMediaId()));
     result.put(
         "movementToRepair", value.isMovementToRepair());
-    result.put(
-        "movementToShipment", value.isMovementToShipment());
     result.put(
         "logisticsPlanningMode",
         value.getLogisticsPlanningMode() == null

@@ -28,7 +28,8 @@ function minor(value: string) {
 
 function planLine(
   line: RepairEstimateLineDto,
-  planComment: string | null
+  planComment: string | null,
+  routingCatalogNodeId?: string
 ): InventoryCatalogPlanLine | InventoryManualPlanLine {
   const groupComment =
     line.lineType === "WORK"
@@ -38,6 +39,7 @@ function planLine(
     return {
       aggregationKind: "CATALOG" as const,
       catalogNodeId: line.catalogSnapshot.nodeId,
+      routingCatalogNodeId: null,
       description: null,
       type: null,
       unit: null,
@@ -54,9 +56,13 @@ function planLine(
   if (line.lineType !== "WORK" && line.lineType !== "MATERIAL") {
     throw new Error("Для ручной позиции укажите тип работы или материала")
   }
+  if (!routingCatalogNodeId) {
+    throw new Error("Для ручной позиции выберите план ремонтных работ")
+  }
   return {
     aggregationKind: "MANUAL" as const,
     catalogNodeId: null,
+    routingCatalogNodeId,
     description: line.description.trim(),
     type: line.lineType,
     unit: line.unit.trim(),
@@ -73,25 +79,25 @@ function planLine(
 
 export function buildInventoryPlanSelection(input: {
   completionMode: RepairEstimateCompletionMode
-  movementRequired: boolean
-  logisticsPlanningMode: LogisticsPlanningMode
+  movementToRepair: boolean
+  logisticsPlanningMode: LogisticsPlanningMode | null
   logisticsScheduledDate: string | null
-  movementCatalogNodeId?: string | null
   priority: RepairPriority
   coverMediaId: string | null
   taskPlans: RepairEstimateTaskPlanDto[]
   lines: RepairEstimateLineDto[]
 }): Exclude<InventoryPlanSelection, null> {
-  if (!input.movementRequired) {
+  if (!input.movementToRepair) {
     if (
-      input.logisticsPlanningMode !== "AUTO" ||
+      input.logisticsPlanningMode !== null ||
       input.logisticsScheduledDate !== null
     ) {
       throw new Error(
-        "Параметры логистической очереди недоступны без перемещения."
+        "Параметры логистической очереди доступны только для перемещения на ремонт."
       )
     }
   } else if (
+    input.logisticsPlanningMode === null ||
     (input.logisticsPlanningMode === "AUTO" &&
       input.logisticsScheduledDate !== null) ||
     (input.logisticsPlanningMode === "FIXED_DATE" &&
@@ -101,25 +107,27 @@ export function buildInventoryPlanSelection(input: {
       "Дата логистического задания должна быть задана только при выборе конкретной даты."
     )
   }
-  if (input.movementRequired && !input.movementCatalogNodeId) {
-    throw new Error("В каталоге не настроено расположение для перемещения.")
-  }
-  const planCommentByLine = new Map<string, string>()
-  for (const plan of input.taskPlans.filter(
+  const repairWorkPlans = input.taskPlans.filter(
     (candidate) => candidate.kind === "REPAIR_WORK"
-  )) {
+  )
+  const planByIncludedLineId = new Map<string, RepairEstimateTaskPlanDto>()
+  for (const plan of repairWorkPlans) {
     for (const lineId of plan.includedLineIds) {
-      const existing = planCommentByLine.get(lineId)
-      if (existing !== undefined && existing !== plan.groupComment) {
+      if (planByIncludedLineId.has(lineId)) {
         throw new Error("Строка не может входить в несколько планов работ")
       }
-      planCommentByLine.set(lineId, plan.groupComment)
+      planByIncludedLineId.set(lineId, plan)
     }
   }
-  const lines = input.lines.map((line) =>
-    planLine(line, planCommentByLine.get(line.id) ?? null)
-  )
   if (input.completionMode === "AUTO") {
+    if (input.lines.some((line) => line.catalogSnapshot === null)) {
+      throw new Error(
+        "Автоматический режим доступен только для позиций каталога"
+      )
+    }
+    const lines = input.lines.map((line) =>
+      planLine(line, planByIncludedLineId.get(line.id)?.groupComment ?? null)
+    )
     if (lines.some((line) => line.aggregationKind !== "CATALOG")) {
       throw new Error(
         "Автоматический режим доступен только для позиций каталога"
@@ -129,77 +137,68 @@ export function buildInventoryPlanSelection(input: {
       (line): line is InventoryCatalogPlanLine =>
         line.aggregationKind === "CATALOG"
     )
-    const autoWorkStageCount = input.lines.filter(
-      (line) => line.lineType === "WORK"
-    ).length
-    const stages = input.movementRequired
-      ? [
-          {
-            catalogNodeId: input.movementCatalogNodeId!,
-            kind: "MOVE_TO_REPAIR" as const,
-            order: 0,
-          },
-          {
-            catalogNodeId: input.movementCatalogNodeId!,
-            kind: "MOVE_FROM_REPAIR" as const,
-            order: autoWorkStageCount + 1,
-          },
-        ]
-      : []
     return {
       mode: "AUTO",
       priority: input.priority,
       coverMediaId: input.coverMediaId,
+      movementToRepair: input.movementToRepair,
       logisticsPlanningMode: input.logisticsPlanningMode,
       logisticsScheduledDate: input.logisticsScheduledDate,
       lines: catalogLines,
-      stages,
+      stages: [],
     }
   }
   const lineById = new Map(input.lines.map((line) => [line.id, line]))
-  const selected = input.taskPlans
-    .filter((plan) => plan.kind === "REPAIR_WORK")
-    .map((plan) => {
-      const primary = plan.primaryLineId
+  const routingCatalogNodeIdByPlan = new Map<
+    RepairEstimateTaskPlanDto,
+    string
+  >()
+  for (const plan of repairWorkPlans) {
+    if (plan.includedLineIds.some((lineId) => !lineById.has(lineId))) {
+      throw new Error("План работ содержит строку, отсутствующую в смете")
+    }
+    const primary =
+      plan.primaryLineId && plan.includedLineIds.includes(plan.primaryLineId)
         ? lineById.get(plan.primaryLineId)
         : undefined
-      const catalogNodeId = primary?.catalogSnapshot?.nodeId
-      if (!catalogNodeId) {
-        throw new Error(
-          "Для ручного этапа выберите основной вид работ из каталога"
-        )
-      }
-      return catalogNodeId
-    })
-  if (selected.length === 0) {
+    const catalogNodeId =
+      primary?.lineType === "WORK"
+        ? primary.catalogSnapshot?.nodeId.trim()
+        : undefined
+    if (!catalogNodeId) {
+      throw new Error(
+        "Для ручного этапа выберите основной вид работ из каталога"
+      )
+    }
+    routingCatalogNodeIdByPlan.set(plan, catalogNodeId)
+  }
+  if (repairWorkPlans.length === 0) {
     throw new Error("Ручной план должен содержать хотя бы один этап работ")
   }
-  const workStages = selected.map((catalogNodeId, index) => ({
-    catalogNodeId,
+  const lines = input.lines.map((line) => {
+    const plan = planByIncludedLineId.get(line.id)
+    if (line.catalogSnapshot) {
+      return planLine(line, plan?.groupComment ?? null)
+    }
+    return planLine(
+      line,
+      plan?.groupComment ?? null,
+      plan ? routingCatalogNodeIdByPlan.get(plan) : undefined
+    )
+  })
+  const workStages = repairWorkPlans.map((plan, index) => ({
+    catalogNodeId: routingCatalogNodeIdByPlan.get(plan)!,
     kind: "REPAIR_WORK" as const,
-    order: index + (input.movementRequired ? 1 : 0),
+    order: index,
   }))
   return {
     mode: "MANUAL",
     priority: input.priority,
     coverMediaId: input.coverMediaId,
+    movementToRepair: input.movementToRepair,
     logisticsPlanningMode: input.logisticsPlanningMode,
     logisticsScheduledDate: input.logisticsScheduledDate,
     lines,
-    stages: input.movementRequired
-      ? [
-          {
-            catalogNodeId: input.movementCatalogNodeId!,
-            kind: "MOVE_TO_REPAIR",
-            order: 0,
-          },
-          ...workStages,
-          {
-            catalogNodeId: input.movementCatalogNodeId!,
-            kind: "MOVE_FROM_REPAIR",
-            order: workStages.length + 1,
-          },
-        ]
-      : workStages,
+    stages: workStages,
   }
 }

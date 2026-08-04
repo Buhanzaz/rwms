@@ -60,11 +60,10 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-describe("repair completion priority step", () => {
-  it("uses catalog-derived AUTO plans without manual mode or queue controls", async () => {
+describe("repair completion", () => {
+  it("shows the complete estimate review and submits catalog-derived AUTO plans", async () => {
     capabilities.get.mockResolvedValue({
       warehouseId: "warehouse-1",
-      movementToShipmentAvailable: true,
       movementQueueDefinitions: [],
     })
     const user = userEvent.setup()
@@ -89,18 +88,17 @@ describe("repair completion priority step", () => {
           completeLabel="Создать задание"
           pendingLabel="Создание..."
           previewKey="priority-test"
-          initialMovementRequired={false}
+          initialMovementToRepair={false}
           onOpenChange={vi.fn()}
           onComplete={onComplete}
         />
       </QueryClientProvider>
     )
 
+    await screen.findByRole("button", { name: "Создать задание" })
     expect(
-      await screen.findByRole("checkbox", {
-        name: "Перемещение на отгрузку",
-      })
-    ).toBeTruthy()
+      screen.queryByRole("checkbox", { name: "Перемещение на отгрузку" })
+    ).toBeNull()
     expect(screen.queryByText("Автоматическое распределение")).toBeNull()
     expect(
       screen.queryByRole("combobox", { name: "Режим завершения" })
@@ -108,11 +106,15 @@ describe("repair completion priority step", () => {
     expect(screen.queryByText("Выбрать вручную")).toBeNull()
     expect(screen.queryByText("Маршрут очереди")).toBeNull()
     expect(screen.queryByText("Удержание")).toBeNull()
-
-    await user.click(screen.getByRole("button", { name: "Далее" }))
-
-    expect(screen.getByText("Выберите приоритет задания")).toBeTruthy()
-    expect(onComplete).not.toHaveBeenCalled()
+    expect(screen.getByText("Итоги сметы")).toBeTruthy()
+    expect(screen.getByText("Работы и материалы")).toBeTruthy()
+    expect(screen.getAllByText("Ремонтные задания").length).toBeGreaterThan(1)
+    expect(screen.getAllByText("Заменить панель").length).toBeGreaterThan(0)
+    expect(
+      screen.getByRole("radio", {
+        name: "Приоритет 1: Самый срочный",
+      })
+    ).toBeTruthy()
 
     await user.click(
       screen.getByRole("radio", {
@@ -125,7 +127,7 @@ describe("repair completion priority step", () => {
       expect.objectContaining({
         priority: 1,
         completionMode: "AUTO",
-        movementRequired: false,
+        movementToRepair: false,
         logisticsPlanningMode: "AUTO",
         logisticsScheduledDate: null,
         taskPlans: [
@@ -140,10 +142,9 @@ describe("repair completion priority step", () => {
     )
   })
 
-  it("uses the neutral priority and skips priority choice for AUTO movement", async () => {
+  it("uses the selected priority for both legs of movement to repair", async () => {
     capabilities.get.mockResolvedValue({
       warehouseId: "warehouse-1",
-      movementToShipmentAvailable: true,
       movementQueueDefinitions: [
         { queueDefinitionId: "movement", workQueueId: "warehouse-movement" },
       ],
@@ -170,7 +171,7 @@ describe("repair completion priority step", () => {
           completeLabel="Создать задание"
           pendingLabel="Создание..."
           previewKey="movement-test"
-          initialMovementRequired={false}
+          initialMovementToRepair={false}
           onOpenChange={vi.fn()}
           onComplete={onComplete}
         />
@@ -179,7 +180,12 @@ describe("repair completion priority step", () => {
 
     await user.click(
       await screen.findByRole("checkbox", {
-        name: "Перемещение на отгрузку",
+        name: "Создать перемещение на ремонт",
+      })
+    )
+    await user.click(
+      screen.getByRole("radio", {
+        name: "Приоритет 1: Самый срочный",
       })
     )
     await user.click(screen.getByRole("button", { name: "Создать задание" }))
@@ -187,29 +193,27 @@ describe("repair completion priority step", () => {
     expect(onComplete).toHaveBeenCalledWith(
       expect.objectContaining({
         completionMode: "AUTO",
-        movementRequired: true,
+        movementToRepair: true,
         logisticsPlanningMode: "AUTO",
         logisticsScheduledDate: null,
-        priority: 3,
-        taskPlans: expect.arrayContaining([
+        priority: 1,
+        taskPlans: [
           expect.objectContaining({
-            kind: "MOVE_TO_REPAIR",
-            routeQueueKind: "MOVEMENT",
+            kind: "REPAIR_WORK",
+            routeQueueKind: "REPAIR",
           }),
-          expect.objectContaining({
-            kind: "MOVE_FROM_REPAIR",
-            routeQueueKind: "MOVEMENT",
-          }),
-        ]),
+        ],
       })
     )
-    expect(screen.queryByText("Выберите приоритет задания")).toBeNull()
+    expect(screen.getByText("Приоритет ремонта")).toBeTruthy()
+    expect(
+      screen.queryByRole("checkbox", { name: "Перемещение на отгрузку" })
+    ).toBeNull()
   })
 
-  it("requires and submits a date for fixed-date logistics planning", async () => {
+  it("requires and submits a date for inbound logistics planning", async () => {
     capabilities.get.mockResolvedValue({
       warehouseId: "warehouse-1",
-      movementToShipmentAvailable: true,
       movementQueueDefinitions: [
         { queueDefinitionId: "movement", workQueueId: "warehouse-movement" },
       ],
@@ -236,7 +240,7 @@ describe("repair completion priority step", () => {
           completeLabel="Создать задание"
           pendingLabel="Создание..."
           previewKey="fixed-date-movement-test"
-          initialMovementRequired={false}
+          initialMovementToRepair={false}
           onOpenChange={vi.fn()}
           onComplete={onComplete}
         />
@@ -245,7 +249,7 @@ describe("repair completion priority step", () => {
 
     await user.click(
       await screen.findByRole("checkbox", {
-        name: "Перемещение на отгрузку",
+        name: "Создать перемещение на ремонт",
       })
     )
     await user.click(
@@ -267,7 +271,7 @@ describe("repair completion priority step", () => {
 
     expect(onComplete).toHaveBeenCalledWith(
       expect.objectContaining({
-        movementRequired: true,
+        movementToRepair: true,
         logisticsPlanningMode: "FIXED_DATE",
         logisticsScheduledDate: "2026-08-12",
         priority: 3,
@@ -278,7 +282,6 @@ describe("repair completion priority step", () => {
   it("restores persisted fixed-date logistics planning when reopened", async () => {
     capabilities.get.mockResolvedValue({
       warehouseId: "warehouse-1",
-      movementToShipmentAvailable: true,
       movementQueueDefinitions: [
         { queueDefinitionId: "movement", workQueueId: "warehouse-movement" },
       ],
@@ -305,7 +308,7 @@ describe("repair completion priority step", () => {
           completeLabel="Создать задание"
           pendingLabel="Создание..."
           previewKey="persisted-fixed-date-movement-test"
-          initialMovementRequired
+          initialMovementToRepair
           initialLogisticsPlanningMode="FIXED_DATE"
           initialLogisticsScheduledDate="2026-08-12"
           onOpenChange={vi.fn()}
@@ -330,7 +333,7 @@ describe("repair completion priority step", () => {
 
     expect(onComplete).toHaveBeenCalledWith(
       expect.objectContaining({
-        movementRequired: true,
+        movementToRepair: true,
         logisticsPlanningMode: "FIXED_DATE",
         logisticsScheduledDate: "2026-08-12",
       })
@@ -340,7 +343,6 @@ describe("repair completion priority step", () => {
   it("does not render or submit movement when the warehouse has no capability", async () => {
     capabilities.get.mockResolvedValue({
       warehouseId: "warehouse-1",
-      movementToShipmentAvailable: false,
       movementQueueDefinitions: [],
     })
     const user = userEvent.setup()
@@ -365,19 +367,18 @@ describe("repair completion priority step", () => {
           completeLabel="Создать задание"
           pendingLabel="Создание..."
           previewKey="no-movement-capability"
-          initialMovementRequired
+          initialMovementToRepair
           onOpenChange={vi.fn()}
           onComplete={onComplete}
         />
       </QueryClientProvider>
     )
 
-    await screen.findByRole("button", { name: "Далее" })
+    await screen.findByRole("button", { name: "Создать задание" })
     expect(
       screen.queryByRole("checkbox", { name: "Перемещение на отгрузку" })
     ).toBeNull()
 
-    await user.click(screen.getByRole("button", { name: "Далее" }))
     await user.click(
       screen.getByRole("radio", { name: "Приоритет 1: Самый срочный" })
     )
@@ -385,7 +386,7 @@ describe("repair completion priority step", () => {
 
     expect(onComplete).toHaveBeenCalledWith(
       expect.objectContaining({
-        movementRequired: false,
+        movementToRepair: false,
         logisticsPlanningMode: "AUTO",
         logisticsScheduledDate: null,
       })

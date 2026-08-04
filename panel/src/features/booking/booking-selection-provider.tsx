@@ -1,11 +1,36 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react"
 
+import type { ManualBookingDraftHold } from "@/features/booking/api/manual-booking-drafts-api"
 import {
   BookingSelectionContext,
   type BookingSelectionContextValue,
 } from "@/features/booking/booking-selection-context"
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 import { useWarehouse } from "@/hooks/use-warehouse"
+
+type BookingSelectionState = {
+  draftId: string
+  checkedItems: RentalItemDto[]
+  stagedItems: RentalItemDto[]
+  activeHold: ManualBookingDraftHold | null
+}
+
+function createInitialState(): BookingSelectionState {
+  return {
+    draftId: crypto.randomUUID(),
+    checkedItems: [],
+    stagedItems: [],
+    activeHold: null,
+  }
+}
+
+function replaceSnapshot(items: RentalItemDto[], snapshot: RentalItemDto) {
+  const index = items.findIndex((item) => item.id === snapshot.id)
+  if (index < 0 || items[index] === snapshot) return items
+  const next = [...items]
+  next[index] = snapshot
+  return next
+}
 
 export function BookingSelectionProvider({
   children,
@@ -30,69 +55,134 @@ function BookingSelectionScope({
   children: ReactNode
   warehouseId: string | null
 }) {
-  const [items, setItems] = useState<RentalItemDto[]>([])
-  const selectedIds = useMemo(
-    () => new Set(items.map((item) => item.id)),
-    [items]
+  const [state, setState] = useState(createInitialState)
+  const checkedIds = useMemo(
+    () => new Set(state.checkedItems.map((item) => item.id)),
+    [state.checkedItems]
+  )
+  const stagedIds = useMemo(
+    () => new Set(state.stagedItems.map((item) => item.id)),
+    [state.stagedItems]
   )
 
-  const select = useCallback(
+  const toggleChecked = useCallback(
     (item: RentalItemDto) => {
       if (warehouseId !== item.warehouseId) return
-
-      setItems((current) => {
-        const existingIndex = current.findIndex(
+      setState((current) => {
+        if (current.stagedItems.some((candidate) => candidate.id === item.id)) {
+          return current
+        }
+        const checked = current.checkedItems.some(
           (candidate) => candidate.id === item.id
         )
-        if (existingIndex < 0) return [...current, item]
-        if (current[existingIndex] === item) return current
-
-        const next = [...current]
-        next[existingIndex] = item
-        return next
+        return {
+          ...current,
+          checkedItems: checked
+            ? current.checkedItems.filter(
+                (candidate) => candidate.id !== item.id
+              )
+            : [...current.checkedItems, item],
+        }
       })
     },
     [warehouseId]
   )
 
-  const deselect = useCallback((rentalItemId: string) => {
-    setItems((current) => current.filter((item) => item.id !== rentalItemId))
+  const addCheckedToStaged = useCallback(() => {
+    setState((current) => {
+      if (current.checkedItems.length === 0) return current
+      const stagedIds = new Set(current.stagedItems.map((item) => item.id))
+      return {
+        ...current,
+        checkedItems: [],
+        stagedItems: [
+          ...current.stagedItems,
+          ...current.checkedItems.filter((item) => !stagedIds.has(item.id)),
+        ],
+      }
+    })
+  }, [])
+
+  const removeStaged = useCallback((rentalItemId: string) => {
+    setState((current) => ({
+      ...current,
+      stagedItems: current.stagedItems.filter(
+        (item) => item.id !== rentalItemId
+      ),
+    }))
   }, [])
 
   const removeMany = useCallback((rentalItemIds: readonly string[]) => {
     const ids = new Set(rentalItemIds)
     if (ids.size === 0) return
-    setItems((current) => current.filter((item) => !ids.has(item.id)))
+    setState((current) => ({
+      ...current,
+      checkedItems: current.checkedItems.filter((item) => !ids.has(item.id)),
+      stagedItems: current.stagedItems.filter((item) => !ids.has(item.id)),
+      activeHold: current.activeHold
+        ? (() => {
+            const retainedIds = current.activeHold.rentalItemIds.filter(
+              (id) => !ids.has(id)
+            )
+            return retainedIds.length > 0
+              ? { ...current.activeHold, rentalItemIds: retainedIds }
+              : null
+          })()
+        : null,
+    }))
   }, [])
 
-  const toggle = useCallback(
-    (item: RentalItemDto) => {
-      if (selectedIds.has(item.id)) deselect(item.id)
-      else select(item)
-    },
-    [deselect, select, selectedIds]
-  )
+  const syncSnapshot = useCallback((item: RentalItemDto) => {
+    setState((current) => {
+      const checkedItems = replaceSnapshot(current.checkedItems, item)
+      const stagedItems = replaceSnapshot(current.stagedItems, item)
+      if (
+        checkedItems === current.checkedItems &&
+        stagedItems === current.stagedItems
+      ) {
+        return current
+      }
+      return { ...current, checkedItems, stagedItems }
+    })
+  }, [])
 
-  const clear = useCallback(() => setItems([]), [])
+  const setActiveHold = useCallback((hold: ManualBookingDraftHold) => {
+    setState((current) =>
+      hold.draftId === current.draftId
+        ? { ...current, activeHold: hold }
+        : current
+    )
+  }, [])
+
+  const clear = useCallback(() => setState(createInitialState()), [])
   const value = useMemo<BookingSelectionContextValue>(
     () => ({
       warehouseId,
-      selectedItems: items,
-      selectedIds,
-      select,
-      deselect,
-      toggle,
+      draftId: state.draftId,
+      checkedItems: state.checkedItems,
+      checkedIds,
+      stagedItems: state.stagedItems,
+      stagedIds,
+      activeHold: state.activeHold,
+      toggleChecked,
+      addCheckedToStaged,
+      removeStaged,
       removeMany,
+      syncSnapshot,
+      setActiveHold,
       clear,
     }),
     [
+      addCheckedToStaged,
+      checkedIds,
       clear,
-      deselect,
-      items,
       removeMany,
-      select,
-      selectedIds,
-      toggle,
+      removeStaged,
+      setActiveHold,
+      stagedIds,
+      state,
+      syncSnapshot,
+      toggleChecked,
       warehouseId,
     ]
   )

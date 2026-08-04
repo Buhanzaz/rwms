@@ -16,6 +16,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
@@ -55,10 +56,8 @@ public class WarehouseService {
   }
 
   @Transactional(readOnly = true)
-  public WarehouseResponse get(UUID id, boolean includeInactive) {
-    Warehouse warehouse = require(id);
-    if (!includeInactive && !warehouse.isActive()) throw new WarehouseNotFoundException();
-    return responses.toResponse(warehouse);
+  public WarehouseResponse get(UUID id) {
+    return responses.toResponse(require(id));
   }
 
   @Transactional
@@ -68,7 +67,15 @@ public class WarehouseService {
     Optional<WarehouseResponse> replayed =
         idempotency.replay(subjectId, idempotencyKey, fingerprint);
     if (replayed.isPresent()) return new CreateResult(replayed.get(), true);
-    Warehouse persisted = warehouses.saveAndFlush(candidate);
+    if (warehouses.existsByNormalizedName(candidate.getNormalizedName())) {
+      throw duplicateNameConflict();
+    }
+    Warehouse persisted;
+    try {
+      persisted = warehouses.saveAndFlush(candidate);
+    } catch (DataIntegrityViolationException exception) {
+      throw duplicateNameConflict();
+    }
     outbox.append(persisted, WarehouseEventType.CREATED);
     WarehouseResponse response = responses.toResponse(persisted);
     idempotency.storeSuccess(subjectId, idempotencyKey, fingerprint, response);
@@ -79,6 +86,9 @@ public class WarehouseService {
   public WarehouseResponse replace(UUID id, ReplaceWarehouseRequest request) {
     Warehouse warehouse = require(id);
     assertExpectedVersion(warehouse, request.expectedVersion());
+    if (warehouses.existsByNormalizedNameAndIdNot(Warehouse.normalizeName(request.name()), id)) {
+      throw duplicateNameConflict();
+    }
     Warehouse.Mutation mutation =
         warehouse.replace(
             request.name(),
@@ -88,7 +98,12 @@ public class WarehouseService {
             request.active(),
             request.sortOrder());
     if (mutation == Warehouse.Mutation.NONE) return responses.toResponse(warehouse);
-    Warehouse persisted = warehouses.saveAndFlush(warehouse);
+    Warehouse persisted;
+    try {
+      persisted = warehouses.saveAndFlush(warehouse);
+    } catch (DataIntegrityViolationException exception) {
+      throw duplicateNameConflict();
+    }
     outbox.append(
         persisted,
         mutation == Warehouse.Mutation.DEACTIVATED
@@ -151,6 +166,10 @@ public class WarehouseService {
     if (warehouse.getVersion() != expectedVersion) {
       throw new WarehouseConflictException("Warehouse has been changed by another request");
     }
+  }
+
+  private static WarehouseConflictException duplicateNameConflict() {
+    return new WarehouseConflictException("A warehouse with this name already exists");
   }
 
   private static ZoneId zone(String value) {

@@ -73,6 +73,17 @@ final class DisabledInventoryDependencyGateway implements InventoryDependencyGat
   }
 
   @Override
+  public JsonNode preflightReconciliation(UUID key, JsonNode request) {
+    throw unavailable();
+  }
+
+  @Override
+  public JsonNode applyReconciliation(
+      UUID inventoryId, UUID findingId, UUID key, JsonNode request) {
+    throw unavailable();
+  }
+
+  @Override
   public RepairUpsert upsertRepair(UUID inventoryId, UUID findingId, UUID key, JsonNode request) {
     throw unavailable();
   }

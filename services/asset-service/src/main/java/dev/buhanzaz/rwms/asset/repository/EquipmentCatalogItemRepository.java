@@ -11,6 +11,10 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface EquipmentCatalogItemRepository extends JpaRepository<EquipmentCatalogItem, UUID> {
+  boolean existsByNormalizedName(String normalizedName);
+
+  boolean existsByNormalizedNameAndIdNot(String normalizedName, UUID id);
+
   List<EquipmentCatalogItem> findAllByOrderByNameAscIdAsc();
 
   List<EquipmentCatalogItem> findAllByCategoryAndActiveTrueOrderByNameAscIdAsc(

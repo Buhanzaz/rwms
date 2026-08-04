@@ -48,6 +48,7 @@ import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
 const BOOKING_QUERY_CACHE_TIME_MS = 2 * 60 * 60 * 1_000
 const COVER_BATCH_SIZE = 200
 const LOAD_MORE_SCROLL_THRESHOLD = 160
+const EMPTY_IDS: ReadonlySet<string> = new Set()
 
 const BOOKING_FILTERS = [
   { id: "number", label: "Номер", dataType: "text" },
@@ -114,9 +115,11 @@ export function BookingCabinBrowser({
   warehouseId,
   items,
   selectedIds,
+  stagedIds = EMPTY_IDS,
   search,
   onSearchChange,
   onToggle,
+  onRemoveStaged,
   actions,
   emptyText = "Свободные бытовки не найдены.",
   footer,
@@ -127,9 +130,11 @@ export function BookingCabinBrowser({
   warehouseId: string
   items: RentalItemDto[]
   selectedIds: ReadonlySet<string>
+  stagedIds?: ReadonlySet<string>
   search: string
   onSearchChange: (value: string) => void
   onToggle: (item: RentalItemDto) => void
+  onRemoveStaged?: (item: RentalItemDto) => void
   actions?: ReactNode
   emptyText?: string
   footer?: ReactNode
@@ -279,20 +284,43 @@ export function BookingCabinBrowser({
           }
           renderPhotoOverlay={(item) => {
             const checked = selectedIds.has(item.id)
+            const staged = stagedIds.has(item.id)
             const checkboxId = `booking-cabin-${item.id}`
             return (
-              <label
-                htmlFor={checkboxId}
-                className="absolute top-2 right-2 z-10 flex cursor-pointer items-center rounded-md border bg-background/95 p-2 shadow-sm backdrop-blur-sm"
-                onClick={(event) => event.stopPropagation()}
-              >
-                <Checkbox
-                  id={checkboxId}
-                  checked={checked}
-                  aria-label={`${checked ? "Снять выбор" : "Выбрать"} бытовки ${item.number}`}
-                  onCheckedChange={() => onToggle(item)}
-                />
-              </label>
+              <div className="absolute top-2 right-2 z-10 flex items-center gap-1">
+                {staged ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    className="h-8 bg-background/95 shadow-sm backdrop-blur-sm"
+                    aria-label={`Убрать добавленную бытовку ${item.number}`}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onRemoveStaged?.(item)
+                    }}
+                  >
+                    Добавлена
+                  </Button>
+                ) : null}
+                <label
+                  htmlFor={checkboxId}
+                  className="flex cursor-pointer items-center rounded-md border bg-background/95 p-2 shadow-sm backdrop-blur-sm"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <Checkbox
+                    id={checkboxId}
+                    checked={checked}
+                    disabled={staged}
+                    aria-label={
+                      staged
+                        ? `Бытовка ${item.number} добавлена`
+                        : `${checked ? "Снять выбор" : "Выбрать"} бытовки ${item.number}`
+                    }
+                    onCheckedChange={() => onToggle(item)}
+                  />
+                </label>
+              </div>
             )
           }}
         />

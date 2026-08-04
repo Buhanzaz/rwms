@@ -16,6 +16,8 @@ import dev.buhanzaz.rwms.manager.network.TaskBoardSnapshotDto
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Best-effort, account-scoped read snapshots for manager screens.
@@ -24,84 +26,127 @@ import java.security.MessageDigest
  * fall back to the last server-verified snapshot. The cache never becomes business-data
  * authority: every command is still sent to the owning service with its concurrency controls.
  */
-internal class ManagerReadCache(context: Context) {
-    private val directory = File(context.applicationContext.filesDir, DIRECTORY_NAME)
-    private val moshi = Moshi.Builder()
-        .add(ExplicitNullJsonAdapterFactory)
-        .addLast(KotlinJsonAdapterFactory())
-        .build()
-    private val maintenanceAdapter = moshi.adapter(CachedMaintenanceRead::class.java).serializeNulls()
-    private val repairQueueAdapter = moshi.adapter(CachedRepairQueueRead::class.java).serializeNulls()
-    private val inventoryAdapter = moshi.adapter(CachedInventoryRead::class.java).serializeNulls()
-
-    fun readMaintenance(scope: ManagerReadCacheScope): CachedMaintenanceRead? =
-        read(scope, MAINTENANCE_FILE, maintenanceAdapter)
-
-    fun writeMaintenance(scope: ManagerReadCacheScope, value: CachedMaintenanceRead) {
-        write(scope, MAINTENANCE_FILE, maintenanceAdapter, value)
+internal class ManagerReadCache(
+    context: Context,
+) {
+    private val applicationContext = context.applicationContext
+    /**
+     * Creating reflective Moshi adapters, hashing cache keys and reading AtomicFile snapshots are
+     * all deferred until a caller enters the IO-dispatched API below. This keeps ViewModel
+     * construction and all UI-thread calls free of cold-start cache work.
+     */
+    private val storage by lazy {
+        Storage(File(applicationContext.filesDir, DIRECTORY_NAME))
     }
 
-    fun readRepairQueue(scope: ManagerReadCacheScope): CachedRepairQueueRead? =
-        read(scope, REPAIR_QUEUE_FILE, repairQueueAdapter)
+    suspend fun readMaintenance(scope: ManagerReadCacheScope): CachedMaintenanceRead? =
+        withContext(Dispatchers.IO) { storage.readMaintenance(scope) }
 
-    fun writeRepairQueue(scope: ManagerReadCacheScope, value: CachedRepairQueueRead) {
-        write(scope, REPAIR_QUEUE_FILE, repairQueueAdapter, value)
+    suspend fun writeMaintenance(scope: ManagerReadCacheScope, value: CachedMaintenanceRead) {
+        withContext(Dispatchers.IO) { storage.writeMaintenance(scope, value) }
     }
 
-    fun readInventory(scope: ManagerReadCacheScope): CachedInventoryRead? =
-        read(scope, INVENTORY_FILE, inventoryAdapter)
+    suspend fun readRepairQueue(scope: ManagerReadCacheScope): CachedRepairQueueRead? =
+        withContext(Dispatchers.IO) { storage.readRepairQueue(scope) }
 
-    fun writeInventory(scope: ManagerReadCacheScope, value: CachedInventoryRead) {
-        write(scope, INVENTORY_FILE, inventoryAdapter, value)
+    suspend fun writeRepairQueue(scope: ManagerReadCacheScope, value: CachedRepairQueueRead) {
+        withContext(Dispatchers.IO) { storage.writeRepairQueue(scope, value) }
     }
 
-    internal fun clear(scope: ManagerReadCacheScope) {
-        FILE_NAMES.forEach { name -> file(scope, name).delete() }
+    suspend fun readInventory(scope: ManagerReadCacheScope): CachedInventoryRead? =
+        withContext(Dispatchers.IO) { storage.readInventory(scope) }
+
+    suspend fun writeInventory(scope: ManagerReadCacheScope, value: CachedInventoryRead) {
+        withContext(Dispatchers.IO) { storage.writeInventory(scope, value) }
     }
 
-    private fun <T> read(
-        scope: ManagerReadCacheScope,
-        name: String,
-        adapter: JsonAdapter<T>,
-    ): T? {
-        val atomic = AtomicFile(file(scope, name))
-        val payload = runCatching {
-            atomic.openRead().use { input ->
-                input.readBytes().toString(StandardCharsets.UTF_8)
-            }
-        }.getOrNull() ?: return null
-        return runCatching { adapter.fromJson(payload) }.getOrNull()
+    internal suspend fun clear(scope: ManagerReadCacheScope) {
+        withContext(Dispatchers.IO) { storage.clear(scope) }
     }
 
-    private fun <T> write(
-        scope: ManagerReadCacheScope,
-        name: String,
-        adapter: JsonAdapter<T>,
-        value: T,
+    private class Storage(
+        private val directory: File,
     ) {
-        val payload = runCatching { adapter.toJson(value) }.getOrNull() ?: return
-        if (!directory.exists() && !directory.mkdirs()) return
-        val atomic = AtomicFile(file(scope, name))
-        val output = runCatching { atomic.startWrite() }.getOrNull() ?: return
-        try {
-            output.write(payload.toByteArray(StandardCharsets.UTF_8))
-            atomic.finishWrite(output)
-        } catch (_: Throwable) {
-            atomic.failWrite(output)
+        private val moshi = Moshi.Builder()
+            .add(ExplicitNullJsonAdapterFactory)
+            .addLast(KotlinJsonAdapterFactory())
+            .build()
+        private val maintenanceAdapter =
+            moshi.adapter(CachedMaintenanceRead::class.java).serializeNulls()
+        private val repairQueueAdapter =
+            moshi.adapter(CachedRepairQueueRead::class.java).serializeNulls()
+        private val inventoryAdapter =
+            moshi.adapter(CachedInventoryRead::class.java).serializeNulls()
+
+        fun readMaintenance(scope: ManagerReadCacheScope): CachedMaintenanceRead? =
+            read(scope, MAINTENANCE_FILE, maintenanceAdapter)
+
+        fun writeMaintenance(scope: ManagerReadCacheScope, value: CachedMaintenanceRead) {
+            write(scope, MAINTENANCE_FILE, maintenanceAdapter, value)
         }
+
+        fun readRepairQueue(scope: ManagerReadCacheScope): CachedRepairQueueRead? =
+            read(scope, REPAIR_QUEUE_FILE, repairQueueAdapter)
+
+        fun writeRepairQueue(scope: ManagerReadCacheScope, value: CachedRepairQueueRead) {
+            write(scope, REPAIR_QUEUE_FILE, repairQueueAdapter, value)
+        }
+
+        fun readInventory(scope: ManagerReadCacheScope): CachedInventoryRead? =
+            read(scope, INVENTORY_FILE, inventoryAdapter)
+
+        fun writeInventory(scope: ManagerReadCacheScope, value: CachedInventoryRead) {
+            write(scope, INVENTORY_FILE, inventoryAdapter, value)
+        }
+
+        fun clear(scope: ManagerReadCacheScope) {
+            FILE_NAMES.forEach { name -> file(scope, name).delete() }
+        }
+
+        private fun <T> read(
+            scope: ManagerReadCacheScope,
+            name: String,
+            adapter: JsonAdapter<T>,
+        ): T? {
+            val atomic = AtomicFile(file(scope, name))
+            val payload = runCatching {
+                atomic.openRead().use { input ->
+                    input.readBytes().toString(StandardCharsets.UTF_8)
+                }
+            }.getOrNull() ?: return null
+            return runCatching { adapter.fromJson(payload) }.getOrNull()
+        }
+
+        private fun <T> write(
+            scope: ManagerReadCacheScope,
+            name: String,
+            adapter: JsonAdapter<T>,
+            value: T,
+        ) {
+            val payload = runCatching { adapter.toJson(value) }.getOrNull() ?: return
+            if (!directory.exists() && !directory.mkdirs()) return
+            val atomic = AtomicFile(file(scope, name))
+            val output = runCatching { atomic.startWrite() }.getOrNull() ?: return
+            try {
+                output.write(payload.toByteArray(StandardCharsets.UTF_8))
+                atomic.finishWrite(output)
+            } catch (_: Throwable) {
+                atomic.failWrite(output)
+            }
+        }
+
+        private fun file(scope: ManagerReadCacheScope, name: String): File = File(
+            directory,
+            "$name-${scope.accountId.safeFilePart()}-${scope.warehouseId.safeFilePart()}.json",
+        )
+
+        private fun String.safeFilePart(): String = MessageDigest
+            .getInstance("SHA-256")
+            .digest(toByteArray(StandardCharsets.UTF_8))
+            .joinToString(separator = "") { byte ->
+                (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+            }
     }
-
-    private fun file(scope: ManagerReadCacheScope, name: String): File = File(
-        directory,
-        "$name-${scope.accountId.safeFilePart()}-${scope.warehouseId.safeFilePart()}.json",
-    )
-
-    private fun String.safeFilePart(): String = MessageDigest
-        .getInstance("SHA-256")
-        .digest(toByteArray(StandardCharsets.UTF_8))
-        .joinToString(separator = "") { byte ->
-            (byte.toInt() and 0xff).toString(16).padStart(2, '0')
-        }
 
     private companion object {
         const val DIRECTORY_NAME = "manager-read-cache"

@@ -69,15 +69,10 @@ public class MaintenanceAssetController {
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody EnsureMaintenanceFurnitureEquipmentRequest request) {
     access.requireMaintenanceAssetAccess(jwt);
-    AssetService.CreateResult<EquipmentResponse> result =
-        service.createEquipment(
-            access.maintenanceSubjectId(jwt),
-            idempotencyKey,
-            new CreateEquipmentRequest(
-                request.equipmentName(), EquipmentCategory.FURNITURE, null));
-    return created(
-        new AssetService.CreateResult<>(
-            responseMapper.toMaintenanceFurnitureEquipment(result.response()), result.replayed()));
+    AssetService.CreateResult<MaintenanceFurnitureEquipmentResponse> result =
+        service.ensureMaintenanceFurnitureEquipment(
+            access.maintenanceSubjectId(jwt), idempotencyKey, request);
+    return result.replayed() ? idempotentOk(result) : created(result);
   }
 
   @PostMapping("/operation-leases")

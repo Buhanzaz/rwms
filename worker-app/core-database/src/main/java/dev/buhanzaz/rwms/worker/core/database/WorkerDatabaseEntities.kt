@@ -24,6 +24,8 @@ data class WorkerSessionEntity(
     val currentGroupName: String? = null,
     @ColumnInfo(defaultValue = "'AVAILABLE'")
     val operationalAvailability: String = "AVAILABLE",
+    /** Exact server-issued palette JSON; null means the service has no KPI color policy. */
+    val kpiPaletteJson: String? = null,
 )
 
 @Entity(tableName = "worker_group", indices = [Index(value = ["userId", "name"])])
@@ -56,6 +58,8 @@ data class WorkerCategoryEntity(
     val type: String,
     @ColumnInfo(defaultValue = "'GENERAL'")
     val queuePurpose: String,
+    @ColumnInfo(defaultValue = "''")
+    val groupIdsKey: String = "",
     val sortOrder: Int,
     val audienceModesKey: String,
     val resultPhotoMinCount: Int,

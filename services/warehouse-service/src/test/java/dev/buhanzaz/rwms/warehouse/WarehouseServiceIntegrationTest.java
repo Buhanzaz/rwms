@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import dev.buhanzaz.rwms.warehouse.api.CreateWarehouseRequest;
@@ -20,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -137,7 +140,15 @@ class WarehouseServiceIntegrationTest {
             "warehouse.warehouse.created.v1",
             "warehouse.warehouse.changed.v1",
             "warehouse.warehouse.deactivated.v1");
-    WarehouseResponse inactive = service.get(created.id(), true);
+    WarehouseResponse inactive = service.get(created.id());
+    assertThatThrownBy(
+            () ->
+                service.create(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    request(" operations\tUPDATED ", null)))
+        .isInstanceOf(WarehouseConflictException.class)
+        .hasMessageContaining("name");
     WarehouseResponse reactivated =
         service.replace(
             inactive.id(),
@@ -150,11 +161,97 @@ class WarehouseServiceIntegrationTest {
     assertThat(reactivated.active()).isTrue();
     assertThat(eventTypes(created.id()).getLast()).isEqualTo("warehouse.warehouse.changed.v1");
 
-    WarehouseResponse duplicateName =
+    WarehouseResponse anotherWarehouse =
         service
-            .create(UUID.randomUUID(), UUID.randomUUID(), request("Operations updated", null))
+            .create(UUID.randomUUID(), UUID.randomUUID(), request("Field office", null))
             .response();
-    assertThat(duplicateName.id()).isNotEqualTo(reactivated.id());
+    assertThatThrownBy(
+            () ->
+                service.replace(
+                    anotherWarehouse.id(),
+                    replace(
+                        anotherWarehouse,
+                        anotherWarehouse.version(),
+                        "OPERATIONS  updated",
+                        true,
+                        null)))
+        .isInstanceOf(WarehouseConflictException.class)
+        .hasMessageContaining("name");
+  }
+
+  @Test
+  void publicWarehouseReadReturnsInactiveWarehouseByUuidAndListStaysActiveOnly() throws Exception {
+    WarehouseResponse inactive =
+        service
+            .create(UUID.randomUUID(), UUID.randomUUID(), request("Historical warehouse", null))
+            .response();
+    service.deactivate(inactive.id(), inactive.version());
+
+    String body =
+        mockMvc
+            .perform(
+                get("/api/warehouse/v1/warehouses/{id}", inactive.id()).with(warehouseReadUserJwt()))
+            .andExpect(status().isOk())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+
+    assertThat(objectMapper.readTree(body).get("active").booleanValue()).isFalse();
+    assertThat(service.list(false)).extracting(WarehouseResponse::id).doesNotContain(inactive.id());
+  }
+
+  @Test
+  void duplicateWarehouseNamesReturnConflictForCreateAndReplace() throws Exception {
+    WarehouseResponse existing =
+        service
+            .create(UUID.randomUUID(), UUID.randomUUID(), request("Registry depot", null))
+            .response();
+    WarehouseResponse other =
+        service
+            .create(UUID.randomUUID(), UUID.randomUUID(), request("Registry overflow", null))
+            .response();
+
+    mockMvc
+        .perform(
+            post("/api/warehouse/v1/warehouses")
+                .with(systemAdminWriteJwt())
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request(" registry\tDEPOT ", null))))
+        .andExpect(status().isConflict())
+        .andExpect(
+            result ->
+                assertThat(
+                        objectMapper
+                            .readTree(result.getResponse().getContentAsString())
+                            .get("code")
+                            .stringValue())
+                    .isEqualTo("WAREHOUSE_CONFLICT"));
+
+    mockMvc
+        .perform(
+            put("/api/warehouse/v1/warehouses/{id}", other.id())
+                .with(systemAdminWriteJwt())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(
+                        replace(
+                            other,
+                            other.version(),
+                            "REGISTRY  depot",
+                            true,
+                            other.sortOrder()))))
+        .andExpect(status().isConflict())
+        .andExpect(
+            result ->
+                assertThat(
+                        objectMapper
+                            .readTree(result.getResponse().getContentAsString())
+                            .get("code")
+                            .stringValue())
+                    .isEqualTo("WAREHOUSE_CONFLICT"));
+
+    assertThat(existing.id()).isNotEqualTo(other.id());
   }
 
   @Test
@@ -416,6 +513,31 @@ class WarehouseServiceIntegrationTest {
                     .claim("principal_type", principalType)
                     .claim("client_id", clientId)
                     .claim("scope", scope));
+  }
+
+  private static org.springframework.security.test.web.servlet.request
+          .SecurityMockMvcRequestPostProcessors.JwtRequestPostProcessor
+      warehouseReadUserJwt() {
+    return jwt()
+        .jwt(
+            token ->
+                token
+                    .subject(UUID.randomUUID().toString())
+                    .claim("principal_type", "USER")
+                    .claim("scope", "warehouse.read"));
+  }
+
+  private static org.springframework.security.test.web.servlet.request
+          .SecurityMockMvcRequestPostProcessors.JwtRequestPostProcessor
+      systemAdminWriteJwt() {
+    return jwt()
+        .jwt(
+            token ->
+                token
+                    .subject(UUID.randomUUID().toString())
+                    .claim("principal_type", "USER")
+                    .claim("global_role", "SYSTEM_ADMIN")
+                    .claim("scope", "rwms.write"));
   }
 
   private static org.springframework.security.test.web.servlet.request

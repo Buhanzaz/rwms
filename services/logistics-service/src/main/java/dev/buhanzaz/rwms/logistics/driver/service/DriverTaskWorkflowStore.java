@@ -10,6 +10,7 @@ import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsNotFoundException;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -92,6 +93,9 @@ class DriverTaskWorkflowStore {
       return;
     }
     requireBoardTask(task, board);
+    if (matchesCurrentStatus(task, board)) {
+      return;
+    }
     task.observeBoardTask(
         board.taskId(),
         board.taskVersion(),
@@ -102,6 +106,29 @@ class DriverTaskWorkflowStore {
         board.status(),
         board.doneAt());
     tasks.saveAndFlush(task);
+  }
+
+  /**
+   * The relay polls active task-board work as a fallback for missed events. Do not turn an
+   * identical poll response into a local aggregate write: it advances the JPA version and can
+   * race an operator command that has already applied at task-board.
+   */
+  private static boolean matchesCurrentStatus(
+      DriverLogisticsTask task, LogisticsDependencyGateway.DriverBoardTask board) {
+    if (!Objects.equals(task.getTaskBoardTaskId(), board.taskId())
+        || !Objects.equals(task.getTaskBoardTaskVersion(), board.taskVersion())
+        || !Objects.equals(task.getTaskBoardEntryId(), board.entryId())
+        || !Objects.equals(task.getTaskBoardEntryStatus(), board.entryStatus())
+        || !Objects.equals(task.getTaskBoardDoneAt(), board.doneAt())
+        || !Objects.equals(task.getScheduledDate(), board.scheduledDate())
+        || task.getRetryCount() != 0
+        || task.getFailureCode() != null) {
+      return false;
+    }
+    return "ACTIVE".equals(board.status())
+        && (("CURRENT".equals(board.lane()) && task.getState() == DriverTaskState.CURRENT)
+            || ("SCHEDULED".equals(board.lane())
+                && task.getState() == DriverTaskState.SCHEDULED));
   }
 
   @Transactional
@@ -164,16 +191,23 @@ class DriverTaskWorkflowStore {
   }
 
   @Transactional
-  public void bindRemovalAllocation(
+  public void bindReleaseAllocation(
       UUID taskId, LogisticsDependencyGateway.RepairPlaceAllocation allocation) {
     DriverLogisticsTask task = locked(taskId);
-    if (task.getKind() != DriverTaskKind.REMOVE_FROM_REPAIR
+    if (!task.getKind().releasesRepairPlace()
         || !task.getWarehouseId().equals(allocation.warehouseId())
         || !task.getRepairId().equals(allocation.repairId())
         || !task.getCabinId().equals(allocation.rentalItemId())
         || !"READY_TO_RELEASE".equals(allocation.state())) {
       throw new LogisticsConflictException(
-          "Ready repair-place allocation does not match the removal task");
+          "Ready repair-place allocation does not match the outbound task");
+    }
+    // This method is called from the periodic repair-place discovery pass. A previously bound
+    // allocation is already a durable checkpoint, so persisting it again on every pass only
+    // advances the local optimistic-lock version and can race a board move.
+    if (Objects.equals(task.getRepairPlaceAllocationId(), allocation.id())
+        && Objects.equals(task.getRepairPlaceAllocationVersion(), allocation.version())) {
+      return;
     }
     task.bindRemovalRepairPlace(allocation.id(), allocation.version());
     tasks.saveAndFlush(task);
@@ -297,9 +331,8 @@ class DriverTaskWorkflowStore {
   private static String title(DriverTaskKind kind) {
     return switch (kind) {
       case DELIVER_TO_REPAIR -> "Доставить бытовку в ремонт";
-      case REMOVE_FROM_REPAIR -> "Вывезти бытовку после ремонта";
+      case REMOVE_FROM_REPAIR -> "Переместить бытовку с ремонта";
       case CAPITAL_TO_PRODUCTION -> "Переместить бытовку на производство";
-      case MOVE_TO_SHIPMENT -> "Переместить бытовку на отгрузку";
       case GENERAL_MOVEMENT -> "Переместить бытовку";
     };
   }

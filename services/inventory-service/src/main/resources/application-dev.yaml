@@ -17,6 +17,6 @@ rwms:
     dependencies:
       enabled: ${INVENTORY_DEPENDENCIES_ENABLED:false}
     security:
-      dev-auth-bypass: ${INVENTORY_DEV_AUTH_BYPASS:true}
+      dev-auth-bypass: ${INVENTORY_DEV_AUTH_BYPASS:false}
   cors:
     allowed-origins: ${PANEL_ORIGIN:http://localhost:5173}

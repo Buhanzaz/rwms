@@ -5,6 +5,7 @@ import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.manager.network.CatalogLinkDto
 import dev.buhanzaz.rwms.manager.network.CatalogNodeDto
 import java.time.LocalDate
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -20,19 +21,19 @@ class MaintenanceCatalogCacheTest {
     private lateinit var cache: MaintenanceCatalogCache
 
     @Before
-    fun setUp() {
+    fun setUp() = runBlocking {
         context = RuntimeEnvironment.getApplication().applicationContext
         cache = MaintenanceCatalogCache(context)
         cache.clear()
     }
 
     @After
-    fun tearDown() {
+    fun tearDown() = runBlocking {
         cache.clear()
     }
 
     @Test
-    fun `round trips catalog data including null node and link fields`() {
+    fun `round trips catalog data including null node and link fields`() = runBlocking {
         val catalog = CachedMaintenanceCatalog(
             warehouseId = "warehouse-1",
             revision = ActiveMaintenanceCatalogRevision("catalog-1", 7),
@@ -84,7 +85,7 @@ class MaintenanceCatalogCacheTest {
     }
 
     @Test
-    fun `records attempt slot and clears both cache values`() {
+    fun `records attempt slot and clears both cache values`() = runBlocking {
         val slot = LocalDate.of(2026, 7, 27)
 
         cache.markAttemptSlot(slot)
@@ -105,7 +106,7 @@ class MaintenanceCatalogCacheTest {
     }
 
     @Test
-    fun `returns null for corrupt catalog payload`() {
+    fun `returns null for corrupt catalog payload`() = runBlocking {
         context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
             .edit()
             .putString(CATALOG_PAYLOAD_KEY, "{not-json")
@@ -115,7 +116,7 @@ class MaintenanceCatalogCacheTest {
     }
 
     @Test
-    fun `does not reuse snapshots written before warehouse scoping existed`() {
+    fun `does not reuse snapshots written before warehouse scoping existed`() = runBlocking {
         context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
             .edit()
             .putString(

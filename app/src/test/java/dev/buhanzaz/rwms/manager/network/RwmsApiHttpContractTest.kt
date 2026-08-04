@@ -73,7 +73,7 @@ class RwmsApiHttpContractTest {
     }
 
     @Test
-    fun `inventory commands use public paths and preserve canonical request fields`() = runTest {
+    fun `inventory field commands use public paths and preserve canonical request fields`() = runTest {
         val inventoryId = "11111111-1111-1111-1111-111111111111"
         val findingId = "22222222-2222-2222-2222-222222222222"
         val mediaId = "33333333-3333-3333-3333-333333333333"
@@ -139,37 +139,6 @@ class RwmsApiHttpContractTest {
                 ),
             )
         }
-        val revisions = listOf(
-            InventoryRevisionExpectationDto(
-                findingId = findingId,
-                expectedFindingRevision = 6,
-            ),
-        )
-        val preview = captureRequest {
-            api.previewInventoryCompletion(
-                inventoryId = inventoryId,
-                idempotencyKey = "inventory-preview-1",
-                request = InventoryCompletionPreviewRequest(
-                    expectedSessionRevision = 10,
-                    findingRevisions = revisions,
-                ),
-            )
-        }
-        val acknowledgementSha256 = "a".repeat(64)
-        val validationSha256 = "b".repeat(64)
-        val completion = captureRequest {
-            api.completeInventorySession(
-                inventoryId = inventoryId,
-                idempotencyKey = "inventory-complete-1",
-                request = CompleteInventorySessionRequest(
-                    expectedSessionRevision = 10,
-                    findingRevisions = revisions,
-                    acknowledgementSha256 = acknowledgementSha256,
-                    validationSha256 = validationSha256,
-                ),
-            )
-        }
-
         resolve.assertJsonCommand(
             method = "POST",
             path = "/api/inventory/v1/sessions/$inventoryId/number-resolutions",
@@ -194,22 +163,10 @@ class RwmsApiHttpContractTest {
             idempotencyKey = null,
             body = """{"expectedSessionRevision":9,"expectedFindingRevision":5,"strategy":"ACCEPT_REGISTRY","reason":null}""",
         )
-        preview.assertJsonCommand(
-            method = "POST",
-            path = "/api/inventory/v1/sessions/$inventoryId/completion-preview",
-            idempotencyKey = "inventory-preview-1",
-            body = """{"expectedSessionRevision":10,"findingRevisions":[{"findingId":"$findingId","expectedFindingRevision":6}]}""",
-        )
-        completion.assertJsonCommand(
-            method = "POST",
-            path = "/api/inventory/v1/sessions/$inventoryId/complete",
-            idempotencyKey = "inventory-complete-1",
-            body = """{"expectedSessionRevision":10,"findingRevisions":[{"findingId":"$findingId","expectedFindingRevision":6}],"acknowledgementSha256":"$acknowledgementSha256","validationSha256":"$validationSha256"}""",
-        )
     }
 
     @Test
-    fun `inventory work staged inspection carries logistics intent without legacy movement stages`() =
+    fun `inventory work staged inspection carries field-only repair intent`() =
         runTest {
             val inventoryId = "10101010-1010-1010-1010-101010101010"
             val findingId = "20202020-2020-2020-2020-202020202020"
@@ -234,13 +191,13 @@ class RwmsApiHttpContractTest {
                             priority = 2,
                             coverMediaId = mediaId,
                             movementToRepair = true,
-                            movementToShipment = false,
-                            logisticsPlanningMode = "FIXED_DATE",
-                            logisticsScheduledDate = "2026-08-04",
+                            logisticsPlanningMode = "AUTO",
+                            logisticsScheduledDate = null,
                             lines = listOf(
                                 InventoryPlanLineInputDto(
                                     aggregationKind = "CATALOG",
                                     catalogNodeId = workNodeId,
+                                    routingCatalogNodeId = null,
                                     description = null,
                                     type = null,
                                     unit = null,
@@ -267,9 +224,78 @@ class RwmsApiHttpContractTest {
                 method = "PUT",
                 path = "/api/inventory/v1/sessions/$inventoryId/findings/$findingId/inspection",
                 idempotencyKey = null,
-                body = """{"expectedSessionRevision":4,"expectedFindingRevision":2,"inspection":"WORK_STAGED","comment":"Требуется ремонт","passportObservation":{"presence":"ABSENT","value":null},"equipmentObservation":{"presence":"ABSENT","value":null},"media":[{"mediaId":"$mediaId","generation":1}],"coverMediaId":"$mediaId","planSelection":{"mode":"MANUAL","priority":2,"coverMediaId":"$mediaId","movementToRepair":true,"movementToShipment":false,"logisticsPlanningMode":"FIXED_DATE","logisticsScheduledDate":"2026-08-04","lines":[{"aggregationKind":"CATALOG","catalogNodeId":"$workNodeId","description":null,"type":null,"unit":null,"quantity":"1","unitPriceMinor":null,"normativeMinutes":null,"groupComment":"Каркас","mediaReferences":[{"mediaId":"$mediaId","generation":1}]}],"stages":[{"catalogNodeId":"$workNodeId","kind":"REPAIR_WORK","order":0}]}}""",
+                body = """{"expectedSessionRevision":4,"expectedFindingRevision":2,"inspection":"WORK_STAGED","comment":"Требуется ремонт","passportObservation":{"presence":"ABSENT","value":null},"equipmentObservation":{"presence":"ABSENT","value":null},"media":[{"mediaId":"$mediaId","generation":1}],"coverMediaId":"$mediaId","planSelection":{"mode":"MANUAL","priority":2,"coverMediaId":"$mediaId","movementToRepair":true,"logisticsPlanningMode":"AUTO","logisticsScheduledDate":null,"lines":[{"aggregationKind":"CATALOG","catalogNodeId":"$workNodeId","routingCatalogNodeId":null,"description":null,"type":null,"unit":null,"quantity":"1","unitPriceMinor":null,"normativeMinutes":null,"groupComment":"Каркас","mediaReferences":[{"mediaId":"$mediaId","generation":1}]}],"stages":[{"catalogNodeId":"$workNodeId","kind":"REPAIR_WORK","order":0}]}}""",
             )
         }
+
+    @Test
+    fun `manual inventory work and material lines serialize their technical routing node`() = runTest {
+        val inventoryId = "51515151-5151-5151-5151-515151515151"
+        val findingId = "61616161-6161-6161-6161-616161616161"
+        val routingNodeId = "71717171-7171-7171-7171-717171717171"
+
+        val inspection = captureRequest {
+            api.saveInventoryInspection(
+                inventoryId = inventoryId,
+                findingId = findingId,
+                request = SaveInspectionRequest(
+                    expectedSessionRevision = 6,
+                    expectedFindingRevision = 3,
+                    inspection = "WORK_STAGED",
+                    comment = "Ручные позиции",
+                    passportObservation = ObservationInput("ABSENT", null),
+                    equipmentObservation = ObservationInput("ABSENT", null),
+                    media = emptyList(),
+                    planSelection = InventoryPlanSelectionDto(
+                        mode = "MANUAL",
+                        priority = 3,
+                        movementToRepair = false,
+                        logisticsPlanningMode = null,
+                        lines = listOf(
+                            InventoryPlanLineInputDto(
+                                aggregationKind = "MANUAL",
+                                catalogNodeId = null,
+                                routingCatalogNodeId = routingNodeId,
+                                description = "Ручная работа",
+                                type = "WORK",
+                                unit = "ч",
+                                quantity = "1",
+                                unitPriceMinor = 12500,
+                                normativeMinutes = "30",
+                                groupComment = "Каркас",
+                            ),
+                            InventoryPlanLineInputDto(
+                                aggregationKind = "MANUAL",
+                                catalogNodeId = null,
+                                routingCatalogNodeId = routingNodeId,
+                                description = "Ручной материал",
+                                type = "MATERIAL",
+                                unit = "шт.",
+                                quantity = "2",
+                                unitPriceMinor = 3500,
+                                normativeMinutes = "0",
+                                groupComment = null,
+                            ),
+                        ),
+                        stages = listOf(
+                            InventoryPlanStageSelectionDto(
+                                catalogNodeId = routingNodeId,
+                                kind = "REPAIR_WORK",
+                                order = 0,
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        }
+
+        inspection.assertJsonCommand(
+            method = "PUT",
+            path = "/api/inventory/v1/sessions/$inventoryId/findings/$findingId/inspection",
+            idempotencyKey = null,
+            body = """{"expectedSessionRevision":6,"expectedFindingRevision":3,"inspection":"WORK_STAGED","comment":"Ручные позиции","passportObservation":{"presence":"ABSENT","value":null},"equipmentObservation":{"presence":"ABSENT","value":null},"media":[],"coverMediaId":null,"planSelection":{"mode":"MANUAL","priority":3,"coverMediaId":null,"movementToRepair":false,"logisticsPlanningMode":null,"logisticsScheduledDate":null,"lines":[{"aggregationKind":"MANUAL","catalogNodeId":null,"routingCatalogNodeId":"$routingNodeId","description":"Ручная работа","type":"WORK","unit":"ч","quantity":"1","unitPriceMinor":12500,"normativeMinutes":"30","groupComment":"Каркас","mediaReferences":[]},{"aggregationKind":"MANUAL","catalogNodeId":null,"routingCatalogNodeId":"$routingNodeId","description":"Ручной материал","type":"MATERIAL","unit":"шт.","quantity":"2","unitPriceMinor":3500,"normativeMinutes":"0","groupComment":null,"mediaReferences":[]}],"stages":[{"catalogNodeId":"$routingNodeId","kind":"REPAIR_WORK","order":0}]}}""",
+        )
+    }
 
     @Test
     fun `return commands include public version paths and required evidence`() = runTest {
@@ -404,7 +430,6 @@ class RwmsApiHttpContractTest {
                     expectedVersion = 8,
                     priority = 2,
                     movementToRepair = false,
-                    movementToShipment = false,
                     logisticsPlanningMode = null,
                     logisticsScheduledDate = null,
                 ),
@@ -438,7 +463,7 @@ class RwmsApiHttpContractTest {
             method = "POST",
             path = "/api/maintenance/v1/estimates/$estimateId/complete?warehouseId=$warehouseId",
             idempotencyKey = "estimate-complete-1",
-            body = """{"expectedVersion":8,"priority":2,"movementToRepair":false,"movementToShipment":false,"logisticsPlanningMode":null,"logisticsScheduledDate":null}""",
+            body = """{"expectedVersion":8,"priority":2,"movementToRepair":false,"logisticsPlanningMode":null,"logisticsScheduledDate":null}""",
         )
         amendment.assertJsonCommand(
             method = "POST",
@@ -514,9 +539,8 @@ class RwmsApiHttpContractTest {
                 request = PriorityVersionRequest(
                     expectedVersion = 4,
                     priority = 1,
-                    movementToRepair = false,
-                    movementToShipment = false,
-                    logisticsPlanningMode = null,
+                    movementToRepair = true,
+                    logisticsPlanningMode = "AUTO",
                     logisticsScheduledDate = null,
                 ),
             )
@@ -532,7 +556,7 @@ class RwmsApiHttpContractTest {
             method = "POST",
             path = "/api/maintenance/v1/repairs/$repairId/plan?warehouseId=$warehouseId",
             idempotencyKey = "direct-repair-queue-1",
-            body = """{"expectedVersion":4,"priority":1,"movementToRepair":false,"movementToShipment":false,"logisticsPlanningMode":null,"logisticsScheduledDate":null}""",
+            body = """{"expectedVersion":4,"priority":1,"movementToRepair":true,"logisticsPlanningMode":"AUTO","logisticsScheduledDate":null}""",
         )
     }
 

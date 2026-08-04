@@ -203,7 +203,7 @@ public class RentalItem {
       Boolean linoleum,
       String passportJson,
       String tagsJson) {
-    if (status == RentalItemStatus.IN_TRANSFER || status == RentalItemStatus.WRITTEN_OFF) {
+    if (status == RentalItemStatus.IN_TRANSFER || status.isTerminalDispositionStatus()) {
       throw new IllegalArgumentException("HTML import cannot create a fenced or terminal status");
     }
     return createHtmlImportItem(
@@ -273,28 +273,51 @@ public class RentalItem {
 
   public boolean changeStatus(RentalItemStatus next) {
     if (next == null) throw new IllegalArgumentException("status is required");
-    if (status == next) return false;
     if (!status.acceptsManualStatusChangeTo(next)) {
       throw new IllegalStateException("Rental-item status is fenced or terminal");
     }
+    if (status == next) return false;
     status = next;
     return true;
   }
 
   /**
    * A service-to-service operation that holds the current operation lease may
-   * perform a fenced status transition, including the otherwise manual-fenced
-   * write-off state. The caller must validate the lease before invoking this
-   * transition.
+   * perform a fenced status transition, including terminal disposition states.
+   * The caller must validate the lease before invoking this transition.
    */
   public boolean changeStatusUnderLease(RentalItemStatus next) {
     if (next == null) throw new IllegalArgumentException("status is required");
+    if (status.isTerminalDispositionStatus() && next != status) {
+      throw new IllegalStateException("Terminal rental item cannot change status");
+    }
     if (status == RentalItemStatus.IN_TRANSFER || next == RentalItemStatus.IN_TRANSFER) {
       throw new IllegalStateException(
           "Transfer status must use the dedicated transfer transition");
     }
     if (status == next) return false;
     status = next;
+    return true;
+  }
+
+  /**
+   * Applies the terminal cabin truth after the asset service has verified a
+   * durable maintenance disposition fence.  This method deliberately accepts
+   * only the two terminal dispositions; it does not create a generic status
+   * transition path for callers that do not own the fence.
+   */
+  public boolean applyPropertyDisposition(RentalItemStatus terminalStatus) {
+    if (terminalStatus == null || !terminalStatus.isTerminalDispositionStatus()) {
+      throw new IllegalArgumentException("Property disposition must be terminal");
+    }
+    if (status.isTerminalDispositionStatus()) {
+      if (status == terminalStatus) return false;
+      throw new IllegalStateException("Terminal rental item cannot change disposition");
+    }
+    if (status == RentalItemStatus.IN_TRANSFER || transferOriginStatus != null) {
+      throw new IllegalStateException("Transferred rental item cannot be disposed directly");
+    }
+    status = terminalStatus;
     return true;
   }
 
@@ -335,7 +358,7 @@ public class RentalItem {
   public boolean changeWarehouse(UUID nextWarehouseId) {
     if (nextWarehouseId == null) throw new IllegalArgumentException("warehouseId is required");
     if (warehouseId.equals(nextWarehouseId)) return false;
-    if (status == RentalItemStatus.WRITTEN_OFF || status == RentalItemStatus.IN_TRANSFER) {
+    if (status.isTerminalDispositionStatus() || status == RentalItemStatus.IN_TRANSFER) {
       throw new IllegalStateException("Rental item cannot change warehouse in its current status");
     }
     warehouseId = nextWarehouseId;

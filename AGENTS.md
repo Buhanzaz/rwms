@@ -1,317 +1,418 @@
 # AGENTS.md
 
-# RWMS Panel-to-Services Development Rules
+# RWMS Product Development Rules
 
 ## Current Objective
 
-The current RWMS development objective is the migration described in
-[`docs/plans/20260718-panel-mocks-to-services-transition.md`](docs/plans/20260718-panel-mocks-to-services-transition.md):
-move the real user flows in `panel/` from browser mocks and browser-owned
-business state to the existing RWMS services.
+RWMS is an actively developed product. The objective is to finish, correct and
+extend the supported product flows; there is no active migration program,
+stage pointer, wave sequence or cutover gate.
 
-`panel/` is the only primary panel. Do not restore or run
-`wms-panel-old/` as a second UI. Historical stages, roadmaps and completed
-claims are context only; they do not block a user-directed panel or service
-cutover.
+The user's current command selects the scope. Implement that scope as a
+complete, working change across every affected client, contract and owning
+service. Do not start unrelated product work, commit, publish or deploy beyond
+the requested scope.
 
-The direct user command selects the flow or plan task to execute. Do not start
-later waves, commit, advance a historical stage or implement an unrelated
-service without a direct request.
+`panel/` is the primary web panel. `app/` is the manager Android application and
+`worker-app/` is the worker Android application. `wms-panel-old/`, browser
+mocks, `old_db/`, `docs/plans/` and `WMS_ARCHITECTURE_KNOWLEDGE/` are historical
+evidence only. They do not define current behavior and do not restrict current
+development.
 
-While Wave 0 in the migration plan is incomplete, foundation work is
-sequential: restore a green panel build, enforce gateway-only browser URLs and
-make the local all-services runtime coherent before parallel coding.
+There is no general requirement to preserve compatibility with obsolete mock
+state, old browser data, old schemas, fixtures or abandoned flows. This does
+not authorize deletion of a live database, volume, backup or user data. Any
+destructive data operation still requires an explicit target, impact analysis
+and user authorization.
 
-## Authority
+## Authority And Sources Of Truth
 
 Use authority in this order:
 
 1. the current direct user command;
-2. this file;
-3. current code and canonical schemas under `contracts/`;
-4. the current migration plan;
-5. safety, security and data-integrity constraints;
-6. historical plans and architecture records as context only.
+2. this `AGENTS.md`;
+3. canonical transport contracts under `contracts/openapi/` and
+   `contracts/events/`;
+4. the owning service's current domain code, Flyway schema and tests;
+5. the current product knowledge in `docs/project-knowledge/`;
+6. historical plans, migration notes, legacy code and old data as evidence
+   only.
 
-Do not edit `docs/plans/ACTIVE_STAGE.md` or rewrite historical stage claims
-unless the user explicitly asks. `old_db/` is read-only evidence unless the
-user explicitly authorizes a concrete data operation.
+Canonical contracts define component boundaries. The owning service defines
+business transitions and invariants that are not transport concerns. The
+knowledge base is a verified index and explanation of those sources; it never
+overrides them.
 
-## Stack And Target Boundaries
+If the request, a canonical contract and the owning domain logic disagree, do
+not silently choose one. Gather the exact evidence, explain the conflict and
+ask the user the smallest decision needed before changing contract meaning,
+ownership, identity, status semantics, money, time or destructive behavior.
 
-- Panel: React 19, TypeScript, Vite 8, React Router, TanStack Query/Table,
-  Tailwind CSS v4, shadcn/ui and Hugeicons.
-- Spring services: Spring Boot 4.1, Java 25, Gradle Kotlin multi-module,
-  Spring Data JPA and PostgreSQL.
-- Schema authority: Flyway only. Liquibase is forbidden.
-- Authentication: OAuth2/OIDC Authorization Code + PKCE for the panel and
-  locally validated Bearer JWTs for APIs.
-- Messaging and objects: Kafka 4.3.1 and MinIO.
-- Edge: stateless Spring API gateway.
-- Media: one stateful Go `media-service`; do not create a separate target
-  photo-processing deployable.
+## Mandatory Task Workflow
+
+Every task follows this sequence. The depth is proportional to the risk, but no
+step is skipped.
+
+### 1. Analyze The Task
+
+Before editing:
+
+- state the intended result and measurable acceptance criteria;
+- separate explicit requirements from assumptions;
+- identify unknown product decisions, failure cases, security and data risks;
+- check the current worktree and preserve user or concurrent changes;
+- identify applicable skills and MCP sources, or explicitly record that none
+  are needed.
+
+### 2. Analyze Every Affected Place
+
+Trace the full flow, not only the first matching screen or class. Search for:
+
+- navigation, pages, components, state, query keys, cache and real-time
+  invalidation;
+- client ports, adapters, DTO mappers and same-origin gateway routes;
+- OpenAPI operations, event schemas, producers and every active consumer;
+- controllers, application services, domain transitions, repositories and
+  authorization;
+- JPA mappings, Flyway migrations, constraints, indexes and existing data;
+- idempotency, optimistic concurrency, retries, outbox/inbox and recovery;
+- panel, manager app, worker app and external integrations that consume the
+  changed behavior;
+- focused tests, contract checks, runtime configuration and observability.
+
+Use `rg` or `rg --files` first for repository searches. Do not infer that a
+flow is isolated until its callers and consumers have been checked.
+
+### 3. Create A Plan Before Implementation
+
+Publish a working plan in commentary or the plan tool before changing code.
+For a small task, a concise two- or three-step plan is enough. A non-trivial
+plan must name:
+
+- the owning component and files or areas to change;
+- contract and business-logic impact;
+- persistence, migration and existing-data impact;
+- active consumers and compatibility behavior;
+- obsolete implementation to delete;
+- focused tests and architecture checks;
+- affected runtime services that may need an update;
+- selected skills and MCP tools, including `none` when none apply.
+
+Stop and ask a focused question when implementation would require an
+unrequested breaking contract, a change of domain owner, an unresolved
+business invariant or a destructive data decision. Do not stop for a detail
+that current authoritative sources answer unambiguously.
+
+### 4. Implement The Smallest Complete Change
+
+- Deliver one production implementation of the requested behavior end to end.
+- Change a canonical contract and all affected producers/consumers together
+  when the boundary must evolve.
+- Keep commands and business orchestration in the owning service, not in a UI,
+  gateway or read projection.
+- Remove replaced legacy code, adapters, storage, fixtures, tests and
+  configuration in the same task. Do not hide them behind a flag, unused
+  export, unreachable route, CSS or fallback.
+- Do not fabricate successful data or silently fall back to mocks when a
+  service, token or contract is unavailable.
+- Preserve unrelated dirty-worktree changes and avoid broad mechanical edits.
+
+### 5. Test After Implementation
+
+Run the narrowest checks that cover the final diff and relevant failure paths.
+Tests happen after implementation and fixes continue until the focused gate is
+green or an external blocker is proven.
+
+Never claim a check that was not executed. If infrastructure prevents a test,
+name the exact blocker and run the strongest honest replacement.
+
+### 6. Review Architecture
+
+Before handoff, review the final diff for:
+
+- correct service and data ownership;
+- dependency direction and absence of cross-service persistence coupling;
+- consistency with OpenAPI and event contracts;
+- authentication, authorization and warehouse isolation;
+- transaction boundaries, concurrency, idempotency and retry safety;
+- single source of truth and removal of duplicate business state;
+- cache and real-time invalidation scope;
+- observability and recoverable failure behavior;
+- absence of new legacy paths, compatibility shims and browser-owned domain
+  state.
+
+Fix violations within scope. If fixing one requires a new product decision,
+report it and ask before proceeding.
+
+### 7. Update Project Knowledge
+
+When a task changes architecture, an owner, a business invariant, a contract or
+an important cross-component flow:
+
+1. update the relevant document in `docs/project-knowledge/`;
+2. cite the authoritative repository paths that prove the statement;
+3. append one concise entry to
+   `docs/project-knowledge/change-log.md`;
+4. place unresolved decisions in
+   `docs/project-knowledge/open-questions.md` instead of inventing an answer.
+
+Do not copy complete schemas or implementation details that will immediately
+drift. Link to canonical sources and record the durable meaning.
+
+### 8. Report The Result
+
+Every final response includes:
+
+- what is now working;
+- the main files or areas changed;
+- exact tests and their results;
+- contract and architecture review result;
+- runtime update/status when relevant;
+- skills and MCP tools actually used, or `none`;
+- found remarks, risks, unresolved questions and known follow-up work.
+
+Do not present a partial implementation as complete.
+
+## Project Knowledge Base
+
+`docs/project-knowledge/` is the canonical, maintained map of current RWMS
+architecture and business logic. Start at
+[`docs/project-knowledge/README.md`](docs/project-knowledge/README.md).
+
+The folder contains:
+
+- `architecture.md` — deployables, ownership and dependency boundaries;
+- `domain-logic.md` — confirmed business responsibilities and invariants;
+- `contracts.md` — contract locations and safe change procedure;
+- `change-log.md` — append-only record of durable architecture/logic changes;
+- `open-questions.md` — unresolved product decisions and contradictions.
+
+Read only the sections relevant to the task, then verify them against the
+current contracts and code. If a knowledge document is stale, correct it as
+part of the task.
+
+Historical content under `docs/plans/` and `WMS_ARCHITECTURE_KNOWLEDGE/` may be
+used to understand provenance. It must never be copied into current behavior
+without verification.
+
+## Skills And MCP
+
+### Skills
+
+- At task start, inspect the available skills. If the user names a skill or the
+  task clearly matches one, read its complete `SKILL.md` before taking task
+  actions and follow it.
+- Use the smallest set of skills that covers the task. Announce selected skills
+  and why; if no skill applies, say so.
+- A skill does not override the current user command, canonical RWMS contracts
+  or these repository rules.
+- Record durable facts found through a skill in the project knowledge base only
+  after validating them against current repository sources.
+
+### MCP
+
+- Prefer an installed MCP source when it is the direct authority for external
+  context, such as a referenced issue, design, document or repository object.
+- Prefer repository files for repository facts. Do not call MCP or the web only
+  to repeat information already available locally.
+- MCP discovery is read-only by default. External writes, messages, comments,
+  tickets, uploads or document edits require user scope that authorizes them.
+- Never send secrets, tokens, private keys, customer data or unnecessary source
+  code to an external MCP.
+- State which MCP was used and why in the plan and final report. State `none`
+  when no MCP was needed.
+
+## Stack And Deployable Boundaries
+
+- Web panel: React, TypeScript, Vite, React Router, TanStack Query/Table,
+  Tailwind CSS and shadcn-based components under `panel/`.
+- Spring services: Java, Spring Boot, Gradle Kotlin multi-module, Spring Data
+  JPA and PostgreSQL under `services/`.
+- Android clients: the manager app under `app/` and worker app under
+  `worker-app/`.
+- Schema authority: service-local Flyway only. Liquibase and Hibernate schema
+  mutation are forbidden.
+- Authentication: OAuth2/OIDC Authorization Code with PKCE for interactive
+  clients and locally validated Bearer JWTs for APIs.
+- Messaging and objects: Kafka and private MinIO.
+- Edge: stateless `api-gateway-service`.
+- Media: one stateful Go `media-service`; do not create a second photo or media
+  processing deployable.
 
 Every stateful service owns one PostgreSQL database. Cross-database foreign
-keys, joins, shared tables, shared JPA entities and shared mutable domain models
-are forbidden.
+keys, joins, shared tables, shared repositories, shared JPA entities and shared
+mutable domain models are forbidden.
 
-## Flow Ownership
+## Domain Ownership
 
-Use existing services rather than creating opportunistic replacements:
+| Flow                                                                                 | Owner                                                            |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| Login, users, roles, clients and warehouse access                                    | `auth-service`                                                   |
+| Warehouse identity, metadata and timezone                                            | `warehouse-service`                                              |
+| Cabins, status, equipment, balances, holds and leases                                | `asset-service`                                                  |
+| Queues, workforce, assignments and operational board                                 | `task-board-service`                                             |
+| Catalog, estimates, repairs, acceptance and write-off decisions                      | `maintenance-service`                                            |
+| Inventory sessions, findings, completion and publication                             | `inventory-service`                                              |
+| Rental inquiries, returns, shipments, transfers, drivers and logistics orchestration | `logistics-service`                                              |
+| Media metadata, upload/finalize, originals and transformations                       | `media-service`                                                  |
+| Cross-domain cabin activity                                                          | read-only `dossier-service` projection                           |
+| KPI and dashboard facts                                                              | `analytics-service` projections                                  |
+| Assistant conversations and tool-call history                                        | `assistant-service`; rental availability remains logistics-owned |
 
-| Flow | Owner |
-| --- | --- |
-| Login, users, roles, warehouse access | `auth-service` |
-| Warehouse identity and metadata | `warehouse-service` |
-| Cabins, status, equipment, balances, holds and leases | `asset-service` |
-| Queues, workforce and operational board | `task-board-service` |
-| Catalog, estimates, repairs, acceptance and write-off decisions | `maintenance-service` |
-| Inventory sessions, findings, completion and publication | `inventory-service` |
-| Returns, shipments, transfers and their orchestration | `logistics-service` |
-| Media metadata, upload/finalize, originals and transformations | `media-service` |
-| Cross-domain cabin activity | read-only `dossier-service` projection |
+`api-gateway-service` owns no database, Kafka participation, token storage,
+workflow, cache or business aggregation. `dossier-service` and analytics
+projections never own commands for producer aggregates.
 
-`api-gateway-service` owns no database, Kafka participation, token storage or
-business aggregation. `dossier-service` never owns commands.
+## Panel, Android And Gateway Rules
 
-## Definition Of A Cutover
-
-Each requested flow is delivered as one vertical slice:
-
-1. inspect the current panel behavior, its port/adapter/store and the owning
-   service;
-2. compare every required action with the canonical OpenAPI/event contract;
-3. add the smallest owning-service contract/implementation change only when a
-   real gap is proven;
-4. connect the panel through the public same-origin gateway route;
-5. remove the replaced browser adapter, storage, seed, mock selector,
-   compatibility shim and mock-only tests in the same task;
-6. run focused validation and report the exact result.
-
-Keep one production implementation per flow. Do not introduce a compatibility
-flag, dual-write, silent fallback or a second runtime merely to preserve old
-code.
-
-### Legacy Code Removal
-
-When a flow or component is replaced, the legacy implementation must be
-deleted from the repository as part of the same change. Do not hide it behind
-feature flags, unreachable routes, CSS, permissions, comments, or unused
-exports, and do not retain it as a fallback, compatibility shim, seed,
-fixture, or mock-only path. Remove the corresponding obsolete tests and
-configuration too, after verifying that no supported flow still references
-them. Keep historical documentation only when it is explicitly archival and
-cannot be executed or used as a runtime source of truth.
-
-Browser `localStorage`/IndexedDB data is fixture or recovery evidence, not
-trusted PostgreSQL migration input. Do not import it automatically.
-
-Local storage is acceptable only for non-authoritative UI preferences such as
-theme, the last service-issued warehouse UUID and table/grid presentation.
-
-## Panel And Gateway Rules
-
-- Browser requests use same-origin `/auth/**` and `/api/**` only.
+- Interactive clients use the public gateway only. Browser requests use
+  same-origin `/auth/**` and `/api/**` routes.
 - Do not put internal service origins or `localhost:<service-port>` into panel
   runtime configuration.
-- The browser never calls `/api/internal/**` or private service routes.
-- Missing token, gateway configuration or service is an error; production does
-  not fall back to a mock.
+- Clients never call `/api/internal/**` or private service routes.
+- Missing token, gateway configuration or service is an explicit error, not a
+  mock fallback.
 - Use the shared Bearer client and map Problem Details consistently.
-- Mutable commands use `expectedVersion` or ETag and show a consistent
-  conflict result for `409`.
-- Retried creates/effects use `Idempotency-Key` or a stable domain external
-  ID.
-- The panel may combine independent public read projections. The gateway must
-  not aggregate business responses.
-- Preserve the transferred panel UX where it matches proved domain semantics.
-  Hide or mark unavailable a control whose service contract is undefined;
-  never fabricate success or data.
+- Mutable commands use `expectedVersion`, ETag or another contract-defined
+  fencing token and show a consistent `409` conflict.
+- Retried creates and effects use `Idempotency-Key` or a stable domain external
+  identifier.
+- The panel may combine independent public reads. The gateway must not
+  aggregate business responses.
+- Server data is authoritative. Local storage is allowed only for
+  non-authoritative UI preferences, encrypted client session material where
+  required and explicitly designed offline caches.
+- Real-time messages are invalidation signals unless their contract declares a
+  complete projection. Refresh or patch only affected query/cache entries;
+  avoid global cache clears and stale image URLs after media revisions.
+- Preserve the current supported UX when it matches domain semantics. If no
+  contract exists for a control, make it unavailable and explain the gap; do
+  not fabricate success.
+
+## Contracts, Services And Events
+
+- A service owns its aggregate transitions and server-side orchestration.
+  Browser sagas are forbidden.
+- Internal service calls use private addresses and service credentials, not the
+  public gateway.
+- PostgreSQL event stores and projections are authoritative; Kafka is
+  at-least-once transport, not an archive or database.
+- Preserve transactional outbox/inbox, aggregate-key ordering, deduplication
+  and version-gap handling when a touched service uses them.
+- Effects and consumers must be idempotent. Infinite retry and 2PC are
+  forbidden.
+- The initiating service owns saga state, recovery and compensation. A UI
+  rollback is not a consistency mechanism.
+- Each status and invariant belongs to one service. Consumers store only
+  contract-defined IDs or immutable snapshots and tolerate compatible
+  additions.
+- Generated clients and transport DTOs are boundary types, never persistence
+  entities or shared domain models.
 
 ## Spring Data, Flyway, Lombok And MapStruct
 
-Use Spring Data JPA for stateful Spring service persistence. When a task changes
-an entity, repository or projection, apply the `spring-data-jpa` rules before
+Use Spring Data JPA for stateful Spring persistence. When changing a JPA entity,
+repository or projection, apply the available `spring-data-jpa` skill before
 editing.
 
 - JPA mappings define the application model; Hibernate never creates, updates
   or drops the target schema.
 - Every target profile uses `hibernate.ddl-auto=validate`.
 - Flyway migrations are immutable, ordered and service-local.
-- `baselineOnMigrate` remains false; non-empty legacy schemas require an
-  explicit proven baseline.
-- Destructive schema changes use expand/contract. Never delete data or volumes
-  as an implicit migration step.
-- Run a clean install or the affected upgrade path plus JPA validation when a
-  migration changes.
+- `baselineOnMigrate` remains false. A non-empty unversioned schema requires an
+  explicit proven adoption procedure.
+- Destructive schema changes use expand/contract and explicit data handling.
+- Run a clean install or affected upgrade path plus JPA validation for schema
+  changes.
+- JPA entities must not use Lombok `@Data`, generated builders,
+  `equals/hashCode/toString`, or generated setters for IDs, versions,
+  timestamps and invariants.
+- Use MapStruct at touched Spring boundaries that map entities/projections to
+  DTOs or sanitized integration payloads. Use Spring component model,
+  constructor injection and `unmappedTargetPolicy=ERROR`.
+- Do not use MapStruct for request-to-entity mutation, security or secret
+  mapping, version mutation, checksums, outbox construction or domain
+  transitions.
+- `platform:technical-contracts` remains framework-neutral and contains no
+  Spring, JPA, Kafka or business-domain model.
 
-Lombok is encouraged for safe boilerplate reduction, but JPA entities must not
-use `@Data`, Lombok builders, generated `equals/hashCode/toString`, or
-generated setters for IDs, versions, timestamps and domain invariants. Records
-remain records.
+## Legacy Removal And Data Safety
 
-MapStruct is required where a touched Spring boundary maps entity/projection
-reads to DTOs or sanitized integration payloads. Use Spring component model,
-constructor injection and `unmappedTargetPolicy=ERROR`. Do not use MapStruct
-for request-to-entity mutation, security/secret mapping, version mutation,
-outbox/checksum construction or domain transitions.
-
-`platform:technical-contracts` remains framework-neutral and contains no JPA,
-Spring, Kafka or business-domain model. Canonical transport schemas live under
-`contracts/openapi` and `contracts/events`.
-
-## Service And Event Rules
-
-- A service owns its aggregate transitions and server-side orchestration.
-  Browser sagas must be removed during their flow cutover.
-- Internal service-to-service calls use private addresses and appropriate
-  service credentials, not the public gateway.
-- PostgreSQL event stores and projections are authoritative; Kafka is
-  transport, not an archive or database.
-- Preserve transactional outbox/inbox, aggregate-key ordering, deduplication
-  and version-gap handling when a touched service already uses them.
-- Delivery is at-least-once and effects must be idempotent.
-- 2PC is forbidden. The initiating service owns saga state and compensation.
-- Remove RabbitMQ compatibility runtime/config/tests when its directed Kafka
-  or combined media replacement is complete; do not keep a parallel path.
-
-## Agent Policy: One By Default, Additional Agents For Parallel Waves
-
-Use one primary agent by default.
-
-For a genuinely parallel implementation wave, the primary agent may start
-additional coding agents. Additional agents must not create their own
-subagents. Do not add agents when the work is sequential or shares files.
-
-Start each additional agent only when all of the following are true:
-
-- the new task and all active tasks are concrete coding tasks, not discovery
-  or planning;
-- their file ownership is explicit and non-overlapping;
-- neither task waits on an unfinished contract from the other;
-- both can run useful focused verification independently;
-- parallel work materially shortens the requested delivery.
-
-Never create separate discovery, reviewer, QA, memory, status, documentation or
-commit agents. The coding agent that changes a flow writes its tests and runs
-its focused checks. The primary agent owns integration and the final report.
-
-Before starting any additional agent, state:
-
-- its exact outcome;
-- exclusive files/directories;
-- frozen inputs/contracts;
-- files it must not touch;
-- required validation.
-
-One owner at a time is mandatory for:
-
-- `AGENTS.md`, the migration plan, `App.tsx`, `app-sidebar.tsx`,
-  `gateway-config.ts` and root `compose.yaml`;
-- one service's OpenAPI file, Flyway directory or JPA aggregate;
-- the current monolithic logistics API until it is split into non-overlapping
-  flow directories.
-
-Safe parallel lanes after Wave 0 include:
-
-- warehouse/asset core;
-- task-board settings and operational board;
-- media integration;
-- maintenance catalog, provided its files do not overlap the selected first
-  media consumer.
-
-These lanes may run in one wave when their prerequisites and exclusive
-ownership are already fixed. In the next wave, inventory and maintenance
-lifecycle may run together, along with any other dependency-ready vertical or
-primary-agent integration work.
-
-Logistics decomposition and contract ownership remain sequential. After its
-code is split and the OpenAPI is frozen, returns, shipments and transfers may
-run as three independent panel tasks while one backend owner retains exclusive
-ownership of logistics-service/OpenAPI/Flyway. Dossier final integration comes
-after real producer facts.
-
-Agents work in the shared worktree, preserve user/concurrent edits, never
-revert another agent's changes and do not commit unless explicitly assigned.
-Each additional agent reports changed files, checks run and remaining risks.
+- Delete an obsolete runtime path when its replacement is delivered. Also
+  delete its mock selectors, browser stores, seeds, fixtures, compatibility
+  adapters, tests and configuration once no supported flow references them.
+- Do not retain old code as a fallback or automatically import localStorage,
+  IndexedDB, `old_db/` or legacy exports into PostgreSQL.
+- Old data may be disregarded when designing current behavior unless the user
+  explicitly requests import or backward compatibility.
+- Never delete or rewrite an actual database, volume, backup, object bucket or
+  user data merely because it is old. Resolve exact targets and obtain explicit
+  authorization for destructive operations.
 
 ## Focused Verification
 
-Run the narrowest checks that cover the final diff. Never claim a check that
-was not executed.
-
 - Panel change: affected Vitest tests plus `npm run typecheck`; add lint/build
-  when the changed boundary requires them.
+  when the boundary requires it.
 - Spring change: affected module/package tests or compile check.
-- Contract change: owning contract validation and focused controller/client
-  compatibility test.
-- Migration change: affected Flyway install/upgrade path and JPA validation.
-- Go media change: affected package tests/build.
-- Auth, authorization, concurrency and integration changes: add the smallest
-  targeted success and failure checks.
-- Android app change or a service-contract change consumed by `app/`: run the
-  affected unit/contract tests and build the exact APK to be distributed. Before
-  calling it tested or publishing it, install that APK on an emulator or
-  physical device, authenticate against the intended public RWMS gateway (not
-  MockWebServer), and verify the first authenticated workspace request plus the
-  changed flow. Capture a UI tree or screenshot and filtered logcat; a JSON
-  parsing, HTTP-contract, crash, or connection error fails the gate. If real
-  gateway credentials or runtime are unavailable, report that blocker and do
-  not claim end-to-end APK validation. For every change in `app/`, update the
-  `/download` site with the newly built application version before handoff.
+- Contract change: schema validation plus focused producer and consumer
+  compatibility tests.
+- Flyway/JPA change: affected clean install or upgrade path and JPA validation.
+- Go media change: affected Go package tests and build.
+- Auth, authorization, concurrency, cache, SSE and integration changes: cover
+  the smallest relevant success and failure paths.
+- Documentation-only change: validate links/references and run whitespace or
+  formatting checks available in the repository.
+- Android or Android-consumed contract change: run affected unit/contract
+  tests, build the exact APK and update `/download`. Before claiming end-to-end
+  validation, install that APK on an emulator or device, authenticate against
+  the intended public gateway and verify the first workspace request plus the
+  changed flow. Capture a UI tree or screenshot and filtered logcat. If the
+  gateway or credentials are unavailable, report the blocker and do not claim
+  end-to-end validation.
 
-Use full Testcontainers, Playwright, Kafka outage/retry or cross-service suites
-only when the change requires them, focused checks reveal a wider issue or the
-user asks. If infrastructure blocks a check, name the exact blocker and run the
-narrowest honest replacement.
+Use full Testcontainers, browser automation, Kafka outage/replay or
+cross-service suites when risk requires them, focused checks reveal a wider
+issue or the user asks.
 
-## Deferred Decisions
+## Agent Coordination
 
-Do not invent or opportunistically implement:
+Use one primary agent by default. Additional agents are allowed only for
+concrete parallel coding lanes with explicit, non-overlapping file ownership,
+frozen contracts and independent focused verification. Do not create separate
+discovery, planning, documentation, reviewer, status or QA agents. Additional
+agents must not create their own subagents.
 
-- warehouse location/bin topology;
-- final old-panel-to-current cabin status mapping;
-- company/contract and customer-reservation ownership;
-- formal stock reservation invariants;
-- task-board schedule timezone/DST/downtime semantics;
-- worker push/offline notification delivery;
-- media retention/orphan cleanup policy;
-- compensation after irreversible shipment/transfer departure;
-- KPI formulas, periods, historical backfill or analytics-service;
-- production hosting/deployment topology.
+Before starting another coding agent, state its exact outcome, exclusive files
+or directories, frozen inputs, files it must not touch and required checks.
+One owner at a time is mandatory for `AGENTS.md`, shared navigation, a service's
+OpenAPI family, Flyway directory, JPA aggregate and other high-conflict files.
 
-Keep the related production controls unavailable until a direct command and
-domain decision define them.
+Every agent preserves concurrent changes, does not commit unless assigned and
+reports changed files, checks and remaining risks.
 
 ## Local Runtime And VPS
 
-Work in this repository is performed on the VPS. At the end of each completed
-task, update the affected running test services on the VPS so they reflect the
-delivered changes; inspect their status and logs after the update.
+`compose.yaml` is for isolated local development and test dependencies. Do not
+add production orchestration, ingress, TLS or release infrastructure unless the
+user explicitly requests it.
 
-`compose.yaml` is for isolated local development/test dependencies only. Do
-not add Kubernetes, Helm, Terraform, Ansible, Swarm, production ingress/TLS or
-release pipelines unless explicitly requested.
+After a runtime code task, update only the affected running test services on
+the VPS when the environment is available, then inspect their status and logs.
+Documentation-only tasks require no service restart.
 
-When the user asks for the temporary VPS demo, Codex may start the repository's
-databases, Kafka, MinIO, services, gateway and panel; bind only the approved
-panel/gateway port; inspect logs; and restart failed demo processes.
+Never expose PostgreSQL, Kafka, MinIO administration, internal service ports or
+management endpoints publicly. Do not commit runtime credentials, private
+keys, generated keystores, logs or secrets.
 
-Do not expose PostgreSQL, Kafka, MinIO administration, internal service ports
-or management endpoints to the Internet. Do not commit VPS credentials,
-private keys, generated keystores, logs or runtime secrets. A temporary HTTP
-demo is not production-ready.
+## Git And Workspace Safety
 
-## Git And Data Safety
-
-- Preserve all user and concurrent changes; stage only intended files/hunks.
-- Never use destructive reset/checkout to clean the worktree.
-- Never delete databases, volumes, backups or user data without explicit scope
-  and exact-target verification.
-- Do not commit secrets, generated binaries, build output, browser artifacts or
-  IDE state.
-- Do not commit, push or open a PR unless the user asks.
-- Before a requested commit, verify identity; use `buhanzaz` and the user's
-  configured email with a short human message.
-- Do not put agent/model/tool names in branches, folders, commits or PR
-  metadata, and do not use a `codex/` branch prefix.
+- Preserve all user and concurrent changes; stage only intended files or
+  hunks.
+- Never use destructive reset or checkout to clean the worktree.
+- Do not commit generated binaries, build output, browser artifacts, IDE state
+  or secrets.
+- Do not commit, push or open a pull request unless the user asks.
+- Before a requested commit, verify identity and use `buhanzaz` with the user's
+  configured email and a short human message.
+- Do not put agent, model or tool names in branches, directories, commits or
+  pull-request metadata, and do not use a `codex/` branch prefix.

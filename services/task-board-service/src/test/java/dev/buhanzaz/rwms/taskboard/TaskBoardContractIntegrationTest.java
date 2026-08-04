@@ -425,9 +425,12 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(schemas)
         .containsKeys(
             "AudienceSelector",
+            "WorkerCategory",
             "WorkerContext",
             "WorkerFeed",
             "WorkerTaskDetail",
+            "WorkerKpiPalette",
+            "WorkerKpiPaletteRange",
             "WorkerActionRequest",
             "WorkerActionAppliedResult",
             "WorkerActionConflictProblem",
@@ -435,6 +438,27 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
             "TaskEvidence",
             "WorkerInvalidationEvent",
             "WorkerDeviceRegistrationRequest");
+    assertThat(child(schemas, "WorkerCategory").get("required"))
+        .isEqualTo(
+            List.of(
+                "queueId",
+                "name",
+                "type",
+                "queuePurpose",
+                "sortOrder",
+                "audienceModes",
+                "groupIds",
+                "resultPhotoMinCount"));
+    assertThat(child(schemas, "WorkerContext").get("required"))
+        .asList()
+        .contains("kpiPalette");
+    assertThat(
+            child(
+                    child(child(schemas, "WorkerInvalidationEvent"), "properties"),
+                    "type")
+                .get("enum"))
+        .asList()
+        .contains("NEW_TASK", "URGENT_TASK", "TASK_JOIN_AVAILABLE");
     assertThat(child(schemas, "WorkerActionRequest").get("required"))
         .isEqualTo(
             List.of(
@@ -471,6 +495,7 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
             "/internal/task-board/v1/tasks",
             "/internal/task-board/v1/tasks/{externalTaskId}",
             "/internal/task-board/v1/tasks/{externalTaskId}/cancel",
+            "/internal/task-board/v1/tasks/{externalTaskId}/cancel-if-pre-start",
             "/internal/task-board/v1/logistics/equipment-movement-tasks",
             "/internal/task-board/v1/logistics/equipment-movement-tasks/{externalTaskId}",
             "/internal/task-board/v1/logistics/equipment-movement-tasks/{externalTaskId}/cancel");
@@ -494,6 +519,17 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
         child(child(schemas, "RegisterExternalTaskRequest"), "properties");
     assertThat(createTaskProperties).doesNotContainKey("dailyCapacity");
     assertThat(externalTaskProperties).containsKeys("dailyCapacity", "source");
+    assertThat(child(schemas, "PreStartCancellationOutcome").get("enum"))
+        .isEqualTo(List.of("CANCELLED", "ALREADY_CANCELLED", "STARTED", "VERSION_CONFLICT"));
+    assertThat(child(schemas, "PreStartCancellationResult").get("required"))
+        .isEqualTo(
+            List.of(
+                "outcome",
+                "taskId",
+                "externalTaskId",
+                "taskVersion",
+                "status",
+                "cancelledAt"));
     assertThat(child(externalTaskProperties, "dailyCapacity").toString())
         .contains("minimum=1", "type=null");
     assertThat(

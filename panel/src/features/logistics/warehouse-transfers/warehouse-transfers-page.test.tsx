@@ -347,7 +347,6 @@ beforeEach(() => {
     lineId: LINE_ID,
     activeRepairId: null,
     priorityRequired: false,
-    movementToShipmentAvailable: false,
     missingQueueDefinitionIds: [],
   })
 })
@@ -887,12 +886,11 @@ describe("WarehouseTransfersPage", () => {
           },
         ],
         priority: null,
-        movementToShipment: false,
       })
     )
   })
 
-  it("requires the accepting employee to choose repair priority and shows movement only when available", async () => {
+  it("requires the accepting employee to choose repair priority without a shipment option", async () => {
     authState.sourceLevel = "MANAGE"
     authState.destinationLevel = "MANAGE"
     const user = userEvent.setup()
@@ -903,7 +901,6 @@ describe("WarehouseTransfersPage", () => {
       lineId: LINE_ID,
       activeRepairId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
       priorityRequired: true,
-      movementToShipmentAvailable: true,
       missingQueueDefinitionIds: [],
     })
     transferApi.arriveWarehouseTransferLine.mockResolvedValue(
@@ -914,13 +911,10 @@ describe("WarehouseTransfersPage", () => {
     await user.click(await screen.findByRole("button", { name: "Принять" }))
     const priorityTrigger = await screen.findByLabelText("Приоритет ремонта")
     expect(
-      screen.getByRole("checkbox", { name: "Перемещение на отгрузку" })
-    ).toBeTruthy()
+      screen.queryByRole("checkbox", { name: "Перемещение на отгрузку" })
+    ).toBeNull()
     await user.click(priorityTrigger)
     await user.click(screen.getByRole("option", { name: "2 · Высокий" }))
-    await user.click(
-      screen.getByRole("checkbox", { name: "Перемещение на отгрузку" })
-    )
     await user.click(
       screen.getByRole("button", { name: "Подготовить Фотографии строки 1" })
     )
@@ -932,7 +926,6 @@ describe("WarehouseTransfersPage", () => {
           documentId: TRANSIT_DOCUMENT_ID,
           lineId: LINE_ID,
           priority: 2,
-          movementToShipment: true,
         })
       )
     )
@@ -949,7 +942,6 @@ describe("WarehouseTransfersPage", () => {
       lineId: LINE_ID,
       activeRepairId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
       priorityRequired: true,
-      movementToShipmentAvailable: false,
       missingQueueDefinitionIds: ["eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"],
     })
     renderPage()
