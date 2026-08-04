@@ -4,38 +4,17 @@ import android.Manifest
 import android.content.ContentResolver
 import android.content.Context
 import android.content.pm.PackageManager
-import android.media.MediaActionSound
 import android.net.Uri
-import android.os.Build
-import android.os.VibrationEffect
-import android.os.Vibrator
-import android.os.VibratorManager
-import android.util.Log
 import android.view.Surface as AndroidSurface
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.core.Camera
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageCapture
-import androidx.camera.core.ImageCaptureException
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.video.FileOutputOptions
-import androidx.camera.video.Recorder
-import androidx.camera.video.Recording
-import androidx.camera.video.VideoCapture
-import androidx.camera.video.VideoRecordEvent
-import androidx.camera.view.PreviewView
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -61,12 +40,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -87,18 +64,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import java.io.File
 import java.util.Locale
 import java.util.UUID
-import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.withTimeout
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -144,6 +117,9 @@ fun ManagerPhotoCaptureScreen(
             onPhotoCaptured = onPhotoCaptured,
             onRemovePhotoUri = onRemovePhotoUri,
             audioPermissionGranted = audioPermissionGranted,
+            onRequestAudioPermission = {
+                permissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
+            },
             onClose = onBack,
         )
     } else {
@@ -196,550 +172,18 @@ private fun ManagerPhotoCamera(
     onPhotoCaptured: (String) -> Unit,
     onRemovePhotoUri: (String) -> Unit,
     audioPermissionGranted: Boolean,
+    onRequestAudioPermission: () -> Unit,
     onClose: () -> Unit,
 ) {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    val mainExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
-    val previewView = remember(context) {
-        PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
-    }
-    var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
-    var videoCapture by remember { mutableStateOf<VideoCapture<Recorder>?>(null) }
-    var activeRecording by remember { mutableStateOf<Recording?>(null) }
-    var videoState by remember { mutableStateOf(ManagerVideoCaptureState.Idle) }
-    var camera by remember { mutableStateOf<Camera?>(null) }
-    var selectedZoom by remember { mutableFloatStateOf(1f) }
-    var lensFacing by remember { mutableStateOf(CameraSelector.LENS_FACING_BACK) }
-    var canSwitchCamera by remember { mutableStateOf(false) }
-    var lightMode by remember { mutableStateOf(ManagerPhotoLightMode.Off) }
-    var galleryStartIndex by remember { mutableStateOf<Int?>(null) }
-    val shutterSound = remember {
-        MediaActionSound().apply { load(MediaActionSound.SHUTTER_CLICK) }
-    }
-    val lastPhoto = photoUris.lastOrNull()
-
-    DisposableEffect(shutterSound) {
-        onDispose { shutterSound.release() }
-    }
-
-    DisposableEffect(lifecycleOwner, previewView, lensFacing) {
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
-        var disposed = false
-        cameraProviderFuture.addListener(
-            {
-                if (disposed) return@addListener
-                val cameraProvider = runCatching { cameraProviderFuture.get() }.getOrElse {
-                    Log.e("ManagerPhotoCamera", "Unable to obtain camera provider", it)
-                    return@addListener
-                }
-                val backAvailable = cameraProvider.hasManagerLens(CameraSelector.LENS_FACING_BACK)
-                val frontAvailable = cameraProvider.hasManagerLens(CameraSelector.LENS_FACING_FRONT)
-                val boundLensFacing = when {
-                    cameraProvider.hasManagerLens(lensFacing) -> lensFacing
-                    backAvailable -> CameraSelector.LENS_FACING_BACK
-                    frontAvailable -> CameraSelector.LENS_FACING_FRONT
-                    else -> {
-                        Log.e("ManagerPhotoCamera", "No supported camera lens is available")
-                        return@addListener
-                    }
-                }
-                if (boundLensFacing != lensFacing) lensFacing = boundLensFacing
-                canSwitchCamera = backAvailable && frontAvailable
-                val preview = Preview.Builder()
-                    .build()
-                    .also { it.setSurfaceProvider(previewView.surfaceProvider) }
-                val capture = ImageCapture.Builder()
-                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                    .build()
-                    .apply { flashMode = lightMode.toFlashMode() }
-                val recorder = Recorder.Builder().build()
-                val video = VideoCapture.withOutput(recorder)
-
-                var videoBound = false
-                val boundCamera = runCatching {
-                    cameraProvider.unbindAll()
-                    cameraProvider.bindToLifecycle(
-                        lifecycleOwner,
-                        CameraSelector.Builder().requireLensFacing(boundLensFacing).build(),
-                        preview,
-                        capture,
-                        video,
-                    )
-                        .also { videoBound = true }
-                }.recoverCatching { videoFailure ->
-                    // Some devices cannot bind photo and video use cases together. Keep photo
-                    // capture usable instead of offering a recording that cannot be saved.
-                    Log.w("ManagerPhotoCamera", "Video capture is unavailable for this lens", videoFailure)
-                    cameraProvider.unbindAll()
-                    cameraProvider.bindToLifecycle(
-                        lifecycleOwner,
-                        CameraSelector.Builder().requireLensFacing(boundLensFacing).build(),
-                        preview,
-                        capture,
-                    )
-                }.getOrElse {
-                    Log.e("ManagerPhotoCamera", "Unable to bind photo camera", it)
-                    null
-                }
-                if (disposed || boundCamera == null) return@addListener
-                imageCapture = capture
-                videoCapture = video.takeIf { videoBound }
-                camera = boundCamera
-                boundCamera.cameraInfo.zoomState.value?.let { zoomState ->
-                    val normalizedZoom = managerCoerceZoom(
-                        selectedZoom,
-                        zoomState.minZoomRatio,
-                        zoomState.maxZoomRatio,
-                    )
-                    selectedZoom = normalizedZoom
-                    boundCamera.cameraControl.setZoomRatio(normalizedZoom)
-                }
-                if (boundCamera.cameraInfo.hasFlashUnit()) {
-                    boundCamera.cameraControl.enableTorch(lightMode == ManagerPhotoLightMode.Torch)
-                }
-            },
-            mainExecutor,
-        )
-
-        onDispose {
-            disposed = true
-            runCatching {
-                camera?.cameraControl?.enableTorch(false)
-                activeRecording?.stop()
-                if (cameraProviderFuture.isDone) cameraProviderFuture.get().unbindAll()
-            }
-            activeRecording = null
-            videoState = ManagerVideoCaptureState.Idle
-            camera = null
-            imageCapture = null
-            videoCapture = null
-        }
-    }
-
-    val takePhotoAction: State<() -> Unit> = rememberUpdatedState(
-        newValue = {
-            if (videoState == ManagerVideoCaptureState.Idle) {
-                playCaptureFeedback(context, shutterSound)
-                captureDirectPhoto(
-                    imageCapture = imageCapture,
-                    previewView = previewView,
-                    cacheDir = context.cacheDir,
-                    mainExecutor = mainExecutor,
-                    onCaptured = onPhotoCaptured,
-                )
-            }
-        },
+    ManagerCameraExperience(
+        title = title,
+        photoUris = photoUris,
+        onPhotoCaptured = onPhotoCaptured,
+        onRemovePhotoUri = onRemovePhotoUri,
+        audioPermissionGranted = audioPermissionGranted,
+        onRequestAudioPermission = onRequestAudioPermission,
+        onClose = onClose,
     )
-    val startVideoAction: State<() -> Unit> = rememberUpdatedState(
-        newValue = startVideo@{
-            if (videoState != ManagerVideoCaptureState.Idle || activeRecording != null) {
-                return@startVideo
-            }
-            val capture = videoCapture ?: run {
-                Log.w("ManagerPhotoCamera", "Video capture was requested without a bound video use case")
-                return@startVideo
-            }
-            val file = createManagerMediaFile(context.cacheDir, prefix = "video", extension = "mp4")
-                ?: return@startVideo
-            val outputOptions = FileOutputOptions.Builder(file).build()
-            var pendingRecording = capture.output.prepareRecording(context, outputOptions)
-            if (audioPermissionGranted &&
-                ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-                PackageManager.PERMISSION_GRANTED
-            ) {
-                // PendingRecording is immutable: retain the audio-enabled instance.
-                pendingRecording = try {
-                    pendingRecording.withAudioEnabled()
-                } catch (security: SecurityException) {
-                    // Permission can still be revoked between the check and CameraX call.
-                    Log.w("ManagerPhotoCamera", "Audio permission was revoked", security)
-                    pendingRecording
-                }
-            }
-            videoState = ManagerVideoCaptureState.Starting
-            activeRecording = pendingRecording.start(mainExecutor) { event ->
-                when (event) {
-                    is VideoRecordEvent.Start -> {
-                        if (videoState == ManagerVideoCaptureState.Starting) {
-                            videoState = ManagerVideoCaptureState.Recording
-                        }
-                    }
-
-                    is VideoRecordEvent.Finalize -> {
-                        activeRecording = null
-                        videoState = ManagerVideoCaptureState.Idle
-                        if (event.hasError()) {
-                            file.delete()
-                            Log.e(
-                                "ManagerPhotoCamera",
-                                "Unable to finalize video (${event.error})",
-                            )
-                        } else {
-                            // The app-owned MP4 is verified by MediaUploader before upload.
-                            onPhotoCaptured(Uri.fromFile(file).toString())
-                            playCaptureFeedback(context, shutterSound)
-                        }
-                    }
-
-                    else -> Unit
-                }
-            }
-        },
-    )
-    val lockVideoAction: State<() -> Unit> = rememberUpdatedState(
-        newValue = {
-            if (activeRecording != null && videoState.isVideoActive) {
-                videoState = ManagerVideoCaptureState.Locked
-            }
-        },
-    )
-    val stopVideoAction: State<() -> Unit> = rememberUpdatedState(
-        newValue = {
-            val recording = activeRecording
-            if (recording != null && videoState.isVideoActive) {
-                videoState = ManagerVideoCaptureState.Stopping
-                recording.stop()
-            }
-        },
-    )
-    val captureState = rememberUpdatedState(videoState)
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black),
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(108.dp),
-        ) {
-            ManagerLightToggleButton(
-                lightMode = lightMode,
-                onClick = {
-                    val next = lightMode.next()
-                    lightMode = next
-                    imageCapture?.flashMode = next.toFlashMode()
-                    camera?.cameraControl?.enableTorch(next == ManagerPhotoLightMode.Torch)
-                },
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(start = 24.dp, bottom = 12.dp),
-            )
-            Text(
-                text = title,
-                color = Color.White,
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 26.dp),
-            )
-        }
-
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .background(Color.Black),
-        ) {
-            AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
-            ManagerZoomSelector(
-                camera = camera,
-                selectedZoom = selectedZoom,
-                onZoomSelected = { zoom ->
-                    selectedZoom = zoom
-                    camera?.cameraControl?.setZoomRatio(zoom)
-                },
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 12.dp),
-            )
-        }
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(156.dp)
-                .padding(start = 28.dp, end = 28.dp, bottom = 36.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (lastPhoto != null) {
-                Box(
-                    modifier = Modifier
-                        .size(64.dp)
-                        .clip(CircleShape)
-                        .background(Color.DarkGray)
-                        .clickable { galleryStartIndex = photoUris.lastIndex },
-                ) {
-                    if (isManagerVideoUri(lastPhoto)) {
-                        Text("▶", color = Color.White, fontSize = 24.sp)
-                    } else {
-                        ManagerPhotoPreview(lastPhoto, Modifier.fillMaxSize())
-                    }
-                }
-            } else {
-                Spacer(Modifier.size(64.dp))
-            }
-            Spacer(Modifier.weight(1f))
-            Box(
-                modifier = Modifier
-                    .size(88.dp)
-                    .clip(CircleShape)
-                    .background(Color.White)
-                    .managerCaptureGesture(
-                        videoState = captureState,
-                        onTakePhoto = takePhotoAction,
-                        onStartVideo = startVideoAction,
-                        onLockVideo = lockVideoAction,
-                        onStopVideo = stopVideoAction,
-                    )
-                    .semantics(mergeDescendants = true) {
-                        role = Role.Button
-                        contentDescription = if (videoState.isVideoActive) {
-                            "Остановить запись видео"
-                        } else {
-                            "Снять фото. Удерживайте кнопку для записи видео"
-                        }
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                if (videoState.isVideoActive) {
-                    Box(
-                        modifier = Modifier
-                            .size(if (videoState == ManagerVideoCaptureState.Locked) 34.dp else 28.dp)
-                            .clip(
-                                if (videoState == ManagerVideoCaptureState.Locked) {
-                                    RoundedCornerShape(8.dp)
-                                } else {
-                                    CircleShape
-                                },
-                            )
-                            .background(Color(0xFFB3261E)),
-                    )
-                }
-            }
-            Spacer(Modifier.weight(1f))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (canSwitchCamera && !videoState.isVideoActive) {
-                    CameraRoundControl(
-                        label = "⇄",
-                        description = "Переключить камеру",
-                        onClick = {
-                            lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
-                                CameraSelector.LENS_FACING_FRONT
-                            } else {
-                                CameraSelector.LENS_FACING_BACK
-                            }
-                        },
-                    )
-                }
-                CameraRoundControl(
-                    label = "→",
-                    description = "Выйти из камеры",
-                    onClick = onClose,
-                )
-            }
-        }
-    }
-
-    galleryStartIndex?.let { index ->
-        ManagerPhotoGalleryDialog(
-            photoUris = photoUris,
-            initialIndex = index,
-            onRemovePhotoUri = onRemovePhotoUri,
-            onDismiss = { galleryStartIndex = null },
-        )
-    }
-}
-
-@Composable
-private fun ManagerZoomSelector(
-    camera: Camera?,
-    selectedZoom: Float,
-    onZoomSelected: (Float) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val zoomState = camera?.cameraInfo?.zoomState?.value
-    val minZoom = zoomState?.minZoomRatio ?: 1f
-    val maxZoom = zoomState?.maxZoomRatio ?: 1f
-    val zoomStops = managerSupportedZoomStops(minZoom, maxZoom)
-    if (zoomStops.size < 2) return
-    Row(
-        modifier = modifier
-            .clip(CircleShape)
-            .background(Color.Black.copy(alpha = 0.42f))
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        zoomStops.forEach { zoom ->
-            FilledTonalButton(
-                onClick = { onZoomSelected(zoom) },
-                shape = CircleShape,
-                colors = ButtonDefaults.filledTonalButtonColors(
-                    containerColor = if (abs(selectedZoom - zoom) < 0.01f) {
-                        Color.White
-                    } else {
-                        Color.Transparent
-                    },
-                    contentColor = if (abs(selectedZoom - zoom) < 0.01f) Color.Black else Color.White,
-                ),
-                modifier = Modifier.size(48.dp),
-            ) { Text(managerZoomLabel(zoom)) }
-        }
-    }
-}
-
-/** Only show zoom positions exposed by the currently bound CameraInfo range. */
-internal fun managerSupportedZoomStops(minZoom: Float, maxZoom: Float): List<Float> {
-    val minimum = normalizedManagerZoomMinimum(minZoom)
-    val maximum = normalizedManagerZoomMaximum(minimum, maxZoom)
-    val stops = mutableListOf(minimum, maximum)
-    var lowerStop = 1f
-    while (lowerStop >= minimum) {
-        if (lowerStop <= maximum) stops += lowerStop
-        lowerStop /= 2f
-    }
-    var upperStop = 2f
-    while (upperStop <= maximum) {
-        if (upperStop >= minimum) stops += upperStop
-        upperStop *= 2f
-    }
-    return stops
-        .distinctBy { (it * 1_000f).roundToInt() }
-        .sorted()
-}
-
-internal fun managerCoerceZoom(requestedZoom: Float, minZoom: Float, maxZoom: Float): Float {
-    val minimum = normalizedManagerZoomMinimum(minZoom)
-    val maximum = normalizedManagerZoomMaximum(minimum, maxZoom)
-    return requestedZoom
-        .takeIf { it.isFinite() }
-        ?.coerceIn(minimum, maximum)
-        ?: minimum
-}
-
-private fun normalizedManagerZoomMinimum(value: Float): Float =
-    value.takeIf { it.isFinite() && it > 0f } ?: 1f
-
-private fun normalizedManagerZoomMaximum(minimum: Float, value: Float): Float =
-    value.takeIf { it.isFinite() && it >= minimum } ?: minimum
-
-private fun managerZoomLabel(value: Float): String =
-    if (abs(value - value.roundToInt()) < 0.01f) {
-        "${value.roundToInt()}×"
-    } else {
-        String.format(Locale.US, "%.1f×", value)
-    }
-
-private fun ProcessCameraProvider.hasManagerLens(lensFacing: Int): Boolean = runCatching {
-    hasCamera(CameraSelector.Builder().requireLensFacing(lensFacing).build())
-}.getOrDefault(false)
-
-private enum class ManagerVideoCaptureState {
-    Idle,
-    Starting,
-    Recording,
-    Locked,
-    Stopping,
-    ;
-
-    val isVideoActive: Boolean
-        get() = this != Idle
-}
-
-/**
- * A tap takes a photo. Holding the same shutter begins recording; swiping up while
- * still holding it locks the recording, and a later tap ends it.
- */
-private fun Modifier.managerCaptureGesture(
-    videoState: State<ManagerVideoCaptureState>,
-    onTakePhoto: State<() -> Unit>,
-    onStartVideo: State<() -> Unit>,
-    onLockVideo: State<() -> Unit>,
-    onStopVideo: State<() -> Unit>,
-): Modifier = pointerInput(Unit) {
-    awaitEachGesture {
-        val down = awaitFirstDown(requireUnconsumed = false)
-        if (videoState.value.isVideoActive) {
-            if (waitForUpOrCancellation() != null) onStopVideo.value.invoke()
-            return@awaitEachGesture
-        }
-        val releasedBeforeVideo = try {
-            withTimeout(MANAGER_VIDEO_HOLD_MILLIS) { waitForUpOrCancellation() }
-        } catch (_: TimeoutCancellationException) {
-            null
-        }
-        if (releasedBeforeVideo != null) {
-            onTakePhoto.value.invoke()
-            return@awaitEachGesture
-        }
-
-        onStartVideo.value.invoke()
-        var locked = false
-        while (true) {
-            val event = awaitPointerEvent()
-            val change = event.changes.firstOrNull { it.id == down.id } ?: continue
-            if (!locked &&
-                change.position.y <= down.position.y - MANAGER_VIDEO_LOCK_DISTANCE_DP.dp.toPx()
-            ) {
-                locked = true
-                onLockVideo.value.invoke()
-            }
-            if (change.changedToUpIgnoreConsumed()) {
-                if (!locked) onStopVideo.value.invoke()
-                break
-            }
-        }
-    }
-}
-
-private const val MANAGER_VIDEO_HOLD_MILLIS = 500L
-private const val MANAGER_VIDEO_LOCK_DISTANCE_DP = 72
-
-@Composable
-private fun CameraRoundControl(
-    label: String,
-    description: String,
-    onClick: () -> Unit,
-) {
-    Box(
-        modifier = Modifier
-            .size(64.dp)
-            .clip(CircleShape)
-            .background(Color.White.copy(alpha = 0.16f))
-            .clickable(role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = description },
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(label, color = Color.White, fontSize = 28.sp)
-    }
-}
-
-@Composable
-private fun ManagerLightToggleButton(
-    lightMode: ManagerPhotoLightMode,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Box(
-        modifier = modifier
-            .size(56.dp)
-            .clip(CircleShape)
-            .background(lightMode.buttonColor)
-            .clickable(role = Role.Button, onClick = onClick)
-            .semantics(mergeDescendants = true) {},
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = lightMode.icon,
-            color = lightMode.contentColor,
-            fontSize = 22.sp,
-            lineHeight = 22.sp,
-            textAlign = TextAlign.Center,
-        )
-    }
 }
 
 @Composable
@@ -1028,36 +472,6 @@ fun ManagerPhotoGalleryDialog(
     }
 }
 
-private fun captureDirectPhoto(
-    imageCapture: ImageCapture?,
-    previewView: PreviewView,
-    cacheDir: File,
-    mainExecutor: java.util.concurrent.Executor,
-    onCaptured: (String) -> Unit,
-) {
-    val capture = imageCapture ?: return
-    // CameraX stores this orientation in the JPEG's EXIF metadata.  Keep the original bytes
-    // untouched afterwards; media-service is the sole canonical image processor.
-    capture.targetRotation = managerCaptureTargetRotation(previewView.display?.rotation)
-    val file = createManagerMediaFile(cacheDir, "capture") ?: return
-    val outputOptions = ImageCapture.OutputFileOptions.Builder(file).build()
-    capture.takePicture(
-        outputOptions,
-        mainExecutor,
-        object : ImageCapture.OnImageSavedCallback {
-            override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                // Keep CameraX's original JPEG and its EXIF orientation intact.
-                onCaptured(Uri.fromFile(file).toString())
-            }
-
-            override fun onError(exception: ImageCaptureException) {
-                file.delete()
-                Log.e("ManagerPhotoCamera", "Unable to save photo", exception)
-            }
-        },
-    )
-}
-
 /** Returns a valid CameraX target rotation even while the preview is attaching to the window. */
 internal fun managerCaptureTargetRotation(displayRotation: Int?): Int = when (displayRotation) {
     AndroidSurface.ROTATION_0,
@@ -1068,6 +482,29 @@ internal fun managerCaptureTargetRotation(displayRotation: Int?): Int = when (di
 
     else -> AndroidSurface.ROTATION_0
 }
+
+/** Maps the physical device position to CameraX rotation even when the activity stays portrait. */
+internal fun managerCaptureTargetRotationForOrientation(
+    orientationDegrees: Int,
+    fallbackRotation: Int,
+): Int = when (orientationDegrees) {
+    in 45 until 135 -> AndroidSurface.ROTATION_270
+    in 135 until 225 -> AndroidSurface.ROTATION_180
+    in 225 until 315 -> AndroidSurface.ROTATION_90
+    in 0 until 360 -> AndroidSurface.ROTATION_0
+    else -> managerCaptureTargetRotation(fallbackRotation)
+}
+
+/** EXIF rotation values used when a vendor HAL writes Orientation=0. */
+internal fun managerExifOrientationForRotationDegrees(rotationDegrees: Int): Int =
+    when (((rotationDegrees % 360) + 360) % 360) {
+        90 -> 6
+        180 -> 3
+        270 -> 8
+        else -> 1
+    }
+
+internal fun managerExifOrientationNeedsRepair(orientation: Int): Boolean = orientation !in 1..8
 
 /** Copies a gallery original to an app-owned cache path that MediaUploader can read later. */
 fun copyManagerPhotoToAppCache(context: Context, source: Uri): String? = runCatching {
@@ -1103,44 +540,3 @@ private fun isManagerVideoUri(uriText: String): Boolean = Uri.parse(uriText)
     ?.lowercase(Locale.ROOT)
     ?.let { it == "mp4" || it == "webm" }
     ?: false
-
-private fun playCaptureFeedback(context: Context, shutterSound: MediaActionSound) {
-    runCatching { shutterSound.play(MediaActionSound.SHUTTER_CLICK) }
-    runCatching {
-        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            context.getSystemService(VibratorManager::class.java)?.defaultVibrator
-        } else {
-            @Suppress("DEPRECATION")
-            context.getSystemService(Vibrator::class.java)
-        } ?: return@runCatching
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            vibrator.vibrate(VibrationEffect.createOneShot(45L, VibrationEffect.DEFAULT_AMPLITUDE))
-        } else {
-            @Suppress("DEPRECATION")
-            vibrator.vibrate(45L)
-        }
-    }
-}
-
-private enum class ManagerPhotoLightMode(
-    val icon: String,
-    val buttonColor: Color,
-    val contentColor: Color,
-) {
-    Off("⚡", Color.White.copy(alpha = 0.12f), Color.White),
-    Flash("⚡", Color(0xFF9AD99A), Color.Black),
-    Torch("☀", Color(0xFF9AD99A), Color.Black),
-    ;
-
-    fun next(): ManagerPhotoLightMode = when (this) {
-        Off -> Flash
-        Flash -> Torch
-        Torch -> Off
-    }
-
-    fun toFlashMode(): Int = when (this) {
-        Flash -> ImageCapture.FLASH_MODE_ON
-        Off,
-        Torch -> ImageCapture.FLASH_MODE_OFF
-    }
-}
