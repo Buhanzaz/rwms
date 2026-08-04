@@ -47,6 +47,7 @@ public class RentalSettingsService {
     }
     value.update(
         request.chatSelectionHoldMinutes(),
+        request.manualBookingHoldMinutes(),
         request.presentationHoldMinutes(),
         request.draftReservationHoldMinutes(),
         actor.subjectId(),
@@ -62,6 +63,11 @@ public class RentalSettingsService {
   @Transactional
   public int presentationHoldMinutes(OrderActor actor) {
     return loadOrCreate(actor).getPresentationHoldMinutes();
+  }
+
+  @Transactional
+  public int manualBookingHoldMinutes(OrderActor actor) {
+    return loadOrCreate(actor).getManualBookingHoldMinutes();
   }
 
   @Transactional

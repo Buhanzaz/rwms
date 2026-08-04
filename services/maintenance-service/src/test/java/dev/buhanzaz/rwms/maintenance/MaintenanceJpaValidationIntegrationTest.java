@@ -35,7 +35,7 @@ class MaintenanceJpaValidationIntegrationTest {
   void latestFlywayPassesHibernateValidationForEveryBusinessProjection() {
     assertThat(entityManagerFactory.isOpen()).isTrue();
     assertThat(jdbc.queryForObject(
-        "select count(*) from flyway_schema_history where success", Integer.class)).isEqualTo(28);
+        "select count(*) from flyway_schema_history where success", Integer.class)).isEqualTo(32);
     assertThat(jdbc.queryForObject(
         """
         select count(*) from information_schema.columns
@@ -87,6 +87,7 @@ class MaintenanceJpaValidationIntegrationTest {
         .extracting(value -> value.getJavaType().getSimpleName())
         .contains(
             "InventoryRepairSource", "LogisticsReturnShortage", "RepairCapacitySettings",
-            "RepairTaskEvidence", "RepairComplexitySettings", "RepairPlaceAllocation");
+            "RepairTaskEvidence", "RepairComplexitySettings", "RepairPlaceAllocation",
+            "InventoryPublicationSource", "InventoryPublicationSourceOperation");
   }
 }

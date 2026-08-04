@@ -47,7 +47,7 @@ public class WarehouseController {
   @GetMapping("/{id}")
   public WarehouseResponse get(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id) {
     access.requireWarehouseRead(jwt);
-    return service.get(id, access.isSystemAdmin(jwt));
+    return service.get(id);
   }
 
   @PostMapping

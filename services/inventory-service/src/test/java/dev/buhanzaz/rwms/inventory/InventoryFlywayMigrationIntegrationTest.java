@@ -48,7 +48,7 @@ class InventoryFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsNoSeedOrImporter() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(13);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(15);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames())
@@ -71,6 +71,9 @@ class InventoryFlywayMigrationIntegrationTest {
             "inventory_completion_statistics",
             "inventory_statistics_line",
             "inventory_furniture_reconciliation_intent",
+            "inventory_planning_settings",
+            "inventory_final_plan",
+            "inventory_final_plan_entry",
             "inventory_publication_intent",
             "inventory_publication_attempt",
             "inventory_publication_attempt_result",
@@ -108,7 +111,12 @@ class InventoryFlywayMigrationIntegrationTest {
             "movement_to_repair",
             "movement_to_shipment",
             "logistics_planning_mode",
-            "logistics_scheduled_date");
+            "logistics_scheduled_date",
+            "snapshot_schema_version");
+    assertThat(columns("inventory_publication_intent"))
+        .contains("maintenance_outcome", "maintenance_result");
+    assertThat(columns("inventory_publication_attempt_result"))
+        .contains("maintenance_outcome", "maintenance_result");
   }
 
   @Test
@@ -264,7 +272,7 @@ class InventoryFlywayMigrationIntegrationTest {
         UUID.randomUUID());
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(2);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(4);
     upgraded.validate();
 
     assertThat(
@@ -279,6 +287,7 @@ class InventoryFlywayMigrationIntegrationTest {
                        jsonb_exists(source_snapshot, 'moveFromRepairRequired') as legacy_outbound,
                        jsonb_array_length(source_snapshot->'stages') as source_stage_count,
                        source_snapshot #>> '{stages,0,kind}' as source_stage_kind,
+                       snapshot_schema_version,
                        plan_fingerprint_sha256
                 from finding_plan_snapshot where finding_id=? and finding_revision=0
                 """,
@@ -294,6 +303,12 @@ class InventoryFlywayMigrationIntegrationTest {
         .containsEntry("legacy_outbound", false)
         .containsEntry("source_stage_count", 1)
         .containsEntry("source_stage_kind", "REPAIR_WORK");
+    assertThat(
+            jdbc.queryForObject(
+                "select snapshot_schema_version from finding_plan_snapshot where finding_id=? and finding_revision=0",
+                Short.class,
+                findingId))
+        .isEqualTo((short) 1);
     assertThat(
             jdbc.queryForMap(
                 """
@@ -358,7 +373,7 @@ class InventoryFlywayMigrationIntegrationTest {
     insertFinding(inventoryId, findingId, UUID.randomUUID(), "V10-COVER");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(4);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(6);
     upgraded.validate();
     assertThat(columns("inventory_finding")).contains("cover_media_id");
     assertThat(
@@ -415,7 +430,7 @@ class InventoryFlywayMigrationIntegrationTest {
             + "\"queueCode\":\"REPAIR\"}");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(5);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(7);
     upgraded.validate();
     assertThat(columns("finding_plan_stage"))
         .contains(
@@ -517,7 +532,7 @@ class InventoryFlywayMigrationIntegrationTest {
         technicalOnlyExpectedId);
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(8);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(10);
     latest.validate();
 
     assertThat(jdbc.queryForObject(
@@ -682,7 +697,7 @@ class InventoryFlywayMigrationIntegrationTest {
         current.plusDays(7));
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(6);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(8);
     latest.validate();
 
     assertThat(
@@ -926,7 +941,7 @@ class InventoryFlywayMigrationIntegrationTest {
         .containsEntry("expected_item_id", null)
         .containsEntry("membership_active", true);
 
-    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(9);
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(11);
     assertThat(
             jdbc.queryForObject(
                 "select expected_population_count from inventory_session where id=?",

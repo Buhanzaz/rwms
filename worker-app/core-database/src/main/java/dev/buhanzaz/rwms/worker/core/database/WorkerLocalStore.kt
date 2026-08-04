@@ -83,6 +83,9 @@ class WorkerLocalStore @Inject constructor(
     fun observeAssignments(userId: String, entryId: String): Flow<List<WorkerAssignmentEntity>> =
         database.assignmentDao().observeForEntry(userId, entryId)
 
+    fun observeAssignments(userId: String): Flow<List<WorkerAssignmentEntity>> =
+        database.assignmentDao().observeAll(userId)
+
     fun observeDetail(userId: String, entryId: String): Flow<WorkerTaskDetailEntity?> =
         database.detailDao().observeDetail(userId, entryId)
 

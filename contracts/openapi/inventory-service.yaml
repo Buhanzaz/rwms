@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Inventory Service API
-  version: 1.3.0
+  version: 1.5.0
   x-rwms-owner: inventory-service
   x-rwms-stability: approved-stage-7
   description: >-
@@ -18,6 +18,7 @@ tags:
   - { name: Sessions }
   - { name: Findings }
   - { name: Furniture }
+  - { name: Planning }
   - { name: Completion }
   - { name: Publication }
   - { name: Statistics }
@@ -135,6 +136,152 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /api/inventory/v1/sessions/{inventoryId}/registry-review:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+    post:
+      tags: [Findings]
+      operationId: reviewInventoryRegistry
+      description: >-
+        Requires USER, rwms.write and warehouse EDIT. Performs a read-only fresh
+        comparison of the exact active finding revision vector with current asset
+        and maintenance registry truth. It neither resolves conflicts nor changes
+        the inventory, repair cycle or logistics state.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegistryReviewRequest' }
+      responses:
+        '200':
+          description: Fresh registry review for the exact requested revisions.
+          headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RegistryReview' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/inventory/v1/sessions/{inventoryId}/statistics-preview:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+    get:
+      tags: [Statistics]
+      operationId: getInventoryPreliminaryStatistics
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. Available only while the
+        session is ACTIVE in the CABINS review stage. Returns read-only preliminary
+        counters and money totals from persisted active findings and their active
+        frozen plan lines. It does not validate assets, require or change a furniture
+        review, create a completion preview or validation, or persist any state;
+        completion performs fresh validation and freezes the final statistics separately.
+      responses:
+        '200': { $ref: '#/components/responses/FrozenStatisticsResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/inventory/v1/planning-settings/{warehouseId}:
+    parameters:
+      - { $ref: '#/components/parameters/WarehousePathId' }
+    get:
+      tags: [Planning]
+      operationId: getInventoryPlanningSettings
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. Settings are warehouse-local and
+        derive only future final-plan versions; they do not change frozen plan evidence.
+      responses:
+        '200':
+          description: Current planning calendar and independent daily capacities.
+          headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/PlanningSettings' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    put:
+      tags: [Planning]
+      operationId: updateInventoryPlanningSettings
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. A matching settingsRevision is required;
+        changing the calendar marks the active session's draft final plan stale.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlanningSettingsUpdateRequest' }
+      responses:
+        '200':
+          description: Updated planning settings.
+          headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/PlanningSettings' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/inventory/v1/sessions/{inventoryId}/final-plan/prepare:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Planning]
+      operationId: prepareInventoryFinalPlan
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. The server creates one immutable ordered
+        final-plan version for every active finding, derives independent movement and repair
+        calendars, and preflights maintenance reconciliation candidates.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PrepareFinalPlanRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/FinalPlanIdempotentResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/inventory/v1/sessions/{inventoryId}/final-plan:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+    get:
+      tags: [Planning]
+      operationId: getInventoryFinalPlan
+      description: Requires USER, rwms.read and warehouse VIEW.
+      responses:
+        '200':
+          description: Current final-plan head, including stale evidence when replacement is required.
+          headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/FinalPlan' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Planning]
+      operationId: updateInventoryFinalPlan
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE. The request contains every active
+        finding in exact order. It always creates a new immutable final-plan version.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FinalPlanUpdateRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/FinalPlanIdempotentResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
   /api/inventory/v1/sessions/{inventoryId}/number-resolutions:
     parameters:
       - { $ref: '#/components/parameters/InventoryId' }
@@ -497,6 +644,7 @@ components:
   parameters:
     InventoryId: { name: inventoryId, in: path, required: true, schema: { type: string, format: uuid } }
     FindingId: { name: findingId, in: path, required: true, schema: { type: string, format: uuid } }
+    WarehousePathId: { name: warehouseId, in: path, required: true, schema: { type: string, format: uuid } }
     WarehouseId: { name: warehouseId, in: query, required: true, schema: { type: string, format: uuid } }
     IfNoneMatch:
       name: If-None-Match
@@ -563,6 +711,10 @@ components:
       description: Server-owned completion preview.
       headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }
       content: { application/json: { schema: { $ref: '#/components/schemas/CompletionPreview' } } }
+    FinalPlanIdempotentResponse:
+      description: Server-owned immutable final-plan version.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/FinalPlan' } } }
     FurnitureReviewResponse:
       description: Frozen furniture-review snapshot and absolute observations.
       headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
@@ -587,6 +739,10 @@ components:
       description: Exact aggregate of matching completed sessions.
       headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
       content: { application/json: { schema: { $ref: '#/components/schemas/StatisticsSummary' } } }
+    FrozenStatisticsResponse:
+      description: Read-only inventory statistics.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/FrozenStatistics' } } }
     BadRequest: { description: Malformed input or invalid/broad range., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/problem+json: { schema: { $ref: '#/components/schemas/ProblemDetail' } } } }
     Unauthorized: { description: Missing or invalid Bearer JWT., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/problem+json: { schema: { $ref: '#/components/schemas/ProblemDetail' } } } }
     Forbidden: { description: Principal, scope or warehouse grant is insufficient., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/problem+json: { schema: { $ref: '#/components/schemas/ProblemDetail' } } } }
@@ -609,6 +765,7 @@ components:
     ConflictResolutionStrategy: { type: string, enum: [ACCEPT_REGISTRY, KEEP_INSPECTION] }
     ObservationPresence: { type: string, enum: [ABSENT, EXPLICIT_EMPTY, PRESENT] }
     PublicationState: { type: string, enum: [NOT_REQUIRED, READY, PENDING, SUCCEEDED, TRANSIENT_FAILED, BLOCKED, CLOSED_BLOCKED] }
+    MaintenancePublicationOutcome: { type: string, enum: [CREATED, SUCCESSOR, MATCHED] }
     AggregatePublicationState: { type: string, enum: [NOT_REQUESTED, PENDING, PARTIAL, SUCCEEDED, BLOCKED] }
     Sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
     DecimalQuantity:
@@ -698,10 +855,11 @@ components:
     CatalogInventoryPlanLineInput:
       type: object
       additionalProperties: false
-      required: [aggregationKind, catalogNodeId, description, type, unit, quantity, unitPriceMinor, normativeMinutes, mediaReferences]
+      required: [aggregationKind, catalogNodeId, routingCatalogNodeId, description, type, unit, quantity, unitPriceMinor, normativeMinutes, mediaReferences]
       properties:
         aggregationKind: { type: string, const: CATALOG }
         catalogNodeId: { type: string, format: uuid }
+        routingCatalogNodeId: { type: 'null' }
         description: { type: 'null' }
         type: { type: 'null' }
         unit: { type: 'null' }
@@ -713,10 +871,16 @@ components:
     ManualInventoryPlanLineInput:
       type: object
       additionalProperties: false
-      required: [aggregationKind, catalogNodeId, description, type, unit, quantity, unitPriceMinor, normativeMinutes, mediaReferences]
+      required: [aggregationKind, catalogNodeId, routingCatalogNodeId, description, type, unit, quantity, unitPriceMinor, normativeMinutes, mediaReferences]
       properties:
         aggregationKind: { type: string, const: MANUAL }
         catalogNodeId: { type: 'null' }
+        routingCatalogNodeId:
+          description: >-
+            Active maintenance catalog node used only to freeze the line routing snapshot;
+            it does not make the manual line catalog-derived.
+          type: string
+          format: uuid
         description: { type: string, minLength: 1, maxLength: 1000 }
         type: { type: string, enum: [WORK, MATERIAL] }
         unit: { type: string, minLength: 1, maxLength: 32 }
@@ -741,13 +905,12 @@ components:
       oneOf:
         - type: object
           additionalProperties: false
-          required: [mode, priority, coverMediaId, movementToRepair, movementToShipment, logisticsPlanningMode, logisticsScheduledDate, lines, stages]
+          required: [mode, priority, coverMediaId, movementToRepair, logisticsPlanningMode, logisticsScheduledDate, lines, stages]
           properties:
             mode: { type: string, const: AUTO }
             priority: { type: integer, minimum: 1, maximum: 5 }
             coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
             movementToRepair: { type: boolean }
-            movementToShipment: { type: boolean }
             logisticsPlanningMode:
               oneOf: [{ $ref: '#/components/schemas/LogisticsPlanningMode' }, { type: 'null' }]
             logisticsScheduledDate:
@@ -778,13 +941,12 @@ components:
                     logisticsScheduledDate: { type: string, format: date }
         - type: object
           additionalProperties: false
-          required: [mode, priority, coverMediaId, movementToRepair, movementToShipment, logisticsPlanningMode, logisticsScheduledDate, lines, stages]
+          required: [mode, priority, coverMediaId, movementToRepair, logisticsPlanningMode, logisticsScheduledDate, lines, stages]
           properties:
             mode: { type: string, const: MANUAL }
             priority: { type: integer, minimum: 1, maximum: 5 }
             coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
             movementToRepair: { type: boolean }
-            movementToShipment: { type: boolean }
             logisticsPlanningMode:
               oneOf: [{ $ref: '#/components/schemas/LogisticsPlanningMode' }, { type: 'null' }]
             logisticsScheduledDate:
@@ -881,6 +1043,17 @@ components:
       properties:
         findingId: { type: string, format: uuid }
         expectedFindingRevision: { type: integer, format: int64, minimum: 0 }
+    RegistryReviewRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision, findingRevisions]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        findingRevisions:
+          type: array
+          maxItems: 10000
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/RevisionExpectation' }
     StartFurnitureReviewRequest:
       type: object
       additionalProperties: false
@@ -926,19 +1099,176 @@ components:
           maxItems: 10000
           uniqueItems: true
           items: { $ref: '#/components/schemas/FurnitureReviewItemInput' }
+    PlanningSettingsUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSettingsRevision, movementDailyCapacity, repairDailyCapacity, workingWeekdays, holidays]
+      properties:
+        expectedSettingsRevision: { type: integer, format: int64, minimum: 0 }
+        movementDailyCapacity: { type: integer, minimum: 1, maximum: 1000 }
+        repairDailyCapacity: { type: integer, minimum: 1, maximum: 1000 }
+        workingWeekdays:
+          type: array
+          minItems: 1
+          maxItems: 7
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/WorkingWeekday' }
+        holidays:
+          type: array
+          maxItems: 3660
+          uniqueItems: true
+          items: { type: string, format: date }
+    PlanningSettings:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, settingsRevision, movementDailyCapacity, repairDailyCapacity, workingWeekdays, holidays]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        settingsRevision: { type: integer, format: int64, minimum: 0 }
+        movementDailyCapacity: { type: integer, minimum: 1, maximum: 1000 }
+        repairDailyCapacity: { type: integer, minimum: 1, maximum: 1000 }
+        workingWeekdays:
+          type: array
+          minItems: 1
+          maxItems: 7
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/WorkingWeekday' }
+        holidays:
+          type: array
+          maxItems: 3660
+          uniqueItems: true
+          items: { type: string, format: date }
+    WorkingWeekday:
+      type: string
+      enum: [MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY, SATURDAY, SUNDAY]
+    FinalPlanScheduleMode: { type: string, enum: [AUTO, MANUAL] }
+    FinalPlanState: { type: string, enum: [DRAFT, STALE, COMPLETED] }
+    FinalPlanTargetKind: { type: string, enum: [ESTIMATE, REPAIR] }
+    FinalPlanReconciliationStrategy: { type: string, enum: [CREATE, REPLACE, MERGE] }
+    PrepareFinalPlanRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision, expectedSettingsRevision, movementScheduleMode, repairScheduleMode]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        expectedSettingsRevision: { type: integer, format: int64, minimum: 0 }
+        movementScheduleMode: { $ref: '#/components/schemas/FinalPlanScheduleMode' }
+        repairScheduleMode: { $ref: '#/components/schemas/FinalPlanScheduleMode' }
+    FinalPlanReconciliationDecision:
+      type: object
+      description: >-
+        CREATE is valid only when preflight has no active candidate. A selected existing target
+        must be active; a started active target requires MERGE (which maintenance applies by
+        subtracting the current work/material lines and creating a successor after current work).
+      additionalProperties: false
+      required: [strategy, selectedTargetKind, selectedTargetId]
+      properties:
+        strategy: { $ref: '#/components/schemas/FinalPlanReconciliationStrategy' }
+        selectedTargetKind:
+          oneOf: [{ $ref: '#/components/schemas/FinalPlanTargetKind' }, { type: 'null' }]
+        selectedTargetId: { $ref: '#/components/schemas/NullableUuid' }
+    FinalPlanEntryUpdate:
+      type: object
+      additionalProperties: false
+      required: [findingId, expectedFindingRevision, order, priority, movementToRepair, movementScheduledDate, repairScheduledDate, reconciliationDecision]
+      properties:
+        findingId: { type: string, format: uuid }
+        expectedFindingRevision: { type: integer, format: int64, minimum: 0 }
+        order: { type: integer, minimum: 0 }
+        priority: { oneOf: [{ type: integer, minimum: 1, maximum: 5 }, { type: 'null' }] }
+        movementToRepair: { type: boolean }
+        movementScheduledDate: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
+        repairScheduledDate: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
+        reconciliationDecision:
+          oneOf: [{ $ref: '#/components/schemas/FinalPlanReconciliationDecision' }, { type: 'null' }]
+    FinalPlanUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision, expectedFinalPlanVersion, movementScheduleMode, repairScheduleMode, entries]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        expectedFinalPlanVersion: { type: integer, format: int64, minimum: 1 }
+        movementScheduleMode: { $ref: '#/components/schemas/FinalPlanScheduleMode' }
+        repairScheduleMode: { $ref: '#/components/schemas/FinalPlanScheduleMode' }
+        entries:
+          type: array
+          maxItems: 10000
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/FinalPlanEntryUpdate' }
+    FinalPlanSummary:
+      type: object
+      additionalProperties: false
+      required: [workLineCount, materialLineCount, grandTotalMinor]
+      properties:
+        workLineCount: { type: integer, minimum: 0 }
+        materialLineCount: { type: integer, minimum: 0 }
+        grandTotalMinor: { type: integer, format: int64, minimum: 0 }
+    FinalPlanCandidate:
+      type: object
+      additionalProperties: false
+      required: [targetKind, targetId, estimateId, repairId, version, state, started, active, priority, sourceParty, planFingerprintSha256, planSummary]
+      properties:
+        targetKind: { $ref: '#/components/schemas/FinalPlanTargetKind' }
+        targetId: { type: string, format: uuid }
+        estimateId: { $ref: '#/components/schemas/NullableUuid' }
+        repairId: { $ref: '#/components/schemas/NullableUuid' }
+        version: { type: integer, format: int64, minimum: 0 }
+        state: { type: string, minLength: 1, maxLength: 64 }
+        started: { type: boolean }
+        active: { type: boolean }
+        priority: { oneOf: [{ type: integer, minimum: 1, maximum: 5 }, { type: 'null' }] }
+        sourceParty: { type: [string, 'null'], maxLength: 128 }
+        planFingerprintSha256: { oneOf: [{ $ref: '#/components/schemas/Sha256' }, { type: 'null' }] }
+        planSummary: { $ref: '#/components/schemas/FinalPlanSummary' }
+    FinalPlanEntry:
+      type: object
+      additionalProperties: false
+      required: [findingId, findingRevision, planFingerprintSha256, hasWork, targetKind, order, priority, movementToRepair, movementScheduledDate, repairScheduledDate, collisionCandidates, reconciliationDecision]
+      properties:
+        findingId: { type: string, format: uuid }
+        findingRevision: { type: integer, format: int64, minimum: 0 }
+        planFingerprintSha256: { oneOf: [{ $ref: '#/components/schemas/Sha256' }, { type: 'null' }] }
+        hasWork: { type: boolean }
+        targetKind: { oneOf: [{ $ref: '#/components/schemas/FinalPlanTargetKind' }, { type: 'null' }] }
+        order: { type: integer, minimum: 0 }
+        priority: { oneOf: [{ type: integer, minimum: 1, maximum: 5 }, { type: 'null' }] }
+        movementToRepair: { type: boolean }
+        movementScheduledDate: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
+        repairScheduledDate: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
+        collisionCandidates: { type: array, items: { $ref: '#/components/schemas/FinalPlanCandidate' } }
+        reconciliationDecision:
+          oneOf: [{ $ref: '#/components/schemas/FinalPlanReconciliationDecision' }, { type: 'null' }]
+    FinalPlan:
+      type: object
+      additionalProperties: false
+      required: [inventoryId, sessionRevision, finalPlanVersion, finalPlanSha256, planningSettingsRevision, state, movementScheduleMode, repairScheduleMode, entries]
+      properties:
+        inventoryId: { type: string, format: uuid }
+        sessionRevision: { type: integer, format: int64, minimum: 0 }
+        finalPlanVersion: { type: integer, format: int64, minimum: 1 }
+        finalPlanSha256: { $ref: '#/components/schemas/Sha256' }
+        planningSettingsRevision: { type: integer, format: int64, minimum: 0 }
+        state: { $ref: '#/components/schemas/FinalPlanState' }
+        movementScheduleMode: { $ref: '#/components/schemas/FinalPlanScheduleMode' }
+        repairScheduleMode: { $ref: '#/components/schemas/FinalPlanScheduleMode' }
+        entries: { type: array, items: { $ref: '#/components/schemas/FinalPlanEntry' } }
     CompletionPreviewRequest:
       type: object
       additionalProperties: false
-      required: [expectedSessionRevision, findingRevisions]
+      required: [expectedSessionRevision, finalPlanVersion, finalPlanSha256, findingRevisions]
       properties:
         expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        finalPlanVersion: { type: integer, format: int64, minimum: 1 }
+        finalPlanSha256: { $ref: '#/components/schemas/Sha256' }
         findingRevisions: { type: array, uniqueItems: true, items: { $ref: '#/components/schemas/RevisionExpectation' } }
     CompleteSessionRequest:
       type: object
       additionalProperties: false
-      required: [expectedSessionRevision, findingRevisions, acknowledgementSha256, validationSha256]
+      required: [expectedSessionRevision, finalPlanVersion, finalPlanSha256, findingRevisions, acknowledgementSha256, validationSha256]
       properties:
         expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        finalPlanVersion: { type: integer, format: int64, minimum: 1 }
+        finalPlanSha256: { $ref: '#/components/schemas/Sha256' }
         findingRevisions: { type: array, uniqueItems: true, items: { $ref: '#/components/schemas/RevisionExpectation' } }
         acknowledgementSha256: { $ref: '#/components/schemas/Sha256' }
         validationSha256:
@@ -1228,7 +1558,7 @@ components:
     FrozenPlan:
       type: object
       additionalProperties: false
-      required: [mode, catalogVersionId, fingerprintSha256, priority, coverMediaId, movementToRepair, movementToShipment, logisticsPlanningMode, logisticsScheduledDate, lines, stages]
+      required: [mode, catalogVersionId, fingerprintSha256, priority, coverMediaId, movementToRepair, logisticsPlanningMode, logisticsScheduledDate, lines, stages]
       properties:
         mode: { type: string, enum: [AUTO, MANUAL] }
         catalogVersionId: { type: string, format: uuid }
@@ -1239,7 +1569,6 @@ components:
           maximum: 5
         coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
         movementToRepair: { type: boolean }
-        movementToShipment: { type: boolean }
         logisticsPlanningMode:
           oneOf: [{ $ref: '#/components/schemas/LogisticsPlanningMode' }, { type: 'null' }]
         logisticsScheduledDate:
@@ -1352,10 +1681,12 @@ components:
     CompletionPreview:
       type: object
       additionalProperties: false
-      required: [inventoryId, sessionRevision, findingRevisions, validationSha256, validatedAt, acknowledgementSha256, statistics, risks, validatedFindings]
+      required: [inventoryId, sessionRevision, finalPlanVersion, finalPlanSha256, findingRevisions, validationSha256, validatedAt, acknowledgementSha256, statistics, risks, validatedFindings]
       properties:
         inventoryId: { type: string, format: uuid }
         sessionRevision: { type: integer, format: int64, minimum: 0 }
+        finalPlanVersion: { type: integer, format: int64, minimum: 1 }
+        finalPlanSha256: { $ref: '#/components/schemas/Sha256' }
         findingRevisions: { type: array, items: { $ref: '#/components/schemas/RevisionExpectation' } }
         validationSha256:
           allOf: [{ $ref: '#/components/schemas/Sha256' }]
@@ -1375,10 +1706,27 @@ components:
         findingId: { type: string, format: uuid }
         currentSnapshot: { oneOf: [{ $ref: '#/components/schemas/CurrentItemSnapshot' }, { type: 'null' }] }
         conflicts: { type: array, items: { $ref: '#/components/schemas/InventoryConflict' } }
+    RegistryReview:
+      type: object
+      additionalProperties: false
+      required: [inventoryId, sessionRevision, findingRevisions, validatedAt, validatedFindings]
+      properties:
+        inventoryId: { type: string, format: uuid }
+        sessionRevision: { type: integer, format: int64, minimum: 0 }
+        findingRevisions:
+          type: array
+          maxItems: 10000
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/RevisionExpectation' }
+        validatedAt: { type: string, format: date-time }
+        validatedFindings:
+          type: array
+          maxItems: 10000
+          items: { $ref: '#/components/schemas/ValidatedFinding' }
     PublicationIntent:
       type: object
       additionalProperties: false
-      required: [id, inventoryId, findingId, publicationRevision, state, sourceRevision, attemptCount, maintenanceRepairId, failureCode]
+      required: [id, inventoryId, findingId, publicationRevision, state, sourceRevision, attemptCount, finalPlanVersion, targetKind, targetId, maintenanceEstimateId, maintenanceRepairId, maintenanceOutcome, maintenanceResult, failureCode]
       properties:
         id: { type: string, format: uuid }
         inventoryId: { type: string, format: uuid }
@@ -1387,8 +1735,63 @@ components:
         state: { $ref: '#/components/schemas/PublicationState' }
         sourceRevision: { type: integer, format: int64, minimum: 1 }
         attemptCount: { type: integer, minimum: 0 }
+        finalPlanVersion: { oneOf: [{ type: integer, format: int64, minimum: 1 }, { type: 'null' }] }
+        targetKind: { oneOf: [{ $ref: '#/components/schemas/FinalPlanTargetKind' }, { type: 'null' }] }
+        targetId: { $ref: '#/components/schemas/NullableUuid' }
+        maintenanceEstimateId: { $ref: '#/components/schemas/NullableUuid' }
         maintenanceRepairId: { $ref: '#/components/schemas/NullableUuid' }
+        maintenanceOutcome:
+          oneOf: [{ $ref: '#/components/schemas/MaintenancePublicationOutcome' }, { type: 'null' }]
+        maintenanceResult:
+          description: >-
+            Immutable raw result returned by maintenance for a final-plan reconciliation,
+            including its source, outcome, delta and successor facts. Null for legacy repair
+            publications and before reconciliation succeeds.
+          oneOf: [{ type: object, additionalProperties: true }, { type: 'null' }]
         failureCode: { oneOf: [{ type: string, minLength: 1, maxLength: 64 }, { type: 'null' }] }
+      allOf:
+        - if:
+            properties:
+              maintenanceOutcome: { type: 'null' }
+          then:
+            properties:
+              maintenanceResult: { type: 'null' }
+          else:
+            properties:
+              maintenanceResult: { type: object, additionalProperties: true }
+        - if:
+            properties:
+              maintenanceOutcome: { const: MATCHED }
+          then:
+            properties:
+              targetKind: { type: 'null' }
+              targetId: { type: 'null' }
+              maintenanceEstimateId: { type: 'null' }
+              maintenanceRepairId: { type: 'null' }
+        - if:
+            properties:
+              maintenanceOutcome: { const: SUCCESSOR }
+          then:
+            properties:
+              targetKind: { const: REPAIR }
+              targetId: { type: string, format: uuid }
+              maintenanceEstimateId: { type: 'null' }
+              maintenanceRepairId: { type: string, format: uuid }
+        - if:
+            properties:
+              maintenanceOutcome: { const: CREATED }
+          then:
+            oneOf:
+              - properties:
+                  targetKind: { const: ESTIMATE }
+                  targetId: { type: string, format: uuid }
+                  maintenanceEstimateId: { type: string, format: uuid }
+                  maintenanceRepairId: { type: 'null' }
+              - properties:
+                  targetKind: { const: REPAIR }
+                  targetId: { type: string, format: uuid }
+                  maintenanceEstimateId: { type: 'null' }
+                  maintenanceRepairId: { type: string, format: uuid }
     PublicationBatch:
       type: object
       additionalProperties: false
@@ -1480,6 +1883,7 @@ components:
             - INVENTORY_ACTIVE_SESSION_CONFLICT
             - INVENTORY_NUMBER_CONFLICT
             - INVENTORY_ACKNOWLEDGEMENT_STALE
+            - INVENTORY_FINAL_PLAN_INCOMPLETE
             - INVENTORY_MEDIA_NOT_READY
             - INVENTORY_PUBLICATION_CONFLICT
             - INVENTORY_DEPENDENCY_UNAVAILABLE

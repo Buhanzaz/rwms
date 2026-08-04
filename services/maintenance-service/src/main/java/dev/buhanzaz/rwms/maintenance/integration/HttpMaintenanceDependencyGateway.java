@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.maintenance.integration;
 
 import dev.buhanzaz.rwms.maintenance.domain.RepairStageKind;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceDependencyException;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -41,6 +42,7 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
   private final String taskRegistryBase;
   private final String mediaOwnerProofUrl;
   private final String driverTaskIntakeUrl;
+  private final String propertyEquipmentMovementTaskUrl;
 
   HttpMaintenanceDependencyGateway(
       RestClient client,
@@ -65,6 +67,9 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
     driverTaskIntakeUrl =
         strip(properties.logisticsBaseUrl().toString())
             + "/api/internal/logistics/v1/maintenance/driver-tasks";
+    propertyEquipmentMovementTaskUrl =
+        strip(properties.logisticsBaseUrl().toString())
+            + "/api/internal/logistics/v1/maintenance/equipment-movement-tasks";
   }
 
   @Override
@@ -96,6 +101,157 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
   }
 
   @Override
+  public PropertyAssetSnapshot getPropertyAssetSnapshot(
+      PropertyAssetKind assetKind, UUID assetId, UUID warehouseId) {
+    if (assetKind == null || assetId == null || warehouseId == null) {
+      throw new IllegalArgumentException("Property asset snapshot identity is required");
+    }
+    try {
+      PropertyAssetSnapshotResponse response = client.get()
+          .uri(
+              assetBase
+                  + "/property-assets/"
+                  + assetKind.name()
+                  + "/"
+                  + assetId
+                  + "/snapshot?warehouseId="
+                  + warehouseId)
+          .header(HttpHeaders.AUTHORIZATION, bearer(ASSET_CLIENT, ASSET_SCOPE))
+          .retrieve()
+          .body(PropertyAssetSnapshotResponse.class);
+      return propertyAssetSnapshot(response, assetKind, assetId, warehouseId);
+    } catch (RuntimeException exception) {
+      throw dependencyFailure(exception);
+    }
+  }
+
+  @Override
+  public PropertyDispositionFence preparePropertyDisposition(
+      UUID key, UUID decisionId, PropertyDispositionPreparation request) {
+    if (key == null || decisionId == null || request == null) {
+      throw new IllegalArgumentException("Property disposition preparation identity is required");
+    }
+    PropertyDispositionFenceResponse response = post(
+        assetBase + "/property-dispositions/" + decisionId + "/prepare",
+        key,
+        new PreparePropertyDispositionRequest(
+            request.warehouseId(),
+            request.assetKind().name(),
+            request.assetId(),
+            request.disposition().name(),
+            request.expectedAssetVersion(),
+            request.expectedSourceBalanceVersion(),
+            request.quantity(),
+            request.contentsMode() == null ? null : request.contentsMode().name(),
+            request.contents().stream()
+                .map(
+                    line ->
+                        new PreparePropertyContentRequest(
+                            line.equipmentId(),
+                            line.expectedBalanceVersion(),
+                            line.currentQuantity(),
+                            line.moveQuantity()))
+                .toList(),
+            request.authorizedMaintenanceLease() == null
+                ? null
+                : new PropertyDispositionLeaseProofRequest(
+                    request.authorizedMaintenanceLease().leaseId(),
+                    request.authorizedMaintenanceLease().fencingToken(),
+                    request.authorizedMaintenanceLease().ownerType(),
+                    request.authorizedMaintenanceLease().ownerId())),
+        PropertyDispositionFenceResponse.class,
+        ASSET_CLIENT,
+        ASSET_SCOPE);
+    return propertyFence(response, decisionId, request);
+  }
+
+  @Override
+  public PropertyDispositionEffect applyPropertyDisposition(
+      UUID key, UUID decisionId, UUID completedMovementTaskId) {
+    if (key == null || decisionId == null) {
+      throw new IllegalArgumentException("Property disposition effect identity is required");
+    }
+    PropertyDispositionEffectResponse response = post(
+        assetBase + "/property-dispositions/" + decisionId + "/apply",
+        key,
+        new ApplyPropertyDispositionRequest(completedMovementTaskId),
+        PropertyDispositionEffectResponse.class,
+        ASSET_CLIENT,
+        ASSET_SCOPE);
+    if (response == null
+        || response.effectId() == null
+        || !decisionId.equals(response.decisionId())
+        || response.assetKind() == null
+        || response.assetId() == null
+        || response.disposition() == null
+        || response.appliedAt() == null) {
+      throw malformed("Asset-service returned malformed property disposition effect");
+    }
+    try {
+      return new PropertyDispositionEffect(
+          response.effectId(),
+          response.decisionId(),
+          PropertyAssetKind.valueOf(response.assetKind()),
+          response.assetId(),
+          PropertyDispositionKind.valueOf(response.disposition()),
+          response.assetVersion(),
+          response.appliedAt());
+    } catch (IllegalArgumentException exception) {
+      throw malformed("Asset-service returned unknown property disposition effect truth");
+    }
+  }
+
+  @Override
+  public PropertyEquipmentMovementTask createPropertyEquipmentMovementTask(
+      UUID key, PropertyEquipmentMovementCommand command) {
+    if (key == null || command == null) {
+      throw new IllegalArgumentException("Property equipment movement identity is required");
+    }
+    PropertyEquipmentMovementTaskResponse response = post(
+        propertyEquipmentMovementTaskUrl,
+        key,
+        new CreatePropertyEquipmentMovementTaskRequest(
+            command.decisionId(),
+            command.warehouseId(),
+            command.unitNumber(),
+            command.plannedDurationMinutes(),
+            command.deadlineAt(),
+            command.lines().stream()
+                .map(
+                    line ->
+                        new PropertyEquipmentMovementLineRequest(
+                            line.equipmentId(),
+                            line.sourceRentalItemId(),
+                            line.expectedSourceBalanceVersion(),
+                            line.quantity()))
+                .toList()),
+        PropertyEquipmentMovementTaskResponse.class,
+        LOGISTICS_CLIENT,
+        LOGISTICS_SCOPE);
+    return propertyEquipmentMovementTask(response, command.warehouseId());
+  }
+
+  @Override
+  public PropertyEquipmentMovementTask getPropertyEquipmentMovementTask(UUID taskId) {
+    if (taskId == null) {
+      throw new IllegalArgumentException("Property equipment movement task ID is required");
+    }
+    try {
+      PropertyEquipmentMovementTaskResponse response = client.get()
+          .uri(propertyEquipmentMovementTaskUrl + "/" + taskId)
+          .header(HttpHeaders.AUTHORIZATION, bearer(LOGISTICS_CLIENT, LOGISTICS_SCOPE))
+          .retrieve()
+          .body(PropertyEquipmentMovementTaskResponse.class);
+      if (response == null || !taskId.equals(response.id())) {
+        throw malformed("Logistics-service returned another property equipment movement task");
+      }
+      return propertyEquipmentMovementTask(response, response.warehouseId());
+    } catch (RuntimeException exception) {
+      throw dependencyFailure(exception);
+    }
+  }
+
+  @Override
   public FurnitureEquipmentSnapshot ensureFurnitureEquipment(
       UUID catalogNodeId, String equipmentName) {
     if (catalogNodeId == null) {
@@ -107,15 +263,16 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
           .uri(assetBase + "/equipment-catalog")
           .header("Idempotency-Key", catalogNodeId.toString())
           .header(HttpHeaders.AUTHORIZATION, bearer(ASSET_CLIENT, ASSET_SCOPE))
-          .body(new EnsureFurnitureEquipmentRequest(canonicalName))
+          .body(new EnsureFurnitureEquipmentRequest(catalogNodeId, canonicalName))
           .retrieve()
-          .body(FurnitureEquipmentSnapshot.class);
+          .body(MaintenanceFurnitureEquipmentResponse.class);
       if (response == null
+          || !catalogNodeId.equals(response.externalReferenceId())
           || response.equipmentId() == null
           || !canonicalName.equals(response.equipmentName())) {
         throw malformed("Asset-service returned mismatched furniture equipment truth");
       }
-      return response;
+      return new FurnitureEquipmentSnapshot(response.equipmentId(), response.equipmentName());
     } catch (RuntimeException exception) {
       throw furnitureDependencyFailure(exception);
     }
@@ -357,6 +514,38 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
   }
 
   @Override
+  public PreStartTaskCancellation cancelTaskIfPreStart(
+      UUID key, UUID externalTaskId, long expectedVersion) {
+    PreStartCancellationResponse response = post(
+        taskBase + "/" + externalTaskId + "/cancel-if-pre-start",
+        key,
+        new CancelTaskRequest(expectedVersion, "inventory-publication-replacement"),
+        PreStartCancellationResponse.class,
+        TASK_CLIENT,
+        TASK_SCOPE);
+    if (response == null
+        || response.outcome() == null
+        || response.taskId() == null
+        || !externalTaskId.equals(response.externalTaskId())
+        || response.taskVersion() < 0
+        || response.status() == null
+        || response.status().isBlank()) {
+      throw malformed("Task-board returned malformed pre-start cancellation truth");
+    }
+    try {
+      return new PreStartTaskCancellation(
+          PreStartTaskCancellationOutcome.valueOf(response.outcome()),
+          response.taskId(),
+          response.externalTaskId(),
+          response.taskVersion(),
+          response.status(),
+          response.cancelledAt());
+    } catch (IllegalArgumentException exception) {
+      throw malformed("Task-board returned unknown pre-start cancellation outcome");
+    }
+  }
+
+  @Override
   public TaskSnapshot relocateTask(
       UUID key, UUID externalTaskId, long expectedVersion, UUID targetWarehouseId) {
     TaskResponse response =
@@ -419,6 +608,43 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
         response.scheduledDate(),
         response.priority(),
         response.state());
+  }
+
+  @Override
+  public MaintenanceDriverTaskCompensation maintenanceDriverTaskCompensation(
+      UUID repairId, MaintenanceDriverTaskKind kind) {
+    try {
+      MaintenanceDriverTaskCompensationResponse response = client.get()
+          .uri(
+              driverTaskIntakeUrl + "/repairs/{repairId}?kind={kind}",
+              repairId,
+              kind.name())
+          .header(HttpHeaders.AUTHORIZATION, bearer(LOGISTICS_CLIENT, LOGISTICS_SCOPE))
+          .retrieve()
+          .body(MaintenanceDriverTaskCompensationResponse.class);
+      return compensation(response, repairId, kind);
+    } catch (RuntimeException exception) {
+      throw dependencyFailure(exception);
+    }
+  }
+
+  @Override
+  public MaintenanceDriverTaskCompensation cancelMaintenanceDriverTaskCompensation(
+      UUID key, UUID repairId, MaintenanceDriverTaskKind kind) {
+    try {
+      MaintenanceDriverTaskCompensationResponse response = client.post()
+          .uri(
+              driverTaskIntakeUrl + "/repairs/{repairId}/cancel?kind={kind}",
+              repairId,
+              kind.name())
+          .header("Idempotency-Key", key.toString())
+          .header(HttpHeaders.AUTHORIZATION, bearer(LOGISTICS_CLIENT, LOGISTICS_SCOPE))
+          .retrieve()
+          .body(MaintenanceDriverTaskCompensationResponse.class);
+      return compensation(response, repairId, kind);
+    } catch (RuntimeException exception) {
+      throw dependencyFailure(exception);
+    }
   }
 
   @Override
@@ -608,6 +834,37 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
     return snapshot(response);
   }
 
+  private static MaintenanceDriverTaskCompensation compensation(
+      MaintenanceDriverTaskCompensationResponse response,
+      UUID repairId,
+      MaintenanceDriverTaskKind kind) {
+    if (response == null
+        || !repairId.equals(response.repairId())
+        || response.kind() == null
+        || response.outcome() == null) {
+      throw malformed("Logistics-service returned malformed driver-task compensation truth");
+    }
+    try {
+      if (kind != MaintenanceDriverTaskKind.valueOf(response.kind())) {
+        throw malformed("Logistics-service returned another driver-task compensation kind");
+      }
+      return new MaintenanceDriverTaskCompensation(
+          response.repairId(),
+          kind,
+          MaintenanceDriverTaskCompensationOutcome.valueOf(response.outcome()),
+          response.taskId(),
+          response.taskVersion(),
+          response.state(),
+          response.externalTaskId(),
+          response.taskBoardTaskId(),
+          response.taskBoardTaskVersion(),
+          response.repairPlaceAllocationId(),
+          response.repairPlaceAllocationVersion());
+    } catch (IllegalArgumentException exception) {
+      throw malformed("Logistics-service returned unknown driver-task compensation truth");
+    }
+  }
+
   private static void validateLease(
       LeaseResponse response,
       UUID rentalItemId,
@@ -630,6 +887,139 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
     return new LeaseSnapshot(
         response.id(), response.version(), response.rentalItemId(), response.ownerType(),
         UUID.fromString(response.ownerId()), response.fencingToken(), response.expiresAt());
+  }
+
+  private static PropertyAssetSnapshot propertyAssetSnapshot(
+      PropertyAssetSnapshotResponse response,
+      PropertyAssetKind expectedKind,
+      UUID expectedAssetId,
+      UUID expectedWarehouseId) {
+    if (response == null
+        || response.assetKind() == null
+        || response.assetId() == null
+        || response.assetDisplayName() == null
+        || response.warehouseId() == null
+        || response.version() == null
+        || response.contents() == null
+        || !expectedAssetId.equals(response.assetId())
+        || !expectedWarehouseId.equals(response.warehouseId())) {
+      throw malformed("Asset-service returned malformed property asset snapshot");
+    }
+    try {
+      PropertyAssetKind actualKind = PropertyAssetKind.valueOf(response.assetKind());
+      if (actualKind != expectedKind) {
+        throw malformed("Asset-service returned another property asset kind");
+      }
+      List<PropertyAssetContentSnapshot> contents = response.contents().stream()
+          .map(
+              line ->
+                  new PropertyAssetContentSnapshot(
+                      line.equipmentId(),
+                      line.equipmentName(),
+                      line.equipmentFormat(),
+                      requiredNonNegative(line.balanceVersion(), "Property content balance version"),
+                      requiredPositive(line.quantity(), "Property content quantity")))
+          .toList();
+      return new PropertyAssetSnapshot(
+          actualKind,
+          response.assetId(),
+          response.assetDisplayName(),
+          response.warehouseId(),
+          requiredNonNegative(response.version(), "Property asset version"),
+          response.status(),
+          response.quantity(),
+          response.sourceBalanceVersion(),
+          contents,
+          response.activeReservation(),
+          response.activeHold(),
+          response.activeLease(),
+          response.dispositionAllowed());
+    } catch (IllegalArgumentException exception) {
+      if (exception instanceof MaintenanceDependencyException dependency) {
+        throw dependency;
+      }
+      throw malformed("Asset-service returned invalid property asset snapshot truth");
+    }
+  }
+
+  private static PropertyDispositionFence propertyFence(
+      PropertyDispositionFenceResponse response,
+      UUID expectedDecisionId,
+      PropertyDispositionPreparation request) {
+    if (response == null
+        || !expectedDecisionId.equals(response.decisionId())
+        || !request.warehouseId().equals(response.warehouseId())
+        || !request.assetId().equals(response.assetId())
+        || response.assetKind() == null
+        || response.disposition() == null
+        || response.contents() == null
+        || response.preparedAt() == null) {
+      throw malformed("Asset-service returned malformed property disposition fence");
+    }
+    try {
+      PropertyAssetKind assetKind = PropertyAssetKind.valueOf(response.assetKind());
+      PropertyDispositionKind disposition = PropertyDispositionKind.valueOf(response.disposition());
+      if (assetKind != request.assetKind() || disposition != request.disposition()) {
+        throw malformed("Asset-service returned another property disposition fence");
+      }
+      List<PropertyDispositionContent> contents = response.contents().stream()
+          .map(
+              line ->
+                  new PropertyDispositionContent(
+                      line.equipmentId(),
+                      requiredNonNegative(line.expectedBalanceVersion(), "Prepared content balance version"),
+                      requiredPositive(line.currentQuantity(), "Prepared content quantity"),
+                      requiredNonNegative(line.moveQuantity(), "Prepared content movement quantity")))
+          .toList();
+      return new PropertyDispositionFence(
+          response.decisionId(),
+          response.state(),
+          response.requestSha256(),
+          response.warehouseId(),
+          assetKind,
+          response.assetId(),
+          disposition,
+          contents,
+          response.preparedAt(),
+          response.appliedAt());
+    } catch (IllegalArgumentException exception) {
+      if (exception instanceof MaintenanceDependencyException dependency) {
+        throw dependency;
+      }
+      throw malformed("Asset-service returned invalid property disposition fence truth");
+    }
+  }
+
+  private static PropertyEquipmentMovementTask propertyEquipmentMovementTask(
+      PropertyEquipmentMovementTaskResponse response, UUID expectedWarehouseId) {
+    if (response == null
+        || response.id() == null
+        || response.warehouseId() == null
+        || !expectedWarehouseId.equals(response.warehouseId())
+        || response.state() == null
+        || response.state().isBlank()) {
+      throw malformed("Logistics-service returned malformed equipment movement task truth");
+    }
+    return new PropertyEquipmentMovementTask(
+        response.id(),
+        response.warehouseId(),
+        response.state(),
+        response.terminalState(),
+        response.taskBoardDoneAt());
+  }
+
+  private static long requiredNonNegative(Long value, String field) {
+    if (value == null || value < 0) {
+      throw malformed(field + " is invalid");
+    }
+    return value;
+  }
+
+  private static long requiredPositive(Long value, String field) {
+    if (value == null || value < 1) {
+      throw malformed(field + " is invalid");
+    }
+    return value;
   }
 
   private static TaskSnapshot task(
@@ -848,7 +1238,9 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
 
   private record AcquireLeaseRequest(
       UUID rentalItemId, String ownerType, UUID ownerId, long expectedRentalItemVersion) {}
-  private record EnsureFurnitureEquipmentRequest(String equipmentName) {}
+  private record EnsureFurnitureEquipmentRequest(UUID externalReferenceId, String equipmentName) {}
+  private record MaintenanceFurnitureEquipmentResponse(
+      UUID externalReferenceId, UUID equipmentId, String equipmentName) {}
   private record LeaseCommand(
       long expectedVersion, long fencingToken, String ownerType, UUID ownerId) {}
   private record FencedStatusRequest(
@@ -862,6 +1254,100 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
   private record RentalItemSnapshotResponse(
       UUID id, Long version, UUID warehouseId, String number, String status) {}
   private record RentalItemResponse(UUID id, long version, UUID warehouseId, String number, String status) {}
+  private record PropertyAssetContentSnapshotResponse(
+      UUID equipmentId,
+      String equipmentName,
+      String equipmentFormat,
+      Long balanceVersion,
+      Long quantity) {}
+  private record PropertyAssetSnapshotResponse(
+      String assetKind,
+      UUID assetId,
+      String assetDisplayName,
+      UUID warehouseId,
+      Long version,
+      String status,
+      Long quantity,
+      Long sourceBalanceVersion,
+      List<PropertyAssetContentSnapshotResponse> contents,
+      boolean activeReservation,
+      boolean activeHold,
+      boolean activeLease,
+      boolean dispositionAllowed) {}
+  private record PreparePropertyContentRequest(
+      UUID equipmentId,
+      long expectedBalanceVersion,
+      long currentQuantity,
+      long moveQuantity) {}
+  private record PropertyDispositionLeaseProofRequest(
+      UUID leaseId, long fencingToken, String ownerType, UUID ownerId) {}
+  private record PreparePropertyDispositionRequest(
+      UUID warehouseId,
+      String assetKind,
+      UUID assetId,
+      String disposition,
+      Long expectedAssetVersion,
+      Long expectedSourceBalanceVersion,
+      Long quantity,
+      String contentsMode,
+      List<PreparePropertyContentRequest> contents,
+      PropertyDispositionLeaseProofRequest authorizedMaintenanceLease) {}
+  private record PropertyDispositionPreparedContentResponse(
+      UUID equipmentId,
+      UUID sourceBalanceId,
+      Long expectedBalanceVersion,
+      Long currentQuantity,
+      Long moveQuantity,
+      Long dispositionQuantity) {}
+  private record PropertyDispositionFenceResponse(
+      UUID decisionId,
+      String state,
+      String requestSha256,
+      UUID warehouseId,
+      String assetKind,
+      UUID assetId,
+      String disposition,
+      List<PropertyDispositionPreparedContentResponse> contents,
+      Instant preparedAt,
+      Instant appliedAt) {}
+  private record ApplyPropertyDispositionRequest(UUID completedMovementTaskId) {}
+  private record PropertyDispositionEffectResponse(
+      UUID effectId,
+      UUID decisionId,
+      String assetKind,
+      UUID assetId,
+      String disposition,
+      Long assetVersion,
+      Instant appliedAt) {}
+  private record PropertyEquipmentMovementLineRequest(
+      UUID equipmentId,
+      UUID sourceRentalItemId,
+      long expectedSourceBalanceVersion,
+      long quantity) {}
+  private record CreatePropertyEquipmentMovementTaskRequest(
+      UUID decisionId,
+      UUID warehouseId,
+      String unitNumber,
+      int plannedDurationMinutes,
+      OffsetDateTime deadlineAt,
+      List<PropertyEquipmentMovementLineRequest> lines) {}
+  private record PropertyEquipmentMovementTaskResponse(
+      UUID id,
+      Long version,
+      UUID warehouseId,
+      UUID externalTaskId,
+      UUID taskBoardTaskId,
+      Long taskBoardTaskVersion,
+      OffsetDateTime taskBoardDoneAt,
+      String unitNumber,
+      Integer plannedDurationMinutes,
+      OffsetDateTime deadlineAt,
+      String state,
+      String terminalState,
+      String failureCode,
+      List<Object> lines,
+      OffsetDateTime createdAt,
+      OffsetDateTime updatedAt) {}
   private record CabinCharacteristicResponse(UUID id, String name) {}
   private record RouteStep(
       UUID queueDefinitionId,
@@ -897,6 +1383,13 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
       OffsetDateTime deadlineAt, LocalDate scheduledDate, int priority, boolean pinned,
       OffsetDateTime doneAt, List<RouteResponse> route) {}
   private record CancelTaskRequest(long expectedTaskVersion, String reason) {}
+  private record PreStartCancellationResponse(
+      String outcome,
+      UUID taskId,
+      UUID externalTaskId,
+      long taskVersion,
+      String status,
+      OffsetDateTime cancelledAt) {}
   private record RelocateTaskRequest(long expectedTaskVersion, UUID targetWarehouseId) {}
   private record DriverTaskResponse(
       UUID id,
@@ -912,6 +1405,24 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
       LocalDate scheduledDate,
       int priority,
       String state) {}
+  private record MaintenanceDriverTaskCompensationResponse(
+      UUID repairId,
+      String kind,
+      String outcome,
+      UUID taskId,
+      Long taskVersion,
+      String state,
+      UUID externalTaskId,
+      UUID taskBoardTaskId,
+      Long taskBoardTaskVersion,
+      UUID taskBoardEntryId,
+      Long taskBoardEntryVersion,
+      String taskBoardEntryStatus,
+      String taskBoardStatus,
+      String taskBoardLane,
+      OffsetDateTime taskBoardDoneAt,
+      UUID repairPlaceAllocationId,
+      Long repairPlaceAllocationVersion) {}
   private record CancelTaskResponse(
       UUID taskId, UUID externalTaskId, long taskVersion, String status,
       OffsetDateTime cancelledAt) {}

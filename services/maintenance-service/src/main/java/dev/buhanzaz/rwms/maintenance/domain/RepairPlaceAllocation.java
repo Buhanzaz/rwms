@@ -74,6 +74,22 @@ public class RepairPlaceAllocation {
     state = RepairPlaceAllocationState.RELEASED;
   }
 
+  /**
+   * Keeps a cabin physically in its occupied repair place while a proved pre-start replacement
+   * moves the maintenance lifecycle to a new repair aggregate.
+   */
+  public void reassignForInventoryReplacement(UUID successorRepairId) {
+    if (successorRepairId == null) {
+      throw new IllegalArgumentException("Inventory replacement successor is required");
+    }
+    if (state != RepairPlaceAllocationState.OCCUPIED) {
+      throw new IllegalStateException(
+          "Only an occupied repair place can move to an inventory replacement");
+    }
+    if (successorRepairId.equals(repairId)) return;
+    repairId = successorRepairId;
+  }
+
   private void transition(
       RepairPlaceAllocationState expected, RepairPlaceAllocationState target) {
     if (state != expected) {

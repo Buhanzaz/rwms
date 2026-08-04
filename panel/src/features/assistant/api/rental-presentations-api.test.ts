@@ -19,12 +19,13 @@ afterEach(() => {
 })
 
 describe("rental presentation API", () => {
-  it("sends both rental holds in the exact settings PUT payload", async () => {
+  it("sends all rental hold settings in the exact PUT payload", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
           version: 7,
           chatSelectionHoldMinutes: 10,
+          manualBookingHoldMinutes: 60,
           presentationHoldMinutes: 60,
           draftReservationHoldMinutes: 1440,
           updatedBy: "admin",
@@ -39,6 +40,7 @@ describe("rental presentation API", () => {
       accessToken: "access-token",
       expectedVersion: 6,
       chatSelectionHoldMinutes: 10,
+      manualBookingHoldMinutes: 60,
       presentationHoldMinutes: 60,
       draftReservationHoldMinutes: 1440,
     })
@@ -52,6 +54,7 @@ describe("rental presentation API", () => {
     expect(JSON.parse(String(init.body))).toEqual({
       expectedVersion: 6,
       chatSelectionHoldMinutes: 10,
+      manualBookingHoldMinutes: 60,
       presentationHoldMinutes: 60,
       draftReservationHoldMinutes: 1440,
     })

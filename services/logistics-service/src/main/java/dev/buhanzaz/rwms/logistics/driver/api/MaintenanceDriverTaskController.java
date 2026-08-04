@@ -1,10 +1,13 @@
 package dev.buhanzaz.rwms.logistics.driver.api;
 
 import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.CreateDriverTaskRequest;
+import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.MaintenanceDriverTaskCompensationResponse;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.DriverTaskResponse;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverQueueScheduler;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverTaskProcessor;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverTaskService;
+import dev.buhanzaz.rwms.logistics.driver.service.MaintenanceDriverTaskCompensationService;
 import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
 import jakarta.validation.Valid;
 import java.util.UUID;
@@ -15,10 +18,13 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -33,6 +39,7 @@ public class MaintenanceDriverTaskController {
   private final DriverTaskService service;
   private final DriverTaskProcessor processor;
   private final DriverQueueScheduler scheduler;
+  private final MaintenanceDriverTaskCompensationService compensation;
   private final LogisticsAuthorizer access;
 
   @PostMapping
@@ -51,5 +58,24 @@ public class MaintenanceDriverTaskController {
             .header(HttpHeaders.ETAG, '"' + Long.toString(response.version()) + '"');
     if (result.replayed()) builder.header("Idempotency-Replayed", "true");
     return builder.body(response);
+  }
+
+  @GetMapping("/repairs/{repairId}")
+  public MaintenanceDriverTaskCompensationResponse lookupByRepair(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID repairId,
+      @RequestParam DriverTaskKind kind) {
+    access.requireMaintenanceDriverTaskIntake(jwt);
+    return compensation.lookup(repairId, kind);
+  }
+
+  @PostMapping("/repairs/{repairId}/cancel")
+  public ResponseEntity<MaintenanceDriverTaskCompensationResponse> cancelByRepair(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID repairId,
+      @RequestParam DriverTaskKind kind,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey) {
+    access.requireMaintenanceDriverTaskIntake(jwt);
+    return ResponseEntity.ok(compensation.cancel(repairId, kind, idempotencyKey));
   }
 }

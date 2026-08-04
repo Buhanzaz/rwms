@@ -30,7 +30,27 @@ public final class WorkerApiModels {
       String queuePurpose,
       int sortOrder,
       List<String> audienceModes,
+      List<UUID> groupIds,
       int resultPhotoMinCount) {
+    public WorkerCategory(
+        UUID queueId,
+        String name,
+        String type,
+        String queuePurpose,
+        int sortOrder,
+        List<String> audienceModes,
+        int resultPhotoMinCount) {
+      this(
+          queueId,
+          name,
+          type,
+          queuePurpose,
+          sortOrder,
+          audienceModes,
+          List.of(),
+          resultPhotoMinCount);
+    }
+
     public WorkerCategory(
         UUID queueId,
         String name,
@@ -38,9 +58,22 @@ public final class WorkerApiModels {
         int sortOrder,
         List<String> audienceModes,
         int resultPhotoMinCount) {
-      this(queueId, name, type, "GENERAL", sortOrder, audienceModes, resultPhotoMinCount);
+      this(
+          queueId,
+          name,
+          type,
+          "GENERAL",
+          sortOrder,
+          audienceModes,
+          List.of(),
+          resultPhotoMinCount);
     }
   }
+
+  public record WorkerKpiPaletteRange(int fromPercent, int toPercent, String color) {}
+
+  public record WorkerKpiPalette(
+      List<WorkerKpiPaletteRange> ranges, String overdueColor) {}
 
   public record WorkerOfflineLease(
       UUID id, OffsetDateTime issuedAt, OffsetDateTime expiresAt, long syncRevision) {}
@@ -52,6 +85,7 @@ public final class WorkerApiModels {
       List<WorkerGroupSummary> groups,
       List<WorkerQualificationSummary> qualifications,
       List<WorkerCategory> categories,
+      WorkerKpiPalette kpiPalette,
       OffsetDateTime serverTime,
       long revision,
       WorkerOfflineLease offlineLease) {}

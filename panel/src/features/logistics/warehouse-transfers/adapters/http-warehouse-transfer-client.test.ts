@@ -230,7 +230,6 @@ describe("HttpWarehouseTransferClient", () => {
       idempotencyKey: IDEMPOTENCY_KEY,
       references: [{ mediaId: MEDIA_ID, generation: 3 }],
       priority: 2,
-      movementToShipment: true,
     })
 
     const [rawUrl] = fetchMock.mock.calls[0]
@@ -248,7 +247,6 @@ describe("HttpWarehouseTransferClient", () => {
     expect(JSON.parse(init.body as string)).toEqual({
       references: [{ mediaId: MEDIA_ID, generation: 3 }],
       priority: 2,
-      movementToShipment: true,
     })
   })
 
@@ -259,7 +257,6 @@ describe("HttpWarehouseTransferClient", () => {
       lineId: LINE_ID,
       activeRepairId,
       priorityRequired: true,
-      movementToShipmentAvailable: false,
       missingQueueDefinitionIds: [],
     }
     const fetchMock = vi.fn().mockResolvedValue(json(response))
@@ -307,7 +304,6 @@ describe("HttpWarehouseTransferClient", () => {
         idempotencyKey: IDEMPOTENCY_KEY,
         references: [{ mediaId: MEDIA_ID, generation: 3 }],
         priority: null,
-        movementToShipment: false,
       })
     ).rejects.toMatchObject({
       status: 409,

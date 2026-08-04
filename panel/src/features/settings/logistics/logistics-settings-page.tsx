@@ -30,6 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { DriverEditorDialog } from "@/features/settings/logistics/driver-editor-dialog"
+import { InventoryPlanningSettingsCard } from "@/features/settings/logistics/inventory-planning-settings-card"
 import { RepairCapacitySettingsCard } from "@/features/settings/logistics/repair-capacity-settings-card"
 import {
   taskBoardSettingsClient,
@@ -694,6 +695,11 @@ export function LogisticsSettingsPage() {
           warehouseId={warehouseId}
           warehouseName={selectedWarehouse.name}
         />
+        <InventoryPlanningSettingsCard
+          accessToken={accessToken!}
+          warehouseId={warehouseId}
+          warehouseName={selectedWarehouse.name}
+        />
       </div>
     )
   }
@@ -777,6 +783,11 @@ export function LogisticsSettingsPage() {
         />
       ) : null}
       <RepairCapacitySettingsCard
+        accessToken={accessToken!}
+        warehouseId={warehouseId}
+        warehouseName={selectedWarehouse.name}
+      />
+      <InventoryPlanningSettingsCard
         accessToken={accessToken!}
         warehouseId={warehouseId}
         warehouseName={selectedWarehouse.name}

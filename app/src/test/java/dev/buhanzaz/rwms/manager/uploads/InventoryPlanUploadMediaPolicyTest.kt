@@ -11,9 +11,10 @@ class InventoryPlanUploadMediaPolicyTest {
     fun `uploaded media is added only to work lines and stale material media is removed`() {
         val plan = InventoryPlanSelectionDto(
             mode = "MANUAL",
-            movementToRepair = false,
-            movementToShipment = false,
-            logisticsPlanningMode = null,
+            priority = 5,
+            movementToRepair = true,
+            logisticsPlanningMode = "FIXED_DATE",
+            logisticsScheduledDate = "2026-08-05",
             lines = listOf(
                 line(media = listOf(MediaReferenceDto("old-work", 1))),
                 line(media = listOf(MediaReferenceDto("stale-material", 1))),
@@ -35,6 +36,10 @@ class InventoryPlanUploadMediaPolicyTest {
             .containsExactly(MediaReferenceDto("old-work", 1), MediaReferenceDto("new-work", 2))
             .inOrder()
         assertThat(result.lines[1].mediaReferences).isEmpty()
+        assertThat(result.priority).isEqualTo(5)
+        assertThat(result.movementToRepair).isTrue()
+        assertThat(result.logisticsPlanningMode).isEqualTo("FIXED_DATE")
+        assertThat(result.logisticsScheduledDate).isEqualTo("2026-08-05")
     }
 
     private fun line(
@@ -42,6 +47,7 @@ class InventoryPlanUploadMediaPolicyTest {
     ) = InventoryPlanLineInputDto(
         aggregationKind = "MANUAL",
         catalogNodeId = null,
+        routingCatalogNodeId = "routing-node",
         description = "Строка",
         type = "WORK",
         unit = "шт.",

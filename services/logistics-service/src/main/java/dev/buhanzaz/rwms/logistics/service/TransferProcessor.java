@@ -105,8 +105,7 @@ public class TransferProcessor {
                     work.assetId(),
                     work.sourceWarehouseId(),
                     work.warehouseId(),
-                    work.priority(),
-                    work.movementToShipment()));
+                    work.priority()));
       }
     } catch (LogisticsDependencyException exception) {
       store.recordFailure(work.operationId(), exception);

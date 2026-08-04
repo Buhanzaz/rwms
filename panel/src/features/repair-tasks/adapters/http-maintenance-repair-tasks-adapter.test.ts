@@ -147,7 +147,7 @@ function repair(
       plannedMinutes: "30",
       forcedCapital: false,
     },
-    movementToShipment: false,
+    movementToRepair: false,
     logisticsPlanningMode: "AUTO",
     logisticsScheduledDate: null,
     createdAt: "2026-07-18T08:00:00Z",
@@ -386,6 +386,7 @@ const writeCommand: RepairTaskWriteCommand = {
   maintenanceMediaReferences: [],
   coverMediaId: null,
   priority: 2,
+  movementToRepair: false,
   logisticsPlanningMode: "AUTO",
   logisticsScheduledDate: null,
   subtasks: [
@@ -518,34 +519,10 @@ describe("maintenance repair tasks adapter", () => {
     expect(task?.subtasks[0]?.assignments[0]?.worker?.name).toBe("Иван")
   })
 
-  it("keeps logistics stages out of the ordinary repair board projection", async () => {
-    const source = repair()
-    const movementStage = structuredClone(source.plan.stages[0])
-    movementStage.id = "00000000-0000-4000-8000-000000000041"
-    movementStage.kind = "MOVE_TO_REPAIR"
-    movementStage.order = 1
-    movementStage.routing = {
-      queueId: "00000000-0000-4000-8000-000000000042",
-      queueName: "Водители",
-      queueType: "MOVEMENT",
-    }
-    source.plan.stages.push(movementStage)
-    lifecycle.get.mockResolvedValue(source)
-    lifecycle.listAcceptance.mockResolvedValue({ items: [] })
-    const adapter = new HttpMaintenanceRepairTasksAdapter(
-      rentalItemsClient,
-      async () => "token"
-    )
-
-    const task = await adapter.getById(repairId, warehouseId)
-
-    expect(task?.subtasks).toHaveLength(1)
-    expect(task?.subtasks[0]?.kind).toBe("REPAIR_WORK")
-  })
-
   it("marks a queued ordinary repair as awaiting movement until work reaches the board", async () => {
     const source = repair()
     source.executionState = "QUEUED"
+    source.movementToRepair = true
     source.plan.stages[0]!.state = "QUEUED"
     source.plan.stages[0]!.taskSync = {
       ...source.plan.stages[0]!.taskSync,
@@ -557,16 +534,6 @@ describe("maintenance repair tasks adapter", () => {
         updatedAt: "2026-07-18T10:00:00Z",
       },
     }
-    const movementStage = structuredClone(source.plan.stages[0])
-    movementStage.id = "00000000-0000-4000-8000-000000000043"
-    movementStage.kind = "MOVE_TO_REPAIR"
-    movementStage.order = 1
-    movementStage.routing = {
-      queueId: "00000000-0000-4000-8000-000000000044",
-      queueName: "Водители",
-      queueType: "MOVEMENT",
-    }
-    source.plan.stages.push(movementStage)
     lifecycle.get.mockResolvedValue(source)
     lifecycle.listAcceptance.mockResolvedValue({ items: [] })
     const adapter = new HttpMaintenanceRepairTasksAdapter(
@@ -582,16 +549,7 @@ describe("maintenance repair tasks adapter", () => {
   it("does not keep a repair awaiting movement after its work is registered on the board", async () => {
     const source = repair()
     source.executionState = "QUEUED"
-    const movementStage = structuredClone(source.plan.stages[0])
-    movementStage.id = "00000000-0000-4000-8000-000000000043"
-    movementStage.kind = "MOVE_TO_REPAIR"
-    movementStage.order = 1
-    movementStage.routing = {
-      queueId: "00000000-0000-4000-8000-000000000044",
-      queueName: "Водители",
-      queueType: "MOVEMENT",
-    }
-    source.plan.stages.push(movementStage)
+    source.movementToRepair = true
     lifecycle.get.mockResolvedValue(source)
     lifecycle.listAcceptance.mockResolvedValue({ items: [] })
     const adapter = new HttpMaintenanceRepairTasksAdapter(
@@ -1006,6 +964,7 @@ describe("maintenance repair tasks adapter", () => {
       3,
       2,
       expect.any(String),
+      false,
       "AUTO",
       null
     )
@@ -1065,6 +1024,7 @@ describe("maintenance repair tasks adapter", () => {
       5,
       2,
       expect.any(String),
+      false,
       "AUTO",
       null
     )
@@ -1185,6 +1145,7 @@ describe("maintenance repair tasks adapter", () => {
     )
     const fixedDateCommand: RepairTaskWriteCommand = {
       ...structuredClone(writeCommand),
+      movementToRepair: true,
       logisticsPlanningMode: "FIXED_DATE",
       logisticsScheduledDate: "2026-08-12",
     }
@@ -1203,6 +1164,7 @@ describe("maintenance repair tasks adapter", () => {
       3,
       2,
       expect.any(String),
+      true,
       "FIXED_DATE",
       "2026-08-12"
     )
@@ -1337,6 +1299,7 @@ describe("maintenance repair tasks adapter", () => {
       8,
       2,
       expect.any(String),
+      false,
       "AUTO",
       null
     )
@@ -1525,7 +1488,7 @@ describe("maintenance repair tasks adapter", () => {
     )
 
     await expect(adapter.saveDraft(command)).rejects.toThrow(
-      "Очередь «Старая очередь» не подключена к выбранному складу"
+      "Очередь «Старая очередь» не материализована для выбранного склада или отключена. Проверьте «Настройки доски задач → Каталог очередей» и синхронизацию склада."
     )
     expect(lifecycle.createDirect).not.toHaveBeenCalled()
   })
@@ -1588,7 +1551,7 @@ describe("maintenance repair tasks adapter", () => {
     )
 
     await expect(adapter.saveDraft(command)).rejects.toThrow(
-      "Очередь «Ремонт окон» не подключена к выбранному складу"
+      "Очередь «Ремонт окон» не материализована для выбранного склада или отключена. Проверьте «Настройки доски задач → Каталог очередей» и синхронизацию склада."
     )
     expect(lifecycle.createDirect).not.toHaveBeenCalled()
   })

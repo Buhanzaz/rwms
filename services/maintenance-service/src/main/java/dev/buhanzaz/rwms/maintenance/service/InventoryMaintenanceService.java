@@ -254,8 +254,6 @@ public class InventoryMaintenanceService {
         request.warehouseId(), request.rentalItemId(), request.rentalItemVersion(), null,
         RepairOrigin.INVENTORY, request.dispatchDate(), "Инвентаризация", inventoryActorJson());
     draft.selectPriority(request.snapshot().priority());
-    draft.selectMovementToShipment(
-        request.snapshot().movementToShipment());
     draft.selectMovementToRepair(
         request.snapshot().movementToRepair(),
         request.snapshot().logisticsPlanningMode(),
@@ -312,6 +310,7 @@ public class InventoryMaintenanceService {
       String quantity = quantity(input.quantity());
       if (input.aggregationKind() == InventoryPlanLineKind.CATALOG) {
         if (input.catalogNodeId() == null
+            || input.routingCatalogNodeId() != null
             || input.description() != null
             || input.type() != null
             || input.unit() != null
@@ -352,6 +351,7 @@ public class InventoryMaintenanceService {
           throw invalid("MANUAL lines require MANUAL inventory plan mode");
         }
         if (input.catalogNodeId() != null
+            || input.routingCatalogNodeId() == null
             || input.description() == null
             || input.description().isBlank()
             || input.type() == null
@@ -365,10 +365,15 @@ public class InventoryMaintenanceService {
         String unit = normalizedText(input.unit(), 32, "unit");
         String minutes = normativeMinutes(input.normativeMinutes());
         validateMinorProduct(quantity, input.unitPriceMinor());
+        CatalogNode routingNode = activeNode(nodes, input.routingCatalogNodeId());
+        RoutingSnapshot routing = routing(routingNode, nodes, incomingLinks);
+        if (routing == null) {
+          throw invalid("MANUAL line routing catalog node has no routing snapshot");
+        }
         lines.add(new InventoryPlanLineSnapshot(
             InventoryPlanLineKind.MANUAL, null, null, null, input.type(), description,
             description.toLowerCase(Locale.forLanguageTag("ru-RU")), unit, quantity,
-            input.unitPriceMinor(), minutes, null,
+            input.unitPriceMinor(), minutes, routing,
             input.type() == InventoryPlanLineType.WORK ? normalize(input.groupComment()) : null,
             List.copyOf(input.mediaReferences()), false, null));
       }
@@ -381,6 +386,9 @@ public class InventoryMaintenanceService {
     List<InventoryPlanStageSnapshot> stages = request.mode() == InventoryPlanMode.AUTO
         ? autoStages(request, catalog.getId(), nodes, incomingLinks, lines)
         : manualStages(request, catalog.getId(), nodes, incomingLinks);
+    if (request.mode() == InventoryPlanMode.MANUAL) {
+      requireManualLineRoutesMatchSelectedStages(lines, stages);
+    }
     if (!request.isLogisticsPlanningValid()) {
       throw invalid(
           "Inventory logistics planning mode and date are inconsistent");
@@ -388,13 +396,34 @@ public class InventoryMaintenanceService {
     requireWarehouseRoutingReady(request.warehouseId(), stages);
     FrozenInventoryPlanSnapshot snapshot = new FrozenInventoryPlanSnapshot(
         catalog.getId(), request.mode(), List.copyOf(lines), List.copyOf(stages),
-        request.movementToRepair(), request.movementToShipment(),
+        request.movementToRepair(),
         List.copyOf(request.mediaReferences()), request.priority(), request.coverMediaId(),
         request.logisticsPlanningMode(), request.logisticsScheduledDate());
     if (sourceMedia(snapshot).size() > 100) {
       throw invalid("Inventory plan cannot reference more than 100 media objects");
     }
     return snapshot;
+  }
+
+  private static void requireManualLineRoutesMatchSelectedStages(
+      List<InventoryPlanLineSnapshot> lines,
+      List<InventoryPlanStageSnapshot> stages) {
+    for (InventoryPlanLineSnapshot line : lines) {
+      if (line.routing() == null) {
+        throw invalid("Every manual inventory line requires a frozen routing snapshot");
+      }
+      boolean selected = stages.stream().anyMatch(stage -> sameRoute(line.routing(), stage.routing()));
+      if (!selected) {
+        throw invalid("Every inventory line route must match a selected manual repair-work stage");
+      }
+    }
+  }
+
+  private static boolean sameRoute(RoutingSnapshot first, RoutingSnapshot second) {
+    return first != null
+        && second != null
+        && first.queueId().equals(second.queueId())
+        && first.queueType().equals(second.queueType());
   }
 
   private void requireWarehouseRoutingReady(

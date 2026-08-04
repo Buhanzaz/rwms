@@ -4,6 +4,7 @@ import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
 import static dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.*;
 
 import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
+import dev.buhanzaz.rwms.taskboard.api.KpiSettingsApiModels.KpiPaletteDto;
 import dev.buhanzaz.rwms.taskboard.domain.GroupOperationalStatus;
 import dev.buhanzaz.rwms.taskboard.domain.ParticipationPolicy;
 import dev.buhanzaz.rwms.taskboard.domain.QueuePurpose;
@@ -46,6 +47,7 @@ public class WorkerTaskBoardService {
   private final WorkerOfflineLeaseCodec leases;
   private final WorkerInvalidationHub invalidations;
   private final TaskBoardEntryOwnerProofService ownerProofs;
+  private final KpiSettingsService kpiSettings;
 
   public WorkerTaskBoardService(
       TaskBoardService taskBoard,
@@ -54,7 +56,8 @@ public class WorkerTaskBoardService {
       JdbcTemplate jdbc,
       WorkerOfflineLeaseCodec leases,
       WorkerInvalidationHub invalidations,
-      TaskBoardEntryOwnerProofService ownerProofs) {
+      TaskBoardEntryOwnerProofService ownerProofs,
+      KpiSettingsService kpiSettings) {
     this.taskBoard = taskBoard;
     this.workforce = workforce;
     this.registry = registry;
@@ -62,6 +65,7 @@ public class WorkerTaskBoardService {
     this.leases = leases;
     this.invalidations = invalidations;
     this.ownerProofs = ownerProofs;
+    this.kpiSettings = kpiSettings;
   }
 
   public WorkerContext context(UUID workerId, UUID warehouseId) {
@@ -101,6 +105,7 @@ public class WorkerTaskBoardService {
                         qualification.workerClass().name()))
             .toList(),
         access.categories().stream().map(queue -> category(queue, access)).toList(),
+        workerKpiPalette(warehouseId),
         now,
         revision,
         leases.issue(workerId, warehouseId, revision, now));
@@ -691,6 +696,15 @@ public class WorkerTaskBoardService {
                         : OPTIONAL_JOIN);
               }
             });
+    Set<UUID> boundWorkerClassIds =
+        queue.bindings().stream()
+            .map(binding -> binding.workerClass().id())
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    List<UUID> groupIds =
+        access.groups().stream()
+            .filter(group -> boundWorkerClassIds.contains(group.workerClass().id()))
+            .map(WorkerGroupDto::id)
+            .toList();
     return new WorkerCategory(
         queue.id(),
         queue.name(),
@@ -698,7 +712,21 @@ public class WorkerTaskBoardService {
         queue.purpose().name(),
         queue.sortOrder(),
         List.copyOf(modes),
+        groupIds,
         resultPhotoMinimum(queue));
+  }
+
+  private WorkerKpiPalette workerKpiPalette(UUID warehouseId) {
+    KpiPaletteDto palette = kpiSettings.get(warehouseId).palette();
+    if (palette == null) return null;
+    return new WorkerKpiPalette(
+        palette.ranges().stream()
+            .map(
+                range ->
+                    new WorkerKpiPaletteRange(
+                        range.fromPercent(), range.toPercent(), range.color()))
+            .toList(),
+        palette.overdueColor());
   }
 
   private WorkerFeedEntry feedEntry(BoardEntryDto entry, WorkerCategory category) {
@@ -786,19 +814,34 @@ public class WorkerTaskBoardService {
             .map(AudienceSelector::id)
             .collect(java.util.stream.Collectors.toSet());
     if (notifiedClassIds.isEmpty()) return Set.of();
-    return workforce.listWorkers(warehouseId).stream()
-        .filter(WorkerDto::active)
-        .filter(
-            worker ->
-                worker.qualifications().stream()
-                    .anyMatch(
-                        qualification ->
-                            qualification.active()
-                                && notifiedClassIds.contains(
-                                    qualification.workerClass().id())))
-        .map(WorkerDto::id)
-        .collect(
-            java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    List<WorkerDto> activeWorkers =
+        workforce.listWorkers(warehouseId).stream().filter(WorkerDto::active).toList();
+    Set<UUID> activeWorkerIds =
+        activeWorkers.stream()
+            .map(WorkerDto::id)
+            .collect(java.util.stream.Collectors.toSet());
+    Set<UUID> result =
+        activeWorkers.stream()
+            .filter(
+                worker ->
+                    worker.qualifications().stream()
+                        .anyMatch(
+                            qualification ->
+                                qualification.active()
+                                    && notifiedClassIds.contains(
+                                        qualification.workerClass().id())))
+            .map(WorkerDto::id)
+            .collect(
+                java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    workforce.listGroups(warehouseId).stream()
+        .filter(WorkerGroupDto::active)
+        .filter(group -> notifiedClassIds.contains(group.workerClass().id()))
+        .flatMap(group -> group.members().stream())
+        .filter(GroupMemberDto::active)
+        .map(GroupMemberDto::workerId)
+        .filter(activeWorkerIds::contains)
+        .forEach(result::add);
+    return Set.copyOf(result);
   }
 
   private void selectCompletionEvidence(UUID entryId, UUID evidenceId) {

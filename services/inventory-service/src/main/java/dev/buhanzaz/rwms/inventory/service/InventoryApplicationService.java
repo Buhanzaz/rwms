@@ -3,13 +3,21 @@ package dev.buhanzaz.rwms.inventory.service;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.*;
 
 import dev.buhanzaz.rwms.inventory.domain.FindingOrigin;
+import dev.buhanzaz.rwms.inventory.domain.FinalPlanReconciliationStrategy;
+import dev.buhanzaz.rwms.inventory.domain.FinalPlanScheduleMode;
+import dev.buhanzaz.rwms.inventory.domain.FinalPlanState;
+import dev.buhanzaz.rwms.inventory.domain.FinalPlanTargetKind;
 import dev.buhanzaz.rwms.inventory.domain.ConflictResolutionStrategy;
 import dev.buhanzaz.rwms.inventory.domain.FurnitureReconciliationState;
 import dev.buhanzaz.rwms.inventory.domain.InspectionState;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFurnitureReconciliationIntent;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinding;
 import dev.buhanzaz.rwms.inventory.domain.InventoryExpectedItem;
+import dev.buhanzaz.rwms.inventory.domain.InventoryFinalPlan;
+import dev.buhanzaz.rwms.inventory.domain.InventoryFinalPlanEntry;
 import dev.buhanzaz.rwms.inventory.domain.InventoryMembershipMovement;
+import dev.buhanzaz.rwms.inventory.domain.InventoryPlanningSettings;
+import dev.buhanzaz.rwms.inventory.domain.MaintenancePublicationOutcome;
 import dev.buhanzaz.rwms.inventory.domain.LogisticsPlanningMode;
 import dev.buhanzaz.rwms.inventory.domain.InventorySourceAttachment;
 import dev.buhanzaz.rwms.inventory.domain.InventoryValidationSnapshot;
@@ -34,12 +42,15 @@ import dev.buhanzaz.rwms.inventory.eventing.InventoryEventStore;
 import dev.buhanzaz.rwms.inventory.integration.InventoryDependencyGateway;
 import dev.buhanzaz.rwms.inventory.mapper.InventorySessionMapper;
 import dev.buhanzaz.rwms.inventory.repository.InventoryFindingRepository;
+import dev.buhanzaz.rwms.inventory.repository.InventoryFinalPlanEntryRepository;
+import dev.buhanzaz.rwms.inventory.repository.InventoryFinalPlanRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryFurnitureReconciliationIntentRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryPublicationIntentRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryPublicationAttemptRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryPublicationAttemptResultRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventorySessionRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryExpectedItemRepository;
+import dev.buhanzaz.rwms.inventory.repository.InventoryPlanningSettingsRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventorySourceAttachmentRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryValidationSnapshotRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryValidationItemRepository;
@@ -59,6 +70,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
@@ -66,6 +78,7 @@ import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -109,6 +122,13 @@ public class InventoryApplicationService {
                   "rwms:inventory-service:asset-membership".getBytes(StandardCharsets.UTF_8))
               .toString(),
           "SERVICE",
+              null);
+  private static final OpaqueActorReference PUBLICATION_RECOVERY_ACTOR =
+      new OpaqueActorReference(
+          UUID.nameUUIDFromBytes(
+                  "rwms:inventory-service:publication-recovery".getBytes(StandardCharsets.UTF_8))
+              .toString(),
+          "SERVICE",
           null);
   private static final Set<String> RENTAL_ITEM_STATUSES =
       Set.of(
@@ -143,6 +163,9 @@ public class InventoryApplicationService {
 
   private final InventorySessionRepository sessions;
   private final InventoryFindingRepository findings;
+  private final InventoryPlanningSettingsRepository planningSettings;
+  private final InventoryFinalPlanRepository finalPlans;
+  private final InventoryFinalPlanEntryRepository finalPlanEntries;
   private final InventoryFurnitureReconciliationIntentRepository furnitureReconciliations;
   private final InventoryPublicationIntentRepository publications;
   private final InventoryPublicationAttemptRepository publicationAttempts;
@@ -169,10 +192,14 @@ public class InventoryApplicationService {
   private final InventoryFrozenPlanFingerprint frozenPlanFingerprint;
   private final ObjectMapper mapper;
   private final TransactionTemplate transactions;
+  private final TransactionTemplate independentTransactions;
 
   public InventoryApplicationService(
       InventorySessionRepository sessions,
       InventoryFindingRepository findings,
+      InventoryPlanningSettingsRepository planningSettings,
+      InventoryFinalPlanRepository finalPlans,
+      InventoryFinalPlanEntryRepository finalPlanEntries,
       InventoryFurnitureReconciliationIntentRepository furnitureReconciliations,
       InventoryPublicationIntentRepository publications,
       InventoryPublicationAttemptRepository publicationAttempts,
@@ -201,6 +228,9 @@ public class InventoryApplicationService {
       PlatformTransactionManager transactionManager) {
     this.sessions = sessions;
     this.findings = findings;
+    this.planningSettings = planningSettings;
+    this.finalPlans = finalPlans;
+    this.finalPlanEntries = finalPlanEntries;
     this.furnitureReconciliations = furnitureReconciliations;
     this.publications = publications;
     this.publicationAttempts = publicationAttempts;
@@ -227,6 +257,9 @@ public class InventoryApplicationService {
     this.frozenPlanFingerprint = frozenPlanFingerprint;
     this.mapper = mapper;
     transactions = new TransactionTemplate(transactionManager);
+    independentTransactions = new TransactionTemplate(transactionManager);
+    independentTransactions.setPropagationBehavior(
+        org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
   }
 
   public SessionView start(Jwt jwt, UUID idempotencyKey, StartSessionRequest request) {
@@ -480,6 +513,20 @@ public class InventoryApplicationService {
         new PageMetadata(page, size, result.getTotalElements(), result.getTotalPages()));
   }
 
+  /**
+   * Returns the active cabin-review totals from persisted inventory facts only. Completion performs
+   * a separate fresh asset validation before it freezes its final statistics.
+   */
+  public FrozenStatistics preliminaryStatistics(Jwt jwt, UUID inventoryId) {
+    InventorySession session =
+        requireLifecycle(
+            requireScopedSession(inventoryId, authorizer.manageScope(jwt)), SessionLifecycle.ACTIVE);
+    requireCabinReviewStage(session);
+    List<InventoryFinding> activeFindings =
+        findings.findAllByInventoryIdAndMembershipActiveTrueOrderById(inventoryId);
+    return calculatePersistedStatistics(session, activeFindings);
+  }
+
   public void reconcileAssetMembership(
       UUID assetId,
       OpaqueActorReference sourceActor,
@@ -534,12 +581,6 @@ public class InventoryApplicationService {
       UUID previousWarehouseId = finding.getCurrentWarehouseId();
       String previousStatus = finding.getCurrentStatus();
       String previousTenant = finding.getCurrentTenantSnapshot();
-      boolean movementDeparted =
-          departed
-              && previousWarehouseId != null
-              && previousWarehouseId.equals(session.getWarehouseId())
-              && previousStatus != null
-              && CAPTURE_STATUSES.contains(previousStatus);
       boolean snapshotChanged =
           !java.util.Objects.equals(
                   finding.getAssetVersion(), current == null ? null : current.version())
@@ -608,11 +649,20 @@ public class InventoryApplicationService {
                     : finding.getCurrentRepairsSnapshot(),
             nextReconciliation);
       }
-      if (!snapshotRefreshed) continue;
+      // Departure changes the session's live population even when the source snapshot happened
+      // to be identical to the last one we observed. Historical findings remain immutable audit
+      // evidence, but every active projection and completion barrier must see them as gone.
+      boolean membershipChanged = departed && finding.changeMembership(false);
+      if (!snapshotRefreshed && !membershipChanged) continue;
       findings.saveAndFlush(finding);
+      if (membershipChanged && finding.getOrigin() == FindingOrigin.EXPECTED) {
+        session.changeExpectedPopulation(-1);
+      }
+      invalidateFurnitureReviewAfterCabinChange(session);
+      invalidateFinalPlan(session);
       session.touch();
       sessions.saveAndFlush(session);
-      if (movementDeparted) {
+      if (membershipChanged) {
         membershipMovements.saveAndFlush(
             InventoryMembershipMovement.departed(
                 session.getId(),
@@ -629,6 +679,13 @@ public class InventoryApplicationService {
                 current == null ? previousStatus : current.status(),
                 current == null ? previousTenant : current.tenantSnapshot(),
                 occurredAt));
+        appendFindingFacts(
+            finding,
+            session,
+            actor,
+            "inventory.finding.membership-departed.v1",
+            correlationId,
+            causationId);
       }
     }
 
@@ -641,7 +698,7 @@ public class InventoryApplicationService {
     if (session == null) return;
     InventoryFinding existing =
         findings
-            .findByInventoryIdAndIdentityMatchKeyForUpdate(
+            .findActiveByInventoryIdAndIdentityMatchKeyForUpdate(
                 session.getId(), current.identityMatchKey())
             .orElse(null);
     if (existing != null) {
@@ -652,7 +709,6 @@ public class InventoryApplicationService {
         throw InventoryException.conflict(
             "Live inventory asset identity is already bound to another cabin");
       }
-      boolean reactivated = existing.changeMembership(true);
       boolean snapshotChanged =
           !java.util.Objects.equals(existing.getAssetVersion(), current.version())
               || !java.util.Objects.equals(
@@ -660,8 +716,7 @@ public class InventoryApplicationService {
               || !java.util.Objects.equals(existing.getCurrentStatus(), current.status())
               || !java.util.Objects.equals(
                   existing.getCurrentTenantSnapshot(), current.tenantSnapshot());
-      if (!reactivated && !snapshotChanged) return;
-      UUID previousWarehouseId = existing.getCurrentWarehouseId();
+      if (!snapshotChanged) return;
       existing.refreshCurrentAsset(
           current.version(),
           current.warehouseId(),
@@ -675,35 +730,17 @@ public class InventoryApplicationService {
               : existing.getCurrentRepairsSnapshot(),
           ReconciliationState.MATCHED);
       findings.saveAndFlush(existing);
-      if (reactivated && existing.getOrigin() == FindingOrigin.EXPECTED) {
-        session.changeExpectedPopulation(1);
-      }
+      invalidateFurnitureReviewAfterCabinChange(session);
+      invalidateFinalPlan(session);
       session.touch();
       sessions.saveAndFlush(session);
-      if (reactivated) {
-        membershipMovements.saveAndFlush(
-            InventoryMembershipMovement.arrived(
-                session.getId(),
-                causationId,
-                assetId,
-                existing.getOrigin(),
-                existing.getDisplayCanonicalNumber(),
-                previousWarehouseId != null
-                        && !previousWarehouseId.equals(session.getWarehouseId())
-                    ? previousWarehouseId
-                    : null,
-                session.getWarehouseId(),
-                current.status(),
-                current.tenantSnapshot(),
-                occurredAt));
-        appendOwnerProof(
-            existing,
-            session.getWarehouseId(),
-            actor,
-            events.currentVersion("FINDING", existing.getId()),
-            correlationId,
-            causationId);
-      }
+      appendFindingFacts(
+          existing,
+          session,
+          actor,
+          "inventory.finding.membership-refreshed.v1",
+          correlationId,
+          causationId);
       return;
     }
 
@@ -745,6 +782,8 @@ public class InventoryApplicationService {
             current.passportSnapshot() == null ? "{}" : json(current.passportSnapshot()),
             current.contentsSnapshot() == null ? "[]" : json(current.contentsSnapshot())));
     session.changeExpectedPopulation(1);
+    invalidateFurnitureReviewAfterCabinChange(session);
+    invalidateFinalPlan(session);
     session.touch();
     sessions.saveAndFlush(session);
     membershipMovements.saveAndFlush(
@@ -794,7 +833,8 @@ public class InventoryApplicationService {
     }
     InventoryFinding existing =
         findings
-            .findByInventoryIdAndIdentityMatchKey(inventoryId, resolved.identityMatchKey())
+            .findByInventoryIdAndIdentityMatchKeyAndMembershipActiveTrue(
+                inventoryId, resolved.identityMatchKey())
             .orElse(null);
     if (existing != null) {
       CurrentItemSnapshot current = currentItemSnapshot(resolved.asset());
@@ -867,7 +907,8 @@ public class InventoryApplicationService {
     } catch (DataIntegrityViolationException race) {
       created =
           findings
-              .findByInventoryIdAndIdentityMatchKey(inventoryId, resolved.identityMatchKey())
+              .findByInventoryIdAndIdentityMatchKeyAndMembershipActiveTrue(
+                  inventoryId, resolved.identityMatchKey())
               .orElseThrow(() -> InventoryException.conflict("Number resolution raced"));
     }
     return new NumberResolutionView(
@@ -1131,6 +1172,7 @@ public class InventoryApplicationService {
               persistMedia(result, request.media());
               if (frozenPlan != null) persistPlan(result, request.planSelection(), frozenPlan);
               invalidateFurnitureReviewAfterCabinChange(lockedSession);
+              invalidateFinalPlan(lockedSession);
               appendFindingFacts(
                   result, lockedSession, actor(jwt), "inventory.finding.inspection-saved.v1");
               return result;
@@ -1193,6 +1235,7 @@ public class InventoryApplicationService {
                   request.strategy(), fingerprint, request.reason(), actorJson(jwt));
               InventoryFinding result = findings.saveAndFlush(lockedFinding);
               invalidateFurnitureReviewAfterCabinChange(lockedSession);
+              invalidateFinalPlan(lockedSession);
               appendFindingFacts(
                   result,
                   lockedSession,
@@ -1201,6 +1244,30 @@ public class InventoryApplicationService {
               return result;
             });
     return findingView(saved, validatedFinding(session, saved, current));
+  }
+
+  public RegistryReviewView registryReview(
+      Jwt jwt, UUID inventoryId, RegistryReviewRequest request) {
+    InventorySession session = requireActive(inventoryId);
+    authorizer.requireEdit(jwt, session.getWarehouseId());
+    RevisionState revisions =
+        revisionState(session, request.expectedSessionRevision(), request.findingRevisions());
+    InventoryDependencyGateway.Validation validation = validateAssets(revisions.findings());
+    List<ValidatedFinding> validated =
+        validatedFindings(session, revisions.findings(), validation);
+
+    // Do not return remote truth for a local revision vector that changed while dependencies were
+    // being read. The caller refreshes and repeats this read-only review instead.
+    revisionState(
+        requireActive(inventoryId),
+        request.expectedSessionRevision(),
+        request.findingRevisions());
+    return new RegistryReviewView(
+        inventoryId,
+        session.getRevision(),
+        revisions.expectations(),
+        validation.validatedAt(),
+        validated);
   }
 
   public FurnitureReviewView startFurnitureReview(
@@ -1322,6 +1389,1136 @@ public class InventoryApplicationService {
     return furnitureReviewView(saved);
   }
 
+  /** Returns the warehouse-local calendar used to derive final maintenance planning. */
+  public PlanningSettingsView planningSettings(Jwt jwt, UUID warehouseId) {
+    authorizer.requireManage(jwt, warehouseId);
+    return planningSettingsView(warehouseId, planningSpecification(warehouseId));
+  }
+
+  public PlanningSettingsView updatePlanningSettings(
+      Jwt jwt, UUID warehouseId, PlanningSettingsUpdateRequest request) {
+    authorizer.requireManage(jwt, warehouseId);
+    PlanningSpecification requested = planningSpecification(request);
+    return transactions.execute(
+        ignored -> {
+          InventoryPlanningSettings existing = planningSettings.findById(warehouseId).orElse(null);
+          long revision = existing == null ? 0 : existing.getRevision();
+          expectRevision(revision, request.expectedSettingsRevision());
+          InventoryPlanningSettings saved;
+          if (existing == null) {
+            saved =
+                planningSettings.saveAndFlush(
+                    InventoryPlanningSettings.create(
+                        warehouseId,
+                        requested.movementDailyCapacity(),
+                        requested.repairDailyCapacity(),
+                        weekdaysJson(requested.workingWeekdays()),
+                        holidaysJson(requested.holidays())));
+          } else {
+            existing.replace(
+                requested.movementDailyCapacity(),
+                requested.repairDailyCapacity(),
+                weekdaysJson(requested.workingWeekdays()),
+                holidaysJson(requested.holidays()));
+            saved = planningSettings.saveAndFlush(existing);
+          }
+          sessions
+              .findByWarehouseIdAndLifecycle(warehouseId, SessionLifecycle.ACTIVE)
+              .ifPresent(this::invalidateFinalPlan);
+          return planningSettingsView(warehouseId, planningSpecification(saved));
+        });
+  }
+
+  public FinalPlanView prepareFinalPlan(
+      Jwt jwt, UUID inventoryId, UUID idempotencyKey, PrepareFinalPlanRequest request) {
+    requireScopedSession(inventoryId, authorizer.manageScope(jwt));
+    return idempotency.execute(
+        authorizer.subjectId(jwt),
+        "session.final-plan.prepare",
+        idempotencyKey,
+        Map.of("inventoryId", inventoryId, "request", request),
+        HttpStatus.OK.value(),
+        FinalPlanView.class,
+        () -> doPrepareFinalPlan(jwt, inventoryId, idempotencyKey, request));
+  }
+
+  private FinalPlanView doPrepareFinalPlan(
+      Jwt jwt, UUID inventoryId, UUID idempotencyKey, PrepareFinalPlanRequest request) {
+    InventorySession session = requireActive(inventoryId);
+    authorizer.requireManage(jwt, session.getWarehouseId());
+    expectRevision(session.getRevision(), request.expectedSessionRevision());
+    PlanningSpecification settings = planningSpecification(session.getWarehouseId());
+    expectRevision(settings.revision(), request.expectedSettingsRevision());
+    InventoryFinalPlan existing = finalPlans.findById(inventoryId).orElse(null);
+    long finalPlanVersion = existing == null ? 1 : Math.addExact(existing.getFinalPlanVersion(), 1);
+    List<FinalPlanDraft> draft =
+        scheduleFinalPlan(
+            session,
+            settings,
+            request.movementScheduleMode(),
+            request.repairScheduleMode(),
+            initialFinalPlanDrafts(session));
+    String sha256 =
+        finalPlanSha256(
+            session,
+            settings,
+            finalPlanVersion,
+            request.movementScheduleMode(),
+            request.repairScheduleMode(),
+            draft);
+    List<FinalPlanDraft> withCandidates =
+        attachPreflightCandidates(
+            draft,
+            dependencies.preflightReconciliation(
+                idempotencyKey,
+                reconciliationPreflightRequest(
+                    session, finalPlanVersion, sha256, draft)),
+            inventoryId,
+            finalPlanVersion,
+            sha256);
+    return persistFinalPlanVersion(
+        inventoryId,
+        request.expectedSessionRevision(),
+        settings.revision(),
+        existing == null ? 0 : existing.getFinalPlanVersion(),
+        finalPlanVersion,
+        sha256,
+        request.movementScheduleMode(),
+        request.repairScheduleMode(),
+        withCandidates);
+  }
+
+  public FinalPlanView finalPlan(Jwt jwt, UUID inventoryId) {
+    InventorySession session = requireScopedSession(inventoryId, authorizer.readScope(jwt));
+    InventoryFinalPlan plan =
+        finalPlans
+            .findById(inventoryId)
+            .orElseThrow(() -> InventoryException.notFound("Inventory final plan is not prepared"));
+    return finalPlanView(
+        session,
+        plan,
+        finalPlanEntries.findByInventoryIdAndFinalPlanVersionOrderByOrderAscFindingIdAsc(
+            inventoryId, plan.getFinalPlanVersion()));
+  }
+
+  public FinalPlanView updateFinalPlan(
+      Jwt jwt, UUID inventoryId, UUID idempotencyKey, FinalPlanUpdateRequest request) {
+    requireScopedSession(inventoryId, authorizer.manageScope(jwt));
+    return idempotency.execute(
+        authorizer.subjectId(jwt),
+        "session.final-plan.update",
+        idempotencyKey,
+        Map.of("inventoryId", inventoryId, "request", request),
+        HttpStatus.OK.value(),
+        FinalPlanView.class,
+        () -> doUpdateFinalPlan(jwt, inventoryId, idempotencyKey, request));
+  }
+
+  private FinalPlanView doUpdateFinalPlan(
+      Jwt jwt, UUID inventoryId, UUID idempotencyKey, FinalPlanUpdateRequest request) {
+    InventorySession session = requireActive(inventoryId);
+    authorizer.requireManage(jwt, session.getWarehouseId());
+    expectRevision(session.getRevision(), request.expectedSessionRevision());
+    InventoryFinalPlan current =
+        finalPlans
+            .findById(inventoryId)
+            .orElseThrow(() -> InventoryException.conflict("Inventory final plan is not prepared"));
+    if (current.getState() != FinalPlanState.DRAFT) {
+      throw InventoryException.conflict("Inventory final plan must be prepared again");
+    }
+    expectRevision(current.getFinalPlanVersion(), request.expectedFinalPlanVersion());
+    PlanningSpecification settings = planningSpecification(session.getWarehouseId());
+    long nextVersion = Math.addExact(current.getFinalPlanVersion(), 1);
+    List<FinalPlanDraft> draft =
+        scheduleFinalPlan(
+            session,
+            settings,
+            request.movementScheduleMode(),
+            request.repairScheduleMode(),
+            updateFinalPlanDrafts(session, request.entries()));
+    String sha256 =
+        finalPlanSha256(
+            session,
+            settings,
+            nextVersion,
+            request.movementScheduleMode(),
+            request.repairScheduleMode(),
+            draft);
+    List<FinalPlanDraft> withCandidates =
+        attachPreflightCandidates(
+            draft,
+            dependencies.preflightReconciliation(
+                idempotencyKey,
+                reconciliationPreflightRequest(session, nextVersion, sha256, draft)),
+            inventoryId,
+            nextVersion,
+            sha256);
+    return persistFinalPlanVersion(
+        inventoryId,
+        request.expectedSessionRevision(),
+        settings.revision(),
+        current.getFinalPlanVersion(),
+        nextVersion,
+        sha256,
+        request.movementScheduleMode(),
+        request.repairScheduleMode(),
+        withCandidates);
+  }
+
+  private PlanningSpecification planningSpecification(UUID warehouseId) {
+    return planningSettings
+        .findById(warehouseId)
+        .map(this::planningSpecification)
+        .orElseGet(
+            () ->
+                new PlanningSpecification(
+                    0,
+                    6,
+                    6,
+                    List.of(
+                        DayOfWeek.MONDAY,
+                        DayOfWeek.TUESDAY,
+                        DayOfWeek.WEDNESDAY,
+                        DayOfWeek.THURSDAY,
+                        DayOfWeek.FRIDAY),
+                    List.of()));
+  }
+
+  private PlanningSpecification planningSpecification(InventoryPlanningSettings value) {
+    return new PlanningSpecification(
+        value.getRevision(),
+        value.getMovementDailyCapacity(),
+        value.getRepairDailyCapacity(),
+        parseWorkingWeekdays(read(value.getWorkingWeekdays())),
+        parseHolidays(read(value.getHolidays())));
+  }
+
+  private PlanningSpecification planningSpecification(PlanningSettingsUpdateRequest request) {
+    if (request == null) throw new IllegalArgumentException("Planning settings are required");
+    return new PlanningSpecification(
+        request.expectedSettingsRevision(),
+        request.movementDailyCapacity(),
+        request.repairDailyCapacity(),
+        parseWorkingWeekdays(request.workingWeekdays()),
+        parseHolidays(request.holidays()));
+  }
+
+  private PlanningSettingsView planningSettingsView(
+      UUID warehouseId, PlanningSpecification specification) {
+    return new PlanningSettingsView(
+        warehouseId,
+        specification.revision(),
+        specification.movementDailyCapacity(),
+        specification.repairDailyCapacity(),
+        specification.workingWeekdays().stream().map(Enum::name).toList(),
+        specification.holidays());
+  }
+
+  private List<DayOfWeek> parseWorkingWeekdays(List<String> values) {
+    if (values == null || values.isEmpty() || values.size() > 7) {
+      throw new IllegalArgumentException("Working weekdays must contain one to seven days");
+    }
+    EnumSet<DayOfWeek> result = EnumSet.noneOf(DayOfWeek.class);
+    for (String value : values) {
+      try {
+        DayOfWeek day = DayOfWeek.valueOf(value.trim().toUpperCase(Locale.ROOT));
+        if (!result.add(day)) {
+          throw new IllegalArgumentException("Working weekdays must not contain duplicates");
+        }
+      } catch (NullPointerException | IllegalArgumentException exception) {
+        if (exception.getMessage() != null
+            && exception.getMessage().contains("duplicates")) {
+          throw exception;
+        }
+        throw new IllegalArgumentException("Working weekday is invalid", exception);
+      }
+    }
+    return List.copyOf(result);
+  }
+
+  private List<DayOfWeek> parseWorkingWeekdays(JsonNode values) {
+    if (values == null || !values.isArray()) {
+      throw new IllegalStateException("Stored planning weekdays are invalid");
+    }
+    List<String> text = new ArrayList<>();
+    for (JsonNode value : values) {
+      if (!value.isTextual()) {
+        throw new IllegalStateException("Stored planning weekdays are invalid");
+      }
+      text.add(value.asText());
+    }
+    return parseWorkingWeekdays(text);
+  }
+
+  private List<LocalDate> parseHolidays(List<LocalDate> values) {
+    if (values == null || values.size() > 3660) {
+      throw new IllegalArgumentException("Holidays must contain at most 3660 dates");
+    }
+    Set<LocalDate> unique = new LinkedHashSet<>();
+    for (LocalDate value : values) {
+      if (value == null || !unique.add(value)) {
+        throw new IllegalArgumentException("Holidays must contain unique ISO dates");
+      }
+    }
+    return unique.stream().sorted().toList();
+  }
+
+  private List<LocalDate> parseHolidays(JsonNode values) {
+    if (values == null || !values.isArray()) {
+      throw new IllegalStateException("Stored planning holidays are invalid");
+    }
+    List<LocalDate> dates = new ArrayList<>();
+    for (JsonNode value : values) {
+      if (!value.isTextual()) {
+        throw new IllegalStateException("Stored planning holidays are invalid");
+      }
+      try {
+        dates.add(LocalDate.parse(value.asText()));
+      } catch (RuntimeException exception) {
+        throw new IllegalStateException("Stored planning holidays are invalid", exception);
+      }
+    }
+    return parseHolidays(dates);
+  }
+
+  private String weekdaysJson(List<DayOfWeek> values) {
+    return write(values.stream().map(Enum::name).toList());
+  }
+
+  private String holidaysJson(List<LocalDate> values) {
+    return write(values.stream().map(LocalDate::toString).toList());
+  }
+
+  private List<FinalPlanDraft> initialFinalPlanDrafts(InventorySession session) {
+    List<FinalPlanDraft> draft = new ArrayList<>();
+    for (InventoryFinding finding :
+        findings.findAllByInventoryIdAndMembershipActiveTrueOrderById(session.getId())) {
+      draft.add(finalPlanDraft(finding, null, null, null, null));
+    }
+    draft.sort(
+        Comparator.comparing((FinalPlanDraft value) -> value.hasWork() ? 0 : 1)
+            .thenComparing(value -> value.priority() == null ? Integer.MAX_VALUE : value.priority())
+            .thenComparing(value -> value.finding().getDisplayCanonicalNumber())
+            .thenComparing(value -> value.finding().getId()));
+    List<FinalPlanDraft> ordered = new ArrayList<>();
+    for (int index = 0; index < draft.size(); index++) {
+      ordered.add(draft.get(index).withOrder(index));
+    }
+    return List.copyOf(ordered);
+  }
+
+  private List<FinalPlanDraft> updateFinalPlanDrafts(
+      InventorySession session, List<FinalPlanEntryUpdate> submitted) {
+    if (submitted == null) throw new IllegalArgumentException("Final-plan entries are required");
+    List<InventoryFinding> active =
+        findings.findAllByInventoryIdAndMembershipActiveTrueOrderById(session.getId());
+    if (submitted.size() != active.size()) {
+      throw InventoryException.conflict("Final plan must contain every active finding exactly once");
+    }
+    Map<UUID, InventoryFinding> byId = new LinkedHashMap<>();
+    active.forEach(value -> byId.put(value.getId(), value));
+    List<FinalPlanEntryUpdate> ordered = new ArrayList<>(submitted);
+    ordered.sort(Comparator.comparingInt(FinalPlanEntryUpdate::order));
+    Set<UUID> ids = new HashSet<>();
+    List<FinalPlanDraft> result = new ArrayList<>();
+    for (int index = 0; index < ordered.size(); index++) {
+      FinalPlanEntryUpdate input = ordered.get(index);
+      if (input == null
+          || input.order() != index
+          || !ids.add(input.findingId())) {
+        throw new IllegalArgumentException("Final-plan order must be contiguous without duplicates");
+      }
+      InventoryFinding finding = byId.get(input.findingId());
+      if (finding == null || finding.getRevision() != input.expectedFindingRevision()) {
+        throw InventoryException.conflict("Final-plan finding revision is stale");
+      }
+      if (input.movementToRepair() == null) {
+        throw new IllegalArgumentException("Final-plan movement choice is required");
+      }
+      FinalPlanDraft draft =
+          finalPlanDraft(
+              finding,
+              input.priority(),
+              input.movementToRepair(),
+              input.movementScheduledDate(),
+              input.repairScheduledDate());
+      if (!draft.hasWork()) {
+        if (input.priority() != null
+            || input.movementToRepair()
+            || input.movementScheduledDate() != null
+            || input.repairScheduledDate() != null
+            || input.reconciliationDecision() != null) {
+          throw new IllegalArgumentException("No-work final-plan entry has operational data");
+        }
+      } else {
+        validateFinalPlanPriority(input.priority());
+        draft = draft.withDecision(decisionJson(input.reconciliationDecision()));
+      }
+      result.add(draft.withOrder(index));
+    }
+    if (ids.size() != byId.size()) {
+      throw InventoryException.conflict("Final plan does not match the active finding set");
+    }
+    return List.copyOf(result);
+  }
+
+  private FinalPlanDraft finalPlanDraft(
+      InventoryFinding finding,
+      Integer requestedPriority,
+      Boolean requestedMovementToRepair,
+      LocalDate requestedMovementDate,
+      LocalDate requestedRepairDate) {
+    if (finding.getInspection() != InspectionState.WORK_STAGED) {
+      return FinalPlanDraft.noWork(finding);
+    }
+    FindingPlanSnapshot snapshot =
+        activePlanSnapshot(finding)
+            .orElseThrow(() -> InventoryException.conflict("Frozen maintenance plan is missing"));
+    if (!snapshot.getFingerprint().equals(finding.getMaintenancePlanFingerprintSha256())
+        || !snapshot.getFingerprint().equals(frozenPlanFingerprint.sha256(read(snapshot.getSourceSnapshot())))) {
+      throw InventoryException.conflict("Frozen maintenance plan is stale");
+    }
+    Integer defaultPriority = read(snapshot.getSourceSnapshot()).path("priority").asInt(-1);
+    validateFinalPlanPriority(defaultPriority);
+    int priority = requestedPriority == null ? defaultPriority : requestedPriority;
+    boolean movement =
+        requestedMovementToRepair == null ? snapshot.isMovementToRepair() : requestedMovementToRepair;
+    return new FinalPlanDraft(
+        finding,
+        snapshot,
+        true,
+        "AFTER_RENT".equals(finding.getCurrentStatus())
+            ? FinalPlanTargetKind.ESTIMATE
+            : FinalPlanTargetKind.REPAIR,
+        0,
+        priority,
+        movement,
+        requestedMovementDate,
+        requestedRepairDate,
+        "[]",
+        null);
+  }
+
+  private void validateFinalPlanPriority(Integer value) {
+    if (value == null || value < 1 || value > 5) {
+      throw new IllegalArgumentException("Final-plan priority must be between 1 and 5");
+    }
+  }
+
+  private List<FinalPlanDraft> scheduleFinalPlan(
+      InventorySession session,
+      PlanningSpecification settings,
+      FinalPlanScheduleMode movementMode,
+      FinalPlanScheduleMode repairMode,
+      List<FinalPlanDraft> input) {
+    if (movementMode == null || repairMode == null) {
+      throw new IllegalArgumentException("Final-plan schedule modes are required");
+    }
+    LocalDate planningDate = planningDate(session);
+    List<FinalPlanDraft> result = new ArrayList<>(input);
+    Map<LocalDate, Integer> movementUsed = new LinkedHashMap<>();
+    for (int index = 0; index < result.size(); index++) {
+      FinalPlanDraft entry = result.get(index);
+      if (!entry.hasWork()) continue;
+      if (!entry.movementToRepair()) {
+        if (entry.movementScheduledDate() != null) {
+          throw new IllegalArgumentException("Movement date requires movement to repair");
+        }
+        continue;
+      }
+      LocalDate date;
+      if (movementMode == FinalPlanScheduleMode.AUTO) {
+        if (entry.movementScheduledDate() != null) {
+          throw new IllegalArgumentException("AUTO movement schedule cannot include dates");
+        }
+        date =
+            reserveAutomaticDate(
+                planningDate, settings, movementUsed, settings.movementDailyCapacity());
+      } else {
+        date = entry.movementScheduledDate();
+        reserveManualDate(
+            date,
+            planningDate,
+            settings,
+            movementUsed,
+            settings.movementDailyCapacity(),
+            "movement");
+      }
+      result.set(index, entry.withDates(date, entry.repairScheduledDate()));
+    }
+    Map<LocalDate, Integer> repairUsed = new LinkedHashMap<>();
+    for (int index = 0; index < result.size(); index++) {
+      FinalPlanDraft entry = result.get(index);
+      if (!entry.hasWork()) continue;
+      LocalDate earliest =
+          entry.movementToRepair() && entry.movementScheduledDate().isAfter(planningDate)
+              ? entry.movementScheduledDate()
+              : planningDate;
+      LocalDate date;
+      if (repairMode == FinalPlanScheduleMode.AUTO) {
+        if (entry.repairScheduledDate() != null) {
+          throw new IllegalArgumentException("AUTO repair schedule cannot include dates");
+        }
+        date = reserveAutomaticDate(earliest, settings, repairUsed, settings.repairDailyCapacity());
+      } else {
+        date = entry.repairScheduledDate();
+        reserveManualDate(
+            date,
+            planningDate,
+            settings,
+            repairUsed,
+            settings.repairDailyCapacity(),
+            "repair");
+        if (entry.movementToRepair() && date.isBefore(entry.movementScheduledDate())) {
+          throw new IllegalArgumentException("Repair date cannot precede movement date");
+        }
+      }
+      result.set(index, entry.withDates(entry.movementScheduledDate(), date));
+    }
+    return List.copyOf(result);
+  }
+
+  private LocalDate planningDate(InventorySession session) {
+    LocalDate warehouseToday = LocalDate.now(ZoneId.of(session.getWarehouseTimeZone()));
+    return session.getBusinessDate().isAfter(warehouseToday)
+        ? session.getBusinessDate()
+        : warehouseToday;
+  }
+
+  private LocalDate reserveAutomaticDate(
+      LocalDate earliest,
+      PlanningSpecification settings,
+      Map<LocalDate, Integer> used,
+      int capacity) {
+    LocalDate date = earliest;
+    for (int offset = 0; offset < 20_000; offset++, date = date.plusDays(1)) {
+      if (!workingDay(date, settings) || used.getOrDefault(date, 0) >= capacity) continue;
+      used.merge(date, 1, Integer::sum);
+      return date;
+    }
+    throw new IllegalStateException("Planning calendar has no available date");
+  }
+
+  private void reserveManualDate(
+      LocalDate date,
+      LocalDate planningDate,
+      PlanningSpecification settings,
+      Map<LocalDate, Integer> used,
+      int capacity,
+      String stream) {
+    if (date != null && date.isBefore(planningDate)) {
+      throw new IllegalArgumentException(
+          "Manual " + stream + " date cannot precede the current warehouse planning date");
+    }
+    if (date == null || !workingDay(date, settings)) {
+      throw new IllegalArgumentException("Manual " + stream + " date must be a working day");
+    }
+    int next = Math.addExact(used.getOrDefault(date, 0), 1);
+    if (next > capacity) {
+      throw new IllegalArgumentException("Manual " + stream + " schedule exceeds daily capacity");
+    }
+    used.put(date, next);
+  }
+
+  private boolean workingDay(LocalDate date, PlanningSpecification settings) {
+    return settings.workingWeekdays().contains(date.getDayOfWeek())
+        && !settings.holidays().contains(date);
+  }
+
+  private String finalPlanSha256(
+      InventorySession session,
+      PlanningSpecification settings,
+      long finalPlanVersion,
+      FinalPlanScheduleMode movementMode,
+      FinalPlanScheduleMode repairMode,
+      List<FinalPlanDraft> entries) {
+    List<Map<String, Object>> canonicalEntries = new ArrayList<>();
+    for (FinalPlanDraft entry : entries) {
+      Map<String, Object> value = new LinkedHashMap<>();
+      value.put("findingId", entry.finding().getId());
+      value.put("findingRevision", entry.finding().getRevision());
+      value.put("assetId", entry.finding().getAssetId());
+      value.put("assetVersion", entry.finding().getAssetVersion());
+      value.put("planFingerprintSha256", entry.planFingerprintSha256());
+      value.put("hasWork", entry.hasWork());
+      value.put("targetKind", entry.targetKind());
+      value.put("order", entry.order());
+      value.put("priority", entry.priority());
+      value.put("movementToRepair", entry.movementToRepair());
+      value.put("movementScheduledDate", entry.movementScheduledDate());
+      value.put("repairScheduledDate", entry.repairScheduledDate());
+      value.put(
+          "reconciliationDecision",
+          entry.reconciliationDecision() == null ? null : convert(read(entry.reconciliationDecision()), Object.class));
+      canonicalEntries.add(value);
+    }
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("inventoryId", session.getId());
+    payload.put("sessionRevision", session.getRevision());
+    payload.put("planningSettingsRevision", settings.revision());
+    payload.put("finalPlanVersion", finalPlanVersion);
+    payload.put("movementScheduleMode", movementMode);
+    payload.put("repairScheduleMode", repairMode);
+    payload.put("entries", canonicalEntries);
+    return canonicalHash(payload);
+  }
+
+  private ObjectNode reconciliationPreflightRequest(
+      InventorySession session,
+      long finalPlanVersion,
+      String finalPlanSha256,
+      List<FinalPlanDraft> entries) {
+    ObjectNode request = mapper.createObjectNode();
+    request.put("inventoryId", session.getId().toString());
+    request.put("warehouseId", session.getWarehouseId().toString());
+    request.put("finalPlanVersion", finalPlanVersion);
+    request.put("finalPlanSha256", finalPlanSha256);
+    ArrayNode findingsBody = request.putArray("findings");
+    for (FinalPlanDraft entry : entries) {
+      if (!entry.hasWork()) continue;
+      InventoryFinding finding = entry.finding();
+      FindingPlanSnapshot snapshot = entry.snapshot();
+      if (finding.getAssetId() == null || finding.getAssetVersion() == null || snapshot == null) {
+        throw InventoryException.conflict("Work final-plan finding has incomplete asset evidence");
+      }
+      ObjectNode body = findingsBody.addObject();
+      body.put("findingId", finding.getId().toString());
+      body.put("findingRevision", finding.getRevision());
+      body.put("assetId", finding.getAssetId().toString());
+      body.put("assetVersion", finding.getAssetVersion());
+      body.put("planFingerprintSha256", entry.planFingerprintSha256());
+      body.put("snapshotSchemaVersion", snapshot.getSnapshotSchemaVersion());
+      body.put("priority", entry.priority());
+      body.put("movementToRepair", entry.movementToRepair());
+      if (entry.movementScheduledDate() == null) body.putNull("movementScheduledDate");
+      else body.put("movementScheduledDate", entry.movementScheduledDate().toString());
+      body.put("repairScheduledDate", entry.repairScheduledDate().toString());
+      body.set("snapshot", read(snapshot.getSourceSnapshot()));
+      body.set("media", frozenPlanMedia(snapshot));
+    }
+    return request;
+  }
+
+  private ArrayNode frozenPlanMedia(FindingPlanSnapshot snapshot) {
+    JsonNode source = read(snapshot.getSourceSnapshot());
+    ArrayNode output = mapper.createArrayNode();
+    Set<String> seen = new LinkedHashSet<>();
+    appendFrozenPlanMedia(output, seen, source.path("mediaReferences"));
+    JsonNode lines = source.path("lines");
+    if (!lines.isArray()) {
+      throw InventoryException.conflict("Frozen maintenance plan lines are invalid");
+    }
+    for (JsonNode line : lines) {
+      if (!line.isObject()) {
+        throw InventoryException.conflict("Frozen maintenance plan lines are invalid");
+      }
+      appendFrozenPlanMedia(output, seen, line.path("mediaReferences"));
+    }
+    return output;
+  }
+
+  private void appendFrozenPlanMedia(ArrayNode output, Set<String> seen, JsonNode references) {
+    if (references.isMissingNode() || references.isNull()) return;
+    if (!references.isArray()) {
+      throw InventoryException.conflict("Frozen maintenance plan media is invalid");
+    }
+    for (JsonNode reference : references) {
+      UUID mediaId = requiredUuid(reference, "mediaId", "frozen plan media id");
+      long generation = reference.path("generation").asLong(-1);
+      if (generation < 0) {
+        throw InventoryException.conflict("Frozen maintenance plan media generation is invalid");
+      }
+      String key = mediaId + ":" + generation;
+      if (!seen.add(key)) continue;
+      ObjectNode normalized = output.addObject();
+      normalized.put("mediaId", mediaId.toString());
+      normalized.put("generation", generation);
+    }
+  }
+
+  private List<FinalPlanDraft> attachPreflightCandidates(
+      List<FinalPlanDraft> entries,
+      JsonNode response,
+      UUID inventoryId,
+      long finalPlanVersion,
+      String finalPlanSha256) {
+    if (!inventoryId.equals(requiredUuid(response, "inventoryId", "reconciliation inventory id"))
+        || response.path("finalPlanVersion").asLong(-1) != finalPlanVersion
+        || !finalPlanSha256.equals(response.path("finalPlanSha256").asText())
+        || !response.path("findings").isArray()) {
+      throw InventoryException.dependency("Maintenance reconciliation preflight is malformed");
+    }
+    Map<UUID, String> candidatesByFinding = new LinkedHashMap<>();
+    for (JsonNode finding : response.path("findings")) {
+      UUID findingId = requiredUuid(finding, "findingId", "reconciliation finding id");
+      JsonNode candidates = finding.path("candidates");
+      if (!candidates.isArray() || candidatesByFinding.put(findingId, canonicalWrite(candidates)) != null) {
+        throw InventoryException.dependency("Maintenance reconciliation candidates are malformed");
+      }
+      for (JsonNode candidate : candidates) validateFinalPlanCandidate(candidate);
+    }
+    Set<UUID> workIds = new LinkedHashSet<>();
+    for (FinalPlanDraft entry : entries) {
+      if (entry.hasWork()) workIds.add(entry.finding().getId());
+    }
+    if (!candidatesByFinding.keySet().equals(workIds)) {
+      throw InventoryException.dependency("Maintenance reconciliation candidate set is incomplete");
+    }
+    List<FinalPlanDraft> result = new ArrayList<>();
+    for (FinalPlanDraft entry : entries) {
+      FinalPlanDraft withCandidates =
+          entry.hasWork()
+              ? entry.withCandidates(candidatesByFinding.get(entry.finding().getId()))
+              : entry;
+      validateFinalPlanDecision(withCandidates);
+      result.add(withCandidates);
+    }
+    return List.copyOf(result);
+  }
+
+  private void validateFinalPlanCandidate(JsonNode candidate) {
+    try {
+      if (!candidate.isObject()) throw new IllegalArgumentException();
+      FinalPlanTargetKind kind =
+          FinalPlanTargetKind.valueOf(candidate.path("targetKind").asText());
+      UUID targetId = requiredUuid(candidate, "targetId", "reconciliation target id");
+      UUID estimateId = nullableUuid(candidate, "estimateId", "reconciliation estimate id");
+      UUID repairId = nullableUuid(candidate, "repairId", "reconciliation repair id");
+      if ((kind == FinalPlanTargetKind.ESTIMATE && (!targetId.equals(estimateId) || repairId != null))
+          || (kind == FinalPlanTargetKind.REPAIR && (!targetId.equals(repairId) || estimateId != null))
+          || candidate.path("version").asLong(-1) < 0
+          || candidate.path("state").asText().isBlank()
+          || !candidate.path("started").isBoolean()
+          || !candidate.path("active").isBoolean()) {
+        throw new IllegalArgumentException();
+      }
+      if (candidate.hasNonNull("priority")) validateFinalPlanPriority(candidate.path("priority").asInt(-1));
+      if (candidate.hasNonNull("planFingerprintSha256")
+          && !candidate.path("planFingerprintSha256").asText().matches("^[0-9a-f]{64}$")) {
+        throw new IllegalArgumentException();
+      }
+      JsonNode summary = candidate.path("planSummary");
+      if (!summary.isObject()
+          || summary.path("workLineCount").asInt(-1) < 0
+          || summary.path("materialLineCount").asInt(-1) < 0
+          || summary.path("grandTotalMinor").asLong(-1) < 0) {
+        throw new IllegalArgumentException();
+      }
+    } catch (RuntimeException exception) {
+      throw InventoryException.dependency("Maintenance reconciliation candidate is malformed");
+    }
+  }
+
+  private String decisionJson(FinalPlanReconciliationDecision decision) {
+    if (decision == null) return null;
+    if (decision.strategy() == null) {
+      throw new IllegalArgumentException("Final-plan reconciliation strategy is required");
+    }
+    if (decision.strategy() == FinalPlanReconciliationStrategy.CREATE) {
+      if (decision.selectedTargetKind() != null || decision.selectedTargetId() != null) {
+        throw new IllegalArgumentException("CREATE reconciliation cannot select an existing target");
+      }
+    } else if (decision.selectedTargetKind() == null || decision.selectedTargetId() == null) {
+      throw new IllegalArgumentException("MERGE and REPLACE reconciliation require a target");
+    }
+    ObjectNode result = mapper.createObjectNode();
+    result.put("strategy", decision.strategy().name());
+    if (decision.selectedTargetKind() == null) result.putNull("selectedTargetKind");
+    else result.put("selectedTargetKind", decision.selectedTargetKind().name());
+    if (decision.selectedTargetId() == null) result.putNull("selectedTargetId");
+    else result.put("selectedTargetId", decision.selectedTargetId().toString());
+    return canonicalWrite(result);
+  }
+
+  private void validateFinalPlanDecision(FinalPlanDraft entry) {
+    if (!entry.hasWork()) return;
+    validateFinalPlanDecision(entry, finalPlanCandidateSet(entry));
+  }
+
+  private void validateFinalPlanDecision(FinalPlanDraft entry, FinalPlanCandidateSet candidates) {
+    if (entry.reconciliationDecision() == null) return;
+    FinalPlanReconciliationDecision decision = finalPlanDecision(read(entry.reconciliationDecision()));
+    if (candidates.active().size() > 1) {
+      throw InventoryException.conflict(
+          "Maintenance reconciliation has multiple active candidates");
+    }
+    if (decision.strategy() == FinalPlanReconciliationStrategy.CREATE) {
+      if (!candidates.active().isEmpty()) {
+        throw InventoryException.conflict(
+            "CREATE reconciliation is only valid with no active maintenance candidate");
+      }
+      return;
+    }
+    FinalPlanCandidateView selected =
+        candidates.all().stream()
+            .filter(
+                candidate ->
+                    candidate.targetKind() == decision.selectedTargetKind()
+                        && candidate.targetId().equals(decision.selectedTargetId()))
+            .findFirst()
+            .orElse(null);
+    if (selected == null) {
+      throw InventoryException.conflict("Reconciliation selection is no longer a maintenance candidate");
+    }
+    if (!selected.active()) {
+      throw InventoryException.conflict(
+          "Reconciliation selection must be an active maintenance candidate");
+    }
+    if (selected.started() && decision.strategy() != FinalPlanReconciliationStrategy.MERGE) {
+      throw InventoryException.conflict("Started maintenance candidate requires MERGE reconciliation");
+    }
+  }
+
+  private FinalPlanCandidateSet finalPlanCandidateSet(FinalPlanDraft entry) {
+    List<FinalPlanCandidateView> all = finalPlanCandidates(read(entry.collisionCandidates()));
+    return new FinalPlanCandidateSet(all, all.stream().filter(FinalPlanCandidateView::active).toList());
+  }
+
+  private FinalPlanView persistFinalPlanVersion(
+      UUID inventoryId,
+      long expectedSessionRevision,
+      long expectedSettingsRevision,
+      long expectedPriorVersion,
+      long finalPlanVersion,
+      String sha256,
+      FinalPlanScheduleMode movementMode,
+      FinalPlanScheduleMode repairMode,
+      List<FinalPlanDraft> entries) {
+    return transactions.execute(
+        ignored -> {
+          InventorySession locked =
+              sessions
+                  .findByIdAndLifecycleForUpdate(inventoryId, SessionLifecycle.ACTIVE)
+                  .orElseThrow(() -> InventoryException.conflict("Inventory session is not active"));
+          expectRevision(locked.getRevision(), expectedSessionRevision);
+          PlanningSpecification lockedSettings = planningSpecification(locked.getWarehouseId());
+          expectRevision(lockedSettings.revision(), expectedSettingsRevision);
+          InventoryFinalPlan head = finalPlans.findByInventoryIdForUpdate(inventoryId).orElse(null);
+          long prior = head == null ? 0 : head.getFinalPlanVersion();
+          expectRevision(prior, expectedPriorVersion);
+          if (finalPlanVersion != Math.addExact(prior, 1)) {
+            throw InventoryException.conflict("Inventory final-plan version changed");
+          }
+          InventoryFinalPlan saved;
+          if (head == null) {
+            saved =
+                InventoryFinalPlan.create(
+                    inventoryId,
+                    locked.getRevision(),
+                    lockedSettings.revision(),
+                    sha256,
+                    movementMode,
+                    repairMode);
+          } else {
+            head.nextVersion(
+                locked.getRevision(),
+                lockedSettings.revision(),
+                sha256,
+                movementMode,
+                repairMode);
+            saved = head;
+          }
+          saved = finalPlans.saveAndFlush(saved);
+          List<InventoryFinalPlanEntry> persisted =
+              entries.stream()
+                  .map(entry -> finalPlanEntry(inventoryId, finalPlanVersion, entry))
+                  .toList();
+          finalPlanEntries.saveAllAndFlush(persisted);
+          return finalPlanView(locked, saved, persisted);
+        });
+  }
+
+  private InventoryFinalPlanEntry finalPlanEntry(
+      UUID inventoryId, long finalPlanVersion, FinalPlanDraft entry) {
+    return new InventoryFinalPlanEntry(
+        inventoryId,
+        finalPlanVersion,
+        entry.finding().getId(),
+        entry.finding().getRevision(),
+        entry.finding().getAssetId(),
+        entry.finding().getAssetVersion(),
+        entry.planFingerprintSha256(),
+        entry.hasWork(),
+        entry.targetKind(),
+        entry.order(),
+        entry.priority(),
+        entry.movementToRepair(),
+        entry.movementScheduledDate(),
+        entry.repairScheduledDate(),
+        entry.collisionCandidates(),
+        entry.reconciliationDecision());
+  }
+
+  private FinalPlanView finalPlanView(
+      InventorySession session, InventoryFinalPlan plan, List<InventoryFinalPlanEntry> entries) {
+    return new FinalPlanView(
+        session.getId(),
+        session.getRevision(),
+        plan.getFinalPlanVersion(),
+        plan.getFinalPlanSha256(),
+        plan.getPlanningSettingsRevision(),
+        plan.getState(),
+        plan.getMovementScheduleMode(),
+        plan.getRepairScheduleMode(),
+        entries.stream().map(this::finalPlanEntryView).toList());
+  }
+
+  private FinalPlanEntryView finalPlanEntryView(InventoryFinalPlanEntry entry) {
+    return new FinalPlanEntryView(
+        entry.getFindingId(),
+        entry.getFindingRevision(),
+        entry.getPlanFingerprintSha256(),
+        entry.isHasWork(),
+        entry.getTargetKind(),
+        entry.getOrder(),
+        entry.getPriority(),
+        entry.isMovementToRepair(),
+        entry.getMovementScheduledDate(),
+        entry.getRepairScheduledDate(),
+        finalPlanCandidates(read(entry.getCollisionCandidates())),
+        entry.getReconciliationDecision() == null
+            ? null
+            : finalPlanDecision(read(entry.getReconciliationDecision())));
+  }
+
+  private List<FinalPlanCandidateView> finalPlanCandidates(JsonNode candidates) {
+    if (!candidates.isArray()) {
+      throw new IllegalStateException("Stored final-plan candidates are invalid");
+    }
+    List<FinalPlanCandidateView> result = new ArrayList<>();
+    for (JsonNode candidate : candidates) {
+      validateFinalPlanCandidate(candidate);
+      JsonNode summary = candidate.path("planSummary");
+      result.add(
+          new FinalPlanCandidateView(
+              FinalPlanTargetKind.valueOf(candidate.path("targetKind").asText()),
+              requiredUuid(candidate, "targetId", "stored reconciliation target id"),
+              nullableUuid(candidate, "estimateId", "stored reconciliation estimate id"),
+              nullableUuid(candidate, "repairId", "stored reconciliation repair id"),
+              candidate.path("version").asLong(),
+              candidate.path("state").asText(),
+              candidate.path("started").asBoolean(),
+              candidate.path("active").asBoolean(),
+              candidate.hasNonNull("priority") ? candidate.path("priority").asInt() : null,
+              candidate.hasNonNull("sourceParty") ? candidate.path("sourceParty").asText() : null,
+              candidate.hasNonNull("planFingerprintSha256")
+                  ? candidate.path("planFingerprintSha256").asText()
+                  : null,
+              new FinalPlanSummaryView(
+                  summary.path("workLineCount").asInt(),
+                  summary.path("materialLineCount").asInt(),
+                  summary.path("grandTotalMinor").asLong())));
+    }
+    return List.copyOf(result);
+  }
+
+  private FinalPlanReconciliationDecision finalPlanDecision(JsonNode decision) {
+    try {
+      if (!decision.isObject()) throw new IllegalArgumentException();
+      FinalPlanReconciliationStrategy strategy =
+          FinalPlanReconciliationStrategy.valueOf(decision.path("strategy").asText());
+      FinalPlanTargetKind targetKind =
+          decision.hasNonNull("selectedTargetKind")
+              ? FinalPlanTargetKind.valueOf(decision.path("selectedTargetKind").asText())
+              : null;
+      UUID targetId = nullableUuid(decision, "selectedTargetId", "stored reconciliation target id");
+      return new FinalPlanReconciliationDecision(strategy, targetKind, targetId);
+    } catch (RuntimeException exception) {
+      throw new IllegalStateException("Stored final-plan reconciliation decision is invalid", exception);
+    }
+  }
+
+  private UUID nullableUuid(JsonNode node, String field, String label) {
+    if (!node.hasNonNull(field)) return null;
+    return requiredUuid(node, field, label);
+  }
+
+  private boolean explicitNull(JsonNode node, String field) {
+    return node.has(field) && node.get(field).isNull();
+  }
+
+  private void invalidateFinalPlan(InventorySession session) {
+    finalPlans
+        .findById(session.getId())
+        .ifPresent(
+            plan -> {
+              plan.markStale();
+              finalPlans.saveAndFlush(plan);
+            });
+  }
+
+  /**
+   * Completion is bound to the exact server-owned plan version, not merely to a client-side list
+   * of finding revisions. Re-running maintenance preflight makes a changed candidate set a
+   * conflict before any terminal session mutation is possible.
+   */
+  private CompletionFinalPlan requireCompletionFinalPlan(
+      InventorySession session,
+      long expectedVersion,
+      String expectedSha256,
+      boolean refreshMaintenanceCandidates) {
+    InventoryFinalPlan plan =
+        finalPlans
+            .findById(session.getId())
+            .orElseThrow(() -> InventoryException.conflict("Inventory final plan is not prepared"));
+    if (plan.getState() != FinalPlanState.DRAFT
+        || plan.getFinalPlanVersion() != expectedVersion
+        || !plan.getFinalPlanSha256().equals(expectedSha256)
+        || plan.getBasisSessionRevision() != session.getRevision()) {
+      throw InventoryException.conflict("Inventory final plan is stale");
+    }
+    PlanningSpecification settings = planningSpecification(session.getWarehouseId());
+    if (settings.revision() != plan.getPlanningSettingsRevision()) {
+      throw InventoryException.conflict("Inventory final plan calendar is stale");
+    }
+    List<InventoryFinalPlanEntry> entries =
+        finalPlanEntries.findByInventoryIdAndFinalPlanVersionOrderByOrderAscFindingIdAsc(
+            session.getId(), plan.getFinalPlanVersion());
+    requireCurrentFinalPlanDates(session, entries);
+    List<FinalPlanDraft> draft = completionFinalPlanDrafts(session, plan, entries);
+    String calculated =
+        finalPlanSha256(
+            session,
+            settings,
+            plan.getFinalPlanVersion(),
+            plan.getMovementScheduleMode(),
+            plan.getRepairScheduleMode(),
+            draft);
+    if (!plan.getFinalPlanSha256().equals(calculated)) {
+      throw InventoryException.conflict("Inventory final plan evidence is stale");
+    }
+    if (refreshMaintenanceCandidates) {
+      UUID key =
+          UUID.nameUUIDFromBytes(
+              ("rwms:inventory:preflight:"
+                      + session.getId()
+                      + ":"
+                      + plan.getFinalPlanVersion()
+                      + ":"
+                      + plan.getFinalPlanSha256())
+                  .getBytes(StandardCharsets.UTF_8));
+      List<FinalPlanDraft> fresh =
+          attachPreflightCandidates(
+              draft,
+              dependencies.preflightReconciliation(
+                  key,
+                  reconciliationPreflightRequest(
+                      session, plan.getFinalPlanVersion(), plan.getFinalPlanSha256(), draft)),
+              session.getId(),
+              plan.getFinalPlanVersion(),
+              plan.getFinalPlanSha256());
+      for (int index = 0; index < draft.size(); index++) {
+        if (!canonicalJsonTreeHash(read(draft.get(index).collisionCandidates()))
+            .equals(canonicalJsonTreeHash(read(fresh.get(index).collisionCandidates())))) {
+          throw InventoryException.conflict("Maintenance reconciliation candidates changed");
+        }
+      }
+    }
+    for (FinalPlanDraft entry : draft) {
+      FinalPlanCandidateSet candidates = finalPlanCandidateSet(entry);
+      if (candidates.active().size() > 1) {
+        throw new InventoryException(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            "INVENTORY_FINAL_PLAN_AMBIGUOUS_ACTIVE_CANDIDATES",
+            "Resolve multiple active maintenance candidates before completion");
+      }
+      if (entry.hasWork()
+          && !candidates.active().isEmpty()
+          && entry.reconciliationDecision() == null) {
+        throw new InventoryException(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            "INVENTORY_FINAL_PLAN_INCOMPLETE",
+            "Choose a reconciliation strategy for every active maintenance candidate");
+      }
+      validateFinalPlanDecision(entry, candidates);
+    }
+    return new CompletionFinalPlan(plan, entries, draft);
+  }
+
+  private void requireCurrentFinalPlanDates(
+      InventorySession session, List<InventoryFinalPlanEntry> entries) {
+    LocalDate planningDate = planningDate(session);
+    boolean hasPastOperationalDate =
+        entries.stream()
+            .filter(InventoryFinalPlanEntry::isHasWork)
+            .anyMatch(
+                entry ->
+                    (entry.getMovementScheduledDate() != null
+                            && entry.getMovementScheduledDate().isBefore(planningDate))
+                        || (entry.getRepairScheduledDate() != null
+                            && entry.getRepairScheduledDate().isBefore(planningDate)));
+    if (hasPastOperationalDate) {
+      throw InventoryException.conflict(
+          "Inventory final plan has operational dates before the current warehouse planning date; prepare it again");
+    }
+  }
+
+  private List<FinalPlanDraft> completionFinalPlanDrafts(
+      InventorySession session, InventoryFinalPlan plan, List<InventoryFinalPlanEntry> entries) {
+    List<InventoryFinding> active =
+        findings.findAllByInventoryIdAndMembershipActiveTrueOrderById(session.getId());
+    if (active.size() != entries.size()) {
+      throw InventoryException.conflict("Inventory final plan no longer covers the active population");
+    }
+    Map<UUID, InventoryFinalPlanEntry> byId = new LinkedHashMap<>();
+    for (int index = 0; index < entries.size(); index++) {
+      InventoryFinalPlanEntry entry = entries.get(index);
+      if (entry.getOrder() != index || byId.put(entry.getFindingId(), entry) != null) {
+        throw InventoryException.conflict("Inventory final-plan ordering is invalid");
+      }
+    }
+    List<FinalPlanDraft> result = new ArrayList<>();
+    for (InventoryFinding finding : active) {
+      InventoryFinalPlanEntry entry = byId.get(finding.getId());
+      if (entry == null || entry.getFindingRevision() != finding.getRevision()) {
+        throw InventoryException.conflict("Inventory final plan finding evidence is stale");
+      }
+      if (!entry.isHasWork()) {
+        if (finding.getInspection() == InspectionState.WORK_STAGED) {
+          throw InventoryException.conflict("Inventory final plan omitted staged maintenance work");
+        }
+        result.add(FinalPlanDraft.noWork(finding).withOrder(entry.getOrder()));
+        continue;
+      }
+      if (finding.getInspection() != InspectionState.WORK_STAGED
+          || finding.getAssetId() == null
+          || finding.getAssetVersion() == null
+          || !finding.getAssetId().equals(entry.getAssetId())
+          || !finding.getAssetVersion().equals(entry.getAssetVersion())) {
+        throw InventoryException.conflict("Inventory final-plan work evidence is stale");
+      }
+      FindingPlanSnapshot snapshot =
+          activePlanSnapshot(finding)
+              .orElseThrow(() -> InventoryException.conflict("Frozen maintenance plan is missing"));
+      FinalPlanTargetKind expectedTarget =
+          "AFTER_RENT".equals(finding.getCurrentStatus())
+              ? FinalPlanTargetKind.ESTIMATE
+              : FinalPlanTargetKind.REPAIR;
+      if (!snapshot.getFingerprint().equals(entry.getPlanFingerprintSha256())
+          || entry.getTargetKind() != expectedTarget
+          || entry.getPriority() == null
+          || entry.getRepairScheduledDate() == null
+          || entry.isMovementToRepair() != (entry.getMovementScheduledDate() != null)) {
+        throw InventoryException.conflict("Inventory final-plan work fields are invalid");
+      }
+      result.add(
+          new FinalPlanDraft(
+              finding,
+              snapshot,
+              true,
+              entry.getTargetKind(),
+              entry.getOrder(),
+              entry.getPriority(),
+              entry.isMovementToRepair(),
+              entry.getMovementScheduledDate(),
+              entry.getRepairScheduledDate(),
+              entry.getCollisionCandidates(),
+              entry.getReconciliationDecision()));
+    }
+    result.sort(Comparator.comparingInt(FinalPlanDraft::order));
+    return List.copyOf(result);
+  }
+
   public CompletionPreview preview(
       Jwt jwt, UUID inventoryId, UUID idempotencyKey, CompletionPreviewRequest request) {
     requireScopedSession(inventoryId, authorizer.manageScope(jwt));
@@ -1341,6 +2538,12 @@ public class InventoryApplicationService {
     authorizer.requireManage(jwt, session.getWarehouseId());
     RevisionState revisions =
         revisionState(session, request.expectedSessionRevision(), request.findingRevisions());
+    CompletionFinalPlan finalPlan =
+        requireCompletionFinalPlan(
+            session,
+            request.finalPlanVersion(),
+            request.finalPlanSha256(),
+            true);
     InventoryDependencyGateway.Validation validation = validateAssets(revisions.findings());
     List<ValidatedFinding> validatedFindings =
         validatedFindings(session, revisions.findings(), validation);
@@ -1354,11 +2557,20 @@ public class InventoryApplicationService {
     String acknowledgement =
         canonicalHash(
             acknowledgementFacts(
-                session, revisions, validation, furniture, statistics, risks, validatedFindings));
+                session,
+                revisions,
+                finalPlan,
+                validation,
+                furniture,
+                statistics,
+                risks,
+                validatedFindings));
     CompletionPreview response =
         new CompletionPreview(
             inventoryId,
             session.getRevision(),
+            finalPlan.plan().getFinalPlanVersion(),
+            finalPlan.plan().getFinalPlanSha256(),
             revisions.expectations(),
             validation.validationDigest(),
             validation.validatedAt(),
@@ -1389,11 +2601,19 @@ public class InventoryApplicationService {
     authorizer.requireManage(jwt, session.getWarehouseId());
     RevisionState revisions =
         revisionState(session, request.expectedSessionRevision(), request.findingRevisions());
+    CompletionFinalPlan finalPlan =
+        requireCompletionFinalPlan(
+            session,
+            request.finalPlanVersion(),
+            request.finalPlanSha256(),
+            true);
     InventoryDependencyGateway.Validation fresh = validateAssets(revisions.findings());
     ValidationRecord preview = validationRecord(inventoryId);
     if (!request.acknowledgementSha256().equals(preview.acknowledgement())
         || !request.validationSha256().equals(preview.validation())
         || preview.sessionRevision() != session.getRevision()
+        || preview.preview().finalPlanVersion() != finalPlan.plan().getFinalPlanVersion()
+        || !finalPlan.plan().getFinalPlanSha256().equals(preview.preview().finalPlanSha256())
         || !fresh.validationDigest().equals(preview.validation())
         || !semanticValidationDigest(preview.validationTruth().path("assets"))
             .equals(preview.validation())) {
@@ -1436,13 +2656,34 @@ public class InventoryApplicationService {
     InventorySession completed =
         transactions.execute(
             status -> {
-              InventorySession locked = requireActive(inventoryId);
+              InventorySession locked =
+                  sessions
+                      .findByIdAndLifecycleForUpdate(inventoryId, SessionLifecycle.ACTIVE)
+                      .orElseThrow(
+                          () -> InventoryException.conflict("Inventory session is not active"));
               RevisionState lockedRevisions =
                   revisionState(locked, request.expectedSessionRevision(), request.findingRevisions());
+              InventoryFinalPlan lockedFinalPlan =
+                  finalPlans
+                      .findByInventoryIdForUpdate(inventoryId)
+                      .orElseThrow(
+                          () -> InventoryException.conflict("Inventory final plan is not prepared"));
+              if (lockedFinalPlan.getState() != FinalPlanState.DRAFT
+                  || lockedFinalPlan.getFinalPlanVersion() != request.finalPlanVersion()
+                  || !lockedFinalPlan.getFinalPlanSha256().equals(request.finalPlanSha256())
+                  || lockedFinalPlan.getBasisSessionRevision() != locked.getRevision()) {
+                throw InventoryException.conflict("Inventory final plan is stale");
+              }
+              List<InventoryFinalPlanEntry> lockedPlanEntries =
+                  finalPlanEntries.findByInventoryIdAndFinalPlanVersionOrderByOrderAscFindingIdAsc(
+                      inventoryId, lockedFinalPlan.getFinalPlanVersion());
+              completionFinalPlanDrafts(locked, lockedFinalPlan, lockedPlanEntries);
               CompletionPreview completionSnapshot =
                   new CompletionPreview(
                       inventoryId,
                       locked.getRevision(),
+                      lockedFinalPlan.getFinalPlanVersion(),
+                      lockedFinalPlan.getFinalPlanSha256(),
                       lockedRevisions.expectations(),
                       fresh.validationDigest(),
                       fresh.validatedAt(),
@@ -1459,11 +2700,13 @@ public class InventoryApplicationService {
                   fresh.validatedAt(),
                   actorJson(jwt));
               InventorySession result = sessions.saveAndFlush(locked);
+              lockedFinalPlan.complete();
+              finalPlans.saveAndFlush(lockedFinalPlan);
               FrozenStatistics finalStatistics =
                   calculateStatistics(result, lockedRevisions.findings(), validatedFindings);
               persistStatistics(result, finalStatistics);
               createFurnitureReconciliationIntent(result);
-              createPublicationIntents(result, revisions.findings(), actor(jwt));
+              createPublicationIntents(result, lockedFinalPlan, lockedPlanEntries, actor(jwt));
               events.append(
                   "SESSION",
                   result.getId(),
@@ -1476,8 +2719,27 @@ public class InventoryApplicationService {
                   actor(jwt));
               return result;
             });
-    dispatchFurnitureReconciliation(completed.getId());
+    dispatchCompletionEffectsAfterCommit(completed.getId());
     return sessionView(requireSession(completed.getId()));
+  }
+
+  private void dispatchCompletionEffectsAfterCommit(UUID inventoryId) {
+    Runnable dispatch =
+        () -> {
+          dispatchFurnitureReconciliation(inventoryId);
+          dispatchReadyPublications(inventoryId);
+        };
+    if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+      dispatch.run();
+      return;
+    }
+    TransactionSynchronizationManager.registerSynchronization(
+        new TransactionSynchronization() {
+          @Override
+          public void afterCommit() {
+            dispatch.run();
+          }
+        });
   }
 
   public SessionView cancel(
@@ -1549,7 +2811,7 @@ public class InventoryApplicationService {
     List<InventoryPublicationIntent> selected =
         selectPublications(inventoryId, idempotencyKey, request);
     for (InventoryPublicationIntent intent : selected) {
-      dispatchPublication(jwt, session, intent, idempotencyKey, false, null);
+      dispatchPublication(actor(jwt), session, intent, idempotencyKey, false, null);
     }
     return publicationBatch(inventoryId);
   }
@@ -1593,7 +2855,7 @@ public class InventoryApplicationService {
           "Reconciliation proof is accepted only for a blocked publication");
     }
     dispatchPublication(
-        jwt,
+        actor(jwt),
         session,
         intent,
         idempotencyKey,
@@ -1984,7 +3246,6 @@ public class InventoryApplicationService {
     body.put("mode", selection.mode());
     body.put("priority", selection.priority());
     body.put("movementToRepair", selection.movementToRepair());
-    body.put("movementToShipment", selection.movementToShipment());
     if (selection.logisticsPlanningMode() == null) {
       body.putNull("logisticsPlanningMode");
     } else {
@@ -2065,6 +3326,7 @@ public class InventoryApplicationService {
       if (quantity.signum() <= 0) throw new IllegalArgumentException("Plan quantity must be positive");
       if ("CATALOG".equals(line.aggregationKind())) {
         if (line.catalogNodeId() == null
+            || line.routingCatalogNodeId() != null
             || line.description() != null
             || line.type() != null
             || line.unit() != null
@@ -2074,6 +3336,7 @@ public class InventoryApplicationService {
         }
       } else if (!manualMode
           || line.catalogNodeId() != null
+          || line.routingCatalogNodeId() == null
           || line.description() == null
           || line.description().isBlank()
           || line.type() == null
@@ -2195,8 +3458,6 @@ public class InventoryApplicationService {
     UUID catalogVersionId = UUID.fromString(snapshot.path("catalogVersionId").asText());
     boolean movementToRepair =
         requiredBoolean(snapshot, "movementToRepair", "frozen movement to repair");
-    boolean movementToShipment =
-        requiredBoolean(snapshot, "movementToShipment", "frozen movement to shipment");
     LogisticsPlanningMode logisticsPlanningMode;
     LocalDate logisticsScheduledDate;
     try {
@@ -2215,7 +3476,6 @@ public class InventoryApplicationService {
       throw new IllegalStateException("Persisted frozen logistics planning is invalid");
     }
     if (movementToRepair != selection.movementToRepair()
-        || movementToShipment != selection.movementToShipment()
         || logisticsPlanningMode != selection.logisticsPlanningMode()
         || !java.util.Objects.equals(
             logisticsScheduledDate, selection.logisticsScheduledDate())) {
@@ -2229,12 +3489,12 @@ public class InventoryApplicationService {
             finding.getInventoryId(),
             selection.mode(),
             movementToRepair,
-            movementToShipment,
             logisticsPlanningMode,
             logisticsScheduledDate,
             catalogVersionId,
             frozen.fingerprint(),
-            write(snapshot)));
+            write(snapshot),
+            2));
     int lineNo = 0;
     for (JsonNode line : snapshot.path("lines")) {
       String unit = line.path("unit").isNull() ? null : line.path("unit").asText();
@@ -3018,6 +4278,7 @@ public class InventoryApplicationService {
   private Map<String, Object> acknowledgementFacts(
       InventorySession session,
       RevisionState revisions,
+      CompletionFinalPlan finalPlan,
       InventoryDependencyGateway.Validation validation,
       FurnitureCompletionFact furniture,
       FrozenStatistics statistics,
@@ -3061,6 +4322,8 @@ public class InventoryApplicationService {
     Map<String, Object> result = new LinkedHashMap<>();
     result.put("inventoryId", session.getId());
     result.put("sessionRevision", session.getRevision());
+    result.put("finalPlanVersion", finalPlan.plan().getFinalPlanVersion());
+    result.put("finalPlanSha256", finalPlan.plan().getFinalPlanSha256());
     result.put("findingRevisions", revisions.expectations());
     result.put("findingFacts", findingFacts);
     result.put("validationSha256", validation.validationDigest());
@@ -3373,8 +4636,8 @@ public class InventoryApplicationService {
               baseline.displayCanonicalNumber(),
               current.displayCanonicalNumber()));
     }
-    if (!canonicalHash(passportWithoutTenant(baseline.passportSnapshot()))
-        .equals(canonicalHash(passportWithoutTenant(current.passportSnapshot())))) {
+    if (!canonicalJsonTreeHash(passportWithoutTenant(baseline.passportSnapshot()))
+        .equals(canonicalJsonTreeHash(passportWithoutTenant(current.passportSnapshot())))) {
       conflicts.add(
           new ConflictView(
               "PASSPORT_CHANGED",
@@ -3382,8 +4645,8 @@ public class InventoryApplicationService {
               write(passportWithoutTenant(baseline.passportSnapshot())),
               write(passportWithoutTenant(current.passportSnapshot()))));
     }
-    if (!canonicalHash(baseline.contentsSnapshot())
-        .equals(canonicalHash(current.contentsSnapshot()))) {
+    if (!canonicalJsonTreeHash(baseline.contentsSnapshot())
+        .equals(canonicalJsonTreeHash(current.contentsSnapshot()))) {
       conflicts.add(
           new ConflictView(
               "CONTENTS_CHANGED",
@@ -3391,8 +4654,8 @@ public class InventoryApplicationService {
               write(baseline.contentsSnapshot()),
               write(current.contentsSnapshot())));
     }
-    if (!canonicalHash(baseline.repairsSnapshot())
-        .equals(canonicalHash(current.repairsSnapshot()))) {
+    if (!canonicalJsonTreeHash(baseline.repairsSnapshot())
+        .equals(canonicalJsonTreeHash(current.repairsSnapshot()))) {
       conflicts.add(
           new ConflictView(
               "REPAIRS_CHANGED",
@@ -3414,9 +4677,9 @@ public class InventoryApplicationService {
     value.put("status", current.status());
     value.put("displayCanonicalNumber", current.displayCanonicalNumber());
     value.put("tenantSnapshot", current.tenantSnapshot());
-    value.put("passportSnapshot", passportWithoutTenant(current.passportSnapshot()));
-    value.put("contentsSnapshot", current.contentsSnapshot());
-    value.put("repairsSnapshot", current.repairsSnapshot());
+    value.put("passportSnapshot", canonicalJsonValue(passportWithoutTenant(current.passportSnapshot())));
+    value.put("contentsSnapshot", canonicalJsonValue(current.contentsSnapshot()));
+    value.put("repairsSnapshot", canonicalJsonValue(current.repairsSnapshot()));
     return canonicalHash(value);
   }
 
@@ -3478,18 +4741,48 @@ public class InventoryApplicationService {
       InventorySession session,
       List<InventoryFinding> all,
       List<ValidatedFinding> validatedFindings) {
-    Map<UUID, ValidatedFinding> validatedByFinding = new LinkedHashMap<>();
+    Map<UUID, StatisticsReconciliation> reconciliationByFinding = new LinkedHashMap<>();
     for (ValidatedFinding finding : validatedFindings) {
-      if (validatedByFinding.put(finding.findingId(), finding) != null) {
+      if (reconciliationByFinding.put(
+              finding.findingId(),
+              new StatisticsReconciliation(
+                  validatedReconciliation(finding.currentSnapshot(), finding.conflicts())
+                      == ReconciliationState.MISSING,
+                  !finding.conflicts().isEmpty()))
+          != null) {
         throw new IllegalStateException("Inventory validation contains duplicate findings");
       }
     }
-    if (!validatedByFinding.keySet().equals(
+    if (!reconciliationByFinding.keySet().equals(
         all.stream()
             .map(InventoryFinding::getId)
             .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new)))) {
       throw new IllegalStateException("Inventory validation does not cover every finding");
     }
+    return calculateStatistics(session, all, reconciliationByFinding);
+  }
+
+  private FrozenStatistics calculatePersistedStatistics(
+      InventorySession session, List<InventoryFinding> all) {
+    Map<UUID, StatisticsReconciliation> reconciliationByFinding = new LinkedHashMap<>();
+    for (InventoryFinding finding : all) {
+      ReconciliationState reconciliation = finding.getReconciliation();
+      if (reconciliationByFinding.put(
+              finding.getId(),
+              new StatisticsReconciliation(
+                  reconciliation == ReconciliationState.MISSING,
+                  reconciliation == ReconciliationState.CONFLICT))
+          != null) {
+        throw new IllegalStateException("Inventory findings contain duplicate identifiers");
+      }
+    }
+    return calculateStatistics(session, all, reconciliationByFinding);
+  }
+
+  private FrozenStatistics calculateStatistics(
+      InventorySession session,
+      List<InventoryFinding> all,
+      Map<UUID, StatisticsReconciliation> reconciliationByFinding) {
     int inspected =
         (int)
             all.stream()
@@ -3499,12 +4792,8 @@ public class InventoryApplicationService {
         (int)
             all.stream()
                 .filter(
-                    value -> {
-                      ValidatedFinding validated = validatedByFinding.get(value.getId());
-                      return validatedReconciliation(
-                              validated.currentSnapshot(), validated.conflicts())
-                          == ReconciliationState.MISSING;
-                    })
+                    value ->
+                        reconciliationByFinding.get(value.getId()).missing())
                 .count();
     int ready =
         (int) all.stream().filter(value -> value.getInspection() == InspectionState.READY).count();
@@ -3528,7 +4817,9 @@ public class InventoryApplicationService {
                 .count();
     int conflicts =
         (int)
-            validatedFindings.stream().filter(value -> !value.conflicts().isEmpty()).count();
+            reconciliationByFinding.values().stream()
+                .filter(StatisticsReconciliation::conflict)
+                .count();
     List<FindingPlanLine> activeLines = planLines.findActiveByInventoryId(session.getId());
     List<PlanTotal> totals =
         List.of(
@@ -3567,12 +4858,12 @@ public class InventoryApplicationService {
         adjustment,
         normative.stripTrailingZeros().toPlainString(),
         duration,
-        aggregateLines(session.getId()));
+        aggregateLines(activeLines));
   }
 
-  private List<StatisticsLine> aggregateLines(UUID inventoryId) {
+  private List<StatisticsLine> aggregateLines(List<FindingPlanLine> activeLines) {
     Map<StatisticsKey, BigDecimal> quantities = new LinkedHashMap<>();
-    for (FindingPlanLine line : planLines.findActiveByInventoryId(inventoryId)) {
+    for (FindingPlanLine line : activeLines) {
       StatisticsKey key =
           new StatisticsKey(
               line.getSourceKind(),
@@ -3731,15 +5022,21 @@ public class InventoryApplicationService {
   }
 
   private void createPublicationIntents(
-      InventorySession session, List<InventoryFinding> all, OpaqueActorReference actor) {
-    for (InventoryFinding finding : all) {
+      InventorySession session,
+      InventoryFinalPlan finalPlan,
+      List<InventoryFinalPlanEntry> entries,
+      OpaqueActorReference actor) {
+    for (InventoryFinalPlanEntry entry : entries) {
+      if (!entry.isHasWork()) continue;
       InventoryPublicationIntent intent =
           publications.saveAndFlush(
-              finding.getInspection() == InspectionState.WORK_STAGED
-                  ? InventoryPublicationIntent.ready(
-                      session.getId(), finding.getId(), Math.max(1, finding.getRevision()))
-                  : InventoryPublicationIntent.notRequired(
-                      session.getId(), finding.getId(), Math.max(1, finding.getRevision())));
+              InventoryPublicationIntent.ready(
+                  session.getId(),
+                  entry.getFindingId(),
+                  Math.max(1, entry.getFindingRevision()),
+                  finalPlan.getFinalPlanVersion(),
+                  finalPlan.getFinalPlanSha256(),
+                  entry.getTargetKind()));
       if (intent.getState() == PublicationState.READY) {
         appendPublication(intent, session, "inventory.publication.ready.v1", actor);
       }
@@ -3793,14 +5090,14 @@ public class InventoryApplicationService {
   }
 
   private void dispatchPublication(
-      Jwt jwt,
+      OpaqueActorReference eventActor,
       InventorySession session,
       InventoryPublicationIntent original,
       UUID idempotencyKey,
       boolean reconcile,
       String preconditionHash) {
     InventoryPublicationIntent pending =
-        transactions.execute(
+        independentTransactions.execute(
             status -> {
               InventoryPublicationIntent intent =
                   requirePublication(session.getId(), original.getFindingId());
@@ -3817,80 +5114,147 @@ public class InventoryApplicationService {
                           ? "RECONCILE_RETRY"
                           : saved.getAttemptCount() == 1 ? "REQUEST" : "RETRY",
                       saved.getRequestSha256()));
-              appendPublication(saved, session, "inventory.publication.requested.v1", actor(jwt));
+              appendPublication(saved, session, "inventory.publication.requested.v1", eventActor);
               return saved;
             });
-    JsonNode request = publicationRequest(session, pending);
     try {
-      InventoryDependencyGateway.RepairUpsert result =
-          dependencies.upsertRepair(
-              session.getId(), pending.getFindingId(), idempotencyKey, request);
-      transactions.executeWithoutResult(
+      JsonNode request = publicationRequest(session, pending);
+      PublicationTarget result =
+          dispatchPublicationEffect(session, pending, idempotencyKey, request);
+      independentTransactions.executeWithoutResult(
           status -> {
             InventoryPublicationIntent intent =
                 requirePublication(session.getId(), pending.getFindingId());
-            intent.succeed(result.repairId());
-            InventoryPublicationIntent saved = publications.saveAndFlush(intent);
-            insertPublicationAttempt(
-                saved, idempotencyKey, reconcile, "SUCCEEDED", null, result.repairId());
-            appendPublication(saved, session, "inventory.publication.succeeded.v1", actor(jwt));
-          });
-    } catch (InventoryException exception) {
-      transactions.executeWithoutResult(
-          status -> {
-            InventoryPublicationIntent intent =
-                requirePublication(session.getId(), pending.getFindingId());
-            boolean blocked = exception.status() == HttpStatus.CONFLICT;
-            if (blocked) intent.block("SOURCE_PRECONDITION_CONFLICT");
-            else intent.transientFailure();
+            intent.succeed(result.value());
             InventoryPublicationIntent saved = publications.saveAndFlush(intent);
             insertPublicationAttempt(
                 saved,
                 idempotencyKey,
                 reconcile,
-                blocked ? "BLOCKED" : "TRANSIENT_FAILED",
-                blocked ? "SOURCE_PRECONDITION_CONFLICT" : "DEPENDENCY_UNAVAILABLE",
-                null);
-            appendPublication(
-                saved,
-                session,
-                blocked
-                    ? "inventory.publication.blocked.v1"
-                    : "inventory.publication.transient-failed.v1",
-                actor(jwt));
+                "SUCCEEDED",
+                null,
+                result.value());
+            appendPublication(saved, session, "inventory.publication.succeeded.v1", eventActor);
           });
+    } catch (InventoryException exception) {
+      settlePublicationFailure(
+          session, pending.getFindingId(), idempotencyKey, reconcile, eventActor, exception);
+    } catch (RuntimeException exception) {
+      log.warn(
+          "Inventory publication dispatch deferred for inventory {} finding {}",
+          session.getId(),
+          pending.getFindingId(),
+          exception);
+      settlePublicationFailure(
+          session,
+          pending.getFindingId(),
+          idempotencyKey,
+          reconcile,
+          eventActor,
+          InventoryException.dependency("Maintenance publication dispatch failed"));
     }
+  }
+
+  /**
+   * Completion writes READY intents inside its terminal transaction and dispatches only after the
+   * transaction commits. A process failure in between therefore leaves a durable READY intent for
+   * the scheduler, while a failure after the PENDING transition reuses its durable attempt key.
+   */
+  private void dispatchReadyPublications(UUID inventoryId) {
+    InventorySession session;
+    try {
+      session = requireCompleted(inventoryId);
+    } catch (RuntimeException exception) {
+      log.error("Unable to load completed inventory {} for publication dispatch", inventoryId, exception);
+      return;
+    }
+    for (InventoryPublicationIntent intent :
+        publications.findAllByInventoryIdOrderByFindingId(inventoryId)) {
+      if (intent.getState() != PublicationState.READY) continue;
+      try {
+        dispatchPublication(
+            PUBLICATION_RECOVERY_ACTOR,
+            session,
+            intent,
+            servicePublicationIdempotencyKey(intent),
+            false,
+            null);
+      } catch (RuntimeException exception) {
+        // The ready intent is durable and will be picked up by the recovery scheduler.
+        log.error(
+            "Unable to dispatch ready inventory publication {} for inventory {}",
+            intent.getId(),
+            inventoryId,
+            exception);
+      }
+    }
+  }
+
+  private UUID servicePublicationIdempotencyKey(InventoryPublicationIntent intent) {
+    return UUID.nameUUIDFromBytes(
+        ("rwms:inventory-service:publication:" + intent.getMaintenanceSourceKey())
+            .getBytes(StandardCharsets.UTF_8));
+  }
+
+  private void settlePublicationFailure(
+      InventorySession session,
+      UUID findingId,
+      UUID idempotencyKey,
+      boolean reconcile,
+      OpaqueActorReference eventActor,
+      InventoryException exception) {
+    independentTransactions.executeWithoutResult(
+        status -> {
+          InventoryPublicationIntent intent = requirePublication(session.getId(), findingId);
+          if (intent.getState() != PublicationState.PENDING) return;
+          boolean blocked = exception.status() == HttpStatus.CONFLICT;
+          if (blocked) intent.block("SOURCE_PRECONDITION_CONFLICT");
+          else intent.transientFailure();
+          InventoryPublicationIntent saved = publications.saveAndFlush(intent);
+          insertPublicationAttempt(
+              saved,
+              idempotencyKey,
+              reconcile,
+              blocked ? "BLOCKED" : "TRANSIENT_FAILED",
+              blocked ? "SOURCE_PRECONDITION_CONFLICT" : "DEPENDENCY_UNAVAILABLE",
+              null);
+          appendPublication(
+              saved,
+              session,
+              blocked
+                  ? "inventory.publication.blocked.v1"
+                  : "inventory.publication.transient-failed.v1",
+              eventActor);
+        });
   }
 
   @Scheduled(fixedDelayString = "${rwms.inventory.publication-recovery-delay-ms:5000}")
   public void recoverPendingPublications() {
+    for (InventoryPublicationIntent ready :
+        publications.findTop20ByStateOrderByUpdatedAtAsc(PublicationState.READY)) {
+      recoverReadyPublication(ready);
+    }
     OffsetDateTime eligibleBefore = OffsetDateTime.now(ZoneOffset.UTC).minusSeconds(30);
     for (InventoryPublicationIntent pending :
         publications.findTop20ByStateOrderByUpdatedAtAsc(PublicationState.PENDING)) {
-      if (pending.getUpdatedAt().isAfter(eligibleBefore)) continue;
-      InventoryPublicationAttempt attempt =
-          publicationAttempts
-              .findByPublicationIntentIdAndAttemptNo(
-                  pending.getId(), pending.getAttemptCount())
-              .orElseThrow(() ->
-                  new IllegalStateException("Pending publication has no durable attempt"));
-      InventorySession session = requireCompleted(pending.getInventoryId());
-      JsonNode request = publicationRequest(session, pending);
-      OpaqueActorReference serviceActor =
-          new OpaqueActorReference("inventory-service", "SERVICE", "0");
       try {
-        InventoryDependencyGateway.RepairUpsert result =
-            dependencies.upsertRepair(
-                session.getId(),
-                pending.getFindingId(),
-                attempt.getIdempotencyKey(),
-                request);
-        transactions.executeWithoutResult(
+        if (pending.getUpdatedAt().isAfter(eligibleBefore)) continue;
+        InventoryPublicationAttempt attempt =
+            publicationAttempts
+                .findByPublicationIntentIdAndAttemptNo(
+                    pending.getId(), pending.getAttemptCount())
+                .orElseThrow(
+                    () -> new IllegalStateException("Pending publication has no durable attempt"));
+        InventorySession session = requireCompleted(pending.getInventoryId());
+        JsonNode request = publicationRequest(session, pending);
+        PublicationTarget result =
+            dispatchPublicationEffect(session, pending, attempt.getIdempotencyKey(), request);
+        independentTransactions.executeWithoutResult(
             status -> {
               InventoryPublicationIntent intent =
                   requirePublication(session.getId(), pending.getFindingId());
               if (intent.getState() != PublicationState.PENDING) return;
-              intent.succeed(result.repairId());
+              intent.succeed(result.value());
               InventoryPublicationIntent saved = publications.saveAndFlush(intent);
               insertPublicationAttempt(
                   saved,
@@ -3898,42 +5262,83 @@ public class InventoryApplicationService {
                   false,
                   "SUCCEEDED",
                   null,
-                  result.repairId());
-              appendPublication(
-                  saved, session, "inventory.publication.succeeded.v1", serviceActor);
-            });
-      } catch (InventoryException exception) {
-        transactions.executeWithoutResult(
-            status -> {
-              InventoryPublicationIntent intent =
-                  requirePublication(session.getId(), pending.getFindingId());
-              if (intent.getState() != PublicationState.PENDING) return;
-              boolean blocked = exception.status() == HttpStatus.CONFLICT;
-              if (blocked) intent.block("SOURCE_PRECONDITION_CONFLICT");
-              else intent.transientFailure();
-              InventoryPublicationIntent saved = publications.saveAndFlush(intent);
-              String failureCode =
-                  blocked ? "SOURCE_PRECONDITION_CONFLICT" : "DEPENDENCY_UNAVAILABLE";
-              insertPublicationAttempt(
-                  saved,
-                  attempt.getIdempotencyKey(),
-                  false,
-                  blocked ? "BLOCKED" : "TRANSIENT_FAILED",
-                  failureCode,
-                  null);
+                  result.value());
               appendPublication(
                   saved,
                   session,
-                  blocked
-                      ? "inventory.publication.blocked.v1"
-                      : "inventory.publication.transient-failed.v1",
-                  serviceActor);
+                  "inventory.publication.succeeded.v1",
+                  PUBLICATION_RECOVERY_ACTOR);
             });
+      } catch (InventoryException exception) {
+        try {
+          settleRecoveredPublicationFailure(pending, exception);
+        } catch (RuntimeException settlementException) {
+          // A failed state transition for this row must not prevent the remaining recovery batch.
+          log.error(
+              "Unable to settle failed inventory publication {}", pending.getId(), settlementException);
+        }
+      } catch (RuntimeException exception) {
+        // A poison row must never prevent recovery of independent pending publications.
+        log.error("Unable to recover inventory publication {}", pending.getId(), exception);
       }
     }
   }
 
+  private void recoverReadyPublication(InventoryPublicationIntent ready) {
+    try {
+      InventorySession session = requireCompleted(ready.getInventoryId());
+      dispatchPublication(
+          PUBLICATION_RECOVERY_ACTOR,
+          session,
+          ready,
+          servicePublicationIdempotencyKey(ready),
+          false,
+          null);
+    } catch (RuntimeException exception) {
+      // A READY record is the durable post-commit hand-off when completion died before dispatch.
+      log.error("Unable to recover ready inventory publication {}", ready.getId(), exception);
+    }
+  }
+
+  private void settleRecoveredPublicationFailure(
+      InventoryPublicationIntent pending, InventoryException exception) {
+    independentTransactions.executeWithoutResult(
+        status -> {
+          InventoryPublicationIntent intent =
+              requirePublication(pending.getInventoryId(), pending.getFindingId());
+          if (intent.getState() != PublicationState.PENDING) return;
+          InventoryPublicationAttempt attempt =
+              publicationAttempts
+                  .findByPublicationIntentIdAndAttemptNo(intent.getId(), intent.getAttemptCount())
+                  .orElseThrow(
+                      () -> new IllegalStateException("Pending publication has no durable attempt"));
+          InventorySession session = requireCompleted(intent.getInventoryId());
+          boolean blocked = exception.status() == HttpStatus.CONFLICT;
+          if (blocked) intent.block("SOURCE_PRECONDITION_CONFLICT");
+          else intent.transientFailure();
+          InventoryPublicationIntent saved = publications.saveAndFlush(intent);
+          String failureCode = blocked ? "SOURCE_PRECONDITION_CONFLICT" : "DEPENDENCY_UNAVAILABLE";
+          insertPublicationAttempt(
+              saved,
+              attempt.getIdempotencyKey(),
+              false,
+              blocked ? "BLOCKED" : "TRANSIENT_FAILED",
+              failureCode,
+              null);
+          appendPublication(
+              saved,
+              session,
+              blocked
+                  ? "inventory.publication.blocked.v1"
+                  : "inventory.publication.transient-failed.v1",
+              PUBLICATION_RECOVERY_ACTOR);
+        });
+  }
+
   private JsonNode publicationRequest(InventorySession session, InventoryPublicationIntent intent) {
+    if (intent.getFinalPlanVersion() != null) {
+      return finalPlanPublicationRequest(session, intent);
+    }
     InventoryFinding finding = requireFinding(session.getId(), intent.getFindingId());
     if (finding.getInspection() != InspectionState.WORK_STAGED) {
       throw InventoryException.conflict("Finding has no staged maintenance plan");
@@ -3950,6 +5355,119 @@ public class InventoryApplicationService {
     request.put("planFingerprint", finding.getMaintenancePlanFingerprintSha256());
     request.set("snapshot", read(frozenPlan.getSourceSnapshot()));
     return request;
+  }
+
+  private JsonNode finalPlanPublicationRequest(
+      InventorySession session, InventoryPublicationIntent intent) {
+    InventoryFinalPlan plan =
+        finalPlans
+            .findById(session.getId())
+            .orElseThrow(() -> InventoryException.conflict("Inventory final plan is missing"));
+    if (plan.getFinalPlanVersion() != intent.getFinalPlanVersion()
+        || !plan.getFinalPlanSha256().equals(intent.getFinalPlanSha256())) {
+      throw InventoryException.conflict("Publication final-plan source is stale");
+    }
+    InventoryFinalPlanEntry entry =
+        finalPlanEntries
+            .findByInventoryIdAndFinalPlanVersionAndFindingId(
+                session.getId(), intent.getFinalPlanVersion(), intent.getFindingId())
+            .orElseThrow(() -> InventoryException.conflict("Publication final-plan finding is missing"));
+    if (!entry.isHasWork()
+        || entry.getTargetKind() == null
+        || intent.getTargetKind() != entry.getTargetKind()
+        || entry.getFindingRevision() != intent.getSourceRevision()
+        || entry.getAssetId() == null
+        || entry.getAssetVersion() == null
+        || entry.getPlanFingerprintSha256() == null) {
+      throw InventoryException.conflict("Publication final-plan work evidence is invalid");
+    }
+    InventoryFinding finding = requireFinding(session.getId(), intent.getFindingId());
+    FindingPlanSnapshot frozenPlan =
+        activePlanSnapshot(finding)
+            .orElseThrow(() -> InventoryException.conflict("Frozen maintenance plan is missing"));
+    if (!entry.getPlanFingerprintSha256().equals(frozenPlan.getFingerprint())) {
+      throw InventoryException.conflict("Publication frozen maintenance plan is stale");
+    }
+    FinalPlanReconciliationDecision decision =
+        entry.getReconciliationDecision() == null
+            ? new FinalPlanReconciliationDecision(FinalPlanReconciliationStrategy.CREATE, null, null)
+            : finalPlanDecision(read(entry.getReconciliationDecision()));
+    ObjectNode request = mapper.createObjectNode();
+    request.put("warehouseId", session.getWarehouseId().toString());
+    request.put("finalPlanVersion", intent.getFinalPlanVersion());
+    request.put("finalPlanSha256", intent.getFinalPlanSha256());
+    request.put("findingRevision", entry.getFindingRevision());
+    request.put("assetId", entry.getAssetId().toString());
+    request.put("assetVersion", entry.getAssetVersion());
+    request.put("planFingerprintSha256", entry.getPlanFingerprintSha256());
+    request.put("snapshotSchemaVersion", frozenPlan.getSnapshotSchemaVersion());
+    request.put("priority", entry.getPriority());
+    request.put("movementToRepair", entry.isMovementToRepair());
+    if (entry.getMovementScheduledDate() == null) request.putNull("movementScheduledDate");
+    else request.put("movementScheduledDate", entry.getMovementScheduledDate().toString());
+    request.put("repairScheduledDate", entry.getRepairScheduledDate().toString());
+    request.put("strategy", decision.strategy().name());
+    if (decision.selectedTargetKind() == null) request.putNull("selectedTargetKind");
+    else request.put("selectedTargetKind", decision.selectedTargetKind().name());
+    if (decision.selectedTargetId() == null) request.putNull("selectedTargetId");
+    else request.put("selectedTargetId", decision.selectedTargetId().toString());
+    request.set("snapshot", read(frozenPlan.getSourceSnapshot()));
+    request.set("media", frozenPlanMedia(frozenPlan));
+    return request;
+  }
+
+  private PublicationTarget dispatchPublicationEffect(
+      InventorySession session,
+      InventoryPublicationIntent intent,
+      UUID idempotencyKey,
+      JsonNode request) {
+    if (intent.getFinalPlanVersion() == null) {
+      InventoryDependencyGateway.RepairUpsert legacy =
+          dependencies.upsertRepair(session.getId(), intent.getFindingId(), idempotencyKey, request);
+      return new PublicationTarget(
+          new InventoryPublicationIntent.PublicationTarget(
+              FinalPlanTargetKind.REPAIR, legacy.repairId(), null, legacy.repairId()));
+    }
+    return new PublicationTarget(
+        publicationTarget(
+            dependencies.applyReconciliation(
+                session.getId(), intent.getFindingId(), idempotencyKey, request)));
+  }
+
+  private InventoryPublicationIntent.PublicationTarget publicationTarget(JsonNode response) {
+    try {
+      MaintenancePublicationOutcome outcome =
+          MaintenancePublicationOutcome.valueOf(response.path("outcome").asText());
+      String resultSnapshot = canonicalWrite(response);
+      if (outcome == MaintenancePublicationOutcome.MATCHED) {
+        if (!explicitNull(response, "targetKind")
+            || !explicitNull(response, "targetId")
+            || !explicitNull(response, "estimateId")
+            || !explicitNull(response, "repairId")) {
+          throw new IllegalArgumentException();
+        }
+        return new InventoryPublicationIntent.PublicationTarget(
+            outcome, null, null, null, null, resultSnapshot);
+      }
+      FinalPlanTargetKind kind = FinalPlanTargetKind.valueOf(response.path("targetKind").asText());
+      UUID targetId = requiredUuid(response, "targetId", "maintenance publication target id");
+      UUID estimateId = nullableUuid(response, "estimateId", "maintenance estimate id");
+      UUID repairId = nullableUuid(response, "repairId", "maintenance repair id");
+      InventoryPublicationIntent.PublicationTarget target =
+          new InventoryPublicationIntent.PublicationTarget(
+              outcome, kind, targetId, estimateId, repairId, resultSnapshot);
+      if ((kind == FinalPlanTargetKind.ESTIMATE
+              && (!targetId.equals(estimateId) || repairId != null))
+          || (kind == FinalPlanTargetKind.REPAIR
+              && (!targetId.equals(repairId) || estimateId != null))
+          || (outcome == MaintenancePublicationOutcome.SUCCESSOR
+              && kind != FinalPlanTargetKind.REPAIR)) {
+        throw new IllegalArgumentException();
+      }
+      return target;
+    } catch (RuntimeException exception) {
+      throw InventoryException.dependency("Maintenance reconciliation result is malformed");
+    }
   }
 
   private Optional<FindingPlanSnapshot> activePlanSnapshot(InventoryFinding finding) {
@@ -3972,7 +5490,7 @@ public class InventoryApplicationService {
       boolean reconcile,
       String state,
       String failureCode,
-      UUID repairId) {
+      InventoryPublicationIntent.PublicationTarget target) {
     InventoryPublicationAttempt attempt =
         publicationAttempts
             .findByPublicationIntentIdAndAttemptNo(intent.getId(), intent.getAttemptCount())
@@ -3983,7 +5501,9 @@ public class InventoryApplicationService {
             state,
             failureCode,
             failureCode == null ? null : hash(failureCode),
-            repairId));
+            target == null ? null : target.repairId(),
+            target == null ? null : target.outcome(),
+            target == null ? null : target.maintenanceResult()));
   }
 
   private void appendPublication(
@@ -3999,14 +5519,30 @@ public class InventoryApplicationService {
     payload.put("publicationRevision", intent.getRevision());
     payload.put("state", intent.getState().name());
     payload.put("attemptCount", intent.getAttemptCount());
+    if (intent.getFinalPlanVersion() == null) payload.putNull("finalPlanVersion");
+    else payload.put("finalPlanVersion", intent.getFinalPlanVersion());
+    if (intent.getFinalPlanSha256() == null) payload.putNull("finalPlanSha256");
+    else payload.put("finalPlanSha256", intent.getFinalPlanSha256());
+    if (intent.getTargetKind() == null) payload.putNull("targetKind");
+    else payload.put("targetKind", intent.getTargetKind().name());
+    if (intent.getTargetId() == null) payload.putNull("targetId");
+    else payload.put("targetId", intent.getTargetId().toString());
+    if (intent.getMaintenanceEstimateId() == null) payload.putNull("maintenanceEstimateId");
+    else payload.put("maintenanceEstimateId", intent.getMaintenanceEstimateId().toString());
     if (intent.getMaintenanceRepairId() == null) payload.putNull("maintenanceRepairId");
     else payload.put("maintenanceRepairId", intent.getMaintenanceRepairId().toString());
+    if (intent.getMaintenanceOutcome() == null) payload.putNull("maintenanceOutcome");
+    else payload.put("maintenanceOutcome", intent.getMaintenanceOutcome().name());
+    if (intent.getMaintenanceResult() == null) payload.putNull("maintenanceResult");
+    else payload.set("maintenanceResult", read(intent.getMaintenanceResult()));
     if (intent.getBlockedFailureCode() == null) payload.putNull("failureCode");
     else payload.put("failureCode", intent.getBlockedFailureCode());
     ObjectNode source = payload.putObject("sourceReference");
     source.put("inventoryId", intent.getInventoryId().toString());
     source.put("findingId", intent.getFindingId().toString());
     source.put("sourceRevision", intent.getSourceRevision());
+    if (intent.getFinalPlanVersion() == null) source.putNull("finalPlanVersion");
+    else source.put("finalPlanVersion", intent.getFinalPlanVersion());
     source.put(
         "requestSha256",
         intent.getRequestSha256() == null
@@ -4415,8 +5951,6 @@ public class InventoryApplicationService {
     JsonNode source = read(snapshot.getSourceSnapshot());
     boolean sourceMovementToRepair =
         requiredBoolean(source, "movementToRepair", "frozen plan movement to repair");
-    boolean sourceMovementToShipment =
-        requiredBoolean(source, "movementToShipment", "frozen plan movement to shipment");
     LogisticsPlanningMode sourceLogisticsPlanningMode =
         nullableLogisticsPlanningMode(
             source, "logisticsPlanningMode", "frozen plan logistics planning mode");
@@ -4426,7 +5960,6 @@ public class InventoryApplicationService {
     if (!LogisticsPlanningMode.validInboundPlanning(
             sourceMovementToRepair, sourceLogisticsPlanningMode, sourceLogisticsScheduledDate)
         || sourceMovementToRepair != snapshot.isMovementToRepair()
-        || sourceMovementToShipment != snapshot.isMovementToShipment()
         || sourceLogisticsPlanningMode != snapshot.getLogisticsPlanningMode()
         || !java.util.Objects.equals(
             sourceLogisticsScheduledDate, snapshot.getLogisticsScheduledDate())) {
@@ -4489,7 +6022,6 @@ public class InventoryApplicationService {
         priority,
         coverMediaId,
         snapshot.isMovementToRepair(),
-        snapshot.isMovementToShipment(),
         snapshot.getLogisticsPlanningMode(),
         snapshot.getLogisticsScheduledDate(),
         lineViews,
@@ -4613,7 +6145,13 @@ public class InventoryApplicationService {
         value.getState(),
         value.getSourceRevision(),
         value.getAttemptCount(),
+        value.getFinalPlanVersion(),
+        value.getTargetKind(),
+        value.getTargetId(),
+        value.getMaintenanceEstimateId(),
         value.getMaintenanceRepairId(),
+        value.getMaintenanceOutcome(),
+        value.getMaintenanceResult() == null ? null : read(value.getMaintenanceResult()),
         value.getBlockedFailureCode());
   }
 
@@ -5050,7 +6588,7 @@ public class InventoryApplicationService {
     if (stored == null || current == null || current.isNull()) {
       return stored == null && (current == null || current.isNull());
     }
-    return canonicalHash(read(stored)).equals(canonicalHash(current));
+    return canonicalJsonTreeHash(read(stored)).equals(canonicalJsonTreeHash(current));
   }
 
   private <T> T convert(JsonNode value, Class<T> type) {
@@ -5083,8 +6621,12 @@ public class InventoryApplicationService {
    * therefore be hashed as ordinary map/list data rather than directly as an ObjectNode.
    */
   private String canonicalJsonTreeHash(JsonNode value) {
+    return canonicalHash(canonicalJsonValue(value));
+  }
+
+  private Object canonicalJsonValue(JsonNode value) {
     try {
-      return canonicalHash(mapper.treeToValue(value, Object.class));
+      return mapper.treeToValue(value, Object.class);
     } catch (JacksonException exception) {
       throw new IllegalArgumentException("Inventory JSON cannot be canonicalized", exception);
     }
@@ -5116,6 +6658,106 @@ public class InventoryApplicationService {
         .orElse(0);
   }
 
+  private record PlanningSpecification(
+      long revision,
+      int movementDailyCapacity,
+      int repairDailyCapacity,
+      List<DayOfWeek> workingWeekdays,
+      List<LocalDate> holidays) {}
+
+  /** A transient, validated proposal before one immutable final-plan version is persisted. */
+  private record FinalPlanDraft(
+      InventoryFinding finding,
+      FindingPlanSnapshot snapshot,
+      boolean hasWork,
+      FinalPlanTargetKind targetKind,
+      int order,
+      Integer priority,
+      boolean movementToRepair,
+      LocalDate movementScheduledDate,
+      LocalDate repairScheduledDate,
+      String collisionCandidates,
+      String reconciliationDecision) {
+    static FinalPlanDraft noWork(InventoryFinding finding) {
+      return new FinalPlanDraft(
+          finding, null, false, null, 0, null, false, null, null, "[]", null);
+    }
+
+    String planFingerprintSha256() {
+      return snapshot == null ? null : snapshot.getFingerprint();
+    }
+
+    FinalPlanDraft withOrder(int value) {
+      return new FinalPlanDraft(
+          finding,
+          snapshot,
+          hasWork,
+          targetKind,
+          value,
+          priority,
+          movementToRepair,
+          movementScheduledDate,
+          repairScheduledDate,
+          collisionCandidates,
+          reconciliationDecision);
+    }
+
+    FinalPlanDraft withDates(LocalDate movement, LocalDate repair) {
+      return new FinalPlanDraft(
+          finding,
+          snapshot,
+          hasWork,
+          targetKind,
+          order,
+          priority,
+          movementToRepair,
+          movement,
+          repair,
+          collisionCandidates,
+          reconciliationDecision);
+    }
+
+    FinalPlanDraft withCandidates(String candidates) {
+      return new FinalPlanDraft(
+          finding,
+          snapshot,
+          hasWork,
+          targetKind,
+          order,
+          priority,
+          movementToRepair,
+          movementScheduledDate,
+          repairScheduledDate,
+          candidates,
+          reconciliationDecision);
+    }
+
+    FinalPlanDraft withDecision(String decision) {
+      return new FinalPlanDraft(
+          finding,
+          snapshot,
+          hasWork,
+          targetKind,
+          order,
+          priority,
+          movementToRepair,
+          movementScheduledDate,
+          repairScheduledDate,
+          collisionCandidates,
+          decision);
+    }
+  }
+
+  private record FinalPlanCandidateSet(
+      List<FinalPlanCandidateView> all, List<FinalPlanCandidateView> active) {}
+
+  private record CompletionFinalPlan(
+      InventoryFinalPlan plan,
+      List<InventoryFinalPlanEntry> entries,
+      List<FinalPlanDraft> drafts) {}
+
+  private record PublicationTarget(InventoryPublicationIntent.PublicationTarget value) {}
+
   private record RevisionState(
       List<InventoryFinding> findings, List<RevisionExpectation> expectations) {}
 
@@ -5144,6 +6786,8 @@ public class InventoryApplicationService {
       CompletionPreview preview) {}
 
   private record PlanTotal(String type, int count, BigDecimal raw, BigDecimal normative) {}
+
+  private record StatisticsReconciliation(boolean missing, boolean conflict) {}
 
   private record StatisticsKey(
       String kind,

@@ -1,11 +1,14 @@
 package dev.buhanzaz.rwms.logistics.driver.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.MaintenanceDriverTaskCompensationOutcome;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskPlanningMode;
@@ -87,6 +90,9 @@ class DriverTaskWorkflowStoreTest {
             repairId,
             cabinId,
             "RELEASED",
+            null,
+            null,
+            3,
             now,
             now);
     store.confirmManualReservationRelease(taskId, released);
@@ -192,6 +198,133 @@ class DriverTaskWorkflowStoreTest {
   }
 
   @Test
+  void identicalBoardStatusDoesNotAdvanceTheLocalWorkflowVersion() {
+    UUID taskId = UUID.randomUUID();
+    DriverLogisticsTask task = repairDelivery(taskId);
+    UUID boardTaskId = UUID.randomUUID();
+    UUID entryId = UUID.randomUUID();
+    task.registerBoardTask(boardTaskId, 3, entryId, "WAITING", "SCHEDULED", null);
+    when(tasks.findForUpdate(taskId)).thenReturn(Optional.of(task));
+
+    store.confirmStatus(
+        taskId,
+        new LogisticsDependencyGateway.DriverBoardTask(
+            boardTaskId,
+            3,
+            task.getWarehouseId(),
+            task.getExternalTaskId(),
+            "Доставить бытовку в ремонт",
+            task.getUnitNumber(),
+            "Доставить бытовку в ремонт",
+            "ACTIVE",
+            task.getScheduledDate(),
+            "SCHEDULED",
+            task.getPriority(),
+            false,
+            null,
+            entryId,
+            12,
+            "WAITING",
+            4));
+
+    assertThat(task.getState()).isEqualTo(DriverTaskState.SCHEDULED);
+    verify(tasks, never()).saveAndFlush(any());
+  }
+
+  @Test
+  void identicalRemovalAllocationDoesNotAdvanceTheLocalWorkflowVersion() {
+    UUID taskId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    UUID repairId = UUID.randomUUID();
+    UUID allocationId = UUID.randomUUID();
+    DriverLogisticsTask task =
+        DriverLogisticsTask.create(
+            warehouseId,
+            cabinId,
+            repairId,
+            DriverTaskSourceType.REPAIR_PLACE,
+            repairId,
+            DriverTaskKind.REMOVE_FROM_REPAIR,
+            DriverTaskPlanningMode.AUTO,
+            LocalDate.now(ZoneOffset.UTC),
+            3,
+            null,
+            "БЫТ-202",
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            "a".repeat(64));
+    ReflectionTestUtils.setField(task, "id", taskId);
+    task.bindRemovalRepairPlace(allocationId, 4);
+    when(tasks.findForUpdate(taskId)).thenReturn(Optional.of(task));
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+
+    store.bindReleaseAllocation(
+        taskId,
+        new LogisticsDependencyGateway.RepairPlaceAllocation(
+            allocationId,
+            4,
+            warehouseId,
+            repairId,
+            cabinId,
+            "READY_TO_RELEASE",
+            null,
+            null,
+            3,
+            now,
+            now));
+
+    verify(tasks, never()).saveAndFlush(any());
+  }
+
+  @Test
+  void occupiedTransitionResponseRebindsCompletedCompensationProjectionToItsExactVersion() {
+    UUID taskId = UUID.randomUUID();
+    UUID reservedAllocationId = UUID.randomUUID();
+    UUID occupiedAllocationId = UUID.randomUUID();
+    long occupiedAllocationVersion = 11L;
+    DriverLogisticsTask task = finalizingRepairDelivery(taskId, reservedAllocationId);
+    when(tasks.findForUpdate(taskId)).thenReturn(Optional.of(task));
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    LogisticsDependencyGateway.RepairPlaceAllocation occupied =
+        new LogisticsDependencyGateway.RepairPlaceAllocation(
+            occupiedAllocationId,
+            occupiedAllocationVersion,
+            task.getWarehouseId(),
+            task.getRepairId(),
+            task.getCabinId(),
+            "OCCUPIED",
+            null,
+            null,
+            task.getPriority(),
+            now,
+            now);
+
+    store.confirmRepairPlaceEffect(taskId, occupied);
+
+    assertThat(task.getRepairPlaceAllocationId()).isEqualTo(occupiedAllocationId);
+    assertThat(task.getRepairPlaceAllocationVersion()).isEqualTo(occupiedAllocationVersion);
+    assertThat(store.nextWork(taskId)).isEmpty();
+    assertThat(task.getState()).isEqualTo(DriverTaskState.COMPLETED);
+
+    when(
+            tasks.findFirstByRepairIdAndKindOrderByCreatedAtDescIdDesc(
+                task.getRepairId(), DriverTaskKind.DELIVER_TO_REPAIR))
+        .thenReturn(Optional.of(task));
+    var compensation =
+        new MaintenanceDriverTaskCompensationService(
+                tasks, mock(LogisticsDependencyGateway.class))
+            .lookup(task.getRepairId(), DriverTaskKind.DELIVER_TO_REPAIR);
+
+    assertThat(compensation.outcome())
+        .isEqualTo(MaintenanceDriverTaskCompensationOutcome.COMPLETED);
+    assertThat(compensation.repairPlaceAllocationId()).isEqualTo(occupiedAllocationId);
+    assertThat(compensation.repairPlaceAllocationVersion()).isEqualTo(occupiedAllocationVersion);
+    verify(tasks, times(2)).saveAndFlush(task);
+  }
+
+  @Test
   void configurationAndPermanentRejectionsStillRequireReconciliation() {
     UUID configurationTaskId = UUID.randomUUID();
     DriverLogisticsTask configurationTask = repairDelivery(configurationTaskId);
@@ -237,6 +370,28 @@ class DriverTaskWorkflowStoreTest {
             UUID.randomUUID(),
             "a".repeat(64));
     ReflectionTestUtils.setField(task, "id", taskId);
+    return task;
+  }
+
+  private static DriverLogisticsTask finalizingRepairDelivery(
+      UUID taskId, UUID reservedAllocationId) {
+    DriverLogisticsTask task = repairDelivery(taskId);
+    UUID boardTaskId = UUID.randomUUID();
+    UUID entryId = UUID.randomUUID();
+    task.registerBoardTask(boardTaskId, 0, entryId, "WAITING", "SCHEDULED", null);
+    task.reserveRepairPlace(reservedAllocationId, 4);
+    task.moveToCurrent(1, entryId, "WAITING");
+    task.observeBoardTask(
+        boardTaskId,
+        2,
+        entryId,
+        "DONE",
+        task.getScheduledDate(),
+        "CURRENT",
+        "DONE",
+        OffsetDateTime.now(ZoneOffset.UTC));
+    task.captureEvidence(UUID.randomUUID(), UUID.randomUUID(), 1, entryId);
+    task.markCoverApplied();
     return task;
   }
 }

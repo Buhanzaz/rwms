@@ -6,6 +6,7 @@ import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.DIMENSION_24_X_6;
 import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.FINISHING_DVP;
 import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.TYPE_BK_1;
 
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -71,6 +72,33 @@ class RentalItemTest {
   }
 
   @Test
+  void htmlImportCannotCreateFencedOrTerminalCabins() {
+    for (RentalItemStatus status :
+        List.of(
+            RentalItemStatus.IN_TRANSFER,
+            RentalItemStatus.WRITTEN_OFF,
+            RentalItemStatus.LOST)) {
+      assertThatThrownBy(
+              () ->
+                  RentalItem.createFromHtmlImport(
+                      UUID.randomUUID(),
+                      "HTML-" + status,
+                      status,
+                      null,
+                      null,
+                      null,
+                      null,
+                      null,
+                      null,
+                      null,
+                      null))
+          .as("HTML import status %s", status)
+          .isInstanceOf(IllegalArgumentException.class)
+          .hasMessageContaining("fenced or terminal");
+    }
+  }
+
+  @Test
   void regularCabinCreationAndPassportEditingStillRequireComposition() {
     assertThatThrownBy(
             () ->
@@ -103,12 +131,19 @@ class RentalItemTest {
   }
 
   @Test
-  void reservesTerminalAndWorkflowStatusesFromThePublicManualTransition() {
+  void reservesOperationalAndTerminalStatusesFromThePublicManualTransition() {
     RentalItem item = RentalItem.create(
         UUID.randomUUID(), "A-1", TYPE_BK_1, DIMENSION_24_X_6, FINISHING_DVP,
         null, null, "{}", "[]");
 
-    assertThatThrownBy(() -> item.changeStatus(RentalItemStatus.WRITTEN_OFF))
+    for (RentalItemStatus terminal :
+        List.of(RentalItemStatus.WRITTEN_OFF, RentalItemStatus.LOST)) {
+      assertThatThrownBy(() -> item.changeStatus(terminal))
+          .as("terminal target %s", terminal)
+          .isInstanceOf(IllegalStateException.class)
+          .hasMessageContaining("fenced or terminal");
+    }
+    assertThatThrownBy(() -> item.changeStatus(RentalItemStatus.RENTED))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("fenced or terminal");
 
@@ -122,5 +157,57 @@ class RentalItemTest {
     item.arriveTransferUnderLease(RentalItemStatus.FREE);
     assertThat(item.getStatus()).isEqualTo(RentalItemStatus.FREE);
     assertThat(item.getTransferOriginStatus()).isNull();
+  }
+
+  @Test
+  void permitsManualChangesOnlyWithinTheCommercialAndStorageSubset() {
+    RentalItem item = RentalItem.create(
+        UUID.randomUUID(), "A-2", TYPE_BK_1, DIMENSION_24_X_6, FINISHING_DVP,
+        null, null, "{}", "[]");
+
+    assertThat(item.changeStatus(RentalItemStatus.SALE)).isTrue();
+    assertThat(item.changeStatus(RentalItemStatus.USED_SALE)).isTrue();
+    assertThat(item.changeStatus(RentalItemStatus.WAREHOUSE)).isTrue();
+    assertThat(item.changeStatus(RentalItemStatus.OWN_NEEDS)).isTrue();
+    assertThat(item.changeStatus(RentalItemStatus.FREE)).isTrue();
+
+    item.changeStatusUnderLease(RentalItemStatus.RENTED);
+    assertThatThrownBy(() -> item.changeStatus(RentalItemStatus.FREE))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("fenced or terminal");
+
+    for (RentalItemStatus terminal :
+        List.of(RentalItemStatus.WRITTEN_OFF, RentalItemStatus.LOST)) {
+      RentalItem terminalItem = RentalItem.create(
+          UUID.randomUUID(), "A-3-" + terminal, TYPE_BK_1, DIMENSION_24_X_6, FINISHING_DVP,
+          null, null, "{}", "[]");
+      terminalItem.changeStatusUnderLease(terminal);
+      assertThatThrownBy(() -> terminalItem.changeStatus(terminal))
+          .as("terminal source %s", terminal)
+          .isInstanceOf(IllegalStateException.class)
+          .hasMessageContaining("fenced or terminal");
+    }
+  }
+
+  @Test
+  void keepsDispositionedCabinsTerminalUnderLease() {
+    for (RentalItemStatus terminal :
+        List.of(RentalItemStatus.WRITTEN_OFF, RentalItemStatus.LOST)) {
+      RentalItem item = RentalItem.create(
+          UUID.randomUUID(), "A-4-" + terminal, TYPE_BK_1, DIMENSION_24_X_6, FINISHING_DVP,
+          null, null, "{}", "[]");
+
+      item.changeStatusUnderLease(terminal);
+
+      assertThat(item.changeStatusUnderLease(terminal)).as("terminal %s", terminal).isFalse();
+      assertThatThrownBy(() -> item.changeStatusUnderLease(RentalItemStatus.FREE))
+          .as("terminal %s", terminal)
+          .isInstanceOf(IllegalStateException.class)
+          .hasMessageContaining("Terminal");
+      assertThatThrownBy(() -> item.changeWarehouse(UUID.randomUUID()))
+          .as("terminal %s", terminal)
+          .isInstanceOf(IllegalStateException.class)
+          .hasMessageContaining("cannot change warehouse");
+    }
   }
 }

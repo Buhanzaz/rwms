@@ -31,6 +31,9 @@ public class RentalSettings {
   @Column(name = "chat_selection_hold_minutes", nullable = false)
   private int chatSelectionHoldMinutes;
 
+  @Column(name = "manual_booking_hold_minutes", nullable = false)
+  private int manualBookingHoldMinutes;
+
   @Column(name = "presentation_hold_minutes", nullable = false)
   private int presentationHoldMinutes;
 
@@ -47,6 +50,7 @@ public class RentalSettings {
     RentalSettings settings = new RentalSettings();
     settings.id = SINGLETON_ID;
     settings.chatSelectionHoldMinutes = 10;
+    settings.manualBookingHoldMinutes = 60;
     settings.presentationHoldMinutes = 60;
     settings.draftReservationHoldMinutes = 1_440;
     settings.updatedBySubjectId = Objects.requireNonNull(actorSubjectId, "actorSubjectId");
@@ -56,6 +60,7 @@ public class RentalSettings {
 
   public void update(
       int chatMinutes,
+      int manualBookingMinutes,
       int presentationMinutes,
       int draftReservationMinutes,
       UUID actorSubjectId,
@@ -63,6 +68,10 @@ public class RentalSettings {
     if (chatMinutes < 1 || chatMinutes > 1_440) {
       throw new IllegalArgumentException(
           "chatSelectionHoldMinutes must be between 1 and 1440");
+    }
+    if (manualBookingMinutes < 5 || manualBookingMinutes > 1_440) {
+      throw new IllegalArgumentException(
+          "manualBookingHoldMinutes must be between 5 and 1440");
     }
     if (presentationMinutes < 5 || presentationMinutes > 1_440) {
       throw new IllegalArgumentException("presentationHoldMinutes must be between 5 and 1440");
@@ -72,6 +81,7 @@ public class RentalSettings {
           "draftReservationHoldMinutes must be between 1440 and 14400");
     }
     chatSelectionHoldMinutes = chatMinutes;
+    manualBookingHoldMinutes = manualBookingMinutes;
     presentationHoldMinutes = presentationMinutes;
     draftReservationHoldMinutes = draftReservationMinutes;
     updatedBySubjectId = Objects.requireNonNull(actorSubjectId, "actorSubjectId");

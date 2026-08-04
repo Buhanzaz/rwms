@@ -42,14 +42,22 @@
         "maintenance.repair.transfer-prepared.v1",
         "maintenance.repair.transferred.v1",
         "maintenance.repair.accepted.v1",
-        "maintenance.repair.written-off.v1"
+        "maintenance.repair.written-off.v1",
+        "maintenance.property-disposition.requested.v1",
+        "maintenance.property-disposition.approved.v1",
+        "maintenance.property-disposition.rejected.v1",
+        "maintenance.property-disposition.movement-pending.v1",
+        "maintenance.property-disposition.effect-pending.v1",
+        "maintenance.property-disposition.effective.v1",
+        "maintenance.property-disposition.quarantined.v1",
+        "maintenance.property-disposition.recovered.v1"
       ]
     },
     "eventVersion": {"const": 1},
     "occurredAt": {"$ref": "#/$defs/nullableDateTime"},
     "recordedAt": {"type": "string", "format": "date-time"},
     "producer": {"const": "maintenance-service"},
-    "aggregateType": {"enum": ["CATALOG_VERSION", "ESTIMATE", "REPAIR"]},
+    "aggregateType": {"enum": ["CATALOG_VERSION", "ESTIMATE", "REPAIR", "PROPERTY_DISPOSITION"]},
     "aggregateId": {"type": "string", "format": "uuid"},
     "aggregateVersion": {"type": "integer", "format": "int64", "minimum": 0},
     "correlation": {"$ref": "#/$defs/correlationContext"},
@@ -63,20 +71,23 @@
       "oneOf": [
         {"$ref": "#/$defs/catalogVersionFact"},
         {"$ref": "#/$defs/estimateFact"},
-        {"$ref": "#/$defs/repairFact"}
+        {"$ref": "#/$defs/repairFact"},
+        {"$ref": "#/$defs/propertyDispositionFact"}
       ]
     }
   },
   "oneOf": [
     {"$ref": "#/$defs/catalogVersionEnvelope"},
     {"$ref": "#/$defs/estimateEnvelope"},
-    {"$ref": "#/$defs/repairEnvelope"}
+    {"$ref": "#/$defs/repairEnvelope"},
+    {"$ref": "#/$defs/propertyDispositionEnvelope"}
   ],
   "x-rwms-envelope": "DomainEventEnvelopeV2",
   "x-rwms-topics": [
     "rwms.maintenance.catalog-version.v1",
     "rwms.maintenance.estimate.v1",
-    "rwms.maintenance.repair.v1"
+    "rwms.maintenance.repair.v1",
+    "rwms.maintenance.property-disposition.v1"
   ],
   "x-rwms-delivery": {
     "producer": "transactional-postgresql-outbox",
@@ -201,6 +212,24 @@
         "payload": {"$ref": "#/$defs/repairFact"}
       }
     },
+    "propertyDispositionEnvelope": {
+      "properties": {
+        "aggregateType": {"const": "PROPERTY_DISPOSITION"},
+        "eventType": {
+          "enum": [
+            "maintenance.property-disposition.requested.v1",
+            "maintenance.property-disposition.approved.v1",
+            "maintenance.property-disposition.rejected.v1",
+            "maintenance.property-disposition.movement-pending.v1",
+            "maintenance.property-disposition.effect-pending.v1",
+            "maintenance.property-disposition.effective.v1",
+            "maintenance.property-disposition.quarantined.v1",
+            "maintenance.property-disposition.recovered.v1"
+          ]
+        },
+        "payload": {"$ref": "#/$defs/propertyDispositionFact"}
+      }
+    },
     "catalogVersionFact": {
       "type": "object",
       "additionalProperties": false,
@@ -322,6 +351,54 @@
           "maxItems": 1000,
           "items": {"$ref": "#/$defs/repairStageFact"}
         }
+      }
+    },
+    "propertyDispositionFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decisionId",
+        "warehouseId",
+        "assetKind",
+        "assetId",
+        "dispositionKind",
+        "source",
+        "state",
+        "assetEffectState",
+        "rootRepairId",
+        "sourceRepairId",
+        "inventoryId",
+        "findingId",
+        "movementTaskId",
+        "effectId",
+        "recoveryVersion"
+      ],
+      "properties": {
+        "decisionId": {"type": "string", "format": "uuid"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "assetKind": {"enum": ["CABIN", "EQUIPMENT"]},
+        "assetId": {"type": "string", "format": "uuid"},
+        "dispositionKind": {"enum": ["WRITE_OFF", "LOSS"]},
+        "source": {"enum": ["MANUAL", "REPAIR", "ESTIMATE", "INVENTORY"]},
+        "state": {
+          "enum": [
+            "PENDING_APPROVAL",
+            "APPROVED",
+            "MOVEMENT_PENDING",
+            "EFFECT_PENDING",
+            "EFFECTIVE",
+            "REJECTED",
+            "QUARANTINED"
+          ]
+        },
+        "assetEffectState": {"enum": ["NOT_STARTED", "PENDING", "APPLIED", "QUARANTINED"]},
+        "rootRepairId": {"$ref": "#/$defs/nullableUuid"},
+        "sourceRepairId": {"$ref": "#/$defs/nullableUuid"},
+        "inventoryId": {"$ref": "#/$defs/nullableUuid"},
+        "findingId": {"$ref": "#/$defs/nullableUuid"},
+        "movementTaskId": {"$ref": "#/$defs/nullableUuid"},
+        "effectId": {"$ref": "#/$defs/nullableUuid"},
+        "recoveryVersion": {"type": "integer", "format": "int64", "minimum": 0}
       }
     }
   }

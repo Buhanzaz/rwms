@@ -21,6 +21,45 @@ final class NoOpMaintenanceDependencyGateway implements MaintenanceDependencyGat
   }
 
   @Override
+  public PropertyAssetSnapshot getPropertyAssetSnapshot(
+      PropertyAssetKind assetKind, UUID assetId, UUID warehouseId) {
+    throw new MaintenanceDependencyException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        "Canonical property asset snapshot is unavailable without production dependencies");
+  }
+
+  @Override
+  public PropertyDispositionFence preparePropertyDisposition(
+      UUID idempotencyKey, UUID decisionId, PropertyDispositionPreparation request) {
+    throw new MaintenanceDependencyException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        "Canonical property disposition preparation is unavailable without production dependencies");
+  }
+
+  @Override
+  public PropertyDispositionEffect applyPropertyDisposition(
+      UUID idempotencyKey, UUID decisionId, UUID completedMovementTaskId) {
+    throw new MaintenanceDependencyException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        "Canonical property disposition effect is unavailable without production dependencies");
+  }
+
+  @Override
+  public PropertyEquipmentMovementTask createPropertyEquipmentMovementTask(
+      UUID idempotencyKey, PropertyEquipmentMovementCommand command) {
+    throw new MaintenanceDependencyException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        "Canonical equipment movement is unavailable without production dependencies");
+  }
+
+  @Override
+  public PropertyEquipmentMovementTask getPropertyEquipmentMovementTask(UUID taskId) {
+    throw new MaintenanceDependencyException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        "Canonical equipment movement task is unavailable without production dependencies");
+  }
+
+  @Override
   public FurnitureEquipmentSnapshot ensureFurnitureEquipment(
       UUID catalogNodeId, String equipmentName) {
     String canonicalName = equipmentName == null ? "" : equipmentName.trim();
@@ -142,6 +181,18 @@ final class NoOpMaintenanceDependencyGateway implements MaintenanceDependencyGat
   }
 
   @Override
+  public PreStartTaskCancellation cancelTaskIfPreStart(
+      UUID key, UUID externalTaskId, long expectedVersion) {
+    return new PreStartTaskCancellation(
+        PreStartTaskCancellationOutcome.CANCELLED,
+        deterministic("task-board-task", externalTaskId),
+        externalTaskId,
+        Math.addExact(expectedVersion, 1),
+        "CANCELLED",
+        OffsetDateTime.now(ZoneOffset.UTC));
+  }
+
+  @Override
   public TaskSnapshot relocateTask(
       UUID key, UUID externalTaskId, long expectedVersion, UUID targetWarehouseId) {
     return new TaskSnapshot(
@@ -169,6 +220,18 @@ final class NoOpMaintenanceDependencyGateway implements MaintenanceDependencyGat
         scheduledDate,
         command.priority(),
         "SCHEDULED");
+  }
+
+  @Override
+  public MaintenanceDriverTaskCompensation maintenanceDriverTaskCompensation(
+      UUID repairId, MaintenanceDriverTaskKind kind) {
+    return absentDriverTaskCompensation(repairId, kind);
+  }
+
+  @Override
+  public MaintenanceDriverTaskCompensation cancelMaintenanceDriverTaskCompensation(
+      UUID key, UUID repairId, MaintenanceDriverTaskKind kind) {
+    return absentDriverTaskCompensation(repairId, kind);
   }
 
   @Override
@@ -208,7 +271,7 @@ final class NoOpMaintenanceDependencyGateway implements MaintenanceDependencyGat
 
   @Override
   public QueueCapabilities queueCapabilities(UUID warehouseId) {
-    return new QueueCapabilities(warehouseId, false, List.of());
+    return new QueueCapabilities(warehouseId, List.of());
   }
 
   @Override
@@ -237,6 +300,22 @@ final class NoOpMaintenanceDependencyGateway implements MaintenanceDependencyGat
         .map(stage -> new TaskStageSnapshot(
             stage.order(), deterministic("entry:" + stage.order(), externalTaskId), 0))
         .toList());
+  }
+
+  private static MaintenanceDriverTaskCompensation absentDriverTaskCompensation(
+      UUID repairId, MaintenanceDriverTaskKind kind) {
+    return new MaintenanceDriverTaskCompensation(
+        repairId,
+        kind,
+        MaintenanceDriverTaskCompensationOutcome.ABSENT,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null);
   }
 
   private static UUID deterministic(String prefix, UUID key) {

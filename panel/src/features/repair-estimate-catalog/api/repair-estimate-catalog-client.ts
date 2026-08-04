@@ -2,5 +2,7 @@ import type { RepairEstimateCatalogSnapshotDto } from "@/features/repair-estimat
 
 /** Service-specific read port for the active maintenance catalog. */
 export interface RepairEstimateCatalogClient {
-  getOperationalCatalog(): Promise<RepairEstimateCatalogSnapshotDto>
+  getOperationalCatalog(
+    warehouseId?: string | null
+  ): Promise<RepairEstimateCatalogSnapshotDto>
 }

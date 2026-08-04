@@ -27,7 +27,7 @@ import javax.inject.Singleton
         WorkerConflictEntity::class,
         WorkerInvalidationEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 abstract class WorkerDatabase : RoomDatabase() {
@@ -298,6 +298,21 @@ abstract class WorkerDatabase : RoomDatabase() {
                 )
             }
         }
+
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Keep the palette exactly as issued by task-board. A null
+                // value deliberately means that the client must not invent
+                // green/yellow/red thresholds of its own.
+                db.execSQL("ALTER TABLE `worker_session` ADD COLUMN `kpiPaletteJson` TEXT")
+                db.execSQL(
+                    """
+                    ALTER TABLE `worker_category`
+                    ADD COLUMN `groupIdsKey` TEXT NOT NULL DEFAULT ''
+                    """.trimIndent(),
+                )
+            }
+        }
     }
 }
 
@@ -313,6 +328,7 @@ object WorkerDatabaseModule {
                 WorkerDatabase.MIGRATION_2_3,
                 WorkerDatabase.MIGRATION_3_4,
                 WorkerDatabase.MIGRATION_4_5,
+                WorkerDatabase.MIGRATION_5_6,
             )
             .build()
 }

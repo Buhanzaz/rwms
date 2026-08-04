@@ -15,6 +15,7 @@ import androidx.core.app.NotificationManagerCompat
 /** Notification content intentionally contains no task or worker data from the push payload. */
 object WorkerNotifications {
     private const val MANDATORY_CHANNEL = "rwms_worker_mandatory"
+    private const val URGENT_CHANNEL = "rwms_worker_urgent"
     private const val JOIN_CHANNEL = "rwms_worker_join_available"
     private const val UPDATES_CHANNEL = "rwms_worker_updates"
     private const val SYNC_CHANNEL = "rwms_worker_sync"
@@ -25,6 +26,7 @@ object WorkerNotifications {
         manager.createNotificationChannels(
             listOf(
                 NotificationChannel(MANDATORY_CHANNEL, "Обязательные задания", NotificationManager.IMPORTANCE_HIGH),
+                NotificationChannel(URGENT_CHANNEL, "Срочные задания", NotificationManager.IMPORTANCE_HIGH),
                 NotificationChannel(JOIN_CHANNEL, "Доступно присоединение", NotificationManager.IMPORTANCE_HIGH),
                 NotificationChannel(UPDATES_CHANNEL, "Обновления заданий", NotificationManager.IMPORTANCE_DEFAULT),
                 NotificationChannel(SYNC_CHANNEL, "Синхронизация", NotificationManager.IMPORTANCE_LOW),
@@ -52,7 +54,7 @@ object WorkerNotifications {
             NotificationCompat.Builder(context, channelFor(invalidation.type))
                 .setSmallIcon(R.drawable.ic_stat_rwms_worker)
                 .setContentTitle("RWMS Рабочий")
-                .setContentText(messageFor(invalidation.type))
+                .setContentText(workerNotificationMessage(invalidation.type))
                 .setContentIntent(contentIntent)
                 .setAutoCancel(true)
                 .build(),
@@ -66,13 +68,16 @@ object WorkerNotifications {
 
     private fun channelFor(type: String): String = when {
         type == "TASK_JOIN_AVAILABLE" -> JOIN_CHANNEL
+        type == "URGENT_TASK" -> URGENT_CHANNEL
         type.contains("MANDATORY", ignoreCase = true) -> MANDATORY_CHANNEL
         type.contains("SYNC", ignoreCase = true) -> SYNC_CHANNEL
         else -> UPDATES_CHANNEL
     }
 
-    private fun messageFor(type: String): String = when {
-        type == "TASK_JOIN_AVAILABLE" -> "Водитель принял задание — можно присоединиться"
+    internal fun workerNotificationMessage(type: String): String = when {
+        type == "NEW_TASK" -> "Появилось новое задание"
+        type == "URGENT_TASK" -> "Появилось срочное задание"
+        type == "TASK_JOIN_AVAILABLE" -> "Смежной группе требуется помощь — откройте работы"
         type.contains("MANDATORY", ignoreCase = true) -> "Появилось обязательное задание"
         type.contains("SYNC", ignoreCase = true) -> "Данные RWMS обновляются"
         else -> "Состояние заданий изменилось"

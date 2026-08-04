@@ -24,13 +24,13 @@ class InventoryLogisticsPlanningContractTest {
             3,
             null,
             false,
-            false,
             null,
             null,
             List.of(
                 new PlanLineInput(
                     "CATALOG",
                     UUID.randomUUID(),
+                    null,
                     null,
                     null,
                     null,
@@ -46,43 +46,42 @@ class InventoryLogisticsPlanningContractTest {
 
   @Test
   void acceptsNonInboundPlanOnlyWhenPlanningIsExplicitlyNull() {
-    assertThat(selection(false, false, null, null).isLogisticsPlanningValid())
+    assertThat(selection(false, null, null).isLogisticsPlanningValid())
         .isTrue();
     assertThat(
-            selection(false, true, LogisticsPlanningMode.AUTO, null)
+            selection(false, LogisticsPlanningMode.AUTO, null)
                 .isLogisticsPlanningValid())
         .isFalse();
     assertThat(
-            selection(false, false, null, LocalDate.of(2026, 8, 12))
+            selection(false, null, LocalDate.of(2026, 8, 12))
                 .isLogisticsPlanningValid())
         .isFalse();
   }
 
   @Test
   void acceptsAutomaticAndFixedDatePlanningOnlyForInboundMovement() {
-    assertThat(selection(true, false, LogisticsPlanningMode.AUTO, null).isLogisticsPlanningValid())
+    assertThat(selection(true, LogisticsPlanningMode.AUTO, null).isLogisticsPlanningValid())
         .isTrue();
     assertThat(
-            selection(true, true, LogisticsPlanningMode.FIXED_DATE, LocalDate.of(2026, 8, 12))
+            selection(true, LogisticsPlanningMode.FIXED_DATE, LocalDate.of(2026, 8, 12))
                 .isLogisticsPlanningValid())
         .isTrue();
 
     assertThat(
-            selection(true, false, LogisticsPlanningMode.AUTO, LocalDate.of(2026, 8, 12))
+            selection(true, LogisticsPlanningMode.AUTO, LocalDate.of(2026, 8, 12))
                 .isLogisticsPlanningValid())
         .isFalse();
     assertThat(
-            selection(true, false, LogisticsPlanningMode.FIXED_DATE, null)
+            selection(true, LogisticsPlanningMode.FIXED_DATE, null)
                 .isLogisticsPlanningValid())
         .isFalse();
   }
 
   private PlanSelection selection(
       boolean movementToRepair,
-      boolean movementToShipment,
       LogisticsPlanningMode mode,
       LocalDate date) {
     return new PlanSelection(
-        "AUTO", 3, null, movementToRepair, movementToShipment, mode, date, List.of(), List.of());
+        "AUTO", 3, null, movementToRepair, mode, date, List.of(), List.of());
   }
 }

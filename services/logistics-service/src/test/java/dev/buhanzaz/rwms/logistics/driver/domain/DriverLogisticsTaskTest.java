@@ -26,11 +26,12 @@ class DriverLogisticsTaskTest {
             DriverTaskKind.DELIVER_TO_REPAIR);
     UUID taskBoardTaskId = UUID.randomUUID();
     UUID entryId = UUID.randomUUID();
-    UUID allocationId = UUID.randomUUID();
+    UUID reservedAllocationId = UUID.randomUUID();
+    UUID occupiedAllocationId = UUID.randomUUID();
 
     task.registerBoardTask(
         taskBoardTaskId, 0, entryId, "WAITING", "SCHEDULED", null);
-    task.reserveRepairPlace(allocationId, 0);
+    task.reserveRepairPlace(reservedAllocationId, 0);
     task.moveToCurrent(1, entryId, "WAITING");
     task.observeBoardTask(
         taskBoardTaskId,
@@ -49,13 +50,15 @@ class DriverLogisticsTaskTest {
     UUID mediaId = UUID.randomUUID();
     task.captureEvidence(evidenceId, mediaId, 1, entryId);
     task.markCoverApplied();
-    task.markRepairPlaceEffect(allocationId, 1);
+    task.markRepairPlaceEffect(occupiedAllocationId, 7);
     task.complete();
 
     assertThat(task.getState()).isEqualTo(DriverTaskState.COMPLETED);
     assertThat(task.getCompletionMediaId()).isEqualTo(mediaId);
     assertThat(task.isCoverApplied()).isTrue();
     assertThat(task.isRepairPlaceEffectApplied()).isTrue();
+    assertThat(task.getRepairPlaceAllocationId()).isEqualTo(occupiedAllocationId);
+    assertThat(task.getRepairPlaceAllocationVersion()).isEqualTo(7);
   }
 
   @Test
@@ -134,6 +137,69 @@ class DriverLogisticsTaskTest {
     assertThat(task.getRetryCount()).isEqualTo(5);
     assertThat(task.getFailureCode()).isEqualTo("DEPENDENCY_TRANSIENT");
     assertThat(task.getNextAttemptAt()).isNotNull();
+  }
+
+  @Test
+  void unregisteredIntentCanBeCancelledWithoutDeletingItsWorkflowCheckpoint() {
+    DriverLogisticsTask task =
+        create(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            DriverTaskSourceType.REPAIR,
+            UUID.randomUUID(),
+            DriverTaskKind.DELIVER_TO_REPAIR);
+    task.retryAfterSeconds(8, "DEPENDENCY_TRANSIENT", 5);
+
+    task.cancelBeforeExternalRegistration();
+
+    assertThat(task.getState()).isEqualTo(DriverTaskState.CANCELLED);
+    assertThat(task.getNextAttemptAt()).isNull();
+    assertThat(task.getFailureCode()).isNull();
+    assertThatThrownBy(task::cancelBeforeExternalRegistration)
+        .isInstanceOf(IllegalStateException.class);
+  }
+
+  @Test
+  void registeredIntentCannotBeCancelledThroughTheLocalOnlyTransition() {
+    DriverLogisticsTask task =
+        create(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            DriverTaskSourceType.REPAIR,
+            UUID.randomUUID(),
+            DriverTaskKind.DELIVER_TO_REPAIR);
+    task.registerBoardTask(
+        UUID.randomUUID(), 0, UUID.randomUUID(), "WAITING", "SCHEDULED", null);
+
+    assertThatThrownBy(task::cancelBeforeExternalRegistration)
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("unregistered");
+  }
+
+  @Test
+  void guardConfirmedCancellationClearsTheReleasedRepairPlaceCheckpoint() {
+    DriverLogisticsTask task =
+        create(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            DriverTaskSourceType.REPAIR,
+            UUID.randomUUID(),
+            DriverTaskKind.DELIVER_TO_REPAIR);
+    task.registerBoardTask(
+        UUID.randomUUID(), 0, UUID.randomUUID(), "WAITING", "SCHEDULED", null);
+    task.reserveRepairPlace(UUID.randomUUID(), 4);
+    task.requireReconciliation("MAINTENANCE_COMPENSATION_RELEASE_UNKNOWN");
+
+    task.cancelAfterPreStartCancellation();
+
+    assertThat(task.getState()).isEqualTo(DriverTaskState.CANCELLED);
+    assertThat(task.getRepairPlaceAllocationId()).isNull();
+    assertThat(task.getRepairPlaceAllocationVersion()).isNull();
+    assertThat(task.getFailureCode()).isNull();
+    assertThat(task.getNextAttemptAt()).isNull();
   }
 
   @Test

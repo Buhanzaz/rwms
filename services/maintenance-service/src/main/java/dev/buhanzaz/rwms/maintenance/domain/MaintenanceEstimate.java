@@ -53,6 +53,17 @@ public class MaintenanceEstimate {
   @Column(name = "dispatch_date")
   private LocalDate dispatchDate;
 
+  /** Manager-selected inventory publication priority, retained until this DRAFT becomes a repair. */
+  @Column(name = "priority", nullable = false)
+  private int priority = 3;
+
+  /** Whether the eventual repair needs an inbound driver movement. */
+  @Column(name = "movement_to_repair", nullable = false)
+  private boolean movementToRepair;
+
+  @Column(name = "movement_scheduled_date")
+  private LocalDate movementScheduledDate;
+
   @Column(name = "source_party", length = 512)
   private String sourceParty;
 
@@ -67,6 +78,10 @@ public class MaintenanceEstimate {
 
   @Column(name = "completed_at")
   private OffsetDateTime completedAt;
+
+  /** Audit-only terminal marker for a manager-replaced inventory DRAFT; it is never deleted. */
+  @Column(name = "inventory_superseded_at")
+  private OffsetDateTime inventorySupersededAt;
 
   @Column(name = "actor_ref", nullable = false, columnDefinition = "jsonb")
   @JdbcTypeCode(SqlTypes.JSON)
@@ -100,6 +115,8 @@ public class MaintenanceEstimate {
     value.catalogVersionId = catalogVersionId;
     value.state = EstimateState.DRAFT;
     value.revision = 1;
+    value.priority = 3;
+    value.movementToRepair = false;
     value.actorRef = actorRef == null ? "{}" : actorRef;
     value.replaceMetadata(dispatchDate, sourceParty, comment);
     return value;
@@ -125,8 +142,39 @@ public class MaintenanceEstimate {
   }
 
   public void replaceCoverMediaId(UUID coverMediaId) {
+    requireDraft();
     this.coverMediaId = coverMediaId;
     updatedAt = MaintenanceTime.now();
+  }
+
+  /** Stores the final manager choices captured with immutable inventory evidence. */
+  public void selectInventoryPublication(
+      int priority, boolean movementToRepair, LocalDate movementScheduledDate) {
+    requireDraft();
+    if (priority < 1 || priority > 5) {
+      throw new IllegalArgumentException("Estimate priority must be between 1 and 5");
+    }
+    if (!movementToRepair && movementScheduledDate != null) {
+      throw new IllegalArgumentException(
+          "Inbound movement date must be absent when movement to repair is disabled");
+    }
+    this.priority = priority;
+    this.movementToRepair = movementToRepair;
+    this.movementScheduledDate = movementScheduledDate;
+    updatedAt = MaintenanceTime.now();
+  }
+
+  /**
+   * A selected DRAFT has been replaced/merged by a later completed inventory plan.  Retaining
+   * the row protects the historical publication audit while keeping it out of active candidates.
+   */
+  public void supersedeForInventoryPublication() {
+    requireDraft();
+    if (repairId != null) {
+      throw new IllegalStateException("A repair-linked estimate cannot be superseded");
+    }
+    inventorySupersededAt = MaintenanceTime.now();
+    updatedAt = inventorySupersededAt;
   }
 
   public void complete(UUID repairId) {
@@ -163,8 +211,9 @@ public class MaintenanceEstimate {
   }
 
   private void requireDraft() {
-    if (state != EstimateState.DRAFT) {
-      throw new IllegalStateException("Completed estimates are immutable");
+    if (state != EstimateState.DRAFT || inventorySupersededAt != null) {
+      throw new IllegalStateException(
+          "Only an active draft estimate can change; completed or superseded estimates are immutable");
     }
   }
 
@@ -194,11 +243,15 @@ public class MaintenanceEstimate {
   public EstimateState getState() { return state; }
   public int getRevision() { return revision; }
   public LocalDate getDispatchDate() { return dispatchDate; }
+  public int getPriority() { return priority; }
+  public boolean isMovementToRepair() { return movementToRepair; }
+  public LocalDate getMovementScheduledDate() { return movementScheduledDate; }
   public String getSourceParty() { return sourceParty; }
   public String getComment() { return comment; }
   public UUID getRepairId() { return repairId; }
   public UUID getCoverMediaId() { return coverMediaId; }
   public OffsetDateTime getCompletedAt() { return completedAt; }
+  public OffsetDateTime getInventorySupersededAt() { return inventorySupersededAt; }
   public String getActorRef() { return actorRef; }
   public OffsetDateTime getCreatedAt() { return createdAt; }
   public OffsetDateTime getUpdatedAt() { return updatedAt; }

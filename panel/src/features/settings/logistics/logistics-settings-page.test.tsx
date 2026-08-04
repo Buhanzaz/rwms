@@ -60,6 +60,11 @@ vi.mock("@/features/settings/logistics/repair-capacity-settings-card", () => ({
   RepairCapacitySettingsCard: () => null,
 }))
 
+vi.mock(
+  "@/features/settings/logistics/inventory-planning-settings-card",
+  () => ({ InventoryPlanningSettingsCard: () => null })
+)
+
 vi.mock("@/features/settings/task-board/api/task-board-settings-api", () => ({
   taskBoardSettingsClient: {
     listClasses: mocks.listClasses,
@@ -468,9 +473,7 @@ describe("LogisticsSettingsPage", () => {
     expect(
       await screen.findByText("Подключить очередь перемещений")
     ).toBeTruthy()
-    await user.click(
-      screen.getByRole("button", { name: "Подключить очередь" })
-    )
+    await user.click(screen.getByRole("button", { name: "Подключить очередь" }))
 
     await waitFor(() =>
       expect(mocks.updateDriverQueue).toHaveBeenCalledWith(

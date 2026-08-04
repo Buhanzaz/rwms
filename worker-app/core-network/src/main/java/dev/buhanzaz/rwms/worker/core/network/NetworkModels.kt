@@ -32,9 +32,23 @@ data class WorkerCategoryDto(
     val name: String,
     val type: String,
     val queuePurpose: String,
+    val groupIds: List<String>,
     val sortOrder: Int,
     val audienceModes: List<String>,
     val resultPhotoMinCount: Int,
+)
+
+@Serializable
+data class WorkerKpiRangeDto(
+    val fromPercent: Int,
+    val toPercent: Int,
+    val color: String,
+)
+
+@Serializable
+data class WorkerKpiPaletteDto(
+    val ranges: List<WorkerKpiRangeDto>,
+    val overdueColor: String,
 )
 
 @Serializable
@@ -51,6 +65,7 @@ data class WorkerContextDto(
     val groups: List<WorkerGroupSummaryDto>,
     val qualifications: List<WorkerQualificationSummaryDto>,
     val categories: List<WorkerCategoryDto>,
+    val kpiPalette: WorkerKpiPaletteDto?,
     val serverTime: String,
     val revision: Long,
     val offlineLease: WorkerOfflineLeaseDto,
@@ -152,6 +167,8 @@ data class WorkerWorkDto(
     val unit: String?,
     val durationMinutes: Int?,
     val comment: String?,
+    // Old sanitized Room details predate work-level media binding.
+    val sourceMediaIds: List<String> = emptyList(),
 )
 
 @Serializable

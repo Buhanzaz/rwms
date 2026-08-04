@@ -23,6 +23,6 @@ rwms:
     kafka:
       enabled: ${WAREHOUSE_KAFKA_ENABLED:true}
   security:
-    dev-auth-bypass: true
+    dev-auth-bypass: ${WAREHOUSE_DEV_AUTH_BYPASS:false}
   cors:
     allowed-origins: ${PANEL_ORIGIN:http://localhost:8080}

@@ -76,8 +76,7 @@ public class DriverTaskService {
       throw new IllegalArgumentException(
           "Maintenance intake requires a repair, estimate, or inventory source");
     }
-    if (request.kind() != DriverTaskKind.DELIVER_TO_REPAIR
-        && request.kind() != DriverTaskKind.MOVE_TO_SHIPMENT) {
+    if (request.kind() != DriverTaskKind.DELIVER_TO_REPAIR) {
       throw new IllegalArgumentException(
           "Maintenance intake cannot create removal or capital movement tasks");
     }
@@ -90,9 +89,12 @@ public class DriverTaskService {
 
   @Transactional
   public CreateResult ensureRemovalTask(
-      UUID warehouseId, UUID repairId, UUID cabinId) {
+      UUID warehouseId, UUID repairId, UUID cabinId, int priority) {
     if (warehouseId == null || repairId == null || cabinId == null) {
       throw new IllegalArgumentException("Removal task warehouse, repair and cabin are required");
+    }
+    if (priority < 1 || priority > 5) {
+      throw new IllegalArgumentException("Removal task priority must be between 1 and 5");
     }
     UUID idempotencyKey =
         UUID.nameUUIDFromBytes(
@@ -117,7 +119,7 @@ public class DriverTaskService {
               .orElse(null);
     }
     if (existing != null) {
-      requireMatchingRemovalContext(existing, warehouseId, repairId, cabinId);
+      requireMatchingReleaseContext(existing, warehouseId, repairId, cabinId);
       return new CreateResult(mapper.toResponse(existing), true, false);
     }
     return createInternal(
@@ -132,12 +134,12 @@ public class DriverTaskService {
             DriverTaskKind.REMOVE_FROM_REPAIR,
             DriverTaskPlanningMode.AUTO,
             null,
-            3,
+            priority,
             false,
             null));
   }
 
-  private static void requireMatchingRemovalContext(
+  private static void requireMatchingReleaseContext(
       DriverLogisticsTask task, UUID warehouseId, UUID repairId, UUID cabinId) {
     if (task.getSourceType() != DriverTaskSourceType.REPAIR_PLACE
         || task.getKind() != DriverTaskKind.REMOVE_FROM_REPAIR
@@ -146,7 +148,7 @@ public class DriverTaskService {
         || !repairId.equals(task.getRepairId())
         || !cabinId.equals(task.getCabinId())) {
       throw new LogisticsConflictException(
-          "Существующее задание на вывоз не совпадает с фактическим ремонтным местом");
+          "Существующее задание на перемещение с ремонта не совпадает с ремонтным местом");
     }
   }
 
@@ -156,6 +158,26 @@ public class DriverTaskService {
       UUID idempotencyKey,
       UUID warehouseId,
       UUID repairId) {
+    return createCapitalMovement(
+        actorSubjectId,
+        idempotencyKey,
+        warehouseId,
+        repairId,
+        DriverTaskPlanningMode.AUTO,
+        null);
+  }
+
+  @Transactional
+  public CreateResult createCapitalMovement(
+      UUID actorSubjectId,
+      UUID idempotencyKey,
+      UUID warehouseId,
+      UUID repairId,
+      DriverTaskPlanningMode planningMode,
+      LocalDate scheduledDate) {
+    if (planningMode == null) {
+      throw new IllegalArgumentException("Capital movement planning mode is required");
+    }
     LogisticsDependencyGateway.CapitalRepair repair =
         dependencies.readCapitalRepair(repairId);
     if (!warehouseId.equals(repair.warehouseId())) {
@@ -172,8 +194,8 @@ public class DriverTaskService {
             DriverTaskSourceType.CAPITAL_REPAIR,
             repair.repairId(),
             DriverTaskKind.CAPITAL_TO_PRODUCTION,
-            DriverTaskPlanningMode.AUTO,
-            null,
+            planningMode,
+            scheduledDate,
             repair.priority(),
             true,
             null));

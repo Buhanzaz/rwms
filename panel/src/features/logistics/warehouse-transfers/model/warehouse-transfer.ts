@@ -124,7 +124,6 @@ export type TransferArrivalPreflight = {
   lineId: string
   activeRepairId: string | null
   priorityRequired: boolean
-  movementToShipmentAvailable: boolean
   missingQueueDefinitionIds: string[]
 }
 

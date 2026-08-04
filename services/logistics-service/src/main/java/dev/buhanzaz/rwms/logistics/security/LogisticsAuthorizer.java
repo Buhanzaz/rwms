@@ -45,6 +45,14 @@ public class LogisticsAuthorizer {
   }
 
   public void requireMaintenanceDriverTaskIntake(Jwt jwt) {
+    requireMaintenanceServiceIntake(jwt);
+  }
+
+  public void requireMaintenanceEquipmentMovementIntake(Jwt jwt) {
+    requireMaintenanceServiceIntake(jwt);
+  }
+
+  private void requireMaintenanceServiceIntake(Jwt jwt) {
     if (developmentBypass) return;
     if (jwt == null
         || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))

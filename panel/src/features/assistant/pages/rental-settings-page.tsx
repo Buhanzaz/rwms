@@ -43,6 +43,8 @@ export function RentalSettingsPage() {
   })
   const [editedChatSelectionHoldMinutes, setEditedChatSelectionHoldMinutes] =
     useState<string | null>(null)
+  const [editedManualBookingHoldMinutes, setEditedManualBookingHoldMinutes] =
+    useState<string | null>(null)
   const [editedPresentationHoldMinutes, setEditedPresentationHoldMinutes] =
     useState<string | null>(null)
   const [
@@ -55,6 +57,9 @@ export function RentalSettingsPage() {
   const presentationHoldMinutes =
     editedPresentationHoldMinutes ??
     String(settingsQuery.data?.presentationHoldMinutes ?? 60)
+  const manualBookingHoldMinutes =
+    editedManualBookingHoldMinutes ??
+    String(settingsQuery.data?.manualBookingHoldMinutes ?? 60)
   const draftReservationHoldMinutes =
     editedDraftReservationHoldMinutes ??
     String(settingsQuery.data?.draftReservationHoldMinutes ?? 1_440)
@@ -73,6 +78,16 @@ export function RentalSettingsPage() {
         )
       }
       const parsedPresentationHoldMinutes = Number(presentationHoldMinutes)
+      const parsedManualBookingHoldMinutes = Number(manualBookingHoldMinutes)
+      if (
+        !Number.isInteger(parsedManualBookingHoldMinutes) ||
+        parsedManualBookingHoldMinutes < 5 ||
+        parsedManualBookingHoldMinutes > 1_440
+      ) {
+        throw new Error(
+          "Укажите для ручного бронирования целое число от 5 до 1440 минут."
+        )
+      }
       if (
         !Number.isInteger(parsedPresentationHoldMinutes) ||
         parsedPresentationHoldMinutes < 5 ||
@@ -98,6 +113,7 @@ export function RentalSettingsPage() {
         accessToken: accessToken!,
         expectedVersion: settingsQuery.data.version,
         chatSelectionHoldMinutes: parsedChatSelectionHoldMinutes,
+        manualBookingHoldMinutes: parsedManualBookingHoldMinutes,
         presentationHoldMinutes: parsedPresentationHoldMinutes,
         draftReservationHoldMinutes: parsedDraftReservationHoldMinutes,
       })
@@ -105,6 +121,7 @@ export function RentalSettingsPage() {
     onSuccess: async (settings) => {
       queryClient.setQueryData(RENTAL_SETTINGS_QUERY_KEY, settings)
       setEditedChatSelectionHoldMinutes(null)
+      setEditedManualBookingHoldMinutes(null)
       setEditedPresentationHoldMinutes(null)
       setEditedDraftReservationHoldMinutes(null)
       await queryClient.invalidateQueries({
@@ -177,6 +194,27 @@ export function RentalSettingsPage() {
                   />
                   <FieldDescription>
                     Допустимо от 1 минуты до 24 часов. По умолчанию — 10 минут.
+                  </FieldDescription>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="manual-booking-hold-minutes">
+                    Удержание в ручном бронировании
+                  </FieldLabel>
+                  <Input
+                    id="manual-booking-hold-minutes"
+                    type="number"
+                    min={5}
+                    max={1_440}
+                    step={1}
+                    inputMode="numeric"
+                    value={manualBookingHoldMinutes}
+                    onChange={(event) =>
+                      setEditedManualBookingHoldMinutes(event.target.value)
+                    }
+                  />
+                  <FieldDescription>
+                    Начинается после кнопки «Продолжить бронирование».
+                    Допустимо от 5 минут до 24 часов. По умолчанию — 60 минут.
                   </FieldDescription>
                 </Field>
                 <Field>

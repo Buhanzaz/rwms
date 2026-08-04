@@ -9,14 +9,21 @@ import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.CompletionRisk;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.ConflictView;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.CreateFindingAssetRequest;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.FindingView;
+import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.FrozenStatistics;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.FurnitureReviewView;
+import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.FinalPlanEntryUpdate;
+import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.FinalPlanReconciliationDecision;
+import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.FinalPlanUpdateRequest;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.PageResponse;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.Observation;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.PlanLineInput;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.PlanSelection;
+import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.PrepareFinalPlanRequest;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.PublishFindingsRequest;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.ResolveConflictRequest;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.ResolveNumberRequest;
+import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.RegistryReviewRequest;
+import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.RegistryReviewView;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.RevisionExpectation;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.RetryPublicationRequest;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.SaveInspectionRequest;
@@ -28,18 +35,26 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.inventory.domain.ConflictResolutionStrategy;
+import dev.buhanzaz.rwms.inventory.domain.FinalPlanReconciliationStrategy;
+import dev.buhanzaz.rwms.inventory.domain.FinalPlanScheduleMode;
+import dev.buhanzaz.rwms.inventory.domain.FinalPlanTargetKind;
 import dev.buhanzaz.rwms.inventory.domain.FindingOrigin;
 import dev.buhanzaz.rwms.inventory.domain.FindingPlanLine;
 import dev.buhanzaz.rwms.inventory.domain.FindingPlanSnapshot;
 import dev.buhanzaz.rwms.inventory.domain.FindingPlanStage;
 import dev.buhanzaz.rwms.inventory.domain.InspectionState;
 import dev.buhanzaz.rwms.inventory.domain.InventoryExpectedItem;
+import dev.buhanzaz.rwms.inventory.domain.InventoryFinalPlanEntry;
 import dev.buhanzaz.rwms.inventory.domain.LogisticsPlanningMode;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinding;
 import dev.buhanzaz.rwms.inventory.domain.InventoryMembershipMovementType;
+import dev.buhanzaz.rwms.inventory.domain.InventoryPublicationIntent;
+import dev.buhanzaz.rwms.inventory.domain.InventoryReviewStage;
 import dev.buhanzaz.rwms.inventory.domain.ObservationPresence;
 import dev.buhanzaz.rwms.inventory.domain.ReconciliationState;
 import dev.buhanzaz.rwms.inventory.domain.SessionLifecycle;
@@ -48,7 +63,9 @@ import dev.buhanzaz.rwms.inventory.repository.FindingPlanLineRepository;
 import dev.buhanzaz.rwms.inventory.repository.FindingPlanSnapshotRepository;
 import dev.buhanzaz.rwms.inventory.repository.FindingPlanStageRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryExpectedItemRepository;
+import dev.buhanzaz.rwms.inventory.repository.InventoryFinalPlanEntryRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryFindingRepository;
+import dev.buhanzaz.rwms.inventory.repository.InventoryPublicationIntentRepository;
 import dev.buhanzaz.rwms.inventory.integration.InventoryDependencyGateway;
 import dev.buhanzaz.rwms.inventory.service.InventoryApplicationService;
 import dev.buhanzaz.rwms.inventory.service.InventoryCanonicalJsonPort;
@@ -60,11 +77,14 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.hibernate.SessionFactory;
 import org.hibernate.stat.Statistics;
@@ -87,6 +107,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.ObjectNode;
 
 @SpringBootTest(
     properties = {
@@ -110,6 +132,7 @@ class InventoryReadProjectionIntegrationTest {
   @Autowired InventoryApplicationService service;
   @Autowired InventoryFindingRepository findings;
   @Autowired InventoryExpectedItemRepository expectedItems;
+  @Autowired InventoryFinalPlanEntryRepository finalPlanEntries;
   @Autowired FindingPlanSnapshotRepository planSnapshots;
   @Autowired FindingPlanLineRepository planLines;
   @Autowired FindingPlanStageRepository planStages;
@@ -120,6 +143,7 @@ class InventoryReadProjectionIntegrationTest {
   @Autowired InventoryCanonicalJsonPort canonicalJson;
   @Autowired InventoryFrozenPlanFingerprint frozenPlanFingerprint;
   @Autowired InventoryEventStore events;
+  @Autowired InventoryPublicationIntentRepository publications;
   @MockitoBean InventoryDependencyGateway dependencies;
 
   @DynamicPropertySource
@@ -229,7 +253,6 @@ class InventoryReadProjectionIntegrationTest {
     assertThat(expected.frozenPlan().priority()).isEqualTo(3);
     assertThat(expected.frozenPlan().coverMediaId()).isNull();
     assertThat(expected.frozenPlan().movementToRepair()).isTrue();
-    assertThat(expected.frozenPlan().movementToShipment()).isFalse();
     assertThat(expected.frozenPlan().logisticsPlanningMode())
         .isEqualTo(LogisticsPlanningMode.FIXED_DATE);
     assertThat(expected.frozenPlan().logisticsScheduledDate())
@@ -337,6 +360,15 @@ class InventoryReadProjectionIntegrationTest {
     UUID stageNodeId = UUID.randomUUID();
     UUID queueId = UUID.randomUUID();
     seedSession(inventoryId, warehouseId);
+    events.initialize(
+        "SESSION",
+        inventoryId,
+        "inventory.session.started.v1",
+        "rwms.inventory.session.v1",
+        mapper.createObjectNode().put("inventoryId", inventoryId.toString()),
+        UUID.randomUUID(),
+        null,
+        null);
     InventoryFinding finding =
         findings.saveAndFlush(
             InventoryFinding.unexpected(
@@ -391,7 +423,6 @@ class InventoryReadProjectionIntegrationTest {
     snapshot.put("priority", 4);
     snapshot.putNull("coverMediaId");
     snapshot.put("movementToRepair", false);
-    snapshot.put("movementToShipment", false);
     snapshot.putNull("logisticsPlanningMode");
     snapshot.putNull("logisticsScheduledDate");
     snapshot
@@ -457,13 +488,13 @@ class InventoryReadProjectionIntegrationTest {
                     4,
                     null,
                     false,
-                    false,
                     null,
                     null,
                     List.of(
                         new PlanLineInput(
                             "CATALOG",
                             materialNodeId,
+                            null,
                             null,
                             null,
                             null,
@@ -477,15 +508,15 @@ class InventoryReadProjectionIntegrationTest {
     assertThat(freezeRequest.get().required("priority").asInt()).isEqualTo(4);
     assertThat(freezeRequest.get().required("coverMediaId").isNull()).isTrue();
     assertThat(freezeRequest.get().required("movementToRepair").booleanValue()).isFalse();
-    assertThat(freezeRequest.get().required("movementToShipment").booleanValue()).isFalse();
     assertThat(freezeRequest.get().required("logisticsPlanningMode").isNull()).isTrue();
     assertThat(freezeRequest.get().required("logisticsScheduledDate").isNull())
         .isTrue();
     assertThat(freezeRequest.get().required("lines")).hasSize(1);
+    assertThat(freezeRequest.get().required("lines").get(0)
+        .required("routingCatalogNodeId").isNull()).isTrue();
     assertThat(saved.inspectionSource()).isEqualTo("INVENTORY");
     assertThat(saved.frozenPlan().priority()).isEqualTo(4);
     assertThat(saved.frozenPlan().movementToRepair()).isFalse();
-    assertThat(saved.frozenPlan().movementToShipment()).isFalse();
     assertThat(saved.frozenPlan().logisticsPlanningMode()).isNull();
     assertThat(saved.frozenPlan().logisticsScheduledDate()).isNull();
     assertThat(saved.frozenPlan().lines())
@@ -502,17 +533,586 @@ class InventoryReadProjectionIntegrationTest {
             inventoryId,
             warehouseId,
             List.of(new RevisionExpectation(finding.getId(), saved.findingRevision())));
+    PreparedFinalPlan finalPlan = prepareFinalPlan(inventoryId, furnitureReview);
     CompletionPreview preview =
         service.preview(
             jwt(),
             inventoryId,
             UUID.randomUUID(),
-            new CompletionPreviewRequest(
-                furnitureReview.sessionRevision(), furnitureReview.findingRevisions()));
+            completionPreviewRequest(furnitureReview, finalPlan));
     assertThat(preview.statistics().workLineCount()).isZero();
     assertThat(preview.statistics().materialLineCount()).isOne();
     assertThat(preview.statistics().materialTotalMinor()).isEqualTo(250);
     assertThat(preview.statistics().normativeMinutes()).isEqualTo("0");
+
+    UUID repairId = UUID.randomUUID();
+    List<UUID> publicationKeys = new ArrayList<>();
+    AtomicReference<JsonNode> maintenanceApplyRequest = new AtomicReference<>();
+    when(dependencies.applyReconciliation(any(), any(), any(), any()))
+        .thenAnswer(
+            invocation -> {
+              publicationKeys.add(invocation.getArgument(2));
+              maintenanceApplyRequest.set(invocation.getArgument(3));
+              var response = mapper.createObjectNode();
+              response.put("outcome", "CREATED");
+              response.put("targetKind", "REPAIR");
+              response.put("targetId", repairId.toString());
+              response.putNull("estimateId");
+              response.put("repairId", repairId.toString());
+              response
+                  .putObject("source")
+                  .put("inventoryId", inventoryId.toString())
+                  .put("finalPlanVersion", finalPlan.version())
+                  .put("findingId", finding.getId().toString());
+              response.putNull("successor");
+              response.putObject("delta").putArray("lines");
+              return response;
+            });
+    SessionView completed =
+        service.complete(
+            jwt(),
+            inventoryId,
+            UUID.randomUUID(),
+            new CompleteSessionRequest(
+                preview.sessionRevision(),
+                preview.finalPlanVersion(),
+                preview.finalPlanSha256(),
+                preview.findingRevisions(),
+                preview.acknowledgementSha256(),
+                preview.validationSha256()));
+    assertThat(completed.lifecycle()).isEqualTo(SessionLifecycle.COMPLETED);
+    assertThat(publicationKeys).hasSize(1);
+    assertThat(maintenanceApplyRequest.get().has("targetKind")).isFalse();
+    assertThat(maintenanceApplyRequest.get().required("finalPlanVersion").asLong())
+        .isEqualTo(finalPlan.version());
+
+    UUID recoveryAssetId = UUID.randomUUID();
+    InventoryFinding recoveryFinding =
+        InventoryFinding.unexpected(
+            inventoryId,
+            FindingOrigin.UNEXPECTED_EXISTING,
+            recoveryAssetId,
+            2L,
+            warehouseId,
+            "WAREHOUSE",
+            null,
+            "БЫТ-RECOVERY",
+            "БЫТRECOVERY",
+            ReconciliationState.MATCHED,
+            ACTOR);
+    recoveryFinding.saveInspection(
+        InspectionState.WORK_STAGED,
+        ReconciliationState.MATCHED,
+        ObservationPresence.ABSENT,
+        null,
+        ObservationPresence.ABSENT,
+        null,
+        fingerprint,
+        "Восстановление публикации",
+        ACTOR);
+    recoveryFinding = findings.saveAndFlush(recoveryFinding);
+    UUID recoveryFindingId = recoveryFinding.getId();
+    long recoverySourceRevision = Math.max(1, recoveryFinding.getRevision());
+    planSnapshots.saveAndFlush(
+        new FindingPlanSnapshot(
+            recoveryFinding.getId(),
+            recoverySourceRevision,
+            inventoryId,
+            "AUTO",
+            false,
+            null,
+            null,
+            catalogVersionId,
+            fingerprint,
+            snapshot.toString(),
+            2));
+    finalPlanEntries.saveAndFlush(
+        new InventoryFinalPlanEntry(
+            inventoryId,
+            finalPlan.version(),
+            recoveryFinding.getId(),
+            recoverySourceRevision,
+            recoveryAssetId,
+            2L,
+            fingerprint,
+            true,
+            FinalPlanTargetKind.REPAIR,
+            1,
+            4,
+            false,
+            null,
+            LocalDate.of(2026, 8, 4),
+            "[]",
+            null));
+    InventoryPublicationIntent recoveryIntent =
+        publications.saveAndFlush(
+            InventoryPublicationIntent.ready(
+                inventoryId,
+                recoveryFinding.getId(),
+                recoverySourceRevision,
+                finalPlan.version(),
+                finalPlan.sha256(),
+                FinalPlanTargetKind.REPAIR));
+    events.initialize(
+        "PUBLICATION",
+        recoveryIntent.getId(),
+        "inventory.publication.ready.v1",
+        "rwms.inventory.publication.v1",
+        mapper
+            .createObjectNode()
+            .put("inventoryId", inventoryId.toString())
+            .put("findingId", recoveryFinding.getId().toString())
+            .put("publicationIntentId", recoveryIntent.getId().toString()),
+        UUID.randomUUID(),
+        null,
+        null);
+
+    List<UUID> recoveryKeys = new ArrayList<>();
+    AtomicBoolean simulateProcessLoss = new AtomicBoolean(true);
+    doAnswer(
+            invocation -> {
+              recoveryKeys.add(invocation.getArgument(2));
+              if (simulateProcessLoss.getAndSet(false)) {
+                throw new AssertionError("simulated process loss after durable publication attempt");
+              }
+              var response = mapper.createObjectNode();
+              response.put("outcome", "MATCHED");
+              response.putNull("targetKind");
+              response.putNull("targetId");
+              response.putNull("estimateId");
+              response.putNull("repairId");
+              response
+                  .putObject("source")
+                  .put("inventoryId", inventoryId.toString())
+                  .put("finalPlanVersion", finalPlan.version())
+                  .put("findingId", recoveryFindingId.toString());
+              response.putNull("successor");
+              response.putObject("delta").putArray("lines");
+              return response;
+            })
+        .when(dependencies)
+        .applyReconciliation(any(), any(), any(), any());
+
+    assertThatThrownBy(service::recoverPendingPublications)
+        .isInstanceOf(AssertionError.class)
+        .hasMessageContaining("simulated process loss");
+    assertThat(
+            jdbc.queryForObject(
+                "select state from inventory_publication_intent where id=?",
+                String.class,
+                recoveryIntent.getId()))
+        .isEqualTo("PENDING");
+    jdbc.update(
+        """
+        update inventory_publication_intent
+           set created_at=created_at - interval '31 seconds',
+               updated_at=updated_at - interval '31 seconds'
+         where id=?
+        """,
+        recoveryIntent.getId());
+
+    service.recoverPendingPublications();
+
+    assertThat(recoveryKeys).hasSize(2);
+    assertThat(recoveryKeys).allSatisfy(key -> assertThat(key).isEqualTo(recoveryKeys.getFirst()));
+    assertThat(
+            jdbc.queryForObject(
+                "select state from inventory_publication_intent where id=?",
+                String.class,
+                recoveryIntent.getId()))
+        .isEqualTo("SUCCEEDED");
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select target_kind,target_id,maintenance_estimate_id,maintenance_repair_id,
+                       maintenance_outcome,maintenance_result::text as maintenance_result
+                from inventory_publication_intent
+                where id=?
+                """,
+                recoveryIntent.getId()))
+        .containsEntry("target_kind", null)
+        .containsEntry("target_id", null)
+        .containsEntry("maintenance_estimate_id", null)
+        .containsEntry("maintenance_repair_id", null)
+        .containsEntry("maintenance_outcome", "MATCHED")
+        .satisfies(
+            row -> {
+              JsonNode result = mapper.readTree((String) row.get("maintenance_result"));
+              assertThat(result.path("outcome").asText()).isEqualTo("MATCHED");
+              assertThat(result.path("delta").path("lines").isArray()).isTrue();
+              assertThat(result.path("successor").isNull()).isTrue();
+            });
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select result.outcome,result.repair_id,result.maintenance_outcome,
+                       result.maintenance_result::text as maintenance_result
+                from inventory_publication_attempt attempt
+                join inventory_publication_attempt_result result
+                  on result.publication_attempt_id=attempt.id
+                where attempt.publication_intent_id=?
+                """,
+                recoveryIntent.getId()))
+        .containsEntry("outcome", "SUCCEEDED")
+        .containsEntry("repair_id", null)
+        .containsEntry("maintenance_outcome", "MATCHED")
+        .satisfies(
+            row ->
+                assertThat(
+                        mapper
+                            .readTree((String) row.get("maintenance_result"))
+                            .path("outcome")
+                            .asText())
+                    .isEqualTo("MATCHED"));
+  }
+
+  @Test
+  void finalPlanRequiresAnActiveUniqueCandidateAndMergeForStartedWork() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID inventoryId = UUID.randomUUID();
+    seedSession(inventoryId, warehouseId);
+    InventoryFinding finding = stageFinalPlanFinding(inventoryId, warehouseId);
+
+    AtomicReference<List<JsonNode>> candidates = new AtomicReference<>(List.of());
+    doAnswer(
+            invocation -> {
+              JsonNode request = invocation.getArgument(1);
+              ObjectNode response = mapper.createObjectNode();
+              response.put("inventoryId", request.required("inventoryId").asText());
+              response.put("finalPlanVersion", request.required("finalPlanVersion").asLong());
+              response.put("finalPlanSha256", request.required("finalPlanSha256").asText());
+              ArrayNode responseFindings = response.putArray("findings");
+              for (JsonNode requestedFinding : request.required("findings")) {
+                ArrayNode responseCandidates =
+                    responseFindings
+                        .addObject()
+                        .put("findingId", requestedFinding.required("findingId").asText())
+                        .putArray("candidates");
+                candidates.get().forEach(candidate -> responseCandidates.add(candidate.deepCopy()));
+              }
+              return response;
+            })
+        .when(dependencies)
+        .preflightReconciliation(any(), any());
+
+    var prepared =
+        service.prepareFinalPlan(
+            jwt(),
+            inventoryId,
+            UUID.randomUUID(),
+            new PrepareFinalPlanRequest(
+                0, 0, FinalPlanScheduleMode.AUTO, FinalPlanScheduleMode.AUTO));
+    var preparedEntry = prepared.entries().getFirst();
+
+    UUID historicalTargetId = UUID.randomUUID();
+    candidates.set(List.of(finalPlanCandidate(historicalTargetId, false, false)));
+    assertThatThrownBy(
+            () ->
+                service.updateFinalPlan(
+                    jwt(),
+                    inventoryId,
+                    UUID.randomUUID(),
+                    finalPlanUpdateRequest(
+                        prepared,
+                        preparedEntry,
+                        new FinalPlanReconciliationDecision(
+                            FinalPlanReconciliationStrategy.REPLACE,
+                            FinalPlanTargetKind.REPAIR,
+                            historicalTargetId))))
+        .isInstanceOfSatisfying(
+            InventoryException.class,
+            exception -> {
+              assertThat(exception.status()).isEqualTo(HttpStatus.CONFLICT);
+              assertThat(exception.getMessage()).contains("active maintenance candidate");
+            });
+
+    UUID startedTargetId = UUID.randomUUID();
+    candidates.set(List.of(finalPlanCandidate(startedTargetId, true, true)));
+    assertThatThrownBy(
+            () ->
+                service.updateFinalPlan(
+                    jwt(),
+                    inventoryId,
+                    UUID.randomUUID(),
+                    finalPlanUpdateRequest(
+                        prepared,
+                        preparedEntry,
+                        new FinalPlanReconciliationDecision(
+                            FinalPlanReconciliationStrategy.REPLACE,
+                            FinalPlanTargetKind.REPAIR,
+                            startedTargetId))))
+        .isInstanceOfSatisfying(
+            InventoryException.class,
+            exception -> {
+              assertThat(exception.status()).isEqualTo(HttpStatus.CONFLICT);
+              assertThat(exception.getMessage()).contains("requires MERGE");
+            });
+
+    var merged =
+        service.updateFinalPlan(
+            jwt(),
+            inventoryId,
+            UUID.randomUUID(),
+            finalPlanUpdateRequest(
+                prepared,
+                preparedEntry,
+                new FinalPlanReconciliationDecision(
+                    FinalPlanReconciliationStrategy.MERGE,
+                    FinalPlanTargetKind.REPAIR,
+                    startedTargetId)));
+    assertThat(merged.entries().getFirst().reconciliationDecision().strategy())
+        .isEqualTo(FinalPlanReconciliationStrategy.MERGE);
+
+    List<JsonNode> ambiguousCandidates =
+        List.of(
+            finalPlanCandidate(UUID.randomUUID(), false, true),
+            finalPlanCandidate(UUID.randomUUID(), false, true));
+    candidates.set(ambiguousCandidates);
+    var ambiguous =
+        service.prepareFinalPlan(
+            jwt(),
+            inventoryId,
+            UUID.randomUUID(),
+            new PrepareFinalPlanRequest(
+                0, 0, FinalPlanScheduleMode.AUTO, FinalPlanScheduleMode.AUTO));
+
+    assertThatThrownBy(
+            () ->
+                service.preview(
+                    jwt(),
+                    inventoryId,
+                    UUID.randomUUID(),
+                    new CompletionPreviewRequest(
+                        0,
+                        ambiguous.finalPlanVersion(),
+                        ambiguous.finalPlanSha256(),
+                        List.of(new RevisionExpectation(finding.getId(), finding.getRevision())))))
+        .isInstanceOfSatisfying(
+            InventoryException.class,
+            exception -> {
+              assertThat(exception.status())
+                  .withFailMessage(exception.getMessage())
+                  .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+              assertThat(exception.code())
+                  .isEqualTo("INVENTORY_FINAL_PLAN_AMBIGUOUS_ACTIVE_CANDIDATES");
+            });
+  }
+
+  @Test
+  void finalPlanUsesCurrentWarehouseDateAndRejectsPastManualAndStaleDraftDates() {
+    ZoneId warehouseZone = ZoneId.of("Europe/Moscow");
+    LocalDate planningDate = LocalDate.now(warehouseZone);
+    UUID warehouseId = UUID.randomUUID();
+    UUID inventoryId = UUID.randomUUID();
+    seedSession(inventoryId, warehouseId);
+    setBusinessDate(inventoryId, planningDate.minusDays(1));
+    InventoryFinding finding = stageFinalPlanFinding(inventoryId, warehouseId, true);
+
+    prepareFinalPlan(
+        inventoryId,
+        new FurnitureReviewState(
+            0, List.of(new RevisionExpectation(finding.getId(), finding.getRevision()))));
+    var automatic = service.finalPlan(jwt(), inventoryId);
+    var automaticEntry = automatic.entries().getFirst();
+    assertThat(automaticEntry.movementScheduledDate()).isNotNull();
+    assertThat(automaticEntry.movementScheduledDate().isBefore(planningDate)).isFalse();
+    assertThat(automaticEntry.repairScheduledDate()).isNotNull();
+    assertThat(automaticEntry.repairScheduledDate().isBefore(planningDate)).isFalse();
+
+    assertThatThrownBy(
+            () ->
+                service.updateFinalPlan(
+                    jwt(),
+                    inventoryId,
+                    UUID.randomUUID(),
+                    new FinalPlanUpdateRequest(
+                        automatic.sessionRevision(),
+                        automatic.finalPlanVersion(),
+                        FinalPlanScheduleMode.MANUAL,
+                        FinalPlanScheduleMode.MANUAL,
+                        List.of(
+                            new FinalPlanEntryUpdate(
+                                automaticEntry.findingId(),
+                                automaticEntry.findingRevision(),
+                                automaticEntry.order(),
+                                automaticEntry.priority(),
+                                true,
+                                planningDate.minusDays(1),
+                                planningDate,
+                                null)))))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("Manual movement date cannot precede the current warehouse planning date");
+
+    assertThatThrownBy(
+            () ->
+                service.updateFinalPlan(
+                    jwt(),
+                    inventoryId,
+                    UUID.randomUUID(),
+                    new FinalPlanUpdateRequest(
+                        automatic.sessionRevision(),
+                        automatic.finalPlanVersion(),
+                        FinalPlanScheduleMode.MANUAL,
+                        FinalPlanScheduleMode.MANUAL,
+                        List.of(
+                            new FinalPlanEntryUpdate(
+                                automaticEntry.findingId(),
+                                automaticEntry.findingRevision(),
+                                automaticEntry.order(),
+                                automaticEntry.priority(),
+                                false,
+                                null,
+                                planningDate.minusDays(1),
+                                null)))))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("Manual repair date cannot precede the current warehouse planning date");
+
+    jdbc.update(
+        """
+        update inventory_final_plan_entry
+           set movement_scheduled_date=?,repair_scheduled_date=?
+         where inventory_id=? and final_plan_version=?
+        """,
+        planningDate.minusDays(1),
+        planningDate.minusDays(1),
+        inventoryId,
+        automatic.finalPlanVersion());
+    CompletionPreviewRequest previewRequest =
+        new CompletionPreviewRequest(
+            automatic.sessionRevision(),
+            automatic.finalPlanVersion(),
+            automatic.finalPlanSha256(),
+            List.of(new RevisionExpectation(finding.getId(), finding.getRevision())));
+
+    assertThatThrownBy(
+            () -> service.preview(jwt(), inventoryId, UUID.randomUUID(), previewRequest))
+        .isInstanceOfSatisfying(
+            InventoryException.class,
+            exception -> {
+              assertThat(exception.status()).isEqualTo(HttpStatus.CONFLICT);
+              assertThat(exception.getMessage())
+                  .contains("operational dates")
+                  .contains("prepare it again");
+            });
+    assertThatThrownBy(
+            () ->
+                service.complete(
+                    jwt(),
+                    inventoryId,
+                    UUID.randomUUID(),
+                    new CompleteSessionRequest(
+                        automatic.sessionRevision(),
+                        automatic.finalPlanVersion(),
+                        automatic.finalPlanSha256(),
+                        List.of(new RevisionExpectation(finding.getId(), finding.getRevision())),
+                        "b".repeat(64),
+                        "c".repeat(64))))
+        .isInstanceOfSatisfying(
+            InventoryException.class,
+            exception -> {
+              assertThat(exception.status()).isEqualTo(HttpStatus.CONFLICT);
+              assertThat(exception.getMessage())
+                  .contains("operational dates")
+                  .contains("prepare it again");
+            });
+  }
+
+  @Test
+  void preliminaryStatisticsUsesPersistedActiveFindingsAndPlanLinesWithoutMutating() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID inventoryId = UUID.randomUUID();
+    UUID cancelledInventoryId = UUID.randomUUID();
+    seedSession(cancelledInventoryId, warehouseId);
+    markCancelled(cancelledInventoryId);
+    seedSession(inventoryId, warehouseId);
+    new TransactionTemplate(transactionManager)
+        .execute(status -> seedFindings(inventoryId, cancelledInventoryId, warehouseId));
+
+    long sessionRevisionBefore =
+        jdbc.queryForObject(
+            "select session_revision from inventory_session where id=?", Long.class, inventoryId);
+    List<Long> findingRevisionsBefore =
+        jdbc.query(
+            """
+            select finding_revision from inventory_finding
+             where inventory_id=? and membership_active=true
+             order by id
+            """,
+            (resultSet, rowNum) -> resultSet.getLong(1),
+            inventoryId);
+
+    FrozenStatistics statistics = service.preliminaryStatistics(jwt(), inventoryId);
+
+    assertThat(statistics.expectedCount()).isZero();
+    assertThat(statistics.inspectedCount()).isEqualTo(2);
+    assertThat(statistics.missingCount()).isZero();
+    assertThat(statistics.readyCount()).isOne();
+    assertThat(statistics.withWorkCount()).isOne();
+    assertThat(statistics.addedCount()).isZero();
+    assertThat(statistics.unexpectedExistingCount()).isEqualTo(2);
+    assertThat(statistics.conflictCount()).isZero();
+    assertThat(statistics.workLineCount()).isOne();
+    assertThat(statistics.materialLineCount()).isOne();
+    assertThat(statistics.workTotalMinor()).isEqualTo(1543);
+    assertThat(statistics.materialTotalMinor()).isEqualTo(135);
+    assertThat(statistics.grandTotalMinor()).isEqualTo(1678);
+    assertThat(statistics.roundingAdjustmentMinor()).isZero();
+    assertThat(statistics.normativeMinutes()).isEqualTo("3.125");
+    assertThat(statistics.durationSeconds()).isGreaterThanOrEqualTo(0);
+    assertThat(statistics.aggregateLines()).hasSize(2);
+    assertThat(statistics.aggregateLines().get(0))
+        .satisfies(
+            line -> {
+              assertThat(line.aggregationKind()).isEqualTo("MANUAL");
+              assertThat(line.type()).isEqualTo("MATERIAL");
+              assertThat(line.normalizedDescription()).isEqualTo("second material");
+              assertThat(line.unit()).isEqualTo("PCS");
+              assertThat(line.unitPriceMinor()).isEqualTo(45);
+              assertThat(line.quantity()).isEqualTo("3");
+              assertThat(line.rowTotalMinor()).isEqualTo(135);
+            });
+    assertThat(statistics.aggregateLines().get(1))
+        .satisfies(
+            line -> {
+              assertThat(line.aggregationKind()).isEqualTo("CATALOG");
+              assertThat(line.type()).isEqualTo("WORK");
+              assertThat(line.catalogVersionId()).isNotNull();
+              assertThat(line.catalogNodeId()).isNotNull();
+              assertThat(line.unit()).isEqualTo("HOUR");
+              assertThat(line.unitPriceMinor()).isEqualTo(1234);
+              assertThat(line.quantity()).isEqualTo("1.25");
+              assertThat(line.rowTotalMinor()).isEqualTo(1543);
+            });
+    verifyNoInteractions(dependencies);
+
+    assertThat(
+            jdbc.queryForObject(
+                "select session_revision from inventory_session where id=?",
+                Long.class,
+                inventoryId))
+        .isEqualTo(sessionRevisionBefore);
+    assertThat(
+            jdbc.query(
+                """
+                select finding_revision from inventory_finding
+                 where inventory_id=? and membership_active=true
+                 order by id
+                """,
+                (resultSet, rowNum) -> resultSet.getLong(1),
+                inventoryId))
+        .isEqualTo(findingRevisionsBefore);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from inventory_validation_snapshot where inventory_id=?",
+                Integer.class,
+                inventoryId))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from inventory_completion_statistics where inventory_id=?",
+                Integer.class,
+                inventoryId))
+        .isZero();
   }
 
   @Test
@@ -650,15 +1250,11 @@ class InventoryReadProjectionIntegrationTest {
             service
                 .findings(jwtForWarehouse(firstWarehouseId), firstInventoryId, 0, 20, "createdAt,asc")
                 .content())
-        .singleElement()
-        .satisfies(
-            value -> {
-              assertThat(value.inspection()).isEqualTo(InspectionState.NOT_INSPECTED);
-              assertThat(value.conflicts()).isEmpty();
-              assertThat(value.currentSnapshot().warehouseId()).isEqualTo(secondWarehouseId);
-            });
+        .isEmpty();
     assertThat(service.session(jwtForWarehouse(firstWarehouseId), firstInventoryId).expectedCount())
-        .isOne();
+        .isZero();
+    assertThat(service.session(jwtForWarehouse(firstWarehouseId), firstInventoryId).findingCount())
+        .isZero();
     assertThat(
             service
                 .session(jwtForWarehouse(firstWarehouseId), firstInventoryId)
@@ -709,16 +1305,11 @@ class InventoryReadProjectionIntegrationTest {
                     20,
                     "createdAt,asc")
                 .content())
-        .singleElement()
-        .satisfies(
-            value -> {
-              assertThat(value.currentSnapshot()).isNull();
-              assertThat(value.conflicts()).isEmpty();
-            });
+        .isEmpty();
     SessionView afterDeparture =
         service.session(jwtForWarehouse(secondWarehouseId), secondInventoryId);
-    assertThat(afterDeparture.expectedCount()).isOne();
-    assertThat(afterDeparture.findingCount()).isOne();
+    assertThat(afterDeparture.expectedCount()).isZero();
+    assertThat(afterDeparture.findingCount()).isZero();
     assertThat(afterDeparture.membershipMovements())
         .extracting(movement -> movement.type())
         .containsExactly(
@@ -735,7 +1326,39 @@ class InventoryReadProjectionIntegrationTest {
                 "select count(*) from inventory_finding where asset_id=? and membership_active",
                 Long.class,
                 assetId))
-        .isEqualTo(2L);
+        .isZero();
+
+    when(dependencies.currentAsset(assetId))
+        .thenReturn(
+            Optional.of(
+                new InventoryDependencyGateway.LiveAssetSnapshot(
+                    assetId,
+                    10,
+                    secondWarehouseId,
+                    "WAREHOUSE",
+                    "БЫТ-101",
+                    "БЫТ101",
+                    null,
+                    mapper.createObjectNode(),
+                    mapper.createArrayNode())));
+    service.reconcileAssetMembership(
+        assetId, actor, UUID.randomUUID(), UUID.randomUUID(), departedAt.plusMinutes(10));
+    FindingView returned =
+        service
+            .findings(jwtForWarehouse(secondWarehouseId), secondInventoryId, 0, 20, "createdAt,asc")
+            .content()
+            .getFirst();
+    assertThat(returned.inspection()).isEqualTo(InspectionState.NOT_INSPECTED);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from inventory_finding where asset_id=?", Long.class, assetId))
+        .isEqualTo(3L);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from inventory_finding where asset_id=? and membership_active",
+                Long.class,
+                assetId))
+        .isEqualTo(1L);
   }
 
   @Test
@@ -810,19 +1433,19 @@ class InventoryReadProjectionIntegrationTest {
         transferredAt);
 
     SessionView session = service.session(jwtForWarehouse(warehouseId), inventoryId);
-    assertThat(session.expectedCount()).isOne();
-    assertThat(session.findingCount()).isOne();
+    assertThat(session.expectedCount()).isZero();
+    assertThat(session.findingCount()).isZero();
     assertThat(
             service
                 .findings(jwtForWarehouse(warehouseId), inventoryId, 0, 20, "createdAt,asc")
                 .content())
-        .singleElement()
-        .satisfies(
-            value -> {
-              assertThat(value.inspection()).isEqualTo(InspectionState.NOT_INSPECTED);
-              assertThat(value.currentSnapshot().status()).isEqualTo("IN_TRANSFER");
-              assertThat(value.conflicts()).isEmpty();
-            });
+        .isEmpty();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from inventory_finding where inventory_id=? and membership_active=false",
+                Long.class,
+                inventoryId))
+        .isEqualTo(1L);
     assertThat(session.membershipMovements())
         .singleElement()
         .satisfies(
@@ -975,16 +1598,105 @@ class InventoryReadProjectionIntegrationTest {
             inventoryId,
             warehouseId,
             List.of(new RevisionExpectation(finding.getId(), finding.getRevision())));
+    PreparedFinalPlan finalPlan = prepareFinalPlan(inventoryId, furnitureReview);
     CompletionPreview preview =
         service.preview(
             jwt(),
             inventoryId,
             UUID.randomUUID(),
-            new CompletionPreviewRequest(
-                furnitureReview.sessionRevision(), furnitureReview.findingRevisions()));
+            completionPreviewRequest(furnitureReview, finalPlan));
 
     assertThat(preview.validatedFindings()).singleElement();
     assertThat(preview.validationSha256()).isNotEqualTo(providerDigest);
+  }
+
+  @Test
+  void registryReviewIgnoresJsonObjectFieldOrderAndAllowsFurnitureTransition() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID inventoryId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    seedSession(inventoryId, warehouseId);
+    InventoryFinding finding =
+        InventoryFinding.unexpected(
+            inventoryId,
+            FindingOrigin.UNEXPECTED_EXISTING,
+            assetId,
+            1L,
+            warehouseId,
+            "WAREHOUSE",
+            null,
+            "БЫТ-ORDER",
+            "БЫТORDER",
+            ReconciliationState.MATCHED,
+            ACTOR);
+    finding.refreshCurrentAsset(
+        1L,
+        warehouseId,
+        "WAREHOUSE",
+        null,
+        "БЫТ-ORDER",
+        "{\"category\":\"Новая\",\"dimensions\":\"2.4x6\",\"rentalType\":\"БК-1\"}",
+        "[]",
+        "[]",
+        ReconciliationState.MATCHED);
+    finding.saveInspection(
+        InspectionState.READY,
+        ReconciliationState.MATCHED,
+        ObservationPresence.ABSENT,
+        null,
+        ObservationPresence.ABSENT,
+        null,
+        null,
+        ACTOR);
+    finding = findings.saveAndFlush(finding);
+
+    ObjectNode samePassportInAnotherOrder = mapper.createObjectNode();
+    samePassportInAnotherOrder.put("rentalType", "БК-1");
+    samePassportInAnotherOrder.put("category", "Новая");
+    samePassportInAnotherOrder.put("dimensions", "2.4x6");
+    InventoryDependencyGateway.ValidationItem current =
+        new InventoryDependencyGateway.ValidationItem(
+            assetId,
+            true,
+            1L,
+            warehouseId,
+            "WAREHOUSE",
+            "БЫТ-ORDER",
+            "БЫТORDER",
+            null,
+            samePassportInAnotherOrder,
+            mapper.createArrayNode());
+    List<InventoryDependencyGateway.ValidationItem> currentItems = List.of(current);
+    when(dependencies.validateAssets(List.of(assetId)))
+        .thenReturn(
+            new InventoryDependencyGateway.Validation(
+                OffsetDateTime.now(ZoneOffset.UTC),
+                canonicalJson.sha256(currentItems),
+                currentItems));
+    when(dependencies.repairSnapshots(List.of(assetId)))
+        .thenReturn(
+            new InventoryDependencyGateway.RepairSnapshots(
+                List.of(
+                    new InventoryDependencyGateway.RepairAssetSnapshot(assetId, List.of()))));
+    when(dependencies.furnitureSnapshot(warehouseId, List.of(assetId)))
+        .thenReturn(
+            new InventoryDependencyGateway.FurnitureSnapshot(
+                warehouseId, "f".repeat(64), List.of()));
+    List<RevisionExpectation> revisions =
+        List.of(new RevisionExpectation(finding.getId(), finding.getRevision()));
+
+    RegistryReviewView review =
+        service.registryReview(jwt(), inventoryId, new RegistryReviewRequest(0, revisions));
+    FurnitureReviewView furniture =
+        service.startFurnitureReview(
+            jwt(),
+            inventoryId,
+            UUID.randomUUID(),
+            new StartFurnitureReviewRequest(0, revisions, false));
+
+    assertThat(review.validatedFindings()).singleElement().satisfies(
+        validated -> assertThat(validated.conflicts()).isEmpty());
+    assertThat(furniture.stage()).isEqualTo(InventoryReviewStage.FURNITURE);
   }
 
   @Test
@@ -1057,13 +1769,13 @@ class InventoryReadProjectionIntegrationTest {
             inventoryId,
             warehouseId,
             List.of(new RevisionExpectation(finding.getId(), finding.getRevision())));
+    PreparedFinalPlan finalPlan = prepareFinalPlan(inventoryId, furnitureReview);
     CompletionPreview versionPreview =
         service.preview(
             jwt(),
             inventoryId,
             UUID.randomUUID(),
-            new CompletionPreviewRequest(
-                furnitureReview.sessionRevision(), furnitureReview.findingRevisions()));
+            completionPreviewRequest(furnitureReview, finalPlan));
 
     assertThat(versionPreview.validatedFindings().getFirst().conflicts()).isEmpty();
     assertThat(versionPreview.risks()).isEmpty();
@@ -1094,8 +1806,7 @@ class InventoryReadProjectionIntegrationTest {
             jwt(),
             inventoryId,
             UUID.randomUUID(),
-            new CompletionPreviewRequest(
-                furnitureReview.sessionRevision(), furnitureReview.findingRevisions()));
+            completionPreviewRequest(furnitureReview, finalPlan));
 
     assertThat(laterTechnicalVersionPreview.validationSha256())
         .isEqualTo(versionPreview.validationSha256());
@@ -1125,8 +1836,7 @@ class InventoryReadProjectionIntegrationTest {
             jwt(),
             inventoryId,
             UUID.randomUUID(),
-            new CompletionPreviewRequest(
-                furnitureReview.sessionRevision(), furnitureReview.findingRevisions()));
+            completionPreviewRequest(furnitureReview, finalPlan));
 
     assertThat(changedPreview.validatedFindings().getFirst().conflicts())
         .extracting(ConflictView::code)
@@ -1156,14 +1866,13 @@ class InventoryReadProjectionIntegrationTest {
             inventoryId,
             warehouseId,
             List.of(new RevisionExpectation(finding.getId(), keptInspection.findingRevision())));
+    PreparedFinalPlan resumedFinalPlan = prepareFinalPlan(inventoryId, resumedFurnitureReview);
     CompletionPreview resolvedPreview =
         service.preview(
             jwt(),
             inventoryId,
             UUID.randomUUID(),
-            new CompletionPreviewRequest(
-                resumedFurnitureReview.sessionRevision(),
-                resumedFurnitureReview.findingRevisions()));
+            completionPreviewRequest(resumedFurnitureReview, resumedFinalPlan));
     assertThat(resolvedPreview.risks()).isEmpty();
 
     InventoryDependencyGateway.ValidationItem laterChange =
@@ -1191,9 +1900,7 @@ class InventoryReadProjectionIntegrationTest {
             jwt(),
             inventoryId,
             UUID.randomUUID(),
-            new CompletionPreviewRequest(
-                resumedFurnitureReview.sessionRevision(),
-                resumedFurnitureReview.findingRevisions()));
+            completionPreviewRequest(resumedFurnitureReview, resumedFinalPlan));
     assertThat(staleResolutionPreview.validatedFindings().getFirst().conflicts())
         .extracting(ConflictView::code)
         .containsExactly("STATUS_CHANGED");
@@ -1281,13 +1988,13 @@ class InventoryReadProjectionIntegrationTest {
             inventoryId,
             warehouseId,
             List.of(new RevisionExpectation(finding.getId(), finding.getRevision())));
+    PreparedFinalPlan finalPlan = prepareFinalPlan(inventoryId, furnitureReview);
     CompletionPreview preview =
         service.preview(
             jwt(),
             inventoryId,
             UUID.randomUUID(),
-            new CompletionPreviewRequest(
-                furnitureReview.sessionRevision(), furnitureReview.findingRevisions()));
+            completionPreviewRequest(furnitureReview, finalPlan));
 
     InventoryDependencyGateway.ValidationItem completionItem =
         new InventoryDependencyGateway.ValidationItem(
@@ -1317,6 +2024,8 @@ class InventoryReadProjectionIntegrationTest {
             UUID.randomUUID(),
             new CompleteSessionRequest(
                 preview.sessionRevision(),
+                preview.finalPlanVersion(),
+                preview.finalPlanSha256(),
                 preview.findingRevisions(),
                 preview.acknowledgementSha256(),
                 preview.validationSha256()));
@@ -1369,13 +2078,13 @@ class InventoryReadProjectionIntegrationTest {
             inventoryId,
             warehouseId,
             List.of(new RevisionExpectation(finding.getId(), finding.getRevision())));
+    PreparedFinalPlan finalPlan = prepareFinalPlan(inventoryId, furnitureReview);
     CompletionPreview preview =
         service.preview(
             jwt(),
             inventoryId,
             UUID.randomUUID(),
-            new CompletionPreviewRequest(
-                furnitureReview.sessionRevision(), furnitureReview.findingRevisions()));
+            completionPreviewRequest(furnitureReview, finalPlan));
 
     assertThat(preview.validatedFindings().getFirst().conflicts()).isEmpty();
     assertThat(preview.validatedFindings().getFirst().currentSnapshot().status())
@@ -1593,12 +2302,11 @@ class InventoryReadProjectionIntegrationTest {
             activeInventoryId,
             "MANUAL",
             true,
-            false,
             LogisticsPlanningMode.FIXED_DATE,
             LocalDate.of(2026, 8, 12),
             catalogVersionId,
             FINGERPRINT,
-            "{\"priority\":3,\"movementToRepair\":true,\"movementToShipment\":false,"
+            "{\"priority\":3,\"movementToRepair\":true,"
                 + "\"logisticsPlanningMode\":\"FIXED_DATE\","
                 + "\"logisticsScheduledDate\":\"2026-08-12\",\"stages\":["
                 + "{\"id\":\"00000000-0000-0000-0000-000000000811\","
@@ -1753,6 +2461,149 @@ class InventoryReadProjectionIntegrationTest {
     return new FurnitureReviewState(confirmed.sessionRevision(), updatedFindingRevisions);
   }
 
+  private PreparedFinalPlan prepareFinalPlan(
+      UUID inventoryId, FurnitureReviewState furnitureReview) {
+    doAnswer(
+            invocation -> {
+              JsonNode request = invocation.getArgument(1);
+              var response = mapper.createObjectNode();
+              response.put("inventoryId", request.required("inventoryId").asText());
+              response.put("finalPlanVersion", request.required("finalPlanVersion").asLong());
+              response.put("finalPlanSha256", request.required("finalPlanSha256").asText());
+              var findings = response.putArray("findings");
+              for (JsonNode finding : request.required("findings")) {
+                findings
+                    .addObject()
+                    .put("findingId", finding.required("findingId").asText())
+                    .putArray("candidates");
+              }
+              return response;
+            })
+        .when(dependencies)
+        .preflightReconciliation(any(), any());
+    var plan =
+        service.prepareFinalPlan(
+            jwt(),
+            inventoryId,
+            UUID.randomUUID(),
+            new PrepareFinalPlanRequest(
+                furnitureReview.sessionRevision(),
+                0,
+                FinalPlanScheduleMode.AUTO,
+                FinalPlanScheduleMode.AUTO));
+    return new PreparedFinalPlan(plan.finalPlanVersion(), plan.finalPlanSha256());
+  }
+
+  private InventoryFinding stageFinalPlanFinding(UUID inventoryId, UUID warehouseId) {
+    return stageFinalPlanFinding(inventoryId, warehouseId, false);
+  }
+
+  private InventoryFinding stageFinalPlanFinding(
+      UUID inventoryId, UUID warehouseId, boolean movementToRepair) {
+    UUID assetId = UUID.randomUUID();
+    InventoryFinding finding =
+        InventoryFinding.unexpected(
+            inventoryId,
+            FindingOrigin.UNEXPECTED_EXISTING,
+            assetId,
+            1L,
+            warehouseId,
+            "WAREHOUSE",
+            null,
+            "БЫТ-FINAL-PLAN",
+            "БЫТFINALPLAN",
+            ReconciliationState.MATCHED,
+            ACTOR);
+    ObjectNode snapshot = mapper.createObjectNode();
+    snapshot.put("priority", 3);
+    snapshot.put("movementToRepair", movementToRepair);
+    if (movementToRepair) {
+      snapshot.put("logisticsPlanningMode", "AUTO");
+      snapshot.putNull("logisticsScheduledDate");
+    } else {
+      snapshot.putNull("logisticsPlanningMode");
+      snapshot.putNull("logisticsScheduledDate");
+    }
+    snapshot.putArray("lines");
+    String fingerprint = frozenPlanFingerprint.sha256(snapshot);
+    finding.saveInspection(
+        InspectionState.WORK_STAGED,
+        ReconciliationState.MATCHED,
+        ObservationPresence.ABSENT,
+        null,
+        ObservationPresence.ABSENT,
+        null,
+        fingerprint,
+        "Final-plan reconciliation validation",
+        ACTOR);
+    finding = findings.saveAndFlush(finding);
+    planSnapshots.saveAndFlush(
+        new FindingPlanSnapshot(
+            finding.getId(),
+            finding.getRevision(),
+            inventoryId,
+            "AUTO",
+            movementToRepair,
+            movementToRepair ? LogisticsPlanningMode.AUTO : null,
+            null,
+            UUID.randomUUID(),
+            fingerprint,
+            snapshot.toString(),
+            2));
+    return finding;
+  }
+
+  private FinalPlanUpdateRequest finalPlanUpdateRequest(
+      dev.buhanzaz.rwms.inventory.api.InventoryApiModels.FinalPlanView plan,
+      dev.buhanzaz.rwms.inventory.api.InventoryApiModels.FinalPlanEntryView entry,
+      FinalPlanReconciliationDecision decision) {
+    return new FinalPlanUpdateRequest(
+        plan.sessionRevision(),
+        plan.finalPlanVersion(),
+        FinalPlanScheduleMode.AUTO,
+        FinalPlanScheduleMode.AUTO,
+        List.of(
+            new FinalPlanEntryUpdate(
+                entry.findingId(),
+                entry.findingRevision(),
+                entry.order(),
+                entry.priority(),
+                entry.movementToRepair(),
+                null,
+                null,
+                decision)));
+  }
+
+  private ObjectNode finalPlanCandidate(UUID targetId, boolean started, boolean active) {
+    ObjectNode candidate = mapper.createObjectNode();
+    candidate.put("targetKind", "REPAIR");
+    candidate.put("targetId", targetId.toString());
+    candidate.putNull("estimateId");
+    candidate.put("repairId", targetId.toString());
+    candidate.put("version", 1);
+    candidate.put("state", started ? "IN_PROGRESS" : "DRAFT");
+    candidate.put("started", started);
+    candidate.put("active", active);
+    candidate.put("priority", 3);
+    candidate.put("sourceParty", "OWNER");
+    candidate.putNull("planFingerprintSha256");
+    candidate
+        .putObject("planSummary")
+        .put("workLineCount", 1)
+        .put("materialLineCount", 1)
+        .put("grandTotalMinor", 100);
+    return candidate;
+  }
+
+  private CompletionPreviewRequest completionPreviewRequest(
+      FurnitureReviewState furnitureReview, PreparedFinalPlan finalPlan) {
+    return new CompletionPreviewRequest(
+        furnitureReview.sessionRevision(),
+        finalPlan.version(),
+        finalPlan.sha256(),
+        furnitureReview.findingRevisions());
+  }
+
   private void seedSession(UUID inventoryId, UUID warehouseId) {
     OffsetDateTime current = OffsetDateTime.now(ZoneOffset.UTC);
     UUID operationId = UUID.randomUUID();
@@ -1776,6 +2627,10 @@ class InventoryReadProjectionIntegrationTest {
         current,
         current,
         current);
+  }
+
+  private void setBusinessDate(UUID inventoryId, LocalDate businessDate) {
+    jdbc.update("update inventory_session set business_date=? where id=?", businessDate, inventoryId);
   }
 
   private void markCancelled(UUID inventoryId) {
@@ -1857,6 +2712,8 @@ class InventoryReadProjectionIntegrationTest {
       UUID readyAssetId,
       UUID untouchedFindingId,
       UUID untouchedAssetId) {}
+
+  private record PreparedFinalPlan(long version, String sha256) {}
 
   private record FurnitureReviewState(
       long sessionRevision, List<RevisionExpectation> findingRevisions) {

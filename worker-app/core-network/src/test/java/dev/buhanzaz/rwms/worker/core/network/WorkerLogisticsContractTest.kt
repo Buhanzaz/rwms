@@ -18,6 +18,7 @@ class WorkerLogisticsContractTest {
               "name":"Водители",
               "type":"MOVEMENT",
               "queuePurpose":"LOGISTICS_DRIVER",
+              "groupIds":[],
               "sortOrder":10,
               "audienceModes":["AVAILABLE","OPTIONAL_JOIN"],
               "resultPhotoMinCount":1
@@ -26,6 +27,7 @@ class WorkerLogisticsContractTest {
         )
 
         assertThat(category.queuePurpose).isEqualTo("LOGISTICS_DRIVER")
+        assertThat(category.groupIds).isEmpty()
         assertThat(category.audienceModes).contains("OPTIONAL_JOIN")
     }
 

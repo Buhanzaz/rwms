@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinding;
+import dev.buhanzaz.rwms.inventory.domain.InventoryFinalPlan;
+import dev.buhanzaz.rwms.inventory.domain.InventoryFinalPlanEntry;
+import dev.buhanzaz.rwms.inventory.domain.InventoryPlanningSettings;
 import dev.buhanzaz.rwms.inventory.domain.FindingPlanLine;
 import dev.buhanzaz.rwms.inventory.domain.FindingPlanSnapshot;
 import dev.buhanzaz.rwms.inventory.domain.FindingPlanStage;
@@ -76,7 +79,7 @@ class InventoryJpaValidationIntegrationTest {
         assertThat(
             jdbc.queryForObject(
                 "select count(*) from flyway_schema_history where success", Integer.class))
-        .isEqualTo(13);
+        .isEqualTo(15);
     assertThat(entityManagerFactory.getMetamodel().getEntities())
         .extracting(value -> value.getJavaType().getSimpleName())
         .contains(
@@ -84,6 +87,9 @@ class InventoryJpaValidationIntegrationTest {
             "InventoryFinding",
             "InventoryMembershipMovement",
             "InventoryPublicationIntent",
+            "InventoryPlanningSettings",
+            "InventoryFinalPlan",
+            "InventoryFinalPlanEntry",
             "InventoryFurnitureReconciliationIntent");
   }
 
@@ -165,7 +171,6 @@ class InventoryJpaValidationIntegrationTest {
             stagedRevision,
             inventoryId,
             "MANUAL",
-            false,
             false,
             null,
             null,

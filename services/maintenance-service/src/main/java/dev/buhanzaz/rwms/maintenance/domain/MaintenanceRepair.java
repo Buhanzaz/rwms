@@ -79,9 +79,6 @@ public class MaintenanceRepair {
   @Column(name = "movement_to_repair", nullable = false)
   private boolean movementToRepair;
 
-  @Column(name = "movement_to_shipment", nullable = false)
-  private boolean movementToShipment;
-
   @Enumerated(EnumType.STRING)
   @Column(name = "logistics_planning_mode", length = 16)
   private RepairLogisticsPlanningMode logisticsPlanningMode;
@@ -362,18 +359,9 @@ public class MaintenanceRepair {
     this.priority = priority;
   }
 
-  public void selectMovementToShipment(boolean movementToShipment) {
-    if (executionState != RepairExecutionState.DRAFT
-        && executionState != RepairExecutionState.QUEUED) {
-      throw new IllegalStateException(
-          "Movement to shipment can only be selected before repair work starts");
-    }
-    this.movementToShipment = movementToShipment;
-  }
-
   /**
-   * Stores the sole canonical request for an inbound driver movement. Planning belongs to that
-   * request and must be absent when a repair is already in the repair area.
+   * Stores the canonical selection for the full repair movement cycle: delivery into the repair
+   * area and automatic removal after repair completion. Planning belongs only to the inbound leg.
    */
   public boolean selectMovementToRepair(
       boolean movementToRepair,
@@ -442,8 +430,7 @@ public class MaintenanceRepair {
       UUID transferDocumentId,
       UUID transferLineId,
       UUID targetWarehouseId,
-      int priority,
-      boolean movementToShipment) {
+      int priority) {
     if (!"DEPARTURE_PREPARED".equals(transferState)
         || !transferDocumentId.equals(this.transferDocumentId)
         || !transferLineId.equals(this.transferLineId)
@@ -456,7 +443,6 @@ public class MaintenanceRepair {
     }
     warehouseId = targetWarehouseId;
     this.priority = priority;
-    this.movementToShipment = movementToShipment;
     transferState = "NONE";
     this.transferDocumentId = null;
     this.transferLineId = null;
@@ -549,6 +535,42 @@ public class MaintenanceRepair {
     deliveryUpdatedAt = MaintenanceTime.now();
   }
 
+  /**
+   * Restores only an ordinary queued inbound delivery after its exact durable logistics intent
+   * has been reviewed and resumed. This intentionally does not share the draft-only movement
+   * selector: recovery must not broaden ordinary plan editing after queueing.
+   */
+  public void retryQuarantinedInboundDelivery(
+      RepairLogisticsPlanningMode mode, LocalDate scheduledDate) {
+    if (kind != RepairKind.PRIMARY
+        || executionState != RepairExecutionState.QUEUED
+        || acceptanceState != RepairAcceptanceState.NOT_READY
+        || reclassificationState != RepairReclassificationState.STABLE) {
+      throw new IllegalStateException(
+          "Only an ordinary queued repair can retry quarantined inbound delivery");
+    }
+    if (!movementToRepair) {
+      throw new IllegalStateException("Repair does not require inbound movement to repair");
+    }
+    if (!"QUARANTINED".equals(deliveryState)
+        || !"RECONCILIATION_REQUIRED".equals(reconciliationState)
+        || !"FAILED".equals(taskGenerationState)) {
+      throw new IllegalStateException("Inbound delivery is not quarantined for recovery");
+    }
+    if (mode == null
+        || (mode == RepairLogisticsPlanningMode.AUTO && scheduledDate != null)
+        || (mode == RepairLogisticsPlanningMode.FIXED_DATE && scheduledDate == null)) {
+      throw new IllegalArgumentException("Inbound logistics planning mode and date are inconsistent");
+    }
+    logisticsPlanningMode = mode;
+    logisticsScheduledDate = scheduledDate;
+    reconciliationState = "RECONCILIATION_REQUIRED";
+    deliveryState = "RETRY_PENDING";
+    taskGenerationState = "PENDING_GENERATION";
+    deliveryUpdatedAt = MaintenanceTime.now();
+    updatedAt = deliveryUpdatedAt;
+  }
+
   public void touchPlan() {
     if (executionState != RepairExecutionState.DRAFT) {
       throw new IllegalStateException("Only a draft repair plan can be changed");
@@ -604,6 +626,59 @@ public class MaintenanceRepair {
     executionState = RepairExecutionState.CANCELLED;
     acceptanceState = RepairAcceptanceState.NOT_READY;
     updatedAt = MaintenanceTime.now();
+  }
+
+  /** Cancels a never-queued inventory repair before it owns any external effect. */
+  public void supersedeForInventoryPublication() {
+    if (executionState != RepairExecutionState.DRAFT) {
+      throw new IllegalStateException("Only an unstarted draft repair can be superseded");
+    }
+    executionState = RepairExecutionState.CANCELLED;
+    acceptanceState = RepairAcceptanceState.NOT_READY;
+    taskGenerationState = "NOT_REQUIRED";
+    deliveryState = "DELIVERED";
+    reconciliationState = "RECONCILED";
+    deliveryUpdatedAt = MaintenanceTime.now();
+    updatedAt = deliveryUpdatedAt;
+  }
+
+  /**
+   * Cancels an ordinary queued inventory repair only after the durable coordinator has proved
+   * both its driver movement and its task-board route were cancelled while pre-start.
+   */
+  public void supersedeQueuedForInventoryPublication() {
+    if (executionState != RepairExecutionState.QUEUED
+        || acceptanceState != RepairAcceptanceState.NOT_READY
+        || reclassificationState != RepairReclassificationState.STABLE) {
+      throw new IllegalStateException(
+          "Only an ordinary queued repair can be superseded after pre-start compensation");
+    }
+    executionState = RepairExecutionState.CANCELLED;
+    taskGenerationState = "NOT_REQUIRED";
+    deliveryState = "DELIVERED";
+    reconciliationState = "RECONCILED";
+    deliveryUpdatedAt = MaintenanceTime.now();
+    updatedAt = deliveryUpdatedAt;
+  }
+
+  /**
+   * Cancels an external-capital handoff only after logistics has atomically cancelled its pending
+   * capital movement. A completed/started capital movement is intentionally not eligible here.
+   */
+  public void supersedeExternalCapitalForInventoryPublication() {
+    if (executionState != RepairExecutionState.COMPLETED
+        || acceptanceState != RepairAcceptanceState.PENDING
+        || reclassificationState != RepairReclassificationState.EXTERNAL_CAPITAL) {
+      throw new IllegalStateException(
+          "Only a pending external-capital handoff can be superseded after compensation");
+    }
+    executionState = RepairExecutionState.CANCELLED;
+    acceptanceState = RepairAcceptanceState.NOT_READY;
+    taskGenerationState = "NOT_REQUIRED";
+    deliveryState = "DELIVERED";
+    reconciliationState = "RECONCILED";
+    deliveryUpdatedAt = MaintenanceTime.now();
+    updatedAt = deliveryUpdatedAt;
   }
 
   public void enterRework() {
@@ -752,7 +827,6 @@ public class MaintenanceRepair {
   public String getSourceParty() { return sourceParty; }
   public UUID getCoverMediaId() { return coverMediaId; }
   public boolean isMovementToRepair() { return movementToRepair; }
-  public boolean isMovementToShipment() { return movementToShipment; }
   public RepairLogisticsPlanningMode getLogisticsPlanningMode() {
     return logisticsPlanningMode;
   }

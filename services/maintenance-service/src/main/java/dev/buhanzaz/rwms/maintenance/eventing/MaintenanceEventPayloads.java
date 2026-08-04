@@ -8,6 +8,11 @@ import dev.buhanzaz.rwms.maintenance.domain.RepairKind;
 import dev.buhanzaz.rwms.maintenance.domain.RepairOrigin;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStageKind;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStageState;
+import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionAssetEffectState;
+import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionAssetKind;
+import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionKind;
+import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionSource;
+import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionState;
 import java.time.LocalDate;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -19,7 +24,7 @@ import java.util.UUID;
 /** Exact sanitized Kafka facts. Service-local text and media references never enter these records. */
 public final class MaintenanceEventPayloads {
   public sealed interface MaintenanceIntegrationFact
-      permits CatalogVersionFact, EstimateFact, RepairFact {}
+      permits CatalogVersionFact, EstimateFact, RepairFact, PropertyDispositionFact {}
 
   public record CatalogVersionFact(
       UUID catalogVersionId,
@@ -180,6 +185,58 @@ public final class MaintenanceEventPayloads {
       if (kind == RepairKind.REWORK
           && (sourceRepairId == null || repairId.equals(rootRepairId))) {
         throw new IllegalArgumentException("A rework must reference its source and root repair");
+      }
+    }
+  }
+
+  /** Sanitized decision lifecycle fact. Reasons, evidence URLs and actor snapshots remain local. */
+  public record PropertyDispositionFact(
+      UUID decisionId,
+      UUID warehouseId,
+      PropertyDispositionAssetKind assetKind,
+      UUID assetId,
+      PropertyDispositionKind dispositionKind,
+      PropertyDispositionSource source,
+      PropertyDispositionState state,
+      PropertyDispositionAssetEffectState assetEffectState,
+      UUID rootRepairId,
+      UUID sourceRepairId,
+      UUID inventoryId,
+      UUID findingId,
+      UUID movementTaskId,
+      UUID effectId,
+      long recoveryVersion)
+      implements MaintenanceIntegrationFact {
+    public PropertyDispositionFact {
+      Objects.requireNonNull(decisionId, "decisionId is required");
+      Objects.requireNonNull(warehouseId, "warehouseId is required");
+      Objects.requireNonNull(assetKind, "assetKind is required");
+      Objects.requireNonNull(assetId, "assetId is required");
+      Objects.requireNonNull(dispositionKind, "dispositionKind is required");
+      Objects.requireNonNull(source, "source is required");
+      Objects.requireNonNull(state, "state is required");
+      Objects.requireNonNull(assetEffectState, "assetEffectState is required");
+      if (recoveryVersion < 0) {
+        throw new IllegalArgumentException("Disposition recoveryVersion must not be negative");
+      }
+      if (source == PropertyDispositionSource.INVENTORY
+          && (inventoryId == null || findingId == null)) {
+        throw new IllegalArgumentException(
+            "Inventory disposition fact requires inventory and finding identities");
+      }
+      if ((source == PropertyDispositionSource.REPAIR
+              || source == PropertyDispositionSource.ESTIMATE)
+          && rootRepairId == null) {
+        throw new IllegalArgumentException(
+            "Repair-derived disposition fact requires its root repair identity");
+      }
+      if (state == PropertyDispositionState.MOVEMENT_PENDING && movementTaskId == null) {
+        throw new IllegalArgumentException(
+            "Movement-pending disposition fact requires the logistics task identity");
+      }
+      if (state == PropertyDispositionState.EFFECTIVE && effectId == null) {
+        throw new IllegalArgumentException(
+            "Effective disposition fact requires the applied asset effect identity");
       }
     }
   }

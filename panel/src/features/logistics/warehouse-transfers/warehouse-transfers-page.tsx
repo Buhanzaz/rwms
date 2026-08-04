@@ -29,7 +29,6 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   Card,
   CardAction,
@@ -536,12 +535,10 @@ export function WarehouseTransfersPage() {
       line,
       references,
       priority,
-      movementToShipment,
       idempotencyKey,
     }: TransferLineTarget & {
       references: TransferMediaReference[]
       priority: number | null
-      movementToShipment: boolean
       idempotencyKey: string
     }) =>
       arriveWarehouseTransferLine({
@@ -552,7 +549,6 @@ export function WarehouseTransfersPage() {
         expectedLineVersion: line.version,
         references,
         priority,
-        movementToShipment,
         idempotencyKey,
       }),
     onSuccess: (result) => {
@@ -997,14 +993,12 @@ export function WarehouseTransfersPage() {
           onSubmit={(
             references,
             priority,
-            movementToShipment,
             idempotencyKey
           ) =>
             arriveMutation.mutate({
               ...arrivalTarget,
               references,
               priority,
-              movementToShipment,
               idempotencyKey,
             })
           }
@@ -1336,14 +1330,12 @@ function ArrivalTransferDialog({
   onSubmit: (
     references: TransferMediaReference[],
     priority: number | null,
-    movementToShipment: boolean,
     idempotencyKey: string
   ) => void
   onOpenChange: (open: boolean) => void
 }) {
   const [references, setReferences] = useState<TransferMediaReference[]>([])
   const [priority, setPriority] = useState("")
-  const [movementToShipment, setMovementToShipment] = useState(false)
   const attempt = useRef<CommandAttempt | null>(null)
   const [validationError, setValidationError] = useState<string | null>(null)
   const preflightQuery = useQuery({
@@ -1397,22 +1389,14 @@ function ArrivalTransferDialog({
     const selectedPriority = preflight.priorityRequired
       ? Number(priority)
       : null
-    const selectedMovement =
-      preflight.activeRepairId !== null &&
-      preflight.movementToShipmentAvailable &&
-      movementToShipment
-    const signature = JSON.stringify([
-      references,
-      selectedPriority,
-      selectedMovement,
-    ])
+    const signature = JSON.stringify([references, selectedPriority])
     const idempotencyKey =
       attempt.current?.signature === signature
         ? attempt.current.idempotencyKey
         : commandIdentity()
     attempt.current = { signature, idempotencyKey }
     setValidationError(null)
-    onSubmit(references, selectedPriority, selectedMovement, idempotencyKey)
+    onSubmit(references, selectedPriority, idempotencyKey)
   }
 
   return (
@@ -1468,20 +1452,6 @@ function ArrivalTransferDialog({
                     </SelectContent>
                   </Select>
                 </Field>
-                {preflight.movementToShipmentAvailable ? (
-                  <Field orientation="horizontal">
-                    <Checkbox
-                      id="transfer-movement-to-shipment"
-                      checked={movementToShipment}
-                      onCheckedChange={(checked) =>
-                        setMovementToShipment(checked === true)
-                      }
-                    />
-                    <FieldLabel htmlFor="transfer-movement-to-shipment">
-                      Перемещение на отгрузку
-                    </FieldLabel>
-                  </Field>
-                ) : null}
               </FieldGroup>
             </FieldSet>
           ) : null}

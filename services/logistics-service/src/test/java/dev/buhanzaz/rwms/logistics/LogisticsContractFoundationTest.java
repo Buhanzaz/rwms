@@ -48,9 +48,12 @@ class LogisticsContractFoundationTest {
             "/api/logistics/v1/driver-tasks/{taskId}",
             "/api/logistics/v1/driver-tasks/{taskId}/promote",
             "/api/internal/logistics/v1/maintenance/driver-tasks",
+            "/api/internal/logistics/v1/maintenance/driver-tasks/repairs/{repairId}",
+            "/api/internal/logistics/v1/maintenance/driver-tasks/repairs/{repairId}/cancel",
             "/api/logistics/v1/driver-board",
             "/api/logistics/v1/driver-board/tasks/{externalTaskId}/move",
             "/api/logistics/v1/driver-board/capital-repairs/{repairId}/promote",
+            "/api/logistics/v1/driver-board/capital-repairs/{repairId}/schedule",
             "/api/logistics/v1/orders",
             "/api/logistics/v1/orders/{orderId}",
             "/api/logistics/v1/orders/{orderId}/save",
@@ -61,6 +64,7 @@ class LogisticsContractFoundationTest {
             "/api/logistics/v1/orders/{orderId}/units",
             "/api/logistics/v1/orders/{orderId}/units/{unitId}/desired-equipment",
             "/api/logistics/v1/clients",
+            "/api/logistics/v1/manual-booking-drafts/{draftId}/holds",
             "/api/logistics/v1/rental-inquiries",
             "/api/logistics/v1/rental-inquiries/{inquiryId}",
             "/api/logistics/v1/rental-inquiries/{inquiryId}/cabin-facets",
@@ -86,9 +90,14 @@ class LogisticsContractFoundationTest {
             "EquipmentMovementTaskLine",
             "CreateDriverTaskRequest",
             "DriverTask",
+            "MaintenanceDriverTaskCompensation",
+            "MaintenanceDriverTaskCompensationOutcome",
             "DriverBoard",
             "DriverBoardCard",
+            "DriverBoardRepairPlaceCard",
             "CapitalRepairCard",
+            "RepairPlaceStageState",
+            "ScheduleCapitalRepairRequest",
             "CreateOrderRequest",
             "OrderDetail",
             "OrderUnit",
@@ -107,6 +116,8 @@ class LogisticsContractFoundationTest {
             "CabinSearchRequest",
             "CabinSearchResponse",
             "PublishClientPresentationRequest",
+            "ManualBookingDraftHoldsRequest",
+            "ManualBookingDraftHolds",
             "ClientPresentation",
             "PublicClientPresentation",
             "PresentationBooking",
@@ -186,11 +197,15 @@ class LogisticsContractFoundationTest {
             "listDriverTasks",
             "createDriverTask",
             "createMaintenanceDriverTask",
+            "getMaintenanceDriverTaskCompensation",
+            "cancelMaintenanceDriverTaskCompensation",
             "getDriverTask",
             "promoteDriverTask",
             "getDriverBoard",
             "moveDriverBoardTask",
+            "returnDriverTaskToCapitalRepairs",
             "promoteCapitalRepairToDriverCurrent",
+            "scheduleCapitalRepairOnDriverBoard",
             "listOrders",
             "createOrder",
             "getOrder",
@@ -208,6 +223,8 @@ class LogisticsContractFoundationTest {
             "removeOrderUnit",
             "setOrderUnitDesiredEquipment",
             "getOrderHistory",
+            "getManualBookingDraftHolds",
+            "replaceManualBookingDraftHolds",
             "createRentalInquiry",
             "getRentalInquiry",
             "getRentalInquiryCabinFacets",
@@ -233,6 +250,24 @@ class LogisticsContractFoundationTest {
   }
 
   @Test
+  void maintenanceCompensationContractFreezesTheGuardedCancellationSemantics() throws Exception {
+    Map<String, Object> paths = child(openApi(), "paths");
+    Map<String, Object> endpoint =
+        child(paths, "/api/internal/logistics/v1/maintenance/driver-tasks/repairs/{repairId}/cancel");
+    Map<String, Object> post = child(endpoint, "post");
+
+    assertThat(post.get("operationId")).isEqualTo("cancelMaintenanceDriverTaskCompensation");
+    assertThat(String.valueOf(post.get("description")))
+        .contains("atomic")
+        .contains("WAITING-only")
+        .contains("DELIVER_TO_REPAIR")
+        .contains("RESERVED")
+        .contains("CAPITAL_TO_PRODUCTION")
+        .contains("RECONCILIATION_REQUIRED");
+    assertThat(child(post, "responses")).containsKeys("200", "400", "401", "403");
+  }
+
+  @Test
   void rentalSettingsExposeIndependentChatAndPresentationHoldDurations()
       throws Exception {
     Map<String, Object> schemas = child(child(openApi(), "components"), "schemas");
@@ -253,16 +288,21 @@ class LogisticsContractFoundationTest {
     assertThat(settingsRequired)
         .contains(
             "chatSelectionHoldMinutes",
+            "manualBookingHoldMinutes",
             "presentationHoldMinutes",
             "draftReservationHoldMinutes");
     assertThat(updateRequired)
         .contains(
             "expectedVersion",
             "chatSelectionHoldMinutes",
+            "manualBookingHoldMinutes",
             "presentationHoldMinutes",
             "draftReservationHoldMinutes");
     assertThat(child(settingsProperties, "chatSelectionHoldMinutes"))
         .containsEntry("minimum", 1)
+        .containsEntry("maximum", 1440);
+    assertThat(child(settingsProperties, "manualBookingHoldMinutes"))
+        .containsEntry("minimum", 5)
         .containsEntry("maximum", 1440);
     assertThat(child(settingsProperties, "presentationHoldMinutes"))
         .containsEntry("minimum", 5)
@@ -274,6 +314,7 @@ class LogisticsContractFoundationTest {
         .containsKeys(
             "expectedVersion",
             "chatSelectionHoldMinutes",
+            "manualBookingHoldMinutes",
             "presentationHoldMinutes",
             "draftReservationHoldMinutes");
   }

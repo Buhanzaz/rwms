@@ -155,8 +155,7 @@ public interface LogisticsDependencyGateway {
       UUID rentalItemId,
       UUID sourceWarehouseId,
       UUID targetWarehouseId,
-      Integer priority,
-      boolean movementToShipment) {
+      Integer priority) {
     throw unavailable("Maintenance transfer arrival completion is not configured");
   }
 
@@ -283,6 +282,16 @@ public interface LogisticsDependencyGateway {
   default DriverBoardTask cancelDriverTask(
       UUID externalTaskId, long expectedTaskVersion) {
     throw unavailable("Driver task cancellation is not configured");
+  }
+
+  /**
+   * Atomically cancels a source-owned driver task only if task-board still sees every route entry
+   * as waiting. Unlike {@link #cancelDriverTask(UUID, long)}, this command never interrupts work
+   * that has started while logistics was preparing the compensation.
+   */
+  default DriverTaskPreStartCancellation cancelDriverTaskIfPreStart(
+      UUID externalTaskId, long expectedTaskVersion, String reason) {
+    throw unavailable("Pre-start driver task cancellation is not configured");
   }
 
   default DriverBoardTask setDriverTaskLane(
@@ -418,8 +427,35 @@ public interface LogisticsDependencyGateway {
     throw unavailable("Presentation holds are not configured");
   }
 
+  default PresentationHolds replacePresentationHolds(
+      UUID idempotencyKey,
+      UUID presentationId,
+      UUID warehouseId,
+      List<UUID> rentalItemIds,
+      OffsetDateTime expiresAt,
+      UUID actorSubjectId,
+      String actorRole,
+      UUID sourceHoldScopeId) {
+    if (sourceHoldScopeId == null) {
+      return replacePresentationHolds(
+          idempotencyKey,
+          presentationId,
+          warehouseId,
+          rentalItemIds,
+          expiresAt,
+          actorSubjectId,
+          actorRole);
+    }
+    throw unavailable("Presentation hold transfer is not configured");
+  }
+
   default PresentationHolds readPresentationHolds(UUID presentationId) {
     throw unavailable("Presentation holds are not configured");
+  }
+
+  default PresentationHolds readPresentationHolds(
+      UUID presentationId, UUID actorSubjectId, String actorRole) {
+    return readPresentationHolds(presentationId);
   }
 
   default PresentationHolds releasePresentationHolds(
@@ -514,7 +550,6 @@ public interface LogisticsDependencyGateway {
   record TransferRepairArrivalPreflight(
       UUID activeRepairId,
       boolean priorityRequired,
-      boolean movementToShipmentAvailable,
       List<UUID> missingQueueDefinitionIds) {}
 
   record TransferRepairArrivalCompletion(
@@ -651,6 +686,21 @@ public interface LogisticsDependencyGateway {
       String entryStatus,
       int queuePosition) {}
 
+  enum DriverTaskPreStartCancellationOutcome {
+    CANCELLED,
+    ALREADY_CANCELLED,
+    STARTED,
+    VERSION_CONFLICT
+  }
+
+  record DriverTaskPreStartCancellation(
+      DriverTaskPreStartCancellationOutcome outcome,
+      UUID taskId,
+      UUID externalTaskId,
+      long taskVersion,
+      String status,
+      OffsetDateTime cancelledAt) {}
+
   record DriverBoardDateColumn(LocalDate date, List<DriverBoardTask> tasks) {}
 
   record DriverBoardSnapshot(
@@ -695,6 +745,9 @@ public interface LogisticsDependencyGateway {
       UUID repairId,
       UUID rentalItemId,
       String state,
+      String repairStageName,
+      String repairStageState,
+      int priority,
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt) {}
 

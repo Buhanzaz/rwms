@@ -14,6 +14,7 @@ import dev.buhanzaz.rwms.worker.core.database.WorkerLocalStore
 import dev.buhanzaz.rwms.worker.core.database.WorkerSessionEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerTaskEntity
 import dev.buhanzaz.rwms.worker.core.network.WorkerGatewayClient
+import dev.buhanzaz.rwms.worker.core.network.WorkerKpiPaletteDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerTaskDetailDto
 import dev.buhanzaz.rwms.worker.core.sync.WorkerProjectionWriter
 import dev.buhanzaz.rwms.worker.core.sync.WorkerSyncScheduler
@@ -44,6 +45,7 @@ data class TaskDetailUiState(
     val assignments: List<WorkerAssignmentEntity> = emptyList(),
     val evidence: List<TaskEvidenceEntity> = emptyList(),
     val retryableEvidenceIds: Set<String> = emptySet(),
+    val kpiPalette: WorkerKpiPaletteDto? = null,
     val error: String? = null,
 )
 
@@ -53,6 +55,7 @@ private data class SupportingState(
     val assignments: List<WorkerAssignmentEntity>,
     val session: WorkerSessionEntity?,
     val categoryPurposes: Map<String, String>,
+    val kpiPalette: WorkerKpiPaletteDto?,
 )
 
 @HiltViewModel
@@ -112,6 +115,9 @@ class TaskDetailViewModel @Inject constructor(
                     assignments = assignments,
                     session = session,
                     categoryPurposes = categories.associate { it.queueId to it.queuePurpose },
+                    kpiPalette = session?.kpiPaletteJson?.let { encoded ->
+                        runCatching { json.decodeFromString<WorkerKpiPaletteDto>(encoded) }.getOrNull()
+                    },
                 )
             }.flowOn(Dispatchers.IO)
             combine(
@@ -131,6 +137,7 @@ class TaskDetailViewModel @Inject constructor(
                     assignments = evidenceWithRetry.assignments,
                     evidence = evidenceWithRetry.evidence.filter { it.entryId == requested.entryId },
                     retryableEvidenceIds = evidenceWithRetry.retryableEvidenceIds,
+                    kpiPalette = evidenceWithRetry.kpiPalette,
                     error = error,
                 )
             }

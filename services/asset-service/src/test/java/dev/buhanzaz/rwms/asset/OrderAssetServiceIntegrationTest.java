@@ -491,13 +491,13 @@ class OrderAssetServiceIntegrationTest {
                     warehouseId, warehouseOnly.id(), actorSubjectId)));
 
     RentalItemResponse rentalCandidate = freeRental(actorSubjectId, warehouseId);
-    RentalItemResponse rented =
+    RentalItemResponse ownNeeds =
         assets.updateStatus(
             rentalCandidate.id(),
-            new UpdateStatusRequest(rentalCandidate.version(), RentalItemStatus.RENTED));
+            new UpdateStatusRequest(rentalCandidate.version(), RentalItemStatus.OWN_NEEDS));
     assertThat(
             orders
-                .candidates(UUID.randomUUID(), warehouseId, 0, 20, rented.number())
+                .candidates(UUID.randomUUID(), warehouseId, 0, 20, ownNeeds.number())
                 .content())
         .isEmpty();
   }
@@ -651,12 +651,12 @@ class OrderAssetServiceIntegrationTest {
     RentalItemResponse moved =
         assets.updateWarehouse(
             rental.id(), new UpdateWarehouseRequest(released.version(), nextWarehouseId));
-    RentalItemResponse rented =
+    RentalItemResponse ownNeeds =
         assets.updateStatus(
             rental.id(),
-            new UpdateStatusRequest(moved.version(), RentalItemStatus.RENTED));
-    assertThat(rented.warehouseId()).isEqualTo(nextWarehouseId);
-    assertThat(rented.status()).isEqualTo(RentalItemStatus.RENTED);
+            new UpdateStatusRequest(moved.version(), RentalItemStatus.OWN_NEEDS));
+    assertThat(ownNeeds.warehouseId()).isEqualTo(nextWarehouseId);
+    assertThat(ownNeeds.status()).isEqualTo(RentalItemStatus.OWN_NEEDS);
   }
 
   private ReservationAttempt reserveConcurrently(

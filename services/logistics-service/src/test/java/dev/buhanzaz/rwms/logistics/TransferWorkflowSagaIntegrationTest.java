@@ -177,7 +177,7 @@ class TransferWorkflowSagaIntegrationTest {
     UUID arrivalKey = UUID.randomUUID();
     ArriveTransferLineRequest arrivalRequest =
         new ArriveTransferLineRequest(
-            List.of(new MediaReferenceInput(mediaId, 3)), null, false);
+            List.of(new MediaReferenceInput(mediaId, 3)), null);
     LogisticsDocumentService.CreateResult arrival =
         documents.arriveTransferLine(
             SUBJECT,
@@ -262,7 +262,7 @@ class TransferWorkflowSagaIntegrationTest {
             fixture.documentId(), fixture.lineId(), ASSET, ORIGIN, DESTINATION))
         .thenReturn(
             new LogisticsDependencyGateway.TransferRepairArrivalPreflight(
-                ACTIVE_REPAIR, true, true, List.of()));
+                ACTIVE_REPAIR, true, List.of()));
     when(dependencies.readRentalItemSnapshot(ASSET))
         .thenReturn(snapshot(8, ORIGIN, "IN_TRANSFER", 2));
     when(dependencies.validateMediaReferences(any(), any(), any(), any(), any()))
@@ -302,8 +302,7 @@ class TransferWorkflowSagaIntegrationTest {
             eq(ASSET),
             eq(ORIGIN),
             eq(DESTINATION),
-            eq(2),
-            eq(true)))
+            eq(2)))
         .thenAnswer(
             ignored -> {
               var beforeCompletion =
@@ -333,7 +332,7 @@ class TransferWorkflowSagaIntegrationTest {
         inTransit.version(),
         inTransit.lines().getFirst().version(),
         new ArriveTransferLineRequest(
-            List.of(new MediaReferenceInput(mediaId, 4)), 2, true));
+            List.of(new MediaReferenceInput(mediaId, 4)), 2));
     processor.processUntilIdle(fixture.documentId());
 
     var completed = documents.get(fixture.documentId(), LogisticsDocumentType.TRANSFER);
@@ -346,7 +345,6 @@ class TransferWorkflowSagaIntegrationTest {
                        active_repair_id,
                        active_repair_version,
                        repair_continuation_priority,
-                       movement_to_shipment,
                        maintenance_arrival_completed_at
                   from logistics_document_line
                  where id=?
@@ -356,7 +354,6 @@ class TransferWorkflowSagaIntegrationTest {
         .containsEntry("active_repair_id", ACTIVE_REPAIR)
         .containsEntry("active_repair_version", 12L)
         .containsEntry("repair_continuation_priority", 2)
-        .containsEntry("movement_to_shipment", true)
         .containsKey("maintenance_arrival_completed_at");
   }
 
@@ -380,7 +377,7 @@ class TransferWorkflowSagaIntegrationTest {
             fixture.documentId(), fixture.lineId(), ASSET, ORIGIN, DESTINATION))
         .thenReturn(
             new LogisticsDependencyGateway.TransferRepairArrivalPreflight(
-                ACTIVE_REPAIR, true, false, List.of(missingQueue)));
+                ACTIVE_REPAIR, true, List.of(missingQueue)));
 
     assertThatThrownBy(
             () ->
@@ -394,8 +391,7 @@ class TransferWorkflowSagaIntegrationTest {
                     inTransit.lines().getFirst().version(),
                     new ArriveTransferLineRequest(
                         List.of(new MediaReferenceInput(UUID.randomUUID(), 1)),
-                        3,
-                        false)))
+                        3)))
         .isInstanceOf(LogisticsConflictException.class)
         .hasMessageContaining("missing queues");
 
@@ -430,7 +426,7 @@ class TransferWorkflowSagaIntegrationTest {
             fixture.documentId(), fixture.lineId(), ASSET, ORIGIN, DESTINATION))
         .thenReturn(
             new LogisticsDependencyGateway.TransferRepairArrivalPreflight(
-                ACTIVE_REPAIR, true, false, List.of()));
+                ACTIVE_REPAIR, true, List.of()));
 
     mvc.perform(
             get(
@@ -447,7 +443,7 @@ class TransferWorkflowSagaIntegrationTest {
         .andExpect(jsonPath("$.lineId").value(fixture.lineId().toString()))
         .andExpect(jsonPath("$.activeRepairId").value(ACTIVE_REPAIR.toString()))
         .andExpect(jsonPath("$.priorityRequired").value(true))
-        .andExpect(jsonPath("$.movementToShipmentAvailable").value(false))
+        .andExpect(jsonPath("$.movementToShipmentAvailable").doesNotExist())
         .andExpect(jsonPath("$.missingQueueDefinitionIds").isEmpty());
 
     mvc.perform(
@@ -512,7 +508,7 @@ class TransferWorkflowSagaIntegrationTest {
         inTransit.version(),
         inTransit.lines().getFirst().version(),
         new ArriveTransferLineRequest(
-            List.of(new MediaReferenceInput(mediaId, 1)), null, false));
+            List.of(new MediaReferenceInput(mediaId, 1)), null));
     processor.processUntilIdle(fixture.documentId());
 
     assertThat(documents.get(fixture.documentId(), LogisticsDocumentType.TRANSFER).state())
@@ -695,7 +691,7 @@ class TransferWorkflowSagaIntegrationTest {
             eq(DESTINATION)))
         .thenReturn(
             new LogisticsDependencyGateway.TransferRepairArrivalPreflight(
-                null, false, false, List.of()));
+                null, false, List.of()));
     when(dependencies.readRentalItemSnapshot(ASSET)).thenReturn(snapshot(7, ORIGIN, "FREE", 2));
     when(dependencies.acquireOperationLease(
             any(),

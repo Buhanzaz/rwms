@@ -71,16 +71,23 @@ class AssetAuthorizerTest {
   }
 
   @Test
-  void requiresAServiceCredentialWithExactlyAssetInternal() {
+  void outboxRecoveryRequiresUserWriteScopeAndAnAdministratorOrTheExistingDevelopmentBypass() {
     AssetAuthorizer authorizer = new AssetAuthorizer(new MockEnvironment(), false);
 
-    Jwt valid = service("asset.internal", "maintenance-service");
-    authorizer.requireInternalAssetAccess(valid);
-    assertThat(authorizer.internalSubjectId(valid)).isNotNull();
-    assertThatThrownBy(() -> authorizer.requireInternalAssetAccess(service("asset.internal rwms.read", "maintenance-service")))
+    authorizer.requireOutboxRecovery(user("rwms.read rwms.write", "SYSTEM_ADMIN", "VIEW"));
+    authorizer.requireOutboxRecovery(user("rwms.read rwms.write", "WMS_ADMIN", "VIEW"));
+    assertThatThrownBy(() -> authorizer.requireOutboxRecovery(
+        user("rwms.read rwms.write", "WAREHOUSE_MANAGER", "MANAGE")))
         .isInstanceOf(AccessDeniedException.class);
-    assertThatThrownBy(() -> authorizer.requireInternalAssetAccess(user("asset.internal", "SYSTEM_ADMIN", "MANAGE")))
+    assertThatThrownBy(() -> authorizer.requireOutboxRecovery(
+        user("rwms.read", "SYSTEM_ADMIN", "VIEW")))
         .isInstanceOf(AccessDeniedException.class);
+
+    MockEnvironment development = new MockEnvironment();
+    development.setActiveProfiles("dev");
+    AssetAuthorizer bypass = new AssetAuthorizer(development, true);
+    bypass.requireOutboxRecovery(null);
+    assertThat(bypass.subjectId(null)).isNotNull();
   }
 
   @Test
@@ -90,8 +97,6 @@ class AssetAuthorizerTest {
 
     authorizer.requireMaintenanceAssetAccess(valid);
     assertThat(authorizer.maintenanceSubjectId(valid)).isNotNull();
-    assertThatThrownBy(() -> authorizer.requireInternalAssetAccess(valid))
-        .isInstanceOf(AccessDeniedException.class);
     assertThatThrownBy(() -> authorizer.requireMaintenanceAssetAccess(
         service("asset.maintenance asset.internal", "maintenance-service")))
         .isInstanceOf(AccessDeniedException.class);
@@ -110,8 +115,6 @@ class AssetAuthorizerTest {
 
     authorizer.requireInventoryAssetAccess(valid);
     assertThat(authorizer.inventorySubjectId(valid)).isNotNull();
-    assertThatThrownBy(() -> authorizer.requireInternalAssetAccess(valid))
-        .isInstanceOf(AccessDeniedException.class);
     assertThatThrownBy(() -> authorizer.requireInventoryAssetAccess(
         service("asset.inventory asset.internal", "inventory-service")))
         .isInstanceOf(AccessDeniedException.class);
@@ -139,8 +142,6 @@ class AssetAuthorizerTest {
 
     authorizer.requireLogisticsAssetAccess(valid);
     assertThat(authorizer.logisticsSubjectId(valid)).isNotNull();
-    assertThatThrownBy(() -> authorizer.requireInternalAssetAccess(valid))
-        .isInstanceOf(AccessDeniedException.class);
     assertThatThrownBy(() -> authorizer.requireLogisticsAssetAccess(
         service("asset.logistics asset.internal", "logistics-service")))
         .isInstanceOf(AccessDeniedException.class);

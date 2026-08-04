@@ -40,7 +40,7 @@ public class EquipmentMovementTaskProcessor {
             reserve.lineId(),
             dependencies.acquireEquipmentMovementReservation(
                 reserve.lineId(),
-                reserve.taskId(),
+                reserve.assetMovementOwnerId(),
                 reserve.lineId(),
                 reserve.equipmentId(),
                 reserve.sourceWarehouseId(),
@@ -71,7 +71,8 @@ public class EquipmentMovementTaskProcessor {
       if (work instanceof EquipmentMovementWorkflowStore.ExecuteWork execute) {
         store.confirmExecution(
             execute.taskId(),
-            dependencies.executeEquipmentMovement(execute.taskId(), execute.taskId(), execute.lines()));
+            dependencies.executeEquipmentMovement(
+                execute.taskId(), execute.assetMovementOwnerId(), execute.lines()));
         return;
       }
       if (work instanceof EquipmentMovementWorkflowStore.CancelBoardTaskWork cancel) {
@@ -89,7 +90,7 @@ public class EquipmentMovementTaskProcessor {
                 derivedKey("release", release.lineId()),
                 release.reservationId(),
                 release.expectedReservationVersion(),
-                release.taskId(),
+                release.assetMovementOwnerId(),
                 release.lineId()));
         return;
       }

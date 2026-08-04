@@ -80,7 +80,7 @@ function renderWorkspace(
       lines={[]}
       media={media}
       repairCompletionMode={null}
-      movementRequired={false}
+      movementToRepair={false}
       repairPlans={[]}
       readOnly={readOnly}
       coverMediaId={null}

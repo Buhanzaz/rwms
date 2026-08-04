@@ -181,6 +181,7 @@ describe("maintenance lifecycle HTTP client", () => {
       4,
       1,
       idempotencyKey,
+      true,
       "FIXED_DATE",
       "2026-08-12"
     )
@@ -226,6 +227,7 @@ describe("maintenance lifecycle HTTP client", () => {
     expect(JSON.parse(String(completeInit.body))).toEqual({
       expectedVersion: 4,
       priority: 1,
+      movementToRepair: true,
       logisticsPlanningMode: "FIXED_DATE",
       logisticsScheduledDate: "2026-08-12",
     })
@@ -275,6 +277,7 @@ describe("maintenance lifecycle HTTP client", () => {
       3,
       2,
       idempotencyKey,
+      false,
       "AUTO",
       null
     )
@@ -330,7 +333,8 @@ describe("maintenance lifecycle HTTP client", () => {
     expect(JSON.parse(String(requestAt(fetchMock, 2)[1].body))).toEqual({
       expectedVersion: 3,
       priority: 2,
-      logisticsPlanningMode: "AUTO",
+      movementToRepair: false,
+      logisticsPlanningMode: null,
       logisticsScheduledDate: null,
     })
     expect(String(requestAt(fetchMock, 3)[0])).toContain(`/${repairId}/reworks`)

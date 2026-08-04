@@ -8,7 +8,6 @@ export type MovementQueueCapabilityDto = {
 
 export type WarehouseQueueCapabilitiesDto = {
   warehouseId: string
-  movementToShipmentAvailable: boolean
   movementQueueDefinitions: MovementQueueCapabilityDto[]
 }
 

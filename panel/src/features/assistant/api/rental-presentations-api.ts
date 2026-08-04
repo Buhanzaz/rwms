@@ -57,6 +57,7 @@ export type PresentationBooking = {
 export type RentalSettings = {
   version: number
   chatSelectionHoldMinutes: number
+  manualBookingHoldMinutes: number
   presentationHoldMinutes: number
   draftReservationHoldMinutes: number
   updatedBy: string | null
@@ -108,6 +109,7 @@ export function publishClientPresentation(params: {
   inquiryId: string
   warehouseId: string
   idempotencyKey: string
+  manualBookingDraftId?: string
   groups: Array<{
     key: string
     label: string
@@ -124,6 +126,7 @@ export function publishClientPresentation(params: {
       headers: { "Idempotency-Key": params.idempotencyKey },
       body: JSON.stringify({
         warehouseId: params.warehouseId,
+        manualBookingDraftId: params.manualBookingDraftId,
         groups: params.groups,
       }),
     }
@@ -153,6 +156,7 @@ export function updateRentalSettings(params: {
   accessToken: string
   expectedVersion: number
   chatSelectionHoldMinutes: number
+  manualBookingHoldMinutes: number
   presentationHoldMinutes: number
   draftReservationHoldMinutes: number
 }) {
@@ -164,6 +168,7 @@ export function updateRentalSettings(params: {
       body: JSON.stringify({
         expectedVersion: params.expectedVersion,
         chatSelectionHoldMinutes: params.chatSelectionHoldMinutes,
+        manualBookingHoldMinutes: params.manualBookingHoldMinutes,
         presentationHoldMinutes: params.presentationHoldMinutes,
         draftReservationHoldMinutes: params.draftReservationHoldMinutes,
       }),

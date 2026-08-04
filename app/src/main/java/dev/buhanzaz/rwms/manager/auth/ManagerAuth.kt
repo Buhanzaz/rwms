@@ -44,6 +44,7 @@ import okhttp3.CookieJar
 import okhttp3.FormBody
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.OkHttp
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -126,12 +127,27 @@ private const val MANAGER_SCOPE =
 class ManagerAuthRepository(
     context: Context,
     val configuration: ManagerAuthConfiguration,
-    private val rawClient: OkHttpClient = OkHttpClient(),
+    rawClient: OkHttpClient? = null,
 ) : Closeable {
     private val applicationContext = context.applicationContext
-    private val stateStore = EncryptedManagerAuthStateStore(applicationContext)
-    private val authorizationService = AuthorizationService(applicationContext)
-    private val nativeLogin = NativeManagerLoginClient(configuration, rawClient)
+    /*
+     * A signed-out launch only restores the encrypted state.  Do not construct an OkHttp client
+     * or AppAuth's AuthorizationService on the UI thread before the user starts a login or an
+     * authenticated request needs a refresh token.
+     */
+    private val stateStore = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        EncryptedManagerAuthStateStore(applicationContext)
+    }
+    private val rawClient = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        OkHttp.initialize(applicationContext)
+        rawClient ?: OkHttpClient()
+    }
+    private val authorizationService = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        AuthorizationService(applicationContext)
+    }
+    private val nativeLogin = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        NativeManagerLoginClient(configuration, this.rawClient.value)
+    }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val loadedState = AtomicReference<AuthState?>(null)
     private val nativeCookies = AtomicReference<EphemeralCookieJar?>(null)
@@ -143,7 +159,7 @@ class ManagerAuthRepository(
 
     init {
         scope.launch {
-            val restored = stateStore.read()
+            val restored = stateStore.value.read()
             loadedState.set(restored)
             mutableState.value =
                 if (restored?.isAuthorized == true) ManagerAuthState.SignedIn
@@ -161,13 +177,15 @@ class ManagerAuthRepository(
             var pending: NativeManagerLoginSession? = null
             try {
                 pending = withContext(Dispatchers.IO) {
-                    nativeLogin.login(
+                    nativeLogin.value.login(
                         username.trim(),
                         password,
                         createManagerAuthorizationRequest(configuration),
                     )
                 }
-                val token = pending.authorizationResponse.performTokenExchange(authorizationService)
+                val token = withContext(Dispatchers.IO) {
+                    pending.authorizationResponse.performTokenExchange(authorizationService.value)
+                }
                 val next = AuthState(pending.authorizationResponse, token, null)
                 persist(next)
                 nativeCookies.getAndSet(pending.cookies)?.clear()
@@ -212,16 +230,18 @@ class ManagerAuthRepository(
             }
             val detached = AuthState.jsonDeserialize(latest.jsonSerializeString())
             if (forceRefresh) detached.needsTokenRefresh = true
-            val exchange = suspendCancellableCoroutine<RefreshExchange> { continuation ->
-                authorizationService.performTokenRequest(detached.createTokenRefreshRequest()) {
-                        response,
-                        exception,
-                    ->
-                    if (!continuation.isActive) return@performTokenRequest
-                    if (response != null) {
-                        continuation.resume(RefreshExchange.Success(response))
-                    } else {
-                        continuation.resume(RefreshExchange.Failure(exception))
+            val exchange = withContext(Dispatchers.IO) {
+                suspendCancellableCoroutine<RefreshExchange> { continuation ->
+                    authorizationService.value.performTokenRequest(detached.createTokenRefreshRequest()) {
+                            response,
+                            exception,
+                        ->
+                        if (!continuation.isActive) return@performTokenRequest
+                        if (response != null) {
+                            continuation.resume(RefreshExchange.Success(response))
+                        } else {
+                            continuation.resume(RefreshExchange.Failure(exception))
+                        }
                     }
                 }
             }
@@ -255,7 +275,7 @@ class ManagerAuthRepository(
                         .add("token", refreshToken)
                         .add("token_type_hint", "refresh_token")
                         .build()
-                    rawClient.newCall(
+                    rawClient.value.newCall(
                         Request.Builder()
                             .url(configuration.revocationEndpoint.toString())
                             .post(body)
@@ -265,7 +285,7 @@ class ManagerAuthRepository(
             }
         }
         if (cookies != null) {
-            withContext(Dispatchers.IO) { runCatching { nativeLogin.logout(cookies) } }
+            withContext(Dispatchers.IO) { runCatching { nativeLogin.value.logout(cookies) } }
         }
         clearSession(ManagerAuthState.SignedOut)
     }
@@ -276,24 +296,28 @@ class ManagerAuthRepository(
 
     private suspend fun currentState(): AuthState? {
         loadedState.get()?.let { return it }
-        return stateStore.read()?.also(loadedState::set)
+        return withContext(Dispatchers.IO) {
+            stateStore.value.read()?.also(loadedState::set)
+        }
     }
 
     private suspend fun persist(state: AuthState) {
-        stateStore.write(state)
+        withContext(Dispatchers.IO) { stateStore.value.write(state) }
         loadedState.set(state)
     }
 
     private suspend fun clearSession(next: ManagerAuthState) {
         nativeCookies.getAndSet(null)?.clear()
         loadedState.set(null)
-        stateStore.clear()
+        withContext(Dispatchers.IO) { stateStore.value.clear() }
         mutableState.value = next
     }
 
     override fun close() {
         nativeCookies.getAndSet(null)?.clear()
-        authorizationService.dispose()
+        if (authorizationService.isInitialized()) {
+            authorizationService.value.dispose()
+        }
     }
 }
 

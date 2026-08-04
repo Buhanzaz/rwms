@@ -36,7 +36,8 @@ public final class PresentationHoldApiModels {
           @Pattern(
               regexp =
                   "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|VIEWER)$")
-          String actorRole) {}
+          String actorRole,
+      UUID sourceHoldScopeId) {}
 
   public record ConvertPresentationHoldsRequest(
       @NotNull UUID orderId,

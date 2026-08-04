@@ -14,7 +14,10 @@ import java.time.ZonedDateTime
 import kotlin.math.pow
 
 internal const val DIRECT_REPAIR_SOURCE_PARTY = "app-приложение"
-/** Default selection for the shared repair/logistics priority scale. */
+/**
+ * Default repair priority. The same value is propagated to an optional inbound or outbound
+ * logistics task, while the server assigns repair-board priority 1 after inbound delivery.
+ */
 internal const val DEFAULT_MAINTENANCE_PRIORITY = 3
 internal val MAINTENANCE_CATALOG_SYNC_TIME: LocalTime = LocalTime.of(9, 0)
 internal const val LOGISTICS_PLANNING_MODE_AUTO = "AUTO"
@@ -328,6 +331,13 @@ internal fun MaintenanceEditorState.logisticsPlanningValidationError(): String? 
         else -> "Выберите способ добавления в очередь перемещений"
     }
 }
+
+internal fun MaintenanceEditorState.logisticsTaskPriorityValidationError(): String? =
+    if (priority in 1..5) {
+        null
+    } else {
+        "Выберите приоритет ремонта от 1 до 5"
+    }
 
 private val logisticsPlanningModes = setOf(
     LOGISTICS_PLANNING_MODE_AUTO,

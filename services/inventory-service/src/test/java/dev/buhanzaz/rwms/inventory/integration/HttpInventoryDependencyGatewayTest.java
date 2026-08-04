@@ -1,12 +1,14 @@
 package dev.buhanzaz.rwms.inventory.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import dev.buhanzaz.rwms.inventory.service.InventoryException;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -36,6 +38,7 @@ class HttpInventoryDependencyGatewayTest {
   private final AtomicReference<String> authorization = new AtomicReference<>();
   private final AtomicReference<UUID> responseWarehouseId = new AtomicReference<>();
   private final AtomicReference<Boolean> assetPresent = new AtomicReference<>(true);
+  private final AtomicReference<String> reconciliationResponse = new AtomicReference<>();
   private final UUID cabinId = UUID.randomUUID();
   private HttpServer server;
   private HttpInventoryDependencyGateway gateway;
@@ -52,6 +55,8 @@ class HttpInventoryDependencyGatewayTest {
         "/api/internal/asset/v1/inventory/validations", this::validateAssets);
     server.createContext(
         "/api/internal/maintenance/v1/inventory/repair-snapshots", this::repairSnapshots);
+    server.createContext(
+        "/api/internal/maintenance/v1/inventory/reconciliations", this::applyReconciliation);
     server.start();
     String base = "http://127.0.0.1:" + server.getAddress().getPort();
     OAuth2AuthorizedClientManager authorizedClients = mock(OAuth2AuthorizedClientManager.class);
@@ -177,6 +182,40 @@ class HttpInventoryDependencyGatewayTest {
         .isEqualTo(cabinId.toString());
   }
 
+  @Test
+  void acceptsMatchedReconciliationWithoutATargetAndRejectsAnyMatchedTarget() {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    reconciliationResponse.set(
+        """
+        {"source":{"inventoryId":"%s","finalPlanVersion":1,"findingId":"%s"},
+         "outcome":"MATCHED","targetKind":null,"targetId":null,"estimateId":null,
+         "repairId":null,"successor":null,"delta":{"lines":[]}}
+        """.formatted(inventoryId, findingId));
+
+    JsonNode matched =
+        gateway.applyReconciliation(inventoryId, findingId, UUID.randomUUID(), mapper.createObjectNode());
+
+    assertThat(matched.path("outcome").asText()).isEqualTo("MATCHED");
+    assertThat(matched.path("targetId").isNull()).isTrue();
+    assertThat(authorization.get()).isEqualTo("Bearer inventory-maintenance-token");
+
+    UUID repairId = UUID.randomUUID();
+    reconciliationResponse.set(
+        """
+        {"source":{"inventoryId":"%s","finalPlanVersion":1,"findingId":"%s"},
+         "outcome":"MATCHED","targetKind":"REPAIR","targetId":"%s","estimateId":null,
+         "repairId":"%s","successor":null,"delta":{"lines":[]}}
+        """.formatted(inventoryId, findingId, repairId, repairId));
+
+    assertThatThrownBy(
+            () ->
+                gateway.applyReconciliation(
+                    inventoryId, findingId, UUID.randomUUID(), mapper.createObjectNode()))
+        .isInstanceOf(InventoryException.class)
+        .hasMessageContaining("malformed reconciliation result");
+  }
+
   private OAuth2AuthorizedClient authorizedClient(
       String base, String registrationId, String tokenValue, String scope) {
     ClientRegistration registration = ClientRegistration
@@ -258,6 +297,12 @@ class HttpInventoryDependencyGatewayTest {
         }]}]}
         """
             .formatted(cabinId, repairId, repairId, "a".repeat(64)));
+  }
+
+  private void applyReconciliation(HttpExchange exchange) throws IOException {
+    authorization.set(exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION));
+    requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+    respond(exchange, 200, reconciliationResponse.get());
   }
 
   private static void respond(HttpExchange exchange, int status, String body) throws IOException {

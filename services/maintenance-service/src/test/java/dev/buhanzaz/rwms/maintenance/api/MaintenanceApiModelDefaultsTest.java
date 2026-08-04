@@ -186,7 +186,6 @@ class MaintenanceApiModelDefaultsTest {
           "mediaReferences":[],
           "priority":3,
           "movementToRepair":false,
-          "movementToShipment":false,
           "logisticsPlanningMode":null,
           "logisticsScheduledDate":null,
           "coverMediaId":null
@@ -201,7 +200,6 @@ class MaintenanceApiModelDefaultsTest {
           "lines":[],
           "stages":[],
           "movementToRepair":false,
-          "movementToShipment":false,
           "mediaReferences":[],
           "priority":3,
           "logisticsPlanningMode":null,
@@ -213,13 +211,11 @@ class MaintenanceApiModelDefaultsTest {
 
     assertThat(request.priority()).isEqualTo(3);
     assertThat(request.movementToRepair()).isFalse();
-    assertThat(request.movementToShipment()).isFalse();
     assertThat(request.logisticsPlanningMode()).isNull();
     assertThat(request.logisticsScheduledDate()).isNull();
     assertThat(request.coverMediaId()).isNull();
     assertThat(snapshot.priority()).isEqualTo(3);
     assertThat(snapshot.movementToRepair()).isFalse();
-    assertThat(snapshot.movementToShipment()).isFalse();
     assertThat(snapshot.logisticsPlanningMode()).isNull();
     assertThat(snapshot.logisticsScheduledDate()).isNull();
     assertThat(snapshot.coverMediaId()).isNull();

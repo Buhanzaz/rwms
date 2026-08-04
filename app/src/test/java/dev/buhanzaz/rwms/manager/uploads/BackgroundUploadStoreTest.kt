@@ -4,6 +4,11 @@ import android.net.Uri
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.manager.media.MediaOwner
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -31,8 +36,9 @@ class BackgroundUploadStoreTest {
     }
 
     @Test
-    fun `operation and per-photo progress survive a process-style store reload`() {
+    fun `operation and per-photo progress survive a process-style store reload`() = runBlocking {
         val store = BackgroundUploadStore.get(context)
+        store.initialize()
         val photoFile = store.operationDirectory("operation-1").resolve("photo.jpg")
         photoFile.writeBytes(byteArrayOf(1, 2, 3))
         val operation = operation(
@@ -59,7 +65,9 @@ class BackgroundUploadStoreTest {
         }
 
         BackgroundUploadStore.resetForTests()
-        val restored = BackgroundUploadStore.get(context).operation(operation.id)
+        val restoredStore = BackgroundUploadStore.get(context)
+        restoredStore.initialize()
+        val restored = restoredStore.operation(operation.id)
 
         assertThat(restored?.status).isEqualTo(BackgroundUploadStatus.RUNNING)
         assertThat(restored?.stage).isEqualTo("Загрузка фото 1 из 1")
@@ -70,8 +78,9 @@ class BackgroundUploadStoreTest {
     }
 
     @Test
-    fun `successful removal deletes both queue row and durable originals`() {
+    fun `successful removal deletes both queue row and durable originals`() = runBlocking {
         val store = BackgroundUploadStore.get(context)
+        store.initialize()
         val directory = store.operationDirectory("operation-1")
         directory.resolve("photo.jpg").writeBytes(byteArrayOf(9))
         store.put(operation())
@@ -80,6 +89,24 @@ class BackgroundUploadStoreTest {
 
         assertThat(store.operations.value).isEmpty()
         assertThat(directory.exists()).isFalse()
+    }
+
+    @Test
+    fun `concurrent initialization restores one durable queue`() = runBlocking {
+        val persisted = BackgroundUploadStore.get(context)
+        persisted.initialize()
+        persisted.put(operation())
+
+        BackgroundUploadStore.resetForTests()
+        val restored = BackgroundUploadStore.get(context)
+        coroutineScope {
+            List(8) {
+                async(Dispatchers.Default) { restored.initialize() }
+            }.awaitAll()
+        }
+
+        assertThat(restored.operations.value).containsExactly(operation())
+        assertThat(restored.operation("operation-1")).isEqualTo(operation())
     }
 
     private fun operation(

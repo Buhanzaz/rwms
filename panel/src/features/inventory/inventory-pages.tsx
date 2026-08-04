@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -20,6 +20,7 @@ import {
   Card,
   CardContent,
   CardDescription,
+  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
@@ -36,20 +37,30 @@ import { Field, FieldError, FieldLabel } from "@/components/ui/field"
 import { Textarea } from "@/components/ui/textarea"
 import {
   INVENTORY_QUERY_KEY,
+  cancelInventory,
   completeInventory,
+  getInventoryFinalPlan,
   getInventoryFurnitureReview,
+  getInventoryPlanningSettings,
+  getInventoryPreliminaryStatistics,
   getActiveInventory,
   getInventory,
   inventoryActiveQueryKey,
   inventoryDetailQueryKey,
   inventoryFinishPreviewQueryKey,
+  inventoryFinalPlanQueryKey,
   inventoryFurnitureReviewQueryKey,
   inventoryListQueryKey,
+  inventoryPreliminaryStatisticsQueryKey,
+  inventoryPlanningSettingsQueryKey,
   listInventories,
   previewInventoryCompletion,
+  prepareInventoryFinalPlan,
   publishInventoryWorks,
+  reviewInventoryRegistry,
   resolveInventoryFindingConflict,
   saveInventoryFurnitureReview,
+  saveInventoryFinalPlan,
   saveInventoryFinding,
   startInventoryFurnitureReview,
   startInventory,
@@ -67,6 +78,7 @@ import {
 import { InventoryFindingFilters } from "@/features/inventory/inventory-finding-filters"
 import { InventoryFindingsList } from "@/features/inventory/inventory-findings-list"
 import { InventoryFurnitureReview } from "@/features/inventory/inventory-furniture-review"
+import { InventoryFinalPlanEditor } from "@/features/inventory/inventory-final-plan"
 import {
   inventoryFurnitureReconciliationCompletionNotice,
   inventoryFurnitureReconciliationPresentation,
@@ -87,9 +99,9 @@ import { InventoryStatistics } from "@/features/inventory/inventory-statistics"
 import {
   inventoryCompletionRiskSignature,
   inventoryRepairMovementCount,
-  reconcileInventoryRepairTaskPlans,
   toInventoryRepairPlanSnapshot,
 } from "@/features/inventory/domain/inventory-domain"
+import { formatMoneyDecimal } from "@/features/repair-estimates/domain/repair-estimate-domain"
 import type {
   InventoryFindingDto,
   InventoryFurnitureReviewDto,
@@ -116,8 +128,12 @@ import {
 } from "@/hooks/use-workspace-back"
 import { ApiError } from "@/lib/api-client"
 
+function isInventoryDataChangedError(error: unknown) {
+  return error instanceof ApiError && error.status === 409
+}
+
 function errorMessage(error: unknown) {
-  if (error instanceof ApiError && error.status === 409) {
+  if (isInventoryDataChangedError(error)) {
     return "Данные инвентаризации изменились. Обновите страницу и повторите действие."
   }
   return error instanceof Error ? error.message : "Операция не выполнена"
@@ -137,6 +153,13 @@ function showFurnitureReconciliationNotice(session: InventorySessionDto) {
 
 function conflictValue(value: string | null) {
   return value?.trim() || "—"
+}
+
+function formatInventoryDateTime(value: string) {
+  return new Intl.DateTimeFormat("ru-RU", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value))
 }
 
 function structuredConflictValue(value: string | null) {
@@ -181,11 +204,8 @@ function InventoryConflictResolution({
 }) {
   if (findings.length === 0) return null
   return (
-    <section
-      className="flex flex-col gap-3"
-      aria-labelledby="conflicts-title"
-    >
-      <h2 id="conflicts-title" className="text-lg font-semibold">
+    <section className="flex flex-col gap-3" aria-labelledby="conflicts-title">
+      <h2 id="conflicts-title" className="text-lg font-semibold" tabIndex={-1}>
         Конфликты реестра
       </h2>
       {findings.map((finding) => (
@@ -232,12 +252,12 @@ function InventoryConflictResolution({
             </ul>
             <div className="flex flex-col gap-1 text-muted-foreground">
               <p>
-                «Сохранить актуальные данные реестра» — работы и материалы
-                этого осмотра не будут переданы.
+                «Сохранить актуальные данные реестра» — работы и материалы этого
+                осмотра не будут переданы.
               </p>
               <p>
-                «Применить данные инвентаризации» — сохраняет работы и
-                материалы этого осмотра; потребуется указать причину.
+                «Применить данные инвентаризации» — сохраняет работы и материалы
+                этого осмотра; потребуется указать причину.
               </p>
             </div>
             <div className="grid gap-2 sm:grid-cols-3">
@@ -442,6 +462,8 @@ function FindingEditor({
   const { accessToken, currentUser } = useAuth()
   const queryClient = useQueryClient()
   const actor = getInventoryActor(currentUser, session.warehouseId)
+  const [baseFindingVersion] = useState(finding.version)
+  const [baseLinesJson] = useState(() => JSON.stringify(finding.lines))
   const [comment, setComment] = useState(finding.comment)
   const [lines, setLines] = useState<RepairEstimateLineDto[]>(finding.lines)
   const [media, setMedia] = useState<ReadyMediaReference[]>(finding.media)
@@ -457,13 +479,14 @@ function FindingEditor({
     enabled: !readOnly && Boolean(accessToken && session.warehouseId),
   })
   const movementRouteAvailable =
-    movementCapabilitiesQuery.data?.movementToShipmentAvailable === true
+    (movementCapabilitiesQuery.data?.movementQueueDefinitions.length ?? 0) > 0
   const mutation = useMutation({
     mutationFn: (completion: RepairWorkCompletionResult | null) => {
       if (!actor) throw new Error("Нет доступа")
       return saveInventoryFinding({
         inventoryId: session.id,
         expectedVersion: session.version,
+        expectedFindingVersion: baseFindingVersion,
         actor,
         findingId: finding.id,
         comment,
@@ -471,17 +494,25 @@ function FindingEditor({
         coverMediaId,
         lines,
         repairPlans: completion
-          ? completion.taskPlans.map(toInventoryRepairPlanSnapshot)
+          ? completion.taskPlans
+              .filter((plan) => plan.kind === "REPAIR_WORK")
+              .map((plan) =>
+                frozenPlanUnchanged
+                  ? (finding.repairPlans.find(
+                      (savedPlan) => savedPlan.id === plan.id
+                    ) ?? toInventoryRepairPlanSnapshot(plan))
+                  : toInventoryRepairPlanSnapshot(plan)
+              )
           : finding.repairPlans,
         repairCompletionMode: completion?.completionMode ?? null,
-        movementRequired:
-          movementRouteAvailable && completion?.movementRequired === true,
+        movementToRepair:
+          movementRouteAvailable && completion?.movementToRepair === true,
         logisticsPlanningMode:
-          movementRouteAvailable && completion?.movementRequired === true
+          movementRouteAvailable && completion?.movementToRepair === true
             ? completion.logisticsPlanningMode
-            : "AUTO",
+            : undefined,
         logisticsScheduledDate:
-          movementRouteAvailable && completion?.movementRequired === true
+          movementRouteAvailable && completion?.movementToRepair === true
             ? completion.logisticsScheduledDate
             : null,
         priority: completion?.priority ?? finding.repairPriority,
@@ -507,6 +538,7 @@ function FindingEditor({
   const missingRequiredAcceptancePhoto =
     acceptsAfterRentWithoutEstimate && media.length === 0
   const missingCoverPhoto = media.length > 0 && coverMediaId === null
+  const frozenPlanUnchanged = JSON.stringify(lines) === baseLinesJson
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
       <PageToolbar>
@@ -562,7 +594,7 @@ function FindingEditor({
         lines={lines}
         media={media}
         repairCompletionMode={finding.repairCompletionMode}
-        movementRequired={finding.movementRequired}
+        movementToRepair={finding.movementToRepair}
         repairPlans={finding.repairPlans}
         readOnly={readOnly}
         coverMediaId={coverMediaId}
@@ -596,28 +628,29 @@ function FindingEditor({
           completionOpen && mutation.error ? errorMessage(mutation.error) : null
         }
         title="Настройка работ по осмотру"
-        description="Выберите режим и порядок этапов. Очереди фиксируются каталогом; настройка будет сохранена в снимке инвентаризации и передана в ремонт только после её завершения."
+        description="Выберите приоритет и параметры перемещения. Настройка будет сохранена в снимке инвентаризации и передана в ремонт только после её завершения."
         completeLabel="Сохранить осмотр"
         pendingLabel="Сохраняем..."
         previewKey={`inventory:${session.id}:${finding.id}:${session.version}`}
-        initialCompletionMode={finding.repairCompletionMode ?? undefined}
-        initialMovementRequired={finding.movementRequired}
+        initialMovementToRepair={finding.movementToRepair}
         initialLogisticsPlanningMode={finding.logisticsPlanningMode}
         initialLogisticsScheduledDate={finding.logisticsScheduledDate}
         initialPriority={finding.repairPriority}
-        movementRouteAvailable={movementRouteAvailable}
-        routingSelectionAvailable={false}
-        planStructureEditingAvailable={false}
-        reconcileInitialPlans={
-          finding.repairPlans.length > 0
-            ? (prepared) =>
-                reconcileInventoryRepairTaskPlans({
-                  lines,
-                  stored: finding.repairPlans,
-                  prepared,
-                })
+        initialCompletionMode={
+          frozenPlanUnchanged
+            ? (finding.repairCompletionMode ?? "MANUAL")
             : undefined
         }
+        initialTaskPlans={
+          frozenPlanUnchanged
+            ? finding.repairPlans.map((plan) => ({
+                ...plan,
+                generationStatus: "PENDING_GENERATION" as const,
+                workflowRequestRef: null,
+              }))
+            : undefined
+        }
+        movementRouteAvailable={movementRouteAvailable}
         onOpenChange={setCompletionOpen}
         onComplete={(completion) => mutation.mutate(completion)}
       />
@@ -647,9 +680,25 @@ function useInventoryDetailRoute() {
   return { inventoryId, actor, selectedWarehouse, query, session }
 }
 
+function inventoryRegistryReviewQueryKey(session: InventorySessionDto | null) {
+  const revisionVector = session
+    ? [...session.findings]
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .map((finding) => [finding.id, finding.version] as const)
+    : []
+  return [
+    ...INVENTORY_QUERY_KEY,
+    "registry-review",
+    session?.id ?? null,
+    session?.version ?? null,
+    revisionVector,
+  ] as const
+}
+
 export function InventorySessionPage() {
   const isMobile = useIsMobile()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [searchParams] = useSearchParams()
   const { currentUser } = useAuth()
   const { inventoryId, actor, selectedWarehouse, query, session } =
@@ -657,6 +706,9 @@ export function InventorySessionPage() {
   const [filters, setFilters] = useState(createEmptyInventoryFindingFilters)
   const { filtersOpen, setFiltersOpen } = useResponsiveFiltersOpen()
   const [addOpen, setAddOpen] = useState(false)
+  const [cancelOpen, setCancelOpen] = useState(false)
+  const [cancelReason, setCancelReason] = useState("")
+  const [cancelSubmitted, setCancelSubmitted] = useState(false)
   const [mobileAppOperation, setMobileAppOperation] = useState<
     "Осмотр бытовки" | null
   >(null)
@@ -664,6 +716,25 @@ export function InventorySessionPage() {
   const goBack = useWorkspaceBack(`/inventory/${inventoryId}`)
   const selectedFinding =
     session?.findings.find((item) => item.id === findingId) ?? null
+  const cancelMutation = useMutation({
+    mutationFn: () => {
+      if (!session) throw new Error("Инвентаризация недоступна")
+      return cancelInventory({
+        inventoryId: session.id,
+        expectedVersion: session.version,
+        reason: cancelReason,
+      })
+    },
+    onSuccess: (cancelled) => {
+      setCancelOpen(false)
+      void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
+      toast.success("Инвентаризация отменена. Данные сохранены в истории.")
+      navigate(`/inventory/history/${cancelled.id}`, { replace: true })
+    },
+    onError: () => {
+      void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
+    },
+  })
 
   if (!actor || !selectedWarehouse)
     return (
@@ -796,6 +867,19 @@ export function InventorySessionPage() {
           </Button>
           <Button
             type="button"
+            variant="outline"
+            disabled={!canManage}
+            onClick={() => {
+              cancelMutation.reset()
+              setCancelReason("")
+              setCancelSubmitted(false)
+              setCancelOpen(true)
+            }}
+          >
+            Отменить
+          </Button>
+          <Button
+            type="button"
             className="ml-auto"
             disabled={!canManage}
             onClick={() =>
@@ -843,6 +927,66 @@ export function InventorySessionPage() {
         }}
         operation={mobileAppOperation ?? "Осмотр бытовки"}
       />
+      <Dialog
+        open={cancelOpen}
+        onOpenChange={(open) => {
+          if (!cancelMutation.isPending) setCancelOpen(open)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Отменить инвентаризацию?</DialogTitle>
+            <DialogDescription>
+              Сессия станет недоступна для изменений. Осмотры и журнал движения
+              сохранятся в истории, а задания и сметы созданы не будут.
+            </DialogDescription>
+          </DialogHeader>
+          <Field data-invalid={cancelSubmitted && !cancelReason.trim()}>
+            <FieldLabel htmlFor="inventory-cancel-reason">
+              Причина отмены
+            </FieldLabel>
+            <Textarea
+              id="inventory-cancel-reason"
+              value={cancelReason}
+              maxLength={2000}
+              aria-invalid={cancelSubmitted && !cancelReason.trim()}
+              onChange={(event) => setCancelReason(event.target.value)}
+            />
+            {cancelSubmitted && !cancelReason.trim() ? (
+              <FieldError>Укажите причину отмены.</FieldError>
+            ) : null}
+          </Field>
+          {cancelMutation.error ? (
+            <p role="alert" className="text-sm text-destructive">
+              {errorMessage(cancelMutation.error)}
+            </p>
+          ) : null}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={cancelMutation.isPending}
+              onClick={() => setCancelOpen(false)}
+            >
+              Вернуться
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={cancelMutation.isPending}
+              onClick={() => {
+                setCancelSubmitted(true)
+                if (!cancelReason.trim()) return
+                cancelMutation.mutate()
+              }}
+            >
+              {cancelMutation.isPending
+                ? "Отменяем..."
+                : "Отменить инвентаризацию"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -862,10 +1006,49 @@ export function InventoryFinishPage() {
   const [keepInspectionReason, setKeepInspectionReason] = useState("")
   const [keepInspectionSubmitted, setKeepInspectionSubmitted] = useState(false)
   const [furnitureReviewDirty, setFurnitureReviewDirty] = useState(false)
+  const [finalPlanDirty, setFinalPlanDirty] = useState(false)
+  const [dataChangedDialogOpen, setDataChangedDialogOpen] = useState(false)
+  const [registryReviewEnabled, setRegistryReviewEnabled] = useState(false)
+  const conflictNavigationRequested = useRef(false)
+  const sessionHasConflicts = Boolean(
+    session?.findings.some((finding) => finding.conflicts.length > 0)
+  )
+
+  useEffect(() => {
+    if (
+      dataChangedDialogOpen ||
+      !conflictNavigationRequested.current ||
+      !sessionHasConflicts
+    ) {
+      return
+    }
+    const target = document.getElementById("conflicts-title")
+    if (!target) return
+    target.focus()
+    target.scrollIntoView?.({ behavior: "smooth", block: "start" })
+    conflictNavigationRequested.current = false
+  }, [dataChangedDialogOpen, sessionHasConflicts])
   const canManage = Boolean(
     session &&
     hasInventoryWarehouseAccess(currentUser, session.warehouseId, "MANAGE")
   )
+  const registryReviewQuery = useQuery({
+    queryKey: inventoryRegistryReviewQueryKey(session),
+    queryFn: () =>
+      session
+        ? reviewInventoryRegistry(session.id)
+        : Promise.resolve<InventorySessionDto | null>(null),
+    enabled: Boolean(
+      registryReviewEnabled &&
+      session &&
+      actor &&
+      canManage &&
+      session.status === "ACTIVE" &&
+      session.reviewStage === "CABINS"
+    ),
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
+  })
   const furnitureReviewQueryKey = inventoryFurnitureReviewQueryKey(
     session?.id ?? null
   )
@@ -883,22 +1066,54 @@ export function InventoryFinishPage() {
       session.reviewStage === "FURNITURE"
     ),
   })
-  const completionPreviewQueryKey = inventoryFinishPreviewQueryKey(
+  const preliminaryStatisticsQuery = useQuery({
+    queryKey: inventoryPreliminaryStatisticsQueryKey(
+      session?.id ?? null,
+      session?.version ?? null
+    ),
+    queryFn: () =>
+      session
+        ? getInventoryPreliminaryStatistics(session.id)
+        : Promise.resolve(null),
+    enabled: Boolean(
+      session &&
+      actor &&
+      canManage &&
+      session.status === "ACTIVE" &&
+      session.reviewStage === "CABINS"
+    ),
+    refetchOnWindowFocus: "always",
+  })
+  const furnitureReviewMatchesSession =
+    furnitureReviewQuery.data?.sessionRevision === session?.version
+  const planningSettingsQueryKey = inventoryPlanningSettingsQueryKey(
+    session?.warehouseId ?? null
+  )
+  const planningSettingsQuery = useQuery({
+    queryKey: planningSettingsQueryKey,
+    queryFn: () =>
+      session
+        ? getInventoryPlanningSettings(session.warehouseId)
+        : Promise.resolve(null),
+    enabled: Boolean(
+      session &&
+      actor &&
+      canManage &&
+      session.status === "ACTIVE" &&
+      session.reviewStage === "FURNITURE" &&
+      furnitureReviewQuery.data?.confirmed &&
+      furnitureReviewMatchesSession &&
+      !furnitureReviewDirty
+    ),
+  })
+  const finalPlanQueryKey = inventoryFinalPlanQueryKey(
     session?.id ?? null,
     session?.version ?? null
   )
-  const furnitureReviewMatchesSession =
-    furnitureReviewQuery.data?.sessionRevision === session?.version
-  const completionPreviewQuery = useQuery({
-    queryKey: completionPreviewQueryKey,
+  const finalPlanQuery = useQuery({
+    queryKey: finalPlanQueryKey,
     queryFn: () =>
-      session && actor
-        ? previewInventoryCompletion({
-            inventoryId: session.id,
-            expectedVersion: session.version,
-            actor,
-          })
-        : Promise.resolve(null),
+      session ? getInventoryFinalPlan(session.id) : Promise.resolve(null),
     enabled: Boolean(
       session &&
       actor &&
@@ -911,7 +1126,41 @@ export function InventoryFinishPage() {
     ),
     refetchOnWindowFocus: "always",
   })
-  const reviewedFurnitureSession = completionPreviewQuery.data
+  const finalPlan = finalPlanQuery.data ?? null
+  const draftFinalPlan = finalPlan?.state === "DRAFT" ? finalPlan : null
+  const completionPreviewQueryKey = inventoryFinishPreviewQueryKey(
+    session?.id ?? null,
+    session?.version ?? null,
+    draftFinalPlan?.finalPlanVersion ?? null
+  )
+  const completionPreviewQuery = useQuery({
+    queryKey: completionPreviewQueryKey,
+    queryFn: () =>
+      session && actor && draftFinalPlan
+        ? previewInventoryCompletion({
+            inventoryId: session.id,
+            expectedVersion: session.version,
+            actor,
+            finalPlan: draftFinalPlan,
+          })
+        : Promise.resolve(null),
+    enabled: Boolean(
+      session &&
+      actor &&
+      canManage &&
+      session.status === "ACTIVE" &&
+      session.reviewStage === "FURNITURE" &&
+      furnitureReviewQuery.data?.confirmed &&
+      furnitureReviewMatchesSession &&
+      !furnitureReviewDirty &&
+      draftFinalPlan &&
+      !finalPlanDirty
+    ),
+    refetchOnWindowFocus: false,
+  })
+  const reviewedFurnitureSession = finalPlanDirty
+    ? null
+    : completionPreviewQuery.data
   const resolutionMutation = useMutation({
     mutationFn: ({
       reviewSession,
@@ -942,8 +1191,12 @@ export function InventoryFinishPage() {
       setKeepInspectionReason("")
       setKeepInspectionSubmitted(false)
       setFurnitureReviewDirty(false)
+      setFinalPlanDirty(false)
       void queryClient.removeQueries({
         queryKey: [...INVENTORY_QUERY_KEY, "finish-preview", updated.id],
+      })
+      void queryClient.removeQueries({
+        queryKey: [...INVENTORY_QUERY_KEY, "final-plan", updated.id],
       })
       void queryClient.invalidateQueries({ queryKey: furnitureReviewQueryKey })
       void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
@@ -965,8 +1218,46 @@ export function InventoryFinishPage() {
       queryClient.setQueryData(furnitureReviewQueryKey, review)
       setAcknowledgedRiskSignature(null)
       setFurnitureReviewDirty(false)
-      void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
+      setFinalPlanDirty(false)
+      void queryClient.invalidateQueries({
+        queryKey: inventoryDetailQueryKey(review.inventoryId),
+      })
       toast.success("Проверка бытовок завершена. Перейдите к сверке мебели.")
+    },
+    onError: (error) => {
+      if (isInventoryDataChangedError(error)) {
+        setDataChangedDialogOpen(true)
+      }
+      void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
+    },
+  })
+  const registryReviewMutation = useMutation({
+    mutationFn: () => {
+      if (!session) throw new Error("Инвентаризация недоступна")
+      return reviewInventoryRegistry(session.id)
+    },
+    onSuccess: (reviewed) => {
+      const hasConflicts = reviewed.findings.some(
+        (finding) => finding.conflicts.length > 0
+      )
+      conflictNavigationRequested.current = hasConflicts
+      setRegistryReviewEnabled(true)
+      queryClient.setQueryData(
+        inventoryRegistryReviewQueryKey(reviewed),
+        reviewed
+      )
+      queryClient.setQueryData(inventoryDetailQueryKey(reviewed.id), reviewed)
+      setAcknowledgedRiskSignature(null)
+      setDataChangedDialogOpen(false)
+      startFurnitureReviewMutation.reset()
+      if (!hasConflicts) {
+        toast.success(
+          "Данные обновлены. Конфликтов больше нет — повторите переход к мебели."
+        )
+      }
+    },
+    onError: () => {
+      void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
     },
   })
   const saveFurnitureReviewMutation = useMutation({
@@ -979,47 +1270,131 @@ export function InventoryFinishPage() {
     },
     onSuccess: (review) => {
       queryClient.setQueryData(furnitureReviewQueryKey, review)
+      queryClient.setQueryData(finalPlanQueryKey, null)
       setFurnitureReviewDirty(false)
+      setFinalPlanDirty(false)
+      void queryClient.removeQueries({
+        queryKey: [
+          ...INVENTORY_QUERY_KEY,
+          "finish-preview",
+          review.inventoryId,
+        ],
+      })
       void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
       toast.success("Сверка мебели сохранена")
     },
   })
+  const prepareFinalPlanMutation = useMutation({
+    mutationFn: () => {
+      if (!session || !planningSettingsQuery.data) {
+        throw new Error("Настройки итогового плана недоступны")
+      }
+      return prepareInventoryFinalPlan({
+        inventoryId: session.id,
+        expectedSessionRevision: session.version,
+        expectedSettingsRevision: planningSettingsQuery.data.settingsRevision,
+        movementScheduleMode: "AUTO",
+        repairScheduleMode: "AUTO",
+      })
+    },
+    onSuccess: (prepared) => {
+      queryClient.setQueryData(finalPlanQueryKey, prepared)
+      setFinalPlanDirty(false)
+      void queryClient.removeQueries({
+        queryKey: [
+          ...INVENTORY_QUERY_KEY,
+          "finish-preview",
+          prepared.inventoryId,
+        ],
+      })
+      toast.success("Итоговый план построен. Проверьте порядок и задания.")
+    },
+    onError: () => {
+      void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
+      void planningSettingsQuery.refetch()
+    },
+  })
+  const saveFinalPlanMutation = useMutation({
+    mutationFn: (
+      request: Parameters<typeof saveInventoryFinalPlan>[0]["request"]
+    ) => {
+      if (!session) throw new Error("Инвентаризация недоступна")
+      return saveInventoryFinalPlan({ inventoryId: session.id, request })
+    },
+    onSuccess: (saved) => {
+      queryClient.setQueryData(finalPlanQueryKey, saved)
+      setFinalPlanDirty(false)
+      void queryClient.removeQueries({
+        queryKey: [...INVENTORY_QUERY_KEY, "finish-preview", saved.inventoryId],
+      })
+      toast.success("Итоговый план сохранён и повторно проверен сервером.")
+    },
+    onError: () => {
+      void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
+    },
+  })
   const completionMutation = useMutation({
-    mutationFn: async (publish: boolean) => {
-      if (!reviewedFurnitureSession || !actor) {
+    mutationFn: async () => {
+      if (!reviewedFurnitureSession || !actor || !draftFinalPlan) {
         throw new Error("Инвентаризация недоступна")
       }
-      const refreshed = await previewInventoryCompletion({
-        inventoryId: reviewedFurnitureSession.id,
-        expectedVersion: reviewedFurnitureSession.version,
-        actor,
-      })
-      queryClient.setQueryData(completionPreviewQueryKey, refreshed)
-      if (refreshed.findings.some((finding) => finding.conflicts.length > 0)) {
+      if (
+        reviewedFurnitureSession.findings.some(
+          (finding) => finding.conflicts.length > 0
+        )
+      ) {
         throw new Error(
           "Урегулируйте все конфликты реестра перед завершением инвентаризации"
         )
       }
-      const completed = await completeInventory({
-        inventoryId: refreshed.id,
-        expectedVersion: refreshed.version,
+      if (
+        reviewedFurnitureSession.completionEvidence.finalPlanVersion !==
+          draftFinalPlan.finalPlanVersion ||
+        reviewedFurnitureSession.completionEvidence.finalPlanSha256 !==
+          draftFinalPlan.finalPlanSha256
+      ) {
+        throw new Error("Итоговый план изменился. Просмотрите его ещё раз.")
+      }
+      return completeInventory({
+        inventoryId: reviewedFurnitureSession.id,
+        expectedVersion: reviewedFurnitureSession.version,
         actor,
+        completionEvidence: reviewedFurnitureSession.completionEvidence,
       })
-      return publish
-        ? publishInventoryWorks({ inventoryId: completed.id, actor })
-        : completed
     },
-    onSuccess: (completed, publish) => {
-      void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
-      if (publish) {
+    onSuccess: (completed) => {
+      queryClient.setQueryData(inventoryDetailQueryKey(completed.id), completed)
+      queryClient.setQueryData<InventorySessionDto | null>(
+        inventoryActiveQueryKey(completed.warehouseId),
+        null
+      )
+      queryClient.setQueryData<InventorySessionDto[]>(
+        inventoryListQueryKey(completed.warehouseId),
+        (sessions) =>
+          sessions?.map((session) =>
+            session.id === completed.id ? completed : session
+          )
+      )
+      navigate(`/inventory/history/${completed.id}`, { replace: true })
+      void queryClient.invalidateQueries({
+        queryKey: inventoryActiveQueryKey(completed.warehouseId),
+        refetchType: "none",
+      })
+      void queryClient.invalidateQueries({
+        queryKey: inventoryListQueryKey(completed.warehouseId),
+        refetchType: "none",
+      })
+      showFurnitureReconciliationNotice(completed)
+      if (
+        completed.publicationStatus !== "NOT_REQUESTED" ||
+        completed.findings.some((finding) => finding.lines.length > 0)
+      ) {
         showPublicationNotice(completed)
       }
-      showFurnitureReconciliationNotice(completed)
-      navigate(`/inventory/history/${completed.id}`, { replace: true })
     },
     onError: () => {
       setFurnitureReviewDirty(false)
-      void completionPreviewQuery.refetch()
+      setFinalPlanDirty(false)
       void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
     },
   })
@@ -1061,6 +1436,10 @@ export function InventoryFinishPage() {
       />
     )
   const furnitureReview = furnitureReviewQuery.data
+  const cabinReviewSession =
+    session.reviewStage === "CABINS" && registryReviewQuery.data
+      ? registryReviewQuery.data
+      : session
   const activeReviewSession =
     session.reviewStage === "FURNITURE" &&
     furnitureReview?.confirmed &&
@@ -1068,7 +1447,9 @@ export function InventoryFinishPage() {
     !furnitureReviewDirty &&
     reviewedFurnitureSession
       ? reviewedFurnitureSession
-      : session
+      : cabinReviewSession
+  const displayedStatistics =
+    activeReviewSession.statistics ?? preliminaryStatisticsQuery.data ?? null
   const missing = activeReviewSession.findings.filter(
     (item) => item.reconciliationStatus === "MISSING"
   ).length
@@ -1089,26 +1470,21 @@ export function InventoryFinishPage() {
     ["Всего", activeReviewSession.findings.length],
     [
       "Ожидалось",
-      activeReviewSession.statistics?.expectedCount ??
-        activeReviewSession.findings.length,
+      displayedStatistics?.expectedCount ?? activeReviewSession.findings.length,
     ],
     [
       "Проверено",
-      activeReviewSession.statistics?.inspectedCount ??
+      displayedStatistics?.inspectedCount ??
         activeReviewSession.findings.length - notInspected,
     ],
-    ["Не найдено", activeReviewSession.statistics?.missingCount ?? missing],
+    ["Не найдено", displayedStatistics?.missingCount ?? missing],
     ["Не проверено", notInspected],
-    ["Готовы", activeReviewSession.statistics?.readyCount ?? 0],
-    [
-      "С работами",
-      activeReviewSession.statistics?.withWorkCount ?? withWork.length,
-    ],
-    ["Добавлено", activeReviewSession.statistics?.addedCount ?? 0],
+    ["Готовы", displayedStatistics?.readyCount ?? 0],
+    ["С работами", displayedStatistics?.withWorkCount ?? withWork.length],
+    ["Добавлено", displayedStatistics?.addedCount ?? 0],
     [
       "Конфликты",
-      activeReviewSession.statistics?.conflictCount ??
-        conflictingFindings.length,
+      displayedStatistics?.conflictCount ?? conflictingFindings.length,
     ],
     ["Перемещения на ремонт и вывозы", repairMovementCount],
   ] as const
@@ -1143,6 +1519,12 @@ export function InventoryFinishPage() {
                     {label}: {value}
                   </Badge>
                 ))}
+                {displayedStatistics ? (
+                  <Badge>
+                    Итого: {formatMoneyDecimal(displayedStatistics.grandTotal)}{" "}
+                    ₽
+                  </Badge>
+                ) : null}
               </div>
               {confirmationRequired ? (
                 <Field orientation="horizontal">
@@ -1169,7 +1551,10 @@ export function InventoryFinishPage() {
                   мебели.
                 </p>
               ) : null}
-              {startFurnitureReviewMutation.error ? (
+              {startFurnitureReviewMutation.error &&
+              !isInventoryDataChangedError(
+                startFurnitureReviewMutation.error
+              ) ? (
                 <p role="alert" className="text-sm text-destructive">
                   {errorMessage(startFurnitureReviewMutation.error)}
                 </p>
@@ -1178,18 +1563,27 @@ export function InventoryFinishPage() {
                 type="button"
                 disabled={
                   startFurnitureReviewMutation.isPending ||
-                  unresolvedConflicts ||
                   (confirmationRequired && !confirmed)
                 }
-                onClick={() =>
+                onClick={() => {
+                  startFurnitureReviewMutation.reset()
+                  if (unresolvedConflicts) {
+                    setDataChangedDialogOpen(true)
+                    return
+                  }
                   startFurnitureReviewMutation.mutate(confirmationRequired)
-                }
+                }}
               >
                 Завершить проверку бытовок и перейти к мебели
               </Button>
             </CardContent>
           </Card>
-          {activeReviewSession.statistics ? (
+          {preliminaryStatisticsQuery.error ? (
+            <p role="alert" className="text-sm text-destructive">
+              {errorMessage(preliminaryStatisticsQuery.error)}
+            </p>
+          ) : null}
+          {displayedStatistics ? (
             <section
               className="flex flex-col gap-3"
               aria-labelledby="preview-title"
@@ -1198,7 +1592,7 @@ export function InventoryFinishPage() {
                 Предварительные итоги
               </h2>
               <InventoryStatistics
-                statistics={activeReviewSession.statistics}
+                statistics={displayedStatistics}
                 findings={activeReviewSession.findings}
                 showCounters={false}
               />
@@ -1273,7 +1667,10 @@ export function InventoryFinishPage() {
                 : null
             }
             onSave={(review) => saveFurnitureReviewMutation.mutate(review)}
-            onDraftChange={setFurnitureReviewDirty}
+            onDraftChange={(dirty) => {
+              setFurnitureReviewDirty(dirty)
+              if (dirty) setFinalPlanDirty(true)
+            }}
           />
           {furnitureReview!.confirmed && !furnitureReviewDirty ? (
             <>
@@ -1281,14 +1678,20 @@ export function InventoryFinishPage() {
                 <InventoryLoading>
                   Обновляем версию инвентаризации...
                 </InventoryLoading>
-              ) : completionPreviewQuery.isLoading ? (
+              ) : planningSettingsQuery.isLoading ||
+                finalPlanQuery.isLoading ? (
                 <InventoryLoading>
-                  Проверяем актуальное состояние реестра...
+                  Загружаем настройки и итоговый план...
                 </InventoryLoading>
               ) : null}
-              {completionPreviewQuery.error ? (
+              {planningSettingsQuery.error ? (
                 <p role="alert" className="text-sm text-destructive">
-                  {errorMessage(completionPreviewQuery.error)}
+                  {errorMessage(planningSettingsQuery.error)}
+                </p>
+              ) : null}
+              {finalPlanQuery.error ? (
+                <p role="alert" className="text-sm text-destructive">
+                  {errorMessage(finalPlanQuery.error)}
                 </p>
               ) : null}
             </>
@@ -1329,17 +1732,142 @@ export function InventoryFinishPage() {
           {furnitureReview!.confirmed &&
           !furnitureReviewDirty &&
           furnitureReviewMatchesSession &&
+          planningSettingsQuery.data &&
+          !planningSettingsQuery.error &&
+          !finalPlanQuery.error &&
+          (finalPlan === null || finalPlan.state === "STALE") ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>
+                  {finalPlan?.state === "STALE"
+                    ? "Итоговый план устарел"
+                    : "Подготовить итоговый план"}
+                </CardTitle>
+                <CardDescription>
+                  {finalPlan?.state === "STALE"
+                    ? "После подготовки плана состав или результаты инвентаризации изменились. Постройте новую версию: устаревшую нельзя сохранить или применить."
+                    : "Сервер возьмёт только текущий живой состав, найдёт уже существующие сметы и ремонты и предложит предварительные даты. До окончательного завершения рабочие доски не меняются."}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-wrap gap-2">
+                <Badge variant="secondary">
+                  Перемещения:{" "}
+                  {planningSettingsQuery.data.movementDailyCapacity}
+                  /день
+                </Badge>
+                <Badge variant="secondary">
+                  Ремонты: {planningSettingsQuery.data.repairDailyCapacity}/день
+                </Badge>
+                <Badge variant="outline">
+                  Настройки v{planningSettingsQuery.data.settingsRevision}
+                </Badge>
+              </CardContent>
+              <CardFooter className="flex-col items-stretch gap-3 border-t">
+                {prepareFinalPlanMutation.error ? (
+                  <p role="alert" className="text-sm text-destructive">
+                    {errorMessage(prepareFinalPlanMutation.error)}
+                  </p>
+                ) : null}
+                <Button
+                  type="button"
+                  disabled={prepareFinalPlanMutation.isPending}
+                  onClick={() => prepareFinalPlanMutation.mutate()}
+                >
+                  {finalPlan?.state === "STALE"
+                    ? "Перестроить план по актуальным данным"
+                    : "Подготовить план и перейти к сверке заданий"}
+                </Button>
+              </CardFooter>
+            </Card>
+          ) : null}
+          {draftFinalPlan ? (
+            <InventoryFinalPlanEditor
+              key={draftFinalPlan.finalPlanVersion}
+              plan={draftFinalPlan}
+              findings={session.findings}
+              pending={saveFinalPlanMutation.isPending}
+              error={
+                saveFinalPlanMutation.error
+                  ? errorMessage(saveFinalPlanMutation.error)
+                  : null
+              }
+              onDirtyChange={setFinalPlanDirty}
+              onOpenFinding={(findingId) =>
+                navigate(
+                  `/inventory/${session.id}?findingId=${findingId}`,
+                  workspaceEntryNavigationOptions
+                )
+              }
+              onOpenCandidate={(candidate) =>
+                navigate(
+                  candidate.targetKind === "ESTIMATE"
+                    ? `/estimates?estimateId=${encodeURIComponent(candidate.targetId)}`
+                    : `/repairs?repairId=${encodeURIComponent(candidate.targetId)}`
+                )
+              }
+              onSave={(request) => saveFinalPlanMutation.mutate(request)}
+            />
+          ) : null}
+          {draftFinalPlan &&
+          !finalPlanDirty &&
+          completionPreviewQuery.isLoading ? (
+            <InventoryLoading>
+              Проверяем точную версию плана и актуальное состояние реестра...
+            </InventoryLoading>
+          ) : null}
+          {draftFinalPlan && !finalPlanDirty && completionPreviewQuery.error ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>План нужно проверить заново</CardTitle>
+                <CardDescription role="alert" className="text-destructive">
+                  {errorMessage(completionPreviewQuery.error)}
+                </CardDescription>
+              </CardHeader>
+              <CardFooter className="justify-end border-t">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={prepareFinalPlanMutation.isPending}
+                  onClick={() => prepareFinalPlanMutation.mutate()}
+                >
+                  Перестроить план по актуальным данным
+                </Button>
+              </CardFooter>
+            </Card>
+          ) : null}
+          {furnitureReview!.confirmed &&
+          !furnitureReviewDirty &&
+          furnitureReviewMatchesSession &&
+          draftFinalPlan &&
+          !finalPlanDirty &&
           reviewedFurnitureSession &&
           !completionPreviewQuery.error ? (
             <Card>
               <CardHeader>
                 <CardTitle>Завершение инвентаризации</CardTitle>
                 <CardDescription>
-                  Сверка мебели подтверждена. Завершение зафиксирует
-                  неизменяемый снимок результатов.
+                  Вы видите проверенную сервером версию итогового плана.
+                  Завершение одним действием зафиксирует результаты, применит
+                  выбранные замены/слияния и создаст новые сметы или ремонты.
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-3">
+                <div className="flex flex-wrap gap-2">
+                  <Badge>План v{draftFinalPlan.finalPlanVersion}</Badge>
+                  <Badge variant="secondary">
+                    Бытовок: {draftFinalPlan.entries.length}
+                  </Badge>
+                  <Badge variant="secondary">
+                    С замечаниями:{" "}
+                    {
+                      draftFinalPlan.entries.filter((entry) => entry.hasWork)
+                        .length
+                    }
+                  </Badge>
+                  <Badge variant="outline">
+                    Проверка: {draftFinalPlan.finalPlanSha256.slice(0, 12)}…
+                  </Badge>
+                </div>
                 {unresolvedConflicts ? (
                   <p role="alert" className="text-sm text-destructive">
                     Урегулируйте все конфликты реестра перед завершением
@@ -1351,56 +1879,76 @@ export function InventoryFinishPage() {
                     {errorMessage(completionMutation.error)}
                   </p>
                 ) : null}
-                <div className="flex flex-wrap gap-2">
-                  {withWork.length > 0 ? (
-                    <>
-                      <Button
-                        type="button"
-                        disabled={
-                          completionMutation.isPending ||
-                          completionPreviewQuery.isFetching ||
-                          unresolvedConflicts
-                        }
-                        onClick={() => completionMutation.mutate(true)}
-                      >
-                        <HugeiconsIcon
-                          icon={SentIcon}
-                          data-icon="inline-start"
-                        />
-                        Завершить и передать работы
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        disabled={
-                          completionMutation.isPending ||
-                          completionPreviewQuery.isFetching ||
-                          unresolvedConflicts
-                        }
-                        onClick={() => completionMutation.mutate(false)}
-                      >
-                        Завершить без передачи
-                      </Button>
-                    </>
-                  ) : (
-                    <Button
-                      type="button"
-                      disabled={
-                        completionMutation.isPending ||
-                        completionPreviewQuery.isFetching ||
-                        unresolvedConflicts
-                      }
-                      onClick={() => completionMutation.mutate(false)}
-                    >
-                      Завершить
-                    </Button>
-                  )}
-                </div>
               </CardContent>
+              <CardFooter className="justify-end border-t">
+                <Button
+                  type="button"
+                  disabled={
+                    completionMutation.isPending ||
+                    completionPreviewQuery.isFetching ||
+                    unresolvedConflicts
+                  }
+                  onClick={() => completionMutation.mutate()}
+                >
+                  <HugeiconsIcon icon={SentIcon} data-icon="inline-start" />
+                  Завершить и применить итоговый план
+                </Button>
+              </CardFooter>
             </Card>
           ) : null}
         </>
       )}
+      <Dialog
+        open={dataChangedDialogOpen}
+        onOpenChange={(open) => {
+          setDataChangedDialogOpen(open)
+          if (!open) {
+            startFurnitureReviewMutation.reset()
+            registryReviewMutation.reset()
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Данные инвентаризации изменились</DialogTitle>
+            <DialogDescription>
+              После открытия этой страницы сведения о бытовках изменились. Перед
+              переходом к мебели сравните данные и разрешите конфликты с
+              актуальным реестром.
+            </DialogDescription>
+          </DialogHeader>
+          {registryReviewMutation.error ? (
+            <p role="alert" className="text-sm text-destructive">
+              {errorMessage(registryReviewMutation.error)}
+            </p>
+          ) : null}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setDataChangedDialogOpen(false)
+                startFurnitureReviewMutation.reset()
+                registryReviewMutation.reset()
+              }}
+            >
+              Остаться на странице
+            </Button>
+            <Button
+              type="button"
+              disabled={registryReviewMutation.isPending}
+              onClick={() => {
+                registryReviewMutation.reset()
+                registryReviewMutation.mutate()
+              }}
+            >
+              {registryReviewMutation.isPending
+                ? "Загружаем изменения..."
+                : "Перейти к разрешению конфликтов"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={keepInspectionFinding !== null}
         onOpenChange={(open) => {
@@ -1558,11 +2106,11 @@ export function InventoryHistoryDetailPage() {
         description={errorMessage(query.error)}
       />
     )
-  if (!session || session.status !== "COMPLETED")
+  if (!session || session.status === "ACTIVE")
     return (
       <InventoryUnavailable
         title="Результат недоступен"
-        description="Завершённая инвентаризация не найдена на выбранном складе."
+        description="Завершённая или отменённая инвентаризация не найдена на выбранном складе."
       />
     )
   if (selectedFinding)
@@ -1575,6 +2123,67 @@ export function InventoryHistoryDetailPage() {
         onBack={goBack}
       />
     )
+  if (session.status === "CANCELLED") {
+    return (
+      <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto">
+        <PageToolbar>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => navigate("/inventory/history")}
+          >
+            <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
+            Назад
+          </Button>
+        </PageToolbar>
+        <Card className="border-destructive/50">
+          <CardHeader>
+            <CardTitle className="flex flex-wrap items-center gap-2">
+              <Badge variant="destructive">Инвентаризация отменена</Badge>
+              <span>{session.warehouse.name}</span>
+            </CardTitle>
+            <CardDescription>
+              Отмена не публикует сметы, ремонты или задания. Собранные данные
+              сохранены только как журнал этой сессии.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <dl className="grid gap-2 text-sm sm:grid-cols-[12rem_1fr]">
+              <dt className="text-muted-foreground">Причина</dt>
+              <dd>{session.cancellation?.reason ?? "Причина не сохранена"}</dd>
+              <dt className="text-muted-foreground">Время отмены</dt>
+              <dd>
+                {session.cancellation?.cancelledAt
+                  ? formatInventoryDateTime(session.cancellation.cancelledAt)
+                  : session.completedAt
+                    ? formatInventoryDateTime(session.completedAt)
+                    : "—"}
+              </dd>
+              <dt className="text-muted-foreground">Автор сессии</dt>
+              <dd>{session.author.displayName}</dd>
+            </dl>
+          </CardContent>
+        </Card>
+        <InventoryMembershipMovements
+          movements={session.membershipMovements}
+          warehouse={session.warehouse}
+        />
+        <div className="min-h-[20rem] md:flex">
+          <InventoryFindingsList
+            findings={session.findings}
+            canInspect={false}
+            statusMode="COMPLETION"
+            onOpen={(finding) =>
+              navigate(
+                `/inventory/history/${session.id}?findingId=${finding.id}`,
+                workspaceEntryNavigationOptions
+              )
+            }
+          />
+        </div>
+      </div>
+    )
+  }
   const canPublish = hasInventoryWarehouseAccess(
     currentUser,
     session.warehouseId,

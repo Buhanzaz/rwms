@@ -1,85 +1,89 @@
 # RWMS Рабочий
 
-`worker-app/` is an independent Android Gradle build for the private RWMS worker
-APK. It is deliberately not included in the repository's Java 25 multi-module
-build.
+`worker-app/` — самостоятельная Android-сборка приватного приложения для рабочих RWMS.
+Она не включена в основную Java 25 multi-module сборку репозитория.
 
-## Configuration
+## Конфигурация
 
-The app only talks to the public HTTPS gateway. The default build targets the
-running test environment:
+Приложение обращается только к публичному HTTPS gateway. Обычная debug-сборка
+нацелена на действующее тестовое окружение:
 
 ```bash
 ./gradlew assembleDebug
 ```
 
-This produces an APK configured for `https://77-90-158-90.sslip.io`. Another
-public HTTPS gateway can be selected explicitly:
+По умолчанию используется `https://77-90-158-90.sslip.io`. Другой публичный
+HTTPS gateway можно указать явно:
 
 ```bash
 ./gradlew -PRWMS_PUBLIC_BASE_URL=https://rwms.example.org assembleDebug
 ```
 
-The registered public client is `rwms-worker-android`, using Authorization Code
-+ PKCE S256 and scopes `openid profile offline_access worker.tasks`. The native
-client consumes the validated authorization response in memory. It does not
-open a Custom Tab and the APK exposes no OAuth browser/deep-link activity.
-Non-HTTPS origins and origins containing paths, credentials, queries or
-fragments are rejected at build/runtime.
+Публичный client — `rwms-worker-android`: Authorization Code + PKCE S256,
+scopes `openid profile offline_access worker.tasks`. Пароль не сохраняется,
+а browser/deep-link Activity в APK не экспортируется.
 
-For a signed release, create a secret properties file outside Git using
-[`signing.properties.example`](signing.properties.example), then run:
+Для подписанного release-файла создайте секретный properties-файл вне Git по
+примеру [`signing.properties.example`](signing.properties.example):
 
 ```bash
 ./gradlew -PsigningPropertiesFile=/secure/path/rwms-worker-signing.properties assembleRelease
 ```
 
-Without that property `assembleRelease` produces an unsigned release APK; no
-key, Firebase file, token or service origin is stored in this repository.
+## Меню и работы
 
-## Security and offline behavior
+- Начальный экран — русское меню `Работы`, `Загрузки`, `Профиль`.
+- `Работы` строятся только по выданным task-board категориям и их `groupIds`.
+  Одна группа образует один столбец, две группы — ровно два. На узком экране
+  столбцы идут последовательно, на широком видны одновременно.
+- Активное или приостановленное assignment ограничивает карточку назначенной
+  группой. Задания без группы показываются секцией `Личные задания` в первом
+  групповом столбце; при отсутствии групп используется отдельный столбец.
+- KPI-цвет берётся только из `WorkerContext.kpiPalette`, хранится в Room и
+  применяется к оставшемуся времени. Локальных green/yellow/red порогов нет.
+- В карточке задания показываются стабильный `taskId`, материалы и работы без
+  цен, общие фото и отдельные `sourceMediaIds` каждой работы.
 
-- The launch screen accepts the worker's **«Логин приложения»** and password
-  created in task-board settings. A memory-only cookie session performs the
-  authorization server's CSRF-protected login and Authorization Code + PKCE
-  exchange without opening a browser. The password is never logged or
-  persisted and leaves memory with the login screen/session attempt.
-- AppAuth state is AES-GCM encrypted by an Android Keystore key before it is
-  persisted in DataStore. Backup, data extraction and clear-text traffic are
-  disabled. Room and captured photos live in app-private/no-backup storage.
-- Room is the UI source of truth. A task action updates its projection and
-  inserts a stable outbox operation in one Room transaction.
-- The manager-selected current group and operational availability come from
-  the worker context. A worker cannot choose another group while taking a task.
-- Task time is rendered from the task-board service's schedule-aware timer
-  snapshot. Local display progress is capped at the next server transition and
-  stays frozen during breaks, off-shift periods and manual pauses.
-- A server-issued 24-hour lease is evaluated from a server-time/
-  `elapsedRealtime` anchor. Expired visible cache is removed, while encrypted
-  unsent commands and evidence remain scoped to their original user until
-  connection is restored.
-- Synchronization runs as a unique, connected WorkManager job in this order:
-  actions, evidence reservation, a fresh media session, upload/finalize,
-  `READY` polling, then a refreshed feed. Upload sessions are not persisted as
-  offline authority.
+## Загрузки и фото результата
 
-FCM is optional. The dependency compiles without `google-services.json`; it is
-only used as an invalidation trigger once Firebase configuration is supplied
-outside Git. Foreground SSE invalidations and a 15-second polling fallback are
-always available.
+`Загрузки` отображают только активные или ошибочные outbox/evidence операции:
+статус, сохранённый процент и безопасное описание ошибки. Успешные операции
+исчезают автоматически. Кнопка `Повторить` запускает существующий sync.
+`encryptedPayload` и `encryptedFilePath` никогда не входят в UI-модель.
 
-## Local checks
+После выполнения работы рабочий снимает JPEG и подтверждает его. Evidence
+сохраняется зашифрованно, привязывается к заданию и отправляется через
+reservation → upload/finalize → `READY`; после этого результат доступен в
+приёмке.
 
-Use JDK 17 (the build declares Java/Kotlin toolchains 17):
+Camera UX перенесён из manager app `0.3.29`: полноэкранный preview, `НОЧЬ` и
+`ФОТО`, вспышка/фонарь, tap-to-focus, pinch zoom и zoom stops, сетка, формат
+кадра, Ultra HDR с capability check, exposure, быстрый режим движения,
+переключение камеры и volume shutter. Видимый пункт `ВИДЕО` не создаёт MP4:
+worker contract принимает только JPEG evidence, поэтому приложение остаётся в
+`ФОТО` и показывает объяснение.
+
+## Безопасность и offline
+
+- AppAuth state шифруется AES-GCM ключом Android Keystore до записи в DataStore.
+- Room — единственный UI source of truth. Команда и outbox-row записываются в
+  одной транзакции.
+- 24-часовой offline lease рассчитывается от server-time/`elapsedRealtime`.
+- Sync идёт как unique connected WorkManager job: actions, reservation,
+  upload/finalize, ожидание `READY`, затем обновлённый feed.
+- FCM содержит только invalidation. `NEW_TASK`, `URGENT_TASK` и
+  `TASK_JOIN_AVAILABLE` дают русские generic-уведомления; срочные и смежные
+  задания используют high-importance channels.
+
+## Локальные проверки
+
+Используйте JDK 17 и установленный Android SDK:
 
 ```bash
-./gradlew testDebugUnitTest lintDebug assembleDebug assembleRelease
+ANDROID_HOME=/root/Android/Sdk ANDROID_SDK_ROOT=/root/Android/Sdk \
+  ./gradlew testDebugUnitTest lintDebug assembleDebug
 ```
 
-Compose UI behavior is covered by regular unit/instrumented tests. Screenshot
-recording is deliberately deferred: the available Android screenshot Gradle
-plugin is pre-release and this private APK keeps stable dependencies only.
-
-Live FCM delivery, CameraX hardware behavior, API 23/28/36 device checks, and
-baseline-profile generation remain device/VPS checks; this repository does not
-contain a Firebase configuration, release key, or physical-device runner.
+Compose, Room migration, network compatibility, Camera-настройки и безопасная
+проекция загрузок покрыты focused tests. Реальный CameraX hardware, FCM и
+аутентифицированный gateway flow дополнительно проверяются на emulator/device.

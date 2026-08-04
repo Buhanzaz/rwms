@@ -19,6 +19,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -193,6 +194,41 @@ class DriverCapitalRepairPromotionIntegrationTest {
               boardTask.set(current);
               return current;
             });
+    when(dependencies.moveDriverTask(
+            any(), anyLong(), anyLong(), eq("SCHEDULED"), any(), anyInt()))
+        .thenAnswer(
+            invocation -> {
+              LogisticsDependencyGateway.DriverBoardTask scheduled = boardTask.get();
+              LocalDate targetDate = invocation.getArgument(4, LocalDate.class);
+              int targetIndex = invocation.getArgument(5, Integer.class);
+              assertThat(invocation.getArgument(0, UUID.class))
+                  .isEqualTo(scheduled.externalTaskId());
+              assertThat(invocation.getArgument(1, Long.class))
+                  .isEqualTo(scheduled.taskVersion());
+              assertThat(invocation.getArgument(2, Long.class))
+                  .isEqualTo(scheduled.entryVersion());
+              LogisticsDependencyGateway.DriverBoardTask moved =
+                  new LogisticsDependencyGateway.DriverBoardTask(
+                      scheduled.taskId(),
+                      scheduled.taskVersion(),
+                      scheduled.warehouseId(),
+                      scheduled.externalTaskId(),
+                      scheduled.title(),
+                      scheduled.unitNumber(),
+                      scheduled.taskText(),
+                      scheduled.status(),
+                      targetDate,
+                      "SCHEDULED",
+                      scheduled.priority(),
+                      scheduled.pinned(),
+                      scheduled.doneAt(),
+                      scheduled.entryId(),
+                      scheduled.entryVersion() + 1,
+                      scheduled.entryStatus(),
+                      targetIndex);
+              boardTask.set(moved);
+              return moved;
+            });
     when(dependencies.cancelDriverTask(any(), anyLong()))
         .thenAnswer(
             invocation -> {
@@ -277,6 +313,35 @@ class DriverCapitalRepairPromotionIntegrationTest {
   }
 
   @Test
+  void schedulesCapitalRepairDirectlyOnTheSelectedDateAndQueuePosition() throws Exception {
+    LocalDate targetDate = LocalDate.now(ZoneOffset.UTC).plusDays(2);
+
+    mvc.perform(schedule(UUID.randomUUID(), targetDate, 1))
+        .andExpect(status().isCreated())
+        .andExpect(jsonPath("$.kind").value("CAPITAL_TO_PRODUCTION"))
+        .andExpect(jsonPath("$.workflowState").value("SCHEDULED"))
+        .andExpect(jsonPath("$.lane").value("SCHEDULED"))
+        .andExpect(jsonPath("$.scheduledDate").value(targetDate.toString()))
+        .andExpect(jsonPath("$.position").value(1));
+
+    assertThat(
+            jdbc.queryForObject(
+                "select planning_mode from driver_logistics_task where source_id = ?",
+                String.class,
+                REPAIR))
+        .isEqualTo("FIXED_DATE");
+    assertThat(
+            jdbc.queryForObject(
+                "select fixed_date_lower_bound from driver_logistics_task where source_id = ?",
+                LocalDate.class,
+                REPAIR))
+        .isEqualTo(targetDate);
+    verify(dependencies, never()).setDriverTaskLane(any(), anyLong(), eq("CURRENT"));
+    verify(dependencies)
+        .moveDriverTask(any(), anyLong(), anyLong(), eq("SCHEDULED"), eq(targetDate), eq(1));
+  }
+
+  @Test
   void returnsCapitalMovementWithoutDeletingHistoryAndAllowsASecondPromotion()
       throws Exception {
     mvc.perform(promote(UUID.randomUUID()))
@@ -340,6 +405,17 @@ class DriverCapitalRepairPromotionIntegrationTest {
         .header("Idempotency-Key", idempotencyKey)
         .contentType(MediaType.APPLICATION_JSON)
         .content("{\"warehouseId\":\"%s\"}".formatted(WAREHOUSE))
+        .with(actor());
+  }
+
+  private static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder schedule(
+      UUID idempotencyKey, LocalDate targetDate, int targetIndex) {
+    return post("/api/logistics/v1/driver-board/capital-repairs/{repairId}/schedule", REPAIR)
+        .header("Idempotency-Key", idempotencyKey)
+        .contentType(MediaType.APPLICATION_JSON)
+        .content(
+            "{\"warehouseId\":\"%s\",\"targetDate\":\"%s\",\"targetIndex\":%d}"
+                .formatted(WAREHOUSE, targetDate, targetIndex))
         .with(actor());
   }
 

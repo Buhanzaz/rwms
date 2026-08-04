@@ -14,6 +14,7 @@ import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.inquiry.domain.PresentationBookingManagerAction;
 import dev.buhanzaz.rwms.logistics.inquiry.service.ClientPresentationService;
+import dev.buhanzaz.rwms.logistics.inquiry.service.ManualBookingDraftService;
 import dev.buhanzaz.rwms.logistics.inquiry.service.PresentationBookingService;
 import dev.buhanzaz.rwms.logistics.inquiry.service.RentalBookingAlertService;
 import dev.buhanzaz.rwms.logistics.inquiry.service.RentalInquiryService;
@@ -82,6 +83,7 @@ class RentalInquiryPresentationIntegrationTest {
   @Autowired PresentationBookingService bookings;
   @Autowired RentalBookingAlertService bookingAlerts;
   @Autowired RentalSettingsService settings;
+  @Autowired ManualBookingDraftService manualBookingDrafts;
   @Autowired JdbcTemplate jdbc;
   @MockitoBean LogisticsDependencyGateway dependencies;
 
@@ -138,7 +140,9 @@ class RentalInquiryPresentationIntegrationTest {
         update rental_settings
         set version=0,
             chat_selection_hold_minutes=10,
+            manual_booking_hold_minutes=60,
             presentation_hold_minutes=60,
+            draft_reservation_hold_minutes=1440,
             updated_by_subject_id='00000000-0000-0000-0000-000000000000',
             updated_at=clock_timestamp()
         """);
@@ -183,28 +187,35 @@ class RentalInquiryPresentationIntegrationTest {
               UUID presentationId = invocation.getArgument(1);
               List<UUID> ids = invocation.getArgument(3);
               OffsetDateTime expiresAt = invocation.getArgument(4);
-              List<LogisticsDependencyGateway.PresentationHold> holds = new ArrayList<>();
-              for (UUID id : ids) {
-                holds.add(
-                    new LogisticsDependencyGateway.PresentationHold(
-                        UUID.randomUUID(),
-                        0,
-                        presentationId,
-                        id,
-                        WAREHOUSE,
-                        "ACTIVE",
-                        expiresAt,
-                        null,
-                        now(),
-                        null));
-              }
-              LogisticsDependencyGateway.PresentationHolds result =
-                  new LogisticsDependencyGateway.PresentationHolds(
-                  presentationId, expiresAt, List.copyOf(holds));
-              presentationHolds.put(presentationId, result);
-              return result;
+              return replaceHolds(presentationId, ids, expiresAt, null);
             });
+    when(
+            dependencies.replacePresentationHolds(
+                any(),
+                any(),
+                eq(WAREHOUSE),
+                anyList(),
+                any(),
+                eq(MANAGER),
+                eq("RENTAL_MANAGER"),
+                any()))
+        .thenAnswer(
+            invocation ->
+                replaceHolds(
+                    invocation.getArgument(1),
+                    invocation.getArgument(3),
+                    invocation.getArgument(4),
+                    invocation.getArgument(7)));
     when(dependencies.readPresentationHolds(any()))
+        .thenAnswer(
+            invocation -> {
+              UUID scopeId = invocation.getArgument(0);
+              return presentationHolds.getOrDefault(
+                  scopeId,
+                  new LogisticsDependencyGateway.PresentationHolds(
+                      scopeId, null, List.of()));
+            });
+    when(dependencies.readPresentationHolds(any(), eq(MANAGER), eq("RENTAL_MANAGER")))
         .thenAnswer(
             invocation -> {
               UUID scopeId = invocation.getArgument(0);
@@ -413,13 +424,84 @@ class RentalInquiryPresentationIntegrationTest {
     RentalSettingsResponse updated =
         settings.update(
             administrator,
-            new UpdateRentalSettingsRequest(initial.version(), 12, 90, 2_880));
+            new UpdateRentalSettingsRequest(initial.version(), 12, 75, 90, 2_880));
 
     assertThat(updated.version()).isEqualTo(initial.version() + 1);
     assertThat(updated.chatSelectionHoldMinutes()).isEqualTo(12);
+    assertThat(updated.manualBookingHoldMinutes()).isEqualTo(75);
     assertThat(updated.presentationHoldMinutes()).isEqualTo(90);
     assertThat(updated.draftReservationHoldMinutes()).isEqualTo(2_880);
     assertThat(updated.updatedBy()).isEqualTo(MANAGER);
+  }
+
+  @Test
+  void manualBookingDraftUsesItsOwnConfiguredHoldDuration() {
+    jdbc.update("update rental_settings set manual_booking_hold_minutes=45");
+    UUID draftId = UUID.randomUUID();
+    OffsetDateTime startedAt = now();
+
+    ManualBookingDraftHoldsResponse held =
+        manualBookingDrafts.replace(
+            actor,
+            UUID.randomUUID(),
+            draftId,
+            new ManualBookingDraftHoldsRequest(
+                WAREHOUSE, List.of(CABIN_1, CABIN_2)));
+
+    assertThat(held.draftId()).isEqualTo(draftId);
+    assertThat(held.warehouseId()).isEqualTo(WAREHOUSE);
+    assertThat(held.rentalItemIds()).containsExactly(CABIN_1, CABIN_2);
+    assertThat(held.expiresAt())
+        .isAfter(startedAt.plusMinutes(44))
+        .isBefore(startedAt.plusMinutes(46));
+    assertThat(manualBookingDrafts.get(actor, draftId, WAREHOUSE))
+        .isEqualTo(held);
+  }
+
+  @Test
+  void publishingManualBookingTransfersItsDraftHoldScope() {
+    UUID draftId = UUID.randomUUID();
+    manualBookingDrafts.replace(
+        actor,
+        UUID.randomUUID(),
+        draftId,
+        new ManualBookingDraftHoldsRequest(
+            WAREHOUSE, List.of(CABIN_1, CABIN_2)));
+    RentalInquiryResponse inquiry = createInquiry();
+
+    ClientPresentationResponse published =
+        presentations.publish(
+            actor,
+            inquiry.id(),
+            UUID.randomUUID(),
+            new PublishClientPresentationRequest(
+                WAREHOUSE,
+                List.of(
+                    new PresentationGroupInput(
+                        "bk-1", "БК-1", List.of(CABIN_1))),
+                draftId));
+
+    assertThat(published.groups())
+        .singleElement()
+        .satisfies(
+            group ->
+                assertThat(group.cabins())
+                    .extracting(PresentationCabin::id)
+                    .containsExactly(CABIN_1));
+    assertThat(presentationHolds).doesNotContainKey(draftId);
+    assertThat(presentationHolds.get(inquiry.id()).holds())
+        .extracting(LogisticsDependencyGateway.PresentationHold::rentalItemId)
+        .containsExactly(CABIN_1);
+    verify(dependencies)
+        .replacePresentationHolds(
+            any(),
+            eq(inquiry.id()),
+            eq(WAREHOUSE),
+            eq(List.of(CABIN_1)),
+            any(),
+            eq(MANAGER),
+            eq("RENTAL_MANAGER"),
+            eq(draftId));
   }
 
   @Test
@@ -658,7 +740,14 @@ class RentalInquiryPresentationIntegrationTest {
     assertThat(presentations.publicPresentation(token(second)).viewOnly()).isFalse();
     verify(dependencies, times(2))
         .replacePresentationHolds(
-            any(), eq(inquiry.id()), eq(WAREHOUSE), anyList(), any(), eq(MANAGER), eq("RENTAL_MANAGER"));
+            any(),
+            eq(inquiry.id()),
+            eq(WAREHOUSE),
+            anyList(),
+            any(),
+            eq(MANAGER),
+            eq("RENTAL_MANAGER"),
+            eq(null));
   }
 
   @Test
@@ -803,7 +892,8 @@ class RentalInquiryPresentationIntegrationTest {
         UUID.randomUUID(),
         new PublishClientPresentationRequest(
             WAREHOUSE,
-            List.of(new PresentationGroupInput("bk-1", "БК-1", ids))));
+            List.of(new PresentationGroupInput("bk-1", "БК-1", ids)),
+            null));
   }
 
   private LogisticsDependencyGateway.AvailableCabin cabin(UUID id) {
@@ -822,6 +912,34 @@ class RentalInquiryPresentationIntegrationTest {
         Map.of("wall", "ДВП", "authorAction", "hidden"),
         List.of("Свободна"),
         now());
+  }
+
+  private LogisticsDependencyGateway.PresentationHolds replaceHolds(
+      UUID presentationId,
+      List<UUID> ids,
+      OffsetDateTime expiresAt,
+      UUID sourceHoldScopeId) {
+    if (sourceHoldScopeId != null) presentationHolds.remove(sourceHoldScopeId);
+    List<LogisticsDependencyGateway.PresentationHold> holds = new ArrayList<>();
+    for (UUID id : ids) {
+      holds.add(
+          new LogisticsDependencyGateway.PresentationHold(
+              UUID.randomUUID(),
+              0,
+              presentationId,
+              id,
+              WAREHOUSE,
+              "ACTIVE",
+              expiresAt,
+              null,
+              now(),
+              null));
+    }
+    LogisticsDependencyGateway.PresentationHolds result =
+        new LogisticsDependencyGateway.PresentationHolds(
+            presentationId, expiresAt, List.copyOf(holds));
+    presentationHolds.put(presentationId, result);
+    return result;
   }
 
   private LogisticsDependencyGateway.OrderUnitReservation reservation(

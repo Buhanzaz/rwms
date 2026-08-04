@@ -272,33 +272,6 @@ function repair(params: {
         workerGroup: null,
         assignments: [],
       },
-      {
-        id: `${params.id}-stage-1`,
-        externalTaskId: params.externalTaskId,
-        taskTitle: `Скрытый следующий этап ${params.cabinNumber}`,
-        taskText: null,
-        kind: "MOVE_FROM_REPAIR",
-        status: "WAITING",
-        workLines: [],
-        materialLines: [],
-        groupComment: "",
-        queueName: "Перемещение",
-        queueId: "settings-movement",
-        routeQueueKind: "MOVEMENT",
-        sortOrder: 1,
-        entryType: "SHADOW",
-        queuePosition: 0,
-        scheduledDate: "2026-07-25",
-        priority: params.priority ?? 3,
-        pinned: false,
-        plannedDurationMinutes: null,
-        startedAt: null,
-        completedAt: null,
-        activeStartedAt: null,
-        activeWorkSeconds: 0,
-        workerGroup: null,
-        assignments: [],
-      },
     ],
     sourceEstimateId: null,
     sourceEstimateVersion: null,
@@ -306,6 +279,7 @@ function repair(params: {
     sourceInventoryFindingId: null,
     sourceRepairTaskId: null,
     sourceRepairTaskVersion: null,
+    movementToRepair: false,
     logisticsPlanningMode: "AUTO",
     logisticsScheduledDate: null,
     createdAt: "2026-07-24T08:00:00Z",
@@ -618,7 +592,6 @@ describe("RepairsQueueView", () => {
 
   it("shows one compact card per repair and opens task information", () => {
     const repairQueue = queue("repair", "Ремонтная очередь", "REPAIR")
-    const movementQueue = queue("movement", "Перемещение", "MOVEMENT")
     const firstRepair = repair({
       id: "repair-a",
       externalTaskId: "external-a",
@@ -634,16 +607,6 @@ describe("RepairsQueueView", () => {
       title: "Срочно починить крышу",
       priority: 1,
       pinned: true,
-      routeLength: 2,
-    })
-    const shadowEntry = entry({
-      id: "entry-a-shadow",
-      externalTaskId: "external-a",
-      routeIndex: 1,
-      routeLength: 2,
-      date: "2026-07-25",
-      queue: movementQueue,
-      title: "Вернуть бытовку после ремонта",
     })
     const onOpen = vi.fn()
     const onPin = vi.fn()
@@ -652,7 +615,6 @@ describe("RepairsQueueView", () => {
       <RepairsQueueView
         boards={[
           board("2026-07-24", [{ ...repairQueue, entries: [currentEntry] }]),
-          board("2026-07-25", [{ ...movementQueue, entries: [shadowEntry] }]),
         ]}
         repairs={[firstRepair]}
         disabled={false}
@@ -665,8 +627,6 @@ describe("RepairsQueueView", () => {
     expect(screen.getAllByRole("button", { name: "Инфо" })).toHaveLength(1)
     expect(screen.getByText("Срочно починить крышу")).toBeTruthy()
     expect(screen.getByText("На ремонте")).toBeTruthy()
-    expect(screen.queryByText("Вернуть бытовку после ремонта")).toBeNull()
-    expect(screen.queryByText("Скрытый следующий этап БЫТ-101")).toBeNull()
 
     fireEvent.click(
       screen.getByRole("button", {

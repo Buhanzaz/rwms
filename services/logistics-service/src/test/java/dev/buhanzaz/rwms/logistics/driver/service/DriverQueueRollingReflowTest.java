@@ -82,11 +82,11 @@ class DriverQueueRollingReflowTest {
 
     when(tasks.findAllByWarehouseIdOrderByCreatedAtAscIdAsc(warehouseId))
         .thenReturn(List.of(overdue, secondInbound, fixed));
-    when(dependencies.readRepairPlaces(warehouseId)).thenReturn(repairPlaces(1, 1, 0, 0, 0));
+    when(dependencies.readRepairPlaces(warehouseId)).thenReturn(repairPlaces(1, 0, 0, 1, 0));
     when(dependencies.readDriverBoard(warehouseId)).thenReturn(board);
     when(tasks.existsByWarehouseIdAndStateAndManualPromotionHoldUntilAfter(
             eq(warehouseId), eq(DriverTaskState.SCHEDULED), any(OffsetDateTime.class)))
-        .thenReturn(true);
+        .thenReturn(false);
     when(dependencies.readDriverTask(overdue.getExternalTaskId())).thenReturn(overdueBoard);
     when(dependencies.readDriverTask(secondInbound.getExternalTaskId())).thenReturn(secondBoard);
     when(dependencies.readDriverTask(fixed.getExternalTaskId())).thenReturn(fixedBoard);

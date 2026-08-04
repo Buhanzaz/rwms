@@ -366,6 +366,22 @@ public class MaintenanceReconciliationStore {
     return true;
   }
 
+  /**
+   * A DRAFT repair is being superseded before it owns a lease or a task.  Cancel its durable
+   * pending intents in the same transaction so a delayed worker cannot queue the cancelled plan.
+   */
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void cancelPendingForRepair(UUID repairId) {
+    if (repairId == null) {
+      throw new IllegalArgumentException("Repair identity is required");
+    }
+    for (MaintenanceReconciliation reconciliation :
+        reconciliations.findPendingByRepairIdForUpdate(repairId)) {
+      reconciliation.cancelPending();
+    }
+    reconciliations.flush();
+  }
+
   @Transactional(propagation = Propagation.MANDATORY)
   public Optional<WorkItem> lockNextDue() {
     return reconciliations

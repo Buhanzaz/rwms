@@ -6,7 +6,7 @@ import org.junit.Test
 
 class InventoryMaintenancePlanPolicyTest {
     @Test
-    fun `inventory plan reuses maintenance editor without losing logistics choice`() {
+    fun `inventory plan keeps only priority and repair delivery intent`() {
         val line = MaintenanceLineEditorState(
             id = "line-1",
             catalogNodeId = "node-1",
@@ -34,14 +34,13 @@ class InventoryMaintenancePlanPolicyTest {
             planStages = listOf(stage),
             planPriority = 2,
             planMovementToRepair = true,
-            planMovementToShipment = false,
-            planLogisticsPlanningMode = LOGISTICS_PLANNING_MODE_FIXED_DATE,
-            planLogisticsScheduledDate = "2026-08-03",
+            planLogisticsPlanningMode = LOGISTICS_PLANNING_MODE_AUTO,
+            planLogisticsScheduledDate = null,
         )
 
         val maintenance = inventory.toMaintenancePlanEditor()
         val changed = inventory.withMaintenancePlanEditor(
-            maintenance.copy(priority = 5, movementToShipment = true),
+            maintenance.copy(priority = 5),
         )
 
         assertThat(maintenance.sourceParty).isEqualTo("Инвентаризация")
@@ -49,15 +48,14 @@ class InventoryMaintenancePlanPolicyTest {
         assertThat(maintenance.stages).containsExactly(stage)
         assertThat(maintenance.movementToRepair).isTrue()
         assertThat(maintenance.logisticsPlanningMode)
-            .isEqualTo(LOGISTICS_PLANNING_MODE_FIXED_DATE)
-        assertThat(maintenance.logisticsScheduledDate).isEqualTo("2026-08-03")
+            .isEqualTo(LOGISTICS_PLANNING_MODE_AUTO)
+        assertThat(maintenance.logisticsScheduledDate).isNull()
         assertThat(changed.planPriority).isEqualTo(5)
         assertThat(changed.planLines).containsExactly(line)
         assertThat(changed.planMovementToRepair).isTrue()
-        assertThat(changed.planMovementToShipment).isTrue()
         assertThat(changed.planLogisticsPlanningMode)
-            .isEqualTo(LOGISTICS_PLANNING_MODE_FIXED_DATE)
-        assertThat(changed.planLogisticsScheduledDate).isEqualTo("2026-08-03")
+            .isEqualTo(LOGISTICS_PLANNING_MODE_AUTO)
+        assertThat(changed.planLogisticsScheduledDate).isNull()
     }
 
     @Test

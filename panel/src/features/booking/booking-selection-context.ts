@@ -1,15 +1,22 @@
 import { createContext, useContext } from "react"
 
+import type { ManualBookingDraftHold } from "@/features/booking/api/manual-booking-drafts-api"
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 
 export type BookingSelectionContextValue = {
   warehouseId: string | null
-  selectedItems: RentalItemDto[]
-  selectedIds: ReadonlySet<string>
-  select: (item: RentalItemDto) => void
-  deselect: (rentalItemId: string) => void
-  toggle: (item: RentalItemDto) => void
+  draftId: string
+  checkedItems: RentalItemDto[]
+  checkedIds: ReadonlySet<string>
+  stagedItems: RentalItemDto[]
+  stagedIds: ReadonlySet<string>
+  activeHold: ManualBookingDraftHold | null
+  toggleChecked: (item: RentalItemDto) => void
+  addCheckedToStaged: () => void
+  removeStaged: (rentalItemId: string) => void
   removeMany: (rentalItemIds: readonly string[]) => void
+  syncSnapshot: (item: RentalItemDto) => void
+  setActiveHold: (hold: ManualBookingDraftHold) => void
   clear: () => void
 }
 

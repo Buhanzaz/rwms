@@ -33,6 +33,7 @@ import java.util.List;
 import java.util.UUID;
 import tools.jackson.core.JsonParser;
 import tools.jackson.databind.DeserializationContext;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.PropertyName;
 import tools.jackson.databind.ValueDeserializer;
 import tools.jackson.databind.annotation.JsonDeserialize;
@@ -66,6 +67,23 @@ public final class MaintenanceApiModels {
   public enum InventoryPlanMode { AUTO, MANUAL }
   public enum InventoryPlanLineKind { CATALOG, MANUAL }
   public enum InventoryPlanLineType { WORK, MATERIAL }
+  /** The maintenance aggregate selected from the current asset truth for an inventory finding. */
+  public enum InventoryPublicationTargetKind { ESTIMATE, REPAIR }
+  /** A manager-approved publication decision for one completed inventory finding. */
+  public enum InventoryPublicationStrategy { CREATE, REPLACE, MERGE }
+  /** Immutable result shape for a completed-inventory publication source. */
+  public enum InventoryPublicationOutcome { CREATED, SUCCESSOR, MATCHED }
+  /** Lifecycle of a locally stored successor; only maintenance may release it to queueing. */
+  public enum InventoryPublicationSuccessorState { WAITING_PREDECESSOR, RELEASED }
+  /** Proven fact that made a locally stored successor eligible for normal queue orchestration. */
+  public enum InventoryPublicationTerminalFact { TASK_BOARD_COMPLETION, REPAIR_ACCEPTANCE }
+  /** Why a frozen inventory line was retained in, or removed from, the successor delta. */
+  public enum InventoryPublicationDeltaDisposition {
+    RETAINED,
+    RETAINED_AFTER_DEDUCTION,
+    REMOVED_AS_ALREADY_PRESENT,
+    RETAINED_AMBIGUOUS
+  }
   public enum EstimateLineType { WORK, MATERIAL }
   public enum ReworkLineDisposition { ADDED, REPEAT }
 
@@ -109,14 +127,12 @@ public final class MaintenanceApiModels {
   public record TransferRepairArrivalPreflightResponse(
       UUID activeRepairId,
       boolean priorityRequired,
-      boolean movementToShipmentAvailable,
       @NotNull List<UUID> missingQueueDefinitionIds) {}
   public record CompleteTransferRepairRequest(
       @NotNull UUID rentalItemId,
       @NotNull UUID sourceWarehouseId,
       @NotNull UUID targetWarehouseId,
-      @JsonProperty(required = true) @Min(1) @Max(5) Integer priority,
-      boolean movementToShipment) {
+      @JsonProperty(required = true) @Min(1) @Max(5) Integer priority) {
     public CompleteTransferRepairRequest {
       if (sourceWarehouseId != null && sourceWarehouseId.equals(targetWarehouseId)) {
         throw new IllegalArgumentException(
@@ -280,7 +296,6 @@ public final class MaintenanceApiModels {
       @NotNull @Min(0) Long expectedVersion,
       @NotNull @Min(1) @Max(5) Integer priority,
       @JsonProperty(required = true) boolean movementToRepair,
-      @JsonProperty(required = true) boolean movementToShipment,
       @JsonProperty(required = true)
           RepairLogisticsPlanningMode logisticsPlanningMode,
       @JsonProperty(required = true)
@@ -289,7 +304,6 @@ public final class MaintenanceApiModels {
       this(
           expectedVersion,
           3,
-          false,
           false,
           null,
           null);
@@ -300,7 +314,6 @@ public final class MaintenanceApiModels {
       this(
           expectedVersion,
           priority,
-          false,
           false,
           null,
           null);
@@ -319,7 +332,6 @@ public final class MaintenanceApiModels {
       @NotNull @Min(0) Long expectedVersion,
       @NotNull @Min(1) @Max(5) Integer priority,
       @JsonProperty(required = true) boolean movementToRepair,
-      @JsonProperty(required = true) boolean movementToShipment,
       @JsonProperty(required = true)
           RepairLogisticsPlanningMode logisticsPlanningMode,
       @JsonProperty(required = true)
@@ -329,7 +341,6 @@ public final class MaintenanceApiModels {
       this(
           expectedVersion,
           priority,
-          false,
           false,
           null,
           null);
@@ -342,6 +353,22 @@ public final class MaintenanceApiModels {
     public boolean isLogisticsPlanningValid() {
       return validInboundLogisticsPlanning(
           movementToRepair, logisticsPlanningMode, logisticsScheduledDate);
+    }
+  }
+  /** Reviewed recovery input for the exact quarantined inbound driver-task intent. */
+  public record RetryInboundDeliveryRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      @NotNull @JsonProperty(required = true)
+          RepairLogisticsPlanningMode logisticsPlanningMode,
+      @JsonProperty(required = true) LocalDate logisticsScheduledDate,
+      @NotBlank @Size(max = 2000) String reason) {
+    @AssertTrue(
+        message =
+            "inbound delivery recovery requires AUTO with no date or FIXED_DATE with a date")
+    @JsonIgnore
+    public boolean isLogisticsPlanningValid() {
+      return validInboundLogisticsPlanning(
+          true, logisticsPlanningMode, logisticsScheduledDate);
     }
   }
 
@@ -806,7 +833,6 @@ public final class MaintenanceApiModels {
       UUID coverMediaId,
       RepairComplexitySnapshot complexity,
       boolean movementToRepair,
-      boolean movementToShipment,
       @JsonProperty(required = true)
           RepairLogisticsPlanningMode logisticsPlanningMode,
       LocalDate logisticsScheduledDate,
@@ -818,6 +844,7 @@ public final class MaintenanceApiModels {
   public record InventoryPlanLineInput(
       @NotNull InventoryPlanLineKind aggregationKind,
       @JsonProperty(required = true) UUID catalogNodeId,
+      @JsonProperty(required = true) UUID routingCatalogNodeId,
       @JsonProperty(required = true) @Size(max = 1000) String description,
       @JsonProperty(required = true) InventoryPlanLineType type,
       @JsonProperty(required = true) @Size(max = 32) String unit,
@@ -846,7 +873,6 @@ public final class MaintenanceApiModels {
       @NotNull @Min(1) @Max(5) Integer priority,
       @JsonProperty(required = true) UUID coverMediaId,
       @JsonProperty(required = true) boolean movementToRepair,
-      @JsonProperty(required = true) boolean movementToShipment,
       @JsonProperty(required = true)
           RepairLogisticsPlanningMode logisticsPlanningMode,
       @JsonProperty(required = true)
@@ -873,7 +899,6 @@ public final class MaintenanceApiModels {
           mediaReferences,
           priority,
           coverMediaId,
-          false,
           false,
           null,
           null);
@@ -932,7 +957,6 @@ public final class MaintenanceApiModels {
       @NotEmpty List<@Valid InventoryPlanLineSnapshot> lines,
       @NotEmpty List<@Valid InventoryPlanStageSnapshot> stages,
       @JsonProperty(required = true) boolean movementToRepair,
-      @JsonProperty(required = true) boolean movementToShipment,
       @NotNull List<@Valid MediaReferenceInput> mediaReferences,
       @NotNull @Min(1) @Max(5) Integer priority,
       @JsonProperty(required = true) UUID coverMediaId,
@@ -946,7 +970,6 @@ public final class MaintenanceApiModels {
         List<InventoryPlanLineSnapshot> lines,
         List<InventoryPlanStageSnapshot> stages,
         boolean movementToRepair,
-        boolean movementToShipment,
         List<MediaReferenceInput> mediaReferences,
         Integer priority,
         UUID coverMediaId) {
@@ -956,7 +979,6 @@ public final class MaintenanceApiModels {
           lines,
           stages,
           movementToRepair,
-          movementToShipment,
           mediaReferences,
           priority,
           coverMediaId,
@@ -992,6 +1014,166 @@ public final class MaintenanceApiModels {
       RepairResponse repair,
       InventorySourceReference source,
       DeliverySnapshot delivery) {}
+
+  /**
+   * Immutable completed-inventory evidence.  {@code snapshot} deliberately remains raw JSON:
+   * inventory schema version 1 retained the historical movementToShipment marker, while version
+   * 2 removed it.  Maintenance hashes and stores that exact source document before adapting it
+   * to the current executable plan model.
+   */
+  public record InventoryPublicationFindingInput(
+      @NotNull UUID findingId,
+      @NotNull @Min(1) Long findingRevision,
+      @NotNull UUID assetId,
+      @NotNull @Min(0) Long assetVersion,
+      @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String planFingerprintSha256,
+      @NotNull @Min(1) @Max(5) Integer priority,
+      @JsonProperty(required = true) boolean movementToRepair,
+      @JsonProperty(required = true) LocalDate movementScheduledDate,
+      @NotNull LocalDate repairScheduledDate,
+      @NotNull @JsonSetter(nulls = Nulls.FAIL) JsonNode snapshot,
+      @NotNull @Size(max = 100) List<@Valid MediaReferenceInput> media,
+      @NotNull @Min(1) @Max(2) Integer snapshotSchemaVersion) {
+    public InventoryPublicationFindingInput {
+      media = media == null ? null : List.copyOf(media);
+    }
+  }
+
+  public record InventoryPublicationPreflightRequest(
+      @NotNull UUID inventoryId,
+      @NotNull UUID warehouseId,
+      @NotNull @Min(1) Long finalPlanVersion,
+      @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String finalPlanSha256,
+      @NotEmpty @Size(max = 5000)
+          List<@NotNull @Valid InventoryPublicationFindingInput> findings) {
+    public InventoryPublicationPreflightRequest {
+      findings = findings == null ? null : List.copyOf(findings);
+    }
+  }
+
+  public record InventoryPublicationPlanSummary(
+      @Min(0) int workLineCount,
+      @Min(0) int materialLineCount,
+      @Min(0) long grandTotalMinor) {}
+
+  public record InventoryPublicationCandidate(
+      @NotNull InventoryPublicationTargetKind targetKind,
+      @NotNull UUID targetId,
+      UUID estimateId,
+      UUID repairId,
+      @Min(0) long version,
+      @NotBlank String state,
+      boolean started,
+      boolean active,
+      @Min(1) @Max(5) Integer priority,
+      String sourceParty,
+      String planFingerprintSha256,
+      @NotNull InventoryPublicationPlanSummary planSummary) {}
+
+  public record InventoryPublicationPreflightFinding(
+      @NotNull UUID findingId,
+      @NotNull InventoryPublicationTargetKind targetKind,
+      @NotNull List<InventoryPublicationCandidate> candidates) {}
+
+  public record InventoryPublicationPreflightResponse(
+      @NotNull UUID inventoryId,
+      @Min(1) long finalPlanVersion,
+      @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String finalPlanSha256,
+      @NotNull List<InventoryPublicationPreflightFinding> findings) {}
+
+  public record InventoryPublicationApplyRequest(
+      @NotNull UUID warehouseId,
+      @NotNull @Min(1) Long finalPlanVersion,
+      @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String finalPlanSha256,
+      @NotNull @Min(1) Long findingRevision,
+      @NotNull UUID assetId,
+      @NotNull @Min(0) Long assetVersion,
+      @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String planFingerprintSha256,
+      @NotNull @Min(1) @Max(5) Integer priority,
+      @JsonProperty(required = true) boolean movementToRepair,
+      @JsonProperty(required = true) LocalDate movementScheduledDate,
+      @NotNull LocalDate repairScheduledDate,
+      @NotNull @JsonSetter(nulls = Nulls.FAIL) JsonNode snapshot,
+      @NotNull @Size(max = 100) List<@Valid MediaReferenceInput> media,
+      @NotNull @Min(1) @Max(2) Integer snapshotSchemaVersion,
+      @NotNull InventoryPublicationStrategy strategy,
+      @JsonProperty(required = true) InventoryPublicationTargetKind selectedTargetKind,
+      @JsonProperty(required = true) UUID selectedTargetId) {
+    public InventoryPublicationApplyRequest {
+      media = media == null ? null : List.copyOf(media);
+    }
+
+    public InventoryPublicationFindingInput finding(UUID findingId) {
+      return new InventoryPublicationFindingInput(
+          findingId,
+          findingRevision,
+          assetId,
+          assetVersion,
+          planFingerprintSha256,
+          priority,
+          movementToRepair,
+          movementScheduledDate,
+          repairScheduledDate,
+          snapshot,
+          media,
+          snapshotSchemaVersion);
+    }
+  }
+
+  /** Audit identity returned for both a new publication and an idempotent replay. */
+  public record InventoryPublicationSourceReference(
+      @NotNull UUID inventoryId,
+      @Min(1) long finalPlanVersion,
+      @NotNull UUID findingId,
+      @Min(1) long findingRevision,
+      @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String finalPlanSha256,
+      @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String planFingerprintSha256,
+      @NotNull InventoryPublicationStrategy strategy,
+      InventoryPublicationTargetKind selectedTargetKind,
+      UUID selectedTargetId,
+      InventoryPublicationTargetKind supersededTargetKind,
+      UUID supersededTargetId) {}
+
+  /**
+   * One source-plan line's immutable successor decision. {@code sourceIndex} addresses the raw
+   * frozen snapshot retained by {@link InventoryPublicationSourceReference}; quantities make a
+   * partial semantic deduction inspectable without rewriting that source evidence.
+   */
+  public record InventoryPublicationDeltaLine(
+      @Min(0) int sourceIndex,
+      @NotNull InventoryPublicationDeltaDisposition disposition,
+      @NotNull InventoryPlanLineType lineType,
+      UUID catalogNodeId,
+      @NotBlank String requestedQuantity,
+      @NotBlank String retainedQuantity) {}
+
+  /** Immutable, source-scoped explanation of the created successor or no-op match. */
+  public record InventoryPublicationDelta(
+      @NotNull List<@NotNull @Valid InventoryPublicationDeltaLine> lines) {
+    public InventoryPublicationDelta {
+      lines = lines == null ? null : List.copyOf(lines);
+    }
+  }
+
+  /** Durable predecessor-to-successor lifecycle fact; null for CREATED and MATCHED outcomes. */
+  public record InventoryPublicationSuccessorStatus(
+      @NotNull UUID predecessorRepairId,
+      @NotNull InventoryPublicationSuccessorState state,
+      InventoryPublicationTerminalFact terminalFact,
+      UUID terminalFactEventId,
+      OffsetDateTime terminalFactOccurredAt,
+      OffsetDateTime releasedAt) {}
+
+  public record InventoryPublicationApplyResult(
+      @NotNull InventoryPublicationSourceReference source,
+      @NotNull InventoryPublicationOutcome outcome,
+      InventoryPublicationTargetKind targetKind,
+      UUID targetId,
+      UUID estimateId,
+      UUID repairId,
+      InventoryPublicationSuccessorStatus successor,
+      @NotNull @Valid InventoryPublicationDelta delta) {}
+
   public record InventoryRepairSnapshotRequest(
       @NotEmpty @Size(max = 5000) List<@NotNull UUID> assetIds) {
     public InventoryRepairSnapshotRequest {

@@ -42,7 +42,14 @@ class WorkerProjectionWriter @Inject constructor(
         val now = System.currentTimeMillis()
         database.withTransaction {
             val previous = database.sessionDao().session(context.worker.id)
-            database.sessionDao().upsert(stagedSession(previous, context, now))
+            database.sessionDao().upsert(
+                stagedSession(
+                    previous = previous,
+                    context = context,
+                    now = now,
+                    kpiPaletteJson = context.kpiPalette?.let { json.encodeToString(it) },
+                ),
+            )
             replaceGroups(context)
         }
     }
@@ -52,7 +59,12 @@ class WorkerProjectionWriter @Inject constructor(
         val now = System.currentTimeMillis()
         return database.withTransaction {
             val previous = database.sessionDao().session(context.worker.id)
-            val activated = activatedSession(previous, context, now)
+            val activated = activatedSession(
+                previous = previous,
+                context = context,
+                now = now,
+                kpiPaletteJson = context.kpiPalette?.let { json.encodeToString(it) },
+            )
             database.sessionDao().upsert(activated)
             replaceGroups(context)
             reconcileCompletedActionsFromDetails(context.worker.id, now)
@@ -77,7 +89,12 @@ class WorkerProjectionWriter @Inject constructor(
         database.withTransaction {
             val userId = context.worker.id
             val previous = database.sessionDao().session(userId)
-            val activated = activatedSession(previous, context, now)
+            val activated = activatedSession(
+                previous = previous,
+                context = context,
+                now = now,
+                kpiPaletteJson = context.kpiPalette?.let { json.encodeToString(it) },
+            )
             database.sessionDao().upsert(activated)
             replaceGroups(context)
             applyFeedInTransaction(
@@ -229,6 +246,7 @@ class WorkerProjectionWriter @Inject constructor(
             name = name,
             type = type,
             queuePurpose = queuePurpose,
+            groupIdsKey = normalizedGroupIdsKey(),
             sortOrder = sortOrder,
             audienceModesKey = normalizedAudienceModesKey(),
             resultPhotoMinCount = resultPhotoMinCount,
@@ -440,6 +458,7 @@ internal fun stagedSession(
     previous: WorkerSessionEntity?,
     context: WorkerContextDto,
     now: Long,
+    kpiPaletteJson: String? = context.kpiPalette?.let { Json.encodeToString(it) },
 ): WorkerSessionEntity = WorkerSessionEntity(
     userId = context.worker.id,
     displayName = context.worker.displayName,
@@ -456,6 +475,7 @@ internal fun stagedSession(
     currentGroupId = context.currentGroup?.id,
     currentGroupName = context.currentGroup?.name,
     operationalAvailability = context.operationalAvailability,
+    kpiPaletteJson = kpiPaletteJson,
 )
 
 internal fun activatedSession(
@@ -463,6 +483,7 @@ internal fun activatedSession(
     context: WorkerContextDto,
     now: Long,
     elapsedRealtimeMillis: Long = SystemClock.elapsedRealtime(),
+    kpiPaletteJson: String? = context.kpiPalette?.let { Json.encodeToString(it) },
 ): WorkerSessionEntity = WorkerSessionEntity(
     userId = context.worker.id,
     displayName = context.worker.displayName,
@@ -479,6 +500,7 @@ internal fun activatedSession(
     currentGroupId = context.currentGroup?.id,
     currentGroupName = context.currentGroup?.name,
     operationalAvailability = context.operationalAvailability,
+    kpiPaletteJson = kpiPaletteJson,
 )
 
 private fun String.toEpochMillisForProjection(field: String): Long =
@@ -487,3 +509,6 @@ private fun String.toEpochMillisForProjection(field: String): Long =
 
 internal fun WorkerCategoryDto.normalizedAudienceModesKey(): String =
     audienceModes.asSequence().distinct().sorted().joinToString("\u001F")
+
+internal fun WorkerCategoryDto.normalizedGroupIdsKey(): String =
+    groupIds.asSequence().distinct().sorted().joinToString("\u001F")

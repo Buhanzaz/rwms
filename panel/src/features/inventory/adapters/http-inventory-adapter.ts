@@ -3,6 +3,7 @@ import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 import type {
   FurnitureReviewView,
   InventoryCompletionPreview,
+  InventoryFinalPlan,
   InventoryFinding,
   InventoryFindingPage,
   InventoryMediaReference,
@@ -10,11 +11,17 @@ import type {
   InventoryPlanSelection,
   InventoryPublicationBatch,
   InventoryPublicationIntent,
+  InventoryRegistryReview,
   InventorySessionDetail,
   InventorySessionPage,
   InventorySessionView,
+  InventoryFrozenStatistics,
+  InventoryPlanningSettings,
+  PrepareInventoryFinalPlanRequest,
   SaveFurnitureReviewRequest,
   StartFurnitureReviewRequest,
+  UpdateInventoryFinalPlanRequest,
+  UpdateInventoryPlanningSettingsRequest,
   InventoryStatisticsPage,
   InventoryStatisticsSummary,
 } from "@/features/inventory/model/inventory-service"
@@ -72,6 +79,31 @@ export async function listInventorySessions(
   )
 }
 
+export function getInventoryPlanningSettings(
+  accessToken: string | null,
+  warehouseId: string
+) {
+  return bearerRequest<InventoryPlanningSettings>(
+    requireInventoryAccessToken(accessToken),
+    endpoint(`/planning-settings/${encodeURIComponent(warehouseId)}`)
+  )
+}
+
+export function updateInventoryPlanningSettings(input: {
+  accessToken: string | null
+  warehouseId: string
+  request: UpdateInventoryPlanningSettingsRequest
+}) {
+  return bearerRequest<InventoryPlanningSettings>(
+    requireInventoryAccessToken(input.accessToken),
+    endpoint(`/planning-settings/${encodeURIComponent(input.warehouseId)}`),
+    {
+      method: "PUT",
+      body: JSON.stringify(input.request),
+    }
+  )
+}
+
 export async function getActiveInventorySession(
   accessToken: string | null,
   warehouseId: string
@@ -103,6 +135,35 @@ export function getInventorySession(
   return getInventorySessionByUrl(
     requireInventoryAccessToken(accessToken),
     `/sessions/${encodeURIComponent(inventoryId)}`
+  )
+}
+
+export function reviewInventoryRegistry(input: {
+  accessToken: string | null
+  session: InventorySessionView
+}) {
+  return bearerRequest<InventoryRegistryReview>(
+    requireInventoryAccessToken(input.accessToken),
+    endpoint(
+      `/sessions/${encodeURIComponent(input.session.id)}/registry-review`
+    ),
+    {
+      method: "POST",
+      body: JSON.stringify({
+        expectedSessionRevision: input.session.sessionRevision,
+        findingRevisions: revisionExpectations(input.session.findings),
+      }),
+    }
+  )
+}
+
+export function getInventoryPreliminaryStatistics(
+  accessToken: string | null,
+  inventoryId: string
+) {
+  return bearerRequest<InventoryFrozenStatistics>(
+    requireInventoryAccessToken(accessToken),
+    endpoint(`/sessions/${encodeURIComponent(inventoryId)}/statistics-preview`)
   )
 }
 
@@ -283,9 +344,57 @@ export function saveFurnitureReview(input: {
   )
 }
 
+export function prepareInventoryFinalPlan(input: {
+  accessToken: string | null
+  inventoryId: string
+  request: PrepareInventoryFinalPlanRequest
+  idempotencyKey: string
+}) {
+  return bearerRequest<InventoryFinalPlan>(
+    requireInventoryAccessToken(input.accessToken),
+    endpoint(
+      `/sessions/${encodeURIComponent(input.inventoryId)}/final-plan/prepare`
+    ),
+    {
+      method: "POST",
+      headers: commandHeaders(input.idempotencyKey),
+      body: JSON.stringify(input.request),
+    }
+  )
+}
+
+export function getInventoryFinalPlan(
+  accessToken: string | null,
+  inventoryId: string
+) {
+  return bearerRequest<InventoryFinalPlan>(
+    requireInventoryAccessToken(accessToken),
+    endpoint(`/sessions/${encodeURIComponent(inventoryId)}/final-plan`)
+  )
+}
+
+export function updateInventoryFinalPlan(input: {
+  accessToken: string | null
+  inventoryId: string
+  request: UpdateInventoryFinalPlanRequest
+  idempotencyKey: string
+}) {
+  return bearerRequest<InventoryFinalPlan>(
+    requireInventoryAccessToken(input.accessToken),
+    endpoint(`/sessions/${encodeURIComponent(input.inventoryId)}/final-plan`),
+    {
+      method: "PUT",
+      headers: commandHeaders(input.idempotencyKey),
+      body: JSON.stringify(input.request),
+    }
+  )
+}
+
 export function previewInventoryCompletion(input: {
   accessToken: string | null
   session: InventorySessionView
+  finalPlanVersion: number
+  finalPlanSha256: string
   idempotencyKey: string
 }) {
   return bearerRequest<InventoryCompletionPreview>(
@@ -299,6 +408,8 @@ export function previewInventoryCompletion(input: {
       body: JSON.stringify({
         expectedSessionRevision: input.session.sessionRevision,
         findingRevisions: revisionExpectations(input.session.findings),
+        finalPlanVersion: input.finalPlanVersion,
+        finalPlanSha256: input.finalPlanSha256,
       }),
     }
   )
@@ -322,6 +433,29 @@ export function completeInventorySession(input: {
         findingRevisions: input.preview.findingRevisions,
         acknowledgementSha256: input.preview.acknowledgementSha256,
         validationSha256: input.preview.validationSha256,
+        finalPlanVersion: input.preview.finalPlanVersion,
+        finalPlanSha256: input.preview.finalPlanSha256,
+      }),
+    }
+  )
+}
+
+export function cancelInventorySession(input: {
+  accessToken: string | null
+  inventoryId: string
+  expectedSessionRevision: number
+  reason: string
+  idempotencyKey: string
+}) {
+  return bearerRequest<InventorySessionDetail>(
+    requireInventoryAccessToken(input.accessToken),
+    endpoint(`/sessions/${encodeURIComponent(input.inventoryId)}/cancel`),
+    {
+      method: "POST",
+      headers: commandHeaders(input.idempotencyKey),
+      body: JSON.stringify({
+        expectedSessionRevision: input.expectedSessionRevision,
+        reason: input.reason,
       }),
     }
   )

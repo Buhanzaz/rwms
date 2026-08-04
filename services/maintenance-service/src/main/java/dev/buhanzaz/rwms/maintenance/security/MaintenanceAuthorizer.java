@@ -37,6 +37,18 @@ public class MaintenanceAuthorizer {
     requireWarehouse(jwt, warehouseId, AccessLevel.MANAGE);
   }
 
+  /** Warehouse managers may propose a disposition, but ordinary rental managers may not. */
+  public void requireDispositionInitiator(Jwt jwt, UUID warehouseId) {
+    requireManage(jwt, warehouseId);
+    requireGlobalRole(jwt, "WAREHOUSE_MANAGER", "WMS_ADMIN", "SYSTEM_ADMIN");
+  }
+
+  /** The final write-off/loss decision is intentionally restricted to administrators. */
+  public void requireDispositionAdministrator(Jwt jwt, UUID warehouseId) {
+    requireManage(jwt, warehouseId);
+    requireGlobalRole(jwt, "WMS_ADMIN", "SYSTEM_ADMIN");
+  }
+
   public void requireInventoryService(Jwt jwt) {
     if (jwt == null
         || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))
@@ -86,6 +98,13 @@ public class MaintenanceAuthorizer {
         || !scopes(jwt).contains(scope)) {
       throw new AccessDeniedException("Required USER scope is missing");
     }
+  }
+
+  private void requireGlobalRole(Jwt jwt, String... allowedRoles) {
+    if (developmentPublicBypass) return;
+    String role = jwt == null ? null : jwt.getClaimAsString("global_role");
+    if (role != null && java.util.Arrays.asList(allowedRoles).contains(role)) return;
+    throw new AccessDeniedException("Required global role is missing");
   }
 
   private void requireWarehouse(Jwt jwt, UUID warehouseId, AccessLevel required) {

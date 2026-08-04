@@ -34,6 +34,7 @@ const apiMocks = vi.hoisted(() => ({
   pinDriverBoardTask: vi.fn(),
   promoteCapitalRepair: vi.fn(),
   returnCapitalRepair: vi.fn(),
+  scheduleCapitalRepair: vi.fn(),
 }))
 
 const assetApiMocks = vi.hoisted(() => ({
@@ -72,6 +73,7 @@ vi.mock("@/features/logistics/driver-board/driver-board-api", async () => {
     pinDriverBoardTask: apiMocks.pinDriverBoardTask,
     promoteCapitalRepair: apiMocks.promoteCapitalRepair,
     returnCapitalRepair: apiMocks.returnCapitalRepair,
+    scheduleCapitalRepair: apiMocks.scheduleCapitalRepair,
   }
 })
 vi.mock("@/features/rental-items/api/asset-rental-items-api", () => ({
@@ -136,6 +138,16 @@ const SCHEDULED_EXTERNAL_ID = "00000000-0000-4000-8000-000000000020"
 const SECOND_EXTERNAL_ID = "00000000-0000-4000-8000-000000000021"
 const CAPITAL_REPAIR_ID = "00000000-0000-4000-8000-000000000030"
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 function user(): CurrentUser {
   return {
     id: "driver-board-manager",
@@ -185,11 +197,23 @@ const board: DriverBoard = {
   queueId: "00000000-0000-4000-8000-000000000200",
   queueVersion: 4,
   repairPlaceCount: 3,
+  occupiedRepairPlaceCount: 1,
   usedRepairPlaceCount: 2,
   availableRepairPlaceCount: 1,
   inboundRepairPlaceAvailable: true,
   automaticRefillDelayMinutes: 5,
   repairPlacesOverCapacity: false,
+  repairPlaces: [
+    {
+      repairId: "00000000-0000-4000-8000-000000000062",
+      cabinId: "00000000-0000-4000-8000-000000000063",
+      unitNumber: "БТ-062",
+      allocationState: "OCCUPIED",
+      repairStageName: "Электрика",
+      repairStageState: "IN_PROGRESS",
+      priority: 2,
+    },
+  ],
   current: [
     card(CURRENT_EXTERNAL_ID, {
       title: "Вывезти готовую бытовку",
@@ -260,6 +284,14 @@ beforeEach(() => {
   apiMocks.moveDriverBoardTask.mockResolvedValue({})
   apiMocks.promoteCapitalRepair.mockResolvedValue({})
   apiMocks.returnCapitalRepair.mockResolvedValue(undefined)
+  apiMocks.scheduleCapitalRepair.mockResolvedValue(
+    card("00000000-0000-4000-8000-000000000099", {
+      title: "Переместить бытовку на производство",
+      kind: "CAPITAL_TO_PRODUCTION",
+      workflowState: "SCHEDULED",
+      lane: "SCHEDULED",
+    })
+  )
   apiMocks.createManualMovement.mockResolvedValue({})
   apiMocks.pinDriverBoardTask.mockResolvedValue({})
   assetApiMocks.listAssetRentalItems.mockResolvedValue({
@@ -292,13 +324,11 @@ describe("DriverBoardPage", () => {
       await screen.findByRole("heading", { name: "Текущие задания" })
     ).toBeTruthy()
     expect(
-      within(screen.getByLabelText(/Текущие задания на .*01 августа/i)).getByText(
-        /сб.*, 01 августа/i
-      )
+      within(
+        screen.getByLabelText(/Текущие задания на .*01 августа/i)
+      ).getByText(/сб.*, 01 августа/i)
     ).toBeTruthy()
-    expect(
-      screen.queryByRole("heading", { name: "Перемещение" })
-    ).toBeNull()
+    expect(screen.queryByRole("heading", { name: "Перемещение" })).toBeNull()
     expect(
       screen.queryByText(
         "Текущие перемещения, запланированные даты и капитальные ремонты."
@@ -308,8 +338,8 @@ describe("DriverBoardPage", () => {
       screen.getByRole("heading", { name: "Капитальные ремонты" })
     ).toBeTruthy()
     expect(
-      screen.getByLabelText("Ремонтные места: 2 из 3 используется").textContent
-    ).toContain("2/3")
+      screen.getByLabelText("Ремонтные места: 1 из 3 занято").textContent
+    ).toContain("1 из 3")
     expect(
       screen.getByLabelText("Запланированные задания по датам")
     ).toBeTruthy()
@@ -324,6 +354,136 @@ describe("DriverBoardPage", () => {
     expect(
       screen.getByLabelText("Переместить задание бытовки БТ-001")
     ).toBeTruthy()
+  })
+
+  it("keeps a scheduled repair delivery out of the empty repair-place list", async () => {
+    const actor = userEvent.setup()
+    renderPage({
+      ...board,
+      repairPlaceCount: 6,
+      occupiedRepairPlaceCount: 0,
+      usedRepairPlaceCount: 1,
+      availableRepairPlaceCount: 5,
+      repairPlaces: [],
+      dates: [
+        {
+          ...board.dates[0],
+          tasks: [
+            card(SCHEDULED_EXTERNAL_ID, {
+              unitNumber: "БТ-064",
+              kind: "DELIVER_TO_REPAIR",
+            }),
+          ],
+        },
+        ...board.dates.slice(1),
+      ],
+    })
+
+    const repairPlaces = await screen.findByLabelText(
+      "Ремонтные места: 0 из 6 занято"
+    )
+    expect(within(repairPlaces).getByText("0 из 6")).toBeTruthy()
+    expect(
+      within(repairPlaces).getByText("Физически свободно: 6")
+    ).toBeTruthy()
+    expect(
+      screen.getByTestId(`scheduled-task-${SCHEDULED_EXTERNAL_ID}`).textContent
+    ).toContain("БТ-064")
+
+    await actor.click(
+      screen.getByRole("button", { name: "Развернуть список ремонтных мест" })
+    )
+
+    const repairPlaceList = screen.getByLabelText("Бытовки в ремонтных местах")
+    expect(within(repairPlaceList).getByRole("status").textContent).toBe(
+      "В ремонтных местах пока нет бытовок."
+    )
+    expect(within(repairPlaceList).queryByText("Бытовка БТ-064")).toBeNull()
+
+    await actor.click(
+      screen.getByRole("button", { name: "Свернуть список ремонтных мест" })
+    )
+    expect(screen.queryByLabelText("Бытовки в ремонтных местах")).toBeNull()
+  })
+
+  it("expands repair places with their truthful repair stage states", async () => {
+    const actor = userEvent.setup()
+    renderPage({
+      ...board,
+      occupiedRepairPlaceCount: 3,
+      repairPlaces: [
+        {
+          repairId: "00000000-0000-4000-8000-000000000066",
+          cabinId: "00000000-0000-4000-8000-000000000067",
+          unitNumber: "БТ-066",
+          allocationState: "OCCUPIED",
+          repairStageName: "Электрика",
+          repairStageState: "QUEUED",
+          priority: 2,
+        },
+        {
+          repairId: "00000000-0000-4000-8000-000000000068",
+          cabinId: "00000000-0000-4000-8000-000000000069",
+          unitNumber: "БТ-068",
+          allocationState: "OCCUPIED",
+          repairStageName: "Сантехника",
+          repairStageState: "IN_PROGRESS",
+          priority: 1,
+        },
+        {
+          repairId: "00000000-0000-4000-8000-000000000070",
+          cabinId: "00000000-0000-4000-8000-000000000071",
+          unitNumber: "БТ-070",
+          allocationState: "READY_TO_RELEASE",
+          repairStageName: null,
+          repairStageState: "DONE",
+          priority: 3,
+        },
+      ],
+    })
+
+    await actor.click(
+      await screen.findByRole("button", {
+        name: "Развернуть список ремонтных мест",
+      })
+    )
+
+    const repairPlaceList = screen.getByLabelText("Бытовки в ремонтных местах")
+    expect(within(repairPlaceList).getByText("Бытовка БТ-066")).toBeTruthy()
+    expect(within(repairPlaceList).getByText("Ожидает")).toBeTruthy()
+    expect(within(repairPlaceList).getByText("Этап: Электрика")).toBeTruthy()
+    expect(within(repairPlaceList).getByText("Бытовка БТ-068")).toBeTruthy()
+    expect(within(repairPlaceList).getByText("В работе")).toBeTruthy()
+    expect(within(repairPlaceList).getByText("Этап: Сантехника")).toBeTruthy()
+    expect(within(repairPlaceList).getByText("Бытовка БТ-070")).toBeTruthy()
+    expect(within(repairPlaceList).getByText("Ожидает вывоза")).toBeTruthy()
+    expect(
+      screen
+        .getByRole("button", { name: "Свернуть список ремонтных мест" })
+        .getAttribute("aria-expanded")
+    ).toBe("true")
+  })
+
+  it("shows an accessible empty repair-place message after expansion", async () => {
+    const actor = userEvent.setup()
+    renderPage({
+      ...board,
+      repairPlaceCount: 6,
+      occupiedRepairPlaceCount: 0,
+      usedRepairPlaceCount: 1,
+      availableRepairPlaceCount: 5,
+      repairPlaces: [],
+    })
+
+    await actor.click(
+      await screen.findByRole("button", {
+        name: "Развернуть список ремонтных мест",
+      })
+    )
+
+    expect(screen.getByRole("status").textContent).toBe(
+      "В ремонтных местах пока нет бытовок."
+    )
   })
 
   it("opens a date-only dialog after dropping into the empty date area", async () => {
@@ -436,6 +596,41 @@ describe("DriverBoardPage", () => {
     })
   })
 
+  it("places a capital repair directly onto the selected calendar date", async () => {
+    renderPage()
+    await screen.findByTestId(`capital-repair-${CAPITAL_REPAIR_ID}`)
+
+    const dragData = dndMocks.draggableData.get(
+      `capital-repair:${CAPITAL_REPAIR_ID}`
+    )
+    const targetData = dndMocks.sortableData.get(
+      `driver-task:${SECOND_EXTERNAL_ID}`
+    )
+    expect(dragData).toBeDefined()
+    expect(targetData).toBeDefined()
+
+    act(() => {
+      dndMocks.onDragStart?.({ active: { data: { current: dragData } } })
+      dndMocks.onDragEnd?.({
+        active: { data: { current: dragData } },
+        over: { data: { current: targetData } },
+      })
+    })
+
+    await waitFor(() => {
+      expect(apiMocks.scheduleCapitalRepair).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accessToken: "driver-token",
+          repairId: CAPITAL_REPAIR_ID,
+          warehouseId: WAREHOUSE_ID,
+          targetDate: "2026-08-02",
+          targetIndex: 0,
+          idempotencyKey: expect.any(String),
+        })
+      )
+    })
+  })
+
   it("promotes a capital repair through the explicit current-queue action", async () => {
     const userEventInstance = userEvent.setup()
     renderPage()
@@ -472,9 +667,7 @@ describe("DriverBoardPage", () => {
     const dragData = dndMocks.sortableData.get(
       `driver-task:${CURRENT_EXTERNAL_ID}`
     )
-    const capitalTarget = dndMocks.droppableData.get(
-      "driver-capital-repairs"
-    )
+    const capitalTarget = dndMocks.droppableData.get("driver-capital-repairs")
     expect(dragData).toBeDefined()
     expect(capitalTarget).toEqual({ type: "capital-target" })
 
@@ -513,9 +706,7 @@ describe("DriverBoardPage", () => {
     const dragData = dndMocks.sortableData.get(
       `driver-task:${SCHEDULED_EXTERNAL_ID}`
     )
-    const capitalTarget = dndMocks.droppableData.get(
-      "driver-capital-repairs"
-    )
+    const capitalTarget = dndMocks.droppableData.get("driver-capital-repairs")
     act(() => {
       dndMocks.onDragEnd?.({
         active: { data: { current: dragData } },
@@ -533,38 +724,105 @@ describe("DriverBoardPage", () => {
     })
   })
 
-  it("does not show the stale-queue warning while refreshing a conflict", async () => {
-    apiMocks.moveDriverBoardTask.mockRejectedValueOnce(
-      new ApiError("Очередь перемещений уже изменилась", 409, null)
-    )
-    renderPage()
-    await screen.findByTestId(`scheduled-task-${SCHEDULED_EXTERNAL_ID}`)
+  it("reorders a queue in the UI before the move request resolves", async () => {
+    const pendingMove = deferred<DriverBoardCard>()
+    apiMocks.moveDriverBoardTask.mockReturnValueOnce(pendingMove.promise)
+    const anotherCurrent = card("00000000-0000-4000-8000-000000000011", {
+      driverTaskId: "00000000-0000-4000-8000-000000000110",
+      unitNumber: "БТ-002",
+      kind: "DELIVER_TO_REPAIR",
+      workflowState: "CURRENT",
+      lane: "CURRENT",
+      position: 1,
+    })
+    renderPage({ ...board, current: [...board.current, anotherCurrent] })
+    await screen.findByTestId(`current-task-${CURRENT_EXTERNAL_ID}`)
 
     const dragData = dndMocks.sortableData.get(
-      `driver-task:${SCHEDULED_EXTERNAL_ID}`
+      `driver-task:${CURRENT_EXTERNAL_ID}`
     )
-    const currentDropData = dndMocks.droppableData.get("driver-current")
+    const targetData = dndMocks.sortableData.get(
+      `driver-task:${anotherCurrent.externalTaskId}`
+    )
+    expect(dragData).toBeDefined()
+    expect(targetData).toBeDefined()
+
     act(() => {
       dndMocks.onDragEnd?.({
         active: { data: { current: dragData } },
-        over: { data: { current: currentDropData } },
+        over: { data: { current: targetData } },
       })
+    })
+
+    await waitFor(() => {
+      expect(apiMocks.moveDriverBoardTask).toHaveBeenCalledTimes(1)
+      const currentTaskIds = within(
+        screen.getByLabelText(/^Текущие задания на /i)
+      )
+        .getAllByTestId(/^current-task-/)
+        .map((element) => element.getAttribute("data-testid"))
+      expect(currentTaskIds).toEqual([
+        `current-task-${anotherCurrent.externalTaskId}`,
+        `current-task-${CURRENT_EXTERNAL_ID}`,
+      ])
+    })
+  })
+
+  it("rolls a move back and shows an error when the server rejects it", async () => {
+    const pendingMove = deferred<DriverBoardCard>()
+    apiMocks.moveDriverBoardTask.mockReturnValueOnce(pendingMove.promise)
+    renderPage()
+    await screen.findByTestId(`current-task-${CURRENT_EXTERNAL_ID}`)
+
+    const dragData = dndMocks.sortableData.get(
+      `driver-task:${CURRENT_EXTERNAL_ID}`
+    )
+    const targetData = dndMocks.sortableData.get(
+      `driver-task:${SECOND_EXTERNAL_ID}`
+    )
+    act(() => {
+      dndMocks.onDragEnd?.({
+        active: { data: { current: dragData } },
+        over: { data: { current: targetData } },
+      })
+    })
+
+    await waitFor(() => {
+      expect(apiMocks.moveDriverBoardTask).toHaveBeenCalledTimes(1)
+      expect(
+        screen.queryByTestId(`current-task-${CURRENT_EXTERNAL_ID}`)
+      ).toBeNull()
+      expect(
+        within(
+          screen.getByLabelText(/^Задания на .*2 августа/i)
+        ).getAllByTestId(/^scheduled-task-/)
+      ).toHaveLength(2)
+    })
+
+    await act(async () => {
+      pendingMove.reject(
+        new ApiError("Очередь перемещений уже изменилась", 409, null)
+      )
+      await Promise.resolve()
     })
 
     await waitFor(() => {
       expect(apiMocks.getDriverBoard).toHaveBeenCalledTimes(2)
     })
-    expect(screen.queryByText("Очередь уже изменилась")).toBeNull()
-    expect(screen.queryByText("Команда не выполнена")).toBeNull()
+    expect(
+      screen.getByTestId(`current-task-${CURRENT_EXTERNAL_ID}`)
+    ).toBeTruthy()
+    expect(
+      within(screen.getByLabelText(/^Задания на .*2 августа/i)).getAllByTestId(
+        /^scheduled-task-/
+      )
+    ).toHaveLength(1)
+    expect(screen.getByText("Команда не выполнена")).toBeTruthy()
+    expect(screen.getByText("Очередь перемещений уже изменилась")).toBeTruthy()
   })
 
-  it("does not allow an ordinary inbound repair to exceed repair-place capacity", async () => {
-    renderPage({
-      ...board,
-      usedRepairPlaceCount: board.repairPlaceCount,
-      availableRepairPlaceCount: 0,
-      inboundRepairPlaceAvailable: false,
-    })
+  it("does not move a scheduled ordinary task into current assignments", async () => {
+    renderPage()
     await screen.findByTestId(`scheduled-task-${SCHEDULED_EXTERNAL_ID}`)
 
     const dragData = dndMocks.sortableData.get(
@@ -582,95 +840,24 @@ describe("DriverBoardPage", () => {
 
     expect(apiMocks.moveDriverBoardTask).not.toHaveBeenCalled()
     expect(
-      screen.getByText(/нет свободного или освобождаемого ремонтного места/i)
+      screen.getByText(
+        /в текущие задания можно добавить только капитальный ремонт/i
+      )
+    ).toBeTruthy()
+    expect(
+      screen.getByTestId(`scheduled-task-${SCHEDULED_EXTERNAL_ID}`)
     ).toBeTruthy()
   })
 
-  it("inserts a scheduled task at the selected position in the current queue", async () => {
-    renderPage()
-    await screen.findByTestId(`scheduled-task-${SCHEDULED_EXTERNAL_ID}`)
-
-    const dragData = dndMocks.sortableData.get(
-      `driver-task:${SCHEDULED_EXTERNAL_ID}`
-    )
-    expect(dragData).toBeDefined()
-
-    const currentData = dndMocks.sortableData.get(
-      `driver-task:${CURRENT_EXTERNAL_ID}`
-    )
-    expect(currentData).toBeDefined()
-
-    act(() => {
-      dndMocks.onDragStart?.({ active: { data: { current: dragData } } })
-      dndMocks.onDragEnd?.({
-        active: { data: { current: dragData } },
-        over: { data: { current: currentData } },
-      })
-    })
-
-    await waitFor(() => {
-      expect(apiMocks.moveDriverBoardTask).toHaveBeenCalledWith({
-        accessToken: "driver-token",
-        externalTaskId: SCHEDULED_EXTERNAL_ID,
-        command: {
-          warehouseId: WAREHOUSE_ID,
-          expectedTaskVersion: 7,
-          expectedEntryVersion: 11,
-          targetLane: "CURRENT",
-          targetDate: "2026-08-01",
-          targetIndex: 0,
-        },
-      })
-    })
-  })
-
-  it("appends a scheduled task when it is dropped on the empty part of the current queue", async () => {
-    renderPage()
-    await screen.findByTestId(`scheduled-task-${SCHEDULED_EXTERNAL_ID}`)
-
-    const dragData = dndMocks.sortableData.get(
-      `driver-task:${SCHEDULED_EXTERNAL_ID}`
-    )
-    const currentDropData = dndMocks.droppableData.get("driver-current")
-    expect(dragData).toBeDefined()
-    expect(currentDropData).toBeDefined()
-
-    act(() => {
-      dndMocks.onDragStart?.({ active: { data: { current: dragData } } })
-      dndMocks.onDragEnd?.({
-        active: { data: { current: dragData } },
-        over: { data: { current: currentDropData } },
-      })
-    })
-
-    await waitFor(() => {
-      expect(apiMocks.moveDriverBoardTask).toHaveBeenCalledWith({
-        accessToken: "driver-token",
-        externalTaskId: SCHEDULED_EXTERNAL_ID,
-        command: {
-          warehouseId: WAREHOUSE_ID,
-          expectedTaskVersion: 7,
-          expectedEntryVersion: 11,
-          targetLane: "CURRENT",
-          targetDate: "2026-08-01",
-          targetIndex: 1,
-        },
-      })
-    })
-  })
-
   it("reorders current tasks by dropping the whole card on another card", async () => {
-    const anotherCurrent = card(
-      "00000000-0000-4000-8000-000000000011",
-      {
-        driverTaskId: "00000000-0000-4000-8000-000000000110",
-        unitNumber: "БТ-002",
-        kind: "DELIVER_TO_REPAIR",
-        workflowState: "CURRENT",
-        lane: "CURRENT",
-        position: 1,
-      }
-    )
+    const anotherCurrent = card("00000000-0000-4000-8000-000000000011", {
+      driverTaskId: "00000000-0000-4000-8000-000000000110",
+      unitNumber: "БТ-002",
+      kind: "DELIVER_TO_REPAIR",
+      workflowState: "CURRENT",
+      lane: "CURRENT",
+      position: 1,
+    })
     renderPage({ ...board, current: [...board.current, anotherCurrent] })
     await screen.findByTestId(`current-task-${CURRENT_EXTERNAL_ID}`)
 
@@ -750,16 +937,13 @@ describe("DriverBoardPage", () => {
   })
 
   it("renders every server-provided current movement instead of truncating the lane", async () => {
-    const anotherCurrent = card(
-      "00000000-0000-4000-8000-000000000011",
-      {
-        driverTaskId: "00000000-0000-4000-8000-000000000110",
-        unitNumber: "БТ-002",
-        kind: "DELIVER_TO_REPAIR",
-        workflowState: "CURRENT",
-        lane: "CURRENT",
-      }
-    )
+    const anotherCurrent = card("00000000-0000-4000-8000-000000000011", {
+      driverTaskId: "00000000-0000-4000-8000-000000000110",
+      unitNumber: "БТ-002",
+      kind: "DELIVER_TO_REPAIR",
+      workflowState: "CURRENT",
+      lane: "CURRENT",
+    })
     renderPage({ ...board, current: [...board.current, anotherCurrent] })
 
     expect(

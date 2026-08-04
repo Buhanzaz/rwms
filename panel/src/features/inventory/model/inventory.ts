@@ -131,7 +131,7 @@ export type InventoryFindingDto = {
   lines: RepairEstimateLineDto[]
   repairCompletionMode: RepairEstimateCompletionMode | null
   repairPriority: RepairPriority
-  movementRequired: boolean
+  movementToRepair: boolean
   logisticsPlanningMode: LogisticsPlanningMode
   logisticsScheduledDate: string | null
   repairPlans: InventoryRepairPlanSnapshotDto[]
@@ -193,6 +193,7 @@ export type InventorySessionDto = {
   businessDate: string
   startedAt: string
   completedAt: string | null
+  cancellation: { reason: string; cancelledAt: string } | null
   findingCount: number
   inspectedCount: number
   findings: InventoryFindingDto[]

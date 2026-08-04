@@ -141,14 +141,13 @@ class InventoryApiHttpContractTest {
     }
 
     @Test
-    fun `start and inspection send exact CAS media and furniture snapshots`() = runTest {
+    fun `field inspection sends exact CAS media and furniture evidence`() = runTest {
         val warehouseId = "11111111-1111-1111-1111-111111111111"
         val inventoryId = "22222222-2222-2222-2222-222222222222"
         val findingId = "33333333-3333-3333-3333-333333333333"
         val assetId = "44444444-4444-4444-4444-444444444444"
         val equipmentId = "55555555-5555-5555-5555-555555555555"
         val mediaId = "66666666-6666-6666-6666-666666666666"
-        server.enqueue(json(sessionJson(inventoryId, warehouseId), status = 201))
         server.enqueue(
             json(
                 findingJson(
@@ -161,10 +160,6 @@ class InventoryApiHttpContractTest {
             ),
         )
 
-        val started = api.startInventory(
-            idempotencyKey = "inventory-start-contract",
-            request = StartInventoryRequest(warehouseId),
-        )
         val saved = api.saveInventoryInspection(
             inventoryId = inventoryId,
             findingId = findingId,
@@ -191,16 +186,7 @@ class InventoryApiHttpContractTest {
             ),
         )
 
-        assertThat(started.id).isEqualTo(inventoryId)
         assertThat(saved.findingRevision).isEqualTo(3)
-        val start = takeRequest()
-        assertThat(start.method).isEqualTo("POST")
-        assertThat(start.path).isEqualTo("/api/inventory/v1/sessions")
-        assertThat(start.getHeader("Idempotency-Key"))
-            .isEqualTo("inventory-start-contract")
-        assertThat(start.body.readUtf8())
-            .isEqualTo("""{"warehouseId":"$warehouseId"}""")
-
         val inspection = takeRequest()
         assertThat(inspection.method).isEqualTo("PUT")
         assertThat(inspection.path)
@@ -209,6 +195,17 @@ class InventoryApiHttpContractTest {
             )
         assertThat(inspection.body.readUtf8()).isEqualTo(
             """{"expectedSessionRevision":9,"expectedFindingRevision":3,"inspection":"READY","comment":"Мебель пересчитана","passportObservation":{"presence":"ABSENT","value":null},"equipmentObservation":{"presence":"PRESENT","value":[{"equipmentId":"$equipmentId","equipmentName":"Стул","equipmentCategory":"Мебель","catalogVersion":7,"quantity":4}]},"media":[{"mediaId":"$mediaId","generation":2}],"coverMediaId":null,"planSelection":null}""",
+        )
+    }
+
+    @Test
+    fun `field API excludes inventory session lifecycle commands`() {
+        val methodNames = RwmsApi::class.java.declaredMethods.map { method -> method.name }
+
+        assertThat(methodNames).containsNoneOf(
+            "startInventory",
+            "previewInventoryCompletion",
+            "completeInventorySession",
         )
     }
 

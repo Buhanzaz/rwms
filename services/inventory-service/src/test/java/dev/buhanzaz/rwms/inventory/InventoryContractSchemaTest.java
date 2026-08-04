@@ -36,6 +36,13 @@ class InventoryContractSchemaTest {
             "GET /api/inventory/v1/sessions/active",
             "GET /api/inventory/v1/sessions/{inventoryId}",
             "GET /api/inventory/v1/sessions/{inventoryId}/findings",
+            "POST /api/inventory/v1/sessions/{inventoryId}/registry-review",
+            "GET /api/inventory/v1/sessions/{inventoryId}/statistics-preview",
+            "GET /api/inventory/v1/planning-settings/{warehouseId}",
+            "PUT /api/inventory/v1/planning-settings/{warehouseId}",
+            "POST /api/inventory/v1/sessions/{inventoryId}/final-plan/prepare",
+            "GET /api/inventory/v1/sessions/{inventoryId}/final-plan",
+            "PUT /api/inventory/v1/sessions/{inventoryId}/final-plan",
             "POST /api/inventory/v1/sessions/{inventoryId}/number-resolutions",
             "POST /api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/assets",
             "PUT /api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/inspection",
@@ -62,6 +69,7 @@ class InventoryContractSchemaTest {
             "INVENTORY_ACTIVE_SESSION_CONFLICT",
             "INVENTORY_NUMBER_CONFLICT",
             "INVENTORY_ACKNOWLEDGEMENT_STALE",
+            "INVENTORY_FINAL_PLAN_INCOMPLETE",
             "INVENTORY_MEDIA_NOT_READY",
             "INVENTORY_PUBLICATION_CONFLICT",
             "INVENTORY_DEPENDENCY_UNAVAILABLE",
@@ -179,6 +187,31 @@ class InventoryContractSchemaTest {
   }
 
   @Test
+  void planLineRoutingSourceIsExplicitAndOnlyManualLinesMaySetIt() throws Exception {
+    ObjectNode catalog = (ObjectNode) validAutoPlan().required("lines").get(0);
+    JsonSchema catalogSchema = openApiSchema("CatalogInventoryPlanLineInput");
+    assertThat(catalogSchema.validate(catalog)).isEmpty();
+    ObjectNode catalogWithRoute = catalog.deepCopy();
+    catalogWithRoute.put("routingCatalogNodeId", "00000000-0000-0000-0000-000000000732");
+    assertThat(catalogSchema.validate(catalogWithRoute)).isNotEmpty();
+
+    ObjectNode manual = catalog.deepCopy();
+    manual.put("aggregationKind", "MANUAL");
+    manual.putNull("catalogNodeId");
+    manual.put("routingCatalogNodeId", "00000000-0000-0000-0000-000000000732");
+    manual.put("description", "Manual work");
+    manual.put("type", "WORK");
+    manual.put("unit", "h");
+    manual.put("unitPriceMinor", 100);
+    manual.put("normativeMinutes", "30");
+    JsonSchema manualSchema = openApiSchema("ManualInventoryPlanLineInput");
+    assertThat(manualSchema.validate(manual)).isEmpty();
+    ObjectNode manualWithoutRoute = manual.deepCopy();
+    manualWithoutRoute.putNull("routingCatalogNodeId");
+    assertThat(manualSchema.validate(manualWithoutRoute)).isNotEmpty();
+  }
+
+  @Test
   void publicationSessionDetailAndStatisticsSchemasRejectImpossibleCombinations()
       throws Exception {
     JsonSchema publish = openApiSchema("PublishFindingsRequest");
@@ -249,6 +282,38 @@ class InventoryContractSchemaTest {
   }
 
   @Test
+  void matchedPublicationIntentRetainsMaintenanceEvidenceWithoutATarget() throws Exception {
+    JsonSchema publication = openApiSchema("PublicationIntent");
+    JsonNode matched =
+        JSON.readTree(
+            """
+            {
+              "id":"00000000-0000-0000-0000-000000000761",
+              "inventoryId":"00000000-0000-0000-0000-000000000762",
+              "findingId":"00000000-0000-0000-0000-000000000763",
+              "publicationRevision":2,"state":"SUCCEEDED","sourceRevision":1,
+              "attemptCount":1,"finalPlanVersion":1,
+              "targetKind":null,"targetId":null,"maintenanceEstimateId":null,
+              "maintenanceRepairId":null,"maintenanceOutcome":"MATCHED",
+              "maintenanceResult":{
+                "source":{"inventoryId":"00000000-0000-0000-0000-000000000762"},
+                "outcome":"MATCHED","targetKind":null,"targetId":null,
+                "estimateId":null,"repairId":null,"successor":null,"delta":{"lines":[]}
+              },
+              "failureCode":null
+            }
+            """);
+
+    assertThat(publication.validate(matched)).isEmpty();
+
+    ObjectNode matchedWithTarget = (ObjectNode) matched.deepCopy();
+    matchedWithTarget.put("targetKind", "REPAIR");
+    matchedWithTarget.put("targetId", "00000000-0000-0000-0000-000000000764");
+    matchedWithTarget.put("maintenanceRepairId", "00000000-0000-0000-0000-000000000764");
+    assertThat(publication.validate(matchedWithTarget)).isNotEmpty();
+  }
+
+  @Test
   void findingReadProjectionIsStrictTypedAndRejectsUnsafeOrInexactPlanValues()
       throws Exception {
     JsonSchema finding = openApiSchema("Finding");
@@ -294,7 +359,7 @@ class InventoryContractSchemaTest {
                 "mode":"MANUAL","catalogVersionId":"00000000-0000-0000-0000-000000000734",
                 "fingerprintSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "priority":3,"coverMediaId":null,
-                "movementToRepair":false,"movementToShipment":false,
+                "movementToRepair":false,
                 "logisticsPlanningMode":null,"logisticsScheduledDate":null,
                 "lines":[{
                   "id":"00000000-0000-0000-0000-000000000736",
@@ -494,10 +559,11 @@ class InventoryContractSchemaTest {
         JSON.readTree(
             """
             {"mode":"AUTO","priority":3,"coverMediaId":null,
-              "movementToRepair":false,"movementToShipment":false,
+              "movementToRepair":false,
               "logisticsPlanningMode":null,"logisticsScheduledDate":null,"lines":[{
               "aggregationKind":"CATALOG",
               "catalogNodeId":"00000000-0000-0000-0000-000000000731",
+              "routingCatalogNodeId":null,
               "description":null,"type":null,"unit":null,"quantity":"1",
               "unitPriceMinor":null,"normativeMinutes":null,"groupComment":null,
               "mediaReferences":[]}],"stages":[]}

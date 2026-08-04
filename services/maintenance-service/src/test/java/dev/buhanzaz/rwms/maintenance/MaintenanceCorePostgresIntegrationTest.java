@@ -389,7 +389,6 @@ class MaintenanceCorePostgresIntegrationTest {
             created.version(),
             2,
             true,
-            false,
             RepairLogisticsPlanningMode.FIXED_DATE,
             scheduledDate));
     stubQueueDependencies(fixture);
@@ -617,7 +616,7 @@ class MaintenanceCorePostgresIntegrationTest {
             jdbc.queryForObject(
                 """
                 select state from repair_place_allocation
-                where repair_id=? and state <> 'RELEASED'
+                where repair_id=?
                 """,
                 String.class,
                 created.id()))
@@ -1280,7 +1279,7 @@ class MaintenanceCorePostgresIntegrationTest {
     when(dependencies.queueCapabilities(targetWarehouseId))
         .thenReturn(
             new MaintenanceDependencyGateway.QueueCapabilities(
-                targetWarehouseId, false, List.of()));
+                targetWarehouseId, List.of()));
     when(
             dependencies.preflightMaintenanceRouting(
                 eq(targetWarehouseId), anyList()))
@@ -1299,7 +1298,6 @@ class MaintenanceCorePostgresIntegrationTest {
             transferId, lineId, transfer);
     assertThat(preflight.activeRepairId()).isEqualTo(fixture.repairId());
     assertThat(preflight.priorityRequired()).isTrue();
-    assertThat(preflight.movementToShipmentAvailable()).isFalse();
     assertThat(preflight.missingQueueDefinitionIds())
         .containsExactly(requiredQueueDefinitionId);
 
@@ -1314,8 +1312,7 @@ class MaintenanceCorePostgresIntegrationTest {
                         fixture.rentalItemId(),
                         fixture.warehouseId(),
                         targetWarehouseId,
-                        4,
-                        false)))
+                        4)))
         .isInstanceOf(MaintenanceConflictException.class)
         .extracting(
             exception ->
@@ -1370,7 +1367,7 @@ class MaintenanceCorePostgresIntegrationTest {
     when(dependencies.queueCapabilities(targetWarehouseId))
         .thenReturn(
             new MaintenanceDependencyGateway.QueueCapabilities(
-                targetWarehouseId, false, List.of()));
+                targetWarehouseId, List.of()));
 
     service.prepareTransferDeparture(
         transferId, lineId, UUID.randomUUID(), transfer);
@@ -1451,8 +1448,7 @@ class MaintenanceCorePostgresIntegrationTest {
                     fixture.rentalItemId(),
                     fixture.warehouseId(),
                     targetWarehouseId,
-                    4,
-                    false))
+                    4))
             .response();
 
     assertThat(completed.activeRepairId()).isEqualTo(fixture.repairId());
@@ -5035,6 +5031,255 @@ class MaintenanceCorePostgresIntegrationTest {
   }
 
   @Test
+  void managedInboundDeliveryRetryResumesOnlyItsStableQuarantinedIntent() {
+    RepairFixture fixture = createQuarantinedInboundDelivery();
+    var before = repairs.findById(fixture.repairId()).orElseThrow();
+    var beforeSnapshot = service.repair(fixture.repairId(), fixture.warehouseId());
+    var workLinesBefore = beforeSnapshot.plan().stages().stream()
+        .flatMap(stage -> stage.workLines().stream())
+        .toList();
+    var materialLinesBefore = beforeSnapshot.plan().stages().stream()
+        .flatMap(stage -> stage.materialLines().stream())
+        .toList();
+    UUID reconciliationId = jdbc.queryForObject(
+        """
+        select id from integration_reconciliation
+        where repair_id=? and dependency_type='LOGISTICS' and operation_type='CREATE_DRIVER_TASK'
+        """,
+        UUID.class,
+        fixture.repairId());
+    UUID stableKey = jdbc.queryForObject(
+        """
+        select idempotency_key from integration_reconciliation
+        where id=?
+        """,
+        UUID.class,
+        reconciliationId);
+    long eventCountBefore = jdbc.queryForObject(
+        """
+        select count(*) from domain_event
+        where aggregate_type='REPAIR' and aggregate_id=?
+        """,
+        Long.class,
+        fixture.repairId().toString());
+    UUID subjectId = UUID.randomUUID();
+    UUID commandKey = UUID.randomUUID();
+    RetryInboundDeliveryRequest request = new RetryInboundDeliveryRequest(
+        before.getVersion(), RepairLogisticsPlanningMode.AUTO, null, "logistics confirmed no driver task");
+
+    clearInvocations(dependencies);
+    when(
+            dependencies.maintenanceDriverTaskCompensation(
+                fixture.repairId(),
+                MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR))
+        .thenAnswer(
+            ignored -> {
+              assertThat(
+                      org.springframework.transaction.support.TransactionSynchronizationManager
+                          .isActualTransactionActive())
+                  .isFalse();
+              return driverTaskCompensation(
+                  fixture.repairId(),
+                  MaintenanceDependencyGateway.MaintenanceDriverTaskCompensationOutcome.ABSENT);
+            });
+
+    var recovered = service.retryInboundDelivery(
+        subjectId, commandKey, fixture.repairId(), fixture.warehouseId(), request);
+
+    assertThat(recovered.replayed()).isFalse();
+    assertThat(recovered.response().repair().version()).isEqualTo(before.getVersion() + 1);
+    assertThat(recovered.response().repair().priority()).isEqualTo(beforeSnapshot.priority());
+    assertThat(recovered.response().repair().logisticsPlanningMode())
+        .isEqualTo(RepairLogisticsPlanningMode.AUTO);
+    assertThat(recovered.response().repair().logisticsScheduledDate()).isNull();
+    assertThat(recovered.response().delivery().state()).isEqualTo(DeliveryState.RETRY_PENDING);
+    assertThat(recovered.response().affectedSourceRepairs()).isEmpty();
+    assertThat(repairs.findById(fixture.repairId()).orElseThrow())
+        .satisfies(repair -> {
+          assertThat(repair.getPriority()).isEqualTo(beforeSnapshot.priority());
+          assertThat(repair.getLogisticsPlanningMode()).isEqualTo(RepairLogisticsPlanningMode.AUTO);
+          assertThat(repair.getLogisticsScheduledDate()).isNull();
+          assertThat(repair.getDeliveryState()).isEqualTo("RETRY_PENDING");
+          assertThat(repair.getTaskGenerationState()).isEqualTo("PENDING_GENERATION");
+          assertThat(repair.getReconciliationState()).isEqualTo("RECONCILIATION_REQUIRED");
+        });
+    var persistedAfter = service.repair(fixture.repairId(), fixture.warehouseId());
+    assertThat(persistedAfter.priority()).isEqualTo(beforeSnapshot.priority());
+    assertThat(persistedAfter.plan().stages().stream()
+            .flatMap(stage -> stage.workLines().stream())
+            .toList())
+        .containsExactlyElementsOf(workLinesBefore);
+    assertThat(persistedAfter.plan().stages().stream()
+            .flatMap(stage -> stage.materialLines().stream())
+            .toList())
+        .containsExactlyElementsOf(materialLinesBefore);
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select state,attempt_count,idempotency_key,review_version,review_subject_id,review_reason
+                from integration_reconciliation where id=?
+                """,
+                reconciliationId))
+        .containsEntry("state", "RETRY_PENDING")
+        .containsEntry("attempt_count", 0)
+        .containsEntry("idempotency_key", stableKey)
+        .containsEntry("review_version", 1L)
+        .containsEntry("review_subject_id", subjectId)
+        .containsEntry("review_reason", "logistics confirmed no driver task");
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from integration_reconciliation
+                where repair_id=? and dependency_type='LOGISTICS'
+                  and operation_type='CREATE_DRIVER_TASK' and idempotency_key=?
+                """,
+                Integer.class,
+                fixture.repairId(),
+                stableKey))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select event_type from domain_event
+                where aggregate_type='REPAIR' and aggregate_id=?
+                order by aggregate_version desc limit 1
+                """,
+                String.class,
+                fixture.repairId().toString()))
+        .isEqualTo(MaintenanceEventType.REPAIR_PLAN_CHANGED.value());
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from domain_event
+                where aggregate_type='REPAIR' and aggregate_id=?
+                """,
+                Long.class,
+                fixture.repairId().toString()))
+        .isEqualTo(eventCountBefore + 1);
+    verify(dependencies)
+        .maintenanceDriverTaskCompensation(
+            fixture.repairId(),
+            MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR);
+    verify(dependencies, never()).cancelMaintenanceDriverTaskCompensation(any(), any(), any());
+
+    clearInvocations(dependencies);
+    var replay = service.retryInboundDelivery(
+        subjectId, commandKey, fixture.repairId(), fixture.warehouseId(), request);
+
+    assertThat(replay.replayed()).isTrue();
+    assertThat(replay.response()).isEqualTo(recovered.response());
+    verifyNoInteractions(dependencies);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from domain_event
+                where aggregate_type='REPAIR' and aggregate_id=?
+                """,
+                Long.class,
+                fixture.repairId().toString()))
+        .isEqualTo(eventCountBefore + 1);
+  }
+
+  @Test
+  void inboundDeliveryRetryFailsClosedForAnyRemoteTaskAndInvalidLocalState() {
+    RepairFixture fixture = createQuarantinedInboundDelivery();
+    var quarantined = repairs.findById(fixture.repairId()).orElseThrow();
+    RetryInboundDeliveryRequest request = new RetryInboundDeliveryRequest(
+        quarantined.getVersion(), RepairLogisticsPlanningMode.AUTO, null, "retry after verification");
+
+    for (MaintenanceDependencyGateway.MaintenanceDriverTaskCompensationOutcome outcome : List.of(
+        MaintenanceDependencyGateway.MaintenanceDriverTaskCompensationOutcome.PENDING,
+        MaintenanceDependencyGateway.MaintenanceDriverTaskCompensationOutcome.CANCELLED,
+        MaintenanceDependencyGateway.MaintenanceDriverTaskCompensationOutcome.STARTED,
+        MaintenanceDependencyGateway.MaintenanceDriverTaskCompensationOutcome.COMPLETED,
+        MaintenanceDependencyGateway.MaintenanceDriverTaskCompensationOutcome.RECONCILIATION_REQUIRED)) {
+      reset(dependencies);
+      when(
+              dependencies.maintenanceDriverTaskCompensation(
+                  fixture.repairId(),
+                  MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR))
+          .thenReturn(driverTaskCompensation(fixture.repairId(), outcome));
+
+      assertThatThrownBy(
+              () ->
+                  service.retryInboundDelivery(
+                      UUID.randomUUID(),
+                      UUID.randomUUID(),
+                      fixture.repairId(),
+                      fixture.warehouseId(),
+                      request))
+          .isInstanceOf(MaintenanceConflictException.class);
+    }
+
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select state,attempt_count from integration_reconciliation
+                where repair_id=? and dependency_type='LOGISTICS' and operation_type='CREATE_DRIVER_TASK'
+                """,
+                fixture.repairId()))
+        .containsEntry("state", "QUARANTINED")
+        .containsEntry("attempt_count", 4);
+
+    jdbc.update(
+        """
+        update integration_reconciliation
+           set state='RETRY_PENDING',attempt_count=0
+         where repair_id=? and dependency_type='LOGISTICS' and operation_type='CREATE_DRIVER_TASK'
+        """,
+        fixture.repairId());
+    reset(dependencies);
+    when(
+            dependencies.maintenanceDriverTaskCompensation(
+                fixture.repairId(),
+                MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR))
+        .thenReturn(
+            driverTaskCompensation(
+                fixture.repairId(),
+                MaintenanceDependencyGateway.MaintenanceDriverTaskCompensationOutcome.ABSENT));
+
+    assertThatThrownBy(
+            () ->
+                service.retryInboundDelivery(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    fixture.repairId(),
+                    fixture.warehouseId(),
+                    request))
+        .isInstanceOf(MaintenanceConflictException.class);
+
+    jdbc.update(
+        """
+        update integration_reconciliation
+           set state='QUARANTINED',attempt_count=4
+         where repair_id=? and dependency_type='LOGISTICS' and operation_type='CREATE_DRIVER_TASK'
+        """,
+        fixture.repairId());
+    jdbc.update(
+        "update maintenance_repair set execution_state='IN_PROGRESS' where id=?",
+        fixture.repairId());
+
+    assertThatThrownBy(
+            () ->
+                service.retryInboundDelivery(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    fixture.repairId(),
+                    fixture.warehouseId(),
+                    request))
+        .isInstanceOf(MaintenanceConflictException.class);
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select state,attempt_count from integration_reconciliation
+                where repair_id=? and dependency_type='LOGISTICS' and operation_type='CREATE_DRIVER_TASK'
+                """,
+                fixture.repairId()))
+        .containsEntry("state", "QUARANTINED")
+        .containsEntry("attempt_count", 4);
+  }
+
+  @Test
   void concurrentReconciliationClaimsSkipLockedWorkWithoutBlocking() throws Exception {
     RepairFixture fixture = createDirectRepair();
     new TransactionTemplate(transactionManager)
@@ -5427,6 +5672,74 @@ class MaintenanceCorePostgresIntegrationTest {
     return new RepairFixture(
         result.response().id(), result.response().plan().stages().getFirst().taskSync().externalTaskId(),
         warehouseId, rentalItemId);
+  }
+
+  private RepairFixture createQuarantinedInboundDelivery() {
+    RepairFixture fixture = createDirectRepair();
+    long version = service.repair(fixture.repairId(), fixture.warehouseId()).version();
+    service.queueRepair(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        fixture.repairId(),
+        new QueueRepairRequest(
+            version,
+            2,
+            true,
+            RepairLogisticsPlanningMode.FIXED_DATE,
+            LocalDate.of(2026, 8, 6)));
+    stubQueueDependencies(fixture);
+    assertThat(service.reconcileOneTask()).isTrue();
+
+    reset(dependencies);
+    when(
+            dependencies.createDriverTask(
+                any(), any(MaintenanceDependencyGateway.DriverTaskCommand.class)))
+        .thenThrow(new IllegalStateException("driver intake unavailable"));
+    for (int attempt = 0; attempt < 4; attempt++) {
+      if (attempt > 0) makeReconciliationDue(fixture.repairId(), "CREATE_DRIVER_TASK");
+      deferOtherReconciliations(fixture.repairId(), "CREATE_DRIVER_TASK");
+      assertThat(service.reconcileOneTask()).isTrue();
+    }
+    assertThat(repairs.findById(fixture.repairId()).orElseThrow())
+        .satisfies(repair -> {
+          assertThat(repair.getExecutionState()).isEqualTo(RepairExecutionState.QUEUED);
+          assertThat(repair.getDeliveryState()).isEqualTo("QUARANTINED");
+          assertThat(repair.getTaskGenerationState()).isEqualTo("FAILED");
+          assertThat(repair.getReconciliationState()).isEqualTo("RECONCILIATION_REQUIRED");
+        });
+    return fixture;
+  }
+
+  private static MaintenanceDependencyGateway.MaintenanceDriverTaskCompensation
+      driverTaskCompensation(
+          UUID repairId,
+          MaintenanceDependencyGateway.MaintenanceDriverTaskCompensationOutcome outcome) {
+    if (outcome == MaintenanceDependencyGateway.MaintenanceDriverTaskCompensationOutcome.ABSENT) {
+      return new MaintenanceDependencyGateway.MaintenanceDriverTaskCompensation(
+          repairId,
+          MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR,
+          outcome,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null);
+    }
+    return new MaintenanceDependencyGateway.MaintenanceDriverTaskCompensation(
+        repairId,
+        MaintenanceDependencyGateway.MaintenanceDriverTaskKind.DELIVER_TO_REPAIR,
+        outcome,
+        UUID.randomUUID(),
+        0L,
+        "SCHEDULED",
+        null,
+        null,
+        null,
+        null,
+        null);
   }
 
   private void stubQueueDependencies(RepairFixture fixture) {

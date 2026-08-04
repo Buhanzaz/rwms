@@ -201,6 +201,24 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationFailure' }
         '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/internal/maintenance/v1/inventory/dispositions:
+    post:
+      tags: [Internal]
+      operationId: createInventoryLossDisposition
+      description: >-
+        Exact inventory-service boundary requiring sub=client_id=inventory-service
+        and exactly maintenance.inventory. Records one PENDING_APPROVAL LOSS
+        decision for each inventory shortage; inventory completion never mutates
+        asset balances directly and retries by the stable inventory/finding ID.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateInventoryLossDispositionRequest' } } } }
+      responses:
+        '200': { description: Existing idempotent loss decision., content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
+        '201': { description: Newly recorded loss decision awaiting administrator approval., content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/internal/maintenance/v1/inventory/plans:
     post:
       tags: [Inventory Integration]
@@ -251,6 +269,51 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpsertInventoryRepairRequest' } } } }
       responses:
         '200': { description: Created or replayed inventory-origin repair., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryRepairUpsertResult' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/internal/maintenance/v1/inventory/reconciliations/preflight:
+    post:
+      tags: [Inventory Integration]
+      operationId: preflightInventoryPublicationReconciliation
+      description: >-
+        Private exact maintenance.inventory SERVICE boundary. Validates the completed inventory
+        evidence without mutating maintenance state, resolves AFTER_RENT to ESTIMATE and every
+        other current status to REPAIR, and returns deterministic active and historical target
+        candidates for each finding that has a frozen work plan.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryPublicationPreflightRequest' } } } }
+      responses:
+        '200': { description: Current target candidates and immutable plan summaries., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryPublicationPreflightResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/internal/maintenance/v1/inventory/reconciliations/{inventoryId}/findings/{findingId}:
+    parameters:
+      - { name: inventoryId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: findingId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    put:
+      tags: [Inventory Integration]
+      operationId: applyInventoryPublicationReconciliation
+      description: >-
+        Private exact maintenance.inventory SERVICE boundary. Stores the raw schema-versioned
+        completed plan under inventoryId:finalPlanVersion:findingId. CREATE refuses unresolved
+        active targets. REPLACE and MERGE supersede only an unstarted DRAFT target. MERGE of an
+        IN_PROGRESS or proven-completed repair creates a local successor from the semantic delta;
+        it has no task-board effect until the predecessor's terminal fact. REPLACE never alters
+        started work. A MATCHED result proves that every submitted line is already assigned to
+        the predecessor and creates no new task. AFTER_RENT creates a DRAFT estimate only; it
+        never schedules repair tasks or inbound logistics.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryPublicationApplyRequest' } } } }
+      responses:
+        '200': { description: Created or idempotently replayed completed-inventory publication., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryPublicationApplyResult' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -343,8 +406,8 @@ paths:
       operationId: completeRepairTransferArrival
       description: >-
         Called only after target-warehouse cabin acceptance. The receiver supplies the existing
-        priority and, when available, movement-to-shipment choice. The same repair chain moves to
-        the target warehouse, unfinished task-board entries are relocated by global queue
+        priority. The same repair chain moves to the target warehouse, unfinished task-board
+        entries are relocated by global queue
         definition, and the lease is reacquired. Missing target queues fail closed without
         partial relocation.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CompleteTransferRepairRequest' } } } }
@@ -732,6 +795,30 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationFailure' }
         '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/maintenance/v1/repairs/{id}/inbound-delivery/retry:
+    parameters:
+      - { $ref: '#/components/parameters/RepairId' }
+      - { $ref: '#/components/parameters/WarehouseIdQuery' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Repairs]
+      operationId: retryQuarantinedInboundDelivery
+      description: >-
+        Requires USER, rwms.write and exact warehouse MANAGE access. Recovers only an ordinary
+        STABLE queued repair whose exact LOGISTICS/CREATE_DRIVER_TASK inbound intent is
+        quarantined and whose logistics-owned DELIVER_TO_REPAIR task is proven absent. The
+        command changes only inbound planning, resumes the existing stable intent, and never
+        cancels or deletes logistics work.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RetryInboundDeliveryRequest' } } } }
+      responses:
+        '200': { description: Recovered inbound delivery intent and current repair delivery truth., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairCommandResult' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
   /api/maintenance/v1/repairs/{id}/reworks:
     parameters:
       - { $ref: '#/components/parameters/RepairId' }
@@ -785,10 +872,16 @@ paths:
     post:
       tags: [Decisions]
       operationId: writeOffRepair
-      description: Requires USER, rwms.write and warehouse MANAGE access. Fences the cabin to WRITTEN_OFF and cascades the terminal decision through the source chain.
+      description: >-
+        Requires USER, rwms.write, warehouse MANAGE and a warehouse-operational
+        global role (WAREHOUSE_MANAGER, WMS_ADMIN or SYSTEM_ADMIN). Creates one
+        PENDING_APPROVAL cabin disposition decision for the root cabin/rework
+        chain; it does not change asset truth before an administrator approves
+        the decision. A non-empty cabin requires an explicit contents plan.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/WriteOffRepairRequest' } } } }
       responses:
-        '200': { description: Written-off repair and lease reconciliation truth., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairCommandResult' } } } }
+        '200': { description: Existing idempotent disposition decision., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
+        '201': { description: Newly recorded disposition decision awaiting administrator approval., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -816,15 +909,142 @@ paths:
     get:
       tags: [Decisions]
       operationId: listWriteOffProjection
-      description: Read-only repair projection; not a command aggregate. Requires USER, rwms.read and warehouse VIEW access.
+      description: >-
+        One row per disposition decision/root asset, never one row per repair in
+        a rework chain. Requires USER, rwms.read and warehouse VIEW access.
       parameters:
         - { $ref: '#/components/parameters/WarehouseIdQuery' }
         - { $ref: '#/components/parameters/Page' }
         - { $ref: '#/components/parameters/Size' }
+        - name: state
+          in: query
+          schema: { $ref: '#/components/schemas/PropertyDispositionState' }
       responses:
-        '200': { description: Write-off projection page., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/WriteOffProjectionPage' } } } }
+        '200': { description: Write-off decision page with honest effect state., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionPage' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /api/maintenance/v1/losses:
+    get:
+      tags: [Decisions]
+      operationId: listLossProjection
+      description: One row per loss decision/root asset. Requires USER, rwms.read and warehouse VIEW access.
+      parameters:
+        - { $ref: '#/components/parameters/WarehouseIdQuery' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Size' }
+        - name: state
+          in: query
+          schema: { $ref: '#/components/schemas/PropertyDispositionState' }
+      responses:
+        '200': { description: Loss decision page with honest effect state., content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionPage' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/maintenance/v1/dispositions:
+    post:
+      tags: [Decisions]
+      operationId: createPropertyDisposition
+      description: >-
+        Creates a manual cabin or stock-equipment write-off/loss request.
+        Requires USER, rwms.write, warehouse MANAGE and global role
+        WAREHOUSE_MANAGER, WMS_ADMIN or SYSTEM_ADMIN. reason is mandatory; final
+        approval remains administrator-only. Manual equipment always comes from
+        STOCK. A cabin with contents requires an explicit plan; a cabin without
+        contents rejects a fabricated plan.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreatePropertyDispositionRequest' } } } }
+      responses:
+        '200': { description: Existing idempotent decision., content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
+        '201': { description: Newly recorded decision awaiting approval., content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/maintenance/v1/dispositions/{decisionId}:
+    parameters:
+      - name: decisionId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - { $ref: '#/components/parameters/WarehouseIdQuery' }
+    get:
+      tags: [Decisions]
+      operationId: getPropertyDisposition
+      description: Returns decision, root/repair-chain detail and current effect/recovery truth.
+      responses:
+        '200': { description: Current decision truth., content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/maintenance/v1/dispositions/{decisionId}/approve:
+    parameters:
+      - name: decisionId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - { $ref: '#/components/parameters/WarehouseIdQuery' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Decisions]
+      operationId: approvePropertyDisposition
+      description: >-
+        SYSTEM_ADMIN/WMS_ADMIN only. Records the immutable approval and starts
+        or resumes the server-owned asset/logistics saga; it never reports an
+        EFFECTIVE state before asset truth confirms the terminal effect.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ApprovePropertyDispositionRequest' } } } }
+      responses:
+        '200': { description: Approved decision and current effect state., content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/maintenance/v1/dispositions/{decisionId}/reject:
+    parameters:
+      - name: decisionId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - { $ref: '#/components/parameters/WarehouseIdQuery' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Decisions]
+      operationId: rejectPropertyDisposition
+      description: SYSTEM_ADMIN/WMS_ADMIN only; rejection is final and requires a reason.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RejectPropertyDispositionRequest' } } } }
+      responses:
+        '200': { description: Rejected decision., content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/maintenance/v1/dispositions/{decisionId}/recovery:
+    parameters:
+      - name: decisionId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - { $ref: '#/components/parameters/WarehouseIdQuery' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Decisions]
+      operationId: recoverPropertyDisposition
+      description: >-
+        SYSTEM_ADMIN/WMS_ADMIN only. Re-reads asset/logistics truth before a
+        version-fenced requeue; blind retry is forbidden. reviewer reason is
+        retained locally and never published to Kafka.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RecoverPropertyDispositionRequest' } } } }
+      responses:
+        '200': { description: Reviewed/requeued decision truth., content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
   /api/maintenance/v1/settings/repair-capacity/{warehouseId}:
     parameters:
       - name: warehouseId
@@ -1096,7 +1316,7 @@ components:
     PriorityVersionRequest:
       type: object
       additionalProperties: false
-      required: [expectedVersion, priority, movementToRepair, movementToShipment, logisticsPlanningMode, logisticsScheduledDate]
+      required: [expectedVersion, priority, movementToRepair, logisticsPlanningMode, logisticsScheduledDate]
       allOf:
         - if:
             properties:
@@ -1122,16 +1342,35 @@ components:
           maximum: 5
           description: 1 is the most urgent and 5 is the least urgent.
         movementToRepair:
-          description: Request a driver delivery into the repair zone before worker tasks are visible.
-          type: boolean
-        movementToShipment:
-          description: Request an outbound movement after the repair process.
+          description: >-
+            Request driver delivery into the repair zone before worker tasks are visible and an
+            automatic movement from repair after the repair process is completed.
           type: boolean
         logisticsPlanningMode:
           oneOf: [ { $ref: '#/components/schemas/RepairLogisticsPlanningMode' }, { type: 'null' } ]
         logisticsScheduledDate:
           description: Required only for inbound FIXED_DATE and null without inbound movement.
           oneOf: [ { type: string, format: date }, { type: 'null' } ]
+    RetryInboundDeliveryRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, logisticsPlanningMode, logisticsScheduledDate, reason]
+      oneOf:
+        - type: object
+          properties:
+            logisticsPlanningMode: { const: AUTO }
+            logisticsScheduledDate: { type: 'null' }
+        - type: object
+          properties:
+            logisticsPlanningMode: { const: FIXED_DATE }
+            logisticsScheduledDate: { type: string, format: date }
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        logisticsPlanningMode: { $ref: '#/components/schemas/RepairLogisticsPlanningMode' }
+        logisticsScheduledDate:
+          description: Null for AUTO; required for FIXED_DATE.
+          oneOf: [ { type: string, format: date }, { type: 'null' } ]
+        reason: { type: string, minLength: 1, maxLength: 2000 }
     ReplaceRepairCapacitySettingsRequest:
       type: object
       additionalProperties: false
@@ -1245,6 +1484,30 @@ components:
         state: { $ref: '#/components/schemas/RepairPlaceAllocationState' }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    LogisticsRepairPlaceProjectionAllocation:
+      type: object
+      additionalProperties: false
+      required: [id, version, warehouseId, repairId, rentalItemId, state, repairStageName, repairStageState, priority, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        warehouseId: { type: string, format: uuid }
+        repairId: { type: string, format: uuid }
+        rentalItemId: { type: string, format: uuid }
+        state: { $ref: '#/components/schemas/RepairPlaceAllocationState' }
+        repairStageName:
+          oneOf:
+            - { type: string, minLength: 1, maxLength: 255 }
+            - { type: 'null' }
+          description: Earliest unfinished maintenance stage, when one exists.
+        repairStageState:
+          oneOf:
+            - { $ref: '#/components/schemas/RepairStageState' }
+            - { type: 'null' }
+          description: State of repairStageName; null when the repair has no unfinished stage.
+        priority: { type: integer, minimum: 1, maximum: 5 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
     LogisticsRepairPlaceProjection:
       type: object
       additionalProperties: false
@@ -1273,7 +1536,7 @@ components:
             reservation share one ordered scheduling slot.
         allocations:
           type: array
-          items: { $ref: '#/components/schemas/LogisticsRepairPlaceAllocation' }
+          items: { $ref: '#/components/schemas/LogisticsRepairPlaceProjectionAllocation' }
     LogisticsCapitalRepair:
       type: object
       additionalProperties: false
@@ -1338,12 +1601,11 @@ components:
     TransferRepairArrivalPreflight:
       type: object
       additionalProperties: false
-      required: [activeRepairId, priorityRequired, movementToShipmentAvailable, missingQueueDefinitionIds]
+      required: [activeRepairId, priorityRequired, missingQueueDefinitionIds]
       properties:
         activeRepairId:
           oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
         priorityRequired: { type: boolean }
-        movementToShipmentAvailable: { type: boolean }
         missingQueueDefinitionIds:
           type: array
           uniqueItems: true
@@ -1351,7 +1613,7 @@ components:
     CompleteTransferRepairRequest:
       type: object
       additionalProperties: false
-      required: [rentalItemId, sourceWarehouseId, targetWarehouseId, priority, movementToShipment]
+      required: [rentalItemId, sourceWarehouseId, targetWarehouseId, priority]
       properties:
         rentalItemId: { type: string, format: uuid }
         sourceWarehouseId: { type: string, format: uuid }
@@ -1361,9 +1623,6 @@ components:
           oneOf:
             - { type: integer, minimum: 1, maximum: 5 }
             - { type: 'null' }
-        movementToShipment:
-          description: Must be false when target-warehouse movement capability is unavailable.
-          type: boolean
     CompleteTransferRepairResult:
       type: object
       additionalProperties: false
@@ -2023,13 +2282,19 @@ components:
       additionalProperties: false
       description: >-
         CATALOG requires catalogNodeId and rejects the manual evidence fields.
-        MANUAL requires a null catalogNodeId plus description, WORK/MATERIAL type,
-        unit, nonnegative minor-unit price and exact normative minutes. MANUAL
-        lines are valid only with MANUAL plan mode.
-      required: [aggregationKind, catalogNodeId, description, type, unit, quantity, unitPriceMinor, normativeMinutes, mediaReferences]
+        MANUAL requires null catalogNodeId, a non-null active routingCatalogNodeId
+        used only to resolve an immutable routing snapshot, description, WORK/MATERIAL
+        type, unit, nonnegative minor-unit price and exact normative minutes. MANUAL
+        lines are valid only with MANUAL plan mode and remain non-catalog lines after freezing.
+      required: [aggregationKind, catalogNodeId, routingCatalogNodeId, description, type, unit, quantity, unitPriceMinor, normativeMinutes, mediaReferences]
       properties:
         aggregationKind: { $ref: '#/components/schemas/InventoryPlanLineKind' }
         catalogNodeId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        routingCatalogNodeId:
+          description: >-
+            Null for CATALOG. Required for MANUAL and used only to resolve the frozen routing
+            snapshot; it is not retained as catalogVersionId, catalogNodeId or catalogNodeName.
           oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
         description:
           oneOf: [ { type: string, minLength: 1, maxLength: 1000 }, { type: 'null' } ]
@@ -2063,7 +2328,7 @@ components:
     FreezeInventoryPlanRequest:
       type: object
       additionalProperties: false
-      required: [warehouseId, inventoryId, findingId, sourceRevision, mode, lines, plan, mediaReferences, priority, coverMediaId, movementToRepair, movementToShipment, logisticsPlanningMode, logisticsScheduledDate]
+      required: [warehouseId, inventoryId, findingId, sourceRevision, mode, lines, plan, mediaReferences, priority, coverMediaId, movementToRepair, logisticsPlanningMode, logisticsScheduledDate]
       allOf:
         - if:
             properties:
@@ -2109,7 +2374,6 @@ components:
           description: Required and contained in aggregate mediaReferences when photos are present; otherwise null.
           oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
         movementToRepair: { type: boolean }
-        movementToShipment: { type: boolean }
         logisticsPlanningMode:
           oneOf: [ { $ref: '#/components/schemas/RepairLogisticsPlanningMode' }, { type: 'null' } ]
         logisticsScheduledDate:
@@ -2169,7 +2433,7 @@ components:
     FrozenInventoryPlanSnapshot:
       type: object
       additionalProperties: false
-      required: [catalogVersionId, mode, lines, stages, movementToRepair, movementToShipment, mediaReferences, priority, coverMediaId, logisticsPlanningMode, logisticsScheduledDate]
+      required: [catalogVersionId, mode, lines, stages, movementToRepair, mediaReferences, priority, coverMediaId, logisticsPlanningMode, logisticsScheduledDate]
       allOf:
         - if:
             properties:
@@ -2201,7 +2465,6 @@ components:
           maxItems: 1000
           items: { $ref: '#/components/schemas/InventoryPlanStageSnapshot' }
         movementToRepair: { type: boolean }
-        movementToShipment: { type: boolean }
         mediaReferences:
           type: array
           maxItems: 100
@@ -2241,6 +2504,234 @@ components:
         dispatchDate: { type: string, format: date }
         planFingerprint: { type: string, pattern: '^[0-9a-f]{64}$' }
         snapshot: { $ref: '#/components/schemas/FrozenInventoryPlanSnapshot' }
+    InventoryPublicationTargetKind:
+      type: string
+      enum: [ESTIMATE, REPAIR]
+    InventoryPublicationStrategy:
+      type: string
+      enum: [CREATE, REPLACE, MERGE]
+    InventoryPublicationOutcome:
+      type: string
+      enum: [CREATED, SUCCESSOR, MATCHED]
+    InventoryPublicationSuccessorState:
+      type: string
+      enum: [WAITING_PREDECESSOR, RELEASED]
+    InventoryPublicationTerminalFact:
+      type: string
+      enum: [TASK_BOARD_COMPLETION, REPAIR_ACCEPTANCE]
+    InventoryPublicationDeltaDisposition:
+      type: string
+      enum: [RETAINED, RETAINED_AFTER_DEDUCTION, REMOVED_AS_ALREADY_PRESENT, RETAINED_AMBIGUOUS]
+    InventoryPublicationSnapshot:
+      description: >-
+        Raw inventory-owned frozen plan. snapshotSchemaVersion=1 may additionally retain the
+        historical movementToShipment boolean; maintenance stores and hashes that exact raw
+        document before adapting it to the current executable schema. Version 2 omits it.
+      type: object
+      additionalProperties: true
+      properties:
+        catalogVersionId: { type: string, format: uuid }
+        mode: { $ref: '#/components/schemas/InventoryPlanMode' }
+        lines: { type: array, items: { $ref: '#/components/schemas/InventoryPlanLineSnapshot' } }
+        stages: { type: array, items: { $ref: '#/components/schemas/InventoryPlanStageSnapshot' } }
+        movementToRepair: { type: boolean }
+        movementToShipment: { type: boolean }
+        mediaReferences: { type: array, items: { $ref: '#/components/schemas/MediaReference' } }
+        priority: { type: integer, minimum: 1, maximum: 5 }
+        coverMediaId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        logisticsPlanningMode:
+          oneOf: [ { $ref: '#/components/schemas/RepairLogisticsPlanningMode' }, { type: 'null' } ]
+        logisticsScheduledDate:
+          oneOf: [ { type: string, format: date }, { type: 'null' } ]
+    InventoryPublicationFindingInput:
+      type: object
+      additionalProperties: false
+      required: [findingId, findingRevision, assetId, assetVersion, planFingerprintSha256, priority, movementToRepair, movementScheduledDate, repairScheduledDate, snapshot, media, snapshotSchemaVersion]
+      properties:
+        findingId: { type: string, format: uuid }
+        findingRevision: { type: integer, format: int64, minimum: 1 }
+        assetId: { type: string, format: uuid }
+        assetVersion: { type: integer, format: int64, minimum: 0 }
+        planFingerprintSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        priority: { type: integer, minimum: 1, maximum: 5 }
+        movementToRepair: { type: boolean }
+        movementScheduledDate:
+          oneOf: [ { type: string, format: date }, { type: 'null' } ]
+        repairScheduledDate: { type: string, format: date }
+        snapshot: { $ref: '#/components/schemas/InventoryPublicationSnapshot' }
+        media:
+          description: >-
+            Deterministic unique union: aggregate media first, then line media in source order.
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/MediaReference' }
+        snapshotSchemaVersion: { type: integer, minimum: 1, maximum: 2 }
+    InventoryPublicationPreflightRequest:
+      type: object
+      additionalProperties: false
+      required: [inventoryId, warehouseId, finalPlanVersion, finalPlanSha256, findings]
+      properties:
+        inventoryId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        finalPlanVersion: { type: integer, format: int64, minimum: 1 }
+        finalPlanSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        findings:
+          type: array
+          minItems: 1
+          maxItems: 5000
+          items: { $ref: '#/components/schemas/InventoryPublicationFindingInput' }
+    InventoryPublicationPlanSummary:
+      type: object
+      additionalProperties: false
+      required: [workLineCount, materialLineCount, grandTotalMinor]
+      properties:
+        workLineCount: { type: integer, minimum: 0 }
+        materialLineCount: { type: integer, minimum: 0 }
+        grandTotalMinor: { type: integer, format: int64, minimum: 0 }
+    InventoryPublicationCandidate:
+      type: object
+      additionalProperties: false
+      required: [targetKind, targetId, estimateId, repairId, version, state, started, active, priority, sourceParty, planFingerprintSha256, planSummary]
+      properties:
+        targetKind: { $ref: '#/components/schemas/InventoryPublicationTargetKind' }
+        targetId: { type: string, format: uuid }
+        estimateId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        repairId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        version: { type: integer, format: int64, minimum: 0 }
+        state: { type: string, minLength: 1 }
+        started: { type: boolean }
+        active: { type: boolean }
+        priority:
+          oneOf: [ { type: integer, minimum: 1, maximum: 5 }, { type: 'null' } ]
+        sourceParty:
+          oneOf: [ { type: string, maxLength: 512 }, { type: 'null' } ]
+        planFingerprintSha256:
+          oneOf: [ { type: string, pattern: '^[0-9a-f]{64}$' }, { type: 'null' } ]
+        planSummary: { $ref: '#/components/schemas/InventoryPublicationPlanSummary' }
+    InventoryPublicationPreflightFinding:
+      type: object
+      additionalProperties: false
+      required: [findingId, targetKind, candidates]
+      properties:
+        findingId: { type: string, format: uuid }
+        targetKind: { $ref: '#/components/schemas/InventoryPublicationTargetKind' }
+        candidates: { type: array, items: { $ref: '#/components/schemas/InventoryPublicationCandidate' } }
+    InventoryPublicationPreflightResponse:
+      type: object
+      additionalProperties: false
+      required: [inventoryId, finalPlanVersion, finalPlanSha256, findings]
+      properties:
+        inventoryId: { type: string, format: uuid }
+        finalPlanVersion: { type: integer, format: int64, minimum: 1 }
+        finalPlanSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        findings: { type: array, items: { $ref: '#/components/schemas/InventoryPublicationPreflightFinding' } }
+    InventoryPublicationApplyRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, finalPlanVersion, finalPlanSha256, findingRevision, assetId, assetVersion, planFingerprintSha256, priority, movementToRepair, movementScheduledDate, repairScheduledDate, snapshot, media, snapshotSchemaVersion, strategy, selectedTargetKind, selectedTargetId]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        finalPlanVersion: { type: integer, format: int64, minimum: 1 }
+        finalPlanSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        findingRevision: { type: integer, format: int64, minimum: 1 }
+        assetId: { type: string, format: uuid }
+        assetVersion: { type: integer, format: int64, minimum: 0 }
+        planFingerprintSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        priority: { type: integer, minimum: 1, maximum: 5 }
+        movementToRepair: { type: boolean }
+        movementScheduledDate:
+          oneOf: [ { type: string, format: date }, { type: 'null' } ]
+        repairScheduledDate: { type: string, format: date }
+        snapshot: { $ref: '#/components/schemas/InventoryPublicationSnapshot' }
+        media: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/MediaReference' } }
+        snapshotSchemaVersion: { type: integer, minimum: 1, maximum: 2 }
+        strategy: { $ref: '#/components/schemas/InventoryPublicationStrategy' }
+        selectedTargetKind:
+          oneOf: [ { $ref: '#/components/schemas/InventoryPublicationTargetKind' }, { type: 'null' } ]
+        selectedTargetId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+    InventoryPublicationSourceReference:
+      type: object
+      additionalProperties: false
+      required: [inventoryId, finalPlanVersion, findingId, findingRevision, finalPlanSha256, planFingerprintSha256, strategy, selectedTargetKind, selectedTargetId, supersededTargetKind, supersededTargetId]
+      properties:
+        inventoryId: { type: string, format: uuid }
+        finalPlanVersion: { type: integer, format: int64, minimum: 1 }
+        findingId: { type: string, format: uuid }
+        findingRevision: { type: integer, format: int64, minimum: 1 }
+        finalPlanSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        planFingerprintSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        strategy: { $ref: '#/components/schemas/InventoryPublicationStrategy' }
+        selectedTargetKind:
+          oneOf: [ { $ref: '#/components/schemas/InventoryPublicationTargetKind' }, { type: 'null' } ]
+        selectedTargetId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        supersededTargetKind:
+          oneOf: [ { $ref: '#/components/schemas/InventoryPublicationTargetKind' }, { type: 'null' } ]
+        supersededTargetId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+    InventoryPublicationDeltaLine:
+      description: >-
+        A line decision against the raw frozen snapshot. sourceIndex addresses snapshot.lines;
+        retainedQuantity may be zero only when the line was already present in the predecessor.
+      type: object
+      additionalProperties: false
+      required: [sourceIndex, disposition, lineType, catalogNodeId, requestedQuantity, retainedQuantity]
+      properties:
+        sourceIndex: { type: integer, minimum: 0 }
+        disposition: { $ref: '#/components/schemas/InventoryPublicationDeltaDisposition' }
+        lineType: { $ref: '#/components/schemas/InventoryPlanLineType' }
+        catalogNodeId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        requestedQuantity: { type: string, minLength: 1 }
+        retainedQuantity: { type: string, minLength: 1 }
+    InventoryPublicationDelta:
+      type: object
+      additionalProperties: false
+      required: [lines]
+      properties:
+        lines:
+          type: array
+          items: { $ref: '#/components/schemas/InventoryPublicationDeltaLine' }
+    InventoryPublicationSuccessorStatus:
+      description: >-
+        Present only for SUCCESSOR. RELEASED means the existing maintenance QUEUE_REPAIR
+        reconciliation was durably enqueued after the listed proven predecessor fact.
+      type: object
+      additionalProperties: false
+      required: [predecessorRepairId, state, terminalFact, terminalFactEventId, terminalFactOccurredAt, releasedAt]
+      properties:
+        predecessorRepairId: { type: string, format: uuid }
+        state: { $ref: '#/components/schemas/InventoryPublicationSuccessorState' }
+        terminalFact:
+          oneOf: [ { $ref: '#/components/schemas/InventoryPublicationTerminalFact' }, { type: 'null' } ]
+        terminalFactEventId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        terminalFactOccurredAt:
+          oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
+        releasedAt:
+          oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
+    InventoryPublicationApplyResult:
+      type: object
+      additionalProperties: false
+      required: [source, outcome, targetKind, targetId, estimateId, repairId, successor, delta]
+      properties:
+        source: { $ref: '#/components/schemas/InventoryPublicationSourceReference' }
+        outcome: { $ref: '#/components/schemas/InventoryPublicationOutcome' }
+        targetKind:
+          oneOf: [ { $ref: '#/components/schemas/InventoryPublicationTargetKind' }, { type: 'null' } ]
+        targetId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        estimateId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        repairId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        successor:
+          oneOf: [ { $ref: '#/components/schemas/InventoryPublicationSuccessorStatus' }, { type: 'null' } ]
+        delta: { $ref: '#/components/schemas/InventoryPublicationDelta' }
     InventoryRepairSnapshotRequest:
       type: object
       additionalProperties: false
@@ -2372,7 +2863,7 @@ components:
     Repair:
       type: object
       additionalProperties: false
-      required: [id, rootRepairId, sourceRepairId, estimateId, warehouseId, rentalItemId, origin, kind, executionState, acceptanceState, reclassificationState, version, dispatchDate, priority, sourceParty, plan, inventorySource, lease, mediaReferences, coverMediaId, complexity, movementToRepair, movementToShipment, logisticsPlanningMode, logisticsScheduledDate, createdAt, updatedAt, actor]
+      required: [id, rootRepairId, sourceRepairId, estimateId, warehouseId, rentalItemId, origin, kind, executionState, acceptanceState, reclassificationState, version, dispatchDate, priority, sourceParty, plan, inventorySource, lease, mediaReferences, coverMediaId, complexity, movementToRepair, logisticsPlanningMode, logisticsScheduledDate, createdAt, updatedAt, actor]
       properties:
         id: { type: string, format: uuid }
         rootRepairId: { type: string, format: uuid }
@@ -2406,12 +2897,9 @@ components:
             every read; it is not user-entered cached text.
           $ref: '#/components/schemas/RepairComplexitySnapshot'
         movementToRepair:
-          description: True while a driver delivery into the repair zone is required before worker tasks may be shown.
-          type: boolean
-        movementToShipment:
           description: >-
-            Receiver-selected continuation option. It can be true only when the current warehouse
-            has the stable movement/driver queue capability.
+            Selects the full repair movement cycle: driver delivery into the repair zone before
+            worker tasks are shown and automatic movement from repair after completion.
           type: boolean
         logisticsPlanningMode:
           oneOf: [ { $ref: '#/components/schemas/RepairLogisticsPlanningMode' }, { type: 'null' } ]
@@ -2549,7 +3037,7 @@ components:
     WriteOffRepairRequest:
       type: object
       additionalProperties: false
-      required: [expectedVersion, reason]
+      required: [expectedVersion, reason, contentsPlan]
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         reason:
@@ -2560,6 +3048,13 @@ components:
         comment:
           description: Service-local decision text; never published to Kafka.
           oneOf: [ { type: string, maxLength: 2000 }, { type: 'null' } ]
+        contentsPlan:
+          description: >-
+            Required and non-null only when the root cabin currently has contents. Null means the
+            cabin is empty and therefore no contents-choice modal was shown.
+          oneOf:
+            - { $ref: '#/components/schemas/CabinContentsDispositionPlanInput' }
+            - { type: 'null' }
     EstimateCommandResult:
       type: object
       additionalProperties: false
@@ -2599,24 +3094,270 @@ components:
         page: { type: integer, minimum: 0 }
         size: { type: integer, minimum: 1 }
         totalElements: { type: integer, format: int64, minimum: 0 }
-    WriteOffProjection:
+    PropertyDispositionAssetKind:
+      type: string
+      enum: [CABIN, EQUIPMENT]
+    PropertyDispositionKind:
+      type: string
+      enum: [WRITE_OFF, LOSS]
+    PropertyDispositionSource:
+      type: string
+      enum: [MANUAL, REPAIR, ESTIMATE, INVENTORY]
+    PropertyDispositionState:
+      type: string
+      description: >-
+        EFFECTIVE is returned only after asset-service confirms terminal truth. APPROVED,
+        MOVEMENT_PENDING and EFFECT_PENDING expose honest server-side saga progress; QUARANTINED
+        requires an administrator recovery decision.
+      enum: [PENDING_APPROVAL, APPROVED, MOVEMENT_PENDING, EFFECT_PENDING, EFFECTIVE, REJECTED, QUARANTINED]
+    PropertyDispositionAssetEffectState:
+      type: string
+      enum: [NOT_STARTED, PENDING, APPLIED, QUARANTINED]
+    CabinContentsDispositionMode:
+      type: string
+      enum: [MOVE_SELECTED_TO_STOCK, DISPOSE_WITH_CABIN]
+    CabinContentsDispositionLineInput:
       type: object
       additionalProperties: false
-      required: [repairId, rootRepairId, warehouseId, rentalItemId, repairVersion, writtenOffAt, actor]
+      required: [equipmentId, expectedBalanceVersion, moveToStockQuantity]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        expectedBalanceVersion: { type: integer, format: int64, minimum: 0 }
+        moveToStockQuantity:
+          description: >-
+            Quantity physically assigned to the furniture-movement task. It must be between zero
+            and the current cabin quantity. The remainder is disposed with the cabin.
+          type: integer
+          format: int64
+          minimum: 0
+    CabinContentsDispositionPlanInput:
+      type: object
+      additionalProperties: false
+      required: [mode, lines]
+      properties:
+        mode: { $ref: '#/components/schemas/CabinContentsDispositionMode' }
+        lines:
+          description: >-
+            Exactly one line for every non-zero cabin content item. Zero-quantity catalogue extras
+            are never accepted. DISPOSE_WITH_CABIN requires every moveToStockQuantity to be zero.
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items: { $ref: '#/components/schemas/CabinContentsDispositionLineInput' }
+    CabinContentsDispositionLine:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, equipmentName, equipmentFormat, currentQuantity, moveToStockQuantity, disposeQuantity, expectedBalanceVersion]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        equipmentName: { type: string, minLength: 1, maxLength: 255 }
+        equipmentFormat:
+          description: Optional immutable display format/unit snapshot; identity remains equipmentId.
+          oneOf: [ { type: string, minLength: 1, maxLength: 128 }, { type: 'null' } ]
+        currentQuantity: { type: integer, format: int64, minimum: 1 }
+        moveToStockQuantity: { type: integer, format: int64, minimum: 0 }
+        disposeQuantity: { type: integer, format: int64, minimum: 0 }
+        expectedBalanceVersion: { type: integer, format: int64, minimum: 0 }
+    CabinContentsDispositionPlan:
+      type: object
+      additionalProperties: false
+      required: [mode, lines]
+      properties:
+        mode: { $ref: '#/components/schemas/CabinContentsDispositionMode' }
+        lines:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items: { $ref: '#/components/schemas/CabinContentsDispositionLine' }
+    CreateCabinPropertyDispositionRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, assetKind, assetId, expectedAssetVersion, disposition, reason, contentsPlan]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        assetKind: { type: string, const: CABIN }
+        assetId: { type: string, format: uuid }
+        expectedAssetVersion: { type: integer, format: int64, minimum: 0 }
+        disposition: { $ref: '#/components/schemas/PropertyDispositionKind' }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+        evidenceLink:
+          oneOf: [ { type: string, format: uri, maxLength: 2000 }, { type: 'null' } ]
+        contentsPlan:
+          description: Non-null exactly when the live cabin has contents; empty cabins use null.
+          oneOf:
+            - { $ref: '#/components/schemas/CabinContentsDispositionPlanInput' }
+            - { type: 'null' }
+    CreateEquipmentPropertyDispositionRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, assetKind, assetId, expectedAssetVersion, expectedSourceBalanceVersion, quantity, disposition, reason]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        assetKind: { type: string, const: EQUIPMENT }
+        assetId: { type: string, format: uuid }
+        expectedAssetVersion:
+          description: Current equipment-catalog version; deactivation or semantic mutation conflicts.
+          type: integer
+          format: int64
+          minimum: 0
+        expectedSourceBalanceVersion: { type: integer, format: int64, minimum: 0 }
+        quantity: { type: integer, format: int64, minimum: 1 }
+        disposition: { $ref: '#/components/schemas/PropertyDispositionKind' }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+        evidenceLink:
+          oneOf: [ { type: string, format: uri, maxLength: 2000 }, { type: 'null' } ]
+    CreatePropertyDispositionRequest:
+      oneOf:
+        - { $ref: '#/components/schemas/CreateCabinPropertyDispositionRequest' }
+        - { $ref: '#/components/schemas/CreateEquipmentPropertyDispositionRequest' }
+      discriminator:
+        propertyName: assetKind
+        mapping:
+          CABIN: '#/components/schemas/CreateCabinPropertyDispositionRequest'
+          EQUIPMENT: '#/components/schemas/CreateEquipmentPropertyDispositionRequest'
+    CreateInventoryLossDispositionRequest:
+      type: object
+      additionalProperties: false
+      required: [inventorySessionId, findingId, warehouseId, equipmentId, equipmentName, expectedAssetVersion, quantity, expectedSourceBalanceVersion, reason]
+      properties:
+        inventorySessionId: { type: string, format: uuid }
+        findingId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        equipmentId: { type: string, format: uuid }
+        equipmentName: { type: string, minLength: 1, maxLength: 255 }
+        expectedAssetVersion: { type: integer, format: int64, minimum: 0 }
+        quantity: { type: integer, format: int64, minimum: 1 }
+        expectedSourceBalanceVersion: { type: integer, format: int64, minimum: 0 }
+        reason:
+          description: Inventory-owned nonblank shortage explanation frozen into the decision.
+          type: string
+          minLength: 1
+          maxLength: 2000
+        evidenceLink:
+          oneOf: [ { type: string, format: uri, maxLength: 2000 }, { type: 'null' } ]
+    ApprovePropertyDispositionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        comment:
+          oneOf: [ { type: string, minLength: 1, maxLength: 2000 }, { type: 'null' } ]
+    RejectPropertyDispositionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reason]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+    RecoverPropertyDispositionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, expectedRecoveryVersion, reason]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        expectedRecoveryVersion: { type: integer, format: int64, minimum: 0 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+    PropertyDispositionRepairChainEntry:
+      type: object
+      additionalProperties: false
+      required: [repairId, repairVersion]
       properties:
         repairId: { type: string, format: uuid }
-        rootRepairId: { type: string, format: uuid }
-        warehouseId: { type: string, format: uuid }
-        rentalItemId: { type: string, format: uuid }
         repairVersion: { type: integer, format: int64, minimum: 0 }
-        writtenOffAt: { type: string, format: date-time }
-        actor: { $ref: '#/components/schemas/ActorSnapshot' }
-    WriteOffProjectionPage:
+    PropertyDispositionDecision:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - version
+        - recoveryVersion
+        - warehouseId
+        - assetKind
+        - assetId
+        - assetDisplayName
+        - disposition
+        - source
+        - state
+        - reason
+        - quantity
+        - expectedAssetVersion
+        - expectedSourceBalanceVersion
+        - contentsPlan
+        - rootRepairId
+        - repairChain
+        - inventorySessionId
+        - findingId
+        - assetEffectState
+        - movementTaskId
+        - failureCode
+        - failureDetail
+        - requestedBy
+        - requestedAt
+        - reviewedBy
+        - reviewedAt
+        - reviewComment
+        - effectiveAt
+        - updatedAt
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        recoveryVersion: { type: integer, format: int64, minimum: 0 }
+        warehouseId: { type: string, format: uuid }
+        assetKind: { $ref: '#/components/schemas/PropertyDispositionAssetKind' }
+        assetId: { type: string, format: uuid }
+        assetDisplayName: { type: string, minLength: 1, maxLength: 255 }
+        disposition: { $ref: '#/components/schemas/PropertyDispositionKind' }
+        source: { $ref: '#/components/schemas/PropertyDispositionSource' }
+        state: { $ref: '#/components/schemas/PropertyDispositionState' }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+        evidenceLink:
+          oneOf: [ { type: string, format: uri, maxLength: 2000 }, { type: 'null' } ]
+        quantity:
+          oneOf: [ { type: integer, format: int64, minimum: 1 }, { type: 'null' } ]
+        expectedAssetVersion:
+          oneOf: [ { type: integer, format: int64, minimum: 0 }, { type: 'null' } ]
+        expectedSourceBalanceVersion:
+          oneOf: [ { type: integer, format: int64, minimum: 0 }, { type: 'null' } ]
+        contentsPlan:
+          oneOf:
+            - { $ref: '#/components/schemas/CabinContentsDispositionPlan' }
+            - { type: 'null' }
+        rootRepairId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        repairChain:
+          type: array
+          maxItems: 1000
+          items: { $ref: '#/components/schemas/PropertyDispositionRepairChainEntry' }
+        inventorySessionId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        findingId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        assetEffectState: { $ref: '#/components/schemas/PropertyDispositionAssetEffectState' }
+        movementTaskId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        failureCode:
+          oneOf: [ { type: string, minLength: 1, maxLength: 128 }, { type: 'null' } ]
+        failureDetail:
+          description: Sanitized operator-safe detail; upstream response bodies and secrets are forbidden.
+          oneOf: [ { type: string, minLength: 1, maxLength: 2000 }, { type: 'null' } ]
+        requestedBy: { $ref: '#/components/schemas/ActorSnapshot' }
+        requestedAt: { type: string, format: date-time }
+        reviewedBy:
+          oneOf: [ { $ref: '#/components/schemas/ActorSnapshot' }, { type: 'null' } ]
+        reviewedAt:
+          oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
+        reviewComment:
+          oneOf: [ { type: string, minLength: 1, maxLength: 2000 }, { type: 'null' } ]
+        effectiveAt:
+          oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
+        updatedAt: { type: string, format: date-time }
+    PropertyDispositionPage:
       type: object
       additionalProperties: false
       required: [items, page, size, totalElements]
       properties:
-        items: { type: array, items: { $ref: '#/components/schemas/WriteOffProjection' } }
+        items: { type: array, items: { $ref: '#/components/schemas/PropertyDispositionDecision' } }
         page: { type: integer, minimum: 0 }
         size: { type: integer, minimum: 1 }
         totalElements: { type: integer, format: int64, minimum: 0 }

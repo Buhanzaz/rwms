@@ -109,8 +109,7 @@ export type MaintenanceRepeatReworkLineInput = {
 export type MaintenanceReworkLineInput =
   MaintenanceAddedReworkLineInput | MaintenanceRepeatReworkLineInput
 
-export type MaintenanceRepairStageKind =
-  "REPAIR_WORK" | "MOVE_TO_REPAIR" | "MOVE_FROM_REPAIR"
+export type MaintenanceRepairStageKind = "REPAIR_WORK"
 
 export type MaintenancePlanStageInput = {
   id: string
@@ -262,7 +261,7 @@ export type MaintenanceRepair = {
     plannedMinutes: string
     forcedCapital: boolean
   }
-  movementToShipment: boolean
+  movementToRepair: boolean
   logisticsPlanningMode: "AUTO" | "FIXED_DATE"
   logisticsScheduledDate: string | null
   createdAt: string
@@ -314,9 +313,21 @@ function json(
 }
 
 function validateLogisticsPlanning(
+  movementToRepair: boolean,
   logisticsPlanningMode: "AUTO" | "FIXED_DATE",
   logisticsScheduledDate: string | null
 ) {
+  if (!movementToRepair) {
+    if (
+      logisticsPlanningMode !== "AUTO" ||
+      logisticsScheduledDate !== null
+    ) {
+      throw new Error(
+        "Планирование логистики доступно только для перемещения на ремонт."
+      )
+    }
+    return { logisticsPlanningMode: null, logisticsScheduledDate: null }
+  }
   if (
     (logisticsPlanningMode === "AUTO" && logisticsScheduledDate !== null) ||
     (logisticsPlanningMode === "FIXED_DATE" && !logisticsScheduledDate)
@@ -427,10 +438,12 @@ export function completeMaintenanceEstimate(
   expectedVersion: number,
   priority: number,
   idempotencyKey: string,
+  movementToRepair: boolean,
   logisticsPlanningMode: "AUTO" | "FIXED_DATE",
   logisticsScheduledDate: string | null
 ) {
   const logisticsPlanning = validateLogisticsPlanning(
+    movementToRepair,
     logisticsPlanningMode,
     logisticsScheduledDate
   )
@@ -439,7 +452,12 @@ export function completeMaintenanceEstimate(
     itemEndpoint("estimates", warehouseId, estimateId, "/complete"),
     json(
       "POST",
-      { expectedVersion, priority, ...logisticsPlanning },
+      {
+        expectedVersion,
+        priority,
+        movementToRepair,
+        ...logisticsPlanning,
+      },
       { "Idempotency-Key": idempotencyKey }
     )
   )
@@ -551,10 +569,12 @@ export function queueMaintenanceRepair(
   expectedVersion: number,
   priority: number,
   idempotencyKey: string,
+  movementToRepair: boolean,
   logisticsPlanningMode: "AUTO" | "FIXED_DATE",
   logisticsScheduledDate: string | null
 ) {
   const logisticsPlanning = validateLogisticsPlanning(
+    movementToRepair,
     logisticsPlanningMode,
     logisticsScheduledDate
   )
@@ -563,7 +583,12 @@ export function queueMaintenanceRepair(
     itemEndpoint("repairs", warehouseId, repairId, "/plan"),
     json(
       "POST",
-      { expectedVersion, priority, ...logisticsPlanning },
+      {
+        expectedVersion,
+        priority,
+        movementToRepair,
+        ...logisticsPlanning,
+      },
       { "Idempotency-Key": idempotencyKey }
     )
   )

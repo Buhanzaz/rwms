@@ -118,7 +118,7 @@ fun ManagerPhotoCaptureScreen(
             onRemovePhotoUri = onRemovePhotoUri,
             audioPermissionGranted = audioPermissionGranted,
             onRequestAudioPermission = {
-                permissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
+                permissionLauncher.launch(managerVideoAudioPermissions())
             },
             onClose = onBack,
         )
@@ -126,17 +126,18 @@ fun ManagerPhotoCaptureScreen(
         CameraPermissionScreen(
             title = title,
             onRequestPermission = {
-                permissionLauncher.launch(
-                    arrayOf(
-                        Manifest.permission.CAMERA,
-                        Manifest.permission.RECORD_AUDIO,
-                    ),
-                )
+                permissionLauncher.launch(managerPhotoCapturePermissions())
             },
             onBack = onBack,
         )
     }
 }
+
+internal fun managerPhotoCapturePermissions(): Array<String> =
+    arrayOf(Manifest.permission.CAMERA)
+
+internal fun managerVideoAudioPermissions(): Array<String> =
+    arrayOf(Manifest.permission.RECORD_AUDIO)
 
 @Composable
 private fun CameraPermissionScreen(

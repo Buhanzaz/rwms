@@ -76,7 +76,6 @@ const ARRIVAL_PREFLIGHT_KEYS = [
   "lineId",
   "activeRepairId",
   "priorityRequired",
-  "movementToShipmentAvailable",
   "missingQueueDefinitionIds",
 ] as const
 
@@ -224,7 +223,6 @@ export function parseTransferArrivalPreflight(
   const source = object(value, ARRIVAL_PREFLIGHT_KEYS)
   const activeRepairId = nullableUuid(source.activeRepairId)
   const priorityRequired = flag(source.priorityRequired)
-  const movementToShipmentAvailable = flag(source.movementToShipmentAvailable)
   const missingQueueDefinitionIds = list(source.missingQueueDefinitionIds).map(
     uuid
   )
@@ -233,7 +231,6 @@ export function parseTransferArrivalPreflight(
       missingQueueDefinitionIds.length ||
     (activeRepairId === null &&
       (priorityRequired ||
-        movementToShipmentAvailable ||
         missingQueueDefinitionIds.length > 0)) ||
     (activeRepairId !== null && !priorityRequired)
   ) {
@@ -244,7 +241,6 @@ export function parseTransferArrivalPreflight(
     lineId: uuid(source.lineId),
     activeRepairId,
     priorityRequired,
-    movementToShipmentAvailable,
     missingQueueDefinitionIds,
   }
 }
@@ -405,7 +401,6 @@ export class HttpWarehouseTransferClient implements WarehouseTransferClient {
         body: JSON.stringify({
           references: input.references,
           priority: input.priority,
-          movementToShipment: input.movementToShipment,
         }),
       }
     )

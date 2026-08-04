@@ -392,10 +392,7 @@ export function createRepairEstimateCatalogIndex(
       // A queue id and kind are the stable identity of a binding.  Names are
       // presentation data and may be stale in an old snapshot; prefer the
       // first deterministic value, but use a non-empty name when available.
-      if (
-        !existing.binding.queueName &&
-        candidate.binding.queueName
-      ) {
+      if (!existing.binding.queueName && candidate.binding.queueName) {
         unique.set(key, {
           ...existing,
           binding: {
@@ -445,14 +442,16 @@ export function createRepairEstimateCatalogIndex(
       const candidates: QueueBindingCandidate[] = []
       const queueId = current.queueDefinitionId?.trim() || null
       if (queueId && current.routeQueueKind) {
-        const result = Object.freeze([{
-          sourceNodeId: current.id,
-          binding: {
-            queueId,
-            queueName: current.queueDefinitionName?.trim() || null,
-            queueKind: current.routeQueueKind,
+        const result = Object.freeze([
+          {
+            sourceNodeId: current.id,
+            binding: {
+              queueId,
+              queueName: current.queueDefinitionName?.trim() || null,
+              queueKind: current.routeQueueKind,
+            },
           },
-        }])
+        ])
         resolving.delete(currentNodeId)
         memoized.set(currentNodeId, result)
         return result
@@ -462,8 +461,9 @@ export function createRepairEstimateCatalogIndex(
       if (current.parentId && nodesById.has(current.parentId)) {
         predecessorIds.add(current.parentId)
       }
-      for (const predecessor of
-        incomingGraphParentNodesByNodeId.get(current.id) ?? EMPTY_NODES) {
+      for (const predecessor of incomingGraphParentNodesByNodeId.get(
+        current.id
+      ) ?? EMPTY_NODES) {
         predecessorIds.add(predecessor.id)
       }
 
@@ -478,9 +478,7 @@ export function createRepairEstimateCatalogIndex(
         )
 
       for (const predecessor of predecessors) {
-        candidates.push(
-          ...collectReachableBindings(predecessor.id)
-        )
+        candidates.push(...collectReachableBindings(predecessor.id))
       }
 
       resolving.delete(currentNodeId)
@@ -562,6 +560,8 @@ export function createRepairEstimateCatalogIndex(
 /**
  * Service-client boundary for operational estimate screens.
  */
-export async function getOperationalRepairEstimateCatalog(): Promise<RepairEstimateCatalogSnapshotDto> {
-  return catalogClient.getOperationalCatalog()
+export async function getOperationalRepairEstimateCatalog(
+  warehouseId?: string | null
+): Promise<RepairEstimateCatalogSnapshotDto> {
+  return catalogClient.getOperationalCatalog(warehouseId)
 }
