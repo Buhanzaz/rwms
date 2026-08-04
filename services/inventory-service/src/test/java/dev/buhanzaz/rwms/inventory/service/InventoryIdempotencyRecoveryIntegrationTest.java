@@ -16,7 +16,10 @@ import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.NumberResolutionView;
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.CompletionPreviewRequest;
+import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.FurnitureReviewView;
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.RevisionExpectation;
+import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.SaveFurnitureReviewRequest;
+import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.StartFurnitureReviewRequest;
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.StartSessionRequest;
 import dev.buhanzaz.rwms.inventory.eventing.InventoryEventStore;
 import dev.buhanzaz.rwms.inventory.integration.InventoryDependencyGateway;
@@ -192,13 +195,16 @@ class InventoryIdempotencyRecoveryIntegrationTest {
             new InventoryDependencyGateway.Validation(
                 OffsetDateTime.now(ZoneOffset.UTC), canonicalJson.sha256(items), items));
 
+    long furnitureSessionRevision =
+        confirmEmptyFurnitureReview(
+            inventoryId, warehouseId, List.of(new RevisionExpectation(findingId, 0)));
     var preview =
         application.preview(
             jwt(),
             inventoryId,
             UUID.randomUUID(),
             new CompletionPreviewRequest(
-                0, List.of(new RevisionExpectation(findingId, 0))));
+                furnitureSessionRevision, List.of(new RevisionExpectation(findingId, 0))));
 
     assertThat(preview.statistics().missingCount()).isZero();
     assertThat(preview.statistics().conflictCount()).isZero();
@@ -571,6 +577,29 @@ class InventoryIdempotencyRecoveryIntegrationTest {
         actorJson(),
         now,
         now);
+  }
+
+  private long confirmEmptyFurnitureReview(
+      UUID inventoryId, UUID warehouseId, List<RevisionExpectation> findingRevisions) {
+    String snapshotSha256 = "f".repeat(64);
+    when(dependencies.furnitureSnapshot(eq(warehouseId), any()))
+        .thenReturn(
+            new InventoryDependencyGateway.FurnitureSnapshot(
+                warehouseId, snapshotSha256, List.of()));
+    long sessionRevision = application.session(jwt(), inventoryId).sessionRevision();
+    FurnitureReviewView started =
+        application.startFurnitureReview(
+            jwt(),
+            inventoryId,
+            UUID.randomUUID(),
+            new StartFurnitureReviewRequest(sessionRevision, findingRevisions, true));
+    FurnitureReviewView confirmed =
+        application.saveFurnitureReview(
+            jwt(),
+            inventoryId,
+            new SaveFurnitureReviewRequest(
+                started.sessionRevision(), snapshotSha256, List.of()));
+    return confirmed.sessionRevision();
   }
 
   private String actorJson() {

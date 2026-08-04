@@ -538,6 +538,15 @@ public class InventoryFinding implements Persistable<UUID> {
     actorRef = required(nextActorRef, 2000, "actor reference");
   }
 
+  /** Updates only the equipment observation after the cabin review has been frozen. */
+  public void saveFurnitureObservation(
+      ObservationPresence equipmentPresence, String equipmentJson, String nextActorRef) {
+    requireIdleOrCreated();
+    equipmentObservationState = equipmentPresence;
+    equipmentObservation = observation(equipmentPresence, equipmentJson, true);
+    actorRef = required(nextActorRef, 2000, "actor reference");
+  }
+
   public void resolveConflict(
       ConflictResolutionStrategy strategy,
       String currentFingerprint,
@@ -557,6 +566,8 @@ public class InventoryFinding implements Persistable<UUID> {
     }
     if (strategy == ConflictResolutionStrategy.ACCEPT_REGISTRY) {
       captureInspectionBaseline();
+      inspection = InspectionState.READY;
+      maintenancePlanFingerprintSha256 = null;
     }
     conflictResolutionStrategy = strategy;
     conflictResolutionCurrentSha256 = sha256(currentFingerprint);

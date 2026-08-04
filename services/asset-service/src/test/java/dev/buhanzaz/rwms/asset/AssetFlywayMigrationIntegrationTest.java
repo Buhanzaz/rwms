@@ -89,7 +89,7 @@ class AssetFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsTransferredWarehouseData() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(24);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(25);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains(
@@ -120,6 +120,7 @@ class AssetFlywayMigrationIntegrationTest {
         "inventory_asset_source_operation",
         "inventory_asset_number_claim",
         "inventory_asset_source",
+        "inventory_furniture_reconciliation",
         "logistics_return_equipment_receipt",
         "rental_item_html_import",
         "rental_item_html_import_row",
@@ -213,12 +214,12 @@ class AssetFlywayMigrationIntegrationTest {
         """, existingId, UUID.randomUUID());
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(22);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(23);
     latest.validate();
 
     assertThat(appliedVersions())
         .containsExactly(
-            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24");
+            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25");
     assertThat(columnCount("rental_item", "number")).isZero();
     assertThat(columnCount("rental_item", "display_canonical_number")).isEqualTo(1);
     assertThat(columnCount("rental_item", "identity_match_key")).isEqualTo(1);
@@ -273,11 +274,11 @@ class AssetFlywayMigrationIntegrationTest {
     int outboxCount = integer("select count(*) from outbox_event");
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(17);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(18);
     latest.validate();
     assertThat(appliedVersions())
         .containsExactly(
-            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24");
+            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25");
     assertOldPanelTechnicalMetadataRemoved();
     assertLegacyIdentityMetadataRemoved();
     JsonNode unrelated = json(jdbc.queryForObject(
@@ -365,7 +366,7 @@ class AssetFlywayMigrationIntegrationTest {
         order by snapshot.aggregate_version desc limit 1
         """, correctedAggregateId);
     latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(16);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(17);
     latest.validate();
 
     assertThat(integer("select count(*) from rental_item")).isEqualTo(195);
@@ -1198,6 +1199,36 @@ class AssetFlywayMigrationIntegrationTest {
                     "delete from order_unit_reservation where id=?", secondReservationId))
         .isInstanceOf(org.springframework.jdbc.UncategorizedSQLException.class)
         .hasMessageContaining("evidence cannot be deleted");
+  }
+
+  @Test
+  void versionTwentyFiveAddsAnImmutableFurnitureReconciliationSource() {
+    Flyway versionTwentyFour = configuration(MIGRATIONS).target("24").load();
+    assertThat(versionTwentyFour.migrate().migrationsExecuted).isEqualTo(24);
+
+    Flyway versionTwentyFive = configuration(MIGRATIONS).target("25").load();
+    assertThat(versionTwentyFive.migrate().migrationsExecuted).isOne();
+    versionTwentyFive.validate();
+
+    UUID inventoryId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into inventory_furniture_reconciliation(
+          inventory_id,version,request_sha256,idempotency_key,created_at,updated_at)
+        values (?,0,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        inventoryId,
+        "a".repeat(64),
+        UUID.randomUUID());
+    assertThat(columnCount("inventory_furniture_reconciliation", "completed_at")).isEqualTo(1);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update inventory_furniture_reconciliation set request_sha256=? where inventory_id=?",
+                    "b".repeat(64),
+                    inventoryId))
+        .isInstanceOf(RuntimeException.class)
+        .hasMessageContaining("source identity is immutable");
   }
 
   @Test

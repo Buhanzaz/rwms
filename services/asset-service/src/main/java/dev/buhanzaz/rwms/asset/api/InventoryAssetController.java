@@ -18,7 +18,9 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -80,6 +82,28 @@ public class InventoryAssetController {
       @Valid @RequestBody InventoryValidationRequest request) {
     access.requireInventoryAssetAccess(jwt);
     return service.validateAssets(request);
+  }
+
+  @PostMapping("/furniture-snapshots")
+  public InventoryFurnitureSnapshot furnitureSnapshot(
+      @AuthenticationPrincipal Jwt jwt,
+      @Valid @RequestBody InventoryFurnitureSnapshotRequest request) {
+    access.requireInventoryAssetAccess(jwt);
+    return service.furnitureSnapshot(request);
+  }
+
+  @PutMapping("/furniture-reconciliations/{inventoryId}")
+  public ResponseEntity<Void> reconcileFurniture(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID inventoryId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody InventoryFurnitureReconciliationRequest request) {
+    access.requireInventoryAssetAccess(jwt);
+    InventoryAssetService.FurnitureReconciliationResult result =
+        service.reconcileFurniture(inventoryId, idempotencyKey, request);
+    ResponseEntity.HeadersBuilder<?> response = ResponseEntity.noContent();
+    if (result.replayed()) response.header("Idempotency-Replayed", "true");
+    return response.build();
   }
 
   @PostMapping("/source-assets")

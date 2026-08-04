@@ -596,6 +596,44 @@ public final class AssetApiModels {
       String validationDigest,
       List<InventoryValidationItem> assets) {}
 
+  /** Current active furniture and the selected cabin quantities in one deterministic snapshot. */
+  public record InventoryFurnitureSnapshotRequest(
+      @NotNull UUID warehouseId,
+      @NotNull @Size(max = 5000) List<@NotNull UUID> assetIds) {}
+  public record InventoryFurnitureSnapshot(
+      UUID warehouseId,
+      String snapshotSha256,
+      List<InventoryFurnitureSnapshotItem> items) {}
+  public record InventoryFurnitureSnapshotItem(
+      UUID equipmentId,
+      long catalogVersion,
+      String equipmentName,
+      long currentStockQuantity,
+      List<InventoryFurnitureSnapshotCabin> cabins) {}
+  public record InventoryFurnitureSnapshotCabin(
+      UUID assetId,
+      long assetVersion,
+      String displayCanonicalNumber,
+      RentalItemStatus status,
+      long currentQuantity) {}
+
+  /** Absolute reviewed count for every current active furniture position and selected cabin. */
+  public record InventoryFurnitureReconciliationRequest(
+      @NotNull UUID warehouseId,
+      @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String expectedSnapshotSha256,
+      @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String reviewSha256,
+      @NotNull @Size(max = 1000)
+      List<@NotNull @Valid InventoryFurnitureReconciliationItem> items) {}
+  public record InventoryFurnitureReconciliationItem(
+      @NotNull UUID equipmentId,
+      @NotNull @Min(0) Long catalogVersion,
+      @NotNull @Min(0) Long stockQuantity,
+      @NotNull @Size(max = 5000)
+      List<@NotNull @Valid InventoryFurnitureReconciliationCabin> cabins) {}
+  public record InventoryFurnitureReconciliationCabin(
+      @NotNull UUID assetId,
+      @NotNull @Min(0) Long quantity) {}
+
   public record InventorySourceAssetRequest(
       @NotNull UUID inventoryId,
       @NotNull UUID findingId,

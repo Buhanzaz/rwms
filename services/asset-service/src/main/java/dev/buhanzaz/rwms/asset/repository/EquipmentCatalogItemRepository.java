@@ -1,10 +1,29 @@
 package dev.buhanzaz.rwms.asset.repository;
 
 import dev.buhanzaz.rwms.asset.domain.EquipmentCatalogItem;
+import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
+import jakarta.persistence.LockModeType;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 public interface EquipmentCatalogItemRepository extends JpaRepository<EquipmentCatalogItem, UUID> {
   List<EquipmentCatalogItem> findAllByOrderByNameAscIdAsc();
+
+  List<EquipmentCatalogItem> findAllByCategoryAndActiveTrueOrderByNameAscIdAsc(
+      EquipmentCategory category);
+
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      """
+      select item
+      from EquipmentCatalogItem item
+      where item.category = :category and item.active = true
+      order by item.name, item.id
+      """)
+  List<EquipmentCatalogItem> findAllActiveByCategoryForUpdate(
+      @Param("category") EquipmentCategory category);
 }

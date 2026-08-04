@@ -1,6 +1,9 @@
 package dev.buhanzaz.rwms.inventory.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.inventory.InventoryServiceApplication;
@@ -229,6 +232,346 @@ class InventoryInspectionApiContractIntegrationTest {
         .containsEntry("cover_media_id", null);
   }
 
+  @Test
+  void previewExposesRegistryConflictBeforeFurnitureSnapshotStalenessAndResolutionReturnsToCabins()
+      throws Exception {
+    Fixture fixture = fixture("READY");
+    HttpResponse<String> inspection =
+        request(
+            inspectionPath(fixture),
+            requestBody(fixture, ObservationPresence.EXPLICIT_EMPTY, mapper.createArrayNode())
+                .toString());
+    assertThat(inspection.statusCode()).withFailMessage(inspection.body()).isEqualTo(200);
+    long findingRevision = mapper.readTree(inspection.body()).required("findingRevision").asLong();
+
+    String snapshotSha256 = "3".repeat(64);
+    when(dependencies.furnitureSnapshot(fixture.warehouseId(), List.of(fixture.assetId())))
+        .thenReturn(
+            new InventoryDependencyGateway.FurnitureSnapshot(
+                fixture.warehouseId(),
+                snapshotSha256,
+                List.of()));
+    ObjectNode start = mapper.createObjectNode();
+    start.put("expectedSessionRevision", 0);
+    start.put("acknowledgeIncomplete", false);
+    start.putArray("findingRevisions")
+        .addObject()
+        .put("findingId", fixture.findingId().toString())
+        .put("expectedFindingRevision", findingRevision);
+    HttpResponse<String> started =
+        post(
+            "/api/inventory/v1/sessions/"
+                + fixture.inventoryId()
+                + "/furniture-review/start",
+            start.toString());
+    assertThat(started.statusCode()).withFailMessage(started.body()).isEqualTo(200);
+    long furnitureSessionRevision =
+        mapper.readTree(started.body()).required("sessionRevision").asLong();
+
+    ObjectNode save = mapper.createObjectNode();
+    save.put("expectedSessionRevision", furnitureSessionRevision);
+    save.put("assetSnapshotSha256", snapshotSha256);
+    save.putArray("items");
+    HttpResponse<String> reviewed =
+        request(
+            "/api/inventory/v1/sessions/" + fixture.inventoryId() + "/furniture-review",
+            save.toString());
+    assertThat(reviewed.statusCode()).withFailMessage(reviewed.body()).isEqualTo(200);
+    long reviewedSessionRevision =
+        mapper.readTree(reviewed.body()).required("sessionRevision").asLong();
+    assertThat(
+            jdbc.queryForObject(
+                "select equipment_observation_state from inventory_finding where id=?",
+                String.class,
+                fixture.findingId()))
+        .isEqualTo("EXPLICIT_EMPTY");
+    assertThat(
+            jdbc.queryForObject(
+                "select equipment_observation::text from inventory_finding where id=?",
+                String.class,
+                fixture.findingId()))
+        .isEqualTo("[]");
+
+    when(dependencies.validateAssets(List.of(fixture.assetId())))
+        .thenReturn(
+            changedValidation(fixture.assetId(), fixture.warehouseId(), "БЫТ-API", "БЫТAPI"));
+    when(dependencies.furnitureSnapshot(fixture.warehouseId(), List.of(fixture.assetId())))
+        .thenReturn(
+            new InventoryDependencyGateway.FurnitureSnapshot(
+                fixture.warehouseId(), "8".repeat(64), List.of()));
+    long reviewedFindingRevision =
+        jdbc.queryForObject(
+            "select finding_revision from inventory_finding where id=?",
+            Long.class,
+            fixture.findingId());
+    ObjectNode preview = mapper.createObjectNode();
+    preview.put("expectedSessionRevision", reviewedSessionRevision);
+    preview
+        .putArray("findingRevisions")
+        .addObject()
+        .put("findingId", fixture.findingId().toString())
+        .put("expectedFindingRevision", reviewedFindingRevision);
+    HttpResponse<String> previewResponse =
+        post(
+            "/api/inventory/v1/sessions/"
+                + fixture.inventoryId()
+                + "/completion-preview",
+            preview.toString());
+    assertThat(previewResponse.statusCode()).withFailMessage(previewResponse.body()).isEqualTo(200);
+    assertThat(mapper.readTree(previewResponse.body()).required("risks").toString())
+        .contains("\"code\":\"CONFLICT\"");
+
+    ObjectNode resolve = mapper.createObjectNode();
+    resolve.put("expectedSessionRevision", reviewedSessionRevision);
+    resolve.put("expectedFindingRevision", reviewedFindingRevision);
+    resolve.put("strategy", "KEEP_INSPECTION");
+    resolve.put("reason", "Реестр обновился после сверки мебели");
+    HttpResponse<String> resolved =
+        request(
+            "/api/inventory/v1/sessions/"
+                + fixture.inventoryId()
+                + "/findings/"
+                + fixture.findingId()
+                + "/conflict-resolution",
+            resolve.toString());
+    assertThat(resolved.statusCode()).withFailMessage(resolved.body()).isEqualTo(200);
+    assertThat(
+            jdbc.queryForObject(
+                "select review_stage from inventory_session where id=?",
+                String.class,
+                fixture.inventoryId()))
+        .isEqualTo("CABINS");
+    assertThat(
+            jdbc.queryForObject(
+                "select furniture_asset_snapshot_sha256 from inventory_session where id=?",
+                String.class,
+                fixture.inventoryId()))
+        .isNull();
+    assertThat(
+            jdbc.queryForObject(
+                "select furniture_review_sha256 from inventory_session where id=?",
+                String.class,
+                fixture.inventoryId()))
+        .isNull();
+  }
+
+  @Test
+  void confirmedFurnitureReviewCannotBeRestartedWithAnotherIdempotencyKey() throws Exception {
+    Fixture fixture = fixture("READY");
+    ReviewFixture review = confirmEmptyFurnitureReview(fixture, "9".repeat(64));
+    String confirmedReviewSha256 =
+        jdbc.queryForObject(
+            "select furniture_review_sha256 from inventory_session where id=?",
+            String.class,
+            fixture.inventoryId());
+    ObjectNode restart = mapper.createObjectNode();
+    restart.put("expectedSessionRevision", review.sessionRevision());
+    restart.put("acknowledgeIncomplete", false);
+    restart
+        .putArray("findingRevisions")
+        .addObject()
+        .put("findingId", fixture.findingId().toString())
+        .put("expectedFindingRevision", review.findingRevision());
+
+    HttpResponse<String> response =
+        post(
+            "/api/inventory/v1/sessions/"
+                + fixture.inventoryId()
+                + "/furniture-review/start",
+            restart.toString());
+
+    assertThat(response.statusCode()).withFailMessage(response.body()).isEqualTo(409);
+    assertThat(mapper.readTree(response.body()).required("detail").asText())
+        .isEqualTo("Furniture review is already confirmed");
+    assertThat(
+            jdbc.queryForObject(
+                "select furniture_review_sha256 from inventory_session where id=?",
+                String.class,
+                fixture.inventoryId()))
+        .isEqualTo(confirmedReviewSha256);
+  }
+
+  @Test
+  void acceptedTransferredCabinIsExcludedFromFurnitureSnapshotScope() throws Exception {
+    Fixture fixture = fixture("READY");
+    HttpResponse<String> inspection =
+        request(
+            inspectionPath(fixture),
+            requestBody(fixture, ObservationPresence.EXPLICIT_EMPTY, mapper.createArrayNode())
+                .toString());
+    assertThat(inspection.statusCode()).withFailMessage(inspection.body()).isEqualTo(200);
+    long inspectedFindingRevision =
+        mapper.readTree(inspection.body()).required("findingRevision").asLong();
+    UUID destinationWarehouseId = UUID.randomUUID();
+    when(dependencies.validateAssets(List.of(fixture.assetId())))
+        .thenReturn(
+            statusValidation(
+                fixture.assetId(), destinationWarehouseId, "IN_TRANSFER", "БК-1"));
+    ObjectNode acceptRegistry = mapper.createObjectNode();
+    acceptRegistry.put("expectedSessionRevision", 0);
+    acceptRegistry.put("expectedFindingRevision", inspectedFindingRevision);
+    acceptRegistry.put("strategy", "ACCEPT_REGISTRY");
+    acceptRegistry.putNull("reason");
+    HttpResponse<String> accepted =
+        request(
+            "/api/inventory/v1/sessions/"
+                + fixture.inventoryId()
+                + "/findings/"
+                + fixture.findingId()
+                + "/conflict-resolution",
+            acceptRegistry.toString());
+    assertThat(accepted.statusCode()).withFailMessage(accepted.body()).isEqualTo(200);
+    long acceptedFindingRevision =
+        mapper.readTree(accepted.body()).required("findingRevision").asLong();
+
+    String emptySnapshotSha256 = "a".repeat(64);
+    when(dependencies.furnitureSnapshot(fixture.warehouseId(), List.of()))
+        .thenReturn(
+            new InventoryDependencyGateway.FurnitureSnapshot(
+                fixture.warehouseId(), emptySnapshotSha256, List.of()));
+    ObjectNode start = mapper.createObjectNode();
+    start.put("expectedSessionRevision", 0);
+    start.put("acknowledgeIncomplete", false);
+    start
+        .putArray("findingRevisions")
+        .addObject()
+        .put("findingId", fixture.findingId().toString())
+        .put("expectedFindingRevision", acceptedFindingRevision);
+    HttpResponse<String> started =
+        post(
+            "/api/inventory/v1/sessions/"
+                + fixture.inventoryId()
+                + "/furniture-review/start",
+            start.toString());
+
+    assertThat(started.statusCode()).withFailMessage(started.body()).isEqualTo(200);
+    assertThat(mapper.readTree(started.body()).required("items").isEmpty()).isTrue();
+    verify(dependencies).furnitureSnapshot(fixture.warehouseId(), List.of());
+  }
+
+  @Test
+  void savingCabinInspectionDuringFurnitureReviewReturnsSessionToCabins() throws Exception {
+    Fixture fixture = fixture("READY");
+    ReviewFixture review = confirmEmptyFurnitureReview(fixture, "7".repeat(64));
+    ObjectNode update =
+        requestBody(fixture, ObservationPresence.EXPLICIT_EMPTY, mapper.createArrayNode());
+    update.put("expectedSessionRevision", review.sessionRevision());
+    update.put("expectedFindingRevision", review.findingRevision());
+    update.put("comment", "Дополнен осмотр после сверки мебели");
+
+    HttpResponse<String> response = request(inspectionPath(fixture), update.toString());
+
+    assertThat(response.statusCode()).withFailMessage(response.body()).isEqualTo(200);
+    assertThat(mapper.readTree(response.body()).required("findingRevision").asLong())
+        .isEqualTo(review.findingRevision() + 1);
+    assertThat(
+            jdbc.queryForObject(
+                "select review_stage from inventory_session where id=?",
+                String.class,
+                fixture.inventoryId()))
+        .isEqualTo("CABINS");
+    assertThat(
+            jdbc.queryForObject(
+                "select furniture_asset_snapshot_sha256 from inventory_session where id=?",
+                String.class,
+                fixture.inventoryId()))
+        .isNull();
+    assertThat(
+            jdbc.queryForObject(
+                "select furniture_review_sha256 from inventory_session where id=?",
+                String.class,
+                fixture.inventoryId()))
+        .isNull();
+  }
+
+  @Test
+  void rejectsFurnitureSnapshotThatOmitsASelectedCabin() throws Exception {
+    Fixture fixture = fixture("READY");
+    UUID equipmentId = UUID.randomUUID();
+    when(dependencies.furnitureSnapshot(fixture.warehouseId(), List.of(fixture.assetId())))
+        .thenReturn(
+            new InventoryDependencyGateway.FurnitureSnapshot(
+                fixture.warehouseId(),
+                "5".repeat(64),
+                List.of(
+                    new InventoryDependencyGateway.FurnitureSnapshotItem(
+                        equipmentId, 1L, "Стол", 0L, List.of()))));
+    ObjectNode start = mapper.createObjectNode();
+    start.put("expectedSessionRevision", 0);
+    start.put("acknowledgeIncomplete", true);
+    start.putArray("findingRevisions")
+        .addObject()
+        .put("findingId", fixture.findingId().toString())
+        .put("expectedFindingRevision", 0);
+
+    HttpResponse<String> response =
+        post(
+            "/api/inventory/v1/sessions/"
+                + fixture.inventoryId()
+                + "/furniture-review/start",
+            start.toString());
+
+    assertThat(response.statusCode()).withFailMessage(response.body()).isEqualTo(503);
+    assertThat(mapper.readTree(response.body()).required("code").asText())
+        .isEqualTo("INVENTORY_DEPENDENCY_UNAVAILABLE");
+    assertThat(
+            jdbc.queryForObject(
+                "select review_stage from inventory_session where id=?",
+                String.class,
+                fixture.inventoryId()))
+        .isEqualTo("CABINS");
+  }
+
+  @Test
+  void emptyConfirmedFurnitureReviewCompletesWithoutReconciliationIntent() throws Exception {
+    Fixture fixture = fixture("READY");
+    ReviewFixture review = confirmEmptyFurnitureReview(fixture, "6".repeat(64));
+    ObjectNode previewRequest = mapper.createObjectNode();
+    previewRequest.put("expectedSessionRevision", review.sessionRevision());
+    previewRequest
+        .putArray("findingRevisions")
+        .addObject()
+        .put("findingId", fixture.findingId().toString())
+        .put("expectedFindingRevision", review.findingRevision());
+    HttpResponse<String> preview =
+        post(
+            "/api/inventory/v1/sessions/"
+                + fixture.inventoryId()
+                + "/completion-preview",
+            previewRequest.toString());
+    assertThat(preview.statusCode()).withFailMessage(preview.body()).isEqualTo(200);
+    JsonNode previewBody = mapper.readTree(preview.body());
+
+    ObjectNode completeRequest = mapper.createObjectNode();
+    completeRequest.put("expectedSessionRevision", review.sessionRevision());
+    completeRequest.put("acknowledgementSha256", previewBody.required("acknowledgementSha256").asText());
+    completeRequest.put("validationSha256", previewBody.required("validationSha256").asText());
+    completeRequest
+        .putArray("findingRevisions")
+        .addObject()
+        .put("findingId", fixture.findingId().toString())
+        .put("expectedFindingRevision", review.findingRevision());
+    HttpResponse<String> completed =
+        post(
+            "/api/inventory/v1/sessions/" + fixture.inventoryId() + "/complete",
+            completeRequest.toString());
+
+    assertThat(completed.statusCode()).withFailMessage(completed.body()).isEqualTo(200);
+    assertThat(
+            mapper
+                .readTree(completed.body())
+                .required("furnitureReconciliationState")
+                .asText())
+        .isEqualTo("NOT_REQUIRED");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from inventory_furniture_reconciliation_intent where inventory_id=?",
+                Integer.class,
+                fixture.inventoryId()))
+        .isZero();
+    verify(dependencies, never()).reconcileFurniture(any(), any(), any());
+  }
+
   @ParameterizedTest(name = "{0} title media returns canonical Problem Details")
   @EnumSource(value = NonReadyMediaStatus.class)
   void rejectsNonReadyTitleMediaWithoutMutatingInspection(NonReadyMediaStatus mediaStatus)
@@ -361,6 +704,15 @@ class InventoryInspectionApiContractIntegrationTest {
         now,
         now,
         now);
+    events.initialize(
+        "SESSION",
+        inventoryId,
+        "inventory.session.started.v1",
+        "rwms.inventory.session.v1",
+        mapper.createObjectNode().put("inventoryId", inventoryId.toString()),
+        UUID.randomUUID(),
+        null,
+        null);
 
     InventoryFinding finding =
         findings.saveAndFlush(
@@ -421,7 +773,88 @@ class InventoryInspectionApiContractIntegrationTest {
             new InventoryDependencyGateway.RepairSnapshots(
                 List.of(
                     new InventoryDependencyGateway.RepairAssetSnapshot(assetId, List.of()))));
-    return new Fixture(inventoryId, finding.getId(), mediaId, warehouseId);
+    return new Fixture(inventoryId, finding.getId(), mediaId, warehouseId, assetId);
+  }
+
+  private InventoryDependencyGateway.Validation changedValidation(
+      UUID assetId, UUID warehouseId, String number, String matchKey) {
+    return statusValidation(assetId, warehouseId, "WAREHOUSE", "БК-2", number, matchKey);
+  }
+
+  private InventoryDependencyGateway.Validation statusValidation(
+      UUID assetId, UUID warehouseId, String status, String passportType) {
+    return statusValidation(assetId, warehouseId, status, passportType, "БЫТ-API", "БЫТAPI");
+  }
+
+  private InventoryDependencyGateway.Validation statusValidation(
+      UUID assetId,
+      UUID warehouseId,
+      String status,
+      String passportType,
+      String number,
+      String matchKey) {
+    return new InventoryDependencyGateway.Validation(
+        OffsetDateTime.now(ZoneOffset.UTC),
+        "4".repeat(64),
+        List.of(
+            new InventoryDependencyGateway.ValidationItem(
+                assetId,
+                true,
+                8L,
+                warehouseId,
+                status,
+                number,
+                matchKey,
+                null,
+                mapper.createObjectNode().put("type", passportType),
+                mapper.createArrayNode())));
+  }
+
+  private ReviewFixture confirmEmptyFurnitureReview(Fixture fixture, String snapshotSha256)
+      throws Exception {
+    HttpResponse<String> inspection =
+        request(
+            inspectionPath(fixture),
+            requestBody(fixture, ObservationPresence.EXPLICIT_EMPTY, mapper.createArrayNode())
+                .toString());
+    assertThat(inspection.statusCode()).withFailMessage(inspection.body()).isEqualTo(200);
+    long inspectionFindingRevision =
+        mapper.readTree(inspection.body()).required("findingRevision").asLong();
+    when(dependencies.furnitureSnapshot(fixture.warehouseId(), List.of(fixture.assetId())))
+        .thenReturn(
+            new InventoryDependencyGateway.FurnitureSnapshot(
+                fixture.warehouseId(), snapshotSha256, List.of()));
+    ObjectNode start = mapper.createObjectNode();
+    start.put("expectedSessionRevision", 0);
+    start.put("acknowledgeIncomplete", false);
+    start.putArray("findingRevisions")
+        .addObject()
+        .put("findingId", fixture.findingId().toString())
+        .put("expectedFindingRevision", inspectionFindingRevision);
+    HttpResponse<String> started =
+        post(
+            "/api/inventory/v1/sessions/"
+                + fixture.inventoryId()
+                + "/furniture-review/start",
+            start.toString());
+    assertThat(started.statusCode()).withFailMessage(started.body()).isEqualTo(200);
+    long furnitureSessionRevision =
+        mapper.readTree(started.body()).required("sessionRevision").asLong();
+    ObjectNode save = mapper.createObjectNode();
+    save.put("expectedSessionRevision", furnitureSessionRevision);
+    save.put("assetSnapshotSha256", snapshotSha256);
+    save.putArray("items");
+    HttpResponse<String> reviewed =
+        request(
+            "/api/inventory/v1/sessions/" + fixture.inventoryId() + "/furniture-review",
+            save.toString());
+    assertThat(reviewed.statusCode()).withFailMessage(reviewed.body()).isEqualTo(200);
+    return new ReviewFixture(
+        mapper.readTree(reviewed.body()).required("sessionRevision").asLong(),
+        jdbc.queryForObject(
+            "select finding_revision from inventory_finding where id=?",
+            Long.class,
+            fixture.findingId()));
   }
 
   private byte[] readyMediaFact(Fixture fixture) {
@@ -516,6 +949,17 @@ class InventoryInspectionApiContractIntegrationTest {
         HttpResponse.BodyHandlers.ofString());
   }
 
+  private HttpResponse<String> post(String path, String body) throws Exception {
+    return HTTP.send(
+        HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))
+            .header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKEN)
+            .header(HttpHeaders.CONTENT_TYPE, "application/json")
+            .header("Idempotency-Key", UUID.randomUUID().toString())
+            .POST(HttpRequest.BodyPublishers.ofString(body))
+            .build(),
+        HttpResponse.BodyHandlers.ofString());
+  }
+
   private HttpResponse<String> get(String path) throws Exception {
     return HTTP.send(
         HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))
@@ -545,5 +989,8 @@ class InventoryInspectionApiContractIntegrationTest {
     DELETED
   }
 
-  private record Fixture(UUID inventoryId, UUID findingId, UUID mediaId, UUID warehouseId) {}
+  private record Fixture(
+      UUID inventoryId, UUID findingId, UUID mediaId, UUID warehouseId, UUID assetId) {}
+
+  private record ReviewFixture(long sessionRevision, long findingRevision) {}
 }

@@ -1,4 +1,5 @@
 import type {
+  FurnitureReviewView,
   InventoryCompletionPreview,
   InventoryFinding,
   InventoryFrozenPlanLine,
@@ -10,6 +11,7 @@ import type {
 import type {
   InventoryConflictCode,
   InventoryConflictDto,
+  InventoryFurnitureReviewDto,
   InventoryFindingDto,
   InventoryFindingPublicationStatus,
   InventoryMembershipMovementDto,
@@ -321,6 +323,29 @@ export function toInventorySessionView(input: {
     publicationStatus: aggregatePublicationStatus(
       input.session.publicationState
     ),
+    reviewStage: input.session.reviewStage,
+    furnitureReconciliationState: input.session.furnitureReconciliationState,
+  }
+}
+
+export function toInventoryFurnitureReviewView(
+  review: FurnitureReviewView
+): InventoryFurnitureReviewDto {
+  return {
+    inventoryId: review.inventoryId,
+    sessionRevision: review.sessionRevision,
+    stage: review.stage,
+    assetSnapshotSha256: review.assetSnapshotSha256,
+    reviewSha256: review.reviewSha256,
+    confirmed: review.confirmed,
+    items: review.items.map((item) => ({
+      equipmentId: item.equipmentId,
+      catalogVersion: item.catalogVersion,
+      equipmentName: item.equipmentName,
+      currentStockQuantity: item.currentStockQuantity,
+      observedStockQuantity: item.observedStockQuantity,
+      cabins: item.cabins.map((cabin) => ({ ...cabin })),
+    })),
   }
 }
 
