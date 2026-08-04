@@ -4,8 +4,10 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import dev.buhanzaz.rwms.inventory.domain.FindingOrigin;
 import dev.buhanzaz.rwms.inventory.domain.ConflictResolutionStrategy;
+import dev.buhanzaz.rwms.inventory.domain.FurnitureReconciliationState;
 import dev.buhanzaz.rwms.inventory.domain.InspectionState;
 import dev.buhanzaz.rwms.inventory.domain.InventoryMembershipMovementType;
+import dev.buhanzaz.rwms.inventory.domain.InventoryReviewStage;
 import dev.buhanzaz.rwms.inventory.domain.LogisticsPlanningMode;
 import dev.buhanzaz.rwms.inventory.domain.MutationState;
 import dev.buhanzaz.rwms.inventory.domain.ObservationPresence;
@@ -126,6 +128,27 @@ public final class InventoryApiModels {
   public record RevisionExpectation(
       @NotNull UUID findingId, @Min(0) long expectedFindingRevision) {}
 
+  public record StartFurnitureReviewRequest(
+      @Min(0) long expectedSessionRevision,
+      @NotNull @Size(max = 10000) List<@Valid RevisionExpectation> findingRevisions,
+      boolean acknowledgeIncomplete) {}
+
+  public record FurnitureReviewCabinInput(
+      @NotNull UUID findingId,
+      @Min(0) long expectedFindingRevision,
+      @Min(0) long observedQuantity) {}
+
+  public record FurnitureReviewItemInput(
+      @NotNull UUID equipmentId,
+      @Min(0) long catalogVersion,
+      @Min(0) long observedStockQuantity,
+      @NotNull @Size(max = 10000) List<@Valid FurnitureReviewCabinInput> cabins) {}
+
+  public record SaveFurnitureReviewRequest(
+      @Min(0) long expectedSessionRevision,
+      @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String assetSnapshotSha256,
+      @NotNull @Size(max = 10000) List<@Valid FurnitureReviewItemInput> items) {}
+
   public record CompletionPreviewRequest(
       @Min(0) long expectedSessionRevision,
       @NotNull List<@Valid RevisionExpectation> findingRevisions) {}
@@ -172,6 +195,8 @@ public final class InventoryApiModels {
       InventoryActorView author,
       LocalDate businessDate,
       SessionLifecycle lifecycle,
+      InventoryReviewStage reviewStage,
+      FurnitureReconciliationState furnitureReconciliationState,
       int expectedCount,
       long findingCount,
       long inspectedCount,
@@ -191,6 +216,8 @@ public final class InventoryApiModels {
       InventoryActorView author,
       LocalDate businessDate,
       SessionLifecycle lifecycle,
+      InventoryReviewStage reviewStage,
+      FurnitureReconciliationState furnitureReconciliationState,
       int expectedCount,
       long findingCount,
       long inspectedCount,
@@ -311,6 +338,31 @@ public final class InventoryApiModels {
       String identityMatchKey,
       String outcome,
       FindingView finding) {}
+
+  public record FurnitureReviewView(
+      UUID inventoryId,
+      long sessionRevision,
+      InventoryReviewStage stage,
+      String assetSnapshotSha256,
+      String reviewSha256,
+      boolean confirmed,
+      List<FurnitureReviewItemView> items) {}
+
+  public record FurnitureReviewItemView(
+      UUID equipmentId,
+      long catalogVersion,
+      String equipmentName,
+      long currentStockQuantity,
+      long observedStockQuantity,
+      List<FurnitureReviewCabinView> cabins) {}
+
+  public record FurnitureReviewCabinView(
+      UUID findingId,
+      UUID assetId,
+      String cabinNumber,
+      String status,
+      long currentQuantity,
+      long observedQuantity) {}
 
   public record FrozenStatistics(
       int expectedCount,

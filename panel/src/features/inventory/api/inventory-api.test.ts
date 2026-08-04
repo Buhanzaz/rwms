@@ -3,16 +3,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { InventoryActorSnapshot } from "@/features/inventory/model/inventory"
 import type {
   InventoryFinding,
+  InventorySessionDetail,
   InventorySessionView,
 } from "@/features/inventory/model/inventory-service"
 import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/repair-estimate"
 
 const auth = vi.hoisted(() => ({ getUser: vi.fn() }))
 const inventoryHttp = vi.hoisted(() => ({
+  getFurnitureReview: vi.fn(),
   getInventorySession: vi.fn(),
   resolveInventoryNumber: vi.fn(),
   resolveInventoryFindingConflict: vi.fn(),
+  saveFurnitureReview: vi.fn(),
   saveInventoryInspection: vi.fn(),
+  startFurnitureReview: vi.fn(),
 }))
 const queueCapabilities = vi.hoisted(() => ({ get: vi.fn() }))
 const catalogApi = vi.hoisted(() => ({ get: vi.fn() }))
@@ -36,10 +40,14 @@ vi.mock(
 )
 
 import {
+  getInventoryFurnitureReview,
   resolveInventoryFindingConflict,
   resolveInventoryNumber,
+  saveInventoryFurnitureReview,
   saveInventoryFinding,
+  startInventoryFurnitureReview,
 } from "@/features/inventory/api/inventory-api"
+import { toInventorySessionView } from "@/features/inventory/domain/inventory-view-mapper"
 
 const WAREHOUSE_ID = "11111111-1111-4111-8111-111111111111"
 const INVENTORY_ID = "22222222-2222-4222-8222-222222222222"
@@ -69,6 +77,8 @@ const refreshedSession = {
   startedAt: "2026-07-27T08:00:00Z",
   terminalAt: null,
   publicationState: "NOT_REQUESTED",
+  reviewStage: "CABINS",
+  furnitureReconciliationState: "NOT_REQUIRED",
   statistics: null,
   cancellation: null,
   membershipMovements: [],
@@ -201,6 +211,116 @@ describe("inventory API", () => {
       INVENTORY_ID
     )
     expect(result.version).toBe(8)
+  })
+
+  it("starts and saves furniture review with the current cabin finding revisions", async () => {
+    const review = {
+      inventoryId: INVENTORY_ID,
+      sessionRevision: 9,
+      stage: "FURNITURE" as const,
+      assetSnapshotSha256: "a".repeat(64),
+      reviewSha256: null,
+      confirmed: false,
+      items: [
+        {
+          equipmentId: "77777777-7777-4777-8777-777777777777",
+          catalogVersion: 888,
+          equipmentName: "Стол",
+          currentStockQuantity: 5,
+          observedStockQuantity: 4,
+          cabins: [
+            {
+              findingId: rawFinding.id,
+              assetId: rawFinding.assetId!,
+              cabinNumber: rawFinding.displayCanonicalNumber,
+              status: "WAREHOUSE",
+              currentQuantity: 1,
+              observedQuantity: 0,
+            },
+          ],
+        },
+      ],
+    }
+    const sessionDetail: InventorySessionDetail = refreshedSession
+    const mappedSession = toInventorySessionView({
+      session: {
+        ...sessionDetail,
+        sessionRevision: 8,
+      },
+      findings: [rawFinding],
+    })
+    inventoryHttp.startFurnitureReview.mockResolvedValue(review)
+    inventoryHttp.getFurnitureReview.mockResolvedValue(review)
+    inventoryHttp.saveFurnitureReview.mockResolvedValue({
+      ...review,
+      confirmed: true,
+      reviewSha256: "b".repeat(64),
+    })
+
+    const started = await startInventoryFurnitureReview({
+      session: mappedSession,
+      acknowledgeIncomplete: true,
+    })
+    const loaded = await getInventoryFurnitureReview(INVENTORY_ID)
+    const saved = await saveInventoryFurnitureReview({
+      review: {
+        ...started,
+        items: [
+          {
+            ...started.items[0],
+            observedStockQuantity: 3,
+            cabins: [{ ...started.items[0].cabins[0], observedQuantity: 0 }],
+          },
+        ],
+      },
+      session: mappedSession,
+    })
+
+    expect(inventoryHttp.startFurnitureReview).toHaveBeenCalledWith({
+      accessToken: "inventory-token",
+      inventoryId: INVENTORY_ID,
+      request: {
+        expectedSessionRevision: 8,
+        findingRevisions: [
+          {
+            findingId: rawFinding.id,
+            expectedFindingRevision: rawFinding.findingRevision,
+          },
+        ],
+        acknowledgeIncomplete: true,
+      },
+      idempotencyKey: expect.any(String),
+    })
+    expect(loaded.items[0]).toMatchObject({
+      equipmentName: "Стол",
+      observedStockQuantity: 4,
+    })
+    expect(inventoryHttp.saveFurnitureReview).toHaveBeenCalledWith({
+      accessToken: "inventory-token",
+      inventoryId: INVENTORY_ID,
+      request: {
+        expectedSessionRevision: 9,
+        assetSnapshotSha256: "a".repeat(64),
+        items: [
+          {
+            equipmentId: "77777777-7777-4777-8777-777777777777",
+            catalogVersion: 888,
+            observedStockQuantity: 3,
+            cabins: [
+              {
+                findingId: rawFinding.id,
+                expectedFindingRevision: rawFinding.findingRevision,
+                observedQuantity: 0,
+              },
+            ],
+          },
+        ],
+      },
+    })
+    expect(saved).toMatchObject({
+      confirmed: true,
+      reviewSha256: "b".repeat(64),
+    })
   })
 
   it("fails closed before saving when movement is requested without a connected warehouse capability", async () => {

@@ -4,7 +4,9 @@ import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.*;
 
 import dev.buhanzaz.rwms.inventory.domain.FindingOrigin;
 import dev.buhanzaz.rwms.inventory.domain.ConflictResolutionStrategy;
+import dev.buhanzaz.rwms.inventory.domain.FurnitureReconciliationState;
 import dev.buhanzaz.rwms.inventory.domain.InspectionState;
+import dev.buhanzaz.rwms.inventory.domain.InventoryFurnitureReconciliationIntent;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinding;
 import dev.buhanzaz.rwms.inventory.domain.InventoryExpectedItem;
 import dev.buhanzaz.rwms.inventory.domain.InventoryMembershipMovement;
@@ -22,6 +24,8 @@ import dev.buhanzaz.rwms.inventory.domain.InventoryPublicationIntent;
 import dev.buhanzaz.rwms.inventory.domain.InventoryPublicationAttempt;
 import dev.buhanzaz.rwms.inventory.domain.InventoryPublicationAttemptResult;
 import dev.buhanzaz.rwms.inventory.domain.InventorySession;
+import dev.buhanzaz.rwms.inventory.domain.InventoryReviewStage;
+import dev.buhanzaz.rwms.inventory.domain.ObservationPresence;
 import dev.buhanzaz.rwms.inventory.domain.PublicationState;
 import dev.buhanzaz.rwms.inventory.domain.ReconciliationState;
 import dev.buhanzaz.rwms.inventory.domain.SessionLifecycle;
@@ -30,6 +34,7 @@ import dev.buhanzaz.rwms.inventory.eventing.InventoryEventStore;
 import dev.buhanzaz.rwms.inventory.integration.InventoryDependencyGateway;
 import dev.buhanzaz.rwms.inventory.mapper.InventorySessionMapper;
 import dev.buhanzaz.rwms.inventory.repository.InventoryFindingRepository;
+import dev.buhanzaz.rwms.inventory.repository.InventoryFurnitureReconciliationIntentRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryPublicationIntentRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryPublicationAttemptRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryPublicationAttemptResultRepository;
@@ -70,6 +75,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
@@ -87,11 +94,13 @@ import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.SerializationFeature;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 @Service
 public class InventoryApplicationService {
+  private static final Logger log = LoggerFactory.getLogger(InventoryApplicationService.class);
   private static final String SESSION_TOPIC = "rwms.inventory.session.v1";
   private static final String PUBLICATION_TOPIC = "rwms.inventory.publication.v1";
   private static final OpaqueActorReference ASSET_SYNC_ACTOR =
@@ -134,6 +143,7 @@ public class InventoryApplicationService {
 
   private final InventorySessionRepository sessions;
   private final InventoryFindingRepository findings;
+  private final InventoryFurnitureReconciliationIntentRepository furnitureReconciliations;
   private final InventoryPublicationIntentRepository publications;
   private final InventoryPublicationAttemptRepository publicationAttempts;
   private final InventoryPublicationAttemptResultRepository publicationAttemptResults;
@@ -163,6 +173,7 @@ public class InventoryApplicationService {
   public InventoryApplicationService(
       InventorySessionRepository sessions,
       InventoryFindingRepository findings,
+      InventoryFurnitureReconciliationIntentRepository furnitureReconciliations,
       InventoryPublicationIntentRepository publications,
       InventoryPublicationAttemptRepository publicationAttempts,
       InventoryPublicationAttemptResultRepository publicationAttemptResults,
@@ -190,6 +201,7 @@ public class InventoryApplicationService {
       PlatformTransactionManager transactionManager) {
     this.sessions = sessions;
     this.findings = findings;
+    this.furnitureReconciliations = furnitureReconciliations;
     this.publications = publications;
     this.publicationAttempts = publicationAttempts;
     this.publicationAttemptResults = publicationAttemptResults;
@@ -773,6 +785,7 @@ public class InventoryApplicationService {
       Jwt jwt, UUID inventoryId, UUID idempotencyKey, ResolveNumberRequest request) {
     InventorySession session = requireActive(inventoryId);
     authorizer.requireEdit(jwt, session.getWarehouseId());
+    requireCabinReviewStage(session);
     expectRevision(session.getRevision(), request.expectedSessionRevision());
     InventoryDependencyGateway.NumberResolution resolved =
         dependencies.resolveNumber(session.getWarehouseId(), request.submittedNumber());
@@ -889,6 +902,9 @@ public class InventoryApplicationService {
       CreateFindingAssetRequest request) {
     InventorySession session = requireSession(inventoryId);
     authorizer.requireEdit(jwt, session.getWarehouseId());
+    if (session.getLifecycle() == SessionLifecycle.ACTIVE) {
+      requireCabinReviewStage(session);
+    }
     if (request.origin() != FindingOrigin.ADDED_NEW
         && request.origin() != FindingOrigin.ADDED_USED) {
       throw new IllegalArgumentException("Created asset origin must be ADDED_NEW or ADDED_USED");
@@ -1085,6 +1101,7 @@ public class InventoryApplicationService {
         transactions.execute(
             status -> {
               InventorySession lockedSession = requireActive(inventoryId);
+              requireCabinOrFurnitureReviewStage(lockedSession);
               InventoryFinding lockedFinding = requireFinding(inventoryId, findingId);
               expectRevision(lockedSession.getRevision(), request.expectedSessionRevision());
               expectRevision(lockedFinding.getRevision(), request.expectedFindingRevision());
@@ -1113,6 +1130,7 @@ public class InventoryApplicationService {
               InventoryFinding result = findings.saveAndFlush(lockedFinding);
               persistMedia(result, request.media());
               if (frozenPlan != null) persistPlan(result, request.planSelection(), frozenPlan);
+              invalidateFurnitureReviewAfterCabinChange(lockedSession);
               appendFindingFacts(
                   result, lockedSession, actor(jwt), "inventory.finding.inspection-saved.v1");
               return result;
@@ -1174,6 +1192,7 @@ public class InventoryApplicationService {
               lockedFinding.resolveConflict(
                   request.strategy(), fingerprint, request.reason(), actorJson(jwt));
               InventoryFinding result = findings.saveAndFlush(lockedFinding);
+              invalidateFurnitureReviewAfterCabinChange(lockedSession);
               appendFindingFacts(
                   result,
                   lockedSession,
@@ -1182,6 +1201,125 @@ public class InventoryApplicationService {
               return result;
             });
     return findingView(saved, validatedFinding(session, saved, current));
+  }
+
+  public FurnitureReviewView startFurnitureReview(
+      Jwt jwt,
+      UUID inventoryId,
+      UUID idempotencyKey,
+      StartFurnitureReviewRequest request) {
+    requireScopedSession(inventoryId, authorizer.editScope(jwt));
+    return idempotency.execute(
+        authorizer.subjectId(jwt),
+        "session.furniture-review.start",
+        idempotencyKey,
+        Map.of("inventoryId", inventoryId, "request", request),
+        HttpStatus.OK.value(),
+        FurnitureReviewView.class,
+        () -> doStartFurnitureReview(jwt, inventoryId, request));
+  }
+
+  private FurnitureReviewView doStartFurnitureReview(
+      Jwt jwt, UUID inventoryId, StartFurnitureReviewRequest request) {
+    InventorySession session = requireActive(inventoryId);
+    authorizer.requireEdit(jwt, session.getWarehouseId());
+    requireFurnitureReviewCanStart(session);
+    RevisionState revisions =
+        revisionState(session, request.expectedSessionRevision(), request.findingRevisions());
+    InventoryDependencyGateway.Validation validation = validateAssets(revisions.findings());
+    List<ValidatedFinding> validated =
+        validatedFindings(session, revisions.findings(), validation);
+    List<CompletionRisk> risks = risks(session, revisions.findings(), validated);
+    validateFurnitureStageTransition(risks, request.acknowledgeIncomplete());
+    InventoryDependencyGateway.FurnitureSnapshot snapshot =
+        dependencies.furnitureSnapshot(
+            session.getWarehouseId(), furnitureAssetIds(session, revisions.findings()));
+    validateFurnitureSnapshot(session, revisions.findings(), snapshot);
+    String snapshotBody = write(snapshot);
+    InventorySession saved =
+        transactions.execute(
+            status -> {
+              InventorySession locked = requireActive(inventoryId);
+              requireFurnitureReviewCanStart(locked);
+              RevisionState lockedRevisions =
+                  revisionState(
+                      locked, request.expectedSessionRevision(), request.findingRevisions());
+              if (lockedRevisions.findings().size() != revisions.findings().size()) {
+                throw InventoryException.conflict("Inventory finding set changed before furniture review");
+              }
+              locked.beginFurnitureReview(snapshot.snapshotSha256(), snapshotBody);
+              return sessions.saveAndFlush(locked);
+            });
+    return furnitureReviewView(saved);
+  }
+
+  public FurnitureReviewView furnitureReview(Jwt jwt, UUID inventoryId) {
+    InventorySession session = requireScopedSession(inventoryId, authorizer.readScope(jwt));
+    requireFurnitureReviewStage(session);
+    return furnitureReviewView(session);
+  }
+
+  public FurnitureReviewView saveFurnitureReview(
+      Jwt jwt, UUID inventoryId, SaveFurnitureReviewRequest request) {
+    InventorySession session =
+        requireLifecycle(
+            requireScopedSession(inventoryId, authorizer.editScope(jwt)), SessionLifecycle.ACTIVE);
+    authorizer.requireEdit(jwt, session.getWarehouseId());
+    requireFurnitureReviewStage(session);
+    expectRevision(session.getRevision(), request.expectedSessionRevision());
+    InventoryDependencyGateway.FurnitureSnapshot snapshot = furnitureSnapshot(session);
+    FurnitureReviewSubmission submission =
+        validateFurnitureReviewSubmission(session, snapshot, request);
+    InventorySession saved =
+        transactions.execute(
+            status -> {
+              InventorySession locked = requireActive(inventoryId);
+              requireFurnitureReviewStage(locked);
+              expectRevision(locked.getRevision(), request.expectedSessionRevision());
+              if (!request.assetSnapshotSha256().equals(locked.getFurnitureAssetSnapshotSha256())) {
+                throw InventoryException.conflict("Furniture review snapshot is stale");
+              }
+              List<InventoryFinding> active =
+                  findings.findAllByInventoryIdAndMembershipActiveTrueOrderById(inventoryId);
+              Map<UUID, InventoryFinding> byId =
+                  active.stream()
+                      .collect(
+                          java.util.stream.Collectors.toMap(
+                              InventoryFinding::getId,
+                              java.util.function.Function.identity(),
+                              (left, right) -> {
+                                throw new IllegalStateException("Duplicate inventory finding");
+                              },
+                              LinkedHashMap::new));
+              for (Map.Entry<UUID, Long> expected : submission.findingRevisions().entrySet()) {
+                InventoryFinding finding = byId.get(expected.getKey());
+                if (finding == null || finding.getRevision() != expected.getValue()) {
+                  throw InventoryException.conflict("Furniture review finding revision is stale");
+                }
+              }
+              for (Map.Entry<UUID, FurnitureObservation> observation :
+                  submission.equipmentObservationByFinding().entrySet()) {
+                InventoryFinding finding = byId.get(observation.getKey());
+                if (finding == null) {
+                  throw InventoryException.conflict("Furniture review finding is no longer active");
+                }
+                finding.saveFurnitureObservation(
+                    observation.getValue().presence(),
+                    observation.getValue().body(),
+                    actorJson(jwt));
+              }
+              findings.saveAllAndFlush(
+                  submission.equipmentObservationByFinding().keySet().stream()
+                      .map(byId::get)
+                      .toList());
+              locked.confirmFurnitureReview(
+                  request.assetSnapshotSha256(),
+                  submission.reviewSha256(),
+                  submission.reviewBody(),
+                  actorJson(jwt));
+              return sessions.saveAndFlush(locked);
+            });
+    return furnitureReviewView(saved);
   }
 
   public CompletionPreview preview(
@@ -1207,12 +1345,16 @@ public class InventoryApplicationService {
     List<ValidatedFinding> validatedFindings =
         validatedFindings(session, revisions.findings(), validation);
     List<CompletionRisk> risks = risks(session, revisions.findings(), validatedFindings);
+    FurnitureCompletionFact furniture = requireConfirmedFurnitureReview(session);
+    if (risks.stream().noneMatch(risk -> "CONFLICT".equals(risk.code()))) {
+      requireCurrentFurnitureReviewSnapshot(session, revisions.findings());
+    }
     FrozenStatistics statistics =
         calculateStatistics(session, revisions.findings(), validatedFindings);
     String acknowledgement =
         canonicalHash(
             acknowledgementFacts(
-                session, revisions, validation, statistics, risks, validatedFindings));
+                session, revisions, validation, furniture, statistics, risks, validatedFindings));
     CompletionPreview response =
         new CompletionPreview(
             inventoryId,
@@ -1288,6 +1430,8 @@ public class InventoryApplicationService {
           "INVENTORY_VALIDATION_FAILED",
           "Inventory has unresolved completion risks");
     }
+    FurnitureCompletionFact furniture =
+        requireConfirmedCurrentFurnitureReview(session, revisions.findings());
     FrozenStatistics previewStatistics = preview.preview().statistics();
     InventorySession completed =
         transactions.execute(
@@ -1308,6 +1452,7 @@ public class InventoryApplicationService {
                       validatedFindings);
               persistValidation(
                   locked, fresh, request.acknowledgementSha256(), completionSnapshot);
+              requireLockedFurnitureReview(locked, furniture);
               locked.complete(
                   fresh.validationDigest(),
                   request.acknowledgementSha256(),
@@ -1317,6 +1462,7 @@ public class InventoryApplicationService {
               FrozenStatistics finalStatistics =
                   calculateStatistics(result, lockedRevisions.findings(), validatedFindings);
               persistStatistics(result, finalStatistics);
+              createFurnitureReconciliationIntent(result);
               createPublicationIntents(result, revisions.findings(), actor(jwt));
               events.append(
                   "SESSION",
@@ -1330,7 +1476,8 @@ public class InventoryApplicationService {
                   actor(jwt));
               return result;
             });
-    return sessionView(completed);
+    dispatchFurnitureReconciliation(completed.getId());
+    return sessionView(requireSession(completed.getId()));
   }
 
   public SessionView cancel(
@@ -2183,6 +2330,665 @@ public class InventoryApplicationService {
             .toList());
   }
 
+  private void validateFurnitureStageTransition(
+      List<CompletionRisk> risks, boolean acknowledgeIncomplete) {
+    if (risks.stream().anyMatch(risk -> "CONFLICT".equals(risk.code()))) {
+      throw InventoryException.conflict(
+          "Урегулируйте конфликты реестра перед сверкой мебели");
+    }
+    if (risks.stream()
+        .anyMatch(
+            risk ->
+                !"MISSING".equals(risk.code()) && !"NOT_INSPECTED".equals(risk.code()))) {
+      throw new InventoryException(
+          HttpStatus.UNPROCESSABLE_ENTITY,
+          "INVENTORY_VALIDATION_FAILED",
+          "Сверка мебели недоступна, пока в осмотре есть незавершённые изменения");
+    }
+    if (!acknowledgeIncomplete && !risks.isEmpty()) {
+      throw new InventoryException(
+          HttpStatus.UNPROCESSABLE_ENTITY,
+          "INVENTORY_VALIDATION_FAILED",
+          "Подтвердите только ненайденные и непроверенные бытовки перед сверкой мебели");
+    }
+  }
+
+  /**
+   * Furniture is reconciled only for cabins that are still physically in this inventory's
+   * warehouse and are eligible for a capture. Accepted registry changes may legitimately leave a
+   * historical finding active while its cabin has departed; such a finding is intentionally not a
+   * member of the frozen furniture scope.
+   */
+  private List<InventoryFinding> furnitureFindings(
+      InventorySession session, List<InventoryFinding> values) {
+    return values.stream()
+        .filter(value -> value.getAssetId() != null)
+        .filter(value -> session.getWarehouseId().equals(value.getCurrentWarehouseId()))
+        .filter(value -> CAPTURE_STATUSES.contains(value.getCurrentStatus()))
+        .toList();
+  }
+
+  private List<UUID> furnitureAssetIds(
+      InventorySession session, List<InventoryFinding> values) {
+    return furnitureFindings(session, values).stream()
+        .map(InventoryFinding::getAssetId)
+        .distinct()
+        .sorted()
+        .toList();
+  }
+
+  private void validateFurnitureSnapshot(
+      InventorySession session,
+      List<InventoryFinding> activeFindings,
+      InventoryDependencyGateway.FurnitureSnapshot snapshot) {
+    if (snapshot == null
+        || !session.getWarehouseId().equals(snapshot.warehouseId())
+        || snapshot.snapshotSha256() == null
+        || !snapshot.snapshotSha256().matches("^[0-9a-f]{64}$")
+        || snapshot.items() == null) {
+      throw InventoryException.dependency("Asset-service returned malformed furniture snapshot");
+    }
+    Set<UUID> knownAssets = new HashSet<>(furnitureAssetIds(session, activeFindings));
+    Set<UUID> equipmentIds = new HashSet<>();
+    for (InventoryDependencyGateway.FurnitureSnapshotItem item : snapshot.items()) {
+      if (item == null
+          || item.equipmentId() == null
+          || !equipmentIds.add(item.equipmentId())
+          || item.catalogVersion() < 0
+          || item.equipmentName() == null
+          || item.equipmentName().isBlank()
+          || item.currentStockQuantity() < 0
+          || item.cabins() == null) {
+        throw InventoryException.dependency("Asset-service returned malformed furniture item");
+      }
+      Set<UUID> cabinAssets = new HashSet<>();
+      for (InventoryDependencyGateway.FurnitureSnapshotCabin cabin : item.cabins()) {
+        if (cabin == null
+            || cabin.assetId() == null
+            || !knownAssets.contains(cabin.assetId())
+            || !cabinAssets.add(cabin.assetId())
+            || cabin.assetVersion() < 0
+            || cabin.displayCanonicalNumber() == null
+            || cabin.displayCanonicalNumber().isBlank()
+            || cabin.status() == null
+            || cabin.status().isBlank()
+            || cabin.currentQuantity() < 0) {
+          throw InventoryException.dependency("Asset-service returned malformed furniture cabin");
+        }
+      }
+      if (!cabinAssets.equals(knownAssets)) {
+        throw InventoryException.dependency(
+            "Asset-service returned an incomplete furniture cabin snapshot");
+      }
+    }
+  }
+
+  private InventoryDependencyGateway.FurnitureSnapshot furnitureSnapshot(InventorySession session) {
+    if (session.getFurnitureAssetSnapshot() == null) {
+      throw InventoryException.conflict("Furniture review has not started");
+    }
+    try {
+      InventoryDependencyGateway.FurnitureSnapshot snapshot =
+          convert(
+              read(session.getFurnitureAssetSnapshot()),
+              InventoryDependencyGateway.FurnitureSnapshot.class);
+      if (!session.getFurnitureAssetSnapshotSha256().equals(snapshot.snapshotSha256())) {
+        throw InventoryException.conflict("Stored furniture review snapshot is inconsistent");
+      }
+      return snapshot;
+    } catch (IllegalArgumentException exception) {
+      throw InventoryException.conflict("Stored furniture review snapshot is invalid");
+    }
+  }
+
+  private FurnitureReviewSubmission validateFurnitureReviewSubmission(
+      InventorySession session,
+      InventoryDependencyGateway.FurnitureSnapshot snapshot,
+      SaveFurnitureReviewRequest request) {
+    if (!request.assetSnapshotSha256().equals(session.getFurnitureAssetSnapshotSha256())) {
+      throw InventoryException.conflict("Furniture review snapshot is stale");
+    }
+    List<InventoryFinding> active =
+        findings.findAllByInventoryIdAndMembershipActiveTrueOrderById(session.getId());
+    validateFurnitureSnapshot(session, active, snapshot);
+    List<InventoryFinding> scopedFurnitureFindings = furnitureFindings(session, active);
+    Map<UUID, InventoryFinding> findingByAsset = new LinkedHashMap<>();
+    for (InventoryFinding finding : scopedFurnitureFindings) {
+      if (findingByAsset.put(finding.getAssetId(), finding) != null) {
+        throw new IllegalStateException("Inventory furniture asset is bound twice");
+      }
+    }
+    Map<UUID, FurnitureReviewItemInput> submittedByEquipment = new LinkedHashMap<>();
+    for (FurnitureReviewItemInput item : request.items()) {
+      if (item == null
+          || item.equipmentId() == null
+          || item.catalogVersion() < 0
+          || item.observedStockQuantity() < 0
+          || item.cabins() == null
+          || submittedByEquipment.put(item.equipmentId(), item) != null) {
+        throw new IllegalArgumentException("Furniture review item set is invalid");
+      }
+    }
+    if (submittedByEquipment.size() != snapshot.items().size()) {
+      throw InventoryException.conflict("Furniture review item set is incomplete");
+    }
+    ObjectNode review = mapper.createObjectNode();
+    review.put("assetSnapshotSha256", request.assetSnapshotSha256());
+    ArrayNode reviewItems = review.putArray("items");
+    Map<UUID, Long> findingRevisions = new LinkedHashMap<>();
+    Map<UUID, List<ObjectNode>> observations = new LinkedHashMap<>();
+    for (InventoryFinding finding : scopedFurnitureFindings) {
+      observations.put(finding.getId(), new ArrayList<>());
+    }
+    for (InventoryDependencyGateway.FurnitureSnapshotItem source :
+        snapshot.items().stream()
+            .sorted(Comparator.comparing(InventoryDependencyGateway.FurnitureSnapshotItem::equipmentId))
+            .toList()) {
+      FurnitureReviewItemInput submitted = submittedByEquipment.get(source.equipmentId());
+      if (submitted == null || submitted.catalogVersion() != source.catalogVersion()) {
+        throw InventoryException.conflict("Furniture review catalog item changed");
+      }
+      Map<UUID, FurnitureReviewCabinInput> cabinsByFinding = new LinkedHashMap<>();
+      for (FurnitureReviewCabinInput cabin : submitted.cabins()) {
+        if (cabin == null
+            || cabin.findingId() == null
+            || cabin.expectedFindingRevision() < 0
+            || cabin.observedQuantity() < 0
+            || cabinsByFinding.put(cabin.findingId(), cabin) != null) {
+          throw new IllegalArgumentException("Furniture review cabin set is invalid");
+        }
+      }
+      if (cabinsByFinding.size() != source.cabins().size()) {
+        throw InventoryException.conflict("Furniture review cabin set is incomplete");
+      }
+      ObjectNode reviewItem = reviewItems.addObject();
+      reviewItem.put("equipmentId", source.equipmentId().toString());
+      reviewItem.put("catalogVersion", source.catalogVersion());
+      reviewItem.put("observedStockQuantity", submitted.observedStockQuantity());
+      ArrayNode reviewCabins = reviewItem.putArray("cabins");
+      for (InventoryDependencyGateway.FurnitureSnapshotCabin sourceCabin :
+          source.cabins().stream()
+              .sorted(Comparator.comparing(InventoryDependencyGateway.FurnitureSnapshotCabin::assetId))
+              .toList()) {
+        InventoryFinding finding = findingByAsset.get(sourceCabin.assetId());
+        if (finding == null) {
+          throw InventoryException.conflict("Furniture review cabin is no longer active");
+        }
+        FurnitureReviewCabinInput submittedCabin = cabinsByFinding.get(finding.getId());
+        if (submittedCabin == null
+            || submittedCabin.expectedFindingRevision() != finding.getRevision()) {
+          throw InventoryException.conflict("Furniture review finding revision is stale");
+        }
+        Long previous = findingRevisions.put(finding.getId(), finding.getRevision());
+        if (previous != null && previous.longValue() != finding.getRevision()) {
+          throw new IllegalStateException("Furniture review repeats inconsistent finding revision");
+        }
+        ObjectNode reviewCabin = reviewCabins.addObject();
+        reviewCabin.put("findingId", finding.getId().toString());
+        reviewCabin.put("assetId", sourceCabin.assetId().toString());
+        reviewCabin.put("observedQuantity", submittedCabin.observedQuantity());
+        ObjectNode observation = mapper.createObjectNode();
+        observation.put("equipmentId", source.equipmentId().toString());
+        observation.put("catalogVersion", source.catalogVersion());
+        observation.put("observedQuantity", submittedCabin.observedQuantity());
+        observations.computeIfAbsent(finding.getId(), ignored -> new ArrayList<>()).add(observation);
+      }
+    }
+    if (!submittedByEquipment.keySet().equals(
+        snapshot.items().stream()
+            .map(InventoryDependencyGateway.FurnitureSnapshotItem::equipmentId)
+            .collect(java.util.stream.Collectors.toSet()))) {
+      throw InventoryException.conflict("Furniture review contains an unknown catalog item");
+    }
+    Map<UUID, FurnitureObservation> observationJson = new LinkedHashMap<>();
+    observations.forEach(
+        (findingId, entries) -> {
+          entries.sort(
+              Comparator.<ObjectNode, UUID>comparing(
+                      value -> UUID.fromString(value.path("equipmentId").asText()))
+                  .thenComparingLong(value -> value.path("catalogVersion").asLong()));
+          ArrayNode value = mapper.createArrayNode();
+          entries.forEach(value::add);
+          observationJson.put(
+              findingId,
+              new FurnitureObservation(
+                  entries.isEmpty() ? ObservationPresence.EXPLICIT_EMPTY : ObservationPresence.PRESENT,
+                  write(value)));
+        });
+    return new FurnitureReviewSubmission(
+        write(review),
+        canonicalJsonTreeHash(review),
+        Map.copyOf(findingRevisions),
+        Map.copyOf(observationJson));
+  }
+
+  private FurnitureReviewView furnitureReviewView(InventorySession session) {
+    requireFurnitureReviewStage(session);
+    InventoryDependencyGateway.FurnitureSnapshot snapshot = furnitureSnapshot(session);
+    List<InventoryFinding> active =
+        findings.findAllByInventoryIdAndMembershipActiveTrueOrderById(session.getId());
+    List<InventoryFinding> scopedFurnitureFindings = furnitureFindings(session, active);
+    Map<UUID, InventoryFinding> findingByAsset = new LinkedHashMap<>();
+    for (InventoryFinding finding : scopedFurnitureFindings) {
+      findingByAsset.put(finding.getAssetId(), finding);
+    }
+    JsonNode review =
+        session.getFurnitureStockObservation() == null
+            ? null
+            : read(session.getFurnitureStockObservation());
+    List<FurnitureReviewItemView> items = new ArrayList<>();
+    for (InventoryDependencyGateway.FurnitureSnapshotItem item :
+        snapshot.items().stream()
+            .sorted(Comparator.comparing(InventoryDependencyGateway.FurnitureSnapshotItem::equipmentId))
+            .toList()) {
+      List<FurnitureReviewCabinView> cabins = new ArrayList<>();
+      for (InventoryDependencyGateway.FurnitureSnapshotCabin cabin :
+          item.cabins().stream()
+              .sorted(Comparator.comparing(InventoryDependencyGateway.FurnitureSnapshotCabin::assetId))
+              .toList()) {
+        InventoryFinding finding = findingByAsset.get(cabin.assetId());
+        if (finding == null) continue;
+        long observed =
+            reviewCabinQuantity(review, item.equipmentId(), finding.getId())
+                .or(() -> findingFurnitureQuantity(finding, item.equipmentId(), item.catalogVersion()))
+                .orElse(cabin.currentQuantity());
+        cabins.add(
+            new FurnitureReviewCabinView(
+                finding.getId(),
+                cabin.assetId(),
+                cabin.displayCanonicalNumber(),
+                cabin.status(),
+                cabin.currentQuantity(),
+                observed));
+      }
+      long observedStock =
+          reviewStockQuantity(review, item.equipmentId()).orElse(item.currentStockQuantity());
+      items.add(
+          new FurnitureReviewItemView(
+              item.equipmentId(),
+              item.catalogVersion(),
+              item.equipmentName(),
+              item.currentStockQuantity(),
+              observedStock,
+              List.copyOf(cabins)));
+    }
+    return new FurnitureReviewView(
+        session.getId(),
+        session.getRevision(),
+        session.getReviewStage(),
+        session.getFurnitureAssetSnapshotSha256(),
+        session.getFurnitureReviewSha256(),
+        session.getFurnitureReviewSha256() != null,
+        List.copyOf(items));
+  }
+
+  private Optional<Long> reviewStockQuantity(JsonNode review, UUID equipmentId) {
+    if (review == null || !review.isObject()) return Optional.empty();
+    for (JsonNode item : review.path("items")) {
+      if (equipmentId.toString().equals(item.path("equipmentId").asText())) {
+        return nonNegativeLong(item.path("observedStockQuantity"));
+      }
+    }
+    return Optional.empty();
+  }
+
+  private Optional<Long> reviewCabinQuantity(JsonNode review, UUID equipmentId, UUID findingId) {
+    if (review == null || !review.isObject()) return Optional.empty();
+    for (JsonNode item : review.path("items")) {
+      if (!equipmentId.toString().equals(item.path("equipmentId").asText())) continue;
+      for (JsonNode cabin : item.path("cabins")) {
+        if (findingId.toString().equals(cabin.path("findingId").asText())) {
+          return nonNegativeLong(cabin.path("observedQuantity"));
+        }
+      }
+    }
+    return Optional.empty();
+  }
+
+  private Optional<Long> findingFurnitureQuantity(
+      InventoryFinding finding, UUID equipmentId, long catalogVersion) {
+    if (finding.getEquipmentObservationState() == ObservationPresence.ABSENT
+        || finding.getEquipmentObservation() == null) {
+      return Optional.empty();
+    }
+    JsonNode observations = read(finding.getEquipmentObservation());
+    if (!observations.isArray()) return Optional.empty();
+    for (JsonNode observation : observations) {
+      if (equipmentId.toString().equals(observation.path("equipmentId").asText())
+          && catalogVersion == observation.path("catalogVersion").asLong(Long.MIN_VALUE)) {
+        return nonNegativeLong(observation.path("observedQuantity"));
+      }
+    }
+    return Optional.empty();
+  }
+
+  private Optional<Long> nonNegativeLong(JsonNode value) {
+    if (value == null || !value.canConvertToLong() || value.longValue() < 0) {
+      return Optional.empty();
+    }
+    return Optional.of(value.longValue());
+  }
+
+  private FurnitureCompletionFact requireConfirmedCurrentFurnitureReview(
+      InventorySession session, List<InventoryFinding> active) {
+    FurnitureCompletionFact review = requireConfirmedFurnitureReview(session);
+    requireCurrentFurnitureReviewSnapshot(session, active);
+    return review;
+  }
+
+  private FurnitureCompletionFact requireConfirmedFurnitureReview(InventorySession session) {
+    requireFurnitureReviewStage(session);
+    if (session.getFurnitureReviewSha256() == null || session.getFurnitureStockObservation() == null) {
+      throw InventoryException.conflict("Furniture review must be confirmed before inventory completion");
+    }
+    if (!canonicalJsonTreeHash(read(session.getFurnitureStockObservation()))
+        .equals(session.getFurnitureReviewSha256())) {
+      throw InventoryException.conflict("Furniture review acknowledgement is inconsistent");
+    }
+    return new FurnitureCompletionFact(
+        session.getFurnitureAssetSnapshotSha256(),
+        session.getFurnitureReviewSha256(),
+        read(session.getFurnitureStockObservation()));
+  }
+
+  private void requireCurrentFurnitureReviewSnapshot(
+      InventorySession session, List<InventoryFinding> active) {
+    InventoryDependencyGateway.FurnitureSnapshot fresh =
+        dependencies.furnitureSnapshot(session.getWarehouseId(), furnitureAssetIds(session, active));
+    validateFurnitureSnapshot(session, active, fresh);
+    if (!session.getFurnitureAssetSnapshotSha256().equals(fresh.snapshotSha256())) {
+      throw InventoryException.conflict("Furniture review snapshot is stale");
+    }
+  }
+
+  private void requireLockedFurnitureReview(
+      InventorySession session, FurnitureCompletionFact expected) {
+    requireFurnitureReviewStage(session);
+    if (!expected.assetSnapshotSha256().equals(session.getFurnitureAssetSnapshotSha256())
+        || !expected.reviewSha256().equals(session.getFurnitureReviewSha256())
+        || session.getFurnitureStockObservation() == null
+        || !canonicalJsonTreeHash(read(session.getFurnitureStockObservation()))
+            .equals(expected.reviewSha256())) {
+      throw InventoryException.conflict("Furniture review changed before inventory completion");
+    }
+  }
+
+  private void requireCabinReviewStage(InventorySession session) {
+    if (session.getReviewStage() != InventoryReviewStage.CABINS) {
+      throw InventoryException.conflict("Cabin review is frozen after furniture review starts");
+    }
+  }
+
+  private void requireCabinOrFurnitureReviewStage(InventorySession session) {
+    if (session.getReviewStage() != InventoryReviewStage.CABINS
+        && session.getReviewStage() != InventoryReviewStage.FURNITURE) {
+      throw InventoryException.conflict("Inventory review stage is invalid");
+    }
+  }
+
+  private void requireFurnitureReviewCanStart(InventorySession session) {
+    requireCabinOrFurnitureReviewStage(session);
+    if (session.getReviewStage() == InventoryReviewStage.FURNITURE
+        && session.getFurnitureReviewSha256() != null) {
+      throw InventoryException.conflict("Furniture review is already confirmed");
+    }
+  }
+
+  /**
+   * Cabin facts and the furniture snapshot describe the same active population. Any saved cabin
+   * inspection or resolved registry conflict therefore invalidates the frozen furniture review;
+   * it never mutates or deletes the historical finding facts themselves.
+   */
+  private void invalidateFurnitureReviewAfterCabinChange(InventorySession session) {
+    if (session.getReviewStage() != InventoryReviewStage.FURNITURE) {
+      return;
+    }
+    session.restartCabinReview();
+    furnitureReconciliations.findById(session.getId()).ifPresent(furnitureReconciliations::delete);
+    sessions.saveAndFlush(session);
+  }
+
+  private void requireFurnitureReviewStage(InventorySession session) {
+    if (session.getReviewStage() != InventoryReviewStage.FURNITURE) {
+      throw InventoryException.conflict("Furniture review has not started");
+    }
+  }
+
+  private void createFurnitureReconciliationIntent(InventorySession session) {
+    if (session.getLifecycle() != SessionLifecycle.COMPLETED) {
+      throw new IllegalStateException("Furniture reconciliation requires a completed inventory");
+    }
+    InventoryDependencyGateway.FurnitureReconciliationRequest request =
+        furnitureReconciliationRequest(session);
+    if (request.items().isEmpty()) {
+      return;
+    }
+    String requestBody = canonicalWrite(request);
+    String requestSha256 = canonicalJsonTreeHash(read(requestBody));
+    UUID idempotencyKey =
+        UUID.nameUUIDFromBytes(
+            ("rwms:inventory:furniture-reconciliation:"
+                    + session.getId()
+                    + ":"
+                    + session.getFurnitureReviewSha256())
+                .getBytes(StandardCharsets.UTF_8));
+    InventoryFurnitureReconciliationIntent intent =
+        InventoryFurnitureReconciliationIntent.pending(
+            session.getId(),
+            idempotencyKey,
+            session.getFurnitureAssetSnapshotSha256(),
+            session.getFurnitureReviewSha256(),
+            requestSha256,
+            requestBody);
+    furnitureReconciliations.saveAndFlush(intent);
+  }
+
+  private InventoryDependencyGateway.FurnitureReconciliationRequest furnitureReconciliationRequest(
+      InventorySession session) {
+    InventoryDependencyGateway.FurnitureSnapshot snapshot = furnitureSnapshot(session);
+    if (session.getFurnitureReviewSha256() == null || session.getFurnitureStockObservation() == null) {
+      throw new IllegalStateException("Completed inventory has no confirmed furniture review");
+    }
+    JsonNode review = read(session.getFurnitureStockObservation());
+    if (!review.isObject()
+        || !session
+            .getFurnitureAssetSnapshotSha256()
+            .equals(review.path("assetSnapshotSha256").asText())) {
+      throw new IllegalStateException("Stored furniture review is invalid");
+    }
+    Map<UUID, JsonNode> reviewedItems = new LinkedHashMap<>();
+    for (JsonNode item : review.path("items")) {
+      UUID equipmentId = requiredUuid(item, "equipmentId", "furniture review equipment id");
+      if (reviewedItems.put(equipmentId, item) != null) {
+        throw new IllegalStateException("Stored furniture review repeats an equipment item");
+      }
+    }
+    List<InventoryDependencyGateway.FurnitureReconciliationItem> items = new ArrayList<>();
+    for (InventoryDependencyGateway.FurnitureSnapshotItem source :
+        snapshot.items().stream()
+            .sorted(Comparator.comparing(InventoryDependencyGateway.FurnitureSnapshotItem::equipmentId))
+            .toList()) {
+      JsonNode reviewedItem = reviewedItems.remove(source.equipmentId());
+      if (reviewedItem == null
+          || requiredNonNegativeLong(
+                  reviewedItem.path("catalogVersion"), "furniture review catalog version")
+              != source.catalogVersion()) {
+        throw new IllegalStateException("Stored furniture review does not match its snapshot");
+      }
+      Map<UUID, JsonNode> reviewedCabins = new LinkedHashMap<>();
+      for (JsonNode cabin : reviewedItem.path("cabins")) {
+        UUID assetId = requiredUuid(cabin, "assetId", "furniture review cabin asset id");
+        if (reviewedCabins.put(assetId, cabin) != null) {
+          throw new IllegalStateException("Stored furniture review repeats a cabin");
+        }
+      }
+      List<InventoryDependencyGateway.FurnitureReconciliationCabin> cabins = new ArrayList<>();
+      for (InventoryDependencyGateway.FurnitureSnapshotCabin sourceCabin :
+          source.cabins().stream()
+              .sorted(Comparator.comparing(InventoryDependencyGateway.FurnitureSnapshotCabin::assetId))
+              .toList()) {
+        JsonNode reviewedCabin = reviewedCabins.remove(sourceCabin.assetId());
+        if (reviewedCabin == null) {
+          throw new IllegalStateException("Stored furniture review omits a cabin");
+        }
+        cabins.add(
+            new InventoryDependencyGateway.FurnitureReconciliationCabin(
+                sourceCabin.assetId(),
+                requiredNonNegativeLong(
+                    reviewedCabin.path("observedQuantity"), "furniture review cabin quantity")));
+      }
+      if (!reviewedCabins.isEmpty()) {
+        throw new IllegalStateException("Stored furniture review contains an unknown cabin");
+      }
+      items.add(
+          new InventoryDependencyGateway.FurnitureReconciliationItem(
+              source.equipmentId(),
+              source.catalogVersion(),
+              requiredNonNegativeLong(
+                  reviewedItem.path("observedStockQuantity"), "furniture review stock quantity"),
+              List.copyOf(cabins)));
+    }
+    if (!reviewedItems.isEmpty()) {
+      throw new IllegalStateException("Stored furniture review contains an unknown equipment item");
+    }
+    return new InventoryDependencyGateway.FurnitureReconciliationRequest(
+        session.getWarehouseId(),
+        session.getFurnitureAssetSnapshotSha256(),
+        session.getFurnitureReviewSha256(),
+        List.copyOf(items));
+  }
+
+  private long requiredNonNegativeLong(JsonNode value, String field) {
+    return nonNegativeLong(value)
+        .orElseThrow(() -> new IllegalStateException("Persisted " + field + " is invalid"));
+  }
+
+  private void dispatchFurnitureReconciliation(UUID inventoryId) {
+    try {
+      FurnitureReconciliationDispatch dispatch =
+          transactions.execute(
+              status -> {
+                InventoryFurnitureReconciliationIntent intent =
+                    furnitureReconciliations.findByInventoryIdForUpdate(inventoryId).orElse(null);
+                if (intent == null) {
+                  return null;
+                }
+                if (intent.getState() != FurnitureReconciliationState.PENDING
+                    && intent.getState() != FurnitureReconciliationState.TRANSIENT_FAILED) {
+                  return null;
+                }
+                InventoryDependencyGateway.FurnitureReconciliationRequest request =
+                    frozenFurnitureReconciliationRequest(intent);
+                intent.beginAttempt(OffsetDateTime.now(ZoneOffset.UTC).plusSeconds(60));
+                InventoryFurnitureReconciliationIntent saved = furnitureReconciliations.saveAndFlush(intent);
+                return new FurnitureReconciliationDispatch(
+                    saved.getInventoryId(),
+                    saved.getIdempotencyKey(),
+                    saved.getAttemptCount(),
+                    request);
+              });
+      if (dispatch == null) return;
+      try {
+        dependencies.reconcileFurniture(
+            dispatch.inventoryId(), dispatch.idempotencyKey(), dispatch.request());
+      } catch (RuntimeException exception) {
+        settleFurnitureReconciliationFailure(inventoryId, dispatch.attemptCount(), exception);
+        return;
+      }
+      transactions.executeWithoutResult(
+          status -> {
+            InventoryFurnitureReconciliationIntent intent =
+                furnitureReconciliations
+                    .findByInventoryIdForUpdate(inventoryId)
+                    .orElseThrow(
+                        () ->
+                            new IllegalStateException(
+                                "Furniture reconciliation intent disappeared during dispatch"));
+            if (intent.getState() == FurnitureReconciliationState.PENDING
+                && intent.getAttemptCount() == dispatch.attemptCount()) {
+              intent.succeed();
+              furnitureReconciliations.saveAndFlush(intent);
+            }
+          });
+    } catch (RuntimeException exception) {
+      log.warn("Furniture reconciliation dispatch deferred for inventory {}", inventoryId, exception);
+      settleFurnitureReconciliationFailure(inventoryId, null, exception);
+    }
+  }
+
+  private InventoryDependencyGateway.FurnitureReconciliationRequest frozenFurnitureReconciliationRequest(
+      InventoryFurnitureReconciliationIntent intent) {
+    JsonNode requestBody = read(intent.getRequestBody());
+    if (!canonicalJsonTreeHash(requestBody).equals(intent.getRequestSha256())) {
+      throw new IllegalStateException("Furniture reconciliation request snapshot is inconsistent");
+    }
+    InventoryDependencyGateway.FurnitureReconciliationRequest request =
+        convert(requestBody, InventoryDependencyGateway.FurnitureReconciliationRequest.class);
+    if (!intent.getAssetSnapshotSha256().equals(request.expectedSnapshotSha256())
+        || !intent.getReviewSha256().equals(request.reviewSha256())
+        || request.warehouseId() == null
+        || request.items() == null) {
+      throw new IllegalStateException("Furniture reconciliation request snapshot is invalid");
+    }
+    for (InventoryDependencyGateway.FurnitureReconciliationItem item : request.items()) {
+      if (item == null
+          || item.equipmentId() == null
+          || item.catalogVersion() < 0
+          || item.stockQuantity() < 0
+          || item.cabins() == null
+          || item.cabins().stream()
+              .anyMatch(cabin -> cabin == null || cabin.assetId() == null || cabin.quantity() < 0)) {
+        throw new IllegalStateException("Furniture reconciliation request snapshot is invalid");
+      }
+    }
+    return request;
+  }
+
+  private void settleFurnitureReconciliationFailure(
+      UUID inventoryId, Integer attemptCount, RuntimeException failure) {
+    try {
+      transactions.executeWithoutResult(
+          status -> {
+            InventoryFurnitureReconciliationIntent intent =
+                furnitureReconciliations.findByInventoryIdForUpdate(inventoryId).orElse(null);
+            if (intent == null
+                || intent.getState() != FurnitureReconciliationState.PENDING
+                || (attemptCount != null && intent.getAttemptCount() != attemptCount)) {
+              return;
+            }
+            if (failure instanceof InventoryException exception
+                && exception.status() == HttpStatus.CONFLICT) {
+              intent.block("ASSET_SNAPSHOT_CONFLICT");
+            } else {
+              long retrySeconds = Math.min(300L, 15L * Math.max(1, intent.getAttemptCount()));
+              intent.transientFailure(
+                  "ASSET_SERVICE_UNAVAILABLE",
+                  OffsetDateTime.now(ZoneOffset.UTC).plusSeconds(retrySeconds));
+            }
+            furnitureReconciliations.saveAndFlush(intent);
+          });
+    } catch (RuntimeException persistenceFailure) {
+      log.error(
+          "Could not persist furniture reconciliation retry state for inventory {}",
+          inventoryId,
+          persistenceFailure);
+    }
+  }
+
+  @Scheduled(fixedDelayString = "${rwms.inventory.furniture-reconciliation-recovery-delay-ms:5000}")
+  public void recoverFurnitureReconciliations() {
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    for (InventoryFurnitureReconciliationIntent intent :
+        furnitureReconciliations
+            .findTop20ByStateInAndNextAttemptAtLessThanEqualOrderByNextAttemptAtAscInventoryIdAsc(
+                List.of(
+                    FurnitureReconciliationState.PENDING,
+                    FurnitureReconciliationState.TRANSIENT_FAILED),
+                now)) {
+      dispatchFurnitureReconciliation(intent.getInventoryId());
+    }
+  }
+
   private InventoryDependencyGateway.Validation validateAssets(List<InventoryFinding> all) {
     List<UUID> assetIds =
         all.stream()
@@ -2213,6 +3019,7 @@ public class InventoryApplicationService {
       InventorySession session,
       RevisionState revisions,
       InventoryDependencyGateway.Validation validation,
+      FurnitureCompletionFact furniture,
       FrozenStatistics statistics,
       List<CompletionRisk> risks,
       List<ValidatedFinding> validatedFindings) {
@@ -2258,6 +3065,9 @@ public class InventoryApplicationService {
     result.put("findingFacts", findingFacts);
     result.put("validationSha256", validation.validationDigest());
     result.put("validationAssets", semanticValidationAssets(mapper.valueToTree(validation.assets())));
+    result.put("furnitureAssetSnapshotSha256", furniture.assetSnapshotSha256());
+    result.put("furnitureReviewSha256", furniture.reviewSha256());
+    result.put("furnitureObservation", furniture.observation());
     result.put("statistics", statistics);
     result.put("risks", risks);
     result.put("validatedFindings", semanticValidatedFindings(validatedFindings));
@@ -2334,10 +3144,7 @@ public class InventoryApplicationService {
         result.add(new CompletionRisk(finding.getId(), "NOT_INSPECTED"));
       }
       if (finding.getInspection() == InspectionState.WORK_STAGED) {
-        FindingPlanSnapshot plan =
-            planSnapshots
-                .findByFindingIdAndFindingRevision(finding.getId(), finding.getRevision())
-                .orElse(null);
+        FindingPlanSnapshot plan = activePlanSnapshot(finding).orElse(null);
         if (finding.getMaintenancePlanFingerprintSha256() == null
             || plan == null
             || !finding.getMaintenancePlanFingerprintSha256().equals(plan.getFingerprint())
@@ -3128,9 +3935,11 @@ public class InventoryApplicationService {
 
   private JsonNode publicationRequest(InventorySession session, InventoryPublicationIntent intent) {
     InventoryFinding finding = requireFinding(session.getId(), intent.getFindingId());
+    if (finding.getInspection() != InspectionState.WORK_STAGED) {
+      throw InventoryException.conflict("Finding has no staged maintenance plan");
+    }
     FindingPlanSnapshot frozenPlan =
-        planSnapshots
-            .findByFindingIdAndFindingRevision(finding.getId(), finding.getRevision())
+        activePlanSnapshot(finding)
             .orElseThrow(() -> InventoryException.conflict("Frozen maintenance plan is missing"));
     ObjectNode request = mapper.createObjectNode();
     request.put("warehouseId", session.getWarehouseId().toString());
@@ -3141,6 +3950,15 @@ public class InventoryApplicationService {
     request.put("planFingerprint", finding.getMaintenancePlanFingerprintSha256());
     request.set("snapshot", read(frozenPlan.getSourceSnapshot()));
     return request;
+  }
+
+  private Optional<FindingPlanSnapshot> activePlanSnapshot(InventoryFinding finding) {
+    String fingerprint = finding.getMaintenancePlanFingerprintSha256();
+    if (fingerprint == null) {
+      return Optional.empty();
+    }
+    return planSnapshots.findFirstByFindingIdAndFingerprintOrderByFindingRevisionDesc(
+        finding.getId(), fingerprint);
   }
 
   private String publicationRequestHash(
@@ -3273,6 +4091,8 @@ public class InventoryApplicationService {
         sessionMapper.toInventoryActorView(value),
         value.getBusinessDate(),
         value.getLifecycle(),
+        value.getReviewStage(),
+        furnitureReconciliationState(value),
         value.getExpectedPopulationCount(),
         counts.findingCount(),
         counts.inspectedCount(),
@@ -3299,12 +4119,35 @@ public class InventoryApplicationService {
         sessionMapper.toInventoryActorView(value),
         value.getBusinessDate(),
         value.getLifecycle(),
+        value.getReviewStage(),
+        furnitureReconciliationState(value),
         value.getExpectedPopulationCount(),
         counts.findingCount(),
         counts.inspectedCount(),
         value.getStartedAt(),
         terminalAt(value),
         aggregatePublicationState(publicationViews));
+  }
+
+  private FurnitureReconciliationState furnitureReconciliationState(InventorySession session) {
+    if (session.getReviewStage() != InventoryReviewStage.FURNITURE) {
+      return FurnitureReconciliationState.NOT_REQUIRED;
+    }
+    return furnitureReconciliations
+        .findById(session.getId())
+        .map(InventoryFurnitureReconciliationIntent::getState)
+        .orElse(
+            session.getFurnitureReviewSha256() == null || !furnitureReviewHasItems(session)
+                ? FurnitureReconciliationState.NOT_REQUIRED
+                : FurnitureReconciliationState.READY);
+  }
+
+  private boolean furnitureReviewHasItems(InventorySession session) {
+    if (session.getFurnitureStockObservation() == null) {
+      return false;
+    }
+    JsonNode review = read(session.getFurnitureStockObservation());
+    return review.isObject() && review.path("items").isArray() && !review.path("items").isEmpty();
   }
 
   private FindingView findingView(InventoryFinding value) {
@@ -4184,6 +5027,17 @@ public class InventoryApplicationService {
     }
   }
 
+  private String canonicalWrite(Object value) {
+    try {
+      return mapper
+          .writer()
+          .with(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
+          .writeValueAsString(value);
+    } catch (JacksonException exception) {
+      throw new IllegalArgumentException("Inventory value is not serializable", exception);
+    }
+  }
+
   private JsonNode read(String value) {
     try {
       return mapper.readTree(value);
@@ -4224,6 +5078,18 @@ public class InventoryApplicationService {
     return canonicalJson.sha256(value);
   }
 
+  /**
+   * PostgreSQL jsonb does not preserve object field order. Persisted immutable JSON facts must
+   * therefore be hashed as ordinary map/list data rather than directly as an ObjectNode.
+   */
+  private String canonicalJsonTreeHash(JsonNode value) {
+    try {
+      return canonicalHash(mapper.treeToValue(value, Object.class));
+    } catch (JacksonException exception) {
+      throw new IllegalArgumentException("Inventory JSON cannot be canonicalized", exception);
+    }
+  }
+
   private String canonicalDisplayNumber(String value) {
     if (value == null) throw new IllegalArgumentException("Rental number is required");
     String display =
@@ -4252,6 +5118,23 @@ public class InventoryApplicationService {
 
   private record RevisionState(
       List<InventoryFinding> findings, List<RevisionExpectation> expectations) {}
+
+  private record FurnitureObservation(ObservationPresence presence, String body) {}
+
+  private record FurnitureReviewSubmission(
+      String reviewBody,
+      String reviewSha256,
+      Map<UUID, Long> findingRevisions,
+      Map<UUID, FurnitureObservation> equipmentObservationByFinding) {}
+
+  private record FurnitureCompletionFact(
+      String assetSnapshotSha256, String reviewSha256, JsonNode observation) {}
+
+  private record FurnitureReconciliationDispatch(
+      UUID inventoryId,
+      UUID idempotencyKey,
+      int attemptCount,
+      InventoryDependencyGateway.FurnitureReconciliationRequest request) {}
 
   private record ValidationRecord(
       String validation,

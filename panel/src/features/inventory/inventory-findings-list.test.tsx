@@ -91,6 +91,8 @@ function session(
     membershipMovements: [],
     statistics: null,
     publicationStatus,
+    reviewStage: "FURNITURE",
+    furnitureReconciliationState: "SUCCEEDED",
   }
 }
 

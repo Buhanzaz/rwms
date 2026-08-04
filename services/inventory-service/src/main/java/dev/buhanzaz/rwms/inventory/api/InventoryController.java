@@ -159,6 +159,30 @@ public class InventoryController {
     return inventory.resolveConflict(jwt, inventoryId, findingId, request);
   }
 
+  @PostMapping("/sessions/{inventoryId}/furniture-review/start")
+  public ResponseEntity<FurnitureReviewView> startFurnitureReview(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID inventoryId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody StartFurnitureReviewRequest request) {
+    return idempotent(
+        inventory.startFurnitureReview(jwt, inventoryId, idempotencyKey, request), HttpStatus.OK);
+  }
+
+  @GetMapping("/sessions/{inventoryId}/furniture-review")
+  public FurnitureReviewView furnitureReview(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID inventoryId) {
+    return inventory.furnitureReview(jwt, inventoryId);
+  }
+
+  @PutMapping("/sessions/{inventoryId}/furniture-review")
+  public FurnitureReviewView saveFurnitureReview(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID inventoryId,
+      @Valid @RequestBody SaveFurnitureReviewRequest request) {
+    return inventory.saveFurnitureReview(jwt, inventoryId, request);
+  }
+
   @PostMapping("/sessions/{inventoryId}/completion-preview")
   public ResponseEntity<CompletionPreview> preview(
       @AuthenticationPrincipal Jwt jwt,

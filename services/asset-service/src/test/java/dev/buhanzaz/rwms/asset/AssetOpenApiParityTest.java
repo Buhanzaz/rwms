@@ -85,6 +85,8 @@ class AssetOpenApiParityTest {
         "/api/internal/asset/v1/inventory/captures/{captureId}/members",
         "/api/internal/asset/v1/inventory/number-resolutions",
         "/api/internal/asset/v1/inventory/validations",
+        "/api/internal/asset/v1/inventory/furniture-snapshots",
+        "/api/internal/asset/v1/inventory/furniture-reconciliations/{inventoryId}",
         "/api/internal/asset/v1/inventory/source-assets");
     assertThat(
             child(
@@ -365,6 +367,38 @@ class AssetOpenApiParityTest {
         .containsExactly("warehouseId", "number");
     assertThat(child(child(schemas, "InventoryNumberResolutionRequest"), "properties").keySet())
         .containsExactly("warehouseId", "number");
+    Map<String, Object> furnitureSnapshotRequest =
+        child(schemas, "InventoryFurnitureSnapshotRequest");
+    assertThat(list(furnitureSnapshotRequest.get("required")))
+        .containsExactly("warehouseId", "assetIds");
+    assertThat(child(furnitureSnapshotRequest, "properties").keySet())
+        .containsExactly("warehouseId", "assetIds");
+    assertThat(list(child(schemas, "InventoryFurnitureSnapshot").get("required")))
+        .containsExactly("warehouseId", "snapshotSha256", "items");
+    assertThat(list(child(schemas, "InventoryFurnitureSnapshotItem").get("required")))
+        .containsExactly(
+            "equipmentId", "catalogVersion", "equipmentName", "currentStockQuantity", "cabins");
+    assertThat(list(child(schemas, "InventoryFurnitureSnapshotCabin").get("required")))
+        .containsExactly(
+            "assetId", "assetVersion", "displayCanonicalNumber", "status", "currentQuantity");
+    Map<String, Object> furnitureReconciliationRequest =
+        child(schemas, "InventoryFurnitureReconciliationRequest");
+    assertThat(list(furnitureReconciliationRequest.get("required")))
+        .containsExactly("warehouseId", "expectedSnapshotSha256", "reviewSha256", "items");
+    assertThat(list(child(schemas, "InventoryFurnitureReconciliationItem").get("required")))
+        .containsExactly("equipmentId", "catalogVersion", "stockQuantity", "cabins");
+    assertThat(list(child(schemas, "InventoryFurnitureReconciliationCabin").get("required")))
+        .containsExactly("assetId", "quantity");
+    Map<String, Object> furnitureSnapshotPath =
+        child(paths, "/api/internal/asset/v1/inventory/furniture-snapshots");
+    assertThat(child(furnitureSnapshotPath, "post").get("operationId"))
+        .isEqualTo("readInventoryFurnitureSnapshot");
+    Map<String, Object> furnitureReconciliationPath = child(
+        paths, "/api/internal/asset/v1/inventory/furniture-reconciliations/{inventoryId}");
+    assertThat(child(furnitureReconciliationPath, "put").get("operationId"))
+        .isEqualTo("reconcileInventoryFurniture");
+    assertThat(child(child(furnitureReconciliationPath, "put"), "responses").get("204").toString())
+        .contains("Idempotency-Replayed", "true");
     assertThat(child(schemas, "InventorySourceAssetRequest").toString())
         .doesNotContain("expectedVersion", "leaseId", "fencingToken", "status");
     assertThat(paths.keySet().stream().filter(path -> path.contains("/inventory/")).toList())

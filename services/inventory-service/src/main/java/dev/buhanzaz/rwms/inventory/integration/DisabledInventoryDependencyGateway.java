@@ -57,6 +57,17 @@ final class DisabledInventoryDependencyGateway implements InventoryDependencyGat
   }
 
   @Override
+  public FurnitureSnapshot furnitureSnapshot(UUID warehouseId, List<UUID> assetIds) {
+    throw unavailable();
+  }
+
+  @Override
+  public void reconcileFurniture(
+      UUID inventoryId, UUID idempotencyKey, FurnitureReconciliationRequest request) {
+    throw unavailable();
+  }
+
+  @Override
   public FrozenPlan freezePlan(UUID key, JsonNode request) {
     throw unavailable();
   }

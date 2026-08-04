@@ -1,6 +1,7 @@
 import { bearerRequest } from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 import type {
+  FurnitureReviewView,
   InventoryCompletionPreview,
   InventoryFinding,
   InventoryFindingPage,
@@ -12,6 +13,8 @@ import type {
   InventorySessionDetail,
   InventorySessionPage,
   InventorySessionView,
+  SaveFurnitureReviewRequest,
+  StartFurnitureReviewRequest,
   InventoryStatisticsPage,
   InventoryStatisticsSummary,
 } from "@/features/inventory/model/inventory-service"
@@ -230,6 +233,52 @@ export function resolveInventoryFindingConflict(input: {
         strategy: input.strategy,
         reason: input.reason,
       }),
+    }
+  )
+}
+
+export function startFurnitureReview(input: {
+  accessToken: string | null
+  inventoryId: string
+  request: StartFurnitureReviewRequest
+  idempotencyKey: string
+}) {
+  return bearerRequest<FurnitureReviewView>(
+    requireInventoryAccessToken(input.accessToken),
+    endpoint(
+      `/sessions/${encodeURIComponent(input.inventoryId)}/furniture-review/start`
+    ),
+    {
+      method: "POST",
+      headers: commandHeaders(input.idempotencyKey),
+      body: JSON.stringify(input.request),
+    }
+  )
+}
+
+export function getFurnitureReview(
+  accessToken: string | null,
+  inventoryId: string
+) {
+  return bearerRequest<FurnitureReviewView>(
+    requireInventoryAccessToken(accessToken),
+    endpoint(`/sessions/${encodeURIComponent(inventoryId)}/furniture-review`)
+  )
+}
+
+export function saveFurnitureReview(input: {
+  accessToken: string | null
+  inventoryId: string
+  request: SaveFurnitureReviewRequest
+}) {
+  return bearerRequest<FurnitureReviewView>(
+    requireInventoryAccessToken(input.accessToken),
+    endpoint(
+      `/sessions/${encodeURIComponent(input.inventoryId)}/furniture-review`
+    ),
+    {
+      method: "PUT",
+      body: JSON.stringify(input.request),
     }
   )
 }

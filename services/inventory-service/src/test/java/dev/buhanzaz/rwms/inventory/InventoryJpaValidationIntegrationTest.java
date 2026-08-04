@@ -4,6 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinding;
+import dev.buhanzaz.rwms.inventory.domain.FindingPlanLine;
+import dev.buhanzaz.rwms.inventory.domain.FindingPlanSnapshot;
+import dev.buhanzaz.rwms.inventory.domain.FindingPlanStage;
+import dev.buhanzaz.rwms.inventory.repository.FindingPlanLineRepository;
+import dev.buhanzaz.rwms.inventory.repository.FindingPlanSnapshotRepository;
+import dev.buhanzaz.rwms.inventory.repository.FindingPlanStageRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryFindingRepository;
 import jakarta.persistence.EntityManagerFactory;
 import java.time.OffsetDateTime;
@@ -42,6 +48,9 @@ class InventoryJpaValidationIntegrationTest {
   @Autowired JdbcTemplate jdbc;
   @Autowired DataSource dataSource;
   @Autowired InventoryFindingRepository findings;
+  @Autowired FindingPlanSnapshotRepository planSnapshots;
+  @Autowired FindingPlanLineRepository planLines;
+  @Autowired FindingPlanStageRepository planStages;
   @Autowired PlatformTransactionManager transactionManager;
 
   @DynamicPropertySource
@@ -67,14 +76,15 @@ class InventoryJpaValidationIntegrationTest {
         assertThat(
             jdbc.queryForObject(
                 "select count(*) from flyway_schema_history where success", Integer.class))
-        .isEqualTo(12);
+        .isEqualTo(13);
     assertThat(entityManagerFactory.getMetamodel().getEntities())
         .extracting(value -> value.getJavaType().getSimpleName())
         .contains(
             "InventorySession",
             "InventoryFinding",
             "InventoryMembershipMovement",
-            "InventoryPublicationIntent");
+            "InventoryPublicationIntent",
+            "InventoryFurnitureReconciliationIntent");
   }
 
   @Test
@@ -113,6 +123,102 @@ class InventoryJpaValidationIntegrationTest {
                       return null;
                     }))
         .isInstanceOf(ObjectOptimisticLockingFailureException.class);
+  }
+
+  @Test
+  void frozenPlanStaysActiveByFingerprintAfterKeepInspectionRevisionBump() {
+    UUID inventoryId = UUID.randomUUID();
+    String fingerprint = "a".repeat(64);
+    seedSession(inventoryId);
+    UUID warehouseId =
+        jdbc.queryForObject(
+            "select warehouse_id from inventory_session where id=?", UUID.class, inventoryId);
+    InventoryFinding stagedFinding =
+        InventoryFinding.unexpected(
+            inventoryId,
+            dev.buhanzaz.rwms.inventory.domain.FindingOrigin.UNEXPECTED_EXISTING,
+            UUID.randomUUID(),
+            0L,
+            warehouseId,
+            "WAREHOUSE",
+            null,
+            "PLAN-KEEP",
+            "PLANKEEP",
+            dev.buhanzaz.rwms.inventory.domain.ReconciliationState.MATCHED,
+            actor());
+    stagedFinding.saveInspection(
+        dev.buhanzaz.rwms.inventory.domain.InspectionState.WORK_STAGED,
+        dev.buhanzaz.rwms.inventory.domain.ReconciliationState.MATCHED,
+        dev.buhanzaz.rwms.inventory.domain.ObservationPresence.ABSENT,
+        null,
+        dev.buhanzaz.rwms.inventory.domain.ObservationPresence.EXPLICIT_EMPTY,
+        "[]",
+        fingerprint,
+        "",
+        actor());
+    stagedFinding = findings.saveAndFlush(stagedFinding);
+    UUID findingId = stagedFinding.getId();
+    long stagedRevision = stagedFinding.getRevision();
+    planSnapshots.saveAndFlush(
+        new FindingPlanSnapshot(
+            findingId,
+            stagedRevision,
+            inventoryId,
+            "MANUAL",
+            false,
+            false,
+            null,
+            null,
+            UUID.randomUUID(),
+            fingerprint,
+            "{\"lines\":[],\"stages\":[]}"));
+    planLines.saveAndFlush(
+        new FindingPlanLine(
+            findingId,
+            stagedRevision,
+            0,
+            "CATALOG",
+            "WORK",
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            "Замена пола",
+            null,
+            "шт",
+            java.math.BigDecimal.ONE,
+            5000,
+            new java.math.BigDecimal("45.000")));
+    planStages.saveAndFlush(
+        new FindingPlanStage(
+            findingId,
+            stagedRevision,
+            0,
+            "REPAIR_WORK",
+            UUID.randomUUID(),
+            "Внутренние работы",
+            UUID.randomUUID(),
+            "Внутренние работы",
+            "REPAIR",
+            false,
+            "{}"));
+
+    jdbc.update(
+        "update inventory_finding set finding_revision=? where id=?",
+        stagedRevision + 1,
+        findingId);
+
+    assertThat(planSnapshots.findFirstByFindingIdAndFingerprintOrderByFindingRevisionDesc(
+            findingId, fingerprint))
+        .hasValueSatisfying(
+            snapshot -> assertThat(snapshot.getFindingRevision()).isEqualTo(stagedRevision));
+    assertThat(planLines.findActiveByInventoryId(inventoryId))
+        .extracting(FindingPlanLine::getDescription)
+        .containsExactly("Замена пола");
+    assertThat(planLines.findActiveByFindingIds(java.util.Set.of(findingId)))
+        .extracting(FindingPlanLine::getFindingRevision)
+        .containsExactly(stagedRevision);
+    assertThat(planStages.findActiveByFindingIds(java.util.Set.of(findingId)))
+        .extracting(FindingPlanStage::getFindingRevision)
+        .containsExactly(stagedRevision);
   }
 
   private void seedSession(UUID inventoryId) {
