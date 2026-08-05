@@ -34,7 +34,10 @@ import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskServic
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventStore;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventType;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.mapper.LogisticsDocumentResponseMapper;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderAuditEventType;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
@@ -150,10 +153,35 @@ public class LogisticsDocumentService {
   private final LogisticsDocumentResponseMapper responseMapper;
   private final LogisticsIdempotencyProperties idempotencyProperties;
   private final LogisticsEventStore eventStore;
+  private final LogisticsWarehouseLifecycle warehouseLifecycle;
+  private final LogisticsWarehouseOperationMarkStore warehouseOperationMarks;
 
   @Transactional
   public CreateResult createReturn(
       UUID subjectId, UUID idempotencyKey, UUID correlationId, CreateReturnRequest request) {
+    requireRequest(request);
+    requireLegacyAdmissionDisabled();
+    return createReturn(
+        subjectId,
+        idempotencyKey,
+        correlationId,
+        request,
+        testTicket(
+            subjectId,
+            CREATE_RETURN,
+            idempotencyKey,
+            List.of(
+                new AdmissionRequirement(
+                    request.warehouseId(), WarehouseOperationDirection.INCOMING))));
+  }
+
+  @Transactional
+  public CreateResult createReturn(
+      UUID subjectId,
+      UUID idempotencyKey,
+      UUID correlationId,
+      CreateReturnRequest request,
+      AdmissionTicket admission) {
     requireRequest(request);
     String checksum =
         LogisticsCommandChecksum.sha256(
@@ -162,6 +190,12 @@ public class LogisticsDocumentService {
     acquireIdempotencyLock(subjectId, CREATE_RETURN, idempotencyKey);
     CreateResult replay = replay(subjectId, idempotencyKey, CREATE_RETURN, checksum);
     if (replay != null) return replay;
+
+    requireAdmission(
+        admission,
+        List.of(
+            new AdmissionRequirement(
+                request.warehouseId(), WarehouseOperationDirection.INCOMING)));
 
     RentalOrder returnOrder = validateReturnRentalBinding(request);
     LogisticsDocument document =
@@ -193,6 +227,8 @@ public class LogisticsDocumentService {
           proofCreatedAt);
     }
     eventStore.initialize(document, lines.size(), correlationId, subjectId);
+    warehouseOperationMarks.enqueue(
+        document.getWarehouseId(), document.getId(), admission.occurredAt());
     remember(subjectId, idempotencyKey, CREATE_RETURN, checksum, document);
     return new CreateResult(toView(document), false);
   }
@@ -201,6 +237,29 @@ public class LogisticsDocumentService {
   public CreateResult createShipment(
       UUID subjectId, UUID idempotencyKey, UUID correlationId, CreateShipmentRequest request) {
     requireRequest(request);
+    requireLegacyAdmissionDisabled();
+    return createShipment(
+        subjectId,
+        idempotencyKey,
+        correlationId,
+        request,
+        testTicket(
+            subjectId,
+            CREATE_SHIPMENT,
+            idempotencyKey,
+            List.of(
+                new AdmissionRequirement(
+                    request.warehouseId(), WarehouseOperationDirection.OUTGOING))));
+  }
+
+  @Transactional
+  public CreateResult createShipment(
+      UUID subjectId,
+      UUID idempotencyKey,
+      UUID correlationId,
+      CreateShipmentRequest request,
+      AdmissionTicket admission) {
+    requireRequest(request);
     String checksum =
         LogisticsCommandChecksum.sha256(
             CREATE_SHIPMENT,
@@ -208,6 +267,12 @@ public class LogisticsDocumentService {
     acquireIdempotencyLock(subjectId, CREATE_SHIPMENT, idempotencyKey);
     CreateResult replay = replay(subjectId, idempotencyKey, CREATE_SHIPMENT, checksum);
     if (replay != null) return replay;
+
+    requireAdmission(
+        admission,
+        List.of(
+            new AdmissionRequirement(
+                request.warehouseId(), WarehouseOperationDirection.OUTGOING)));
 
     RentalOrder shipmentOrder = validateShipmentRentalBinding(request);
     LogisticsDocument document =
@@ -220,13 +285,15 @@ public class LogisticsDocumentService {
             request.driverSnapshot(),
             subjectId,
             correlationId);
-    document.scheduleShipment(request.driverSnapshot(), now().toLocalDate());
+    document.scheduleShipment(request.driverSnapshot(), admission.localDate(request.warehouseId()));
     document = documentRepository.saveAndFlush(document);
     List<LogisticsDocumentLine> lines =
         lineRepository.saveAllAndFlush(
             shipmentLines(document, request.lines(), shipmentOrder == null ? null : shipmentOrder.getId()));
     eventStore.initialize(document, lines.size(), correlationId, subjectId);
     startShipmentPreparation(document, lines, correlationId, subjectId, now());
+    warehouseOperationMarks.enqueue(
+        document.getWarehouseId(), document.getId(), admission.occurredAt());
     remember(subjectId, idempotencyKey, CREATE_SHIPMENT, checksum, document);
     return new CreateResult(toView(document), false);
   }
@@ -235,8 +302,27 @@ public class LogisticsDocumentService {
   public CreateResult createTransfer(
       UUID subjectId, UUID idempotencyKey, UUID correlationId, CreateTransferRequest request) {
     requireRequest(request);
-    validateTransferSchedule(request);
-    validateTransferFurnitureReplacements(request);
+    requireLegacyAdmissionDisabled();
+    return createTransfer(
+        subjectId,
+        idempotencyKey,
+        correlationId,
+        request,
+        testTicket(
+            subjectId,
+            CREATE_TRANSFER,
+            idempotencyKey,
+            transferAdmission(request)));
+  }
+
+  @Transactional
+  public CreateResult createTransfer(
+      UUID subjectId,
+      UUID idempotencyKey,
+      UUID correlationId,
+      CreateTransferRequest request,
+      AdmissionTicket admission) {
+    requireRequest(request);
     String checksum =
         LogisticsCommandChecksum.sha256(
             CREATE_TRANSFER,
@@ -244,6 +330,11 @@ public class LogisticsDocumentService {
     acquireIdempotencyLock(subjectId, CREATE_TRANSFER, idempotencyKey);
     CreateResult replay = replay(subjectId, idempotencyKey, CREATE_TRANSFER, checksum);
     if (replay != null) return replay;
+
+    List<AdmissionRequirement> requirements = transferAdmission(request);
+    requireAdmission(admission, requirements);
+    validateTransferSchedule(request, admission.localDate(request.warehouseId()));
+    validateTransferFurnitureReplacements(request);
 
     LogisticsDocument document =
         documentRepository.saveAndFlush(
@@ -274,8 +365,16 @@ public class LogisticsDocumentService {
           proofCreatedAt);
     }
     transferFurnitureTasks.createForTransfer(
-        subjectId, document, request.scheduledDate(), request.furnitureReplacements());
+        subjectId,
+        document,
+        request.scheduledDate(),
+        request.furnitureReplacements(),
+        admission);
     eventStore.initialize(document, lines.size(), correlationId, subjectId);
+    warehouseOperationMarks.enqueue(
+        document.getWarehouseId(), document.getId(), admission.occurredAt());
+    warehouseOperationMarks.enqueue(
+        document.getDestinationWarehouseId(), document.getId(), admission.occurredAt());
     remember(subjectId, idempotencyKey, CREATE_TRANSFER, checksum, document);
     return new CreateResult(toView(document), false);
   }
@@ -309,6 +408,38 @@ public class LogisticsDocumentService {
       CreateOrderRentalShipmentRequest request,
       String checksum) {
     requireRequest(order);
+    if (order.getWarehouseId() == null) {
+      throw new LogisticsConflictException("Сохранённый заказ требуется для создания отгрузки");
+    }
+    requireLegacyAdmissionDisabled();
+    return createRentalOrderShipment(
+        subjectId,
+        idempotencyKey,
+        correlationId,
+        order,
+        reservations,
+        request,
+        checksum,
+        testTicket(
+            subjectId,
+            CREATE_RENTAL_ORDER_SHIPMENT,
+            idempotencyKey,
+            List.of(
+                new AdmissionRequirement(
+                    order.getWarehouseId(), WarehouseOperationDirection.OUTGOING))));
+  }
+
+  @Transactional
+  public CreateResult createRentalOrderShipment(
+      UUID subjectId,
+      UUID idempotencyKey,
+      UUID correlationId,
+      RentalOrder order,
+      List<LogisticsDependencyGateway.OrderUnitReservation> reservations,
+      CreateOrderRentalShipmentRequest request,
+      String checksum,
+      AdmissionTicket admission) {
+    requireRequest(order);
     requireRequest(request);
     if (subjectId == null || correlationId == null || idempotencyKey == null) {
       throw new IllegalArgumentException("Shipment actor and correlation identifiers are required");
@@ -321,6 +452,14 @@ public class LogisticsDocumentService {
         || order.getWarehouseId() == null
         || order.getClient() == null) {
       throw new LogisticsConflictException("Сохранённый заказ требуется для создания отгрузки");
+    }
+    requireAdmission(
+        admission,
+        List.of(
+            new AdmissionRequirement(
+                order.getWarehouseId(), WarehouseOperationDirection.OUTGOING)));
+    if (request.scheduledDate().isBefore(admission.localDate(order.getWarehouseId()))) {
+      throw new LogisticsConflictException("Дата отгрузки не может быть в прошлом");
     }
 
     List<LogisticsDependencyGateway.OrderUnitReservation> validReservations =
@@ -374,6 +513,8 @@ public class LogisticsDocumentService {
     }
     rentalTerms.saveAllAndFlush(terms);
     eventStore.initialize(document, lines.size(), correlationId, subjectId);
+    warehouseOperationMarks.enqueue(
+        document.getWarehouseId(), document.getId(), admission.occurredAt());
     remember(
         subjectId,
         idempotencyKey,
@@ -1080,6 +1221,32 @@ public class LogisticsDocumentService {
       UUID documentId,
       long expectedDocumentVersion,
       boolean keepScheduledDate) {
+    if (dependencies.productionReady()) {
+      throw new IllegalStateException(
+          "A production shipment confirmation requires an effective warehouse date");
+    }
+    return confirmShipmentPreparation(
+        subjectId,
+        idempotencyKey,
+        correlationId,
+        documentId,
+        expectedDocumentVersion,
+        keepScheduledDate,
+        now().toLocalDate());
+  }
+
+  @Transactional
+  public CreateResult confirmShipmentPreparation(
+      UUID subjectId,
+      UUID idempotencyKey,
+      UUID correlationId,
+      UUID documentId,
+      long expectedDocumentVersion,
+      boolean keepScheduledDate,
+      LocalDate warehouseToday) {
+    if (warehouseToday == null) {
+      throw new IllegalArgumentException("Effective warehouse date is required");
+    }
     requireShipmentCommand(documentId, correlationId, expectedDocumentVersion, new Object());
     String checksum =
         LogisticsCommandChecksum.sha256(
@@ -1102,7 +1269,7 @@ public class LogisticsDocumentService {
     shipmentFurnitureTasks.requireShipmentFurnitureReady(documentId);
     if (!keepScheduledDate) {
       try {
-        document.requireShipmentDepartureAllowed(now());
+        document.requireShipmentDepartureAllowed(warehouseToday);
       } catch (IllegalStateException exception) {
         throw new LogisticsConflictException(
             "Дата отгрузки ещё не наступила. Измените дату и повторите действие");
@@ -1290,7 +1457,7 @@ public class LogisticsDocumentService {
         LogisticsTargetService.MAINTENANCE,
         TRANSFER_MAINTENANCE_PREPARE_DEPARTURE,
         transferMaintenanceDigest(
-            TRANSFER_MAINTENANCE_PREPARE_DEPARTURE, document, line, null),
+            TRANSFER_MAINTENANCE_PREPARE_DEPARTURE, document, line, null, null),
         now);
     createLineAttempt(
         document,
@@ -2028,11 +2195,21 @@ public class LogisticsDocumentService {
       String operation,
       LogisticsDocument document,
       LogisticsDocumentLine line,
-      Integer priority) {
+      Integer priority,
+      Long rentalItemVersion) {
+    if (TRANSFER_MAINTENANCE_COMPLETE_ARRIVAL.equals(operation)
+        && (rentalItemVersion == null || rentalItemVersion < 0)) {
+      throw new IllegalArgumentException(
+          "Transfer maintenance completion requires a non-negative rental-item version");
+    }
+    if (rentalItemVersion != null && rentalItemVersion < 0) {
+      throw new IllegalArgumentException("Transfer maintenance rental-item version is invalid");
+    }
     List<String> values = new ArrayList<>();
     values.add(document.getId().toString());
     values.add(line.getId().toString());
     values.add(line.getAssetId().toString());
+    if (rentalItemVersion != null) values.add(rentalItemVersion.toString());
     values.add(document.getWarehouseId().toString());
     values.add(transferDestination(document).toString());
     values.add(priority == null ? null : priority.toString());
@@ -2235,6 +2412,60 @@ public class LogisticsDocumentService {
     return OffsetDateTime.now(ZoneOffset.UTC);
   }
 
+  private void requireLegacyAdmissionDisabled() {
+    if (dependencies.productionReady()) {
+      throw new IllegalStateException(
+          "A production logistics create command requires a warehouse admission ticket");
+    }
+  }
+
+  private void requireAdmission(
+      AdmissionTicket ticket, List<AdmissionRequirement> expectedRequirements) {
+    if (ticket == null) {
+      throw new IllegalArgumentException("Warehouse admission ticket is required");
+    }
+    List<AdmissionRequirement> expected =
+        expectedRequirements.stream()
+            .sorted(Comparator.comparing(AdmissionRequirement::warehouseId))
+            .toList();
+    if (!expected.equals(ticket.requirements())) {
+      throw new LogisticsConflictException(
+          "Warehouse admission ticket does not match the logistics command");
+    }
+    warehouseLifecycle.consume(ticket);
+  }
+
+  private static List<AdmissionRequirement> transferAdmission(CreateTransferRequest request) {
+    return List.of(
+        new AdmissionRequirement(
+            request.warehouseId(), WarehouseOperationDirection.OUTGOING),
+        new AdmissionRequirement(
+            request.destinationWarehouseId(), WarehouseOperationDirection.INCOMING));
+  }
+
+  private static AdmissionTicket testTicket(
+      UUID subjectId,
+      String operationName,
+      UUID idempotencyKey,
+      List<AdmissionRequirement> requirements) {
+    OffsetDateTime occurredAt = now();
+    UUID operationId =
+        UUID.nameUUIDFromBytes(
+            ("logistics-test-admission:"
+                    + subjectId
+                    + ":"
+                    + operationName
+                    + ":"
+                    + idempotencyKey)
+                .getBytes(StandardCharsets.UTF_8));
+    return AdmissionTicket.bypassed(
+        operationId,
+        requirements.stream()
+            .sorted(Comparator.comparing(AdmissionRequirement::warehouseId))
+            .toList(),
+        occurredAt);
+  }
+
   private static List<LogisticsDocumentLine> returnLines(
       LogisticsDocument document, List<dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnLineRequest> inputs) {
     validateLineInputs(inputs);
@@ -2372,8 +2603,8 @@ public class LogisticsDocumentService {
     return values;
   }
 
-  private static void validateTransferSchedule(CreateTransferRequest request) {
-    if (request.scheduledDate() == null || request.scheduledDate().isBefore(now().toLocalDate())) {
+  private static void validateTransferSchedule(CreateTransferRequest request, LocalDate today) {
+    if (request.scheduledDate() == null || request.scheduledDate().isBefore(today)) {
       throw new IllegalArgumentException("Transfer task date cannot be in the past");
     }
   }

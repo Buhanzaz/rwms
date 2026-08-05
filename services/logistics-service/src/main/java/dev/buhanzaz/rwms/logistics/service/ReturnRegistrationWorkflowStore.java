@@ -392,7 +392,6 @@ class ReturnRegistrationWorkflowStore {
     if (identity == null
         || !document.getWarehouseId().equals(identity.id())
         || identity.version() < 0
-        || !identity.active()
         || identity.timeZone() == null
         || identity.timeZone().isBlank()
         || identity.timeZone().length() > 64) {

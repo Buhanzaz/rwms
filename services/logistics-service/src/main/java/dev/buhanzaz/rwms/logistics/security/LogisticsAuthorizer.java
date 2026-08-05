@@ -44,6 +44,16 @@ public class LogisticsAuthorizer {
     requireWarehouse(jwt, warehouseId, AccessLevel.MANAGE);
   }
 
+  /** Technical recovery changes retry state and therefore remains global-admin only. */
+  public void requireWarehouseOperationRecoveryAdministrator(Jwt jwt) {
+    requireUserScope(jwt, "rwms.write");
+    if (developmentBypass) return;
+    String role = jwt.getClaimAsString("global_role");
+    if (!"SYSTEM_ADMIN".equals(role) && !"WMS_ADMIN".equals(role)) {
+      throw new AccessDeniedException("Global administrator role is required");
+    }
+  }
+
   public void requireMaintenanceDriverTaskIntake(Jwt jwt) {
     requireMaintenanceServiceIntake(jwt);
   }

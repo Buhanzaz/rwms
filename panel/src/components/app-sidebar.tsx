@@ -222,12 +222,12 @@ const settingsNavItems: SidebarNavItem[] = [
 
 const writeOffNavItems: SidebarNavItem[] = [
   {
-    title: "Склад",
+    title: "Списания",
     url: "/write-offs",
     icon: WarehouseIcon,
   },
   {
-    title: "Доп. оборудование",
+    title: "Утраты",
     url: "/write-offs/equipment",
     icon: PackageSearchIcon,
   },

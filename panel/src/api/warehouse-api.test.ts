@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
+  completeWarehouseInactivation,
   createWarehouse,
-  deactivateWarehouse,
   listWarehouses,
   replaceWarehouse,
+  scheduleWarehouseTimeZone,
+  startWarehouseDraining,
 } from "@/api/warehouse-api"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 
@@ -19,6 +21,7 @@ const warehouseResponse = {
   address: null,
   timeZone: "Europe/Moscow",
   active: true,
+  lifecycleState: "ACTIVE",
   sortOrder: 2,
 }
 
@@ -77,7 +80,30 @@ describe("warehouse HTTP API", () => {
       .fn()
       .mockResolvedValueOnce(jsonResponse(warehouseResponse, 201))
       .mockResolvedValueOnce(jsonResponse({ ...warehouseResponse, version: 4 }))
-      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          ...warehouseResponse,
+          version: 5,
+          active: false,
+          lifecycleState: "DRAINING",
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          ...warehouseResponse,
+          version: 6,
+          active: false,
+          lifecycleState: "INACTIVE",
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          warehouseId: WAREHOUSE_ID,
+          warehouseVersion: 7,
+          timeZone: "Europe/Samara",
+          effectiveFrom: "2099-09-01T00:00:00+04:00",
+        })
+      )
     vi.stubGlobal("fetch", fetchMock)
 
     await createWarehouse("access-token", IDEMPOTENCY_KEY, {
@@ -87,8 +113,22 @@ describe("warehouse HTTP API", () => {
       timeZone: "Europe/Moscow",
       sortOrder: 2,
     })
-    await replaceWarehouse("access-token", WAREHOUSE_ID, 3, warehouseResponse)
-    await deactivateWarehouse("access-token", WAREHOUSE_ID, 4)
+    await replaceWarehouse("access-token", WAREHOUSE_ID, 3, {
+      name: warehouseResponse.name,
+      city: warehouseResponse.city,
+      address: warehouseResponse.address,
+      timeZone: warehouseResponse.timeZone,
+      sortOrder: warehouseResponse.sortOrder,
+    })
+    await startWarehouseDraining("access-token", WAREHOUSE_ID, 4)
+    await completeWarehouseInactivation("access-token", WAREHOUSE_ID, 5)
+    await scheduleWarehouseTimeZone(
+      "access-token",
+      WAREHOUSE_ID,
+      6,
+      "Europe/Samara",
+      "2099-09-01T00:00:00+04:00"
+    )
 
     const createRequest = fetchMock.mock.calls[0]?.[1] as RequestInit
     expect(new Headers(createRequest.headers).get("Idempotency-Key")).toBe(
@@ -104,11 +144,33 @@ describe("warehouse HTTP API", () => {
 
     const replaceRequest = fetchMock.mock.calls[1]?.[1] as RequestInit
     expect(JSON.parse(String(replaceRequest.body))).toEqual({
-      ...warehouseResponse,
+      name: warehouseResponse.name,
+      city: warehouseResponse.city,
+      address: warehouseResponse.address,
+      timeZone: warehouseResponse.timeZone,
+      sortOrder: warehouseResponse.sortOrder,
       expectedVersion: 3,
     })
+
     expect(String(fetchMock.mock.calls[2]?.[0])).toContain(
-      `/${WAREHOUSE_ID}?expectedVersion=4`
+      `/${WAREHOUSE_ID}/draining`
     )
+    expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).toEqual({
+      expectedVersion: 4,
+    })
+    expect(String(fetchMock.mock.calls[3]?.[0])).toContain(
+      `/${WAREHOUSE_ID}/inactivation`
+    )
+    expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).toEqual({
+      expectedVersion: 5,
+    })
+    expect(String(fetchMock.mock.calls[4]?.[0])).toContain(
+      `/${WAREHOUSE_ID}/time-zone-changes`
+    )
+    expect(JSON.parse(String(fetchMock.mock.calls[4]?.[1]?.body))).toEqual({
+      expectedVersion: 6,
+      timeZone: "Europe/Samara",
+      effectiveFrom: "2099-09-01T00:00:00+04:00",
+    })
   })
 })

@@ -112,7 +112,11 @@ public class AuthorizationServerConfiguration {
                     "task-board.task-sync",
                     "queue-registry.write",
                     "media.maintenance",
-                    "logistics.maintenance");
+                    "logistics.maintenance",
+                    "warehouse.timezone.read",
+                    "warehouse.operation.mark",
+                    "warehouse.lifecycle.read",
+                    "warehouse.lifecycle.confirm");
 
     @Bean
     PasswordEncoder passwordEncoder() {
@@ -241,7 +245,8 @@ public class AuthorizationServerConfiguration {
                                 .andThen(AuthorizationServerConfiguration::validateMaintenanceDownstreamScope)
                                 .andThen(AuthorizationServerConfiguration::validateAssetDownstreamRequest)
                                 .andThen(AuthorizationServerConfiguration::validateInventoryDownstreamRequest)
-                                .andThen(AuthorizationServerConfiguration::validateLogisticsDownstreamRequest));
+                                .andThen(AuthorizationServerConfiguration::validateLogisticsDownstreamRequest)
+                                .andThen(AuthorizationServerConfiguration::validateTaskBoardDownstreamRequest));
             }
         });
     }
@@ -283,6 +288,15 @@ public class AuthorizationServerConfiguration {
                 OAuthClientProperties.LOGISTICS_CLIENT_ID,
                 OAuthClientProperties.LOGISTICS_SCOPES,
                 OAuthClientProperties.LOGISTICS_AUDIENCE);
+    }
+
+    static void validateTaskBoardDownstreamRequest(
+            OAuth2ClientCredentialsAuthenticationContext context) {
+        validateExactDownstreamRequest(
+                context,
+                OAuthClientProperties.TASK_BOARD_CLIENT_ID,
+                OAuthClientProperties.TASK_BOARD_SCOPES,
+                OAuthClientProperties.TASK_BOARD_AUDIENCE);
     }
 
     private static void validateExactDownstreamRequest(

@@ -58,6 +58,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.postgresql.PostgreSQLContainer;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 @SpringBootTest(
@@ -122,6 +123,8 @@ class InventoryFurnitureReconciliationIntegrationTest {
         .extracting(cabin -> cabin.displayCanonicalNumber())
         .containsExactly(
             fixture.firstCabin().number(), fixture.secondCabin().number());
+    assertThat(item(forward, fixture.equipment().id()).stockBalanceVersion()).isEqualTo(
+        version(fixture.equipment().id(), fixture.warehouseId(), null, BalanceLocationKind.STOCK));
 
     mvc.perform(
             post("/api/internal/asset/v1/inventory/furniture-snapshots")
@@ -230,6 +233,42 @@ class InventoryFurnitureReconciliationIntegrationTest {
         fixture.warehouseId(),
         fixture.firstCabin().id(),
         BalanceLocationKind.CABIN_RENTED)).isEqualTo(4L);
+  }
+
+  @Test
+  void exposesNullStockBalanceVersionOnlyWhenThePhysicalStockBalanceIsAbsent()
+      throws Exception {
+    UUID warehouseId = UUID.randomUUID();
+    EquipmentResponse equipment = assets.createEquipment(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        new CreateEquipmentRequest(
+            "Uninitialized inventory furniture " + UUID.randomUUID(),
+            EquipmentCategory.FURNITURE,
+            null)).response();
+
+    InventoryFurnitureSnapshot absent = snapshot(warehouseId, List.of());
+    InventoryFurnitureSnapshotItem absentItem = item(absent, equipment.id());
+    assertThat(absentItem.currentStockQuantity()).isZero();
+    assertThat(absentItem.stockBalanceVersion()).isNull();
+    JsonNode absentJson = objectMapper.readTree(objectMapper.writeValueAsString(absent));
+    JsonNode absentJsonItem = null;
+    for (JsonNode candidate : absentJson.path("items")) {
+      if (equipment.id().toString().equals(candidate.path("equipmentId").asText())) {
+        absentJsonItem = candidate;
+        break;
+      }
+    }
+    assertThat(absentJsonItem).isNotNull();
+    assertThat(absentJsonItem.path("stockBalanceVersion").isNull()).isTrue();
+
+    seedBalance(equipment.id(), warehouseId, null, BalanceLocationKind.STOCK, 0L);
+
+    InventoryFurnitureSnapshot initialized = snapshot(warehouseId, List.of());
+    InventoryFurnitureSnapshotItem initializedItem = item(initialized, equipment.id());
+    assertThat(initializedItem.currentStockQuantity()).isZero();
+    assertThat(initializedItem.stockBalanceVersion()).isZero();
+    assertThat(initialized.snapshotSha256()).isNotEqualTo(absent.snapshotSha256());
   }
 
   @Test

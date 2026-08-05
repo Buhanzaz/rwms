@@ -9,19 +9,28 @@ export type WarehouseInfo = {
   address: string | null
   timeZone: string
   active: boolean
+  lifecycleState: WarehouseLifecycleState
   sortOrder: number | null
 }
+
+export type WarehouseLifecycleState = "ACTIVE" | "DRAINING" | "INACTIVE"
 
 export type WarehouseWriteInput = {
   name: string
   city: string
   address: string | null
   timeZone: string
-  active: boolean
   sortOrder: number | null
 }
 
-export type WarehouseCreateInput = Omit<WarehouseWriteInput, "active">
+export type WarehouseCreateInput = WarehouseWriteInput
+
+export type WarehouseTimeZoneChange = {
+  warehouseId: string
+  warehouseVersion: number
+  timeZone: string
+  effectiveFrom: string
+}
 
 const WAREHOUSES_ENDPOINT = `${getGatewayRuntimeConfig().warehouseApiBaseUrl}/v1/warehouses`
 const UUID_PATTERN =
@@ -34,7 +43,15 @@ const WAREHOUSE_RESPONSE_KEYS = [
   "address",
   "timeZone",
   "active",
+  "lifecycleState",
   "sortOrder",
+] as const
+
+const WAREHOUSE_TIME_ZONE_CHANGE_KEYS = [
+  "warehouseId",
+  "warehouseVersion",
+  "timeZone",
+  "effectiveFrom",
 ] as const
 
 function requireAccessToken(accessToken: string | null): string {
@@ -90,6 +107,20 @@ function isOptionalSortOrder(value: unknown): value is number | null {
   return value === null || isNonNegativeInteger(value)
 }
 
+function isWarehouseLifecycleState(
+  value: unknown
+): value is WarehouseLifecycleState {
+  return value === "ACTIVE" || value === "DRAINING" || value === "INACTIVE"
+}
+
+function isDateTime(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    Number.isFinite(Date.parse(value))
+  )
+}
+
 function parseWarehouse(value: unknown): WarehouseInfo {
   if (!isRecord(value) || !hasExactKeys(value, WAREHOUSE_RESPONSE_KEYS)) {
     throw new Error("Сервис складов вернул некорректный ответ.")
@@ -103,6 +134,7 @@ function parseWarehouse(value: unknown): WarehouseInfo {
     address,
     timeZone,
     active,
+    lifecycleState,
     sortOrder,
   } = value
   if (
@@ -113,6 +145,8 @@ function parseWarehouse(value: unknown): WarehouseInfo {
     !isNullableString(address, 1000) ||
     !isNonEmptyString(timeZone, 64) ||
     typeof active !== "boolean" ||
+    !isWarehouseLifecycleState(lifecycleState) ||
+    active !== (lifecycleState === "ACTIVE") ||
     !isOptionalSortOrder(sortOrder)
   ) {
     throw new Error("Сервис складов вернул некорректный ответ.")
@@ -126,8 +160,30 @@ function parseWarehouse(value: unknown): WarehouseInfo {
     address,
     timeZone,
     active,
+    lifecycleState,
     sortOrder,
   }
+}
+
+function parseWarehouseTimeZoneChange(value: unknown): WarehouseTimeZoneChange {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, WAREHOUSE_TIME_ZONE_CHANGE_KEYS)
+  ) {
+    throw new Error("Сервис складов вернул некорректный ответ.")
+  }
+
+  const { warehouseId, warehouseVersion, timeZone, effectiveFrom } = value
+  if (
+    !isUuid(warehouseId) ||
+    !isNonNegativeInteger(warehouseVersion) ||
+    !isNonEmptyString(timeZone, 64) ||
+    !isDateTime(effectiveFrom)
+  ) {
+    throw new Error("Сервис складов вернул некорректный ответ.")
+  }
+
+  return { warehouseId, warehouseVersion, timeZone, effectiveFrom }
 }
 
 function requireWarehouseId(warehouseId: string) {
@@ -152,7 +208,6 @@ function requireWarehouseWriteInput(input: WarehouseWriteInput) {
     isNonEmptyString(input.city, 255) &&
     isNullableString(input.address, 1000) &&
     isNonEmptyString(input.timeZone, 64) &&
-    typeof input.active === "boolean" &&
     isOptionalSortOrder(input.sortOrder)
 
   if (!valid) {
@@ -206,7 +261,7 @@ export async function createWarehouse(
   idempotencyKey: string,
   input: WarehouseCreateInput
 ): Promise<WarehouseInfo> {
-  requireWarehouseWriteInput({ ...input, active: true })
+  requireWarehouseWriteInput(input)
 
   const response = await bearerRequest<unknown>(
     requireAccessToken(accessToken),
@@ -235,7 +290,31 @@ export async function replaceWarehouse(
     {
       method: "PUT",
       body: JSON.stringify({
-        ...input,
+        expectedVersion: requireExpectedVersion(expectedVersion),
+        name: input.name,
+        city: input.city,
+        address: input.address,
+        timeZone: input.timeZone,
+        sortOrder: input.sortOrder,
+      }),
+    }
+  )
+
+  return parseWarehouse(response)
+}
+
+async function transitionWarehouseLifecycle(
+  accessToken: string | null,
+  warehouseId: string,
+  expectedVersion: number,
+  transition: "draining" | "inactivation"
+): Promise<WarehouseInfo> {
+  const response = await bearerRequest<unknown>(
+    requireAccessToken(accessToken),
+    `${WAREHOUSES_ENDPOINT}/${encodeURIComponent(requireWarehouseId(warehouseId))}/${transition}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
         expectedVersion: requireExpectedVersion(expectedVersion),
       }),
     }
@@ -244,20 +323,60 @@ export async function replaceWarehouse(
   return parseWarehouse(response)
 }
 
-export async function deactivateWarehouse(
+export function startWarehouseDraining(
   accessToken: string | null,
   warehouseId: string,
   expectedVersion: number
-): Promise<void> {
-  const endpoint = new URL(
-    `${WAREHOUSES_ENDPOINT}/${encodeURIComponent(requireWarehouseId(warehouseId))}`
+): Promise<WarehouseInfo> {
+  return transitionWarehouseLifecycle(
+    accessToken,
+    warehouseId,
+    expectedVersion,
+    "draining"
   )
-  endpoint.searchParams.set(
-    "expectedVersion",
-    String(requireExpectedVersion(expectedVersion))
+}
+
+export function completeWarehouseInactivation(
+  accessToken: string | null,
+  warehouseId: string,
+  expectedVersion: number
+): Promise<WarehouseInfo> {
+  return transitionWarehouseLifecycle(
+    accessToken,
+    warehouseId,
+    expectedVersion,
+    "inactivation"
+  )
+}
+
+export async function scheduleWarehouseTimeZone(
+  accessToken: string | null,
+  warehouseId: string,
+  expectedVersion: number,
+  timeZone: string,
+  effectiveFrom: string
+): Promise<WarehouseTimeZoneChange> {
+  if (!isNonEmptyString(timeZone, 64) || !isDateTime(effectiveFrom)) {
+    throw new Error("Параметры изменения временной зоны не соответствуют API.")
+  }
+
+  const response = await bearerRequest<unknown>(
+    requireAccessToken(accessToken),
+    `${WAREHOUSES_ENDPOINT}/${encodeURIComponent(requireWarehouseId(warehouseId))}/time-zone-changes`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        expectedVersion: requireExpectedVersion(expectedVersion),
+        timeZone,
+        effectiveFrom,
+      }),
+    }
   )
 
-  await bearerRequest<void>(requireAccessToken(accessToken), endpoint, {
-    method: "DELETE",
-  })
+  const change = parseWarehouseTimeZoneChange(response)
+  if (change.warehouseId !== warehouseId) {
+    throw new Error("Сервис складов вернул изменение другого склада.")
+  }
+
+  return change
 }

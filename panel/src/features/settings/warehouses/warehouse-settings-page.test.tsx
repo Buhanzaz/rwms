@@ -13,24 +13,30 @@ import { ApiError } from "@/lib/api-client"
 import { WarehouseSettingsPage } from "@/features/settings/warehouses/warehouse-settings-page"
 
 const {
+  completeWarehouseInactivation,
   createWarehouse,
-  deactivateWarehouse,
   listWarehouses,
   replaceWarehouse,
   reloadWarehouses,
+  scheduleWarehouseTimeZone,
+  startWarehouseDraining,
 } = vi.hoisted(() => ({
+  completeWarehouseInactivation: vi.fn(),
   createWarehouse: vi.fn(),
-  deactivateWarehouse: vi.fn(),
   listWarehouses: vi.fn(),
   replaceWarehouse: vi.fn(),
   reloadWarehouses: vi.fn(),
+  scheduleWarehouseTimeZone: vi.fn(),
+  startWarehouseDraining: vi.fn(),
 }))
 
 vi.mock("@/api/warehouse-api", () => ({
+  completeWarehouseInactivation,
   createWarehouse,
-  deactivateWarehouse,
   listWarehouses,
   replaceWarehouse,
+  scheduleWarehouseTimeZone,
+  startWarehouseDraining,
 }))
 
 vi.mock("@/features/auth/use-auth", () => ({
@@ -52,6 +58,7 @@ const warehouse = {
   address: null,
   timeZone: "Europe/Moscow",
   active: true,
+  lifecycleState: "ACTIVE",
   sortOrder: 2,
 }
 
@@ -61,6 +68,16 @@ const inactiveWarehouse = {
   name: "Южный склад",
   city: "Москва",
   active: false,
+  lifecycleState: "INACTIVE",
+}
+
+const drainingWarehouse = {
+  ...warehouse,
+  id: "00000000-0000-4000-8000-000000000004",
+  version: 5,
+  name: "Склад на выводе",
+  active: false,
+  lifecycleState: "DRAINING",
 }
 
 function renderPage() {
@@ -200,12 +217,107 @@ describe("WarehouseSettingsPage", () => {
           city: warehouse.city,
           address: warehouse.address,
           timeZone: warehouse.timeZone,
-          active: warehouse.active,
           sortOrder: warehouse.sortOrder,
         }
       )
       expect(reloadWarehouses).toHaveBeenCalled()
       expect(screen.queryByRole("dialog")).toBeNull()
     })
+  })
+
+  it("starts the irreversible draining lifecycle with an expected version", async () => {
+    const user = userEvent.setup()
+    listWarehouses.mockResolvedValue([warehouse])
+    startWarehouseDraining.mockResolvedValue({
+      ...warehouse,
+      version: 4,
+      active: false,
+      lifecycleState: "DRAINING",
+    })
+    reloadWarehouses.mockResolvedValue(undefined)
+
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Начать вывод" }))[0]!
+    )
+    const dialog = screen.getByRole("alertdialog")
+    expect(within(dialog).getByText(/Переход необратим/)).toBeTruthy()
+    await user.click(
+      within(dialog).getByRole("button", { name: "Начать вывод" })
+    )
+
+    await waitFor(() =>
+      expect(startWarehouseDraining).toHaveBeenCalledWith(
+        "access-token",
+        warehouse.id,
+        warehouse.version
+      )
+    )
+  })
+
+  it("completes inactivation only through the dedicated lifecycle command", async () => {
+    const user = userEvent.setup()
+    listWarehouses.mockResolvedValue([drainingWarehouse])
+    completeWarehouseInactivation.mockResolvedValue({
+      ...drainingWarehouse,
+      version: 6,
+      lifecycleState: "INACTIVE",
+    })
+    reloadWarehouses.mockResolvedValue(undefined)
+
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Завершить вывод" }))[0]!
+    )
+    const dialog = screen.getByRole("alertdialog")
+    expect(within(dialog).getByText(/подтверждения готовности/)).toBeTruthy()
+    await user.click(
+      within(dialog).getByRole("button", { name: "Завершить вывод" })
+    )
+
+    await waitFor(() =>
+      expect(completeWarehouseInactivation).toHaveBeenCalledWith(
+        "access-token",
+        drainingWarehouse.id,
+        drainingWarehouse.version
+      )
+    )
+  })
+
+  it("schedules an effective-dated timezone change without rewriting metadata", async () => {
+    const user = userEvent.setup()
+    listWarehouses.mockResolvedValue([warehouse])
+    scheduleWarehouseTimeZone.mockResolvedValue({
+      warehouseId: warehouse.id,
+      warehouseVersion: 4,
+      timeZone: "Europe/Samara",
+      effectiveFrom: "2099-09-01T00:00:00+04:00",
+    })
+    reloadWarehouses.mockResolvedValue(undefined)
+
+    renderPage()
+
+    await user.click(
+      (
+        await screen.findAllByRole("button", {
+          name: "Сменить часовой пояс",
+        })
+      )[0]!
+    )
+    await setField(user, "Новая временная зона", "Europe/Samara")
+    await setField(user, "Начать с даты и времени", "2099-09-01T00:00:00+04:00")
+    await user.click(screen.getByRole("button", { name: "Запланировать" }))
+
+    await waitFor(() =>
+      expect(scheduleWarehouseTimeZone).toHaveBeenCalledWith(
+        "access-token",
+        warehouse.id,
+        warehouse.version,
+        "Europe/Samara",
+        "2099-09-01T00:00:00+04:00"
+      )
+    )
   })
 })

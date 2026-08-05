@@ -113,15 +113,6 @@ public class AssetRentalItemController {
     return service.updateStatus(id, request);
   }
 
-  @PutMapping("/{id}/warehouse")
-  public RentalItemResponse updateWarehouse(
-      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID id, @Valid @RequestBody UpdateWarehouseRequest request) {
-    RentalItemResponse current = service.rentalItem(id);
-    access.requireEdit(jwt, current.warehouseId());
-    access.requireEdit(jwt, request.warehouseId());
-    return service.updateWarehouse(id, request);
-  }
-
   @PutMapping("/{id}/general-comment")
   public RentalItemResponse updateGeneralComment(
       @AuthenticationPrincipal Jwt jwt, @PathVariable UUID id, @Valid @RequestBody UpdateGeneralCommentRequest request) {

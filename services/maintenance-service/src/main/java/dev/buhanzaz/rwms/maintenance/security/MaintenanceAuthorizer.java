@@ -49,6 +49,18 @@ public class MaintenanceAuthorizer {
     requireGlobalRole(jwt, "WMS_ADMIN", "SYSTEM_ADMIN");
   }
 
+  /** Exhausted warehouse-operation delivery may be retried only after administrator review. */
+  public void requireWarehouseOperationRecoveryAdministrator(Jwt jwt, UUID warehouseId) {
+    requireManage(jwt, warehouseId);
+    requireGlobalRole(jwt, "WMS_ADMIN", "SYSTEM_ADMIN");
+  }
+
+  /** Furniture mappings can affect stock balances, so only administrators review failed links. */
+  public void requireFurnitureEquipmentLinkAdministrator(Jwt jwt, UUID warehouseId) {
+    requireManage(jwt, warehouseId);
+    requireGlobalRole(jwt, "WMS_ADMIN", "SYSTEM_ADMIN");
+  }
+
   public void requireInventoryService(Jwt jwt) {
     if (jwt == null
         || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))

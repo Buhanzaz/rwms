@@ -15,6 +15,7 @@ const northWarehouse: WarehouseInfo = {
   address: null,
   timeZone: "Europe/Moscow",
   active: true,
+  lifecycleState: "ACTIVE",
   sortOrder: 1,
 }
 
@@ -24,6 +25,15 @@ const southWarehouse: WarehouseInfo = {
   name: "Южный склад",
   city: "Москва",
   active: false,
+  lifecycleState: "INACTIVE",
+}
+
+const drainingWarehouse: WarehouseInfo = {
+  ...northWarehouse,
+  id: "00000000-0000-4000-8000-000000000003",
+  name: "Склад на выводе",
+  active: false,
+  lifecycleState: "DRAINING",
 }
 
 describe("warehouse settings filtering", () => {
@@ -52,7 +62,7 @@ describe("warehouse settings filtering", () => {
 
     filters.names = ["Северный склад"]
     filters.cities = ["Санкт-Петербург"]
-    filters.statuses = ["active"]
+    filters.statuses = ["ACTIVE"]
 
     expect(
       filterWarehouses([northWarehouse, southWarehouse], "", filters)
@@ -60,8 +70,25 @@ describe("warehouse settings filtering", () => {
     expect(
       filterWarehouses([northWarehouse, southWarehouse], "", {
         ...filters,
-        statuses: ["inactive"],
+        statuses: ["INACTIVE"],
       })
     ).toEqual([])
+  })
+
+  it("distinguishes DRAINING from terminal INACTIVE", () => {
+    expect(
+      filterWarehouses(
+        [northWarehouse, drainingWarehouse, southWarehouse],
+        "",
+        { ...createEmptyWarehouseFilters(), statuses: ["DRAINING"] }
+      )
+    ).toEqual([drainingWarehouse])
+    expect(
+      filterWarehouses(
+        [northWarehouse, drainingWarehouse, southWarehouse],
+        "выводится",
+        createEmptyWarehouseFilters()
+      )
+    ).toEqual([drainingWarehouse])
   })
 })

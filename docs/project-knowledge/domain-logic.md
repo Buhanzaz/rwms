@@ -1,6 +1,6 @@
 # Current Domain Logic Map
 
-Status: Confirmed high-level ownership as of 2026-08-04. Detailed request,
+Status: Confirmed high-level ownership as of 2026-08-05. Detailed request,
 status and field semantics remain in canonical contracts and owning service
 tests.
 
@@ -22,8 +22,20 @@ Evidence: [`services/auth-service/`](../../services/auth-service/),
 Other services store warehouse IDs as opaque references and authorize access;
 they do not reproduce the warehouse registry in shared tables.
 
+Warehouse UUID is the stable external reference. Display names are unique
+after trim, whitespace folding and case normalization. Inactive warehouses
+remain readable for historical references. A warehouse that has never recorded
+an operation may correct its timezone immediately; after first use, timezone
+changes are effective-dated and do not rewrite earlier facts or reports.
+Deactivation proceeds through `DRAINING` and exact-version confirmations from
+operation owners before `INACTIVE`. The public warehouse directory remains a
+product-approved global authenticated read rather than a grant-filtered list.
+
 Evidence: [`services/warehouse-service/`](../../services/warehouse-service/),
-[`warehouse-service.yaml`](../../contracts/openapi/warehouse-service.yaml).
+[`warehouse-service.yaml`](../../contracts/openapi/warehouse-service.yaml),
+[`V3__add_normalized_warehouse_name.sql`](../../services/warehouse-service/src/main/resources/db/migration/V3__add_normalized_warehouse_name.sql),
+[`V4__warehouse_effective_time_zones.sql`](../../services/warehouse-service/src/main/resources/db/migration/V4__warehouse_effective_time_zones.sql),
+[`V5__warehouse_lifecycle.sql`](../../services/warehouse-service/src/main/resources/db/migration/V5__warehouse_lifecycle.sql).
 
 ### Cabins And Equipment
 
@@ -31,8 +43,44 @@ Evidence: [`services/warehouse-service/`](../../services/warehouse-service/),
 balances, holds and leases. A logistics or maintenance workflow requests or
 records effects through contracts; it does not mutate asset tables directly.
 
-Evidence: [`services/asset-service/`](../../services/asset-service/),
-[`asset-service.yaml`](../../contracts/openapi/asset-service.yaml).
+Furniture selected from a cabin by either a maintenance estimate or a direct
+repair enters asset-owned, append-only pending-return custody. The selection
+is not a loss or write-off: it can return to warehouse STOCK, or become a
+terminal balance only when the separately approved maintenance property
+decision is applied. A custody return is an incoming warehouse operation;
+retries reuse permanent custody evidence rather than creating another balance
+effect.
+
+Asset uses warehouse-owned directional admission for physical custody: incoming
+operations require an `ACTIVE` warehouse, while outgoing operations may finish
+while it is `DRAINING`. It reconciles a durable operation mark from immutable
+asset events and confirms asset readiness for a draining warehouse only after
+its non-terminal cabins, balances and local workflows have drained. Historical
+timezone context is read from warehouse-service as of the immutable operation
+timestamp, never inferred from the current warehouse timezone.
+
+`WRITTEN_OFF` and `LOST` are terminal for ordinary commands and cannot be
+sources for a normal furniture transfer. The only direct manual cabin statuses
+are `SALE`, `USED_SALE`, `FREE`, `WAREHOUSE` and `OWN_NEEDS`; workflow statuses
+come only from their owning fenced effects. Physical inter-warehouse changes
+must come from logistics. A no-movement data correction is a distinct
+administrator-only, reason/evidence-bearing command that atomically corrects a
+cabin and its contents and preserves immutable audit/events.
+
+Equipment display names are normalized-unique while UUID remains the stable
+reference. The retained HTML import is a constrained legacy
+creation path: it does not merge an existing cabin, does not synthesize a
+workflow/terminal status and records initial furniture as immutable receipts
+instead of replacing live quantities.
+
+Evidence: [`asset-service.yaml`](../../contracts/openapi/asset-service.yaml),
+[`warehouse-service.yaml`](../../contracts/openapi/warehouse-service.yaml),
+[`MaintenanceFurnitureCustodyService.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/MaintenanceFurnitureCustodyService.java),
+[`AssetWarehouseLifecycleReconciler.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/AssetWarehouseLifecycleReconciler.java),
+[`AdministrativeAssetCorrectionService.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/administrative/AdministrativeAssetCorrectionService.java),
+[`RentalItemHtmlImportService.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/RentalItemHtmlImportService.java),
+[`V28__equipment_catalog_identity_and_live_usage.sql`](../../services/asset-service/src/main/resources/db/migration/V28__equipment_catalog_identity_and_live_usage.sql),
+[`V34__maintenance_furniture_custody.sql`](../../services/asset-service/src/main/resources/db/migration/V34__maintenance_furniture_custody.sql).
 
 ### Workforce And Tasks
 
@@ -50,14 +98,46 @@ rework and write-off decisions. Materials and works are maintenance catalog
 concepts; their effects on assets, inventory or tasks cross explicit service
 boundaries.
 
+Cabin and additional-equipment write-off/loss use one property-decision model.
+One list row is one decision/root asset; a repair chain remains visible in the
+detail. A warehouse manager or administrator may create a mandatory-reason
+proposal, but only a global administrator makes the final decision. A non-empty
+cabin must choose between moving exact positive quantities to warehouse and
+disposing the remainder, or disposing all contents with the cabin. An empty
+cabin has no contents choice. Asset mutation and logistics movement are
+asynchronous, durable effects whose pending/quarantined state remains visible
+and can be recovered only by a version-fenced administrator review.
+
+Automatic furniture-catalog linking first persists a stable node-UUID intent,
+then calls asset-service outside the catalog transaction, and finally confirms
+the exact result. Lost responses and local commit races are replay-safe; rename
+or remap conflicts require audited administrator retry or abandonment and never
+silently delete the remote item.
+
+All maintenance-owned cross-service commands use immutable local plans and
+short prepare/remote/finalize boundaries. Remote calls reject an ambient local
+transaction. Transfer arrival receives the exact post-arrival asset version
+from logistics, replays task/lease/status effects with stable derived keys and
+original expected versions after a lost local commit, and revalidates the full
+transfer-line repair chain before finalization.
+
 Evidence: [`services/maintenance-service/`](../../services/maintenance-service/),
-[`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml).
+[`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml),
+[`PropertyDispositionApplicationService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/disposition/application/PropertyDispositionApplicationService.java),
+[`FurnitureEquipmentLinkStore.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/FurnitureEquipmentLinkStore.java),
+[`MaintenanceApplicationService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceApplicationService.java),
+[`V38__durable_furniture_equipment_links.sql`](../../services/maintenance-service/src/main/resources/db/migration/V38__durable_furniture_equipment_links.sql).
 
 ### Inventory
 
 `inventory-service` owns inventory sessions, findings, completion and
 publication intent/state. Publication into another domain uses explicit,
 idempotent integration rather than shared database mutation.
+
+An equipment shortage found at inventory completion is an idempotent
+maintenance `LOSS` proposal with the inventory session/finding as immutable
+source evidence. Final approval and the terminal asset effect remain
+maintenance/asset responsibilities; inventory does not write their tables.
 
 The panel owns whole-session operations: opening an inventory, reviewing the
 ordered final plan, resolving reconciliation choices and completing the exact

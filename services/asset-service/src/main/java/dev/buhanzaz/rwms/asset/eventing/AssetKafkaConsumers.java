@@ -36,6 +36,22 @@ public class AssetKafkaConsumers {
     };
   }
 
+  @Bean
+  Consumer<Message<byte[]>> assetRealtimeInvalidation(
+      AssetRealtimeInvalidationBroadcaster broadcaster) {
+    return message -> {
+      Object topic = message.getHeaders().get(KafkaHeaders.RECEIVED_TOPIC);
+      if (!(topic instanceof String sourceTopic)) return;
+      try {
+        broadcaster.broadcast(
+            message.getPayload(), AssetAggregateType.requireTopic(sourceTopic));
+      } catch (AssetEventValidationException | IllegalArgumentException ignored) {
+        // The durable inbox binding owns validation/DLT. Realtime delivery is only a cache hint
+        // and must never stop the replica-specific broadcast consumer.
+      }
+    };
+  }
+
   // Kept package-visible for focused retry tests. Runtime traffic always enters
   // through the multiplexed assetInbound function above.
   Consumer<Message<byte[]>> assetRentalItemInbound(AssetInboxProcessor processor, AssetSanitizedDltPublisher dlt) {

@@ -292,16 +292,6 @@ export type MaintenanceAcceptanceProjection = {
   readyAt: string
 }
 
-export type MaintenanceWriteOffProjection = {
-  repairId: string
-  rootRepairId: string
-  warehouseId: string
-  rentalItemId: string
-  repairVersion: number
-  writtenOffAt: string
-  actor: MaintenanceActorSnapshot
-}
-
 const MAINTENANCE_API = `${getGatewayRuntimeConfig().maintenanceApiBaseUrl}/v1`
 
 function json(
@@ -318,10 +308,7 @@ function validateLogisticsPlanning(
   logisticsScheduledDate: string | null
 ) {
   if (!movementToRepair) {
-    if (
-      logisticsPlanningMode !== "AUTO" ||
-      logisticsScheduledDate !== null
-    ) {
+    if (logisticsPlanningMode !== "AUTO" || logisticsScheduledDate !== null) {
       throw new Error(
         "Планирование логистики доступно только для перемещения на ремонт."
       )
@@ -340,7 +327,7 @@ function validateLogisticsPlanning(
 }
 
 function collectionEndpoint(
-  resource: "estimates" | "repairs" | "acceptance" | "write-offs",
+  resource: "estimates" | "repairs" | "acceptance",
   warehouseId: string,
   filters: Record<string, string | undefined> = {}
 ) {
@@ -635,26 +622,6 @@ export function acceptMaintenanceRepair(
   )
 }
 
-export function writeOffMaintenanceRepair(
-  accessToken: string,
-  warehouseId: string,
-  repairId: string,
-  expectedVersion: number,
-  reason: string,
-  comment: string | null,
-  idempotencyKey: string
-) {
-  return bearerRequest<MaintenanceRepairCommandResult>(
-    accessToken,
-    itemEndpoint("repairs", warehouseId, repairId, "/write-off"),
-    json(
-      "POST",
-      { expectedVersion, reason, comment },
-      { "Idempotency-Key": idempotencyKey }
-    )
-  )
-}
-
 export function listMaintenanceAcceptance(
   accessToken: string,
   warehouseId: string,
@@ -663,15 +630,5 @@ export function listMaintenanceAcceptance(
   return bearerRequest<MaintenancePage<MaintenanceAcceptanceProjection>>(
     accessToken,
     collectionEndpoint("acceptance", warehouseId, { state })
-  )
-}
-
-export function listMaintenanceWriteOffs(
-  accessToken: string,
-  warehouseId: string
-) {
-  return bearerRequest<MaintenancePage<MaintenanceWriteOffProjection>>(
-    accessToken,
-    collectionEndpoint("write-offs", warehouseId)
   )
 }

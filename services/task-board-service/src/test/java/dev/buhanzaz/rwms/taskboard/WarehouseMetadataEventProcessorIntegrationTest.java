@@ -28,11 +28,13 @@ class WarehouseMetadataEventProcessorIntegrationTest extends PostgresIntegration
   @Autowired WarehouseMetadataEventProcessor processor;
   @Autowired WarehouseMetadataRepository warehouses;
   @Autowired RegistryService registry;
+  @Autowired TestWarehouseTimeZoneGateway timeZones;
   @Autowired JdbcTemplate jdbc;
 
   @BeforeEach
   void clean() {
     cleanTaskBoardFixtures(jdbc);
+    timeZones.reset();
   }
 
   @Test
@@ -53,6 +55,7 @@ class WarehouseMetadataEventProcessorIntegrationTest extends PostgresIntegration
     assertThat(
             jdbc.queryForObject("select count(*) from warehouse_event_inbox", Integer.class))
         .isOne();
+    assertThat(timeZones.invalidatedWarehouses()).containsExactly(WAREHOUSE_ID);
   }
 
   @Test

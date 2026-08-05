@@ -73,6 +73,7 @@ class EquipmentMovementWorkflowStoreOwnerTest {
             new EquipmentMovementWorkflowStore.ReserveWork(
                 taskId,
                 decisionId,
+                EquipmentMovementTaskOwnerType.MAINTENANCE_DISPOSITION,
                 lineId,
                 equipmentId,
                 warehouseId,

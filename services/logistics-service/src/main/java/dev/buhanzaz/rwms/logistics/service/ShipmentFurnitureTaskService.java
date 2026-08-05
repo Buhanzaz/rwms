@@ -17,6 +17,7 @@ import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTask;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
 import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskService;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.mapper.ShipmentFurnitureTaskResponseMapper;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderEquipmentRequirement;
@@ -26,6 +27,8 @@ import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.repository.ShipmentFurnitureMovementTaskRepository;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -57,6 +60,7 @@ public class ShipmentFurnitureTaskService {
   private final ShipmentFurnitureMovementTaskRepository taskLinks;
   private final LogisticsDependencyGateway dependencies;
   private final EquipmentMovementTaskService movementTasks;
+  private final LogisticsWarehouseLifecycle warehouseLifecycle;
   private final ShipmentFurnitureTaskResponseMapper mapper;
 
   /**
@@ -215,6 +219,13 @@ public class ShipmentFurnitureTaskService {
                       + ":"
                       + idempotencyKey)
                   .getBytes(StandardCharsets.UTF_8));
+      AdmissionTicket admission =
+          warehouseLifecycle.ownedContinuation(
+              shipment.getId(),
+              taskKey,
+              List.of(
+                  new AdmissionRequirement(
+                      shipment.getWarehouseId(), WarehouseOperationDirection.OUTGOING)));
       EquipmentMovementTaskService.CreateResult task =
           movementTasks.create(
               actorSubjectId,
@@ -224,7 +235,8 @@ public class ShipmentFurnitureTaskService {
                   plan.unitNumber(),
                   DEFAULT_PLANNED_DURATION_MINUTES,
                   OffsetDateTime.now(ZoneOffset.UTC).plusDays(30),
-                  plan.lines().stream().map(ShipmentFurnitureTaskService::toTaskLine).toList()));
+                  plan.lines().stream().map(ShipmentFurnitureTaskService::toTaskLine).toList()),
+              admission);
       ShipmentFurnitureMovementTask link =
           taskLinks.saveAndFlush(
               ShipmentFurnitureMovementTask.create(

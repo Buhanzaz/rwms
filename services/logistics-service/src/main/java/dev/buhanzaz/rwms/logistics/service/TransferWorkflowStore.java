@@ -322,6 +322,7 @@ class TransferWorkflowStore {
     attempt.confirm(leaseDigest("TRANSFER_ASSET_LEASE_RELEASE_RESPONSE", lease), completedAt);
     guard.release();
     if (line.hasActiveRepair()) {
+      LogisticsGuard releasedGuard = releasedGuard(document, line);
       createAttemptIfMissing(
           document,
           line,
@@ -331,7 +332,8 @@ class TransferWorkflowStore {
               LogisticsDocumentService.TRANSFER_MAINTENANCE_COMPLETE_ARRIVAL,
               document,
               line,
-              line.getRepairContinuationPriority()),
+              line.getRepairContinuationPriority(),
+              releasedGuard.getObservedAssetVersion()),
           completedAt);
       return;
     }
@@ -522,6 +524,9 @@ class TransferWorkflowStore {
               guard.getFenceToken()));
     }
     if (LogisticsDocumentService.TRANSFER_MAINTENANCE_COMPLETE_ARRIVAL.equals(operation)) {
+      LogisticsGuard releasedGuard = releasedGuard(document, line);
+      long rentalItemVersion = releasedGuard.getObservedAssetVersion();
+      requireMaintenanceArrivalFingerprint(attempt, document, line, rentalItemVersion);
       return Optional.of(
           Work.maintenanceComplete(
               attempt.getOperationId(),
@@ -530,7 +535,8 @@ class TransferWorkflowStore {
               line.getAssetId(),
               document.getWarehouseId(),
               destinationWarehouseId(document),
-              line.getRepairContinuationPriority()));
+              line.getRepairContinuationPriority(),
+              rentalItemVersion));
     }
     return Optional.empty();
   }
@@ -687,6 +693,25 @@ class TransferWorkflowStore {
     return guard;
   }
 
+  private LogisticsGuard releasedGuard(
+      LogisticsDocument document, LogisticsDocumentLine line) {
+    LogisticsGuard guard =
+        guardRepository
+            .findByLine_Id(line.getId())
+            .orElseThrow(() -> malformed("Transfer line has no released asset guard"));
+    if (guard.getGuardState() != LogisticsGuardState.RELEASED
+        || guard.getDocument() == null
+        || !document.getId().equals(guard.getDocument().getId())
+        || guard.getLine() == null
+        || !line.getId().equals(guard.getLine().getId())
+        || !line.getAssetId().equals(guard.getAssetId())
+        || guard.getObservedAssetVersion() == null
+        || guard.getObservedAssetVersion() < 0) {
+      throw malformed("Transfer released asset guard is incomplete or mismatched");
+    }
+    return guard;
+  }
+
   private List<LogisticsMediaReference> mediaReferences(LogisticsDocumentLine line) {
     List<LogisticsMediaReference> references =
         mediaReferenceRepository.findAllByLine_IdAndPurposeOrderByCreatedAtAsc(
@@ -737,7 +762,6 @@ class TransferWorkflowStore {
     if (identity == null
         || !expectedWarehouseId.equals(identity.id())
         || identity.version() < 0
-        || !identity.active()
         || identity.timeZone() == null
         || identity.timeZone().isBlank()
         || identity.timeZone().length() > 64) {
@@ -856,6 +880,23 @@ class TransferWorkflowStore {
             && completion.repairVersion() < line.getActiveRepairVersion())
         || !destinationWarehouseId(document).equals(completion.warehouseId())) {
       throw malformed("Maintenance-service returned malformed transfer arrival completion");
+    }
+  }
+
+  private static void requireMaintenanceArrivalFingerprint(
+      LogisticsExternalAttempt attempt,
+      LogisticsDocument document,
+      LogisticsDocumentLine line,
+      long rentalItemVersion) {
+    String expected =
+        LogisticsDocumentService.transferMaintenanceDigest(
+            LogisticsDocumentService.TRANSFER_MAINTENANCE_COMPLETE_ARRIVAL,
+            document,
+            line,
+            line.getRepairContinuationPriority(),
+            rentalItemVersion);
+    if (!expected.equals(attempt.getRequestSha256())) {
+      throw malformed("Transfer maintenance arrival request no longer matches released asset truth");
     }
   }
 
@@ -1189,7 +1230,8 @@ class TransferWorkflowStore {
       List<LogisticsDependencyGateway.MediaReference> references,
       UUID sourceWarehouseId,
       String transferAssetStatus,
-      Integer priority) {
+      Integer priority,
+      long rentalItemVersion) {
     static Work warehouse(UUID operationId, UUID documentId, UUID lineId, UUID warehouseId) {
       return new Work(
           WorkType.WAREHOUSE,
@@ -1206,7 +1248,8 @@ class TransferWorkflowStore {
           List.of(),
           null,
           null,
-          null);
+          null,
+          -1);
     }
 
     static Work snapshot(UUID operationId, UUID assetId) {
@@ -1225,7 +1268,8 @@ class TransferWorkflowStore {
           List.of(),
           null,
           null,
-          null);
+          null,
+          -1);
     }
 
     static Work lease(
@@ -1245,7 +1289,8 @@ class TransferWorkflowStore {
           List.of(),
           null,
           null,
-          null);
+          null,
+          -1);
     }
 
     static Work media(
@@ -1273,7 +1318,8 @@ class TransferWorkflowStore {
           values,
           null,
           null,
-          null);
+          null,
+          -1);
     }
 
     static Work effect(
@@ -1302,7 +1348,8 @@ class TransferWorkflowStore {
           List.of(),
           null,
           transferAssetStatus,
-          null);
+          null,
+          -1);
     }
 
     static Work release(
@@ -1327,7 +1374,8 @@ class TransferWorkflowStore {
           List.of(),
           null,
           null,
-          null);
+          null,
+          -1);
     }
 
     static Work maintenancePrepare(
@@ -1352,7 +1400,8 @@ class TransferWorkflowStore {
           List.of(),
           sourceWarehouseId,
           null,
-          null);
+          null,
+          -1);
     }
 
     static Work maintenanceComplete(
@@ -1362,7 +1411,8 @@ class TransferWorkflowStore {
         UUID assetId,
         UUID sourceWarehouseId,
         UUID destinationWarehouseId,
-        Integer priority) {
+        Integer priority,
+        long rentalItemVersion) {
       return new Work(
           WorkType.MAINTENANCE_COMPLETE,
           operationId,
@@ -1378,7 +1428,8 @@ class TransferWorkflowStore {
           List.of(),
           sourceWarehouseId,
           null,
-          priority);
+          priority,
+          rentalItemVersion);
     }
   }
 

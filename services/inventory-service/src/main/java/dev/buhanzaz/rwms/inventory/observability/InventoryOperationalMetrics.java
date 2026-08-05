@@ -135,6 +135,31 @@ public final class InventoryOperationalMetrics {
         """);
 
     registerCountGauge(
+        "rwms.inventory.furniture.loss.unresolved.current",
+        "Inventory furniture shortages whose maintenance LOSS decision is not yet recorded.",
+        """
+        select count(*)
+          from inventory_furniture_loss_intent
+         where state in ('PENDING', 'TRANSIENT_FAILED', 'BLOCKED')
+        """);
+    registerCountGauge(
+        "rwms.inventory.furniture.loss.failed.current",
+        "Inventory furniture shortage deliveries in retryable or blocked failure states.",
+        """
+        select count(*)
+          from inventory_furniture_loss_intent
+         where state in ('TRANSIENT_FAILED', 'BLOCKED')
+        """);
+    registerAgeGauge(
+        "rwms.inventory.furniture.loss.oldest.unresolved.age.seconds",
+        "Age of the oldest furniture shortage without a recorded maintenance decision.",
+        """
+        select coalesce(extract(epoch from (clock_timestamp() - min(created_at))), 0)
+          from inventory_furniture_loss_intent
+         where state in ('PENDING', 'TRANSIENT_FAILED', 'BLOCKED')
+        """);
+
+    registerCountGauge(
         "rwms.inventory.dlt.backlog",
         "Sanitized inventory DLT records awaiting broker acknowledgement or manual recovery.",
         """

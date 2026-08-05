@@ -14,6 +14,40 @@ final class NoOpMaintenanceDependencyGateway implements MaintenanceDependencyGat
   public boolean productionReady() { return false; }
 
   @Override
+  public WarehouseOperationAdmission warehouseAdmission(
+      UUID warehouseId, WarehouseOperationDirection direction) {
+    return new WarehouseOperationAdmission(
+        warehouseId, 0, WarehouseLifecycleState.ACTIVE, direction, true);
+  }
+
+  @Override
+  public WarehouseLifecycleReadinessWorkPage warehouseLifecycleReadinessWork(
+      UUID after, int limit) {
+    return new WarehouseLifecycleReadinessWorkPage(List.of(), null);
+  }
+
+  @Override
+  public WarehouseLifecycleReadinessConfirmation confirmWarehouseLifecycleReadiness(
+      UUID warehouseId, long expectedVersion) {
+    return new WarehouseLifecycleReadinessConfirmation(
+        warehouseId,
+        expectedVersion,
+        WarehouseLifecycleState.DRAINING,
+        "MAINTENANCE",
+        OffsetDateTime.now(ZoneOffset.UTC));
+  }
+
+  @Override
+  public WarehouseTimeZone warehouseTimeZoneAt(UUID warehouseId, OffsetDateTime at) {
+    return new WarehouseTimeZone(
+        warehouseId, "Europe/Moscow", OffsetDateTime.parse("1970-01-01T00:00:00Z"));
+  }
+
+  @Override
+  public void markWarehouseOperation(
+      UUID warehouseId, UUID operationId, OffsetDateTime occurredAt) {}
+
+  @Override
   public AssetSnapshot getRentalItemSnapshot(UUID rentalItemId) {
     throw new MaintenanceDependencyException(
         HttpStatus.SERVICE_UNAVAILABLE,
@@ -57,6 +91,12 @@ final class NoOpMaintenanceDependencyGateway implements MaintenanceDependencyGat
     throw new MaintenanceDependencyException(
         HttpStatus.SERVICE_UNAVAILABLE,
         "Canonical equipment movement task is unavailable without production dependencies");
+  }
+
+  @Override
+  public List<MaintenanceFurnitureCustodyClaim> unresolvedFurnitureCustody(
+      String ownerType, UUID ownerId) {
+    return List.of();
   }
 
   @Override
@@ -123,12 +163,11 @@ final class NoOpMaintenanceDependencyGateway implements MaintenanceDependencyGat
       String ownerId,
       String transition,
       boolean linkedReturn,
-      UUID estimateId,
-      List<FurnitureLoss> furnitureLosses) {
-    if (!furnitureLosses.isEmpty()) {
+      List<FurniturePendingReturn> furniturePendingReturns) {
+    if (!furniturePendingReturns.isEmpty()) {
       throw new MaintenanceDependencyException(
           HttpStatus.SERVICE_UNAVAILABLE,
-          "Furniture losses require the production asset dependency");
+          "Furniture pending returns require the production asset dependency");
     }
     String status = transition.contains("CAPITAL") ? "CAPITAL_REPAIR"
         : transition.contains("FREE") ? "FREE"
@@ -202,10 +241,16 @@ final class NoOpMaintenanceDependencyGateway implements MaintenanceDependencyGat
   @Override
   public DriverTaskSnapshot createDriverTask(
       UUID key, DriverTaskCommand command) {
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
     java.time.LocalDate scheduledDate =
         command.scheduledDate() == null
-            ? java.time.LocalDate.now(
-                java.time.ZoneId.of("Europe/Moscow"))
+            ? now
+                .toInstant()
+                .atZone(
+                    java.time.ZoneId.of(
+                        warehouseTimeZoneAt(command.warehouseId(), now)
+                            .timeZone()))
+                .toLocalDate()
             : command.scheduledDate();
     return new DriverTaskSnapshot(
         deterministic("driver-task", key),

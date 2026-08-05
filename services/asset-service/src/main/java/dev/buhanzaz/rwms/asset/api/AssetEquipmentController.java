@@ -88,23 +88,4 @@ public class AssetEquipmentController {
     if (result.replayed()) response.header("Idempotency-Replayed", "true");
     return response.body(result.response());
   }
-
-  @GetMapping("/dispositions")
-  public List<EquipmentDispositionResponse> dispositions(
-      @AuthenticationPrincipal Jwt jwt, @RequestParam UUID warehouseId) {
-    access.requireRead(jwt, warehouseId);
-    return service.dispositions(warehouseId);
-  }
-
-  @PostMapping("/dispositions")
-  public ResponseEntity<MovementResponse> disposition(
-      @AuthenticationPrincipal Jwt jwt,
-      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
-      @Valid @RequestBody DispositionEquipmentRequest request) {
-    access.requireEquipmentMovement(jwt, request.warehouseId());
-    AssetService.CreateResult<MovementResponse> result = service.dispose(access.subjectId(jwt), idempotencyKey, request);
-    ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.CREATED);
-    if (result.replayed()) response.header("Idempotency-Replayed", "true");
-    return response.body(result.response());
-  }
 }

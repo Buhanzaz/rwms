@@ -18,6 +18,8 @@ import dev.buhanzaz.rwms.logistics.driver.mapper.DriverTaskResponseMapper;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseOperationMarkStore;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.Optional;
@@ -29,7 +31,13 @@ class DriverTaskServiceTest {
   private final DriverLogisticsTaskRepository tasks = mock(DriverLogisticsTaskRepository.class);
   private final DriverTaskResponseMapper mapper = mock(DriverTaskResponseMapper.class);
   private final LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
-  private final DriverTaskService service = new DriverTaskService(tasks, mapper, dependencies);
+  private final LogisticsWarehouseLifecycle warehouseLifecycle =
+      mock(LogisticsWarehouseLifecycle.class);
+  private final LogisticsWarehouseOperationMarkStore warehouseOperationMarks =
+      mock(LogisticsWarehouseOperationMarkStore.class);
+  private final DriverTaskService service =
+      new DriverTaskService(
+          tasks, mapper, dependencies, warehouseLifecycle, warehouseOperationMarks);
 
   @Test
   void rediscoveryReusesExistingCurrentRemovalDespiteChecksumDrift() {
@@ -94,6 +102,24 @@ class DriverTaskServiceTest {
         .hasMessageContaining("не совпадает");
 
     verifyNoInteractions(mapper, dependencies);
+  }
+
+  @Test
+  void fixedDateCapitalMovementRejectsMissingDateBeforeReplayOrDependencyCalls() {
+    assertThatThrownBy(
+            () ->
+                service.createCapitalMovement(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    DriverTaskPlanningMode.FIXED_DATE,
+                    null,
+                    null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("scheduled date");
+
+    verifyNoInteractions(tasks, dependencies);
   }
 
   private static DriverLogisticsTask currentRemoval(

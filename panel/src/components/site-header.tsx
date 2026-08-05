@@ -52,11 +52,7 @@ export function SiteHeader() {
   const rentalItemId = getRentalItemId(pathname)
   const orderId = getOrderId(pathname)
   const repairTaskId =
-    pathname === "/acceptance"
-      ? searchParams.get("acceptanceId")
-      : pathname === "/write-offs"
-        ? searchParams.get("writeOffId")
-        : null
+    pathname === "/acceptance" ? searchParams.get("acceptanceId") : null
   const rentalItemQuery = useQuery({
     queryKey: ["rental-item", rentalItemId],
     queryFn: () => getAssetRentalItem(accessToken, rentalItemId ?? ""),

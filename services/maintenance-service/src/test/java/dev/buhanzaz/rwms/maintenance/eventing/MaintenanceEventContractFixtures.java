@@ -16,9 +16,15 @@ import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventPayloads.DeliveryS
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventPayloads.EstimateFact;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventPayloads.GenerationState;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventPayloads.MaintenanceIntegrationFact;
+import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventPayloads.PropertyDispositionFact;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventPayloads.RepairFact;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventPayloads.RepairStageFact;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventPayloads.TaskSyncFact;
+import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionAssetEffectState;
+import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionAssetKind;
+import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionKind;
+import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionSource;
+import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionState;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
@@ -34,6 +40,10 @@ final class MaintenanceEventContractFixtures {
   static final UUID STAGE_ID = UUID.fromString("00000000-0000-0000-0000-000000000608");
   static final UUID QUEUE_ID = UUID.fromString("00000000-0000-0000-0000-000000000609");
   static final UUID EXTERNAL_TASK_ID = UUID.fromString("00000000-0000-0000-0000-000000000610");
+  static final UUID DISPOSITION_ID = UUID.fromString("00000000-0000-0000-0000-000000000611");
+  static final UUID DISPOSITION_ASSET_ID = UUID.fromString("00000000-0000-0000-0000-000000000612");
+  static final UUID MOVEMENT_TASK_ID = UUID.fromString("00000000-0000-0000-0000-000000000613");
+  static final UUID EFFECT_ID = UUID.fromString("00000000-0000-0000-0000-000000000614");
 
   static FactCase fact(MaintenanceEventType eventType) {
     return switch (eventType) {
@@ -89,7 +99,82 @@ final class MaintenanceEventContractFixtures {
           MaintenanceAggregateType.REPAIR,
           REPAIR_ID,
           primaryRepair(RepairExecutionState.COMPLETED, RepairAcceptanceState.WRITTEN_OFF));
+      case PROPERTY_DISPOSITION_REQUESTED -> disposition(
+          PropertyDispositionState.PENDING_APPROVAL,
+          PropertyDispositionAssetEffectState.NOT_STARTED,
+          null,
+          null,
+          0);
+      case PROPERTY_DISPOSITION_APPROVED -> disposition(
+          PropertyDispositionState.APPROVED,
+          PropertyDispositionAssetEffectState.NOT_STARTED,
+          null,
+          null,
+          0);
+      case PROPERTY_DISPOSITION_REJECTED -> disposition(
+          PropertyDispositionState.REJECTED,
+          PropertyDispositionAssetEffectState.NOT_STARTED,
+          null,
+          null,
+          0);
+      case PROPERTY_DISPOSITION_MOVEMENT_PENDING -> disposition(
+          PropertyDispositionState.MOVEMENT_PENDING,
+          PropertyDispositionAssetEffectState.NOT_STARTED,
+          MOVEMENT_TASK_ID,
+          null,
+          0);
+      case PROPERTY_DISPOSITION_EFFECT_PENDING -> disposition(
+          PropertyDispositionState.EFFECT_PENDING,
+          PropertyDispositionAssetEffectState.PENDING,
+          null,
+          null,
+          0);
+      case PROPERTY_DISPOSITION_EFFECTIVE -> disposition(
+          PropertyDispositionState.EFFECTIVE,
+          PropertyDispositionAssetEffectState.APPLIED,
+          null,
+          EFFECT_ID,
+          0);
+      case PROPERTY_DISPOSITION_QUARANTINED -> disposition(
+          PropertyDispositionState.QUARANTINED,
+          PropertyDispositionAssetEffectState.QUARANTINED,
+          null,
+          null,
+          0);
+      case PROPERTY_DISPOSITION_RECOVERED -> disposition(
+          PropertyDispositionState.APPROVED,
+          PropertyDispositionAssetEffectState.NOT_STARTED,
+          null,
+          null,
+          1);
     };
+  }
+
+  private static FactCase disposition(
+      PropertyDispositionState state,
+      PropertyDispositionAssetEffectState effectState,
+      UUID movementTaskId,
+      UUID effectId,
+      long recoveryVersion) {
+    return new FactCase(
+        MaintenanceAggregateType.PROPERTY_DISPOSITION,
+        DISPOSITION_ID,
+        new PropertyDispositionFact(
+            DISPOSITION_ID,
+            WAREHOUSE_ID,
+            PropertyDispositionAssetKind.CABIN,
+            DISPOSITION_ASSET_ID,
+            PropertyDispositionKind.WRITE_OFF,
+            PropertyDispositionSource.MANUAL,
+            state,
+            effectState,
+            null,
+            null,
+            null,
+            null,
+            movementTaskId,
+            effectId,
+            recoveryVersion));
   }
 
   static CatalogVersionFact catalog(CatalogVersionState lifecycle) {

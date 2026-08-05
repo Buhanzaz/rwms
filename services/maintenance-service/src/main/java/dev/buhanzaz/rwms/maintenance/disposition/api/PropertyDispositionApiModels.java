@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.maintenance.disposition.api;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.annotation.JsonTypeName;
@@ -71,7 +72,7 @@ public final class PropertyDispositionApiModels {
       @NotNull PropertyDispositionKind disposition,
       @NotBlank @Size(max = 2000) String reason,
       @Size(max = 2000) String evidenceLink,
-      @Valid CabinContentsDispositionPlanInput contentsPlan)
+      @JsonProperty(required = true) @Valid CabinContentsDispositionPlanInput contentsPlan)
       implements CreatePropertyDispositionRequest {
     @AssertTrue(message = "assetKind must be CABIN")
     @JsonIgnore
@@ -104,7 +105,7 @@ public final class PropertyDispositionApiModels {
       @NotNull @Min(0) Long expectedVersion,
       @NotBlank @Size(max = 2000) String reason,
       @Size(max = 2000) String comment,
-      @Valid CabinContentsDispositionPlanInput contentsPlan) {}
+      @JsonProperty(required = true) @Valid CabinContentsDispositionPlanInput contentsPlan) {}
 
   /** Private inventory service input; this always records an equipment LOSS proposal. */
   public record CreateInventoryLossDispositionRequest(
@@ -163,6 +164,8 @@ public final class PropertyDispositionApiModels {
       Long quantity,
       Long expectedAssetVersion,
       Long expectedSourceBalanceVersion,
+      UUID maintenanceCustodyClaimId,
+      Long maintenanceCustodyVersion,
       CabinContentsDispositionPlan contentsPlan,
       UUID rootRepairId,
       List<PropertyDispositionRepairChainEntry> repairChain,

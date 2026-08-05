@@ -25,11 +25,22 @@ import org.springframework.web.util.UriComponentsBuilder;
 final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway {
   private static final String ASSET_CLIENT = "logistics-asset";
   private static final String WAREHOUSE_CLIENT = "logistics-warehouse";
+  private static final String WAREHOUSE_TIME_ZONE_CLIENT = "logistics-warehouse-timezone";
+  private static final String WAREHOUSE_OPERATION_CLIENT = "logistics-warehouse-operation";
+  private static final String WAREHOUSE_LIFECYCLE_READ_CLIENT =
+      "logistics-warehouse-lifecycle-read";
+  private static final String WAREHOUSE_LIFECYCLE_CONFIRM_CLIENT =
+      "logistics-warehouse-lifecycle-confirm";
   private static final String MAINTENANCE_CLIENT = "logistics-maintenance";
   private static final String MEDIA_CLIENT = "logistics-media";
   private static final String TASK_BOARD_CLIENT = "logistics-task-board";
   private static final String ASSET_SCOPE = "asset.logistics";
   private static final String WAREHOUSE_SCOPE = "warehouse.logistics";
+  private static final String WAREHOUSE_TIME_ZONE_SCOPE = "warehouse.timezone.read";
+  private static final String WAREHOUSE_OPERATION_SCOPE = "warehouse.operation.mark";
+  private static final String WAREHOUSE_LIFECYCLE_READ_SCOPE = "warehouse.lifecycle.read";
+  private static final String WAREHOUSE_LIFECYCLE_CONFIRM_SCOPE =
+      "warehouse.lifecycle.confirm";
   private static final String MAINTENANCE_SCOPE = "maintenance.logistics";
   private static final String MEDIA_SCOPE = "media.logistics";
   private static final String TASK_BOARD_SCOPE = "task-board.logistics";
@@ -40,6 +51,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   private final OAuth2AuthorizedClientManager authorizedClients;
   private final String assetBase;
   private final String warehouseBase;
+  private final String warehouseInternalBase;
   private final String maintenanceBase;
   private final String mediaBase;
   private final String taskBoardBase;
@@ -57,6 +69,8 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
     assetBase = strip(properties.assetBaseUrl().toString()) + "/api/internal/asset/v1/logistics";
     warehouseBase =
         strip(properties.warehouseBaseUrl().toString()) + "/api/internal/warehouse/v1/warehouses/logistics";
+    warehouseInternalBase =
+        strip(properties.warehouseBaseUrl().toString()) + "/api/internal/warehouse/v1";
     maintenanceBase =
         strip(properties.maintenanceBaseUrl().toString()) + "/api/internal/maintenance/v1/logistics";
     mediaBase = strip(properties.mediaBaseUrl().toString()) + "/api/internal/media/v1";
@@ -87,6 +101,134 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
         response.name(),
         response.city(),
         response.timeZone());
+  }
+
+  @Override
+  public WarehouseOperationAdmission warehouseAdmission(
+      UUID warehouseId, WarehouseOperationDirection direction) {
+    if (warehouseId == null || direction == null) {
+      throw new IllegalArgumentException("Warehouse admission identity is required");
+    }
+    String uri =
+        UriComponentsBuilder.fromUriString(
+                warehouseInternalBase + "/warehouses/" + warehouseId + "/admission")
+            .queryParam("direction", direction.name())
+            .build()
+            .encode()
+            .toUriString();
+    WarehouseOperationAdmission response =
+        get(
+            uri,
+            WarehouseOperationAdmission.class,
+            WAREHOUSE_LIFECYCLE_READ_CLIENT,
+            WAREHOUSE_LIFECYCLE_READ_SCOPE);
+    boolean expectedAdmission =
+        response.lifecycleState() == WarehouseLifecycleState.ACTIVE
+            || (response.lifecycleState() == WarehouseLifecycleState.DRAINING
+                && direction == WarehouseOperationDirection.OUTGOING);
+    if (!warehouseId.equals(response.warehouseId())
+        || response.direction() != direction
+        || response.admitted() != expectedAdmission) {
+      throw malformed("Warehouse-service returned mismatched admission truth");
+    }
+    return response;
+  }
+
+  @Override
+  public WarehouseLifecycleReadinessWorkPage warehouseLifecycleReadinessWork(
+      UUID after, int limit) {
+    if (limit < 1 || limit > 500) {
+      throw new IllegalArgumentException("Warehouse readiness page size must be from 1 to 500");
+    }
+    UriComponentsBuilder uri =
+        UriComponentsBuilder.fromUriString(
+                warehouseInternalBase + "/lifecycle/readiness-work")
+            .queryParam("limit", limit);
+    if (after != null) uri.queryParam("after", after);
+    WarehouseLifecycleReadinessWorkPage response =
+        get(
+            uri.build().encode().toUriString(),
+            WarehouseLifecycleReadinessWorkPage.class,
+            WAREHOUSE_LIFECYCLE_READ_CLIENT,
+            WAREHOUSE_LIFECYCLE_READ_SCOPE);
+    if (response.items().stream()
+            .map(WarehouseLifecycleReadinessWork::warehouseId)
+            .distinct()
+            .count()
+        != response.items().size()) {
+      throw malformed("Warehouse-service returned duplicate readiness work");
+    }
+    if (response.nextAfter() != null
+        && (response.items().isEmpty()
+            || !response.nextAfter().equals(response.items().getLast().warehouseId()))) {
+      throw malformed("Warehouse-service returned an invalid readiness cursor");
+    }
+    return response;
+  }
+
+  @Override
+  public WarehouseLifecycleReadinessConfirmation confirmWarehouseLifecycleReadiness(
+      UUID warehouseId, long expectedVersion) {
+    if (warehouseId == null || expectedVersion < 0) {
+      throw new IllegalArgumentException("Warehouse readiness fence is invalid");
+    }
+    WarehouseLifecycleReadinessConfirmation response =
+        postWithoutIdempotency(
+            warehouseInternalBase + "/warehouses/" + warehouseId + "/lifecycle-readiness",
+            new WarehouseLifecycleReadinessRequest(expectedVersion),
+            WarehouseLifecycleReadinessConfirmation.class,
+            WAREHOUSE_LIFECYCLE_CONFIRM_CLIENT,
+            WAREHOUSE_LIFECYCLE_CONFIRM_SCOPE);
+    if (!warehouseId.equals(response.warehouseId())
+        || response.warehouseVersion() < expectedVersion) {
+      throw malformed("Warehouse-service returned mismatched logistics readiness confirmation");
+    }
+    return response;
+  }
+
+  @Override
+  public WarehouseTimeZone warehouseTimeZoneAt(UUID warehouseId, OffsetDateTime at) {
+    if (warehouseId == null || at == null) {
+      throw new IllegalArgumentException("Warehouse timezone lookup identity is required");
+    }
+    String uri =
+        UriComponentsBuilder.fromUriString(
+                warehouseInternalBase + "/warehouses/" + warehouseId + "/time-zone")
+            .queryParam("at", at)
+            .build()
+            .encode()
+            .toUriString();
+    WarehouseTimeZone response =
+        get(
+            uri,
+            WarehouseTimeZone.class,
+            WAREHOUSE_TIME_ZONE_CLIENT,
+            WAREHOUSE_TIME_ZONE_SCOPE);
+    if (!warehouseId.equals(response.warehouseId()) || response.effectiveFrom().isAfter(at)) {
+      throw malformed("Warehouse-service returned mismatched effective timezone truth");
+    }
+    return response;
+  }
+
+  @Override
+  public void markWarehouseOperation(
+      UUID warehouseId, UUID operationId, OffsetDateTime occurredAt) {
+    if (warehouseId == null || operationId == null || occurredAt == null) {
+      throw new IllegalArgumentException("Warehouse operation mark identity is required");
+    }
+    try {
+      client
+          .post()
+          .uri(warehouseInternalBase + "/warehouses/" + warehouseId + "/operation-marks")
+          .header(
+              HttpHeaders.AUTHORIZATION,
+              bearer(WAREHOUSE_OPERATION_CLIENT, WAREHOUSE_OPERATION_SCOPE))
+          .body(new WarehouseOperationMarkRequest(operationId, occurredAt))
+          .retrieve()
+          .toBodilessEntity();
+    } catch (RuntimeException exception) {
+      throw dependencyFailure(exception);
+    }
   }
 
   @Override
@@ -430,6 +572,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID transferId,
       UUID lineId,
       UUID rentalItemId,
+      long rentalItemVersion,
       UUID sourceWarehouseId,
       UUID targetWarehouseId,
       Integer priority) {
@@ -439,6 +582,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
             idempotencyKey,
             new CompleteTransferRepairArrivalRequest(
                 rentalItemId,
+                rentalItemVersion,
                 sourceWarehouseId,
                 targetWarehouseId,
                 priority),
@@ -677,7 +821,11 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       String sourceLocationKind,
       long expectedSourceBalanceVersion,
       long quantity,
-      OffsetDateTime reservedUntil) {
+      OffsetDateTime reservedUntil,
+      EquipmentMovementPurpose purpose) {
+    if (purpose == null) {
+      throw malformed("Equipment movement reservation purpose is required");
+    }
     EquipmentMovementReservationResponse response =
         post(
             assetBase + "/equipment-movement-reservations",
@@ -691,7 +839,8 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
                 sourceLocationKind,
                 expectedSourceBalanceVersion,
                 quantity,
-                reservedUntil),
+                reservedUntil,
+                purpose),
             EquipmentMovementReservationResponse.class,
             ASSET_CLIENT,
             ASSET_SCOPE);
@@ -2574,6 +2723,10 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       String city,
       String timeZone) {}
 
+  private record WarehouseLifecycleReadinessRequest(long expectedVersion) {}
+
+  private record WarehouseOperationMarkRequest(UUID operationId, OffsetDateTime occurredAt) {}
+
   private record EquipmentContentResponse(UUID equipmentId, long quantity) {}
 
   private record RentalItemSnapshotResponse(
@@ -2616,6 +2769,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
 
   private record CompleteTransferRepairArrivalRequest(
       UUID rentalItemId,
+      long rentalItemVersion,
       UUID sourceWarehouseId,
       UUID targetWarehouseId,
       Integer priority) {}
@@ -2745,7 +2899,8 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       String sourceLocationKind,
       long expectedSourceBalanceVersion,
       long quantity,
-      OffsetDateTime reservedUntil) {}
+      OffsetDateTime reservedUntil,
+      EquipmentMovementPurpose purpose) {}
 
   private record ReleaseEquipmentMovementReservationRequest(
       long expectedReservationVersion, UUID movementId, UUID lineId) {}

@@ -55,7 +55,35 @@
     "rentalNoteFact": {"type": "object", "additionalProperties": false, "required": ["rentalItemId", "noteId"], "properties": {"rentalItemId": {"$ref": "#/$defs/uuid"}, "noteId": {"$ref": "#/$defs/uuid"}}},
     "equipmentCatalogFact": {"type": "object", "additionalProperties": false, "required": ["equipmentId", "category", "active"], "properties": {"equipmentId": {"$ref": "#/$defs/uuid"}, "category": {"enum": ["FURNITURE", "ELECTRICAL", "OTHER"]}, "active": {"type": "boolean"}}},
     "balanceFact": {"type": "object", "additionalProperties": false, "required": ["balanceId", "equipmentId", "warehouseId", "rentalItemId", "locationKind", "quantity"], "properties": {"balanceId": {"$ref": "#/$defs/uuid"}, "equipmentId": {"$ref": "#/$defs/uuid"}, "warehouseId": {"$ref": "#/$defs/uuid"}, "rentalItemId": {"oneOf": [{"$ref": "#/$defs/uuid"}, {"type": "null"}]}, "locationKind": {"enum": ["STOCK", "CABIN_NON_RENTED", "CABIN_RENTED", "WRITTEN_OFF", "LOST"]}, "quantity": {"type": "integer", "minimum": 0}}},
-    "movementFact": {"type": "object", "additionalProperties": false, "required": ["movementId", "equipmentId", "sourceBalanceId", "targetBalanceId", "quantity", "movementKind"], "properties": {"movementId": {"$ref": "#/$defs/uuid"}, "equipmentId": {"$ref": "#/$defs/uuid"}, "sourceBalanceId": {"$ref": "#/$defs/uuid"}, "targetBalanceId": {"$ref": "#/$defs/uuid"}, "quantity": {"type": "integer", "minimum": 1}, "movementKind": {"enum": ["STOCK_TO_CABIN", "CABIN_TO_STOCK", "CABIN_TO_CABIN", "WAREHOUSE_TO_WAREHOUSE", "WRITE_OFF", "LOSS"]}}},
+    "movementFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["movementId", "equipmentId", "sourceBalanceId", "targetBalanceId", "quantity", "movementKind"],
+      "properties": {
+        "movementId": {"$ref": "#/$defs/uuid"},
+        "equipmentId": {"$ref": "#/$defs/uuid"},
+        "sourceBalanceId": {"$ref": "#/$defs/uuid"},
+        "targetBalanceId": {"$ref": "#/$defs/uuid"},
+        "quantity": {"type": "integer", "minimum": 1},
+        "movementKind": {"enum": ["STOCK_TO_CABIN", "CABIN_TO_STOCK", "CABIN_TO_CABIN", "WAREHOUSE_TO_WAREHOUSE", "WRITE_OFF", "LOSS"]},
+        "equipmentCategory": {"enum": ["FURNITURE", "ELECTRICAL", "OTHER"]},
+        "sourceWarehouseId": {"$ref": "#/$defs/uuid"},
+        "sourceRentalItemId": {"oneOf": [{"$ref": "#/$defs/uuid"}, {"type": "null"}]},
+        "sourceLocationKind": {"enum": ["STOCK", "CABIN_NON_RENTED", "CABIN_RENTED", "WRITTEN_OFF", "LOST"]},
+        "targetWarehouseId": {"$ref": "#/$defs/uuid"},
+        "targetRentalItemId": {"oneOf": [{"$ref": "#/$defs/uuid"}, {"type": "null"}]},
+        "targetLocationKind": {"enum": ["STOCK", "CABIN_NON_RENTED", "CABIN_RENTED", "WRITTEN_OFF", "LOST"]}
+      },
+      "dependentRequired": {
+        "equipmentCategory": ["sourceWarehouseId", "sourceRentalItemId", "sourceLocationKind", "targetWarehouseId", "targetRentalItemId", "targetLocationKind"],
+        "sourceWarehouseId": ["equipmentCategory", "sourceRentalItemId", "sourceLocationKind", "targetWarehouseId", "targetRentalItemId", "targetLocationKind"],
+        "sourceRentalItemId": ["equipmentCategory", "sourceWarehouseId", "sourceLocationKind", "targetWarehouseId", "targetRentalItemId", "targetLocationKind"],
+        "sourceLocationKind": ["equipmentCategory", "sourceWarehouseId", "sourceRentalItemId", "targetWarehouseId", "targetRentalItemId", "targetLocationKind"],
+        "targetWarehouseId": ["equipmentCategory", "sourceWarehouseId", "sourceRentalItemId", "sourceLocationKind", "targetRentalItemId", "targetLocationKind"],
+        "targetRentalItemId": ["equipmentCategory", "sourceWarehouseId", "sourceRentalItemId", "sourceLocationKind", "targetWarehouseId", "targetLocationKind"],
+        "targetLocationKind": ["equipmentCategory", "sourceWarehouseId", "sourceRentalItemId", "sourceLocationKind", "targetWarehouseId", "targetRentalItemId"]
+      }
+    },
     "holdFact": {"type": "object", "additionalProperties": false, "required": ["holdId", "equipmentId", "warehouseId", "quantity", "state"], "properties": {"holdId": {"$ref": "#/$defs/uuid"}, "equipmentId": {"$ref": "#/$defs/uuid"}, "warehouseId": {"$ref": "#/$defs/uuid"}, "quantity": {"type": "integer", "minimum": 1}, "state": {"enum": ["ACTIVE", "COMMITTED", "RELEASED", "EXPIRED", "EXECUTED"]}}},
     "leaseFact": {"type": "object", "additionalProperties": false, "required": ["leaseId", "rentalItemId", "fencingToken", "state"], "properties": {"leaseId": {"$ref": "#/$defs/uuid"}, "rentalItemId": {"$ref": "#/$defs/uuid"}, "fencingToken": {"type": "integer", "minimum": 1}, "state": {"enum": ["ACTIVE", "RELEASED", "EXPIRED"]}}},
     "classifierFact": {"type": "object", "additionalProperties": false, "required": ["classifierId", "type", "parentId", "label", "active", "sortOrder"], "properties": {"classifierId": {"$ref": "#/$defs/uuid"}, "type": {"enum": ["CATEGORY", "SUBCATEGORY", "TYPE", "CONDITION"]}, "parentId": {"oneOf": [{"$ref": "#/$defs/uuid"}, {"type": "null"}]}, "label": {"type": "string", "minLength": 1, "maxLength": 255}, "active": {"type": "boolean"}, "sortOrder": {"oneOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]}}}

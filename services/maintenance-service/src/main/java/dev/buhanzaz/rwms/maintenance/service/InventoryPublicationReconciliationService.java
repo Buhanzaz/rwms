@@ -113,6 +113,7 @@ public class InventoryPublicationReconciliationService {
   private final RepairPlaceService repairPlaces;
   private final InventoryPublicationPrestartReplacementRemoteGateway prestartRemote;
   private final MaintenanceDependencyGateway dependencies;
+  private final WarehouseLifecycleOperations warehouseLifecycle;
   private final MaintenanceJsonbCanonicalizer canonicalizer;
   private final ObjectMapper mapper;
   private final TransactionTemplate requiresNew;
@@ -142,6 +143,7 @@ public class InventoryPublicationReconciliationService {
       RepairPlaceService repairPlaces,
       InventoryPublicationPrestartReplacementRemoteGateway prestartRemote,
       MaintenanceDependencyGateway dependencies,
+      WarehouseLifecycleOperations warehouseLifecycle,
       MaintenanceJsonbCanonicalizer canonicalizer,
       ObjectMapper mapper,
       PlatformTransactionManager transactionManager) {
@@ -169,6 +171,7 @@ public class InventoryPublicationReconciliationService {
     this.repairPlaces = repairPlaces;
     this.prestartRemote = prestartRemote;
     this.dependencies = dependencies;
+    this.warehouseLifecycle = warehouseLifecycle;
     this.canonicalizer = canonicalizer;
     this.mapper = mapper;
     this.requiresNew = new TransactionTemplate(transactionManager);
@@ -198,17 +201,67 @@ public class InventoryPublicationReconciliationService {
       UUID findingId,
       UUID idempotencyKey,
       InventoryPublicationApplyRequest request) {
+    requireNoCallerTransaction("apply an inventory publication");
     if (prestartReplacementRequest(request)) {
       return applyPrestartReplacement(inventoryId, findingId, idempotencyKey, request);
     }
-    return inNewTransaction(() -> applyLocally(inventoryId, findingId, idempotencyKey, request));
+    return applyLocallyWithRemotePreflight(inventoryId, findingId, idempotencyKey, request);
+  }
+
+  /**
+   * The first local attempt deliberately rolls back as soon as it discovers a required remote
+   * admission/routing answer. That releases every source/asset lock before the network call. The
+   * final short transaction reruns the complete idempotency, version and state validation.
+   */
+  private PublicationResult applyLocallyWithRemotePreflight(
+      UUID inventoryId,
+      UUID findingId,
+      UUID idempotencyKey,
+      InventoryPublicationApplyRequest request) {
+    UUID incomingAdmissionWarehouseId = null;
+    List<InventoryPlanStageSnapshot> routingPreflightStages = null;
+    while (true) {
+      UUID admittedWarehouseId = incomingAdmissionWarehouseId;
+      List<InventoryPlanStageSnapshot> preflightedStages = routingPreflightStages;
+      try {
+        return inNewTransaction(
+            () -> applyLocally(
+                inventoryId,
+                findingId,
+                idempotencyKey,
+                request,
+                admittedWarehouseId,
+                preflightedStages));
+      } catch (PublicationRemotePreflightRequired requirement) {
+        switch (requirement.kind()) {
+          case INCOMING -> {
+            if (requirement.warehouseId().equals(incomingAdmissionWarehouseId)) {
+              throw new IllegalStateException(
+                  "Inventory publication repeated warehouse admission");
+            }
+            warehouseLifecycle.requireIncoming(requirement.warehouseId());
+            incomingAdmissionWarehouseId = requirement.warehouseId();
+          }
+          case ROUTING -> {
+            if (requirement.stages().equals(routingPreflightStages)) {
+              throw new IllegalStateException(
+                  "Inventory publication repeated routing preflight");
+            }
+            requireWarehouseRoutingReady(requirement.warehouseId(), requirement.stages());
+            routingPreflightStages = requirement.stages();
+          }
+        }
+      }
+    }
   }
 
   private PublicationResult applyLocally(
       UUID inventoryId,
       UUID findingId,
       UUID idempotencyKey,
-      InventoryPublicationApplyRequest request) {
+      InventoryPublicationApplyRequest request,
+      UUID incomingAdmissionWarehouseId,
+      List<InventoryPlanStageSnapshot> routingPreflightStages) {
     if (inventoryId == null || findingId == null || idempotencyKey == null) {
       throw invalid("Inventory publication identity and idempotency key are required");
     }
@@ -263,14 +316,17 @@ public class InventoryPublicationReconciliationService {
       outcome = InventoryPublicationOutcome.CREATED;
       delta = fullDelta(publication.snapshot());
       created = targetKind == InventoryPublicationTargetKind.ESTIMATE
-          ? createEstimate(sourceId, request.warehouseId(), finding, publication)
+          ? createEstimate(
+              sourceId, request.warehouseId(), finding, publication, incomingAdmissionWarehouseId)
           : createRepair(
               sourceId,
               request.warehouseId(),
               finding,
               publication,
               fullRepairPlan(sourceId, publication.snapshot(), publication.sourceMedia()),
-              true);
+              true,
+              incomingAdmissionWarehouseId,
+              routingPreflightStages);
     } else {
       if (targetKind != InventoryPublicationTargetKind.REPAIR) {
         throw conflict(
@@ -290,7 +346,9 @@ public class InventoryPublicationReconciliationService {
             finding,
             publication,
             successorPlan.plan(),
-            false);
+            false,
+            incomingAdmissionWarehouseId,
+            routingPreflightStages);
       }
     }
     InventoryPublicationSource source = sources.saveAndFlush(InventoryPublicationSource.create(
@@ -384,7 +442,7 @@ public class InventoryPublicationReconciliationService {
       return new PublicationResult(preparation.replay(), true);
     }
     if (!preparation.applicable()) {
-      return inNewTransaction(() -> applyLocally(inventoryId, findingId, idempotencyKey, request));
+      return applyLocallyWithRemotePreflight(inventoryId, findingId, idempotencyKey, request);
     }
 
     InventoryPublicationPrestartReplacement intent = preparation.intent();
@@ -392,6 +450,14 @@ public class InventoryPublicationReconciliationService {
       return inNewTransaction(() -> replayPrestartReplacement(sourceId, requestSha256));
     }
     if ("PREPARED".equals(intent.getPhase())) {
+      // A zero-attempt intent has not made any callback-capable cancellation yet. Reject an
+      // inactive/draining warehouse before touching task-board or logistics, so a denied
+      // successor admission cannot strand a newly cancelled predecessor. Once an attempt was
+      // durably recorded, the response may have been lost or the phase may have been reopened
+      // after partial compensation; it must remain replayable even if admission later changes.
+      if (intent.getRemoteAttemptCount() == 0) {
+        warehouseLifecycle.requireIncoming(request.warehouseId());
+      }
       RemoteAttempt remoteAttempt =
           inNewTransaction(() -> beginPrestartRemoteAttempt(sourceId, requestSha256));
       InventoryPublicationPrestartReplacementRemoteGateway.RemoteCompensation remote;
@@ -440,16 +506,14 @@ public class InventoryPublicationReconciliationService {
         // the operator had selected REPLACE. Preserve that requested strategy in the immutable
         // source audit row; the effective outcome is the safe successor path below.
         try {
-          return inNewTransaction(
-              () ->
-                  applyStartedPrestartReplacement(
-                      sourceId,
-                      requestSha256,
-                      idempotencyKey,
-                      request,
-                      finding,
-                      publication,
-                      remote));
+          return applyStartedPrestartReplacementWithRemotePreflight(
+              sourceId,
+              requestSha256,
+              idempotencyKey,
+              request,
+              finding,
+              publication,
+              remote);
         } catch (MaintenanceConflictException exception) {
           throw retryablePrestartConflict(exception);
         } catch (MaintenanceDependencyException exception) {
@@ -476,6 +540,7 @@ public class InventoryPublicationReconciliationService {
       try {
         RepairPublicationPlan plan =
             fullRepairPlan(sourceId, publication.snapshot(), publication.sourceMedia());
+        warehouseLifecycle.requireIncoming(request.warehouseId());
         requireWarehouseRoutingReady(
             request.warehouseId(),
             plan.allocations().stream()
@@ -776,7 +841,11 @@ public class InventoryPublicationReconciliationService {
             publication,
             plan,
             false,
-            true);
+            request.warehouseId(),
+            plan.allocations().stream()
+                .filter(allocation -> !allocation.lines().isEmpty())
+                .map(PublishedStage::stage)
+                .toList());
     if (intent.isOccupancyReassignmentRequired()) {
       repairPlaces.reassignOccupiedForInventoryReplacement(
           request.warehouseId(),
@@ -922,7 +991,7 @@ public class InventoryPublicationReconciliationService {
     return new PublicationResult(result(source), false);
   }
 
-  private PublicationResult applyStartedPrestartReplacement(
+  private PublicationResult applyStartedPrestartReplacementWithRemotePreflight(
       InventoryPublicationSourceId sourceId,
       String requestSha256,
       UUID idempotencyKey,
@@ -930,6 +999,57 @@ public class InventoryPublicationReconciliationService {
       InventoryPublicationFindingInput finding,
       ValidatedPublication publication,
       InventoryPublicationPrestartReplacementRemoteGateway.RemoteCompensation remote) {
+    UUID incomingAdmissionWarehouseId = null;
+    List<InventoryPlanStageSnapshot> routingPreflightStages = null;
+    while (true) {
+      UUID admittedWarehouseId = incomingAdmissionWarehouseId;
+      List<InventoryPlanStageSnapshot> preflightedStages = routingPreflightStages;
+      try {
+        return inNewTransaction(
+            () ->
+                applyStartedPrestartReplacement(
+                    sourceId,
+                    requestSha256,
+                    idempotencyKey,
+                    request,
+                    finding,
+                    publication,
+                    remote,
+                    admittedWarehouseId,
+                    preflightedStages));
+      } catch (PublicationRemotePreflightRequired requirement) {
+        switch (requirement.kind()) {
+          case INCOMING -> {
+            if (requirement.warehouseId().equals(incomingAdmissionWarehouseId)) {
+              throw new IllegalStateException(
+                  "Started inventory publication repeated warehouse admission");
+            }
+            warehouseLifecycle.requireIncoming(requirement.warehouseId());
+            incomingAdmissionWarehouseId = requirement.warehouseId();
+          }
+          case ROUTING -> {
+            if (requirement.stages().equals(routingPreflightStages)) {
+              throw new IllegalStateException(
+                  "Started inventory publication repeated routing preflight");
+            }
+            requireWarehouseRoutingReady(requirement.warehouseId(), requirement.stages());
+            routingPreflightStages = requirement.stages();
+          }
+        }
+      }
+    }
+  }
+
+  private PublicationResult applyStartedPrestartReplacement(
+      InventoryPublicationSourceId sourceId,
+      String requestSha256,
+      UUID idempotencyKey,
+      InventoryPublicationApplyRequest request,
+      InventoryPublicationFindingInput finding,
+      ValidatedPublication publication,
+      InventoryPublicationPrestartReplacementRemoteGateway.RemoteCompensation remote,
+      UUID incomingAdmissionWarehouseId,
+      List<InventoryPlanStageSnapshot> routingPreflightStages) {
     InventoryPublicationSourceOperation operation =
         operations
             .findByIdForUpdate(sourceId)
@@ -978,7 +1098,9 @@ public class InventoryPublicationReconciliationService {
               finding,
               publication,
               successorPlan.plan(),
-              false);
+              false,
+              incomingAdmissionWarehouseId,
+              routingPreflightStages);
     }
     InventoryPublicationSource source = sources.saveAndFlush(InventoryPublicationSource.create(
         sourceId,
@@ -1351,7 +1473,11 @@ public class InventoryPublicationReconciliationService {
       InventoryPublicationSourceId sourceId,
       UUID warehouseId,
       InventoryPublicationFindingInput finding,
-      ValidatedPublication publication) {
+      ValidatedPublication publication,
+      UUID incomingAdmissionWarehouseId) {
+    if (!warehouseId.equals(incomingAdmissionWarehouseId)) {
+      throw PublicationRemotePreflightRequired.incoming(warehouseId);
+    }
     FrozenInventoryPlanSnapshot snapshot = publication.snapshot();
     MaintenanceEstimate draft = MaintenanceEstimate.create(
         warehouseId,
@@ -1392,6 +1518,8 @@ public class InventoryPublicationReconciliationService {
         estimate.getId(),
         estimate.getVersion(),
         true);
+    warehouseLifecycle.recordOperation(
+        estimate.getWarehouseId(), estimate.getId(), estimate.getCreatedAt());
     return new TargetCreated(
         InventoryPublicationTargetKind.ESTIMATE, estimate.getId(), estimate.getId(), null);
   }
@@ -1402,27 +1530,20 @@ public class InventoryPublicationReconciliationService {
       InventoryPublicationFindingInput finding,
       ValidatedPublication publication,
       RepairPublicationPlan plan,
-      boolean enqueueImmediately) {
-    return createRepair(
-        sourceId, warehouseId, finding, publication, plan, enqueueImmediately, false);
-  }
-
-  private TargetCreated createRepair(
-      InventoryPublicationSourceId sourceId,
-      UUID warehouseId,
-      InventoryPublicationFindingInput finding,
-      ValidatedPublication publication,
-      RepairPublicationPlan plan,
       boolean enqueueImmediately,
-      boolean routingAlreadyPreflighted) {
+      UUID incomingAdmissionWarehouseId,
+      List<InventoryPlanStageSnapshot> routingPreflightStages) {
+    if (!warehouseId.equals(incomingAdmissionWarehouseId)) {
+      throw PublicationRemotePreflightRequired.incoming(warehouseId);
+    }
     FrozenInventoryPlanSnapshot snapshot = publication.snapshot();
-    if (!routingAlreadyPreflighted) {
-      requireWarehouseRoutingReady(
-          warehouseId,
-          plan.allocations().stream()
-              .filter(allocation -> !allocation.lines().isEmpty())
-              .map(PublishedStage::stage)
-              .toList());
+    List<InventoryPlanStageSnapshot> requiredRoutingStages = plan.allocations().stream()
+        .filter(allocation -> !allocation.lines().isEmpty())
+        .map(PublishedStage::stage)
+        .toList();
+    if (!requiredRoutingStages.equals(routingPreflightStages)) {
+      throw PublicationRemotePreflightRequired.routing(
+          warehouseId, requiredRoutingStages);
     }
     RepairLogisticsPlanningMode planningMode = finding.movementToRepair()
         ? finding.movementScheduledDate() == null
@@ -1443,6 +1564,8 @@ public class InventoryPublicationReconciliationService {
         finding.movementToRepair(), planningMode, finding.movementScheduledDate());
     draft.replaceCoverMediaId(plan.coverMediaId());
     MaintenanceRepair repair = repairs.saveAndFlush(draft);
+    warehouseLifecycle.recordOperation(
+        repair.getWarehouseId(), repair.getId(), repair.getCreatedAt());
     List<RepairStage> stages = plan.allocations().stream()
         .filter(allocation -> !allocation.lines().isEmpty())
         .map(
@@ -2559,6 +2682,18 @@ public class InventoryPublicationReconciliationService {
     return result;
   }
 
+  /**
+   * Suspending an ambient transaction leaves its locks and connection open while a remote call
+   * waits. This boundary owns its short transactions, so reject caller-owned transactions before
+   * reading local state or contacting a dependency.
+   */
+  private static void requireNoCallerTransaction(String operation) {
+    if (TransactionSynchronizationManager.isActualTransactionActive()) {
+      throw new IllegalStateException(
+          "Inventory publication cannot " + operation + " inside a caller transaction");
+    }
+  }
+
   private static MaintenanceValidationException invalid(String detail) {
     return new MaintenanceValidationException("MAINTENANCE_VALIDATION_FAILED", detail);
   }
@@ -2599,6 +2734,52 @@ public class InventoryPublicationReconciliationService {
         "Pre-start inventory replacement has a possible remote effect and must be reconciled "
             + "before retry",
         exception);
+  }
+
+  private enum PublicationRemotePreflightKind { INCOMING, ROUTING }
+
+  /**
+   * Rolls back a prepare-only local transaction so that the caller can obtain a remote answer
+   * without holding inventory-source, asset or repair locks. The final attempt repeats the full
+   * local validation before it writes events, reconciliations and the operation mark.
+   */
+  private static final class PublicationRemotePreflightRequired extends RuntimeException {
+    private final PublicationRemotePreflightKind kind;
+    private final UUID warehouseId;
+    private final List<InventoryPlanStageSnapshot> stages;
+
+    private PublicationRemotePreflightRequired(
+        PublicationRemotePreflightKind kind,
+        UUID warehouseId,
+        List<InventoryPlanStageSnapshot> stages) {
+      super(null, null, false, false);
+      this.kind = kind;
+      this.warehouseId = warehouseId;
+      this.stages = stages;
+    }
+
+    static PublicationRemotePreflightRequired incoming(UUID warehouseId) {
+      return new PublicationRemotePreflightRequired(
+          PublicationRemotePreflightKind.INCOMING, warehouseId, List.of());
+    }
+
+    static PublicationRemotePreflightRequired routing(
+        UUID warehouseId, List<InventoryPlanStageSnapshot> stages) {
+      return new PublicationRemotePreflightRequired(
+          PublicationRemotePreflightKind.ROUTING, warehouseId, List.copyOf(stages));
+    }
+
+    PublicationRemotePreflightKind kind() {
+      return kind;
+    }
+
+    UUID warehouseId() {
+      return warehouseId;
+    }
+
+    List<InventoryPlanStageSnapshot> stages() {
+      return stages;
+    }
   }
 
   public record PublicationResult(InventoryPublicationApplyResult response, boolean replayed) {}

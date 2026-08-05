@@ -117,7 +117,6 @@ public final class AssetApiModels {
       List<@NotBlank @Size(max = 128) String> tags) {}
 
   public record UpdateStatusRequest(@NotNull @Min(0) Long expectedVersion, @NotNull RentalItemStatus status) {}
-  public record UpdateWarehouseRequest(@NotNull @Min(0) Long expectedVersion, @NotNull UUID warehouseId) {}
   public record UpdateGeneralCommentRequest(@NotNull @Min(0) Long expectedVersion, @Size(max = 4000) String comment) {}
   public record AddManualNoteRequest(@NotNull @Min(0) Long expectedVersion, @NotBlank @Size(max = 4000) String text) {}
 
@@ -163,7 +162,8 @@ public final class AssetApiModels {
       long quantity,
       BalanceLocationKind locationKind) {}
   public record EquipmentBalanceResponse(UUID id, long version, UUID equipmentId, UUID warehouseId, UUID rentalItemId,
-      BalanceLocationKind locationKind, long quantity, long activeHeldQuantity, long availableStock) {}
+      BalanceLocationKind locationKind, long quantity, long activeHeldQuantity, boolean allocatable,
+      long availableStock) {}
   public record EquipmentTotalsResponse(UUID equipmentId, UUID warehouseId, long totalQuantity, long stockQuantity,
       long nonRentedCabinQuantity, long rentedCabinQuantity, long writtenOffQuantity, long lostQuantity, long activeHeldQuantity,
       long reservedQuantity, long availableQuantity, long availableStock, List<EquipmentBalanceResponse> balances) {}
@@ -246,8 +246,14 @@ public final class AssetApiModels {
       @NotNull @Min(1) Long fencingToken,
       @NotNull MaintenanceLeaseOwnerType ownerType,
       @NotNull UUID ownerId) {}
-  public record MaintenanceFurnitureLoss(
+  /**
+   * Exact cabin balance selected by a maintenance estimate or direct repair.
+   * The selection removes the quantity from the cabin into asset's durable
+   * pending-return custody ledger; it is deliberately not a terminal loss.
+   */
+  public record MaintenanceFurniturePendingReturn(
       @NotNull UUID equipmentId,
+      @NotNull @Min(0) Long expectedSourceBalanceVersion,
       @Min(1) long quantity) {}
   public record MaintenanceFencedStatusRequest(
       @NotNull @Min(0) Long expectedVersion,
@@ -257,8 +263,7 @@ public final class AssetApiModels {
       @NotNull MaintenanceLeaseOwnerType ownerType,
       @NotNull UUID ownerId,
       UUID linkedReturnEstimateId,
-      UUID estimateId,
-      @NotNull @Valid List<@Valid MaintenanceFurnitureLoss> furnitureLosses) {
+      @NotNull @Valid List<@Valid MaintenanceFurniturePendingReturn> furniturePendingReturns) {
     public MaintenanceFencedStatusRequest(
         Long expectedVersion,
         MaintenanceStatusAction action,
@@ -275,10 +280,48 @@ public final class AssetApiModels {
           ownerType,
           ownerId,
           linkedReturnEstimateId,
-          null,
           List.of());
     }
   }
+
+  /**
+   * Asset-owned custody truth linked to its maintenance owner. Quantities are
+   * removed from a cabin before repair work, but become terminal only through
+   * a separately approved property disposition.
+   */
+  public record MaintenanceFurnitureCustodyClaim(
+      UUID id,
+      long custodyVersion,
+      MaintenanceLeaseOwnerType ownerType,
+      UUID ownerId,
+      UUID rentalItemId,
+      UUID warehouseId,
+      UUID equipmentId,
+      UUID sourceBalanceId,
+      long sourceBalanceVersion,
+      long quantity,
+      long returnedToStockQuantity,
+      long preparedDispositionQuantity,
+      long terminalDispositionQuantity,
+      long unresolvedQuantity,
+      long availableForDispositionQuantity,
+      OffsetDateTime selectedAt) {}
+
+  public record ReturnMaintenanceFurnitureCustodyToStockRequest(
+      @NotNull @Min(0) Long expectedCustodyVersion,
+      @NotNull @Min(0) Long expectedStockBalanceVersion,
+      @Min(1) long quantity,
+      @NotNull UUID returnReferenceId) {}
+
+  public record MaintenanceFurnitureCustodyReturnReceipt(
+      UUID claimId,
+      long custodyVersion,
+      UUID returnReferenceId,
+      UUID stockBalanceId,
+      long stockBalanceVersion,
+      long stockQuantity,
+      long quantity,
+      OffsetDateTime returnedAt) {}
 
   /**
    * The only operation-lease owners accepted from logistics. The service
@@ -449,7 +492,13 @@ public final class AssetApiModels {
    * movement and line identifiers supplied on every command.
    */
   public enum LogisticsEquipmentMovementReservationOwnerType {
-    LOGISTICS_EQUIPMENT_MOVEMENT
+    LOGISTICS_EQUIPMENT_MOVEMENT,
+    MAINTENANCE_DISPOSITION_MOVEMENT
+  }
+
+  public enum LogisticsEquipmentMovementPurpose {
+    ALLOCATABLE_REBALANCE,
+    MAINTENANCE_DISPOSITION
   }
 
   /**
@@ -459,6 +508,7 @@ public final class AssetApiModels {
   public record AcquireLogisticsEquipmentMovementReservationRequest(
       @NotNull UUID movementId,
       @NotNull UUID lineId,
+      @NotNull LogisticsEquipmentMovementPurpose purpose,
       @NotNull UUID equipmentId,
       @NotNull UUID sourceWarehouseId,
       UUID sourceRentalItemId,
@@ -610,6 +660,7 @@ public final class AssetApiModels {
       long catalogVersion,
       String equipmentName,
       long currentStockQuantity,
+      Long stockBalanceVersion,
       List<InventoryFurnitureSnapshotCabin> cabins) {}
   public record InventoryFurnitureSnapshotCabin(
       UUID assetId,

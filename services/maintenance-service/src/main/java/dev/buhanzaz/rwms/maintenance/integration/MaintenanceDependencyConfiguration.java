@@ -43,8 +43,27 @@ class MaintenanceDependencyConfiguration {
         validated, "maintenance-media", "media.maintenance");
     ClientRegistration logistics = registration(
         validated, "maintenance-logistics", "logistics.maintenance");
+    ClientRegistration warehouseAdmission = registration(
+        validated, "maintenance-warehouse-admission", "warehouse.lifecycle.read");
+    ClientRegistration warehouseReadiness = registration(
+        validated, "maintenance-warehouse-readiness", "warehouse.lifecycle.read");
+    ClientRegistration warehouseReadinessConfirm = registration(
+        validated, "maintenance-warehouse-readiness-confirm", "warehouse.lifecycle.confirm");
+    ClientRegistration warehouseTimeZone = registration(
+        validated, "maintenance-warehouse-timezone", "warehouse.timezone.read");
+    ClientRegistration warehouseOperationMark = registration(
+        validated, "maintenance-warehouse-operation-mark", "warehouse.operation.mark");
     var registrations = new InMemoryClientRegistrationRepository(
-        asset, task, taskRegistry, media, logistics);
+        asset,
+        task,
+        taskRegistry,
+        media,
+        logistics,
+        warehouseAdmission,
+        warehouseReadiness,
+        warehouseReadinessConfirm,
+        warehouseTimeZone,
+        warehouseOperationMark);
     var manager = new AuthorizedClientServiceOAuth2AuthorizedClientManager(
         registrations, new InMemoryOAuth2AuthorizedClientService(registrations));
     manager.setAuthorizedClientProvider(OAuth2AuthorizedClientProviderBuilder.builder()

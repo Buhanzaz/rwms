@@ -5,10 +5,10 @@ rwms:
         - client-id: logistics-service
           client-name: Logistics Service Downstream Client
           enabled: ${LOGISTICS_CLIENT_ENABLED:false}
-          revision: 1
+          revision: 2
           authentication-methods: [client_secret_basic]
           grant-types: [client_credentials]
-          scopes: [warehouse.logistics, asset.logistics, task-board.logistics, maintenance.logistics, media.logistics]
+          scopes: [warehouse.logistics, warehouse.timezone.read, warehouse.operation.mark, warehouse.lifecycle.read, warehouse.lifecycle.confirm, asset.logistics, task-board.logistics, maintenance.logistics, media.logistics]
           secret-environment: LOGISTICS_CLIENT_SECRET
           audiences: [rwms-services]
           access-token-ttl: 5m

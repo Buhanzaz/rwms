@@ -3,7 +3,6 @@ package dev.buhanzaz.rwms.asset.eventing;
 import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
 import dev.buhanzaz.rwms.asset.domain.AssetEventType;
 import dev.buhanzaz.rwms.platform.contracts.DomainEventEnvelopeV2;
-import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -19,6 +18,16 @@ public class AssetEventPayloadPolicy {
       "comment", "generalcomment", "notetext", "note", "text", "tenant", "media", "url", "photo",
       "name", "displayname", "email", "login", "password", "secret", "token", "reason", "actor",
       "code", "equipmentcode", "classifiercode");
+  private static final Set<String> MOVEMENT_CONTEXT_FIELDS = Set.of(
+      "equipmentCategory",
+      "sourceWarehouseId",
+      "sourceRentalItemId",
+      "sourceLocationKind",
+      "targetWarehouseId",
+      "targetRentalItemId",
+      "targetLocationKind");
+  private static final Set<String> LOCATION_KINDS = Set.of(
+      "STOCK", "CABIN_NON_RENTED", "CABIN_RENTED", "WRITTEN_OFF", "LOST");
   private static final Map<AssetAggregateType, String> ID_FIELDS = Map.of(
       AssetAggregateType.RENTAL_ITEM, "rentalItemId",
       AssetAggregateType.EQUIPMENT_CATALOG, "equipmentId",
@@ -48,6 +57,49 @@ public class AssetEventPayloadPolicy {
       throw new IllegalArgumentException("Asset event payload aggregate identity mismatch");
     }
     validateSafety(payload);
+    if (aggregateType == AssetAggregateType.EQUIPMENT_MOVEMENT) {
+      validateMovementContext(payload);
+    }
+  }
+
+  private static void validateMovementContext(JsonNode payload) {
+    long present = MOVEMENT_CONTEXT_FIELDS.stream().filter(payload::has).count();
+    if (present == 0) {
+      // Facts committed before V30 remain valid and replayable. New producers
+      // always emit the complete exact-at-movement context below.
+      return;
+    }
+    if (present != MOVEMENT_CONTEXT_FIELDS.size()) {
+      throw new IllegalArgumentException(
+          "Equipment movement context must be absent or complete");
+    }
+    requireEnum(payload, "equipmentCategory", Set.of("FURNITURE", "ELECTRICAL", "OTHER"));
+    requireUuid(payload, "sourceWarehouseId", false);
+    requireUuid(payload, "sourceRentalItemId", true);
+    requireEnum(payload, "sourceLocationKind", LOCATION_KINDS);
+    requireUuid(payload, "targetWarehouseId", false);
+    requireUuid(payload, "targetRentalItemId", true);
+    requireEnum(payload, "targetLocationKind", LOCATION_KINDS);
+  }
+
+  private static void requireEnum(JsonNode payload, String field, Set<String> allowed) {
+    JsonNode value = payload.get(field);
+    if (value == null || !value.isTextual() || !allowed.contains(value.stringValue())) {
+      throw new IllegalArgumentException("Asset event payload has invalid " + field);
+    }
+  }
+
+  private static void requireUuid(JsonNode payload, String field, boolean nullable) {
+    JsonNode value = payload.get(field);
+    if (nullable && value != null && value.isNull()) return;
+    if (value == null || !value.isTextual()) {
+      throw new IllegalArgumentException("Asset event payload has invalid " + field);
+    }
+    try {
+      UUID.fromString(value.stringValue());
+    } catch (IllegalArgumentException invalidUuid) {
+      throw new IllegalArgumentException("Asset event payload has invalid " + field, invalidUuid);
+    }
   }
 
   private static boolean matches(AssetEventType type, AssetAggregateType aggregate) {

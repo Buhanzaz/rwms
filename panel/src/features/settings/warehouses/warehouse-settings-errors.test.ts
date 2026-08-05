@@ -19,4 +19,23 @@ describe("warehouse settings conflict handling", () => {
       "Нет доступа"
     )
   })
+
+  it("explains domain conflicts instead of presenting them as stale data", () => {
+    expect(
+      getWarehouseMutationError(
+        new ApiError(
+          "Warehouse cannot become INACTIVE until readiness is confirmed",
+          409
+        )
+      )
+    ).toContain("не все сервисы подтвердили")
+    expect(
+      getWarehouseMutationError(
+        new ApiError(
+          "An operated warehouse timezone must be scheduled with an effective timestamp",
+          409
+        )
+      )
+    ).toContain("нужно назначить с даты")
+  })
 })

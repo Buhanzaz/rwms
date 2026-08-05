@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.asset;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -126,16 +127,47 @@ class OldPanelStockPhotoCleanupApiIntegrationTest {
   }
 
   @Test
-  void movingCabinToWarehouseWithSameLocalNumberReturnsConflict() throws Exception {
+  void directCabinWarehouseRouteIsRemovedInFavorOfAdministrativeCorrection() throws Exception {
     mvc.perform(
             put("/api/asset/v1/rental-items/{id}/warehouse", SECOND_CABIN_ID)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
                     {"expectedVersion":1,"warehouseId":"%s"}
-                    """.formatted(MSK_WAREHOUSE_ID))
+                """.formatted(MSK_WAREHOUSE_ID))
+                .with(writeJwt()))
+        .andExpect(status().isNotFound());
+  }
+
+  @Test
+  void directEquipmentDispositionRouteIsRemoved() throws Exception {
+    mvc.perform(
+            post("/api/asset/v1/equipment/dispositions")
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {"equipmentId":"%s","warehouseId":"%s","sourceLocationKind":"STOCK","sourceExpectedVersion":0,"quantity":1,"disposition":"WRITE_OFF"}
+                    """
+                        .formatted(UUID.randomUUID(), SPB_WAREHOUSE_ID))
+                .with(writeJwt()))
+        .andExpect(status().isNotFound());
+  }
+
+  @Test
+  void publicEquipmentTransferRejectsInterwarehouseMovementWithConflict() throws Exception {
+    mvc.perform(
+            post("/api/asset/v1/equipment/transfers")
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {"equipmentId":"%s","sourceWarehouseId":"%s","sourceLocationKind":"STOCK","sourceExpectedVersion":0,"targetWarehouseId":"%s","targetLocationKind":"STOCK","targetExpectedVersion":0,"quantity":1}
+                    """
+                        .formatted(UUID.randomUUID(), SPB_WAREHOUSE_ID, MSK_WAREHOUSE_ID))
                 .with(writeJwt()))
         .andExpect(status().isConflict())
-        .andExpect(jsonPath("$.code").value("ASSET_CONFLICT"));
+        .andExpect(jsonPath("$.code").value("ASSET_CONFLICT"))
+        .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("logistics")));
   }
 
   private static JwtRequestPostProcessor readJwt() {

@@ -175,7 +175,7 @@ class PresentationHoldServiceIntegrationTest {
     RentalItemResponse leased = freeRental(actorSubjectId, warehouseId, "LEASED-MATCH");
     RentalItemResponse notFree = freeRental(actorSubjectId, warehouseId, "NOT-FREE-MATCH");
     assets.updateStatus(
-        notFree.id(), new UpdateStatusRequest(notFree.version(), RentalItemStatus.REPAIR));
+        notFree.id(), new UpdateStatusRequest(notFree.version(), RentalItemStatus.SALE));
     presentationHolds.replace(
         UUID.randomUUID(),
         UUID.randomUUID(),

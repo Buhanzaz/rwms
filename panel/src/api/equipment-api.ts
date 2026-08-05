@@ -3,12 +3,8 @@ import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 import type {
   EquipmentBalanceDto,
   EquipmentCategory,
-  EquipmentDispositionDto,
-  EquipmentDispositionListItemDto,
   EquipmentItemDto,
   EquipmentItemsQueryParams,
-  EquipmentMovementDto,
-  DisposeEquipmentInput,
 } from "@/types/equipment"
 
 const UUID_PATTERN =
@@ -237,36 +233,6 @@ function parseEquipmentItem(value: unknown): EquipmentItemDto {
   }
 }
 
-function parseEquipmentDisposition(value: unknown): EquipmentDispositionDto {
-  const source = record(value)
-  const movement = record(source.movement)
-  return {
-    id: uuid(movement.id),
-    version: nonNegativeInteger(movement.version),
-    equipmentId: uuid(movement.equipmentId),
-    sourceBalanceId: uuid(movement.sourceBalanceId),
-    targetBalanceId: uuid(movement.targetBalanceId),
-    quantity: nonNegativeInteger(movement.quantity),
-    kind: string(movement.kind),
-    occurredAt: dateTime(movement.occurredAt),
-    equipmentName: string(source.equipmentName),
-  }
-}
-
-function parseMovement(value: unknown): EquipmentMovementDto {
-  const movement = record(value)
-  return {
-    id: uuid(movement.id),
-    version: nonNegativeInteger(movement.version),
-    equipmentId: uuid(movement.equipmentId),
-    sourceBalanceId: uuid(movement.sourceBalanceId),
-    targetBalanceId: uuid(movement.targetBalanceId),
-    quantity: nonNegativeInteger(movement.quantity),
-    kind: string(movement.kind),
-    occurredAt: dateTime(movement.occurredAt),
-  }
-}
-
 function searchByName<T extends { name?: string; equipmentName?: string }>(
   items: T[],
   search: string | undefined
@@ -298,72 +264,4 @@ export async function getEquipmentItems(
   return searchByName(items, params.search).sort((left, right) =>
     left.name.localeCompare(right.name, "ru")
   )
-}
-
-export function listEquipmentDispositions(
-  accessToken: string | null,
-  warehouseId: string
-): Promise<EquipmentDispositionDto[]> {
-  const endpoint = new URL(`${assetApiBaseUrl()}/equipment/dispositions`)
-  endpoint.searchParams.set("warehouseId", warehouseId)
-
-  return bearerRequest<unknown>(requireAccessToken(accessToken), endpoint).then(
-    (response) => values(response).map(parseEquipmentDisposition)
-  )
-}
-
-export async function disposeEquipment(
-  accessToken: string | null,
-  idempotencyKey: string,
-  input: DisposeEquipmentInput
-): Promise<EquipmentMovementDto> {
-  if (!UUID_PATTERN.test(idempotencyKey)) {
-    throw new Error("Не удалось подготовить безопасный ключ команды списания.")
-  }
-
-  if (
-    !Number.isSafeInteger(input.sourceExpectedVersion) ||
-    input.sourceExpectedVersion < 0
-  ) {
-    throw new Error("Для списания нужна актуальная версия исходного остатка.")
-  }
-
-  if (!Number.isSafeInteger(input.quantity) || input.quantity < 1) {
-    throw new Error("Количество списания должно быть целым и больше нуля.")
-  }
-
-  const request = {
-    equipmentId: uuid(input.equipmentId),
-    warehouseId: uuid(input.warehouseId),
-    sourceRentalItemId: nullableUuid(input.sourceRentalItemId),
-    sourceLocationKind: enumValue(
-      input.sourceLocationKind,
-      BALANCE_LOCATION_KINDS
-    ),
-    sourceExpectedVersion: input.sourceExpectedVersion,
-    quantity: input.quantity,
-    disposition: enumValue(input.disposition, ["WRITE_OFF", "LOSS"] as const),
-  }
-
-  const response = await bearerRequest<unknown>(
-    requireAccessToken(accessToken),
-    `${assetApiBaseUrl()}/equipment/dispositions`,
-    {
-      method: "POST",
-      headers: { "Idempotency-Key": idempotencyKey },
-      body: JSON.stringify(request),
-    }
-  )
-
-  return parseMovement(response)
-}
-
-export async function listEquipmentDispositionItems(
-  accessToken: string | null,
-  params: { warehouseId: string; search?: string }
-): Promise<EquipmentDispositionListItemDto[]> {
-  return searchByName(
-    await listEquipmentDispositions(accessToken, params.warehouseId),
-    params.search
-  ).sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))
 }

@@ -3,17 +3,29 @@ package dev.buhanzaz.rwms.warehouse;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import dev.buhanzaz.rwms.warehouse.api.CreateWarehouseRequest;
+import dev.buhanzaz.rwms.warehouse.api.WarehouseLifecycleReadinessRequest;
+import dev.buhanzaz.rwms.warehouse.api.WarehouseLifecycleTransitionRequest;
 import dev.buhanzaz.rwms.warehouse.api.ReplaceWarehouseRequest;
+import dev.buhanzaz.rwms.warehouse.api.ScheduleWarehouseTimeZoneRequest;
+import dev.buhanzaz.rwms.warehouse.api.WarehouseOperationMarkRequest;
 import dev.buhanzaz.rwms.warehouse.api.WarehouseResponse;
+import dev.buhanzaz.rwms.warehouse.api.WarehouseTimeZoneAtResponse;
+import dev.buhanzaz.rwms.warehouse.api.WarehouseTimeZoneChangeResponse;
 import dev.buhanzaz.rwms.warehouse.service.WarehouseConflictException;
 import dev.buhanzaz.rwms.warehouse.service.WarehouseIdempotencyStore;
+import dev.buhanzaz.rwms.warehouse.service.WarehouseLifecycleReadinessOwner;
+import dev.buhanzaz.rwms.warehouse.service.WarehouseOperationDirection;
+import dev.buhanzaz.rwms.warehouse.service.WarehouseOperationSource;
 import dev.buhanzaz.rwms.warehouse.service.WarehouseService;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterAll;
@@ -107,14 +119,14 @@ class WarehouseServiceIntegrationTest {
   }
 
   @Test
-  void enforcesOptimisticVersionNoOpAndDeactivationTransitions() {
+  void enforcesFencedOneWayLifecycleAndRequiresEveryReadinessOwner() {
     WarehouseResponse created =
         service
             .create(UUID.randomUUID(), UUID.randomUUID(), request("Operations", null))
             .response();
     WarehouseResponse noOp =
         service.replace(
-            created.id(), replace(created, created.version(), "Operations", true, null));
+            created.id(), replace(created, created.version(), "Operations", null));
     assertThat(noOp.version()).isEqualTo(created.version());
     assertThat(
             count(
@@ -123,24 +135,96 @@ class WarehouseServiceIntegrationTest {
 
     WarehouseResponse changed =
         service.replace(
-            created.id(),
-            replace(created, created.version(), "Operations updated", true, 5));
+            created.id(), replace(created, created.version(), "Operations updated", 5));
     assertThat(changed.version()).isEqualTo(created.version() + 1);
     assertThat(eventTypes(created.id()))
         .containsExactly("warehouse.warehouse.created.v1", "warehouse.warehouse.changed.v1");
     assertThatThrownBy(
             () ->
                 service.replace(
-                    created.id(), replace(changed, created.version(), "Stale", true, 5)))
+                    created.id(), replace(changed, created.version(), "Stale", 5)))
         .isInstanceOf(WarehouseConflictException.class);
 
-    service.deactivate(created.id(), changed.version());
-    assertThat(eventTypes(created.id()))
-        .containsExactly(
-            "warehouse.warehouse.created.v1",
-            "warehouse.warehouse.changed.v1",
-            "warehouse.warehouse.deactivated.v1");
-    WarehouseResponse inactive = service.get(created.id());
+    assertThatThrownBy(
+            () ->
+                service.completeInactivation(
+                    created.id(), new WarehouseLifecycleTransitionRequest(changed.version())))
+        .isInstanceOf(WarehouseConflictException.class)
+        .hasMessageContaining("DRAINING");
+
+    WarehouseResponse draining =
+        service.startDraining(
+            created.id(), new WarehouseLifecycleTransitionRequest(changed.version()));
+    assertThat(draining.lifecycleState()).isEqualTo("DRAINING");
+    assertThat(draining.active()).isFalse();
+    assertThat(service.admission(draining.id(), WarehouseOperationDirection.INCOMING).admitted())
+        .isFalse();
+    assertThat(service.admission(draining.id(), WarehouseOperationDirection.OUTGOING).admitted())
+        .isTrue();
+    assertThatThrownBy(
+            () ->
+                service.startDraining(
+                    created.id(), new WarehouseLifecycleTransitionRequest(draining.version())))
+        .isInstanceOf(WarehouseConflictException.class)
+        .hasMessageContaining("ACTIVE");
+    assertThatThrownBy(
+            () ->
+                service.confirmLifecycleReadiness(
+                    created.id(),
+                    WarehouseLifecycleReadinessOwner.ASSET,
+                    new WarehouseLifecycleReadinessRequest(changed.version())))
+        .isInstanceOf(WarehouseConflictException.class)
+        .hasMessageContaining("changed by another request");
+    assertThatThrownBy(
+            () ->
+                service.completeInactivation(
+                    created.id(), new WarehouseLifecycleTransitionRequest(draining.version())))
+        .isInstanceOf(WarehouseConflictException.class)
+        .hasMessageContaining("readiness");
+
+    long readinessVersion =
+        service
+            .confirmLifecycleReadiness(
+                created.id(),
+                WarehouseLifecycleReadinessOwner.ASSET,
+                new WarehouseLifecycleReadinessRequest(draining.version()))
+            .warehouseVersion();
+    assertThat(
+            service
+                .confirmLifecycleReadiness(
+                    created.id(),
+                    WarehouseLifecycleReadinessOwner.ASSET,
+                    new WarehouseLifecycleReadinessRequest(draining.version()))
+                .warehouseVersion())
+        .isEqualTo(readinessVersion);
+    for (WarehouseLifecycleReadinessOwner owner : WarehouseLifecycleReadinessOwner.values()) {
+      if (owner == WarehouseLifecycleReadinessOwner.ASSET) continue;
+      readinessVersion =
+          service
+              .confirmLifecycleReadiness(
+                  created.id(), owner, new WarehouseLifecycleReadinessRequest(readinessVersion))
+              .warehouseVersion();
+    }
+    WarehouseResponse inactive =
+        service.completeInactivation(
+            created.id(), new WarehouseLifecycleTransitionRequest(readinessVersion));
+    assertThat(inactive.lifecycleState()).isEqualTo("INACTIVE");
+    assertThat(inactive.active()).isFalse();
+    assertThat(service.admission(inactive.id(), WarehouseOperationDirection.INCOMING).admitted())
+        .isFalse();
+    assertThat(service.admission(inactive.id(), WarehouseOperationDirection.OUTGOING).admitted())
+        .isFalse();
+    assertThat(eventTypes(created.id()).getLast()).isEqualTo("warehouse.warehouse.deactivated.v1");
+    assertThat(
+            count(
+                "select count(*) from warehouse_lifecycle_readiness where warehouse_id=?",
+                created.id()))
+        .isEqualTo(WarehouseLifecycleReadinessOwner.values().length);
+    assertThat(
+            count(
+                "select count(*) from warehouse_lifecycle_transition where warehouse_id=?",
+                created.id()))
+        .isEqualTo(2);
     assertThatThrownBy(
             () ->
                 service.create(
@@ -149,17 +233,12 @@ class WarehouseServiceIntegrationTest {
                     request(" operations\tUPDATED ", null)))
         .isInstanceOf(WarehouseConflictException.class)
         .hasMessageContaining("name");
-    WarehouseResponse reactivated =
-        service.replace(
-            inactive.id(),
-            replace(
-                inactive,
-                inactive.version(),
-                inactive.name(),
-                true,
-                inactive.sortOrder()));
-    assertThat(reactivated.active()).isTrue();
-    assertThat(eventTypes(created.id()).getLast()).isEqualTo("warehouse.warehouse.changed.v1");
+    assertThatThrownBy(
+            () ->
+                service.startDraining(
+                    inactive.id(), new WarehouseLifecycleTransitionRequest(inactive.version())))
+        .isInstanceOf(WarehouseConflictException.class)
+        .hasMessageContaining("ACTIVE");
 
     WarehouseResponse anotherWarehouse =
         service
@@ -168,24 +247,63 @@ class WarehouseServiceIntegrationTest {
     assertThatThrownBy(
             () ->
                 service.replace(
-                    anotherWarehouse.id(),
-                    replace(
-                        anotherWarehouse,
-                        anotherWarehouse.version(),
-                        "OPERATIONS  updated",
-                        true,
-                        null)))
+                        anotherWarehouse.id(),
+                        replace(
+                            anotherWarehouse,
+                            anotherWarehouse.version(),
+                            "OPERATIONS  updated",
+                            null)))
         .isInstanceOf(WarehouseConflictException.class)
         .hasMessageContaining("name");
   }
 
   @Test
-  void publicWarehouseReadReturnsInactiveWarehouseByUuidAndListStaysActiveOnly() throws Exception {
-    WarehouseResponse inactive =
+  void reconcilesOnlyTheAuthenticatedOwnersOutstandingDrainingWorkWithAKeyset() {
+    WarehouseResponse first =
+        service.create(UUID.randomUUID(), UUID.randomUUID(), request("Drain work first", null)).response();
+    WarehouseResponse second =
+        service.create(UUID.randomUUID(), UUID.randomUUID(), request("Drain work second", null)).response();
+    WarehouseResponse firstDraining =
+        service.startDraining(
+            first.id(), new WarehouseLifecycleTransitionRequest(first.version()));
+    service.startDraining(second.id(), new WarehouseLifecycleTransitionRequest(second.version()));
+
+    var firstPage =
+        service.lifecycleReadinessWork(WarehouseLifecycleReadinessOwner.ASSET, null, 1);
+    assertThat(firstPage.items()).hasSize(1);
+    assertThat(firstPage.items().getFirst().lifecycleState()).isEqualTo("DRAINING");
+    assertThat(firstPage.nextAfter()).isEqualTo(firstPage.items().getFirst().warehouseId());
+    var secondPage =
+        service.lifecycleReadinessWork(
+            WarehouseLifecycleReadinessOwner.ASSET, firstPage.nextAfter(), 1);
+    assertThat(secondPage.items()).hasSize(1);
+    assertThat(secondPage.nextAfter()).isNull();
+    assertThat(
+            Set.of(firstPage.items().getFirst().warehouseId(), secondPage.items().getFirst().warehouseId()))
+        .containsExactlyInAnyOrder(first.id(), second.id());
+
+    service.confirmLifecycleReadiness(
+        first.id(),
+        WarehouseLifecycleReadinessOwner.ASSET,
+        new WarehouseLifecycleReadinessRequest(firstDraining.version()));
+    assertThat(
+            service.lifecycleReadinessWork(WarehouseLifecycleReadinessOwner.ASSET, null, 10).items())
+        .extracting(item -> item.warehouseId())
+        .containsExactly(second.id());
+    assertThat(
+            service.lifecycleReadinessWork(WarehouseLifecycleReadinessOwner.INVENTORY, null, 10).items())
+        .extracting(item -> item.warehouseId())
+        .containsExactlyInAnyOrder(first.id(), second.id());
+  }
+
+  @Test
+  void publicWarehouseReadReturnsInactiveWarehouseByUuidAndDefaultListHidesOnlyTerminalState()
+      throws Exception {
+    WarehouseResponse created =
         service
             .create(UUID.randomUUID(), UUID.randomUUID(), request("Historical warehouse", null))
             .response();
-    service.deactivate(inactive.id(), inactive.version());
+    WarehouseResponse inactive = drainAndInactivate(created);
 
     String body =
         mockMvc
@@ -197,7 +315,15 @@ class WarehouseServiceIntegrationTest {
             .getContentAsString();
 
     assertThat(objectMapper.readTree(body).get("active").booleanValue()).isFalse();
+    assertThat(objectMapper.readTree(body).get("lifecycleState").stringValue()).isEqualTo("INACTIVE");
     assertThat(service.list(false)).extracting(WarehouseResponse::id).doesNotContain(inactive.id());
+    assertThat(service.list(true)).extracting(WarehouseResponse::id).contains(inactive.id());
+    mockMvc
+        .perform(
+            delete("/api/warehouse/v1/warehouses/{id}", inactive.id())
+                .queryParam("expectedVersion", Long.toString(inactive.version()))
+                .with(systemAdminWriteJwt()))
+        .andExpect(status().isMethodNotAllowed());
   }
 
   @Test
@@ -239,7 +365,6 @@ class WarehouseServiceIntegrationTest {
                             other,
                             other.version(),
                             "REGISTRY  depot",
-                            true,
                             other.sortOrder()))))
         .andExpect(status().isConflict())
         .andExpect(
@@ -252,6 +377,250 @@ class WarehouseServiceIntegrationTest {
                     .isEqualTo("WAREHOUSE_CONFLICT"));
 
     assertThat(existing.id()).isNotEqualTo(other.id());
+  }
+
+  @Test
+  void preservesEffectiveDatedTimezoneHistoryAndPreventsPostOperationCorrections() throws Exception {
+    WarehouseResponse created =
+        service
+            .create(UUID.randomUUID(), UUID.randomUUID(), request("Timezone history", null))
+            .response();
+    WarehouseResponse corrected =
+        service.replace(
+            created.id(),
+            new ReplaceWarehouseRequest(
+                created.version(),
+                created.name(),
+                created.city(),
+                created.address(),
+                "Europe/Samara",
+                created.sortOrder()));
+    assertThat(corrected.timeZone()).isEqualTo("Europe/Samara");
+
+    OffsetDateTime operationAt = databaseNow();
+    UUID operationId = UUID.randomUUID();
+    assertThat(
+            service.markOperation(
+                corrected.id(),
+                WarehouseOperationSource.ASSET,
+                new WarehouseOperationMarkRequest(operationId, operationAt)))
+        .isTrue();
+    assertThat(
+            service.markOperation(
+                corrected.id(),
+                WarehouseOperationSource.ASSET,
+                new WarehouseOperationMarkRequest(operationId, operationAt)))
+        .isFalse();
+
+    OffsetDateTime effectiveFrom = OffsetDateTime.now(ZoneOffset.UTC).plusDays(1);
+    WarehouseTimeZoneChangeResponse scheduled =
+        service.scheduleTimeZone(
+            corrected.id(),
+            new ScheduleWarehouseTimeZoneRequest(
+                corrected.version(), "Europe/Moscow", effectiveFrom));
+    assertThat(scheduled.warehouseVersion()).isEqualTo(corrected.version() + 1);
+    assertThat(scheduled.timeZone()).isEqualTo("Europe/Moscow");
+    assertThat(service.get(created.id()).timeZone()).isEqualTo("Europe/Samara");
+    WarehouseTimeZoneAtResponse historical = service.timeZoneAt(created.id(), operationAt);
+    assertThat(historical.timeZone()).isEqualTo("Europe/Samara");
+    WarehouseTimeZoneAtResponse future =
+        service.timeZoneAt(created.id(), scheduled.effectiveFrom().plusSeconds(1));
+    assertThat(future.timeZone()).isEqualTo("Europe/Moscow");
+
+    assertThatThrownBy(
+            () ->
+                service.replace(
+                    created.id(),
+                    new ReplaceWarehouseRequest(
+                        scheduled.warehouseVersion(),
+                        corrected.name(),
+                        corrected.city(),
+                        corrected.address(),
+                        "Europe/Moscow",
+                        corrected.sortOrder())))
+        .isInstanceOf(WarehouseConflictException.class)
+        .hasMessageContaining("scheduled");
+    assertThat(count("select count(*) from warehouse_time_zone_history where warehouse_id=?", created.id()))
+        .isEqualTo(3);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from warehouse_operation_mark where warehouse_id=?", Integer.class, created.id()))
+        .isOne();
+    String scheduledEvent =
+        jdbc.queryForObject(
+            """
+            select envelope_body::text
+              from outbox_event
+             where aggregate_id=? and aggregate_version=?
+            """,
+            String.class,
+            created.id().toString(),
+            scheduled.warehouseVersion());
+    assertThat(objectMapper.readTree(scheduledEvent).at("/payload/timeZone").stringValue())
+        .isEqualTo("Europe/Samara");
+    assertThat(
+            objectMapper
+                .readTree(scheduledEvent)
+                .at("/payload/timeZoneDecision/timeZone")
+                .stringValue())
+        .isEqualTo("Europe/Moscow");
+    assertThat(
+            objectMapper
+                .readTree(scheduledEvent)
+                .at("/payload/timeZoneDecision/effectiveFrom")
+                .stringValue())
+        .isEqualTo(scheduled.effectiveFrom().toString());
+  }
+
+  @Test
+  void exposesTimezoneAsOfAndOperationMarkOnlyToExactOperationOwnerScopes() throws Exception {
+    WarehouseResponse created =
+        service
+            .create(UUID.randomUUID(), UUID.randomUUID(), request("Timezone private boundary", null))
+            .response();
+    OffsetDateTime now = databaseNow();
+    String asOfBody =
+        mockMvc
+            .perform(
+                get("/api/internal/warehouse/v1/warehouses/{id}/time-zone", created.id())
+                    .queryParam("at", now.toString())
+                    .with(
+                        operationOwnerJwt(
+                            "asset-service", "warehouse.timezone.read")))
+            .andExpect(status().isOk())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    assertThat(objectMapper.readTree(asOfBody).get("timeZone").stringValue())
+        .isEqualTo("Europe/Moscow");
+    mockMvc
+        .perform(
+            get("/api/internal/warehouse/v1/warehouses/{id}/time-zone", created.id())
+                .queryParam("at", now.toString())
+                .with(
+                    operationOwnerJwt(
+                        "task-board-service", "warehouse.timezone.read")))
+        .andExpect(status().isOk());
+
+    mockMvc
+        .perform(
+            post("/api/internal/warehouse/v1/warehouses/{id}/operation-marks", created.id())
+                .with(operationOwnerJwt("asset-service", "warehouse.operation.mark"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(
+                        new WarehouseOperationMarkRequest(UUID.randomUUID(), databaseNow()))))
+        .andExpect(status().isNoContent());
+    mockMvc
+        .perform(
+            get("/api/internal/warehouse/v1/warehouses/{id}/time-zone", created.id())
+                .queryParam("at", now.toString())
+                .with(
+                    operationOwnerJwt(
+                        "asset-service", "warehouse.timezone.read warehouse.read")))
+        .andExpect(status().isForbidden());
+  }
+
+  @Test
+  void exposesFencedDirectionalAdmissionAndAuthenticatedReadinessOnlyToLifecycleOwners()
+      throws Exception {
+    WarehouseResponse created =
+        service
+            .create(UUID.randomUUID(), UUID.randomUUID(), request("Lifecycle admission", null))
+            .response();
+    WarehouseResponse draining =
+        service.startDraining(
+            created.id(), new WarehouseLifecycleTransitionRequest(created.version()));
+
+    JsonNode incoming =
+        objectMapper.readTree(
+            mockMvc
+                .perform(
+                    get("/api/internal/warehouse/v1/warehouses/{id}/admission", created.id())
+                        .queryParam("direction", "INCOMING")
+                        .with(lifecycleOwnerJwt("asset-service", "warehouse.lifecycle.read")))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString());
+    assertThat(Set.copyOf(incoming.propertyNames()))
+        .containsExactlyInAnyOrder(
+            "warehouseId", "warehouseVersion", "lifecycleState", "direction", "admitted");
+    assertThat(incoming.get("lifecycleState").stringValue()).isEqualTo("DRAINING");
+    assertThat(incoming.get("direction").stringValue()).isEqualTo("INCOMING");
+    assertThat(incoming.get("admitted").booleanValue()).isFalse();
+
+    JsonNode outgoing =
+        objectMapper.readTree(
+            mockMvc
+                .perform(
+                    get("/api/internal/warehouse/v1/warehouses/{id}/admission", created.id())
+                        .queryParam("direction", "OUTGOING")
+                        .with(lifecycleOwnerJwt("asset-service", "warehouse.lifecycle.read")))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString());
+    assertThat(outgoing.get("admitted").booleanValue()).isTrue();
+
+    mockMvc
+        .perform(
+            get("/api/internal/warehouse/v1/warehouses/{id}/admission", created.id())
+                .queryParam("direction", "OUTGOING")
+                .with(
+                    lifecycleOwnerJwt(
+                        "asset-service", "warehouse.lifecycle.read warehouse.read")))
+        .andExpect(status().isForbidden());
+
+    JsonNode work =
+        objectMapper.readTree(
+            mockMvc
+                .perform(
+                    get("/api/internal/warehouse/v1/lifecycle/readiness-work")
+                        .queryParam("limit", "100")
+                        .with(lifecycleOwnerJwt("asset-service", "warehouse.lifecycle.read")))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString());
+    assertThat(Set.copyOf(work.propertyNames())).containsExactlyInAnyOrder("items", "nextAfter");
+    assertThat(work.get("items").get(0).get("warehouseId").stringValue())
+        .isEqualTo(created.id().toString());
+    assertThat(work.get("items").get(0).get("warehouseVersion").longValue())
+        .isEqualTo(draining.version());
+    assertThat(work.get("items").get(0).get("lifecycleState").stringValue()).isEqualTo("DRAINING");
+
+    mockMvc
+        .perform(
+            post(
+                    "/api/internal/warehouse/v1/warehouses/{id}/lifecycle-readiness",
+                    created.id())
+                .with(lifecycleOwnerJwt("asset-service", "warehouse.lifecycle.confirm"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(
+                        new WarehouseLifecycleReadinessRequest(draining.version()))))
+        .andExpect(status().isOk())
+        .andExpect(
+            result ->
+                assertThat(
+                        objectMapper
+                            .readTree(result.getResponse().getContentAsString())
+                            .get("readinessOwner")
+                            .stringValue())
+                    .isEqualTo("ASSET"));
+
+    JsonNode acknowledged =
+        objectMapper.readTree(
+            mockMvc
+                .perform(
+                    get("/api/internal/warehouse/v1/lifecycle/readiness-work")
+                        .with(lifecycleOwnerJwt("asset-service", "warehouse.lifecycle.read")))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString());
+    assertThat(acknowledged.get("items")).isEmpty();
   }
 
   @Test
@@ -330,14 +699,14 @@ class WarehouseServiceIntegrationTest {
     assertThat(response.get("active").booleanValue()).isTrue();
     assertThat(response.get("timeZone").stringValue()).isEqualTo("Europe/Moscow");
 
-    WarehouseResponse inactive =
+    WarehouseResponse inventoryCreated =
         service
             .create(
                 UUID.randomUUID(),
                 UUID.randomUUID(),
                 request("Inventory hidden", null))
             .response();
-    service.deactivate(inactive.id(), inactive.version());
+    WarehouseResponse inactive = drainAndInactivate(inventoryCreated);
 
     mockMvc
         .perform(
@@ -406,14 +775,14 @@ class WarehouseServiceIntegrationTest {
     assertThat(response.get("city").stringValue()).isEqualTo("Санкт-Петербург");
     assertThat(response.get("timeZone").stringValue()).isEqualTo("Europe/Moscow");
 
-    WarehouseResponse inactive =
+    WarehouseResponse logisticsCreated =
         service
             .create(
                 UUID.randomUUID(),
                 UUID.randomUUID(),
                 request("Logistics inactive", null))
             .response();
-    service.deactivate(inactive.id(), inactive.version());
+    WarehouseResponse inactive = drainAndInactivate(logisticsCreated);
 
     mockMvc
         .perform(
@@ -554,6 +923,34 @@ class WarehouseServiceIntegrationTest {
                     .claim("scope", scope));
   }
 
+  private static org.springframework.security.test.web.servlet.request
+          .SecurityMockMvcRequestPostProcessors.JwtRequestPostProcessor
+      operationOwnerJwt(String clientId, String scope) {
+    return jwt()
+        .jwt(
+            token ->
+                token
+                    .subject(clientId)
+                    .audience(java.util.List.of("rwms-services"))
+                    .claim("principal_type", "SERVICE")
+                    .claim("client_id", clientId)
+                    .claim("scope", scope));
+  }
+
+  private static org.springframework.security.test.web.servlet.request
+          .SecurityMockMvcRequestPostProcessors.JwtRequestPostProcessor
+      lifecycleOwnerJwt(String clientId, String scope) {
+    return jwt()
+        .jwt(
+            token ->
+                token
+                    .subject(clientId)
+                    .audience(java.util.List.of("rwms-services"))
+                    .claim("principal_type", "SERVICE")
+                    .claim("client_id", clientId)
+                    .claim("scope", scope));
+  }
+
   private CreateWarehouseRequest request(String name, Integer sortOrder) {
     return new CreateWarehouseRequest(name, "Москва", "", "Europe/Moscow", sortOrder);
   }
@@ -562,7 +959,6 @@ class WarehouseServiceIntegrationTest {
       WarehouseResponse warehouse,
       long expectedVersion,
       String name,
-      boolean active,
       Integer sortOrder) {
     return new ReplaceWarehouseRequest(
         expectedVersion,
@@ -570,13 +966,32 @@ class WarehouseServiceIntegrationTest {
         warehouse.city(),
         warehouse.address(),
         warehouse.timeZone(),
-        active,
         sortOrder);
+  }
+
+  private WarehouseResponse drainAndInactivate(WarehouseResponse warehouse) {
+    WarehouseResponse draining =
+        service.startDraining(
+            warehouse.id(), new WarehouseLifecycleTransitionRequest(warehouse.version()));
+    long expectedVersion = draining.version();
+    for (WarehouseLifecycleReadinessOwner owner : WarehouseLifecycleReadinessOwner.values()) {
+      expectedVersion =
+          service
+              .confirmLifecycleReadiness(
+                  warehouse.id(), owner, new WarehouseLifecycleReadinessRequest(expectedVersion))
+              .warehouseVersion();
+    }
+    return service.completeInactivation(
+        warehouse.id(), new WarehouseLifecycleTransitionRequest(expectedVersion));
   }
 
   private long count(String query, Object... arguments) {
     Long result = jdbc.queryForObject(query, Long.class, arguments);
     return result == null ? 0 : result;
+  }
+
+  private OffsetDateTime databaseNow() {
+    return jdbc.queryForObject("select clock_timestamp()", OffsetDateTime.class);
   }
 
   private java.util.List<String> eventTypes(UUID warehouseId) {

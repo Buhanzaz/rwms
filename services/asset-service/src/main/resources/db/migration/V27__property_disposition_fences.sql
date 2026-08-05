@@ -32,7 +32,7 @@ CREATE UNIQUE INDEX uk_equipment_movement_origin_reservation
 CREATE TABLE public.property_disposition_fence (
   decision_id uuid NOT NULL,
   version bigint NOT NULL DEFAULT 0,
-  request_sha256 char(64) NOT NULL,
+  request_sha256 varchar(64) NOT NULL,
   warehouse_id uuid NOT NULL,
   asset_kind varchar(16) NOT NULL,
   asset_id uuid NOT NULL,
@@ -170,7 +170,7 @@ CREATE TABLE public.property_disposition_effect (
   effect_id uuid NOT NULL,
   decision_id uuid NOT NULL,
   response_body jsonb NOT NULL,
-  response_sha256 char(64) NOT NULL,
+  response_sha256 varchar(64) NOT NULL,
   applied_at timestamptz NOT NULL,
   CONSTRAINT property_disposition_effect_pkey PRIMARY KEY (effect_id),
   CONSTRAINT uk_property_disposition_effect_decision UNIQUE (decision_id),
@@ -182,14 +182,18 @@ CREATE TABLE public.property_disposition_effect (
     FOREIGN KEY (decision_id) REFERENCES public.property_disposition_fence(decision_id)
 );
 
+ALTER TABLE public.property_disposition_fence
+  ADD CONSTRAINT fk_property_disposition_fence_effect
+  FOREIGN KEY (effect_id) REFERENCES public.property_disposition_effect(effect_id);
+
 CREATE TABLE public.property_disposition_audit_event (
   event_id uuid NOT NULL,
   decision_id uuid NOT NULL,
   event_type varchar(24) NOT NULL,
   actor_subject_id uuid NOT NULL,
-  request_sha256 char(64) NOT NULL,
+  request_sha256 varchar(64) NOT NULL,
   event_body jsonb NOT NULL,
-  event_sha256 char(64) NOT NULL,
+  event_sha256 varchar(64) NOT NULL,
   occurred_at timestamptz NOT NULL,
   CONSTRAINT property_disposition_audit_event_pkey PRIMARY KEY (event_id),
   CONSTRAINT ck_property_disposition_audit_event_type CHECK (

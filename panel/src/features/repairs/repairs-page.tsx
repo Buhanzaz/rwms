@@ -30,6 +30,7 @@ import { MobileAppRequiredDialog } from "@/components/mobile-app-required-dialog
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { useAuth } from "@/features/auth/use-auth"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
+import { canInitiatePropertyDisposition } from "@/features/write-offs/property-disposition-presentation"
 import {
   getRepairTask,
   listRepairTasks,
@@ -204,7 +205,7 @@ export function RepairsPage() {
   )
   const canManage = Boolean(
     selectedWarehouseId &&
-    hasWarehouseAccess(currentUser, selectedWarehouseId, "MANAGE")
+    canInitiatePropertyDisposition(currentUser, selectedWarehouseId)
   )
   const navigate = useNavigate()
   const location = useLocation()

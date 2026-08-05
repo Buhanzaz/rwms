@@ -1,5 +1,7 @@
 package dev.buhanzaz.rwms.warehouse.security;
 
+import dev.buhanzaz.rwms.warehouse.service.WarehouseOperationSource;
+import dev.buhanzaz.rwms.warehouse.service.WarehouseLifecycleReadinessOwner;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -98,6 +100,40 @@ public class WarehouseAuthorizer {
     }
   }
 
+  /**
+   * Operation owners resolve a historical timezone only through this explicit as-of contract.
+   * A broad warehouse.read token cannot be repurposed for it.
+   */
+  public void requireInternalTimeZoneReader(Jwt jwt) {
+    requireKnownLifecycleOwner(jwt, "warehouse.timezone.read");
+  }
+
+  /**
+   * The authenticated client determines the durable operation source. Request bodies cannot
+   * choose a source and therefore cannot impersonate another owning workflow.
+   */
+  public WarehouseOperationSource requireInternalOperationMarker(Jwt jwt) {
+    return requireKnownOperationOwner(jwt, "warehouse.operation.mark");
+  }
+
+  /** Resource owners ask this narrow boundary whether one directional operation is admitted. */
+  public void requireInternalLifecycleAdmissionReader(Jwt jwt) {
+    requireKnownLifecycleOwner(jwt, "warehouse.lifecycle.read");
+  }
+
+  /**
+   * A durable pull backlog lets every owner reconcile even when an event was missed or it owns no
+   * live records for the warehouse.
+   */
+  public WarehouseLifecycleReadinessOwner requireInternalLifecycleWorkReader(Jwt jwt) {
+    return requireKnownLifecycleOwner(jwt, "warehouse.lifecycle.read");
+  }
+
+  /** Lifecycle readiness is attributed to the authenticated resource owner, never a request body. */
+  public WarehouseLifecycleReadinessOwner requireInternalLifecycleReadinessConfirmer(Jwt jwt) {
+    return requireKnownLifecycleOwner(jwt, "warehouse.lifecycle.confirm");
+  }
+
   private void requireInternalWarehouseReader(Jwt jwt, String clientId) {
     if (jwt == null
         || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))
@@ -105,6 +141,42 @@ public class WarehouseAuthorizer {
         || !exactlyWarehouseRead(jwt)) {
       throw new AccessDeniedException(
           "Only " + clientId + " with exactly warehouse.read may use this endpoint");
+    }
+  }
+
+  private WarehouseOperationSource requireKnownOperationOwner(Jwt jwt, String scope) {
+    if (jwt == null
+        || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))
+        || !exactlyScope(jwt, scope)) {
+      throw new AccessDeniedException("A recognized operation owner with the exact scope is required");
+    }
+    String clientId = jwt.getClaimAsString("client_id");
+    String subject = jwt.getSubject();
+    if (clientId == null || !clientId.equals(subject)) {
+      throw new AccessDeniedException("Operation owner client_id and subject must match");
+    }
+    try {
+      return WarehouseOperationSource.requireClientId(clientId);
+    } catch (IllegalArgumentException exception) {
+      throw new AccessDeniedException("Only a recognized operation owner may use this endpoint");
+    }
+  }
+
+  private WarehouseLifecycleReadinessOwner requireKnownLifecycleOwner(Jwt jwt, String scope) {
+    if (jwt == null
+        || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))
+        || !exactlyScope(jwt, scope)) {
+      throw new AccessDeniedException("A recognized lifecycle owner with the exact scope is required");
+    }
+    String clientId = jwt.getClaimAsString("client_id");
+    String subject = jwt.getSubject();
+    if (clientId == null || !clientId.equals(subject)) {
+      throw new AccessDeniedException("Lifecycle owner client_id and subject must match");
+    }
+    try {
+      return WarehouseLifecycleReadinessOwner.requireClientId(clientId);
+    } catch (IllegalArgumentException exception) {
+      throw new AccessDeniedException("Only a recognized lifecycle owner may use this endpoint");
     }
   }
 

@@ -7,7 +7,6 @@ const validValues = {
   city: "Санкт-Петербург",
   address: "",
   timeZone: "Europe/Moscow",
-  active: true,
   sortOrder: "2",
 }
 
@@ -19,7 +18,6 @@ describe("warehouse settings form", () => {
         city: "Санкт-Петербург",
         address: null,
         timeZone: "Europe/Moscow",
-        active: true,
         sortOrder: 2,
       },
       error: null,

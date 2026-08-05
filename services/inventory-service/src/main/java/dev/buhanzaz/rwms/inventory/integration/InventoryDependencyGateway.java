@@ -7,7 +7,20 @@ import java.util.UUID;
 import tools.jackson.databind.JsonNode;
 
 public interface InventoryDependencyGateway {
-  WarehouseMetadata warehouse(UUID warehouseId);
+  WarehouseOperation beginWarehouseOperation(
+      UUID warehouseId,
+      UUID operationId,
+      OffsetDateTime occurredAt,
+      WarehouseOperationDirection direction);
+
+  WarehouseAdmission warehouseAdmission(
+      UUID warehouseId, WarehouseOperationDirection direction);
+
+  WarehouseLifecycleReadinessWorkPage warehouseLifecycleReadinessWork(
+      UUID after, int limit);
+
+  WarehouseLifecycleReadinessConfirmation confirmWarehouseLifecycleReadiness(
+      UUID warehouseId, long expectedVersion);
 
   Capture createCapture(UUID idempotencyKey, CaptureRequest request);
 
@@ -30,6 +43,9 @@ public interface InventoryDependencyGateway {
   void reconcileFurniture(
       UUID inventoryId, UUID idempotencyKey, FurnitureReconciliationRequest request);
 
+  InventoryLossDisposition createInventoryLossDisposition(
+      UUID idempotencyKey, InventoryLossDispositionRequest request);
+
   FrozenPlan freezePlan(UUID idempotencyKey, JsonNode request);
 
   /**
@@ -50,7 +66,38 @@ public interface InventoryDependencyGateway {
     return true;
   }
 
-  record WarehouseMetadata(UUID id, long version, boolean active, String timeZone) {}
+  enum WarehouseOperationDirection {
+    INCOMING,
+    OUTGOING
+  }
+
+  record WarehouseOperation(
+      UUID warehouseId,
+      long warehouseVersion,
+      String lifecycleState,
+      WarehouseOperationDirection direction,
+      String timeZone,
+      OffsetDateTime timeZoneEffectiveFrom) {}
+
+  record WarehouseAdmission(
+      UUID warehouseId,
+      long warehouseVersion,
+      String lifecycleState,
+      WarehouseOperationDirection direction,
+      boolean admitted) {}
+
+  record WarehouseLifecycleReadinessWork(
+      UUID warehouseId, long warehouseVersion, String lifecycleState) {}
+
+  record WarehouseLifecycleReadinessWorkPage(
+      List<WarehouseLifecycleReadinessWork> items, UUID nextAfter) {}
+
+  record WarehouseLifecycleReadinessConfirmation(
+      UUID warehouseId,
+      long warehouseVersion,
+      String lifecycleState,
+      String readinessOwner,
+      OffsetDateTime confirmedAt) {}
 
   record CaptureRequest(
       UUID operationId, long technicalAttempt, String requestFingerprint, UUID warehouseId) {}
@@ -164,6 +211,7 @@ public interface InventoryDependencyGateway {
       long catalogVersion,
       String equipmentName,
       long currentStockQuantity,
+      Long stockBalanceVersion,
       List<FurnitureSnapshotCabin> cabins) {}
 
   record FurnitureSnapshotCabin(
@@ -186,6 +234,27 @@ public interface InventoryDependencyGateway {
       List<FurnitureReconciliationCabin> cabins) {}
 
   record FurnitureReconciliationCabin(UUID assetId, long quantity) {}
+
+  record InventoryLossDispositionRequest(
+      UUID inventorySessionId,
+      UUID findingId,
+      UUID warehouseId,
+      UUID equipmentId,
+      String equipmentName,
+      long expectedAssetVersion,
+      long quantity,
+      long expectedSourceBalanceVersion,
+      String reason,
+      String evidenceLink) {}
+
+  record InventoryLossDisposition(
+      UUID id,
+      UUID inventorySessionId,
+      UUID findingId,
+      UUID warehouseId,
+      UUID assetId,
+      String disposition,
+      String state) {}
 
   record FrozenPlan(
       UUID warehouseId,

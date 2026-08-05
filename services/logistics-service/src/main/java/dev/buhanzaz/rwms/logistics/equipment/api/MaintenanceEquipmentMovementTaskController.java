@@ -4,8 +4,13 @@ import dev.buhanzaz.rwms.logistics.equipment.api.EquipmentMovementTaskApiModels.
 import dev.buhanzaz.rwms.logistics.equipment.api.EquipmentMovementTaskApiModels.EquipmentMovementTaskResponse;
 import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskProcessor;
 import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskService;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
 import jakarta.validation.Valid;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
@@ -28,8 +33,12 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 @RequestMapping("/api/internal/logistics/v1/maintenance/equipment-movement-tasks")
 public class MaintenanceEquipmentMovementTaskController {
+  private static final UUID MAINTENANCE_ACTOR =
+      UUID.nameUUIDFromBytes("rwms:maintenance-service".getBytes(StandardCharsets.UTF_8));
+
   private final EquipmentMovementTaskService service;
   private final EquipmentMovementTaskProcessor processor;
+  private final LogisticsWarehouseLifecycle warehouseLifecycle;
   private final LogisticsAuthorizer access;
 
   @PostMapping
@@ -38,8 +47,15 @@ public class MaintenanceEquipmentMovementTaskController {
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody CreateMaintenanceEquipmentMovementTaskRequest request) {
     access.requireMaintenanceEquipmentMovementIntake(jwt);
+    var admission =
+        warehouseLifecycle.prepareEquipmentMovement(
+            MAINTENANCE_ACTOR,
+            idempotencyKey,
+            List.of(
+                new AdmissionRequirement(
+                    request.warehouseId(), WarehouseOperationDirection.OUTGOING)));
     EquipmentMovementTaskService.CreateResult result =
-        service.createFromMaintenance(idempotencyKey, request);
+        service.createFromMaintenance(idempotencyKey, request, admission);
     processor.processUntilIdle(result.response().id());
     EquipmentMovementTaskResponse response = service.getMaintenance(result.response().id());
     ResponseEntity.BodyBuilder builder =

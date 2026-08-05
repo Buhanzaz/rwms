@@ -400,10 +400,19 @@ class InventoryIdempotencyRecoveryIntegrationTest {
             invocation ->
                 new InventoryEventStore.AppendResult(UUID.randomUUID(), 0, "e".repeat(64)));
 
-    when(dependencies.warehouse(warehouseId))
+    when(dependencies.beginWarehouseOperation(
+            eq(warehouseId),
+            any(UUID.class),
+            any(OffsetDateTime.class),
+            eq(InventoryDependencyGateway.WarehouseOperationDirection.INCOMING)))
         .thenReturn(
-            new InventoryDependencyGateway.WarehouseMetadata(
-                warehouseId, 4, true, "Europe/Moscow"));
+            new InventoryDependencyGateway.WarehouseOperation(
+                warehouseId,
+                4,
+                "ACTIVE",
+                InventoryDependencyGateway.WarehouseOperationDirection.INCOMING,
+                "Europe/Moscow",
+                OffsetDateTime.parse("2026-01-01T00:00:00Z")));
     when(dependencies.createCapture(any(UUID.class), any(InventoryDependencyGateway.CaptureRequest.class)))
         .thenAnswer(
             invocation -> {

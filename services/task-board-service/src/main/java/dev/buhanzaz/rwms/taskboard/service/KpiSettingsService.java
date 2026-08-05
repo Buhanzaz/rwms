@@ -13,6 +13,7 @@ import dev.buhanzaz.rwms.taskboard.repository.KpiPaletteRepository;
 import dev.buhanzaz.rwms.taskboard.repository.KpiWorkScheduleRepository;
 import dev.buhanzaz.rwms.taskboard.repository.WarehouseKpiSettingsRepository;
 import dev.buhanzaz.rwms.taskboard.repository.WarehouseMetadataRepository;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.Comparator;
@@ -36,17 +37,18 @@ public class KpiSettingsService {
   private final KpiWorkScheduleRepository scheduleRepository;
   private final KpiSettingsMapper mapper;
   private final JdbcTemplate jdbc;
+  private final WarehouseTimeZoneGateway timeZones;
 
   @Transactional
   public WarehouseKpiSettingsResponse get(UUID warehouseId) {
     WarehouseMetadata warehouse = warehouse(warehouseId);
+    String currentTimeZone = currentTimeZone(warehouse.getId());
     var stored = settingsRepository.findByWarehouseId(warehouseId);
     if (stored.isEmpty()) {
-      return mapper.toWarehouseKpiSettingsResponse(
-          WarehouseKpiSettings.create(warehouseId, warehouse.getTimeZone()));
+      return mapper.toWarehouseKpiSettingsResponse(WarehouseKpiSettings.create(warehouseId, currentTimeZone));
     }
     WarehouseKpiSettings settings = stored.orElseThrow();
-    synchronize(settings, warehouse);
+    synchronize(settings, currentTimeZone);
     return response(settings);
   }
 
@@ -160,26 +162,28 @@ public class KpiSettingsService {
 
   private WarehouseKpiSettings loadOrCreate(UUID warehouseId, long expectedVersion) {
     WarehouseMetadata warehouse = warehouse(warehouseId);
+    String currentTimeZone = currentTimeZone(warehouse.getId());
     var existing = settingsRepository.findByWarehouseId(warehouseId);
     if (existing.isEmpty()) {
       if (expectedVersion != 0) {
         throw stale(0, expectedVersion);
       }
-      return WarehouseKpiSettings.create(warehouseId, warehouse.getTimeZone());
+      return WarehouseKpiSettings.create(warehouseId, currentTimeZone);
     }
     WarehouseKpiSettings settings = existing.orElseThrow();
-    synchronize(settings, warehouse);
+    synchronize(settings, currentTimeZone);
     requireVersion(settings, expectedVersion);
     return settings;
   }
 
   private WarehouseKpiSettings requireSettings(UUID warehouseId) {
     WarehouseMetadata warehouse = warehouse(warehouseId);
+    String currentTimeZone = currentTimeZone(warehouse.getId());
     WarehouseKpiSettings settings =
         settingsRepository
             .findByWarehouseId(warehouseId)
             .orElseThrow(() -> new NotFoundException("Настройки KPI склада не найдены"));
-    synchronize(settings, warehouse);
+    synchronize(settings, currentTimeZone);
     return settings;
   }
 
@@ -190,9 +194,13 @@ public class KpiSettingsService {
         .orElseThrow(() -> new NotFoundException("Склад не найден или неактивен"));
   }
 
-  private void synchronize(WarehouseKpiSettings settings, WarehouseMetadata warehouse) {
-    settings.synchronizeTimeZone(warehouse.getTimeZone());
-    LocalDate today = LocalDate.now(ZoneId.of(warehouse.getTimeZone()));
+  private String currentTimeZone(UUID warehouseId) {
+    return timeZones.timeZoneAt(warehouseId, Instant.now()).timeZone().getId();
+  }
+
+  private void synchronize(WarehouseKpiSettings settings, String currentTimeZone) {
+    settings.synchronizeTimeZone(currentTimeZone);
+    LocalDate today = LocalDate.now(ZoneId.of(currentTimeZone));
     if (settings.promoteSchedule(today)) {
       settingsRepository.saveAndFlush(settings);
     }

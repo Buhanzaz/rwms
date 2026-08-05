@@ -16,10 +16,14 @@ import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementLocationKin
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
 import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskService;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -44,7 +48,11 @@ class CabinFurnitureTaskServiceTest {
   void changedDesiredCompositionCreatesAWorkerTaskFromTheAssetDelta() {
     LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
     EquipmentMovementTaskService movementTasks = mock(EquipmentMovementTaskService.class);
-    CabinFurnitureTaskService service = new CabinFurnitureTaskService(dependencies, movementTasks);
+    LogisticsWarehouseLifecycle warehouseLifecycle = mock(LogisticsWarehouseLifecycle.class);
+    CabinFurnitureTaskService service =
+        new CabinFurnitureTaskService(dependencies, movementTasks, warehouseLifecycle);
+    AdmissionTicket admission = admission();
+    when(warehouseLifecycle.disabledTicket(any(), any(), any(), any())).thenReturn(admission);
     var plan = changedPlan();
     when(
             dependencies.planCabinFurnitureMovements(
@@ -52,7 +60,7 @@ class CabinFurnitureTaskServiceTest {
                 RENTAL_ITEM,
                 List.of(new LogisticsDependencyGateway.CabinFurnitureRequirement(EQUIPMENT, 2L))))
         .thenReturn(plan);
-    when(movementTasks.create(eq(ACTOR), eq(IDEMPOTENCY_KEY), any()))
+    when(movementTasks.create(eq(ACTOR), eq(IDEMPOTENCY_KEY), any(), eq(admission)))
         .thenReturn(
             new EquipmentMovementTaskService.CreateResult(createdTaskResponse(), false));
 
@@ -72,7 +80,8 @@ class CabinFurnitureTaskServiceTest {
 
     ArgumentCaptor<CreateEquipmentMovementTaskRequest> request =
         ArgumentCaptor.forClass(CreateEquipmentMovementTaskRequest.class);
-    verify(movementTasks).create(eq(ACTOR), eq(IDEMPOTENCY_KEY), request.capture());
+    verify(movementTasks)
+        .create(eq(ACTOR), eq(IDEMPOTENCY_KEY), request.capture(), eq(admission));
     assertThat(request.getValue().warehouseId()).isEqualTo(WAREHOUSE);
     assertThat(request.getValue().unitNumber()).isEqualTo("БЫТ-930");
     assertThat(request.getValue().plannedDurationMinutes()).isEqualTo(60);
@@ -92,7 +101,11 @@ class CabinFurnitureTaskServiceTest {
   void matchingDesiredCompositionDoesNotCreateAnUnneededWorkerTask() {
     LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
     EquipmentMovementTaskService movementTasks = mock(EquipmentMovementTaskService.class);
-    CabinFurnitureTaskService service = new CabinFurnitureTaskService(dependencies, movementTasks);
+    LogisticsWarehouseLifecycle warehouseLifecycle = mock(LogisticsWarehouseLifecycle.class);
+    CabinFurnitureTaskService service =
+        new CabinFurnitureTaskService(dependencies, movementTasks, warehouseLifecycle);
+    AdmissionTicket admission = admission();
+    when(warehouseLifecycle.disabledTicket(any(), any(), any(), any())).thenReturn(admission);
     when(
             dependencies.planCabinFurnitureMovements(
                 WAREHOUSE,
@@ -116,6 +129,21 @@ class CabinFurnitureTaskServiceTest {
     assertThat(result.taskId()).isNull();
     assertThat(result.lineCount()).isZero();
     verifyNoInteractions(movementTasks);
+    verify(warehouseLifecycle).consume(admission);
+  }
+
+  private static AdmissionTicket admission() {
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    List<AdmissionRequirement> requirements =
+        List.of(
+            new AdmissionRequirement(
+                WAREHOUSE, WarehouseOperationDirection.OUTGOING));
+    return new AdmissionTicket(
+        UUID.randomUUID(),
+        requirements,
+        now,
+        Map.of(WAREHOUSE, now.toLocalDate()),
+        true);
   }
 
   private static LogisticsDependencyGateway.CabinFurnitureMovementPlan changedPlan() {

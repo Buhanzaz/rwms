@@ -32,11 +32,15 @@ import org.springframework.transaction.annotation.Transactional;
 public class WarehouseKpiClock {
   private final WarehouseKpiSettingsRepository settings;
   private final KpiWorkScheduleRepository schedules;
+  private final WarehouseTimeZoneGateway timeZones;
 
   public WarehouseKpiClock(
-      WarehouseKpiSettingsRepository settings, KpiWorkScheduleRepository schedules) {
+      WarehouseKpiSettingsRepository settings,
+      KpiWorkScheduleRepository schedules,
+      WarehouseTimeZoneGateway timeZones) {
     this.settings = settings;
     this.schedules = schedules;
+    this.timeZones = timeZones;
   }
 
   @Transactional(readOnly = true)
@@ -47,22 +51,10 @@ public class WarehouseKpiClock {
       return Duration.between(fromInclusive, toExclusive).toSeconds();
     }
 
-    ZoneId zone = context.zone();
-    LocalDate firstDate = fromInclusive.atZone(zone).toLocalDate();
-    LocalDate lastDate = toExclusive.minusNanos(1).atZone(zone).toLocalDate();
     long total = 0;
-    for (LocalDate date = firstDate; !date.isAfter(lastDate); date = date.plusDays(1)) {
-      Instant dayStart = date.atStartOfDay(zone).toInstant();
-      Instant dayEnd = date.plusDays(1).atStartOfDay(zone).toInstant();
-      Instant sliceStart = fromInclusive.isAfter(dayStart) ? fromInclusive : dayStart;
-      Instant sliceEnd = toExclusive.isBefore(dayEnd) ? toExclusive : dayEnd;
-      KpiWorkScheduleRevision revision = revisionAt(context.revisions(), date);
-      total =
-          Math.addExact(
-              total,
-              revision == null
-                  ? Duration.between(sliceStart, sliceEnd).toSeconds()
-                  : schedule(zone, revision).countedDuration(sliceStart, sliceEnd).toSeconds());
+    for (WarehouseTimeZoneGateway.TimeZoneSegment segment :
+        timeZones.timeline(warehouseId, fromInclusive, toExclusive)) {
+      total = Math.addExact(total, countedSeconds(context, segment));
     }
     return total;
   }
@@ -74,15 +66,24 @@ public class WarehouseKpiClock {
       return new ScheduleMoment(ScheduleState.WORKING, null, null);
     }
 
-    ZoneId zone = context.zone();
+    List<WarehouseTimeZoneGateway.TimeZoneSegment> zoneTimeline =
+        timeZones.timeline(warehouseId, instant, WarehouseTimeZoneGateway.FAR_FUTURE);
+    WarehouseTimeZoneGateway.TimeZoneSegment activeZone = zoneTimeline.getFirst();
+    ZoneId zone = activeZone.timeZone();
     LocalDate date = instant.atZone(zone).toLocalDate();
     KpiWorkScheduleRevision revision = revisionAt(context.revisions(), date);
+    Instant nextZoneChange =
+        activeZone.toExclusive().equals(WarehouseTimeZoneGateway.FAR_FUTURE)
+            ? null
+            : activeZone.toExclusive();
     if (revision == null) {
       Instant firstEffective =
           context.revisions().getFirst().getEffectiveFrom().atStartOfDay(zone).toInstant();
       return new ScheduleMoment(
           ScheduleState.WORKING,
-          firstEffective.isAfter(instant) ? atOffset(firstEffective) : null,
+          firstEffective.isAfter(instant)
+              ? atOffset(earliest(firstEffective, nextZoneChange))
+              : nextZoneChange == null ? null : atOffset(nextZoneChange),
           null);
     }
 
@@ -110,12 +111,7 @@ public class WarehouseKpiClock {
             .filter(value -> value.isAfter(instant))
             .min(Comparator.naturalOrder())
             .orElse(null);
-    Instant next =
-        nextBoundary == null
-            ? nextRevision
-            : nextRevision == null || nextBoundary.isBefore(nextRevision)
-                ? nextBoundary
-                : nextRevision;
+    Instant next = earliest(nextBoundary, nextRevision, nextZoneChange);
     return new ScheduleMoment(
         state, next == null ? null : atOffset(next), context.dataAvailableFrom());
   }
@@ -127,20 +123,51 @@ public class WarehouseKpiClock {
 
   @Transactional(readOnly = true)
   public LocalDate localDate(UUID warehouseId, Instant instant) {
-    WarehouseKpiSettings warehouseSettings =
-        settings
-            .findByWarehouseId(warehouseId)
-            .orElseThrow(() -> new IllegalStateException("Настройки KPI склада не найдены"));
-    return instant.atZone(ZoneId.of(warehouseSettings.getTimeZone())).toLocalDate();
+    settings
+        .findByWarehouseId(warehouseId)
+        .orElseThrow(() -> new IllegalStateException("Настройки KPI склада не найдены"));
+    return instant.atZone(timeZones.timeZoneAt(warehouseId, instant).timeZone()).toLocalDate();
   }
 
   private ScheduleContext context(UUID warehouseId) {
     WarehouseKpiSettings warehouseSettings = settings.findByWarehouseId(warehouseId).orElse(null);
     if (warehouseSettings == null) return null;
     return new ScheduleContext(
-        ZoneId.of(warehouseSettings.getTimeZone()),
         warehouseSettings.getDataAvailableFrom(),
         schedules.findAllByWarehouseIdAndScheduledTrueOrderByEffectiveFromAsc(warehouseId));
+  }
+
+  private long countedSeconds(
+      ScheduleContext context, WarehouseTimeZoneGateway.TimeZoneSegment segment) {
+    ZoneId zone = segment.timeZone();
+    LocalDate firstDate = segment.fromInclusive().atZone(zone).toLocalDate();
+    LocalDate lastDate = segment.toExclusive().minusNanos(1).atZone(zone).toLocalDate();
+    long total = 0;
+    for (LocalDate date = firstDate; !date.isAfter(lastDate); date = date.plusDays(1)) {
+      Instant dayStart = date.atStartOfDay(zone).toInstant();
+      Instant dayEnd = date.plusDays(1).atStartOfDay(zone).toInstant();
+      Instant sliceStart =
+          segment.fromInclusive().isAfter(dayStart) ? segment.fromInclusive() : dayStart;
+      Instant sliceEnd = segment.toExclusive().isBefore(dayEnd) ? segment.toExclusive() : dayEnd;
+      KpiWorkScheduleRevision revision = revisionAt(context.revisions(), date);
+      total =
+          Math.addExact(
+              total,
+              revision == null
+                  ? Duration.between(sliceStart, sliceEnd).toSeconds()
+                  : schedule(zone, revision).countedDuration(sliceStart, sliceEnd).toSeconds());
+    }
+    return total;
+  }
+
+  private static Instant earliest(Instant... values) {
+    Instant result = null;
+    for (Instant value : values) {
+      if (value != null && (result == null || value.isBefore(result))) {
+        result = value;
+      }
+    }
+    return result;
   }
 
   private static KpiWorkScheduleRevision revisionAt(
@@ -181,5 +208,5 @@ public class WarehouseKpiClock {
       ScheduleState state, java.time.OffsetDateTime nextTransitionAt, LocalDate dataAvailableFrom) {}
 
   private record ScheduleContext(
-      ZoneId zone, LocalDate dataAvailableFrom, List<KpiWorkScheduleRevision> revisions) {}
+      LocalDate dataAvailableFrom, List<KpiWorkScheduleRevision> revisions) {}
 }

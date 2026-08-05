@@ -7,9 +7,9 @@ import { Button } from "@/components/ui/button"
 import {
   createEmptyWarehouseFilters,
   getWarehouseStatusOptions,
-  type WarehouseActivityFilter,
   type WarehouseFilterOptions,
   type WarehouseFiltersState,
+  type WarehouseLifecycleFilter,
 } from "./warehouse-settings-filtering"
 
 function hasActiveFilters(filters: WarehouseFiltersState) {
@@ -74,7 +74,7 @@ export function WarehouseSettingsFilters({
         selected={filters.timeZones}
         onApply={(timeZones) => onChange({ ...filters, timeZones })}
       />
-      <SearchableMultiSelectFilter<WarehouseActivityFilter>
+      <SearchableMultiSelectFilter<WarehouseLifecycleFilter>
         label="Статус"
         options={getWarehouseStatusOptions()}
         selected={filters.statuses}

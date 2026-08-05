@@ -11,6 +11,7 @@ import dev.buhanzaz.rwms.asset.api.RentalItemHtmlImportApiModels.HtmlImportMedia
 import dev.buhanzaz.rwms.asset.api.RentalItemHtmlImportApiModels.HtmlImportRowDecision;
 import dev.buhanzaz.rwms.asset.api.RentalItemHtmlImportApiModels.HtmlImportStatusMapping;
 import dev.buhanzaz.rwms.asset.api.RentalItemHtmlImportApiModels.ReplaceHtmlImportMediaRequest;
+import dev.buhanzaz.rwms.asset.api.RentalItemHtmlImportApiModels.RetryHtmlImportMediaRequest;
 import dev.buhanzaz.rwms.asset.api.RentalItemHtmlImportApiModels.SkipHtmlImportMediaRequest;
 import dev.buhanzaz.rwms.asset.api.RentalItemHtmlImportApiModels.UpdateHtmlImportPlanRequest;
 import dev.buhanzaz.rwms.asset.domain.RentalItemHtmlImportRowAction;
@@ -21,12 +22,17 @@ import dev.buhanzaz.rwms.asset.integration.media.MediaAssetImportClient;
 import dev.buhanzaz.rwms.asset.integration.media.MediaAssetImportJob;
 import dev.buhanzaz.rwms.asset.integration.media.MediaAssetImportSource;
 import dev.buhanzaz.rwms.asset.service.AssetConflictException;
+import dev.buhanzaz.rwms.asset.service.AssetDependencyException;
+import dev.buhanzaz.rwms.asset.service.AssetService;
 import dev.buhanzaz.rwms.asset.service.RentalItemHtmlImportService;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import org.springframework.http.HttpStatus;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -39,6 +45,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 @SpringBootTest(
@@ -66,6 +73,7 @@ class RentalItemHtmlImportServiceIntegrationTest {
   }
 
   @Autowired RentalItemHtmlImportService imports;
+  @Autowired AssetService assets;
   @Autowired JdbcTemplate jdbc;
   @Autowired StubMediaAssetImportClient media;
 
@@ -148,6 +156,7 @@ class RentalItemHtmlImportServiceIntegrationTest {
                 assertThat(source.publicUrl())
                     .isEqualTo(
                         "https://disk.yandex.ru/d/AbCdEfGhIjKlMn"));
+    assertThat(media.preflightTransactionActive.get()).isFalse();
     assertThat(jdbc.queryForObject(
             """
             select count(*)
@@ -201,6 +210,8 @@ class RentalItemHtmlImportServiceIntegrationTest {
               assertThat(binding.sourceRowId())
                   .isEqualTo(media.preflightSources.get().getFirst().sourceRowId());
             });
+    assertThat(media.getTransactionActive.get()).isFalse();
+    assertThat(media.activationTransactionActive.get()).isFalse();
 
     media.status.set(MediaAssetImportJob.Status.COMPLETED);
     imports.synchronizeMedia(preview.id());
@@ -291,6 +302,7 @@ class RentalItemHtmlImportServiceIntegrationTest {
         .containsExactly(
             new MediaAssetImportSource(
                 rowId, "https://disk.yandex.ru/d/QrStUvWxYz0123"));
+    assertThat(media.replacementTransactionActive.get()).isFalse();
     assertThat(jdbc.queryForObject(
             "select count(*) from rental_item_html_import_row where parsed_json like ?",
             Integer.class,
@@ -328,6 +340,36 @@ class RentalItemHtmlImportServiceIntegrationTest {
     assertThat(completed.state())
         .isEqualTo(RentalItemHtmlImportState.COMPLETED_WITH_WARNINGS);
     assertThat(completed.failureCode()).isNull();
+  }
+
+  @Test
+  void invokesMediaRetryOutsideTheLocalDatabaseTransaction() {
+    media.reset();
+    UUID actorSubjectId = UUID.randomUUID();
+    var preview =
+        imports.create(
+            actorSubjectId,
+            UUID.randomUUID(),
+            SPB2_WAREHOUSE_ID,
+            html("HTML-" + UUID.randomUUID()).getBytes(StandardCharsets.UTF_8));
+    imports.commit(
+        actorSubjectId,
+        UUID.randomUUID(),
+        preview.id(),
+        new CommitHtmlImportRequest(preview.version()));
+    media.status.set(MediaAssetImportJob.Status.FAILED);
+    imports.synchronizeMedia(preview.id());
+    var failed = imports.get(preview.id());
+
+    var requeued =
+        imports.retryMedia(
+            actorSubjectId,
+            UUID.randomUUID(),
+            preview.id(),
+            new RetryHtmlImportMediaRequest(failed.version()));
+
+    assertThat(requeued.state()).isEqualTo(RentalItemHtmlImportState.ASSETS_COMMITTED);
+    assertThat(media.retryTransactionActive.get()).isFalse();
   }
 
   @Test
@@ -595,6 +637,234 @@ class RentalItemHtmlImportServiceIntegrationTest {
         .isEqualTo(RentalItemStatus.FREE.name());
   }
 
+  @Test
+  void rejectsMergeToALiveCabinWithoutMutatingIt() {
+    media.reset();
+    UUID actorSubjectId = UUID.randomUUID();
+    String number = "HTML-" + UUID.randomUUID();
+    var original =
+        imports.create(
+            actorSubjectId,
+            UUID.randomUUID(),
+            SPB2_WAREHOUSE_ID,
+            html(number, "Свободная", "").getBytes(StandardCharsets.UTF_8));
+    imports.commit(
+        actorSubjectId,
+        UUID.randomUUID(),
+        original.id(),
+        new CommitHtmlImportRequest(original.version()));
+    UUID liveCabinId =
+        jdbc.queryForObject(
+            """
+            select id from rental_item
+            where warehouse_id=? and display_canonical_number=?
+            """,
+            UUID.class,
+            SPB2_WAREHOUSE_ID,
+            number.toUpperCase(java.util.Locale.ROOT));
+    Map<String, Object> before =
+        jdbc.queryForMap(
+            "select version,status,passport_json,general_comment from rental_item where id=?", liveCabinId);
+
+    var duplicate =
+        imports.create(
+            actorSubjectId,
+            UUID.randomUUID(),
+            SPB2_WAREHOUSE_ID,
+            html(number, "Свободная", "").getBytes(StandardCharsets.UTF_8));
+    var duplicateRow = imports.rowPage(duplicate.id(), 0, 10).content().getFirst();
+    assertThat(duplicate.state()).isEqualTo(RentalItemHtmlImportState.REVIEW_REQUIRED);
+    assertThat(duplicateRow.existingRentalItem()).isNotNull();
+
+    assertThatThrownBy(
+            () ->
+                imports.updatePlan(
+                    duplicate.id(),
+                    new UpdateHtmlImportPlanRequest(
+                        duplicate.version(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(
+                            new HtmlImportRowDecision(
+                                duplicateRow.sourceRowId(),
+                                RentalItemHtmlImportRowAction.MERGE,
+                                duplicateRow.proposedNumber(),
+                                liveCabinId,
+                                duplicateRow.existingRentalItem().version(),
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                Map.of())))))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("MERGE is retired");
+
+    assertThat(
+            jdbc.queryForMap(
+                "select version,status,passport_json,general_comment from rental_item where id=?", liveCabinId))
+        .isEqualTo(before);
+  }
+
+  @Test
+  void rejectsWorkflowStatusMappingsBeforeAnyCabinIsCreated() {
+    UUID actorSubjectId = UUID.randomUUID();
+    String number = "HTML-" + UUID.randomUUID();
+    var preview =
+        imports.create(
+            actorSubjectId,
+            UUID.randomUUID(),
+            SPB2_WAREHOUSE_ID,
+            html(number, "Аренда", "").getBytes(StandardCharsets.UTF_8));
+
+    assertThat(preview.state()).isEqualTo(RentalItemHtmlImportState.REVIEW_REQUIRED);
+    assertThatThrownBy(
+            () ->
+                imports.updatePlan(
+                    preview.id(),
+                    new UpdateHtmlImportPlanRequest(
+                        preview.version(),
+                        List.of(),
+                        List.of(),
+                        List.of(new HtmlImportStatusMapping("Аренда", RentalItemStatus.RENTED)),
+                        List.of())))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("HTML status mapping is invalid");
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from rental_item
+                where warehouse_id=? and display_canonical_number=?
+                """,
+                Integer.class,
+                SPB2_WAREHOUSE_ID,
+                number.toUpperCase(java.util.Locale.ROOT)))
+        .isZero();
+  }
+
+  @Test
+  void recordsInitialFurnitureAsAnImmutableReceiptAndReplaysItWithoutAnotherIncrement() {
+    UUID actorSubjectId = UUID.randomUUID();
+    String number = "HTML-" + UUID.randomUUID();
+    String source =
+        html(number, "Свободная", "")
+            .replace(
+                "<td data-field=\"UF_FURNITURE_JSON\" data-value=\"\"></td>",
+                """
+                <td data-field="UF_FURNITURE_JSON"
+                    data-value='[{"id":7,"qty":2}]'></td>
+                """);
+    var preview =
+        imports.create(
+            actorSubjectId,
+            UUID.randomUUID(),
+            SPB2_WAREHOUSE_ID,
+            source.getBytes(StandardCharsets.UTF_8));
+    var row = imports.rowPage(preview.id(), 0, 10).content().getFirst();
+    var committed =
+        imports.commit(
+            actorSubjectId,
+            UUID.randomUUID(),
+            preview.id(),
+            new CommitHtmlImportRequest(preview.version()));
+
+    assertThat(committed.state()).isEqualTo(RentalItemHtmlImportState.COMPLETED);
+    Map<String, Object> receipt =
+        jdbc.queryForMap(
+            """
+            select rental_item_id,equipment_id,target_balance_id,quantity,reason,actor_subject_id
+            from rental_item_html_import_equipment_receipt
+            where import_id=? and source_row_id=?
+            """,
+            preview.id(),
+            row.sourceRowId());
+    assertThat(receipt.get("reason")).isEqualTo("HTML_IMPORT_INITIAL_CONTENTS");
+    assertThat(receipt.get("actor_subject_id")).isEqualTo(actorSubjectId);
+    assertThat(receipt.get("quantity")).isEqualTo(2L);
+    UUID cabinId = (UUID) receipt.get("rental_item_id");
+    UUID equipmentId = (UUID) receipt.get("equipment_id");
+    UUID targetBalanceId = (UUID) receipt.get("target_balance_id");
+    assertThat(
+            jdbc.queryForObject(
+                "select quantity from equipment_balance where id=?", Long.class, targetBalanceId))
+        .isEqualTo(2L);
+
+    assets.recordHtmlImportEquipmentReceipts(
+        preview.id(), row.sourceRowId(), actorSubjectId, cabinId, Map.of(equipmentId, 2L));
+
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from rental_item_html_import_equipment_receipt
+                where import_id=? and source_row_id=?
+                """,
+                Integer.class,
+                preview.id(),
+                row.sourceRowId()))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select quantity from equipment_balance where id=?", Long.class, targetBalanceId))
+        .isEqualTo(2L);
+  }
+
+  @Test
+  void recoversADurableCommittingIntentAfterTheMediaPreflightResponseIsLost() {
+    media.reset();
+    media.loseNextPreflightResponse.set(true);
+    UUID actorSubjectId = UUID.randomUUID();
+    String number = "HTML-" + UUID.randomUUID();
+    var preview =
+        imports.create(
+            actorSubjectId,
+            UUID.randomUUID(),
+            SPB2_WAREHOUSE_ID,
+            html(number).getBytes(StandardCharsets.UTF_8));
+
+    assertThatThrownBy(
+            () ->
+                imports.commit(
+                    actorSubjectId,
+                    UUID.randomUUID(),
+                    preview.id(),
+                    new CommitHtmlImportRequest(preview.version())))
+        .isInstanceOf(AssetDependencyException.class)
+        .hasMessageContaining("lost media preflight response");
+    assertThat(imports.get(preview.id()).state()).isEqualTo(RentalItemHtmlImportState.COMMITTING);
+    assertThat(media.preflightCalls.get()).isEqualTo(1);
+    assertThat(media.preflightTransactionActive.get()).isFalse();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from rental_item
+                where warehouse_id=? and display_canonical_number=?
+                """,
+                Integer.class,
+                SPB2_WAREHOUSE_ID,
+                number.toUpperCase(java.util.Locale.ROOT)))
+        .isZero();
+
+    imports.synchronizeMedia(preview.id());
+
+    assertThat(imports.get(preview.id()).state())
+        .isEqualTo(RentalItemHtmlImportState.ASSETS_COMMITTED);
+    assertThat(media.preflightCalls.get()).isEqualTo(2);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from rental_item
+                where warehouse_id=? and display_canonical_number=?
+                """,
+                Integer.class,
+                SPB2_WAREHOUSE_ID,
+                number.toUpperCase(java.util.Locale.ROOT)))
+        .isOne();
+  }
+
   private static String html(String number) {
     return html(
         number,
@@ -650,6 +920,13 @@ class RentalItemHtmlImportServiceIntegrationTest {
         activationBindings = new AtomicReference<>();
     private final AtomicReference<List<MediaAssetImportSource>>
         replacementSources = new AtomicReference<>();
+    private final AtomicReference<Boolean> preflightTransactionActive = new AtomicReference<>();
+    private final AtomicReference<Boolean> getTransactionActive = new AtomicReference<>();
+    private final AtomicReference<Boolean> activationTransactionActive = new AtomicReference<>();
+    private final AtomicReference<Boolean> replacementTransactionActive = new AtomicReference<>();
+    private final AtomicReference<Boolean> retryTransactionActive = new AtomicReference<>();
+    private final AtomicInteger preflightCalls = new AtomicInteger();
+    private final AtomicBoolean loseNextPreflightResponse = new AtomicBoolean();
     private UUID importId;
     private UUID warehouseId;
 
@@ -658,6 +935,13 @@ class RentalItemHtmlImportServiceIntegrationTest {
       preflightSources.set(null);
       activationBindings.set(null);
       replacementSources.set(null);
+      preflightTransactionActive.set(null);
+      getTransactionActive.set(null);
+      activationTransactionActive.set(null);
+      replacementTransactionActive.set(null);
+      retryTransactionActive.set(null);
+      preflightCalls.set(0);
+      loseNextPreflightResponse.set(false);
       importId = null;
       warehouseId = null;
     }
@@ -671,12 +955,19 @@ class RentalItemHtmlImportServiceIntegrationTest {
       importId = assetImportId;
       warehouseId = requestedWarehouseId;
       preflightSources.set(List.copyOf(sources));
+      preflightTransactionActive.set(TransactionSynchronizationManager.isActualTransactionActive());
+      preflightCalls.incrementAndGet();
+      if (loseNextPreflightResponse.compareAndSet(true, false)) {
+        throw new AssetDependencyException(
+            HttpStatus.SERVICE_UNAVAILABLE, "lost media preflight response");
+      }
       return job(MediaAssetImportJob.Status.PREFLIGHT_PENDING);
     }
 
     @Override
     public MediaAssetImportJob get(UUID requestedJobId) {
       assertThat(requestedJobId).isEqualTo(jobId);
+      getTransactionActive.set(TransactionSynchronizationManager.isActualTransactionActive());
       return job(status.get());
     }
 
@@ -686,6 +977,7 @@ class RentalItemHtmlImportServiceIntegrationTest {
         List<MediaAssetImportBinding> bindings,
         UUID idempotencyKey) {
       assertThat(requestedJobId).isEqualTo(jobId);
+      activationTransactionActive.set(TransactionSynchronizationManager.isActualTransactionActive());
       activationBindings.set(List.copyOf(bindings));
       status.set(MediaAssetImportJob.Status.ACTIVATION_PENDING);
       return job(MediaAssetImportJob.Status.ACTIVATION_PENDING);
@@ -695,6 +987,7 @@ class RentalItemHtmlImportServiceIntegrationTest {
     public MediaAssetImportJob retry(
         UUID requestedJobId, UUID idempotencyKey) {
       assertThat(requestedJobId).isEqualTo(jobId);
+      retryTransactionActive.set(TransactionSynchronizationManager.isActualTransactionActive());
       status.set(MediaAssetImportJob.Status.PREFLIGHT_PENDING);
       return job(MediaAssetImportJob.Status.PREFLIGHT_PENDING);
     }
@@ -705,6 +998,7 @@ class RentalItemHtmlImportServiceIntegrationTest {
         List<MediaAssetImportSource> sources,
         UUID idempotencyKey) {
       assertThat(requestedJobId).isEqualTo(jobId);
+      replacementTransactionActive.set(TransactionSynchronizationManager.isActualTransactionActive());
       replacementSources.set(List.copyOf(sources));
       status.set(MediaAssetImportJob.Status.PREFLIGHT_PENDING);
       return job(MediaAssetImportJob.Status.PREFLIGHT_PENDING);

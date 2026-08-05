@@ -172,13 +172,41 @@ public class AssetReplayVerifier {
       value.put("quantity", rs.getLong("quantity"));
       result.put(new StreamKey(AssetAggregateType.EQUIPMENT_BALANCE, id), node(value));
     });
-    jdbc.query("select id,equipment_id,source_balance_id,target_balance_id,quantity,movement_kind from equipment_movement", rs -> {
+    jdbc.query("""
+        select movement.id,movement.equipment_id,movement.source_balance_id,
+          movement.target_balance_id,movement.quantity,movement.movement_kind,
+          context.equipment_category_snapshot,
+          context.source_warehouse_id,context.source_rental_item_id,
+          context.source_location_kind,context.target_warehouse_id,
+          context.target_rental_item_id,context.target_location_kind,
+          context.capture_origin
+        from equipment_movement movement
+        join equipment_movement_context context on context.movement_id=movement.id
+        """, rs -> {
       UUID id = rs.getObject("id", UUID.class);
-      result.put(new StreamKey(AssetAggregateType.EQUIPMENT_MOVEMENT, id), node(Map.of(
-          "movementId", id.toString(), "equipmentId", rs.getObject("equipment_id", UUID.class).toString(),
-          "sourceBalanceId", rs.getObject("source_balance_id", UUID.class).toString(),
-          "targetBalanceId", rs.getObject("target_balance_id", UUID.class).toString(),
-          "quantity", rs.getLong("quantity"), "movementKind", rs.getString("movement_kind"))));
+      Map<String, Object> value = new LinkedHashMap<>();
+      value.put("movementId", id.toString());
+      value.put("equipmentId", rs.getObject("equipment_id", UUID.class).toString());
+      value.put("sourceBalanceId", rs.getObject("source_balance_id", UUID.class).toString());
+      value.put("targetBalanceId", rs.getObject("target_balance_id", UUID.class).toString());
+      value.put("quantity", rs.getLong("quantity"));
+      value.put("movementKind", rs.getString("movement_kind"));
+      if ("AT_MOVEMENT".equals(rs.getString("capture_origin"))) {
+        value.put("equipmentCategory", rs.getString("equipment_category_snapshot"));
+        value.put("sourceWarehouseId", rs.getObject("source_warehouse_id", UUID.class).toString());
+        UUID sourceRentalItemId = rs.getObject("source_rental_item_id", UUID.class);
+        value.put(
+            "sourceRentalItemId",
+            sourceRentalItemId == null ? null : sourceRentalItemId.toString());
+        value.put("sourceLocationKind", rs.getString("source_location_kind"));
+        value.put("targetWarehouseId", rs.getObject("target_warehouse_id", UUID.class).toString());
+        UUID targetRentalItemId = rs.getObject("target_rental_item_id", UUID.class);
+        value.put(
+            "targetRentalItemId",
+            targetRentalItemId == null ? null : targetRentalItemId.toString());
+        value.put("targetLocationKind", rs.getString("target_location_kind"));
+      }
+      result.put(new StreamKey(AssetAggregateType.EQUIPMENT_MOVEMENT, id), node(value));
     });
     jdbc.query("select id,equipment_id,warehouse_id,quantity,state from equipment_allocation_hold", rs -> {
       UUID id = rs.getObject("id", UUID.class);

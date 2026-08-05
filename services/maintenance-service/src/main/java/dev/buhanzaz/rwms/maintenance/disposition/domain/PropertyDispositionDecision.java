@@ -82,14 +82,20 @@ public class PropertyDispositionDecision {
   @Column(name = "contents_mode", length = 32)
   private PropertyDispositionContentsMode contentsMode;
 
-  @Column(name = "expected_asset_version", nullable = false)
-  private long expectedAssetVersion;
+  @Column(name = "expected_asset_version")
+  private Long expectedAssetVersion;
 
   @Column(name = "expected_source_balance_version")
   private Long expectedSourceBalanceVersion;
 
   @Column(name = "quantity")
   private Long quantity;
+
+  @Column(name = "maintenance_custody_claim_id")
+  private UUID maintenanceCustodyClaimId;
+
+  @Column(name = "maintenance_custody_version")
+  private Long maintenanceCustodyVersion;
 
   @Column(name = "reason", nullable = false, length = 2000)
   private String reason;
@@ -197,6 +203,8 @@ public class PropertyDispositionDecision {
     value.expectedAssetVersion = draft.expectedAssetVersion();
     value.expectedSourceBalanceVersion = draft.expectedSourceBalanceVersion();
     value.quantity = draft.quantity();
+    value.maintenanceCustodyClaimId = draft.maintenanceCustodyClaimId();
+    value.maintenanceCustodyVersion = draft.maintenanceCustodyVersion();
     value.reason = required(draft.reason(), "Disposition reason", 2000);
     value.evidenceLink = optional(draft.evidenceLink(), 2048);
     value.sourceRepairId = draft.sourceRepairId();
@@ -389,6 +397,36 @@ public class PropertyDispositionDecision {
     recoveryVersion++;
   }
 
+  /**
+   * Requeues a quarantined processing claim without falsifying the business state. This is used
+   * when a local read/commit failed before the processor could safely persist a business-level
+   * quarantine, and after an already applied effect while only lease reconciliation remains.
+   */
+  public void recoverProcessingReconciliation(
+      long expectedVersion,
+      long expectedRecoveryVersion,
+      String recoveryActorSnapshot,
+      String mandatoryRecoveryReason) {
+    requireExpectedVersion(expectedVersion);
+    if (expectedRecoveryVersion < 0 || expectedRecoveryVersion != recoveryVersion) {
+      throw new PropertyDispositionVersionConflictException("Disposition recovery version is stale");
+    }
+    if (state != PropertyDispositionState.APPROVED
+        && state != PropertyDispositionState.MOVEMENT_PENDING
+        && state != PropertyDispositionState.EFFECT_PENDING
+        && state != PropertyDispositionState.EFFECTIVE) {
+      throw new PropertyDispositionConflictException(
+          "Only an active property disposition can recover processing reconciliation");
+    }
+    if (recoveryVersion == Long.MAX_VALUE) {
+      throw new PropertyDispositionConflictException("Disposition recovery version is exhausted");
+    }
+    recoveryReason = required(mandatoryRecoveryReason, "Recovery reason", 2000);
+    this.recoveryActorSnapshot = actorSnapshot(recoveryActorSnapshot);
+    recoveredAt = now();
+    recoveryVersion++;
+  }
+
   public boolean requiresMovement() {
     return contents.stream().anyMatch(line -> line.getMoveQuantity() > 0);
   }
@@ -416,8 +454,7 @@ public class PropertyDispositionDecision {
         || draft.assetKind() == null
         || draft.assetId() == null
         || draft.kind() == null
-        || draft.source() == null
-        || draft.expectedAssetVersion() < 0) {
+        || draft.source() == null) {
       throw new IllegalArgumentException("Disposition decision identity is incomplete");
     }
     if (!validSha256(draft.requestSha256())) {
@@ -433,15 +470,34 @@ public class PropertyDispositionDecision {
           "Manual disposition requires subject-bound idempotency identity");
     }
     if (draft.assetKind() == PropertyDispositionAssetKind.EQUIPMENT) {
+      boolean custody = draft.maintenanceCustodyClaimId() != null
+          || draft.maintenanceCustodyVersion() != null;
       if (draft.quantity() == null
           || draft.quantity() <= 0
-          || draft.expectedSourceBalanceVersion() == null
-          || draft.expectedSourceBalanceVersion() < 0
           || draft.contentsMode() != null
           || !draft.contents().isEmpty()) {
-        throw new IllegalArgumentException("Equipment disposition requires quantity and source balance fence");
+        throw new IllegalArgumentException("Equipment disposition requires a positive quantity");
       }
-    } else if (draft.quantity() != null || draft.expectedSourceBalanceVersion() != null) {
+      if (custody) {
+        if (draft.maintenanceCustodyClaimId() == null
+            || draft.maintenanceCustodyVersion() == null
+            || draft.maintenanceCustodyVersion() < 0
+            || draft.expectedAssetVersion() != null
+            || draft.expectedSourceBalanceVersion() != null) {
+          throw new IllegalArgumentException("Custody equipment disposition fence is invalid");
+        }
+      } else if (draft.expectedAssetVersion() == null
+          || draft.expectedAssetVersion() < 0
+          || draft.expectedSourceBalanceVersion() == null
+          || draft.expectedSourceBalanceVersion() < 0) {
+        throw new IllegalArgumentException("Stock equipment disposition fence is invalid");
+      }
+    } else if (draft.expectedAssetVersion() == null
+        || draft.expectedAssetVersion() < 0
+        || draft.quantity() != null
+        || draft.expectedSourceBalanceVersion() != null
+        || draft.maintenanceCustodyClaimId() != null
+        || draft.maintenanceCustodyVersion() != null) {
       throw new IllegalArgumentException("Cabin disposition must not contain equipment quantity or balance fence");
     }
 
@@ -593,7 +649,7 @@ public class PropertyDispositionDecision {
     return contentsMode;
   }
 
-  public long getExpectedAssetVersion() {
+  public Long getExpectedAssetVersion() {
     return expectedAssetVersion;
   }
 
@@ -603,6 +659,14 @@ public class PropertyDispositionDecision {
 
   public Long getQuantity() {
     return quantity;
+  }
+
+  public UUID getMaintenanceCustodyClaimId() {
+    return maintenanceCustodyClaimId;
+  }
+
+  public Long getMaintenanceCustodyVersion() {
+    return maintenanceCustodyVersion;
   }
 
   public String getReason() {

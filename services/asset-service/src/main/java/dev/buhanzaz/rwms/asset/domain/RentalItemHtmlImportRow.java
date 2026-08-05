@@ -120,6 +120,21 @@ public class RentalItemHtmlImportRow {
     }
   }
 
+  /**
+   * A created cabin is bound only after the local asset transaction succeeds.
+   * The source action deliberately remains CREATE: binding it as MERGE would
+   * falsely imply that an existing cabin was mutated.
+   */
+  public void bindCreatedRentalItem(UUID rentalItemId) {
+    if (rentalItemId == null || action != RentalItemHtmlImportRowAction.CREATE) {
+      throw new IllegalStateException("Only a created HTML import row can bind a cabin");
+    }
+    if (targetRentalItemId != null && !targetRentalItemId.equals(rentalItemId)) {
+      throw new IllegalStateException("HTML import row is already bound to another cabin");
+    }
+    targetRentalItemId = rentalItemId;
+  }
+
   @PrePersist
   void prePersist() {
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);

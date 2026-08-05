@@ -42,7 +42,10 @@ class AuthInventoryServiceClientIntegrationTest {
 
     @Test
     void mintsOnlySeparateExactScopeServiceTokens() throws Exception {
-        assertExactToken("warehouse.read");
+        assertExactToken("warehouse.timezone.read");
+        assertExactToken("warehouse.operation.mark");
+        assertExactToken("warehouse.lifecycle.read");
+        assertExactToken("warehouse.lifecycle.confirm");
         assertExactToken("asset.inventory");
         assertExactToken("maintenance.inventory");
     }
@@ -60,20 +63,20 @@ class AuthInventoryServiceClientIntegrationTest {
 
     @Test
     void rejectsUserAndWrongSubjectClientOrAudienceOverrides() throws Exception {
-        assertInvalidRequest(tokenRequestBuilder("warehouse.read").param("principal_type", "USER"));
-        assertInvalidRequest(tokenRequestBuilder("warehouse.read").param("sub", "other-service"));
+        assertInvalidRequest(tokenRequestBuilder("warehouse.lifecycle.read").param("principal_type", "USER"));
+        assertInvalidRequest(tokenRequestBuilder("warehouse.lifecycle.read").param("sub", "other-service"));
         assertInvalidRequest(tokenRequestBuilder("asset.inventory").param("subject", "other-service"));
         assertRejected(tokenRequestBuilder("maintenance.inventory").param("client_id", "other-service"));
-        assertInvalidRequest(tokenRequestBuilder("warehouse.read").param("audience", "other-audience"));
-        assertInvalidRequest(tokenRequestBuilder("warehouse.read").param("resource", "other-audience"));
-        assertRejected(tokenRequestBuilder("warehouse.read")
+        assertInvalidRequest(tokenRequestBuilder("warehouse.lifecycle.read").param("audience", "other-audience"));
+        assertInvalidRequest(tokenRequestBuilder("warehouse.lifecycle.read").param("resource", "other-audience"));
+        assertRejected(tokenRequestBuilder("warehouse.lifecycle.read")
                 .param("client_id", "inventory-service", "inventory-service"));
 
         assertRejected(post("/oauth2/token")
                 .with(httpBasic("other-service", "wrong-secret"))
                 .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                 .param("grant_type", "client_credentials")
-                .param("scope", "warehouse.read"));
+                .param("scope", "warehouse.lifecycle.read"));
     }
 
     @Test

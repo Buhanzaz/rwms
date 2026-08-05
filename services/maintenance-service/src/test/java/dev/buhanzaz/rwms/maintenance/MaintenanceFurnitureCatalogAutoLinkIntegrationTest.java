@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -142,7 +143,7 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
   }
 
   @Test
-  void existingFurnitureReferenceIsPreservedAndOtherMaterialsDoNotCallAsset() {
+  void existingFurnitureReferenceIsConfirmedAndOtherMaterialsDoNotCallAsset() {
     UUID catalogId = insertDraftCatalog();
     UUID furnitureId = UUID.randomUUID();
     UUID equipmentId = UUID.randomUUID();
@@ -150,6 +151,10 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
     UUID ordinaryMaterialId = UUID.randomUUID();
     FurnitureEquipmentReference existing =
         new FurnitureEquipmentReference(equipmentId, "Chair");
+    when(dependencies.ensureFurnitureEquipment(chairId, "Chair"))
+        .thenReturn(
+            new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
+                equipmentId, "Chair"));
 
     service.changeCatalog(
         catalogId,
@@ -165,7 +170,7 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
                     null)),
             List.of()));
 
-    verifyNoInteractions(dependencies);
+    verify(dependencies).ensureFurnitureEquipment(chairId, "Chair");
     assertThat(service.catalogNodes(catalogId))
         .filteredOn(node -> node.id().equals(chairId))
         .singleElement()

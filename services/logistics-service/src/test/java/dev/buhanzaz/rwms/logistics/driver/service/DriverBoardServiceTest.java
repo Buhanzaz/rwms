@@ -19,6 +19,7 @@ import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskReposito
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Optional;
 import java.util.UUID;
@@ -48,6 +49,13 @@ class DriverBoardServiceTest {
         .thenReturn(
             new LogisticsDependencyGateway.WarehouseIdentity(
                 warehouseId, 0, true, "UTC"));
+    when(dependencies.warehouseTimeZoneAt(
+            org.mockito.ArgumentMatchers.eq(warehouseId),
+            org.mockito.ArgumentMatchers.any(OffsetDateTime.class)))
+        .thenAnswer(
+            invocation ->
+                new LogisticsDependencyGateway.WarehouseTimeZone(
+                    warehouseId, "UTC", invocation.getArgument(1)));
   }
 
   @Test

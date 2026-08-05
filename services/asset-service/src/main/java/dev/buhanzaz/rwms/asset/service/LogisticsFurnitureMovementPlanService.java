@@ -160,31 +160,15 @@ public class LogisticsFurnitureMovementPlanService {
 
   private List<EquipmentBalanceResponse> eligibleSources(
       List<EquipmentBalanceResponse> balances, UUID targetRentalItemId) {
-    Set<UUID> candidateCabins =
-        balances.stream()
-            .filter(balance -> balance.locationKind() == BalanceLocationKind.CABIN_NON_RENTED)
-            .map(EquipmentBalanceResponse::rentalItemId)
-            .filter(Objects::nonNull)
-            .filter(id -> !id.equals(targetRentalItemId))
-            .collect(Collectors.toSet());
-    Set<UUID> reservedCabins =
-        candidateCabins.isEmpty()
-            ? Set.of()
-            : orderReservations
-                .findAllByRentalItemIdInAndState(
-                    List.copyOf(candidateCabins), OrderUnitReservationState.ACTIVE)
-                .stream()
-                .map(OrderUnitReservation::getRentalItemId)
-                .collect(Collectors.toSet());
     return balances.stream()
+        .filter(EquipmentBalanceResponse::allocatable)
         .filter(balance -> balance.availableStock() > 0)
         .filter(
             balance ->
                 balance.locationKind() == BalanceLocationKind.STOCK
                     || (balance.locationKind() == BalanceLocationKind.CABIN_NON_RENTED
                         && balance.rentalItemId() != null
-                        && !balance.rentalItemId().equals(targetRentalItemId)
-                        && !reservedCabins.contains(balance.rentalItemId())))
+                        && !balance.rentalItemId().equals(targetRentalItemId)))
         .sorted(
             Comparator.comparingInt(
                     (EquipmentBalanceResponse balance) ->

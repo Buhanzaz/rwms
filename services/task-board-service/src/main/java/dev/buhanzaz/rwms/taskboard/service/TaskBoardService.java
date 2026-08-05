@@ -11,6 +11,8 @@ import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardProjectionWriter;
 import dev.buhanzaz.rwms.taskboard.mapper.LogisticsTaskResponseMapper;
 import dev.buhanzaz.rwms.taskboard.repository.*;
+import dev.buhanzaz.rwms.taskboard.service.WarehouseLifecycleFence.AdmissionPermit;
+import dev.buhanzaz.rwms.taskboard.service.WarehouseLifecycleGateway.OperationDirection;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
@@ -30,13 +32,17 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Supplier;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.JsonNode;
@@ -78,6 +84,8 @@ public class TaskBoardService {
   private final WarehouseKpiClock kpiClock;
   private final GroupKpiEvidenceService kpiEvidence;
   private final WorkerInvalidationHub workerInvalidations;
+  private final WarehouseLifecycleFence warehouseLifecycleFence;
+  private final TransactionTemplate lifecycleMutations;
 
   public TaskBoardService(
       BoardTaskRepository tasks,
@@ -99,7 +107,9 @@ public class TaskBoardService {
       TaskBoardEntryOwnerProofService ownerProofs,
       WarehouseKpiClock kpiClock,
       GroupKpiEvidenceService kpiEvidence,
-      WorkerInvalidationHub workerInvalidations) {
+      WorkerInvalidationHub workerInvalidations,
+      WarehouseLifecycleFence warehouseLifecycleFence,
+      PlatformTransactionManager transactionManager) {
     this.tasks = tasks;
     this.entries = entries;
     this.queues = queues;
@@ -120,6 +130,8 @@ public class TaskBoardService {
     this.kpiClock = kpiClock;
     this.kpiEvidence = kpiEvidence;
     this.workerInvalidations = workerInvalidations;
+    this.warehouseLifecycleFence = warehouseLifecycleFence;
+    this.lifecycleMutations = new TransactionTemplate(transactionManager);
   }
 
   @Transactional(readOnly = true)
@@ -259,13 +271,13 @@ public class TaskBoardService {
         readList(entry.getSourceMediaReferences(), new TypeReference<>() {}));
   }
 
-  @Transactional
+  @Transactional(propagation = Propagation.NEVER)
   public TaskBoardSnapshot createTask(UUID warehouseId, CreateBoardTaskRequest request) {
     BoardTask task = createTask(warehouseId, request, null, false);
-    return snapshot(warehouseId, task.getScheduledDate(), true);
+    return inLifecycleMutation(() -> snapshot(warehouseId, task.getScheduledDate(), true));
   }
 
-  @Transactional
+  @Transactional(propagation = Propagation.NEVER)
   public BoardTaskRegistrationDto registerExternalTask(
       String sourceClientId, RegisterExternalTaskRequest request) {
     TaskSourceReferenceDto source = sourceReferenceFor(sourceClientId, request.source());
@@ -291,19 +303,23 @@ public class TaskBoardService {
             null,
             dailyCapacity,
             source,
-            request.lane() == null ? TaskLane.SCHEDULED : request.lane());
-    return registrationDto(task);
+            request.lane() == null ? TaskLane.SCHEDULED : request.lane(),
+            OperationDirection.INCOMING);
+    return inLifecycleMutation(
+        () -> registrationDto(requireTask(task.getWarehouseId(), task.getId())));
   }
 
   /**
    * Registers a source-owned task whose generated detail is limited to typed furniture operations.
    * The persisted flag fences completion at the reservation deadline without changing generic tasks.
    */
-  @Transactional
+  @Transactional(propagation = Propagation.NEVER)
   public LogisticsTaskSnapshot registerLogisticsEquipmentMovementTask(
       RegisterLogisticsEquipmentMovementTaskRequest request) {
     NormalizedEquipmentMovementRequest normalized = normalizeEquipmentMovementRequest(request);
-    WorkQueue queue = requireFurnitureMovementQueue(request.warehouseId());
+    UUID furnitureMovementQueueDefinitionId =
+        inLifecycleMutation(
+            () -> requireFurnitureMovementQueue(request.warehouseId()).getDefinition().getId());
     BoardTask task =
         createTask(
             request.warehouseId(),
@@ -316,7 +332,7 @@ public class TaskBoardService {
                 request.deadlineAt(),
                 List.of(
                     new RouteStepRequest(
-                        queue.getDefinition().getId(),
+                        furnitureMovementQueueDefinitionId,
                         equipmentMovementText(normalized.operations()),
                         request.plannedDurationMinutes()))),
             LOGISTICS_SOURCE_CLIENT_ID,
@@ -325,8 +341,12 @@ public class TaskBoardService {
             equipmentMovementFingerprint(request, normalized),
             null,
             null,
-            TaskLane.SCHEDULED);
-    return logisticsTaskMapper.toLogisticsTaskSnapshot(requireEquipmentMovementTask(task));
+            TaskLane.SCHEDULED,
+            equipmentMovementAdmissionDirection(normalized));
+    return inLifecycleMutation(
+        () ->
+            logisticsTaskMapper.toLogisticsTaskSnapshot(
+                requireEquipmentMovementTask(requireTask(task.getWarehouseId(), task.getId()))));
   }
 
   private WorkQueue requireFurnitureMovementQueue(UUID warehouseId) {
@@ -369,7 +389,8 @@ public class TaskBoardService {
         null,
         null,
         null,
-        TaskLane.SCHEDULED);
+        TaskLane.SCHEDULED,
+        OperationDirection.INCOMING);
   }
 
   private BoardTask createTask(
@@ -388,7 +409,8 @@ public class TaskBoardService {
         suppliedFingerprint,
         null,
         null,
-        TaskLane.SCHEDULED);
+        TaskLane.SCHEDULED,
+        OperationDirection.INCOMING);
   }
 
   private BoardTask createTask(
@@ -400,7 +422,8 @@ public class TaskBoardService {
       String suppliedFingerprint,
       Integer dailyCapacity,
       TaskSourceReferenceDto sourceReference,
-      TaskLane taskLane) {
+      TaskLane taskLane,
+      OperationDirection admissionDirection) {
     TaskLane effectiveLane = taskLane == null ? TaskLane.SCHEDULED : taskLane;
     if (effectiveLane == TaskLane.CURRENT
         && (sourceReference == null
@@ -409,31 +432,62 @@ public class TaskBoardService {
       throw new IllegalArgumentException(
           "Только logistics-service может создать текущее логистическое задание");
     }
-    if (request.externalTaskId() != null) {
-      lock("external-task:" + request.externalTaskId());
-      var existing = tasks.findByExternalTaskId(request.externalTaskId());
-      if (existing.isPresent()) {
-        BoardTask task = existing.get();
-        String requestFingerprint =
-            suppliedFingerprint == null
-                ? fingerprint(
+    BoardTask existingTask =
+        inLifecycleMutationNullable(
+            () ->
+                existingExternalTaskForCreate(
                     warehouseId,
                     request,
-                    (MAINTENANCE_SOURCE_CLIENT_ID.equals(sourceClientId)
-                            && dailyCapacity != null)
-                        || request.scheduledDate() == null
-                        ? task.getScheduledDate()
-                        : request.scheduledDate(),
-                    request.priority() == null ? task.getPriority() : priority(request.priority()),
-                    effectiveLane)
-                : suppliedFingerprint;
-        if (warehouseId.equals(task.getWarehouseId())
-            && task.getRequestFingerprint() != null
-            && task.getRequestFingerprint().equals(requestFingerprint)) {
-          requireExactSourceReference(task, sourceClientId, sourceReference);
-          return task;
-        }
-        throw new ConflictException("Задача с externalTaskId уже существует с другими данными");
+                    sourceClientId,
+                    dailyCapacity,
+                    sourceReference,
+                    effectiveLane,
+                    suppliedFingerprint));
+    if (existingTask != null) {
+      return existingTask;
+    }
+    AdmissionPermit admission =
+        warehouseLifecycleFence.acquireAdmission(warehouseId, admissionDirection);
+    return inLifecycleMutation(
+        () ->
+            createTaskAfterAdmission(
+                warehouseId,
+                request,
+                sourceClientId,
+                allowRepeatedQueues,
+                completionDeadlineEnforced,
+                suppliedFingerprint,
+                dailyCapacity,
+                sourceReference,
+                effectiveLane,
+                admission));
+  }
+
+  private BoardTask createTaskAfterAdmission(
+      UUID warehouseId,
+      CreateBoardTaskRequest request,
+      String sourceClientId,
+      boolean allowRepeatedQueues,
+      boolean completionDeadlineEnforced,
+      String suppliedFingerprint,
+      Integer dailyCapacity,
+      TaskSourceReferenceDto sourceReference,
+      TaskLane effectiveLane,
+      AdmissionPermit admission) {
+    warehouseLifecycleFence.terminalizeAdmission(admission);
+    if (request.externalTaskId() != null) {
+      lock("external-task:" + request.externalTaskId());
+      BoardTask existingTask =
+          existingExternalTaskForCreate(
+              warehouseId,
+              request,
+              sourceClientId,
+              dailyCapacity,
+              sourceReference,
+              effectiveLane,
+              suppliedFingerprint);
+      if (existingTask != null) {
+        return existingTask;
       }
     }
     lockQueueMutation(warehouseId);
@@ -521,6 +575,60 @@ public class TaskBoardService {
     kpiEvidence.refreshWarehouse(warehouseId, now());
     publishTaskAvailabilityAfterCommit(task);
     return task;
+  }
+
+  /** Executes the local task-board CAS mutation only after lifecycle admission has completed. */
+  private <T> T inLifecycleMutation(Supplier<T> mutation) {
+    T result = inLifecycleMutationNullable(mutation);
+    if (result == null) {
+      throw new IllegalStateException("Lifecycle task-board mutation returned no result");
+    }
+    return result;
+  }
+
+  private <T> T inLifecycleMutationNullable(Supplier<T> mutation) {
+    return lifecycleMutations.execute(status -> mutation.get());
+  }
+
+  /**
+   * Checks an idempotent external registration without taking the task mutation advisory lock.
+   * The caller repeats this check under that lock after lifecycle admission, so a concurrent create
+   * cannot turn an owner-side read into a duplicate local task.
+   */
+  private BoardTask existingExternalTaskForCreate(
+      UUID warehouseId,
+      CreateBoardTaskRequest request,
+      String sourceClientId,
+      Integer dailyCapacity,
+      TaskSourceReferenceDto sourceReference,
+      TaskLane effectiveLane,
+      String suppliedFingerprint) {
+    if (request.externalTaskId() == null) {
+      return null;
+    }
+    BoardTask task = tasks.findByExternalTaskId(request.externalTaskId()).orElse(null);
+    if (task == null) {
+      return null;
+    }
+    String requestFingerprint =
+        suppliedFingerprint == null
+            ? fingerprint(
+                warehouseId,
+                request,
+                (MAINTENANCE_SOURCE_CLIENT_ID.equals(sourceClientId) && dailyCapacity != null)
+                        || request.scheduledDate() == null
+                    ? task.getScheduledDate()
+                    : request.scheduledDate(),
+                request.priority() == null ? task.getPriority() : priority(request.priority()),
+                effectiveLane)
+            : suppliedFingerprint;
+    if (warehouseId.equals(task.getWarehouseId())
+        && task.getRequestFingerprint() != null
+        && task.getRequestFingerprint().equals(requestFingerprint)) {
+      requireExactSourceReference(task, sourceClientId, sourceReference);
+      return task;
+    }
+    throw new ConflictException("Задача с externalTaskId уже существует с другими данными");
   }
 
   private void publishTaskAvailabilityAfterCommit(BoardTask task) {
@@ -1190,39 +1298,32 @@ public class TaskBoardService {
     return registrationDto(task);
   }
 
-  @Transactional
+  @Transactional(propagation = Propagation.NEVER)
   public BoardTaskRegistrationDto relocateExternalTask(
       String sourceClientId,
       UUID externalTaskId,
       RelocateExternalTaskRequest request) {
-    lock("external-task:" + externalTaskId);
-    var replay =
-        jdbc.query(
-            """
-            select resulting_task_version
-              from task_relocation_receipt
-             where source_client_id=?
-               and external_task_id=?
-               and target_warehouse_id=?
-               and expected_task_version=?
-            """,
-            (result, row) -> result.getLong("resulting_task_version"),
-            sourceClientId,
-            externalTaskId,
-            request.targetWarehouseId(),
-            request.expectedTaskVersion())
-            .stream()
-            .findFirst();
-    if (replay.isPresent()) {
-      BoardTask task = ownedExternalTask(sourceClientId, externalTaskId);
-      if (!task.getWarehouseId().equals(request.targetWarehouseId())
-          || task.getVersion() != replay.orElseThrow()) {
-        throw new ConflictException(
-            "Состояние задачи не соответствует сохранённому результату переноса");
-      }
-      return registrationDto(task);
+    RelocationPreflight preflight =
+        inLifecycleMutation(() -> relocationPreflight(sourceClientId, externalTaskId, request));
+    if (preflight.completed() != null) {
+      return preflight.completed();
     }
+    AdmissionPermit admission =
+        warehouseLifecycleFence.acquireRelocation(
+            preflight.sourceWarehouseId(), preflight.targetWarehouseId());
+    return inLifecycleMutation(
+        () -> relocateExternalTaskAfterAdmission(sourceClientId, externalTaskId, request, admission));
+  }
 
+  private BoardTaskRegistrationDto relocateExternalTaskAfterAdmission(
+      String sourceClientId,
+      UUID externalTaskId,
+      RelocateExternalTaskRequest request,
+      AdmissionPermit admission) {
+    warehouseLifecycleFence.terminalizeAdmission(admission);
+    lock("external-task:" + externalTaskId);
+    BoardTaskRegistrationDto replay = relocationReplay(sourceClientId, externalTaskId, request);
+    if (replay != null) return replay;
     BoardTask task = ownedExternalTask(sourceClientId, externalTaskId);
     checkVersion(task.getVersion(), request.expectedTaskVersion(), "Задача");
     UUID sourceWarehouseId = task.getWarehouseId();
@@ -1334,6 +1435,60 @@ public class TaskBoardService {
     return task;
   }
 
+  /**
+   * Verifies an idempotent relocation receipt without taking the task advisory lock. The caller
+   * repeats the lookup under that lock after the remote lifecycle read has completed.
+   */
+  private BoardTaskRegistrationDto relocationReplay(
+      String sourceClientId, UUID externalTaskId, RelocateExternalTaskRequest request) {
+    Long resultingVersion =
+        jdbc.query(
+                """
+                select resulting_task_version
+                  from task_relocation_receipt
+                 where source_client_id=?
+                   and external_task_id=?
+                   and target_warehouse_id=?
+                   and expected_task_version=?
+                """,
+                (result, row) -> result.getLong("resulting_task_version"),
+                sourceClientId,
+                externalTaskId,
+                request.targetWarehouseId(),
+                request.expectedTaskVersion())
+            .stream()
+            .findFirst()
+            .orElse(null);
+    if (resultingVersion == null) {
+      return null;
+    }
+    BoardTask task = ownedExternalTask(sourceClientId, externalTaskId);
+    if (!task.getWarehouseId().equals(request.targetWarehouseId())
+        || task.getVersion() != resultingVersion) {
+      throw new ConflictException("Состояние задачи не соответствует сохранённому результату переноса");
+    }
+    return registrationDto(task);
+  }
+
+  private RelocationPreflight relocationPreflight(
+      String sourceClientId, UUID externalTaskId, RelocateExternalTaskRequest request) {
+    BoardTaskRegistrationDto replay = relocationReplay(sourceClientId, externalTaskId, request);
+    if (replay != null) {
+      return new RelocationPreflight(replay, null, null);
+    }
+    BoardTask task = ownedExternalTask(sourceClientId, externalTaskId);
+    checkVersion(task.getVersion(), request.expectedTaskVersion(), "Задача");
+    UUID sourceWarehouseId = task.getWarehouseId();
+    UUID targetWarehouseId = request.targetWarehouseId();
+    if (sourceWarehouseId.equals(targetWarehouseId)) {
+      return new RelocationPreflight(registrationDto(task), null, null);
+    }
+    return new RelocationPreflight(null, sourceWarehouseId, targetWarehouseId);
+  }
+
+  private record RelocationPreflight(
+      BoardTaskRegistrationDto completed, UUID sourceWarehouseId, UUID targetWarehouseId) {}
+
   private TaskSourceReferenceDto sourceReferenceFor(
       String sourceClientId, TaskSourceReferenceDto source) {
     if (source == null) return null;
@@ -1412,6 +1567,17 @@ public class TaskBoardService {
     List<NormalizedEquipmentMovementOperation> operations =
         request.operations().stream().map(this::normalizeEquipmentMovementOperation).toList();
     return new NormalizedEquipmentMovementRequest(unitNumber, operations);
+  }
+
+  /** A mixed move still introduces furniture, so it is never a DRAINING drain operation. */
+  private OperationDirection equipmentMovementAdmissionDirection(
+      NormalizedEquipmentMovementRequest movement) {
+    return movement.operations().stream()
+            .allMatch(
+                operation ->
+                    operation.direction() == EquipmentMovementDirection.TAKE_FROM_CABIN)
+        ? OperationDirection.OUTGOING
+        : OperationDirection.INCOMING;
   }
 
   private NormalizedEquipmentMovementOperation normalizeEquipmentMovementOperation(

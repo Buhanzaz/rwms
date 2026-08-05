@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Repository
 public class PropertyDispositionProcessingStore {
+  static final int MAX_CONSECUTIVE_FAILURES = 4;
   private static final String PENDING = "PENDING";
   private static final String IN_FLIGHT = "IN_FLIGHT";
   private static final String COMPLETED = "COMPLETED";
@@ -61,12 +62,12 @@ public class PropertyDispositionProcessingStore {
     UUID token = UUID.randomUUID();
     OffsetDateTime now = now();
     OffsetDateTime leaseUntil = now.plus(leaseDuration);
-    List<UUID> claimed = jdbc.query(
+    List<ClaimRow> claimed = jdbc.query(
         """
         insert into property_disposition_processing_claim(
           decision_id, claim_token, lease_owner, lease_until, status, attempt_count,
-          next_attempt_at, last_error_code, last_error_detail, updated_at)
-        values (?, ?, ?, ?, 'IN_FLIGHT', 1, ?, null, null, ?)
+          failure_count, next_attempt_at, last_error_code, last_error_detail, updated_at)
+        values (?, ?, ?, ?, 'IN_FLIGHT', 1, 0, ?, null, null, ?)
         on conflict (decision_id) do update
           set claim_token = excluded.claim_token,
               lease_owner = excluded.lease_owner,
@@ -79,14 +80,16 @@ public class PropertyDispositionProcessingStore {
                    and property_disposition_processing_claim.next_attempt_at <= ?)
              or (property_disposition_processing_claim.status = 'IN_FLIGHT'
                    and property_disposition_processing_claim.lease_until <= ?)
-        returning decision_id
+        returning decision_id,failure_count
         """,
-        (result, row) -> result.getObject("decision_id", UUID.class),
+        (result, row) ->
+            new ClaimRow(
+                result.getObject("decision_id", UUID.class),
+                result.getInt("failure_count")),
         decisionId,
         token,
         owner.trim(),
         leaseUntil,
-        now,
         now,
         now,
         now,
@@ -95,12 +98,12 @@ public class PropertyDispositionProcessingStore {
       return Optional.empty();
     }
     record(decisionId, token, "CLAIM", "CLAIMED", null, null);
-    return Optional.of(new Claim(decisionId, token));
+    return Optional.of(new Claim(decisionId, token, claimed.getFirst().failureCount()));
   }
 
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public void retrySoon(Claim claim, String phase) {
-    finish(claim, phase, PENDING, now(), "SUCCEEDED", null, null);
+    finish(claim, phase, PENDING, now(), "SUCCEEDED", null, null, false);
   }
 
   @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -108,7 +111,7 @@ public class PropertyDispositionProcessingStore {
     if (delay == null || delay.isNegative()) {
       throw new IllegalArgumentException("Property disposition wait delay is invalid");
     }
-    finish(claim, phase, PENDING, now().plus(delay), "WAITING", null, null);
+    finish(claim, phase, PENDING, now().plus(delay), "WAITING", null, null, false);
   }
 
   @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -124,12 +127,13 @@ public class PropertyDispositionProcessingStore {
         now().plus(delay),
         "RETRYABLE_FAILURE",
         safe(code, 128),
-        safe(detail, 2000));
+        safe(detail, 2000),
+        true);
   }
 
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public void completed(Claim claim, String phase) {
-    finish(claim, phase, COMPLETED, null, "COMPLETED", null, null);
+    finish(claim, phase, COMPLETED, null, "COMPLETED", null, null, false);
   }
 
   @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -141,7 +145,8 @@ public class PropertyDispositionProcessingStore {
         null,
         "QUARANTINED",
         safe(code, 128),
-        safe(detail, 2000));
+        safe(detail, 2000),
+        true);
   }
 
   /** Reopens a human-recovered decision in the caller's transaction. */
@@ -162,6 +167,7 @@ public class PropertyDispositionProcessingStore {
               lease_owner = null,
               lease_until = null,
               status = 'PENDING',
+              failure_count = 0,
               next_attempt_at = excluded.next_attempt_at,
               last_error_code = null,
               last_error_detail = null,
@@ -172,6 +178,24 @@ public class PropertyDispositionProcessingStore {
         now);
   }
 
+  @Transactional(readOnly = true)
+  public boolean isQuarantined(UUID decisionId) {
+    if (decisionId == null) {
+      throw new IllegalArgumentException("Property disposition decision ID is required");
+    }
+    return jdbc.query(
+        """
+        select status='QUARANTINED'
+          from property_disposition_processing_claim
+         where decision_id=?
+        """,
+        (result, ignored) -> result.getBoolean(1),
+        decisionId)
+        .stream()
+        .findFirst()
+        .orElse(false);
+  }
+
   private void finish(
       Claim claim,
       String phase,
@@ -179,7 +203,8 @@ public class PropertyDispositionProcessingStore {
       OffsetDateTime nextAttemptAt,
       String outcome,
       String code,
-      String detail) {
+      String detail,
+      boolean incrementFailure) {
     if (claim == null || phase == null || phase.isBlank() || phase.length() > 64) {
       throw new IllegalArgumentException("Property disposition processing completion is invalid");
     }
@@ -191,6 +216,7 @@ public class PropertyDispositionProcessingStore {
                lease_owner = null,
                lease_until = null,
                status = ?,
+               failure_count = case when ? then failure_count + 1 else 0 end,
                next_attempt_at = coalesce(?, next_attempt_at),
                last_error_code = ?,
                last_error_detail = ?,
@@ -200,6 +226,7 @@ public class PropertyDispositionProcessingStore {
            and status = 'IN_FLIGHT'
         """,
         targetStatus,
+        incrementFailure,
         nextAttemptAt,
         code,
         detail,
@@ -246,11 +273,21 @@ public class PropertyDispositionProcessingStore {
     return OffsetDateTime.now(ZoneOffset.UTC);
   }
 
-  public record Claim(UUID decisionId, UUID token) {
+  public record Claim(UUID decisionId, UUID token, int failureCount) {
     public Claim {
-      if (decisionId == null || token == null) {
+      if (decisionId == null || token == null || failureCount < 0) {
         throw new IllegalArgumentException("Property disposition processing claim identity is required");
       }
     }
+
+    public Claim(UUID decisionId, UUID token) {
+      this(decisionId, token, 0);
+    }
+
+    public boolean nextFailureExhaustsRetries() {
+      return failureCount + 1 >= MAX_CONSECUTIVE_FAILURES;
+    }
   }
+
+  private record ClaimRow(UUID decisionId, int failureCount) {}
 }

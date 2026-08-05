@@ -4,6 +4,7 @@ import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.inquiry.service.RentalSettingsService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.LogisticsDocumentView;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AddOrderUnitRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRequest;
@@ -63,6 +64,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -995,6 +997,38 @@ public class RentalOrderService {
       UUID idempotencyKey,
       UUID correlationId,
       CreateOrderRentalShipmentRequest request) {
+    return createRentalShipment(
+        actor, orderId, idempotencyKey, correlationId, request, null);
+  }
+
+  /**
+   * Returns the warehouse needed for admission without applying the mutable SAVED-state gate.
+   * That keeps a retry replayable after later order changes while still rejecting callers that
+   * lack write access to the warehouse before any admission intent is reserved.
+   */
+  public UUID rentalShipmentAdmissionWarehouse(OrderActor actor, UUID orderId) {
+    if (actor == null || orderId == null) {
+      throw new IllegalArgumentException("Rental shipment admission identity is invalid");
+    }
+    RentalOrder order = order(orderId);
+    access.requireVisible(actor, order);
+    UUID warehouseId = order.getWarehouseId();
+    if (!actor.writeScope()
+        || warehouseId == null
+        || !access.canEditWarehouse(actor, warehouseId)) {
+      throw new AccessDeniedException("Insufficient warehouse access");
+    }
+    return warehouseId;
+  }
+
+  @Transactional
+  public LogisticsDocumentService.CreateResult createRentalShipment(
+      OrderActor actor,
+      UUID orderId,
+      UUID idempotencyKey,
+      UUID correlationId,
+      CreateOrderRentalShipmentRequest request,
+      AdmissionTicket admission) {
     if (actor == null
         || orderId == null
         || idempotencyKey == null
@@ -1020,14 +1054,24 @@ public class RentalOrderService {
     access.requireRentalShipmentCreation(actor, order);
     requireVersion(order, request.expectedVersion());
     List<LogisticsDependencyGateway.OrderUnitReservation> units = readUnits(order);
-    return documents.createRentalOrderShipment(
-        actor.subjectId(),
-        idempotencyKey,
-        correlationId,
-        order,
-        units,
-        request,
-        checksum);
+    return admission == null
+        ? documents.createRentalOrderShipment(
+            actor.subjectId(),
+            idempotencyKey,
+            correlationId,
+            order,
+            units,
+            request,
+            checksum)
+        : documents.createRentalOrderShipment(
+            actor.subjectId(),
+            idempotencyKey,
+            correlationId,
+            order,
+            units,
+            request,
+            checksum,
+            admission);
   }
 
   private static String rentalShipmentChecksum(

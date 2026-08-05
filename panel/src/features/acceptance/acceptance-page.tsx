@@ -21,6 +21,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { useAuth } from "@/features/auth/use-auth"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
+import { canInitiatePropertyDisposition } from "@/features/write-offs/property-disposition-presentation"
 import {
   getRepairTask,
   listPendingRepairAcceptance,
@@ -119,7 +120,7 @@ export function AcceptancePage() {
   )
   const canManage = Boolean(
     selectedWarehouseId &&
-    hasWarehouseAccess(currentUser, selectedWarehouseId, "MANAGE")
+    canInitiatePropertyDisposition(currentUser, selectedWarehouseId)
   )
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()

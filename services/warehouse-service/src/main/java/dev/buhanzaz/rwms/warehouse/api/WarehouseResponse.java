@@ -10,4 +10,5 @@ public record WarehouseResponse(
     String address,
     String timeZone,
     boolean active,
+    String lifecycleState,
     Integer sortOrder) {}

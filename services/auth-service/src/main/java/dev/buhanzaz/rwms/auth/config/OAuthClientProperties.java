@@ -14,8 +14,22 @@ public record OAuthClientProperties(List<Client> clients) {
     static final String ASSET_CLIENT_ID = "asset-service";
     static final String ASSET_AUDIENCE = "rwms-services";
     static final String ASSET_SECRET_ENVIRONMENT = "ASSET_WAREHOUSE_CLIENT_SECRET";
-    static final Set<String> ASSET_SCOPES = Set.of("warehouse.read", "media.asset-import");
+    static final Set<String> ASSET_SCOPES = Set.of(
+            "warehouse.read",
+            "warehouse.timezone.read",
+            "warehouse.operation.mark",
+            "warehouse.lifecycle.read",
+            "warehouse.lifecycle.confirm",
+            "media.asset-import");
     static final String INVENTORY_CLIENT_ID = "inventory-service";
+    static final String TASK_BOARD_CLIENT_ID = "task-board-service";
+    static final String TASK_BOARD_AUDIENCE = "rwms-services";
+    static final Set<String> TASK_BOARD_SCOPES =
+            Set.of(
+                    "worker-credentials.manage",
+                    "warehouse.timezone.read",
+                    "warehouse.lifecycle.read",
+                    "warehouse.lifecycle.confirm");
     static final String WORKER_ANDROID_CLIENT_ID = "rwms-worker-android";
     public static final String MANAGER_ANDROID_CLIENT_ID = "rwms-manager-android";
     static final Set<String> MANAGER_ANDROID_SCOPES = Set.of(
@@ -28,12 +42,22 @@ public record OAuthClientProperties(List<Client> clients) {
     static final String INVENTORY_AUDIENCE = "rwms-services";
     static final String INVENTORY_SECRET_ENVIRONMENT = "INVENTORY_CLIENT_SECRET";
     static final Set<String> INVENTORY_SCOPES =
-            Set.of("warehouse.read", "asset.inventory", "maintenance.inventory");
+            Set.of(
+                    "warehouse.timezone.read",
+                    "warehouse.operation.mark",
+                    "warehouse.lifecycle.read",
+                    "warehouse.lifecycle.confirm",
+                    "asset.inventory",
+                    "maintenance.inventory");
     static final String LOGISTICS_CLIENT_ID = "logistics-service";
     static final String LOGISTICS_AUDIENCE = "rwms-services";
     static final String LOGISTICS_SECRET_ENVIRONMENT = "LOGISTICS_CLIENT_SECRET";
     static final Set<String> LOGISTICS_SCOPES = Set.of(
             "warehouse.logistics",
+            "warehouse.timezone.read",
+            "warehouse.operation.mark",
+            "warehouse.lifecycle.read",
+            "warehouse.lifecycle.confirm",
             "asset.logistics",
             "task-board.logistics",
             "maintenance.logistics",

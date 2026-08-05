@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.maintenance.disposition.repository;
 
 import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionDecision;
+import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionAssetKind;
 import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionKind;
 import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionSource;
 import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionState;
@@ -21,10 +22,10 @@ public interface PropertyDispositionDecisionRepository
     extends JpaRepository<PropertyDispositionDecision, UUID> {
   Optional<PropertyDispositionDecision> findByIdAndWarehouseId(UUID id, UUID warehouseId);
 
-  Optional<PropertyDispositionDecision> findBySourceAndRootRepairId(
-      PropertyDispositionSource source, UUID rootRepairId);
+  Optional<PropertyDispositionDecision> findByAssetKindAndRootRepairId(
+      PropertyDispositionAssetKind assetKind, UUID rootRepairId);
 
-  Optional<PropertyDispositionDecision> findByRootRepairId(UUID rootRepairId);
+  Optional<PropertyDispositionDecision> findByMaintenanceCustodyClaimId(UUID claimId);
 
   Optional<PropertyDispositionDecision> findBySourceAndInventoryIdAndFindingId(
       PropertyDispositionSource source, UUID inventoryId, UUID findingId);

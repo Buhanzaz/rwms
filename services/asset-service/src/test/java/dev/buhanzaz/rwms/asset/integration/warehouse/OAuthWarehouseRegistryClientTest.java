@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -39,6 +40,8 @@ class OAuthWarehouseRegistryClientTest {
   private final AtomicReference<String> tokenAuthorization = new AtomicReference<>();
   private final AtomicReference<String> tokenBody = new AtomicReference<>();
   private final AtomicReference<String> tokenValue = new AtomicReference<>("registry-token");
+  private final AtomicReference<String> lifecycleState = new AtomicReference<>("ACTIVE");
+  private final AtomicReference<String> operationMarkBody = new AtomicReference<>();
   private final AtomicInteger tokenExpiresIn = new AtomicInteger(300);
   private final AtomicInteger tokenRequests = new AtomicInteger();
   private final AtomicInteger tokenResponseDelayMillis = new AtomicInteger();
@@ -46,6 +49,7 @@ class OAuthWarehouseRegistryClientTest {
   private final AtomicInteger unauthorizedWarehouseResponses = new AtomicInteger();
   private final AtomicInteger warehouseProblemStatus = new AtomicInteger();
   private final ConcurrentLinkedQueue<String> issuedTokens = new ConcurrentLinkedQueue<>();
+  private final CopyOnWriteArrayList<String> tokenBodies = new CopyOnWriteArrayList<>();
   private final CopyOnWriteArrayList<String> warehouseAuthorizations = new CopyOnWriteArrayList<>();
   private HttpServer server;
   private ExecutorService serverExecutor;
@@ -59,6 +63,9 @@ class OAuthWarehouseRegistryClientTest {
     server.createContext(
         "/api/internal/warehouse/v1/warehouses/asset/" + warehouseId + "/existence",
         this::warehouse);
+    server.createContext("/api/internal/warehouse/v1/warehouses/", this::warehouseLifecycle);
+    server.createContext(
+        "/api/internal/warehouse/v1/lifecycle/readiness-work", this::readinessWork);
     server.start();
   }
 
@@ -195,6 +202,44 @@ class OAuthWarehouseRegistryClientTest {
     assertThat(warehouseRequests.get()).isEqualTo(1);
   }
 
+  @Test
+  void usesDirectionalAdmissionInsteadOfTreatingDrainingAsGloballyInactive() {
+    lifecycleState.set("DRAINING");
+    OAuthWarehouseRegistryClient client = client();
+
+    client.requireOutgoing(warehouseId);
+
+    assertThatThrownBy(() -> client.requireIncoming(warehouseId))
+        .isInstanceOfSatisfying(
+            AssetDependencyException.class,
+            exception -> assertThat(exception.status()).isEqualTo(HttpStatus.CONFLICT));
+    assertThat(tokenBodies)
+        .containsExactly("grant_type=client_credentials&scope=warehouse.lifecycle.read");
+  }
+
+  @Test
+  void usesSeparateExactScopesForTimezoneMarkAndReadinessBoundaries() {
+    OAuthWarehouseRegistryClient client = client();
+    OffsetDateTime at = OffsetDateTime.parse("2026-08-01T08:30:00Z");
+
+    var timeZone = client.timeZoneAt(warehouseId, at);
+    client.markOperation(warehouseId, UUID.randomUUID(), at);
+    var work = client.lifecycleReadinessWork(null, 100);
+    client.confirmLifecycleReadiness(warehouseId, work.items().getFirst().warehouseVersion());
+
+    assertThat(timeZone.warehouseId()).isEqualTo(warehouseId);
+    assertThat(timeZone.timeZone()).isEqualTo("Europe/Samara");
+    assertThat(work.items())
+        .containsExactly(new WarehouseRegistryClient.WarehouseLifecycleReadinessWork(warehouseId, 4L, "DRAINING"));
+    assertThat(operationMarkBody.get()).contains("operationId", "occurredAt");
+    assertThat(tokenBodies)
+        .containsExactlyInAnyOrder(
+            "grant_type=client_credentials&scope=warehouse.timezone.read",
+            "grant_type=client_credentials&scope=warehouse.operation.mark",
+            "grant_type=client_credentials&scope=warehouse.lifecycle.read",
+            "grant_type=client_credentials&scope=warehouse.lifecycle.confirm");
+  }
+
   private OAuthWarehouseRegistryClient client() { return client(Clock.systemUTC()); }
 
   private OAuthWarehouseRegistryClient client(Clock clock) {
@@ -219,13 +264,16 @@ class OAuthWarehouseRegistryClientTest {
 
   private void token(HttpExchange exchange) throws IOException {
     tokenAuthorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
-    tokenBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+    String payload = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+    tokenBody.set(payload);
+    tokenBodies.add(payload);
     tokenRequests.incrementAndGet();
     delay(tokenResponseDelayMillis.get());
     String issuedToken = issuedTokens.poll();
     if (issuedToken == null) issuedToken = tokenValue.get();
+    String scope = payload.substring(payload.indexOf("scope=") + "scope=".length());
     respond(exchange, 200, "{\"access_token\":\"" + issuedToken
-        + "\",\"token_type\":\"Bearer\",\"scope\":\"warehouse.read\",\"expires_in\":" + tokenExpiresIn.get() + "}");
+        + "\",\"token_type\":\"Bearer\",\"scope\":\"" + scope + "\",\"expires_in\":" + tokenExpiresIn.get() + "}");
   }
 
   private void warehouse(HttpExchange exchange) throws IOException {
@@ -241,6 +289,61 @@ class OAuthWarehouseRegistryClientTest {
       return;
     }
     respond(exchange, 200, "{\"id\":\"" + warehouseId + "\",\"version\":0,\"active\":" + active.get() + "}");
+  }
+
+  private void warehouseLifecycle(HttpExchange exchange) throws IOException {
+    String path = exchange.getRequestURI().getPath();
+    if (path.endsWith("/admission")) {
+      String direction = exchange.getRequestURI().getQuery().substring("direction=".length());
+      String state = lifecycleState.get();
+      boolean admitted = "ACTIVE".equals(state) || ("DRAINING".equals(state) && "OUTGOING".equals(direction));
+      respond(
+          exchange,
+          200,
+          "{\"warehouseId\":\""
+              + warehouseId
+              + "\",\"warehouseVersion\":4,\"lifecycleState\":\""
+              + state
+              + "\",\"direction\":\""
+              + direction
+              + "\",\"admitted\":"
+              + admitted
+              + "}");
+      return;
+    }
+    if (path.endsWith("/time-zone")) {
+      respond(
+          exchange,
+          200,
+          "{\"warehouseId\":\""
+              + warehouseId
+              + "\",\"timeZone\":\"Europe/Samara\",\"effectiveFrom\":\"2026-08-01T00:00:00Z\"}");
+      return;
+    }
+    if (path.endsWith("/operation-marks")) {
+      operationMarkBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+      respondNoContent(exchange);
+      return;
+    }
+    if (path.endsWith("/lifecycle-readiness")) {
+      respond(
+          exchange,
+          200,
+          "{\"warehouseId\":\""
+              + warehouseId
+              + "\",\"warehouseVersion\":5,\"lifecycleState\":\"DRAINING\",\"readinessOwner\":\"ASSET\",\"confirmedAt\":\"2026-08-01T08:31:00Z\"}");
+      return;
+    }
+    respondProblem(exchange, 404);
+  }
+
+  private void readinessWork(HttpExchange exchange) throws IOException {
+    respond(
+        exchange,
+        200,
+        "{\"items\":[{\"warehouseId\":\""
+            + warehouseId
+            + "\",\"warehouseVersion\":4,\"lifecycleState\":\"DRAINING\"}],\"nextAfter\":null}");
   }
 
   private static void delay(int milliseconds) throws IOException {
@@ -259,6 +362,11 @@ class OAuthWarehouseRegistryClientTest {
 
   private static void respond(HttpExchange exchange, int status, String body) throws IOException {
     respond(exchange, status, "application/json", body);
+  }
+
+  private static void respondNoContent(HttpExchange exchange) throws IOException {
+    exchange.sendResponseHeaders(204, -1);
+    exchange.close();
   }
 
   private static void respond(HttpExchange exchange, int status, String contentType, String body) throws IOException {

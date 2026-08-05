@@ -110,9 +110,10 @@ paths:
         historical DRAFT versions may change with optimistic locking; SUPERSEDED versions are
         immutable.
         A MATERIAL below a furnitureCategory may omit furnitureEquipment: maintenance-service then
-        idempotently ensures an asset-service additional-equipment item from the material name and
-        stores the returned immutable identity. Dependency failure or conflict commits no catalog
-        change.
+        first commits a durable node-UUID/name intent, then idempotently ensures the asset-service
+        additional-equipment item outside the catalog transaction and stores the returned immutable
+        mapping. Dependency failure or catalog conflict commits no catalog change but retains
+        inspectable retryable/confirmed link truth; it never deletes an already-created item.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceCatalogNodesRequest' } } } }
       responses:
         '200': { description: Changed catalog., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogVersion' } } } }
@@ -176,6 +177,61 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationFailure' }
+  /api/maintenance/v1/catalog/furniture-equipment-links:
+    get:
+      tags: [Catalog]
+      operationId: listFurnitureEquipmentLinks
+      description: >-
+        SYSTEM_ADMIN/WMS_ADMIN only. Lists durable maintenance-owned auto-link intent,
+        retry, confirmed and reviewed terminal truth for the selected warehouse. A node UUID is
+        the permanent asset-service external reference; confirmed mappings do not depend on the
+        generic idempotency retention window.
+      parameters:
+        - { $ref: '#/components/parameters/WarehouseIdQuery' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Size' }
+        - name: state
+          in: query
+          schema: { $ref: '#/components/schemas/FurnitureEquipmentLinkState' }
+      responses:
+        '200': { description: Durable furniture equipment link page., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/FurnitureEquipmentLinkPage' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/maintenance/v1/catalog/furniture-equipment-links/{nodeId}/review:
+    parameters:
+      - name: nodeId
+        in: path
+        required: true
+        description: Stable maintenance catalog node UUID and asset external reference.
+        schema: { type: string, format: uuid }
+      - { $ref: '#/components/parameters/WarehouseIdQuery' }
+    post:
+      tags: [Catalog]
+      operationId: reviewFurnitureEquipmentLink
+      description: >-
+        SYSTEM_ADMIN/WMS_ADMIN only. Version-fenced review either retries bounded reconciliation
+        after the underlying conflict is corrected or abandons the local intent. Every accepted
+        review and reason is immutable. Abandon never deletes or remaps asset equipment.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FurnitureEquipmentLinkReviewRequest' }
+      responses:
+        '200':
+          description: Reviewed link truth or exact replay of the accepted review.
+          headers:
+            X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }
+            Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FurnitureEquipmentLink' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/maintenance/v1/catalog/versions/{id}/activate:
     parameters:
       - { $ref: '#/components/parameters/CatalogVersionId' }
@@ -213,8 +269,8 @@ paths:
       parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateInventoryLossDispositionRequest' } } } }
       responses:
-        '200': { description: Existing idempotent loss decision., content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
-        '201': { description: Newly recorded loss decision awaiting administrator approval., content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
+        '200': { description: Existing idempotent loss decision., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
+        '201': { description: Newly recorded loss decision awaiting administrator approval., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -936,7 +992,7 @@ paths:
           in: query
           schema: { $ref: '#/components/schemas/PropertyDispositionState' }
       responses:
-        '200': { description: Loss decision page with honest effect state., content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionPage' } } } }
+        '200': { description: Loss decision page with honest effect state., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionPage' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /api/maintenance/v1/dispositions:
@@ -953,8 +1009,8 @@ paths:
       parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreatePropertyDispositionRequest' } } } }
       responses:
-        '200': { description: Existing idempotent decision., content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
-        '201': { description: Newly recorded decision awaiting approval., content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
+        '200': { description: Existing idempotent decision., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
+        '201': { description: Newly recorded decision awaiting approval., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -973,7 +1029,7 @@ paths:
       operationId: getPropertyDisposition
       description: Returns decision, root/repair-chain detail and current effect/recovery truth.
       responses:
-        '200': { description: Current decision truth., content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
+        '200': { description: Current decision truth., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -984,7 +1040,6 @@ paths:
         required: true
         schema: { type: string, format: uuid }
       - { $ref: '#/components/parameters/WarehouseIdQuery' }
-      - { $ref: '#/components/parameters/IdempotencyKey' }
     post:
       tags: [Decisions]
       operationId: approvePropertyDisposition
@@ -994,7 +1049,7 @@ paths:
         EFFECTIVE state before asset truth confirms the terminal effect.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ApprovePropertyDispositionRequest' } } } }
       responses:
-        '200': { description: Approved decision and current effect state., content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
+        '200': { description: Approved decision and current effect state., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1008,14 +1063,13 @@ paths:
         required: true
         schema: { type: string, format: uuid }
       - { $ref: '#/components/parameters/WarehouseIdQuery' }
-      - { $ref: '#/components/parameters/IdempotencyKey' }
     post:
       tags: [Decisions]
       operationId: rejectPropertyDisposition
       description: SYSTEM_ADMIN/WMS_ADMIN only; rejection is final and requires a reason.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RejectPropertyDispositionRequest' } } } }
       responses:
-        '200': { description: Rejected decision., content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
+        '200': { description: Rejected decision., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1028,7 +1082,6 @@ paths:
         required: true
         schema: { type: string, format: uuid }
       - { $ref: '#/components/parameters/WarehouseIdQuery' }
-      - { $ref: '#/components/parameters/IdempotencyKey' }
     post:
       tags: [Decisions]
       operationId: recoverPropertyDisposition
@@ -1038,13 +1091,46 @@ paths:
         retained locally and never published to Kafka.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RecoverPropertyDispositionRequest' } } } }
       responses:
-        '200': { description: Reviewed/requeued decision truth., content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
+        '200': { description: Reviewed/requeued decision truth., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/PropertyDispositionDecision' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/maintenance/v1/warehouse-operation-marks/{operationId}/recovery:
+    parameters:
+      - name: operationId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - { $ref: '#/components/parameters/WarehouseIdQuery' }
+    post:
+      tags: [Decisions]
+      operationId: recoverWarehouseOperationMark
+      description: >-
+        SYSTEM_ADMIN/WMS_ADMIN only. Requeues one quarantined warehouse operated-boundary mark
+        after a reviewed, reason-bearing and recovery-version-fenced decision. The review is
+        append-only; the endpoint never bypasses the bounded delivery workflow.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WarehouseOperationMarkRecoveryRequest' }
+      responses:
+        '200':
+          description: Requeued mark or exact replay of an already accepted review.
+          headers:
+            X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }
+            Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WarehouseOperationMarkRecoveryResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/maintenance/v1/settings/repair-capacity/{warehouseId}:
     parameters:
       - name: warehouseId
@@ -1613,9 +1699,10 @@ components:
     CompleteTransferRepairRequest:
       type: object
       additionalProperties: false
-      required: [rentalItemId, sourceWarehouseId, targetWarehouseId, priority]
+      required: [rentalItemId, rentalItemVersion, sourceWarehouseId, targetWarehouseId, priority]
       properties:
         rentalItemId: { type: string, format: uuid }
+        rentalItemVersion: { type: integer, format: int64, minimum: 0 }
         sourceWarehouseId: { type: string, format: uuid }
         targetWarehouseId: { type: string, format: uuid }
         priority:
@@ -1755,6 +1842,73 @@ components:
       required: [items, page, size, totalElements]
       properties:
         items: { type: array, items: { $ref: '#/components/schemas/CatalogVersion' } }
+        page: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 1 }
+        totalElements: { type: integer, format: int64, minimum: 0 }
+    FurnitureEquipmentLinkState:
+      type: string
+      enum: [PENDING, IN_FLIGHT, RETRY_PENDING, CONFIRMED, REVIEW_REQUIRED, ABANDONED]
+    FurnitureEquipmentLinkReviewAction:
+      type: string
+      enum: [RETRY, ABANDON]
+    FurnitureEquipmentLinkReviewRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedReviewVersion, action, reason]
+      properties:
+        expectedReviewVersion: { type: integer, format: int64, minimum: 0 }
+        action: { $ref: '#/components/schemas/FurnitureEquipmentLinkReviewAction' }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+    FurnitureEquipmentLink:
+      type: object
+      additionalProperties: false
+      required: [nodeId, warehouseId, sourceCatalogVersionId, sourceCatalogExpectedVersion, requestedName, state, equipmentId, equipmentName, observedEquipmentId, observedEquipmentName, attemptCount, nextAttemptAt, claimUntil, lastErrorCode, lastErrorDetail, reviewVersion, reviewedBySubjectId, reviewAction, reviewReason, reviewedAt, confirmedAt, abandonedAt, createdAt, updatedAt]
+      properties:
+        nodeId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        sourceCatalogVersionId: { type: string, format: uuid }
+        sourceCatalogExpectedVersion: { type: integer, format: int64, minimum: 0 }
+        requestedName: { type: string, minLength: 1, maxLength: 255 }
+        state: { $ref: '#/components/schemas/FurnitureEquipmentLinkState' }
+        equipmentId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        equipmentName:
+          oneOf: [ { type: string, minLength: 1, maxLength: 255 }, { type: 'null' } ]
+        observedEquipmentId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        observedEquipmentName:
+          oneOf: [ { type: string, minLength: 1, maxLength: 255 }, { type: 'null' } ]
+        attemptCount: { type: integer, minimum: 0 }
+        nextAttemptAt: { type: string, format: date-time }
+        claimUntil:
+          oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
+        lastErrorCode:
+          oneOf: [ { type: string, minLength: 1, maxLength: 64 }, { type: 'null' } ]
+        lastErrorDetail:
+          oneOf: [ { type: string, minLength: 1, maxLength: 2000 }, { type: 'null' } ]
+        reviewVersion: { type: integer, format: int64, minimum: 0 }
+        reviewedBySubjectId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        reviewAction:
+          oneOf: [ { $ref: '#/components/schemas/FurnitureEquipmentLinkReviewAction' }, { type: 'null' } ]
+        reviewReason:
+          oneOf: [ { type: string, minLength: 1, maxLength: 2000 }, { type: 'null' } ]
+        reviewedAt:
+          oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
+        confirmedAt:
+          oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
+        abandonedAt:
+          oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    FurnitureEquipmentLinkPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, size, totalElements]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/FurnitureEquipmentLink' }
         page: { type: integer, minimum: 0 }
         size: { type: integer, minimum: 1 }
         totalElements: { type: integer, format: int64, minimum: 0 }
@@ -3283,6 +3437,8 @@ components:
         - quantity
         - expectedAssetVersion
         - expectedSourceBalanceVersion
+        - maintenanceCustodyClaimId
+        - maintenanceCustodyVersion
         - contentsPlan
         - rootRepairId
         - repairChain
@@ -3318,6 +3474,10 @@ components:
         expectedAssetVersion:
           oneOf: [ { type: integer, format: int64, minimum: 0 }, { type: 'null' } ]
         expectedSourceBalanceVersion:
+          oneOf: [ { type: integer, format: int64, minimum: 0 }, { type: 'null' } ]
+        maintenanceCustodyClaimId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        maintenanceCustodyVersion:
           oneOf: [ { type: integer, format: int64, minimum: 0 }, { type: 'null' } ]
         contentsPlan:
           oneOf:
@@ -3361,3 +3521,34 @@ components:
         page: { type: integer, minimum: 0 }
         size: { type: integer, minimum: 1 }
         totalElements: { type: integer, format: int64, minimum: 0 }
+    WarehouseOperationMarkRecoveryRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRecoveryVersion, reason]
+      properties:
+        expectedRecoveryVersion: { type: integer, format: int64, minimum: 0 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+    WarehouseOperationMarkRecoveryResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - warehouseId
+        - operationId
+        - state
+        - attemptCount
+        - recoveryVersion
+        - lastErrorCode
+        - recoveredBySubjectId
+        - recoveryReason
+        - recoveredAt
+      properties:
+        warehouseId: { type: string, format: uuid }
+        operationId: { type: string, format: uuid }
+        state: { type: string, enum: [PENDING, IN_FLIGHT, RETRY_PENDING, CONFIRMED, QUARANTINED] }
+        attemptCount: { type: integer, minimum: 0 }
+        recoveryVersion: { type: integer, format: int64, minimum: 1 }
+        lastErrorCode:
+          oneOf: [ { type: string, minLength: 1, maxLength: 128 }, { type: 'null' } ]
+        recoveredBySubjectId: { type: string, format: uuid }
+        recoveryReason: { type: string, minLength: 1, maxLength: 2000 }
+        recoveredAt: { type: string, format: date-time }

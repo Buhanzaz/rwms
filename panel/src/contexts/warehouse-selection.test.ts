@@ -11,6 +11,7 @@ const firstWarehouse: WarehouseInfo = {
   address: null,
   timeZone: "Europe/Moscow",
   active: true,
+  lifecycleState: "ACTIVE",
   sortOrder: null,
 }
 
@@ -31,7 +32,7 @@ describe("resolveWarehouseSelection", () => {
   })
 
   it.each(["spb", "msk", "removed-warehouse", null])(
-    "treats %s as stale and selects the first active warehouse",
+    "treats %s as stale and selects the first available warehouse",
     (savedWarehouseId) => {
       expect(
         resolveWarehouseSelection(savedWarehouseId, [
@@ -42,7 +43,7 @@ describe("resolveWarehouseSelection", () => {
     }
   )
 
-  it("returns null only when the service has no active warehouses", () => {
+  it("returns null only when the directory has no available warehouses", () => {
     expect(resolveWarehouseSelection(firstWarehouse.id, [])).toBeNull()
   })
 })

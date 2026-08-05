@@ -2,6 +2,8 @@ package dev.buhanzaz.rwms.logistics.equipment.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -15,6 +17,8 @@ import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
 import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskProcessor;
 import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskService;
 import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -29,16 +33,24 @@ import org.springframework.security.oauth2.jwt.Jwt;
 class MaintenanceEquipmentMovementTaskControllerTest {
   private final EquipmentMovementTaskService service = mock(EquipmentMovementTaskService.class);
   private final EquipmentMovementTaskProcessor processor = mock(EquipmentMovementTaskProcessor.class);
+  private final LogisticsWarehouseLifecycle warehouseLifecycle =
+      mock(LogisticsWarehouseLifecycle.class);
   private final MaintenanceEquipmentMovementTaskController controller =
       new MaintenanceEquipmentMovementTaskController(
-          service, processor, new LogisticsAuthorizer(new MockEnvironment(), false));
+          service,
+          processor,
+          warehouseLifecycle,
+          new LogisticsAuthorizer(new MockEnvironment(), false));
 
   @Test
   void exactMaintenanceServiceTokenCanCreateAndReadItsPrivateMovement() {
     CreateMaintenanceEquipmentMovementTaskRequest request = request();
     EquipmentMovementTaskResponse response = response(request.decisionId());
     UUID idempotencyKey = UUID.randomUUID();
-    when(service.createFromMaintenance(idempotencyKey, request))
+    AdmissionTicket admission = mock(AdmissionTicket.class);
+    when(warehouseLifecycle.prepareEquipmentMovement(any(), eq(idempotencyKey), any()))
+        .thenReturn(admission);
+    when(service.createFromMaintenance(idempotencyKey, request, admission))
         .thenReturn(new EquipmentMovementTaskService.CreateResult(response, false));
     when(service.getMaintenance(response.id())).thenReturn(response);
 
@@ -48,7 +60,7 @@ class MaintenanceEquipmentMovementTaskControllerTest {
     assertThat(created.getHeaders().getETag()).isEqualTo("\"7\"");
     assertThat(created.getBody()).isSameAs(response);
     assertThat(controller.get(maintenanceJwt(), response.id())).isSameAs(response);
-    verify(service).createFromMaintenance(idempotencyKey, request);
+    verify(service).createFromMaintenance(idempotencyKey, request, admission);
     verify(processor).processUntilIdle(response.id());
     verify(service, org.mockito.Mockito.times(2)).getMaintenance(response.id());
   }

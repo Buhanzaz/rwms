@@ -72,6 +72,7 @@ public class MaintenanceEventPayloadValidatorConfiguration {
         case CATALOG_VERSION -> "catalogVersionId";
         case ESTIMATE -> "estimateId";
         case REPAIR -> "repairId";
+        case PROPERTY_DISPOSITION -> "decisionId";
       };
     }
   }

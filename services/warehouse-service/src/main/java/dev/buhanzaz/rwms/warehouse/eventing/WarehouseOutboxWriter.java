@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.warehouse.eventing;
 
 import dev.buhanzaz.rwms.platform.contracts.DomainEventEnvelopeV2;
 import dev.buhanzaz.rwms.warehouse.domain.Warehouse;
+import dev.buhanzaz.rwms.warehouse.eventing.WarehouseEventPayload.TimeZoneDecision;
 import dev.buhanzaz.rwms.warehouse.mapper.WarehouseEventPayloadMapper;
 import dev.buhanzaz.rwms.warehouse.service.WarehouseChecksum;
 import java.nio.charset.StandardCharsets;
@@ -41,8 +42,24 @@ public class WarehouseOutboxWriter {
   }
 
   @Transactional(propagation = Propagation.MANDATORY)
-  public void append(Warehouse warehouse, WarehouseEventType eventType) {
-    WarehouseEventPayload payload = payloadMapper.toPayload(warehouse);
+  public void append(Warehouse warehouse, WarehouseEventType eventType, String effectiveTimeZone) {
+    append(warehouse, eventType, effectiveTimeZone, null);
+  }
+
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void append(
+      Warehouse warehouse,
+      WarehouseEventType eventType,
+      String effectiveTimeZone,
+      TimeZoneDecision timeZoneDecision) {
+    WarehouseEventPayload mapped = payloadMapper.toPayload(warehouse, effectiveTimeZone);
+    WarehouseEventPayload payload =
+        new WarehouseEventPayload(
+            mapped.warehouseId(),
+            mapped.timeZone(),
+            mapped.active(),
+            mapped.sortOrder(),
+            timeZoneDecision);
     payloadPolicy.validateAndConvert(eventType, payload);
     OffsetDateTime recordedAt = databaseNow();
     UUID eventId = UUID.randomUUID();

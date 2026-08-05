@@ -10,6 +10,9 @@ info:
     separate least-privilege paths for service credentials. Warehouse UUID is
     the stable external business reference; display names are unique only after
     the documented normalization and are never used as integration identity.
+    Lifecycle is one-way ACTIVE -> DRAINING -> INACTIVE. DRAINING rejects new
+    incoming work but permits outbound draining work through the explicit private
+    admission boundary; INACTIVE requires every resource owner to confirm readiness.
 servers:
   - url: /
 security:
@@ -20,8 +23,8 @@ paths:
       operationId: listWarehouses
       description: >-
         Requires USER and warehouse.read. This is an approved global directory:
-        warehouse_access grants do not filter the result. The default remains
-        active-only; includeInactive is SYSTEM_ADMIN-only.
+        warehouse_access grants do not filter the result. The default includes
+        ACTIVE and DRAINING warehouses; includeInactive is SYSTEM_ADMIN-only.
       parameters:
         - name: includeInactive
           in: query
@@ -82,7 +85,11 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
     put:
       operationId: replaceWarehouse
-      description: Full mutable replacement. Requires USER, rwms.write, and exactly SYSTEM_ADMIN.
+      description: >-
+        Full mutable metadata replacement. Requires USER, rwms.write, and exactly SYSTEM_ADMIN.
+        timeZone is an immediate correction only while this warehouse has no durable
+        operation mark; an operated warehouse must use the effective-dated scheduling command.
+        Lifecycle state is not replaceable through this operation.
       requestBody:
         required: true
         content:
@@ -99,17 +106,117 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
-    delete:
-      operationId: deactivateWarehouse
-      description: Soft deactivation. Reactivation is a PUT with active=true.
-      parameters:
-        - $ref: '#/components/parameters/ExpectedVersion'
+  /api/warehouse/v1/warehouses/{id}/draining:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    post:
+      operationId: startWarehouseDraining
+      description: >-
+        Requires USER, rwms.write, and exactly SYSTEM_ADMIN. Permitted only from ACTIVE.
+        It permanently closes inbound admission while preserving outbound admission until
+        all resource owners have confirmed readiness.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WarehouseLifecycleTransitionRequest' }
       responses:
-        '204': { description: Warehouse deactivated. }
+        '200':
+          description: Warehouse entered DRAINING.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Warehouse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/warehouse/v1/warehouses/{id}/inactivation:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    post:
+      operationId: completeWarehouseInactivation
+      description: >-
+        Requires USER, rwms.write, and exactly SYSTEM_ADMIN. Permitted only from DRAINING
+        after asset-service, inventory-service, logistics-service, maintenance-service and
+        task-board-service have each recorded immutable readiness confirmation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WarehouseLifecycleTransitionRequest' }
+      responses:
+        '200':
+          description: Warehouse entered terminal INACTIVE state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Warehouse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/warehouse/v1/warehouses/{id}/time-zone-changes:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    post:
+      operationId: scheduleWarehouseTimeZone
+      description: >-
+        Requires USER, rwms.write, and exactly SYSTEM_ADMIN. Available only after a
+        durable warehouse operation mark exists. Appends an immutable timezone decision
+        whose effectiveFrom must be in the future; it never rewrites historical operation
+        calculations or reports. The Warehouse response continues to expose the currently
+        effective timezone until that instant.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScheduleWarehouseTimeZoneRequest' }
+      responses:
+        '200':
+          description: Immutable timezone decision appended under the expected-version fence.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WarehouseTimeZoneChange' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/warehouse/v1/admin/outbox-events/{eventId}/recovery:
+    parameters:
+      - $ref: '#/components/parameters/OutboxEventId'
+    post:
+      operationId: recoverWarehouseOutboxEvent
+      description: >-
+        Reviewed recovery of one terminal warehouse outbox event. Requires a USER JWT with
+        exactly rwms.write and global role SYSTEM_ADMIN or WMS_ADMIN. The command is allowed only
+        when the identified event is the current first unpublished event of its warehouse
+        aggregate and is terminal DLT or QUARANTINED. Before the bounded relay is re-enabled, the
+        server verifies the stored immutable envelope, checksum and warehouse event schema; no
+        command can edit that envelope. expectedReviewVersion fences concurrent reviews. Retrying
+        the exact same reviewer/reason command is idempotent; a different or stale review yields
+        409 and does not write a second audit entry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WarehouseOutboxRecoveryRequest' }
+      responses:
+        '200':
+          description: >-
+            The immutable event was requeued for the existing bounded relay, or the exact prior
+            reviewed command was replayed.
+          headers:
+            Idempotency-Replayed:
+              required: false
+              schema: { type: string, const: 'true' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WarehouseOutboxRecovery' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
   /api/internal/warehouse/v1/warehouses/{id}/existence:
     parameters:
@@ -138,7 +245,9 @@ paths:
         one scope: warehouse.read. This narrow private route is not gateway-routable.
       responses:
         '200':
-          description: Exact existence and active-state response for asset-service validation.
+          description: >-
+            Exact legacy incoming-admission response for asset-service validation. active is true
+            only in ACTIVE; callers that need outbound draining admission must use admission.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/InternalWarehouseExistence' }
@@ -153,7 +262,7 @@ paths:
       description: >-
         Requires principal_type SERVICE, sub and client_id both exactly
         inventory-service, and exactly one scope: warehouse.read. This narrow
-        private route is not gateway-routable. Inactive warehouses are hidden.
+        private route is not gateway-routable. DRAINING and INACTIVE warehouses are hidden.
       responses:
         '200':
           description: Exact active identity, version and canonical IANA timezone.
@@ -172,7 +281,8 @@ paths:
         Requires principal_type SERVICE, sub and client_id both exactly
         logistics-service, and exactly one scope: warehouse.logistics. This
         narrow private route is not gateway-routable and exposes no topology or
-        location data. Inactive state remains explicit for logistics validation.
+        location data. The legacy active field is false for DRAINING and INACTIVE;
+        directional admission must use the dedicated private boundary.
       responses:
         '200':
           description: Exact warehouse identity, version, active flag and canonical IANA timezone.
@@ -188,7 +298,7 @@ paths:
       description: >-
         Requires principal_type SERVICE, sub and client_id both exactly
         logistics-service, and exactly one scope: warehouse.logistics. This
-        private route returns active identities only, ordered by configured
+        private route returns ACTIVE identities only, ordered by configured
         warehouse order, name and UUID, so logistics can build bounded availability
         facets without a cross-database query.
       responses:
@@ -199,6 +309,139 @@ paths:
               schema:
                 type: array
                 items: { $ref: '#/components/schemas/LogisticsWarehouseIdentity' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/internal/warehouse/v1/warehouses/{id}/time-zone:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      operationId: getWarehouseTimeZoneAt
+      description: >-
+        Explicit as-of timezone lookup for asset-service, inventory-service,
+        logistics-service, maintenance-service, and task-board-service. It resolves
+        both historical and already scheduled decisions. Requires principal_type SERVICE,
+        sub and client_id both equal to one of those owners, and exactly one scope:
+        warehouse.timezone.read. The required at timestamp prevents accidental use of
+        current metadata for a historical operation; inactive warehouses remain resolvable.
+      parameters:
+        - name: at
+          in: query
+          required: true
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Canonical IANA timezone effective at the requested operation timestamp.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WarehouseTimeZoneAt' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/internal/warehouse/v1/warehouses/{id}/operation-marks:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    post:
+      operationId: markWarehouseOperation
+      description: >-
+        Durable, idempotent boundary proving that a warehouse has operated. Available
+        only to asset-service, inventory-service, logistics-service, and maintenance-service
+        when principal_type SERVICE, sub and client_id match and the sole scope is
+        warehouse.operation.mark. The service infers operation source from client_id;
+        the immutable operationId is the idempotency key.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WarehouseOperationMarkRequest' }
+      responses:
+        '204': { description: Operation mark recorded, or an exact idempotent replay acknowledged. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/warehouse/v1/warehouses/{id}/admission:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      operationId: getWarehouseOperationAdmission
+      description: >-
+        Exact directional admission decision for asset-service, inventory-service,
+        logistics-service, maintenance-service and task-board-service. Requires principal_type
+        SERVICE, matching sub and client_id for one owner, and exactly warehouse.lifecycle.read.
+        ACTIVE admits incoming and outgoing work, DRAINING admits only outgoing work, and
+        INACTIVE admits neither. This route is not gateway-routable.
+      parameters:
+        - name: direction
+          in: query
+          required: true
+          schema: { $ref: '#/components/schemas/WarehouseOperationDirection' }
+      responses:
+        '200':
+          description: Admission decision for the requested direction.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WarehouseOperationAdmission' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/internal/warehouse/v1/warehouses/{id}/lifecycle-readiness:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    post:
+      operationId: confirmWarehouseLifecycleReadiness
+      description: >-
+        Immutable own-resource readiness confirmation. Available only while DRAINING to
+        asset-service, inventory-service, logistics-service, maintenance-service and
+        task-board-service when principal_type SERVICE, sub and client_id match and the sole
+        scope is warehouse.lifecycle.confirm. The server infers readinessOwner from client_id;
+        a request cannot confirm readiness for another owner. This route is not gateway-routable.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WarehouseLifecycleReadinessRequest' }
+      responses:
+        '200':
+          description: Readiness confirmed or an exact no-op confirmation acknowledged.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WarehouseLifecycleReadinessConfirmation' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/warehouse/v1/lifecycle/readiness-work:
+    get:
+      operationId: listWarehouseLifecycleReadinessWork
+      description: >-
+        Durable, owner-scoped reconciliation backlog for lifecycle readiness. It returns only
+        DRAINING warehouses for which the authenticated owner has not yet supplied its immutable
+        readiness confirmation, including warehouses for which that owner has no live records.
+        This is the correctness trigger after a missed Kafka hint or service restart. Available
+        only to asset-service, inventory-service, logistics-service, maintenance-service and
+        task-board-service when principal_type SERVICE, sub and client_id match and the sole
+        scope is warehouse.lifecycle.read. This route is not gateway-routable.
+      parameters:
+        - name: after
+          in: query
+          required: false
+          description: UUID keyset cursor from nextAfter; start a new reconciliation without it.
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        '200':
+          description: Page of owner-specific DRAINING readiness work.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WarehouseLifecycleReadinessWorkPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 components:
@@ -213,29 +456,38 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
-    ExpectedVersion:
-      name: expectedVersion
-      in: query
-      required: true
-      schema: { type: integer, minimum: 0 }
     IdempotencyKey:
       name: Idempotency-Key
       in: header
+      required: true
+      schema: { type: string, format: uuid }
+    OutboxEventId:
+      name: eventId
+      in: path
       required: true
       schema: { type: string, format: uuid }
   schemas:
     Warehouse:
       type: object
       additionalProperties: false
-      required: [id, version, name, city, address, timeZone, active, sortOrder]
+      required: [id, version, name, city, address, timeZone, active, lifecycleState, sortOrder]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, minimum: 0 }
         name: { type: string, minLength: 1, maxLength: 255, description: Unique after trim, internal-whitespace collapse and Unicode-aware lowercase normalization. }
         city: { type: string, minLength: 1, maxLength: 255 }
         address: { type: [string, 'null'], maxLength: 1000 }
-        timeZone: { type: string, minLength: 1, maxLength: 64 }
-        active: { type: boolean }
+        timeZone:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Canonical IANA timezone currently effective at the service timestamp.
+        active:
+          type: boolean
+          description: >-
+            Legacy compatibility projection, true only in ACTIVE. It is not a lifecycle command
+            and cannot decide whether outbound draining work is admitted.
+        lifecycleState: { $ref: '#/components/schemas/WarehouseLifecycleState' }
         sortOrder: { type: [integer, 'null'], minimum: 0 }
     CreateWarehouseRequest:
       type: object
@@ -245,20 +497,148 @@ components:
         name: { type: string, minLength: 1, maxLength: 255, description: Unique after trim, internal-whitespace collapse and Unicode-aware lowercase normalization. }
         city: { type: string, minLength: 1, maxLength: 255 }
         address: { type: [string, 'null'], maxLength: 1000 }
-        timeZone: { type: string, minLength: 1, maxLength: 64 }
+        timeZone: { type: string, minLength: 1, maxLength: 64, description: Canonical IANA timezone identifier. }
         sortOrder: { type: [integer, 'null'], minimum: 0 }
     ReplaceWarehouseRequest:
       type: object
       additionalProperties: false
-      required: [expectedVersion, name, city, timeZone, active]
+      required: [expectedVersion, name, city, timeZone]
       properties:
         expectedVersion: { type: integer, minimum: 0 }
         name: { type: string, minLength: 1, maxLength: 255, description: Unique after trim, internal-whitespace collapse and Unicode-aware lowercase normalization. }
         city: { type: string, minLength: 1, maxLength: 255 }
         address: { type: [string, 'null'], maxLength: 1000 }
-        timeZone: { type: string, minLength: 1, maxLength: 64 }
-        active: { type: boolean }
+        timeZone:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Immediate correction only before the first durable operation mark.
         sortOrder: { type: [integer, 'null'], minimum: 0 }
+    WarehouseLifecycleState:
+      type: string
+      enum: [ACTIVE, DRAINING, INACTIVE]
+    WarehouseOperationDirection:
+      type: string
+      enum: [INCOMING, OUTGOING]
+    WarehouseLifecycleTransitionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+    WarehouseLifecycleReadinessRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+    WarehouseLifecycleReadinessConfirmation:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, warehouseVersion, lifecycleState, readinessOwner, confirmedAt]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        warehouseVersion: { type: integer, minimum: 0 }
+        lifecycleState: { $ref: '#/components/schemas/WarehouseLifecycleState' }
+        readinessOwner:
+          type: string
+          enum: [ASSET, INVENTORY, LOGISTICS, MAINTENANCE, TASK_BOARD]
+        confirmedAt: { type: string, format: date-time }
+    WarehouseLifecycleReadinessWork:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, warehouseVersion, lifecycleState]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        warehouseVersion: { type: integer, minimum: 0 }
+        lifecycleState:
+          type: string
+          const: DRAINING
+    WarehouseLifecycleReadinessWorkPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextAfter]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/WarehouseLifecycleReadinessWork' }
+        nextAfter: { type: [string, 'null'], format: uuid }
+    WarehouseOperationAdmission:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, warehouseVersion, lifecycleState, direction, admitted]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        warehouseVersion: { type: integer, minimum: 0 }
+        lifecycleState: { $ref: '#/components/schemas/WarehouseLifecycleState' }
+        direction: { $ref: '#/components/schemas/WarehouseOperationDirection' }
+        admitted: { type: boolean }
+    ScheduleWarehouseTimeZoneRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, timeZone, effectiveFrom]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+        timeZone: { type: string, minLength: 1, maxLength: 64, description: Canonical IANA timezone identifier. }
+        effectiveFrom:
+          type: string
+          format: date-time
+          description: Future instant at which the zone becomes operationally effective.
+    WarehouseTimeZoneChange:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, warehouseVersion, timeZone, effectiveFrom]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        warehouseVersion: { type: integer, minimum: 0 }
+        timeZone: { type: string, minLength: 1, maxLength: 64, description: Canonical IANA timezone identifier. }
+        effectiveFrom: { type: string, format: date-time }
+    WarehouseTimeZoneAt:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, timeZone, effectiveFrom]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        timeZone: { type: string, minLength: 1, maxLength: 64, description: Canonical IANA timezone identifier. }
+        effectiveFrom: { type: string, format: date-time }
+    WarehouseOperationMarkRequest:
+      type: object
+      additionalProperties: false
+      required: [operationId, occurredAt]
+      properties:
+        operationId: { type: string, format: uuid }
+        occurredAt:
+          type: string
+          format: date-time
+          description: Actual operation instant, no later than warehouse-service database time.
+    WarehouseOutboxRecoveryRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedReviewVersion, reason]
+      properties:
+        expectedReviewVersion: { type: integer, minimum: 0 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+    WarehouseOutboxStatus:
+      type: string
+      enum: [PENDING, IN_FLIGHT, PUBLISHED, DLT, QUARANTINED]
+    WarehouseOutboxRecovery:
+      type: object
+      additionalProperties: false
+      required:
+        [eventId, aggregateType, aggregateId, aggregateVersion, status, attemptCount,
+         reviewVersion, lastErrorCode, reviewedBySubjectId, recoveryReason, recoveredAt]
+      properties:
+        eventId: { type: string, format: uuid }
+        aggregateType: { type: string, const: WAREHOUSE }
+        aggregateId: { type: string, format: uuid }
+        aggregateVersion: { type: integer, minimum: 0 }
+        status: { $ref: '#/components/schemas/WarehouseOutboxStatus' }
+        attemptCount: { type: integer, minimum: 0 }
+        reviewVersion: { type: integer, minimum: 1 }
+        lastErrorCode: { type: [string, 'null'], maxLength: 64 }
+        reviewedBySubjectId: { type: string, format: uuid }
+        recoveryReason: { type: string, minLength: 1, maxLength: 2000 }
+        recoveredAt: { type: string, format: date-time }
     InternalWarehouseExistence:
       type: object
       additionalProperties: false

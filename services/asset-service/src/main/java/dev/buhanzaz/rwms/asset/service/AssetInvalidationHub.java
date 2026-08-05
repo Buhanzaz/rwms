@@ -14,8 +14,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
- * Process-local warehouse invalidation fan-out. PostgreSQL domain events are
- * the durable source; a reconnecting browser always performs a scoped read.
+ * Local SSE fan-out fed both by same-instance commits and by the replica-specific Kafka broadcast
+ * consumer. PostgreSQL facts/outbox remain durable; a reconnecting browser always performs a
+ * scoped read because this channel intentionally has no replay cursor.
  */
 @Service
 public class AssetInvalidationHub {
