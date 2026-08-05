@@ -110,6 +110,7 @@ rwms:
       task-board-base-url: ${TASK_BOARD_INTERNAL_BASE_URL:}
       media-base-url: ${MEDIA_INTERNAL_BASE_URL:}
       logistics-base-url: ${LOGISTICS_INTERNAL_BASE_URL:}
+      warehouse-base-url: ${WAREHOUSE_INTERNAL_BASE_URL:}
       connect-timeout: ${MAINTENANCE_CONNECT_TIMEOUT:2s}
       read-timeout: ${MAINTENANCE_READ_TIMEOUT:5s}
   security:

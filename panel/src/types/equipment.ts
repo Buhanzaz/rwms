@@ -67,13 +67,6 @@ export type EquipmentItemsQueryParams = {
   search?: string
 }
 
-export type EquipmentWriteOffSummaryDto = {
-  id: string
-  warehouseId: string
-  name: string
-  writtenOffQuantity: number
-}
-
 export type EquipmentMovementDto = {
   id: string
   version: number
@@ -84,19 +77,3 @@ export type EquipmentMovementDto = {
   kind: string
   occurredAt: string
 }
-
-export type EquipmentDispositionDto = EquipmentMovementDto & {
-  equipmentName: string
-}
-
-export type DisposeEquipmentInput = {
-  equipmentId: string
-  warehouseId: string
-  sourceRentalItemId: string | null
-  sourceLocationKind: EquipmentBalanceLocationKind
-  sourceExpectedVersion: number
-  quantity: number
-  disposition: "WRITE_OFF" | "LOSS"
-}
-
-export type EquipmentDispositionListItemDto = EquipmentDispositionDto

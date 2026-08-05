@@ -3,6 +3,8 @@ package dev.buhanzaz.rwms.warehouse.security;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import dev.buhanzaz.rwms.warehouse.service.WarehouseOperationSource;
+import dev.buhanzaz.rwms.warehouse.service.WarehouseLifecycleReadinessOwner;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
@@ -100,6 +102,117 @@ class WarehouseAuthorizerTest {
   }
 
   @Test
+  void timezoneHistoryAllowsEveryCalendarOwnerButOperationMarksStayNarrow() {
+    WarehouseAuthorizer authorizer = new WarehouseAuthorizer(new MockEnvironment(), false);
+
+    authorizer.requireInternalTimeZoneReader(
+        jwt("SERVICE", "warehouse.timezone.read", null, "asset-service", "asset-service"));
+    authorizer.requireInternalTimeZoneReader(
+        jwt(
+            "SERVICE",
+            "warehouse.timezone.read",
+            null,
+            "task-board-service",
+            "task-board-service"));
+    assertThatThrownBy(
+            () ->
+                authorizer.requireInternalOperationMarker(
+                    jwt(
+                        "SERVICE",
+                        "warehouse.operation.mark",
+                        null,
+                        "task-board-service",
+                        "task-board-service")))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThat(
+            authorizer.requireInternalOperationMarker(
+                jwt(
+                    "SERVICE",
+                    "warehouse.operation.mark",
+                    null,
+                    "maintenance-service",
+                    "maintenance-service")))
+        .isEqualTo(WarehouseOperationSource.MAINTENANCE);
+    for (Jwt invalid :
+        new Jwt[] {
+          jwt(
+              "SERVICE",
+              "warehouse.timezone.read warehouse.read",
+              null,
+              "asset-service",
+              "asset-service"),
+          jwt("SERVICE", "warehouse.timezone.read", null, "auth-service", "auth-service"),
+          jwt("SERVICE", "warehouse.timezone.read", null, "asset-service", "other-service"),
+          jwt("USER", "warehouse.timezone.read", null, "asset-service", "asset-service")
+        }) {
+      assertThatThrownBy(() -> authorizer.requireInternalTimeZoneReader(invalid))
+          .isInstanceOf(AccessDeniedException.class);
+      assertThatThrownBy(() -> authorizer.requireInternalOperationMarker(invalid))
+          .isInstanceOf(AccessDeniedException.class);
+    }
+  }
+
+  @Test
+  void lifecycleContractsRequireAnExactRecognizedResourceOwnerScope() {
+    WarehouseAuthorizer authorizer = new WarehouseAuthorizer(new MockEnvironment(), false);
+
+    authorizer.requireInternalLifecycleAdmissionReader(
+        jwt("SERVICE", "warehouse.lifecycle.read", null, "asset-service", "asset-service"));
+    assertThat(
+            authorizer.requireInternalLifecycleWorkReader(
+                jwt(
+                    "SERVICE",
+                    "warehouse.lifecycle.read",
+                    null,
+                    "maintenance-service",
+                    "maintenance-service")))
+        .isEqualTo(WarehouseLifecycleReadinessOwner.MAINTENANCE);
+    assertThat(
+            authorizer.requireInternalLifecycleReadinessConfirmer(
+                jwt(
+                    "SERVICE",
+                    "warehouse.lifecycle.confirm",
+                    null,
+                    "task-board-service",
+                    "task-board-service")))
+        .isEqualTo(WarehouseLifecycleReadinessOwner.TASK_BOARD);
+    for (Jwt invalid :
+        new Jwt[] {
+          jwt(
+              "SERVICE",
+              "warehouse.lifecycle.read warehouse.read",
+              null,
+              "asset-service",
+              "asset-service"),
+          jwt(
+              "SERVICE",
+              "warehouse.lifecycle.confirm",
+              null,
+              "auth-service",
+              "auth-service"),
+          jwt(
+              "SERVICE",
+              "warehouse.lifecycle.confirm",
+              null,
+              "asset-service",
+              "other-service"),
+          jwt(
+              "USER",
+              "warehouse.lifecycle.read",
+              null,
+              "asset-service",
+              "asset-service")
+        }) {
+      assertThatThrownBy(() -> authorizer.requireInternalLifecycleAdmissionReader(invalid))
+          .isInstanceOf(AccessDeniedException.class);
+      assertThatThrownBy(() -> authorizer.requireInternalLifecycleWorkReader(invalid))
+          .isInstanceOf(AccessDeniedException.class);
+      assertThatThrownBy(() -> authorizer.requireInternalLifecycleReadinessConfirmer(invalid))
+          .isInstanceOf(AccessDeniedException.class);
+    }
+  }
+
+  @Test
   void developmentBypassDoesNotOpenTheInternalContract() {
     MockEnvironment environment = new MockEnvironment();
     environment.setActiveProfiles("dev");
@@ -113,6 +226,16 @@ class WarehouseAuthorizerTest {
     assertThatThrownBy(() -> authorizer.requireInternalInventoryService(null))
         .isInstanceOf(AccessDeniedException.class);
     assertThatThrownBy(() -> authorizer.requireInternalLogisticsService(null))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> authorizer.requireInternalTimeZoneReader(null))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> authorizer.requireInternalOperationMarker(null))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> authorizer.requireInternalLifecycleAdmissionReader(null))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> authorizer.requireInternalLifecycleWorkReader(null))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> authorizer.requireInternalLifecycleReadinessConfirmer(null))
         .isInstanceOf(AccessDeniedException.class);
   }
 

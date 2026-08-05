@@ -73,7 +73,7 @@ class WarehouseOutboxDeliveryIntegrationTest {
         service.replace(
             created.id(),
             new ReplaceWarehouseRequest(
-                created.version(), "Changed name", "Москва", "hidden address", "Europe/Moscow", true, 3));
+                created.version(), "Changed name", "Москва", "hidden address", "Europe/Moscow", 3));
     RwmsKafkaOutboundEventPublisher publisher = mock(RwmsKafkaOutboundEventPublisher.class);
     WarehouseKafkaOutboxRelay relay = new WarehouseKafkaOutboxRelay(store, properties, publisher);
 
@@ -102,7 +102,7 @@ class WarehouseOutboxDeliveryIntegrationTest {
   }
 
   @Test
-  void boundedFailureMovesTheEventToDltAndOperatorRequeueIsCompareAndSet() {
+  void boundedFailureMovesTheEventToDltWithoutBypassingReviewedRecovery() {
     WarehouseResponse created = create("Retry warehouse");
     UUID eventId =
         jdbc.queryForObject(
@@ -120,10 +120,6 @@ class WarehouseOutboxDeliveryIntegrationTest {
 
     assertThat(jdbc.queryForObject("select status from outbox_event where event_id=?", String.class, eventId))
         .isEqualTo("DLT");
-    assertThat(store.requeue(eventId, 4)).isTrue();
-    assertThat(store.requeue(eventId, 4)).isFalse();
-    assertThat(jdbc.queryForObject("select status from outbox_event where event_id=?", String.class, eventId))
-        .isEqualTo("PENDING");
   }
 
   private WarehouseResponse create(String name) {

@@ -14,6 +14,7 @@ import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 import org.springframework.messaging.support.MessageBuilder;
+import org.springframework.kafka.support.KafkaHeaders;
 
 class AssetKafkaConsumersTest {
   private final byte[] payload = "{\"comment\":\"private@example.test\"}".getBytes(StandardCharsets.UTF_8);
@@ -64,5 +65,19 @@ class AssetKafkaConsumersTest {
 
     verify(processor, times(4)).process(payload, AssetAggregateType.RENTAL_ITEM);
     verify(dlt).publish(payload, "PROCESSING_FAILED");
+  }
+
+  @Test
+  void realtimeBindingUsesTheReceivedTopicAndNeverOwnsDlt() {
+    AssetRealtimeInvalidationBroadcaster broadcaster =
+        mock(AssetRealtimeInvalidationBroadcaster.class);
+    var message =
+        MessageBuilder.withPayload(payload)
+            .setHeader(KafkaHeaders.RECEIVED_TOPIC, AssetAggregateType.RENTAL_ITEM.topic())
+            .build();
+
+    new AssetKafkaConsumers().assetRealtimeInvalidation(broadcaster).accept(message);
+
+    verify(broadcaster).broadcast(payload, AssetAggregateType.RENTAL_ITEM);
   }
 }

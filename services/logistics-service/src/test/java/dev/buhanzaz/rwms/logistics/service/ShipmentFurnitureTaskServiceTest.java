@@ -46,6 +46,7 @@ class ShipmentFurnitureTaskServiceTest {
     EquipmentMovementTaskService movementTasks = mock(EquipmentMovementTaskService.class);
     ShipmentFurnitureTaskResponseMapper mapper =
         mock(ShipmentFurnitureTaskResponseMapper.class);
+    LogisticsWarehouseLifecycle warehouseLifecycle = mock(LogisticsWarehouseLifecycle.class);
 
     LogisticsDocument shipment = mock(LogisticsDocument.class);
     when(shipment.getId()).thenReturn(SHIPMENT_ID);
@@ -80,6 +81,7 @@ class ShipmentFurnitureTaskServiceTest {
             taskLinks,
             dependencies,
             movementTasks,
+            warehouseLifecycle,
             mapper);
 
     var readiness = service.readiness(SHIPMENT_ID);

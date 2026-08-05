@@ -7,7 +7,6 @@ const lifecycle = vi.hoisted(() => ({
   get: vi.fn(),
   listAcceptance: vi.fn(),
   listRepairs: vi.fn(),
-  listWriteOffs: vi.fn(),
   queue: vi.fn(),
   replacePlan: vi.fn(),
   writeOff: vi.fn(),
@@ -28,10 +27,16 @@ vi.mock(
     getMaintenanceRepair: lifecycle.get,
     listMaintenanceAcceptance: lifecycle.listAcceptance,
     listMaintenanceRepairs: lifecycle.listRepairs,
-    listMaintenanceWriteOffs: lifecycle.listWriteOffs,
     queueMaintenanceRepair: lifecycle.queue,
     replaceMaintenanceRepairPlan: lifecycle.replacePlan,
-    writeOffMaintenanceRepair: lifecycle.writeOff,
+  })
+)
+
+vi.mock(
+  "@/features/write-offs/property-dispositions-api",
+  async (importOriginal) => ({
+    ...(await importOriginal()),
+    writeOffRepairDisposition: lifecycle.writeOff,
   })
 )
 

@@ -9,7 +9,10 @@ import dev.buhanzaz.rwms.taskboard.domain.KpiSettingsStatus;
 import dev.buhanzaz.rwms.taskboard.repository.WarehouseMetadataRepository;
 import dev.buhanzaz.rwms.taskboard.service.KpiSettingsService;
 import dev.buhanzaz.rwms.taskboard.service.StaleVersionException;
+import dev.buhanzaz.rwms.taskboard.service.WarehouseTimeZoneGateway.TimeZoneDecision;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -29,11 +32,17 @@ class KpiSettingsServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Autowired KpiSettingsService service;
   @Autowired WarehouseMetadataRepository warehouses;
+  @Autowired TestWarehouseTimeZoneGateway timeZones;
   @Autowired JdbcTemplate jdbc;
 
   @BeforeEach
   void clean() {
     cleanTaskBoardFixtures(jdbc);
+    timeZones.reset();
+    timeZones.setTimeline(
+        W1, List.of(new TimeZoneDecision(ZoneId.of("Europe/Moscow"), Instant.EPOCH)));
+    timeZones.setTimeline(
+        W2, List.of(new TimeZoneDecision(ZoneId.of("Asia/Yekaterinburg"), Instant.EPOCH)));
     warehouses.save(WarehouseMetadata.fromFact(W1, 4, "Europe/Moscow", true));
     warehouses.save(WarehouseMetadata.fromFact(W2, 2, "Asia/Yekaterinburg", true));
   }
@@ -72,6 +81,24 @@ class KpiSettingsServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
     assertThat(service.get(W2).palette()).isNull();
     assertThat(service.get(W2).timeZone()).isEqualTo("Asia/Yekaterinburg");
+  }
+
+  @Test
+  void currentKpiSettingsZoneComesFromAuthoritativeAsOfBoundaryNotMetadataSnapshot() {
+    timeZones.setTimeline(
+        W1, List.of(new TimeZoneDecision(ZoneId.of("Europe/Samara"), Instant.EPOCH)));
+
+    assertThat(service.get(W1).timeZone()).isEqualTo("Europe/Samara");
+
+    var saved =
+        service.savePalette(
+            W1,
+            new SaveKpiPaletteRequest(
+                0,
+                List.of(new KpiPaletteRangeRequest(0, 100, "#16A34A")),
+                "#7F1D1D"));
+
+    assertThat(saved.timeZone()).isEqualTo("Europe/Samara");
   }
 
   @Test

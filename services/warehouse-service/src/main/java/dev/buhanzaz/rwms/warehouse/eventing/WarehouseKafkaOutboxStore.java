@@ -172,22 +172,6 @@ public class WarehouseKafkaOutboxStore {
     return count == null ? 0 : count;
   }
 
-  @Transactional
-  public boolean requeue(UUID eventId, int expectedAttemptCount) {
-    return jdbc.update(
-            """
-            update outbox_event
-               set status='PENDING',attempt_count=0,next_attempt_at=clock_timestamp(),
-                   dlt_at=null,last_error_code='OPERATOR_REQUEUED'
-             where event_id=? and status='DLT' and attempt_count=?
-               and published_at is null and lease_owner is null
-               and lease_token is null and lease_until is null
-            """,
-            eventId,
-            expectedAttemptCount)
-        == 1;
-  }
-
   private void dlt(Claim claim, String code) {
     jdbc.update(
         """

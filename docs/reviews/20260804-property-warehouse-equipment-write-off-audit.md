@@ -4,7 +4,9 @@
 
 Рабочая копия: ветка `develop`, базовый `HEAD 694da2e95acf`, поверх него имеется большой набор незакоммиченных пользовательских изменений
 
-Статус: **контур не готов к безопасной промышленной эксплуатации без устранения P0/P1-дефектов**
+Статус исходного среза 2026-08-04: **контур не был готов к безопасной промышленной эксплуатации без устранения P0/P1-дефектов**
+
+Статус исправлений 2026-08-05: см. [раздел 17](#17-исправления-по-результатам-аудита-2026-08-05). Разделы 1–16 сохранены как исходное доказательство проблем и не описывают состояние кода после исправлений.
 
 ## 1. Резюме
 
@@ -259,9 +261,24 @@ Write-off транзакция фиксирует локальный repair ка
 
 ### P-14. Удалённый asset-вызов выполняется внутри maintenance DB-транзакции
 
-`reconcileOneTask` входит в transaction callback, перезагружает/блокирует repair chain и в `reconcileAssetTransition` вызывает acquire/renew/status/release удалённого asset-service до commit. Сетевой timeout удерживает соединение и локи, повышает риск pool starvation и неоднозначного retry.
+До исправления `reconcileOneTask` входил в transaction callback,
+перезагружал/блокировал repair chain и в `reconcileAssetTransition` вызывал
+acquire/renew/status/release удалённого asset-service до commit. Сетевой timeout
+удерживал соединение и локи, повышал риск pool starvation и неоднозначного
+retry.
 
 **Исправление.** Короткая транзакция claims task с lease token; удалённый вызов вне DB-транзакции; короткая финализация CAS по lease/review version. После timeout — truth read/idempotent retry. Разделить гигантские application services по use cases внутри текущего deployable, не создавая новый сервис.
+
+**Реализовано.** Reconciliation, inventory publication, warehouse admission и
+синхронные команды estimates/repairs/acceptance/transfer разделены на короткие
+prepare/finalize-транзакции; HTTP-вызовы выполняются между ними. Claim хранит
+точный lease fence, а поздний worker не может подтвердить более новый claim.
+Повтор transfer arrival использует прежние derived idempotency keys, сохранённые
+task versions и переданную logistics точную `rentalItemVersion`; текущие
+snapshots служат только диагностикой и не заменяют повтор команды. См.
+[`MaintenanceApplicationService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceApplicationService.java),
+[`MaintenanceReconciliationStore.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceReconciliationStore.java) и
+[`TransferWorkflowStore.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/service/TransferWorkflowStore.java).
 
 ### P-15. Срок asset idempotency меньше потенциального срока reconciliation
 
@@ -289,7 +306,12 @@ Maintenance при сохранении catalog nodes вызывает `ensureFu
 
 ### P-19. Широкий `asset.internal` API выглядит неиспользуемым и расширяет blast radius
 
-[`InternalAssetController`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/api/InternalAssetController.java) предоставляет общие holds/leases и raw fenced status target. Authorizer принимает service identity с `asset.internal`, но не найдено production provisioning или first-party caller: maintenance, logistics и inventory используют отдельные scopes. Наличие общего raw endpoint сохраняет обход узких политик и включает дефекты fingerprint из P-18.
+`InternalAssetController` (присутствовал в исходном срезе и удалён исправлением
+P-19) предоставлял общие holds/leases и raw fenced status target. Authorizer
+принимал service identity с `asset.internal`, но не было найдено production
+provisioning или first-party caller: maintenance, logistics и inventory
+использовали отдельные scopes. Наличие общего raw endpoint сохраняло обход
+узких политик и включало дефекты fingerprint из P-18.
 
 **Исправление.** Сначала подтвердить runtime telemetry/конфигурацию внешних consumers. Если потребителей нет — удалить route/models/service methods/tests/OpenAPI и scope. Если неизвестный consumer есть — мигрировать его на dedicated least-privilege contract. Общая audience validation уже включена платформенным starter; для оставшегося generic пути дополнительно требовать `sub == client_id`, известный allowlisted client и точный scope, как это уже сделано для dedicated maintenance/logistics/inventory credentials.
 
@@ -534,3 +556,146 @@ Asset хранит каждое движение, domain event, canonical outbox
 Границы физических баз и базовое владение агрегатами в целом правильные: warehouse, asset и maintenance не делят JPA-модели или таблицы. Основной риск находится выше persistence — в переходах и общих transport-командах. Терминальные состояния не защищены как терминальные, availability не следует фактической политике исполнения, а generic status/transfer/disposition endpoints позволяют обойти ownership maintenance/logistics. Recovery механизмы присутствуют как внутренние классы, но не доведены до безопасной эксплуатации.
 
 Рекомендуемый порядок — сначала запретить порчу terminal state и ложную доступность, затем утвердить ownership/семантику списания и восстановить audit/recovery, после чего заниматься масштабированием чтений и эксплуатационной оптимизацией. Выпускать текущий контур как полностью проверенный и безопасный до P0/P1 нельзя.
+
+## 17. Исправления по результатам аудита 2026-08-05
+
+### 17.1. Утверждённые продуктовые решения
+
+Реализация ниже следует прямым решениям владельца продукта:
+
+1. При списании непустой бытовки оператор выбирает: вернуть на склад точные
+   положительные количества по строкам или списать всё с бытовкой. Количество
+   выше фактического запрещено, нулевые остатки не показываются. Не выбранный
+   остаток становится частью списания. Для пустой бытовки плана наполнения нет.
+2. Списание и утрата дополнительного оборудования — предложение
+   `maintenance-service`: управляющий склада или администратор создаёт его с
+   обязательной причиной, обычный менеджер аренды не может. Финально решает
+   только администратор. Недостача при завершении инвентаризации создаёт `LOSS`.
+3. Ручной статус бытовки ограничен `SALE`, `USED_SALE`, `FREE`, `WAREHOUSE`,
+   `OWN_NEEDS`.
+4. Любое физическое межскладское перемещение оформляется logistics document.
+   Отдельная administrative correction применяется только когда физического
+   движения не было; она требует администратора, причину, HTTPS-доказательство,
+   `expectedVersion`, отсутствие активных workflow-blockers и неизменяемый
+   аудит. Фактическое перемещение без документа оформляется ретроспективным
+   logistics document.
+5. Одна строка списка списаний/утрат означает одно решение и один root asset;
+   repair/rework chain показывается в detail.
+6. Нормализованные display names складов и оборудования уникальны; UUID —
+   устойчивый внешний business reference.
+7. Неактивный склад остаётся доступен историческим read-моделям.
+8. До первой операции timezone можно исправить сразу. После начала работы это
+   датированное изменение: старая зона продолжает применяться к старым фактам,
+   новая — только с `effectiveFrom`; отчёты прошлого не переписываются.
+9. HTML-import временно сохранён как рудимент, но ограничен безопасным созданием
+   pristine assets и receipt-ledger; merge живого имущества и workflow-статусы
+   запрещены.
+10. Глобальный read справочника складов пока оставлен для всех авторизованных
+    пользователей; это принятое раскрытие, а не незакрытый isolation-дефект.
+
+### 17.2. Итог по замечаниям
+
+| ID | Статус после исправлений | Реализованное правило и основное доказательство |
+| --- | --- | --- |
+| P-01 | Закрыто | Terminal balances запрещены как source обычного transfer в [`AssetService.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/AssetService.java). |
+| P-02 | Закрыто | Версия terminal sink определяется и блокируется asset-service; повторное списание не требует фиктивной client version. См. [`PropertyDispositionService.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/disposition/PropertyDispositionService.java). |
+| P-03 | Закрыто | Непустая бытовка требует полной version-fenced contents plan; выбранное уходит в furniture task, остаток — в terminal effect. См. [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml). |
+| P-04 | Закрыто | Terminal cabin не может войти в direct repair, queue/rework или выйти из terminal статуса. См. [`RentalItemStatus.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/domain/RentalItemStatus.java) и узкий maintenance effect. |
+| P-05 | Закрыто | Generic status route оставлен только как ручная команда для пяти утверждённых статусов; workflow/terminal targets отвергаются доменом и контрактом. |
+| P-06 | Закрыто | Totals, holds, order reservation и movement используют одну SQL-backed [`EquipmentAllocationPolicy.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/EquipmentAllocationPolicy.java). |
+| P-07 | Закрыто | Нормализованное имя уникально; category неизменяема после использования, а deactivation блокируется живыми остатками/ссылками. См. [`V28__equipment_catalog_identity_and_live_usage.sql`](../../services/asset-service/src/main/resources/db/migration/V28__equipment_catalog_identity_and_live_usage.sql). |
+| P-08 | Закрыто | `ACTIVE -> DRAINING -> INACTIVE`, directional admission, durable readiness intents и одинаковые local DB commit-fences реализованы в warehouse/asset/maintenance/logistics/task-board. |
+| P-09 | Закрыто | Прямой cabin warehouse route удалён, public equipment transfer ограничен одним складом; физический межскладской процесс принадлежит logistics, correction отделена. |
+| P-10 | Закрыто | Maintenance хранит единое business decision, asset применяет только узкий prepared effect. См. [`PropertyDispositionApplicationService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/disposition/application/PropertyDispositionApplicationService.java). |
+| P-11 | Закрыто | Decision/effect хранят reason, actor, source и immutable name/category/location/content snapshots; Kafka payload остаётся санитизированным. |
+| P-12 | Закрыто | Серверная пагинация возвращает одну строку на decision/root; repair chain находится в detail response. |
+| P-13 | Закрыто | UI показывает pending/effective/quarantined effect; admin recovery требует reason и exact review version, затем повторно проверяет внешнюю истину. |
+| P-14 | Закрыто | Property effects, reconciliation, inventory publication, warehouse admission и синхронные maintenance commands используют prepare/remote/finalize без сетевого вызова под локальной DB-транзакцией. Transfer retry повторяет exact key/version-fenced effects. |
+| P-15 | Закрыто | Permanent decision fence и append-only furniture custody заменили семидневный dedup как доказательство эффекта. |
+| P-16 | Закрыто | Asset и warehouse outbox имеют проверяемую reviewed recovery: checksum/schema, stream head, exact replay, неизменяемый audit и terminal fencing. |
+| P-17 | Закрыто | Auto-link сначала сохраняет durable intent со stable node UUID, вызывает asset вне catalog transaction и подтверждает локально; partial failure/rename/remap требует version-fenced admin retry/abandon. См. [`FurnitureEquipmentLinkStore.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/FurnitureEquipmentLinkStore.java). |
+| P-18 | Закрыто | Resource ID включён в fingerprints mutable commands; replay другого target с тем же ключом конфликтует. |
+| P-19 | Закрыто | Широкий `InternalAssetController` и `asset.internal` runtime boundary удалены; остались exact service identity/audience/scope contracts. |
+| P-20 | Частично закрыто | Rental-item и property-decision lists используют DB paging; equipment warehouse list выполняет constant-count batch reads вместо per-SKU N+1. Production-scale p95/heap/pool/`EXPLAIN ANALYZE` gate на 10k/500/100k ещё не выполнялся, а полный catalog read остаётся непагинированным. |
+| P-21 | Закрыто | OAuth client-credentials token кэшируется до expiry-skew, refresh single-flight, после `401` допускается один refresh/retry. |
+| P-22 | Закрыто | `minLength`/trim semantics синхронизированы с runtime validation и parity tests. |
+| P-23 | Закрыто | Invalidation публикуется из committed Kafka facts между репликами; SSE остаётся честным invalidation/`RESYNC`, не event archive. |
+| P-24 | Закрыто | Equipment movement fact содержит immutable source/target warehouse, location и cabin context; task-board consumer активен и version/dedup fenced. |
+| P-25 | Закрыто | Warehouse/equipment normalized names уникальны, UUID закреплён как стабильная identity. |
+| P-26 | Закрыто | Append-only timezone history и as-of reads отделяют немедленную unused correction от effective-dated operational change. См. [`V4__warehouse_effective_time_zones.sql`](../../services/warehouse-service/src/main/resources/db/migration/V4__warehouse_effective_time_zones.sql). |
+| P-27 | Открытое продуктовое решение | Добавлены backlog/age/quarantine metrics, но retention/archive не придуман и данные не удаляются. Требуемое решение записано в [`open-questions.md`](../project-knowledge/open-questions.md). |
+| P-28 | Закрыто в утверждённом режиме | HTML-import сохранён, но может только создать новый asset с ручным статусом и immutable equipment receipts; existing asset merge/replace и remote call внутри commit запрещены. |
+| P-29 | Разрешено продуктовым решением | Глобальный warehouse directory сохранён намеренно; inactive warehouses доступны историческим reads. |
+
+Итог: все Critical закрыты. Из High полностью закрыты P-06–P-19; P-20 закрыт
+частично — устранены in-memory paging основных списков и N+1 warehouse totals,
+но полный catalog read ещё не пагинирован и целевой production-scale gate не
+проводился. P-27 нельзя закрыть без retention/legal/archive решения и отдельного
+разрешения на необратимое удаление данных.
+
+### 17.3. Основные изменённые контуры
+
+- canonical contracts: [`contracts/openapi/`](../../contracts/openapi/) и
+  [`contracts/events/`](../../contracts/events/);
+- owners: [`warehouse-service`](../../services/warehouse-service/),
+  [`asset-service`](../../services/asset-service/),
+  [`maintenance-service`](../../services/maintenance-service/) и
+  [`logistics-service`](../../services/logistics-service/);
+- затронутые consumers: [`inventory-service`](../../services/inventory-service/),
+  [`task-board-service`](../../services/task-board-service/), service OAuth
+  provisioning в [`auth-service`](../../services/auth-service/) и
+  [`panel`](../../panel/);
+- ключевые Flyway-границы: warehouse V3–V6, asset V28–V35, maintenance
+  V34–V39, logistics V36–V37, inventory V16 и task-board V27.
+
+Инвентаризационный продуктовый контур повторно не аудировался. В нём изменены
+только узкая публикация furniture shortage как `LOSS` proposal и участие в
+warehouse lifecycle. `app/`, `worker-app/`, APK/emulator и VPS не трогались по
+прямому указанию пользователя.
+
+## 18. Проверки исправлений
+
+Подтверждены следующие проверки:
+
+- logistics-service: полный модуль — **275/275**, `BUILD SUCCESSFUL`; отдельно
+  изменённые transfer workflow/HTTP contract — **37/37**;
+- asset-service: полный модуль — **240/240**, `BUILD SUCCESSFUL` за 7m22s;
+  отдельно warehouse lifecycle/Flyway — **23/23**, JPA validation — **24/24**,
+  исправленные status/catalog/allocation regressions — **32/32**;
+- warehouse recovery/access/relay/Flyway/OpenAPI — selected gate green;
+- inventory-service — полный модуль **117/117**;
+- task-board-service — полный модуль, **258 passed + 1 skipped**, green;
+- panel — **130 focused tests**, typecheck и production build green;
+- maintenance-service: полный модуль — **392/392**, `BUILD SUCCESSFUL`;
+  отдельный transaction/inventory/lifecycle/media/logistics gate — **41/41**;
+  ранее disposition baseline — **102/102**, расширенный
+  core/disposition/lifecycle/recovery/dependency gate — **164/164** и
+  Flyway/JPA/OpenAPI/P-17/P-08 gate — **50/50**.
+
+Полный panel lint остаётся красным на 13 ранее существовавших ошибках вне этого
+diff; изменённые файлы проходят scoped lint. Production load gate P-20,
+Android/device E2E и runtime/VPS smoke не выполнялись.
+
+## 19. Финальный architecture review и эксплуатационный запуск
+
+Команды остались у owning services; общих таблиц/JPA-моделей, gateway saga или
+browser-owned domain state не добавлено. Cross-service calls используют exact
+service credentials, durable local intents и выполняются вне локальных
+транзакций. DB guards/advisory locks закрывают admission-to-commit race,
+optimistic versions и idempotency fences защищают retry, а outbox/inbox/recovery
+сохраняют at-least-once semantics. Коррекции, решения и recovery audit
+append-only; уничтожение production evidence не выполнялось.
+
+Для завершения межскладского ремонта logistics передаёт maintenance точную
+версию бытовки, сохранённую released asset guard после `TRANSFER_ARRIVE`.
+Версия входит в durable request fingerprint; повтор после успешных внешних
+эффектов и потерянного локального commit безусловно воспроизводит те же
+task/lease/status commands с теми же ключами и версиями, а затем повторно
+проверяет полную repair chain перед фиксацией.
+
+Код не развёртывался. Перед runtime-вводом требуется применить Flyway и обновить
+только затронутые сервисы, затем проверить health/logs, readiness/admission и
+outbox/reconciliation/quarantine backlog, выполнить публичный smoke списания
+пустой и наполненной бытовки, оборудования, admin approval/recovery,
+межскладского документа и датированной timezone. До отдельного нагрузочного
+gate P-20 нельзя утверждать production p95/heap/pool готовность.

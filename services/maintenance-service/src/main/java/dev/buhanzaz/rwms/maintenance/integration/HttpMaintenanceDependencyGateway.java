@@ -26,11 +26,26 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
   private static final String TASK_REGISTRY_CLIENT = "maintenance-task-board-registry";
   private static final String MEDIA_CLIENT = "maintenance-media";
   private static final String LOGISTICS_CLIENT = "maintenance-logistics";
+  private static final String WAREHOUSE_ADMISSION_CLIENT =
+      "maintenance-warehouse-admission";
+  private static final String WAREHOUSE_READINESS_CLIENT =
+      "maintenance-warehouse-readiness";
+  private static final String WAREHOUSE_READINESS_CONFIRM_CLIENT =
+      "maintenance-warehouse-readiness-confirm";
+  private static final String WAREHOUSE_TIMEZONE_CLIENT =
+      "maintenance-warehouse-timezone";
+  private static final String WAREHOUSE_OPERATION_MARK_CLIENT =
+      "maintenance-warehouse-operation-mark";
   private static final String ASSET_SCOPE = "asset.maintenance";
   private static final String TASK_SCOPE = "task-board.task-sync";
   private static final String TASK_REGISTRY_SCOPE = "queue-registry.write";
   private static final String MEDIA_SCOPE = "media.maintenance";
   private static final String LOGISTICS_SCOPE = "logistics.maintenance";
+  private static final String WAREHOUSE_LIFECYCLE_READ_SCOPE = "warehouse.lifecycle.read";
+  private static final String WAREHOUSE_LIFECYCLE_CONFIRM_SCOPE =
+      "warehouse.lifecycle.confirm";
+  private static final String WAREHOUSE_TIMEZONE_SCOPE = "warehouse.timezone.read";
+  private static final String WAREHOUSE_OPERATION_MARK_SCOPE = "warehouse.operation.mark";
 
   private final RestClient client;
   private final OAuth2AuthorizedClientManager authorizedClients;
@@ -43,6 +58,7 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
   private final String mediaOwnerProofUrl;
   private final String driverTaskIntakeUrl;
   private final String propertyEquipmentMovementTaskUrl;
+  private final String warehouseInternalBase;
 
   HttpMaintenanceDependencyGateway(
       RestClient client,
@@ -70,6 +86,146 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
     propertyEquipmentMovementTaskUrl =
         strip(properties.logisticsBaseUrl().toString())
             + "/api/internal/logistics/v1/maintenance/equipment-movement-tasks";
+    warehouseInternalBase = strip(properties.warehouseBaseUrl().toString())
+        + "/api/internal/warehouse/v1";
+  }
+
+  @Override
+  public WarehouseOperationAdmission warehouseAdmission(
+      UUID warehouseId, WarehouseOperationDirection direction) {
+    if (warehouseId == null || direction == null) {
+      throw new IllegalArgumentException("Warehouse admission identity is required");
+    }
+    try {
+      WarehouseOperationAdmission response = client.get()
+          .uri(
+              warehouseInternalBase
+                  + "/warehouses/"
+                  + warehouseId
+                  + "/admission?direction={direction}",
+              direction.name())
+          .header(
+              HttpHeaders.AUTHORIZATION,
+              bearer(WAREHOUSE_ADMISSION_CLIENT, WAREHOUSE_LIFECYCLE_READ_SCOPE))
+          .retrieve()
+          .body(WarehouseOperationAdmission.class);
+      if (response == null
+          || !warehouseId.equals(response.warehouseId())
+          || direction != response.direction()) {
+        throw malformed("Warehouse-service returned mismatched admission truth");
+      }
+      return response;
+    } catch (RuntimeException exception) {
+      throw dependencyFailure(exception);
+    }
+  }
+
+  @Override
+  public WarehouseLifecycleReadinessWorkPage warehouseLifecycleReadinessWork(
+      UUID after, int limit) {
+    if (limit < 1 || limit > 500) {
+      throw new IllegalArgumentException("Warehouse readiness page size is invalid");
+    }
+    try {
+      String uri = warehouseInternalBase + "/lifecycle/readiness-work?limit=" + limit;
+      if (after != null) uri += "&after=" + after;
+      WarehouseLifecycleReadinessWorkPage response = client.get()
+          .uri(uri)
+          .header(
+              HttpHeaders.AUTHORIZATION,
+              bearer(WAREHOUSE_READINESS_CLIENT, WAREHOUSE_LIFECYCLE_READ_SCOPE))
+          .retrieve()
+          .body(WarehouseLifecycleReadinessWorkPage.class);
+      if (response == null
+          || response.items().stream()
+              .map(WarehouseLifecycleReadinessWork::warehouseId)
+              .distinct()
+              .count()
+              != response.items().size()
+          || (after != null && after.equals(response.nextAfter()))) {
+        throw malformed("Warehouse-service returned malformed readiness work");
+      }
+      return response;
+    } catch (RuntimeException exception) {
+      throw dependencyFailure(exception);
+    }
+  }
+
+  @Override
+  public WarehouseLifecycleReadinessConfirmation confirmWarehouseLifecycleReadiness(
+      UUID warehouseId, long expectedVersion) {
+    if (warehouseId == null || expectedVersion < 0) {
+      throw new IllegalArgumentException("Warehouse readiness identity is required");
+    }
+    try {
+      WarehouseLifecycleReadinessConfirmation response = client.post()
+          .uri(warehouseInternalBase + "/warehouses/" + warehouseId + "/lifecycle-readiness")
+          .header(
+              HttpHeaders.AUTHORIZATION,
+              bearer(
+                  WAREHOUSE_READINESS_CONFIRM_CLIENT,
+                  WAREHOUSE_LIFECYCLE_CONFIRM_SCOPE))
+          .body(new WarehouseLifecycleReadinessRequest(expectedVersion))
+          .retrieve()
+          .body(WarehouseLifecycleReadinessConfirmation.class);
+      if (response == null
+          || !warehouseId.equals(response.warehouseId())
+          || response.warehouseVersion() != expectedVersion) {
+        throw malformed("Warehouse-service returned mismatched readiness confirmation");
+      }
+      return response;
+    } catch (RuntimeException exception) {
+      throw dependencyFailure(exception);
+    }
+  }
+
+  @Override
+  public WarehouseTimeZone warehouseTimeZoneAt(UUID warehouseId, OffsetDateTime at) {
+    if (warehouseId == null || at == null) {
+      throw new IllegalArgumentException("Warehouse timezone lookup identity is required");
+    }
+    try {
+      WarehouseTimeZone response = client.get()
+          .uri(
+              warehouseInternalBase
+                  + "/warehouses/"
+                  + warehouseId
+                  + "/time-zone?at={at}",
+              at)
+          .header(
+              HttpHeaders.AUTHORIZATION,
+              bearer(WAREHOUSE_TIMEZONE_CLIENT, WAREHOUSE_TIMEZONE_SCOPE))
+          .retrieve()
+          .body(WarehouseTimeZone.class);
+      if (response == null
+          || !warehouseId.equals(response.warehouseId())
+          || response.effectiveFrom().isAfter(at)) {
+        throw malformed("Warehouse-service returned mismatched timezone truth");
+      }
+      return response;
+    } catch (RuntimeException exception) {
+      throw dependencyFailure(exception);
+    }
+  }
+
+  @Override
+  public void markWarehouseOperation(
+      UUID warehouseId, UUID operationId, OffsetDateTime occurredAt) {
+    if (warehouseId == null || operationId == null || occurredAt == null) {
+      throw new IllegalArgumentException("Warehouse operation mark identity is required");
+    }
+    try {
+      client.post()
+          .uri(warehouseInternalBase + "/warehouses/" + warehouseId + "/operation-marks")
+          .header(
+              HttpHeaders.AUTHORIZATION,
+              bearer(WAREHOUSE_OPERATION_MARK_CLIENT, WAREHOUSE_OPERATION_MARK_SCOPE))
+          .body(new WarehouseOperationMarkRequest(operationId, occurredAt))
+          .retrieve()
+          .toBodilessEntity();
+    } catch (RuntimeException exception) {
+      throw dependencyFailure(exception);
+    }
   }
 
   @Override
@@ -142,6 +298,8 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
             request.expectedAssetVersion(),
             request.expectedSourceBalanceVersion(),
             request.quantity(),
+            request.maintenanceCustodyClaimId(),
+            request.maintenanceCustodyVersion(),
             request.contentsMode() == null ? null : request.contentsMode().name(),
             request.contents().stream()
                 .map(
@@ -252,6 +410,39 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
   }
 
   @Override
+  public List<MaintenanceFurnitureCustodyClaim> unresolvedFurnitureCustody(
+      String ownerType, UUID ownerId) {
+    if (!("MAINTENANCE_ESTIMATE".equals(ownerType)
+            || "MAINTENANCE_REPAIR".equals(ownerType))
+        || ownerId == null) {
+      throw new IllegalArgumentException("Maintenance furniture custody owner is invalid");
+    }
+    try {
+      MaintenanceFurnitureCustodyClaim[] response = client.get()
+          .uri(
+              assetBase + "/furniture-custody?ownerType={ownerType}&ownerId={ownerId}",
+              ownerType,
+              ownerId)
+          .header(HttpHeaders.AUTHORIZATION, bearer(ASSET_CLIENT, ASSET_SCOPE))
+          .retrieve()
+          .body(MaintenanceFurnitureCustodyClaim[].class);
+      if (response == null) {
+        throw malformed("Asset-service returned no furniture custody truth");
+      }
+      List<MaintenanceFurnitureCustodyClaim> result = List.of(response);
+      if (result.stream().anyMatch(
+              claim -> !ownerType.equals(claim.ownerType()) || !ownerId.equals(claim.ownerId()))
+          || result.stream().map(MaintenanceFurnitureCustodyClaim::id).distinct().count()
+              != result.size()) {
+        throw malformed("Asset-service returned mismatched furniture custody truth");
+      }
+      return result;
+    } catch (RuntimeException exception) {
+      throw dependencyFailure(exception);
+    }
+  }
+
+  @Override
   public FurnitureEquipmentSnapshot ensureFurnitureEquipment(
       UUID catalogNodeId, String equipmentName) {
     if (catalogNodeId == null) {
@@ -259,7 +450,7 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
     }
     String canonicalName = canonicalEquipmentName(equipmentName);
     try {
-      FurnitureEquipmentSnapshot response = client.post()
+      MaintenanceFurnitureEquipmentResponse response = client.post()
           .uri(assetBase + "/equipment-catalog")
           .header("Idempotency-Key", catalogNodeId.toString())
           .header(HttpHeaders.AUTHORIZATION, bearer(ASSET_CLIENT, ASSET_SCOPE))
@@ -382,7 +573,6 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
         ownerId,
         transition,
         linkedReturn,
-        null,
         List.of());
   }
 
@@ -391,7 +581,7 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
       UUID key, UUID rentalItemId, UUID warehouseId, long expectedVersion,
       UUID leaseId, long fencingToken,
       String ownerType, String ownerId, String transition, boolean linkedReturn,
-      UUID estimateId, List<FurnitureLoss> furnitureLosses) {
+      List<FurniturePendingReturn> furniturePendingReturns) {
     String action = switch (transition) {
       case "EMPTY_ESTIMATE_TO_FREE" -> "COMPLETE_EMPTY_ESTIMATE";
       case "EMPTY_REPAIR_TO_FREE" -> "COMPLETE_EMPTY_REPAIR";
@@ -406,7 +596,7 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
     RentalItemResponse response = put(
         assetBase + "/rental-items/" + rentalItemId + "/fenced-status", key,
         new FencedStatusRequest(expectedVersion, action, leaseId, fencingToken, ownerType, owner,
-            linkedReturn ? owner : null, estimateId, List.copyOf(furnitureLosses)),
+            linkedReturn ? owner : null, List.copyOf(furniturePendingReturns)),
         RentalItemResponse.class, ASSET_CLIENT, ASSET_SCOPE);
     String expectedStatus = switch (transition) {
       case "EMPTY_ESTIMATE_TO_FREE", "EMPTY_REPAIR_TO_FREE", "ACCEPT_TO_FREE" -> "FREE";
@@ -935,9 +1125,6 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
           response.activeLease(),
           response.dispositionAllowed());
     } catch (IllegalArgumentException exception) {
-      if (exception instanceof MaintenanceDependencyException dependency) {
-        throw dependency;
-      }
       throw malformed("Asset-service returned invalid property asset snapshot truth");
     }
   }
@@ -959,7 +1146,12 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
     try {
       PropertyAssetKind assetKind = PropertyAssetKind.valueOf(response.assetKind());
       PropertyDispositionKind disposition = PropertyDispositionKind.valueOf(response.disposition());
-      if (assetKind != request.assetKind() || disposition != request.disposition()) {
+      if (assetKind != request.assetKind()
+          || disposition != request.disposition()
+          || !java.util.Objects.equals(
+              response.maintenanceCustodyClaimId(), request.maintenanceCustodyClaimId())
+          || !java.util.Objects.equals(
+              response.maintenanceCustodyVersion(), request.maintenanceCustodyVersion())) {
         throw malformed("Asset-service returned another property disposition fence");
       }
       List<PropertyDispositionContent> contents = response.contents().stream()
@@ -979,13 +1171,12 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
           assetKind,
           response.assetId(),
           disposition,
+          response.maintenanceCustodyClaimId(),
+          response.maintenanceCustodyVersion(),
           contents,
           response.preparedAt(),
           response.appliedAt());
     } catch (IllegalArgumentException exception) {
-      if (exception instanceof MaintenanceDependencyException dependency) {
-        throw dependency;
-      }
       throw malformed("Asset-service returned invalid property disposition fence truth");
     }
   }
@@ -996,6 +1187,9 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
         || response.id() == null
         || response.warehouseId() == null
         || !expectedWarehouseId.equals(response.warehouseId())
+        || response.ownerType() == null
+        || response.ownerType().isBlank()
+        || response.ownerId() == null
         || response.state() == null
         || response.state().isBlank()) {
       throw malformed("Logistics-service returned malformed equipment movement task truth");
@@ -1003,6 +1197,8 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
     return new PropertyEquipmentMovementTask(
         response.id(),
         response.warehouseId(),
+        response.ownerType(),
+        response.ownerId(),
         response.state(),
         response.terminalState(),
         response.taskBoardDoneAt());
@@ -1238,6 +1434,8 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
 
   private record AcquireLeaseRequest(
       UUID rentalItemId, String ownerType, UUID ownerId, long expectedRentalItemVersion) {}
+  private record WarehouseLifecycleReadinessRequest(long expectedVersion) {}
+  private record WarehouseOperationMarkRequest(UUID operationId, OffsetDateTime occurredAt) {}
   private record EnsureFurnitureEquipmentRequest(UUID externalReferenceId, String equipmentName) {}
   private record MaintenanceFurnitureEquipmentResponse(
       UUID externalReferenceId, UUID equipmentId, String equipmentName) {}
@@ -1245,8 +1443,8 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
       long expectedVersion, long fencingToken, String ownerType, UUID ownerId) {}
   private record FencedStatusRequest(
       long expectedVersion, String action, UUID leaseId, long fencingToken,
-      String ownerType, UUID ownerId, UUID linkedReturnEstimateId, UUID estimateId,
-      List<FurnitureLoss> furnitureLosses) {}
+      String ownerType, UUID ownerId, UUID linkedReturnEstimateId,
+      List<FurniturePendingReturn> furniturePendingReturns) {}
   private record LeaseResponse(
       UUID id, long version, UUID rentalItemId, String ownerType, String ownerId,
       long fencingToken, String state, OffsetDateTime expiresAt, OffsetDateTime createdAt,
@@ -1289,6 +1487,8 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
       Long expectedAssetVersion,
       Long expectedSourceBalanceVersion,
       Long quantity,
+      UUID maintenanceCustodyClaimId,
+      Long maintenanceCustodyVersion,
       String contentsMode,
       List<PreparePropertyContentRequest> contents,
       PropertyDispositionLeaseProofRequest authorizedMaintenanceLease) {}
@@ -1307,6 +1507,8 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
       String assetKind,
       UUID assetId,
       String disposition,
+      UUID maintenanceCustodyClaimId,
+      Long maintenanceCustodyVersion,
       List<PropertyDispositionPreparedContentResponse> contents,
       Instant preparedAt,
       Instant appliedAt) {}
@@ -1335,6 +1537,8 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
       UUID id,
       Long version,
       UUID warehouseId,
+      String ownerType,
+      UUID ownerId,
       UUID externalTaskId,
       UUID taskBoardTaskId,
       Long taskBoardTaskVersion,

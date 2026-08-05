@@ -80,6 +80,8 @@ class LogisticsFlywayMigrationIntegrationTest {
             "logistics_reconciliation_request",
             "logistics_return_shortage_snapshot",
             "logistics_task_reference",
+            "logistics_warehouse_admission_intent",
+            "logistics_warehouse_readiness_fence",
             "order_client",
             "outbox_event",
             "projection_checkpoint",
@@ -92,6 +94,8 @@ class LogisticsFlywayMigrationIntegrationTest {
             "rental_order_unit_term",
             "rental_settings",
             "sanitized_dead_letter",
+            "warehouse_operation_mark_outbox",
+            "warehouse_operation_mark_recovery_audit",
             "version_gap_quarantine")
         .doesNotContain("warehouse", "rental_item", "inventory_session", "reservation");
     assertThat(toRegclass("databasechangelog")).isNull();

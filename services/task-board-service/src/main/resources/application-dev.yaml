@@ -24,5 +24,8 @@ rwms:
     dev-auth-bypass: ${TASK_BOARD_DEV_AUTH_BYPASS:false}
   auth:
     worker-credentials-url: ${AUTH_WORKER_CREDENTIALS_URL:http://localhost:9000/api/internal/worker-credentials}
+  warehouse:
+    lifecycle:
+      base-url: ${WAREHOUSE_SERVICE_INTERNAL_BASE_URL:http://localhost:8083}
   cors:
     allowed-origins: ${PANEL_ORIGIN:http://localhost:8080},${WORKER_ORIGIN:http://localhost:8082}

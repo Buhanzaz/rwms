@@ -17,15 +17,20 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentFurnitureTaskR
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferFurnitureReadinessView;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferArrivalPreflightView;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
 import dev.buhanzaz.rwms.logistics.service.CabinFurnitureTaskService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
 import dev.buhanzaz.rwms.logistics.service.ShipmentFurnitureTaskService;
 import dev.buhanzaz.rwms.logistics.service.TransferFurnitureTaskService;
 import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -54,6 +59,7 @@ public class LogisticsController {
   private final ShipmentFurnitureTaskService shipmentFurnitureTasks;
   private final TransferFurnitureTaskService transferFurnitureTasks;
   private final CabinFurnitureTaskService cabinFurnitureTasks;
+  private final LogisticsWarehouseLifecycle warehouseLifecycle;
   private final LogisticsAuthorizer access;
 
   @GetMapping("/returns")
@@ -76,8 +82,18 @@ public class LogisticsController {
       @Valid @RequestBody CreateReturnRequest request,
       HttpServletRequest servletRequest) {
     access.requireEdit(jwt, request.warehouseId());
+    UUID subjectId = access.subjectId(jwt);
+    var admission =
+        warehouseLifecycle.prepareDocument(
+            subjectId,
+            "CREATE_RETURN",
+            idempotencyKey,
+            List.of(
+                new AdmissionRequirement(
+                    request.warehouseId(), WarehouseOperationDirection.INCOMING)));
     LogisticsDocumentService.CreateResult result =
-        service.createReturn(access.subjectId(jwt), idempotencyKey, correlationId(servletRequest), request);
+        service.createReturn(
+            subjectId, idempotencyKey, correlationId(servletRequest), request, admission);
     return created(result);
   }
 
@@ -164,8 +180,18 @@ public class LogisticsController {
       @Valid @RequestBody CreateShipmentRequest request,
       HttpServletRequest servletRequest) {
     access.requireEdit(jwt, request.warehouseId());
+    UUID subjectId = access.subjectId(jwt);
+    var admission =
+        warehouseLifecycle.prepareDocument(
+            subjectId,
+            "CREATE_SHIPMENT",
+            idempotencyKey,
+            List.of(
+                new AdmissionRequirement(
+                    request.warehouseId(), WarehouseOperationDirection.OUTGOING)));
     LogisticsDocumentService.CreateResult result =
-        service.createShipment(access.subjectId(jwt), idempotencyKey, correlationId(servletRequest), request);
+        service.createShipment(
+            subjectId, idempotencyKey, correlationId(servletRequest), request, admission);
     return created(result);
   }
 
@@ -223,6 +249,9 @@ public class LogisticsController {
       HttpServletRequest servletRequest) {
     LogisticsDocumentView current = service.get(documentId, LogisticsDocumentType.SHIPMENT);
     access.requireEdit(jwt, current.warehouseId());
+    var warehouseToday =
+        warehouseLifecycle.localDateAt(
+            current.warehouseId(), OffsetDateTime.now(ZoneOffset.UTC));
     return accepted(
         service.confirmShipmentPreparation(
             access.subjectId(jwt),
@@ -230,7 +259,8 @@ public class LogisticsController {
             correlationId(servletRequest),
             documentId,
             expectedVersion,
-            keepScheduledDate));
+            keepScheduledDate,
+            warehouseToday));
   }
 
   @PostMapping("/shipments/{documentId}/cancel")
@@ -279,8 +309,20 @@ public class LogisticsController {
       HttpServletRequest servletRequest) {
     access.requireEdit(jwt, request.warehouseId());
     access.requireEdit(jwt, request.destinationWarehouseId());
+    UUID subjectId = access.subjectId(jwt);
+    var admission =
+        warehouseLifecycle.prepareDocument(
+            subjectId,
+            "CREATE_TRANSFER",
+            idempotencyKey,
+            List.of(
+                new AdmissionRequirement(
+                    request.warehouseId(), WarehouseOperationDirection.OUTGOING),
+                new AdmissionRequirement(
+                    request.destinationWarehouseId(), WarehouseOperationDirection.INCOMING)));
     LogisticsDocumentService.CreateResult result =
-        service.createTransfer(access.subjectId(jwt), idempotencyKey, correlationId(servletRequest), request);
+        service.createTransfer(
+            subjectId, idempotencyKey, correlationId(servletRequest), request, admission);
     return created(result);
   }
 
@@ -295,14 +337,24 @@ public class LogisticsController {
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody CreateCabinFurnitureTaskRequest request) {
     access.requireEdit(jwt, request.warehouseId());
+    UUID subjectId = access.subjectId(jwt);
+    var admission =
+        warehouseLifecycle.prepareEquipmentMovement(
+            subjectId,
+            idempotencyKey,
+            List.of(
+                new AdmissionRequirement(
+                    request.warehouseId(), WarehouseOperationDirection.OUTGOING)));
     CabinFurnitureTaskResult result =
         cabinFurnitureTasks.create(
-            access.subjectId(jwt),
+            subjectId,
             idempotencyKey,
             request.warehouseId(),
             rentalItemId,
             request.scheduledDate(),
-            request.contents());
+            request.contents(),
+            admission,
+            admission.localDate(request.warehouseId()));
     return result.taskId() == null ? ResponseEntity.ok(result) : ResponseEntity.accepted().body(result);
   }
 

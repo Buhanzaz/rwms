@@ -9,6 +9,7 @@ import dev.buhanzaz.rwms.logistics.driver.service.DriverTaskProcessor;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverTaskService;
 import dev.buhanzaz.rwms.logistics.driver.service.MaintenanceDriverTaskCompensationService;
 import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
 import jakarta.validation.Valid;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -41,6 +42,7 @@ public class MaintenanceDriverTaskController {
   private final DriverQueueScheduler scheduler;
   private final MaintenanceDriverTaskCompensationService compensation;
   private final LogisticsAuthorizer access;
+  private final LogisticsWarehouseLifecycle warehouseLifecycle;
 
   @PostMapping
   public ResponseEntity<DriverTaskResponse> create(
@@ -48,8 +50,13 @@ public class MaintenanceDriverTaskController {
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody CreateDriverTaskRequest request) {
     access.requireMaintenanceDriverTaskIntake(jwt);
+    var admission =
+        warehouseLifecycle.prepareDriverTask(
+            DriverTaskService.maintenanceActorId(),
+            idempotencyKey,
+            DriverTaskService.admissionRequirements(request));
     DriverTaskService.CreateResult result =
-        service.createFromMaintenance(idempotencyKey, request);
+        service.createFromMaintenance(idempotencyKey, request, admission);
     processor.processUntilIdle(result.response().id());
     scheduler.reconcileAndPromote(request.warehouseId());
     DriverTaskResponse response = service.get(result.response().id());

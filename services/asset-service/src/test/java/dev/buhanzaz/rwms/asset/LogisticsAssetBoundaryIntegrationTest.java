@@ -17,15 +17,21 @@ import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.TYPE_BK_1;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireLogisticsEquipmentHoldRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireLogisticsEquipmentMovementReservationRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireLogisticsOperationLeaseRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireMaintenanceOperationLeaseRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateRentalItemRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.ExecuteLogisticsEquipmentMovementReservationLine;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.ExecuteLogisticsEquipmentMovementReservationsRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsEquipmentHoldCommandRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsEquipmentMovementPurpose;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsFencedEffectRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsLeaseCommandRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsReturnEquipmentReceiptLine;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsReturnEquipmentReceiptRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceFencedStatusRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceLeaseOwnerType;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceStatusAction;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.ReleaseMaintenanceOperationLeaseRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.TransferEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.TransferAssetStatus;
@@ -180,6 +186,11 @@ class LogisticsAssetBoundaryIntegrationTest {
   void returnEffectsUseClosedActionsTypedOwnerAndActiveFenceReplay() {
     UUID subject = UUID.randomUUID();
     RentalItemResponse rental = rental(subject, UUID.randomUUID(), RentalItemStatus.RENTED);
+    int setupLogisticsEffects = jdbc.queryForObject(
+        "select count(*) from domain_event where aggregate_id=? and event_type=?",
+        Integer.class,
+        rental.id().toString(),
+        AssetEventType.RENTAL_ITEM_LOGISTICS_EFFECT_APPLIED.value());
     UUID document = UUID.randomUUID();
     UUID line = UUID.randomUUID();
     var lease = service.acquireLogisticsLease(
@@ -269,7 +280,7 @@ class LogisticsAssetBoundaryIntegrationTest {
         Integer.class,
         rental.id().toString(),
         AssetEventType.RENTAL_ITEM_LOGISTICS_EFFECT_APPLIED.value()))
-        .isEqualTo(2);
+        .isEqualTo(setupLogisticsEffects + 2);
   }
 
   @Test
@@ -723,6 +734,7 @@ class LogisticsAssetBoundaryIntegrationTest {
         new AcquireLogisticsEquipmentMovementReservationRequest(
             movementId,
             lineId,
+            LogisticsEquipmentMovementPurpose.ALLOCATABLE_REBALANCE,
             equipmentId,
             warehouse,
             cabin.id(),
@@ -827,6 +839,7 @@ class LogisticsAssetBoundaryIntegrationTest {
         new AcquireLogisticsEquipmentMovementReservationRequest(
             movementId,
             lineId,
+            LogisticsEquipmentMovementPurpose.ALLOCATABLE_REBALANCE,
             equipmentId,
             origin,
             null,
@@ -925,6 +938,7 @@ class LogisticsAssetBoundaryIntegrationTest {
         new AcquireLogisticsEquipmentMovementReservationRequest(
             movementId,
             UUID.randomUUID(),
+            LogisticsEquipmentMovementPurpose.ALLOCATABLE_REBALANCE,
             equipmentId,
             warehouse,
             null,
@@ -939,6 +953,7 @@ class LogisticsAssetBoundaryIntegrationTest {
         new AcquireLogisticsEquipmentMovementReservationRequest(
             movementId,
             UUID.randomUUID(),
+            LogisticsEquipmentMovementPurpose.ALLOCATABLE_REBALANCE,
             equipmentId,
             warehouse,
             null,
@@ -1009,6 +1024,76 @@ class LogisticsAssetBoundaryIntegrationTest {
         .response();
     if (status == RentalItemStatus.FREE) {
       return created;
+    }
+    if (status == RentalItemStatus.RENTED) {
+      UUID documentId = UUID.randomUUID();
+      UUID lineId = UUID.randomUUID();
+      var lease = service.acquireLogisticsLease(
+          subject,
+          UUID.randomUUID(),
+          new AcquireLogisticsOperationLeaseRequest(
+              created.id(), LOGISTICS_SHIPMENT, documentId, lineId, created.version()))
+          .response();
+      service.applyLogisticsEffect(
+          subject,
+          UUID.randomUUID(),
+          created.id(),
+          effect(
+              created.version(),
+              SHIPMENT_CONFIRM,
+              lease.leaseId(),
+              lease.fencingToken(),
+              LOGISTICS_SHIPMENT,
+              documentId,
+              lineId,
+              null));
+      service.releaseLogisticsLease(
+          subject,
+          UUID.randomUUID(),
+          lease.leaseId(),
+          new LogisticsLeaseCommandRequest(
+              lease.version(),
+              lease.fencingToken(),
+              LOGISTICS_SHIPMENT,
+              documentId,
+              lineId));
+      return service.rentalItem(created.id());
+    }
+    if (status == RentalItemStatus.REPAIR || status == RentalItemStatus.CAPITAL_REPAIR) {
+      UUID ownerId = UUID.randomUUID();
+      var lease = service.acquireMaintenanceLease(
+          subject,
+          UUID.randomUUID(),
+          new AcquireMaintenanceOperationLeaseRequest(
+              created.id(),
+              MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR,
+              ownerId,
+              created.version()))
+          .response();
+      service.maintenanceFencedStatus(
+          subject,
+          UUID.randomUUID(),
+          created.id(),
+          new MaintenanceFencedStatusRequest(
+              created.version(),
+              status == RentalItemStatus.REPAIR
+                  ? MaintenanceStatusAction.QUEUE_FOR_REPAIR
+                  : MaintenanceStatusAction.QUEUE_FOR_CAPITAL_REPAIR,
+              lease.id(),
+              lease.fencingToken(),
+              MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR,
+              ownerId,
+              null));
+      service.releaseMaintenanceLease(
+          subject,
+          UUID.randomUUID(),
+          lease.id(),
+          new ReleaseMaintenanceOperationLeaseRequest(
+              lease.version(),
+              lease.fencingToken(),
+              MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR,
+              ownerId));
+      return service.rentalItem(created.id());
     }
     return service.updateStatus(
         created.id(),

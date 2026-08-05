@@ -31,6 +31,7 @@ import type {
   RepairTaskWriteCommand,
 } from "@/features/repair-tasks/model/repair-task"
 import type { RepairTasksClient } from "@/features/repair-tasks/ports/repair-tasks-client"
+import type { CabinContentsDispositionPlanInput } from "@/features/write-offs/property-dispositions-api"
 
 export const REPAIR_TASKS_QUERY_KEY = ["repair-tasks"] as const
 export const REPAIR_TASK_RENTAL_ITEMS_QUERY_KEY = [
@@ -81,20 +82,12 @@ export function repairAcceptanceListQueryKey(warehouseId: string) {
   return [...REPAIR_TASKS_QUERY_KEY, "acceptance", warehouseId] as const
 }
 
-export function repairWriteOffsListQueryKey(warehouseId: string) {
-  return [...REPAIR_TASKS_QUERY_KEY, "write-offs", warehouseId] as const
-}
-
 export function listRepairTasks(warehouseId: string) {
   return repairTasksClient.list(warehouseId)
 }
 
 export function listPendingRepairAcceptance(warehouseId: string) {
   return repairTasksClient.listPendingAcceptance(warehouseId)
-}
-
-export function listRepairWriteOffs(warehouseId: string) {
-  return repairTasksClient.listWriteOffs(warehouseId)
 }
 
 export function getRepairTask(taskId: string, warehouseId: string) {
@@ -318,12 +311,16 @@ export function acceptRepairTask(params: {
 export function writeOffRepairTask(params: {
   task: RepairTaskDto
   reason: string
+  contentsPlan: CabinContentsDispositionPlanInput | null
+  idempotencyKey: string
 }) {
   return repairTasksClient.writeOff({
     taskId: params.task.id,
     expectedVersion: params.task.version,
     warehouseId: params.task.warehouseId,
     reason: params.reason,
+    contentsPlan: params.contentsPlan,
+    idempotencyKey: params.idempotencyKey,
   })
 }
 
@@ -344,6 +341,8 @@ export async function writeOffRepairDraft(params: {
   coverMediaId?: string | null
   pendingUploads: PendingEstimateMediaUpload[]
   writeOffReason: string
+  contentsPlan: CabinContentsDispositionPlanInput | null
+  idempotencyKey: string
 }) {
   if (params.origin === "ESTIMATE" && params.taskId === null) {
     throw new Error(
@@ -377,5 +376,7 @@ export async function writeOffRepairDraft(params: {
   return repairTasksClient.earlyWriteOff({
     ...buildWriteCommand({ draft, warehouseId: params.warehouseId, subtasks }),
     writeOffReason: params.writeOffReason,
+    contentsPlan: params.contentsPlan,
+    idempotencyKey: params.idempotencyKey,
   })
 }

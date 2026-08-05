@@ -38,7 +38,9 @@ public class TaskBoardProductionSafetyValidator implements ApplicationRunner {
             new Endpoint("AUTH_ISSUER", "spring.security.oauth2.resourceserver.jwt.issuer-uri"),
             new Endpoint(
                 "AUTH_TOKEN_URI", "spring.security.oauth2.client.provider.auth-service.token-uri"),
-            new Endpoint("AUTH_WORKER_CREDENTIALS_URL", "rwms.auth.worker-credentials-url"))
+            new Endpoint("AUTH_WORKER_CREDENTIALS_URL", "rwms.auth.worker-credentials-url"),
+            new Endpoint(
+                "WAREHOUSE_SERVICE_INTERNAL_BASE_URL", "rwms.warehouse.lifecycle.base-url"))
         .forEach(endpoint -> requireEndpoint(endpoint, !localProfile));
     String origins = requireText("PANEL_ORIGIN/WORKER_ORIGIN", "rwms.cors.allowed-origins");
     for (String origin : origins.split(",")) {

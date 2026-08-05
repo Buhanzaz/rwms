@@ -154,20 +154,20 @@ export function resolveHeaderBreadcrumbs(
     ]
   }
 
-  if (pathname === "/write-offs" && searchParams.has("writeOffId")) {
+  if (pathname === "/write-offs" && searchParams.has("decisionId")) {
     return [
       { title: "Списание" },
-      { title: "Склад", to: "/write-offs" },
-      { title: repairCabinNumber ?? "Бытовка" },
+      { title: "Списания", to: "/write-offs" },
+      { title: "Решение" },
     ]
   }
 
   if (pathname === "/write-offs") {
-    return [{ title: "Списание" }, { title: "Склад" }]
+    return [{ title: "Списание" }, { title: "Списания" }]
   }
 
   if (pathname === "/write-offs/equipment") {
-    return [{ title: "Списание" }, { title: "Доп. оборудование" }]
+    return [{ title: "Списание" }, { title: "Утраты" }]
   }
 
   if (pathname === "/estimates" && searchParams.has("estimateId")) {

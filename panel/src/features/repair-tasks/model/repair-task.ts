@@ -7,6 +7,7 @@ import type {
   RepairEstimateMediaRefDto,
   RepairPriority,
 } from "@/features/repair-estimates/model/repair-estimate"
+import type { CabinContentsDispositionPlanInput } from "@/features/write-offs/property-dispositions-api"
 
 export type RepairTaskStatus =
   "DRAFT" | "QUEUED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED"
@@ -213,6 +214,8 @@ export type RepairTaskWriteOffCommand = {
   expectedVersion: number
   warehouseId: string
   reason: string
+  contentsPlan: CabinContentsDispositionPlanInput | null
+  idempotencyKey: string
 }
 
 export type RepairTaskEarlyWriteOffCommand = RepairTaskWriteCommand & {
@@ -220,4 +223,6 @@ export type RepairTaskEarlyWriteOffCommand = RepairTaskWriteCommand & {
   sourceEstimateId: string | null
   sourceEstimateVersion: number | null
   writeOffReason: string
+  contentsPlan: CabinContentsDispositionPlanInput | null
+  idempotencyKey: string
 }

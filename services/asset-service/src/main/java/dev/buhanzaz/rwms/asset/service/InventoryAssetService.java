@@ -190,7 +190,7 @@ public class InventoryAssetService {
           "A new monotonic inventory capture attempt is allowed only after the previous attempt expires");
     }
 
-    warehouses.requireActive(request.warehouseId());
+    warehouses.requireIncoming(request.warehouseId());
     List<CaptureMemberRow> members = captureSnapshotTransaction.execute(
         ignored -> captureMemberRows(request.warehouseId()));
     String digest = canonicalHash(members.stream().map(CaptureMemberRow::digestValue).toList());
@@ -318,7 +318,7 @@ public class InventoryAssetService {
    */
   public InventoryFurnitureSnapshot furnitureSnapshot(InventoryFurnitureSnapshotRequest request) {
     FurnitureSnapshotRequest normalized = normalizeFurnitureSnapshotRequest(request);
-    warehouses.requireActive(normalized.warehouseId());
+    warehouses.requireIncoming(normalized.warehouseId());
     FurnitureSnapshotState snapshot = Objects.requireNonNull(
         captureSnapshotTransaction.execute(
             ignored -> currentFurnitureSnapshot(
@@ -339,7 +339,7 @@ public class InventoryAssetService {
       throw new IllegalArgumentException("Inventory furniture reconciliation identity is required");
     }
     FurnitureReconciliationPlan plan = normalizeFurnitureReconciliationRequest(request);
-    warehouses.requireActive(plan.warehouseId());
+    warehouses.requireIncoming(plan.warehouseId());
     String requestSha256 = canonicalHash(
         new FurnitureReconciliationFingerprint(inventoryId, plan));
 
@@ -398,7 +398,7 @@ public class InventoryAssetService {
         passportJson,
         tagsJson);
     String fingerprint = canonicalHash(sourceFingerprint(request, candidate));
-    warehouses.requireActive(request.warehouseId());
+    warehouses.requireIncoming(request.warehouseId());
 
     InventoryAssetSourceId sourceId =
         new InventoryAssetSourceId(request.inventoryId(), request.findingId());
@@ -604,23 +604,25 @@ public class InventoryAssetService {
             .thenComparing(EquipmentCatalogItem::getId))
         .toList();
     List<InventoryFurnitureSnapshotItem> items = orderedCatalog.stream()
-        .map(
-            equipment -> new InventoryFurnitureSnapshotItem(
-                equipment.getId(),
-                equipment.getVersion(),
-                equipment.getName(),
-                balanceQuantity(
-                    balancesByKey,
-                    new BalanceKey(equipment.getId(), null, BalanceLocationKind.STOCK)),
-                orderedCabins.stream()
-                    .map(
-                        cabin -> new InventoryFurnitureSnapshotCabin(
-                            cabin.getId(),
-                            cabin.getVersion(),
-                            cabin.getNumber(),
-                            cabin.getStatus(),
-                            cabinQuantity(balancesByKey, equipment.getId(), cabin.getId())))
-                    .toList()))
+        .map(equipment -> {
+          EquipmentBalance stockBalance = balancesByKey.get(
+              new BalanceKey(equipment.getId(), null, BalanceLocationKind.STOCK));
+          return new InventoryFurnitureSnapshotItem(
+              equipment.getId(),
+              equipment.getVersion(),
+              equipment.getName(),
+              stockBalance == null ? 0L : stockBalance.getQuantity(),
+              stockBalance == null ? null : stockBalance.getVersion(),
+              orderedCabins.stream()
+                  .map(
+                      cabin -> new InventoryFurnitureSnapshotCabin(
+                          cabin.getId(),
+                          cabin.getVersion(),
+                          cabin.getNumber(),
+                          cabin.getStatus(),
+                          cabinQuantity(balancesByKey, equipment.getId(), cabin.getId())))
+                  .toList());
+        })
         .toList();
     String snapshotSha256 = canonicalHash(new FurnitureSnapshotFingerprint(warehouseId, items));
     return new FurnitureSnapshotState(

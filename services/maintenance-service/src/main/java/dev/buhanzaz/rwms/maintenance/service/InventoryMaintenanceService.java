@@ -45,10 +45,16 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.SerializationFeature;
@@ -78,9 +84,59 @@ public class InventoryMaintenanceService {
   private final MaintenanceReconciliationStore ownerProofs;
   private final InventoryRepairSourceOperationRegistrar sourceRegistrar;
   private final MaintenanceDependencyGateway dependencies;
+  private final WarehouseLifecycleOperations warehouseLifecycle;
   private final MaintenanceJsonbCanonicalizer canonicalizer;
   private final ObjectMapper mapper;
+  private final TransactionTemplate requiresNew;
 
+  /**
+   * Kept for the small isolated snapshot unit test. Runtime construction uses the constructor
+   * with the transaction manager below, so mutation methods always own a short transaction.
+   */
+  InventoryMaintenanceService(
+      CatalogVersionRepository catalogs,
+      CatalogNodeRepository catalogNodes,
+      CatalogLinkRepository catalogLinks,
+      InventoryRepairSourceOperationRepository sourceOperations,
+      InventoryRepairSourceRepository sources,
+      RentalItemFactProjectionRepository rentalItems,
+      MediaFactProjectionRepository mediaFacts,
+      MaintenanceRepairRepository repairs,
+      RepairStageRepository repairStages,
+      MaintenanceEventStore events,
+      MaintenanceEventFactFactory eventFacts,
+      MaintenanceProjectionSnapshotFactory projectionSnapshots,
+      InventoryRepairReconciliationWriter reconciliations,
+      MaintenanceReconciliationStore ownerProofs,
+      InventoryRepairSourceOperationRegistrar sourceRegistrar,
+      MaintenanceDependencyGateway dependencies,
+      WarehouseLifecycleOperations warehouseLifecycle,
+      MaintenanceJsonbCanonicalizer canonicalizer,
+      ObjectMapper mapper) {
+    this(
+        catalogs,
+        catalogNodes,
+        catalogLinks,
+        sourceOperations,
+        sources,
+        rentalItems,
+        mediaFacts,
+        repairs,
+        repairStages,
+        events,
+        eventFacts,
+        projectionSnapshots,
+        reconciliations,
+        ownerProofs,
+        sourceRegistrar,
+        dependencies,
+        warehouseLifecycle,
+        canonicalizer,
+        mapper,
+        null);
+  }
+
+  @Autowired
   public InventoryMaintenanceService(
       CatalogVersionRepository catalogs,
       CatalogNodeRepository catalogNodes,
@@ -98,8 +154,10 @@ public class InventoryMaintenanceService {
       MaintenanceReconciliationStore ownerProofs,
       InventoryRepairSourceOperationRegistrar sourceRegistrar,
       MaintenanceDependencyGateway dependencies,
+      WarehouseLifecycleOperations warehouseLifecycle,
       MaintenanceJsonbCanonicalizer canonicalizer,
-      ObjectMapper mapper) {
+      ObjectMapper mapper,
+      PlatformTransactionManager transactionManager) {
     this.catalogs = catalogs;
     this.catalogNodes = catalogNodes;
     this.catalogLinks = catalogLinks;
@@ -116,12 +174,41 @@ public class InventoryMaintenanceService {
     this.ownerProofs = ownerProofs;
     this.sourceRegistrar = sourceRegistrar;
     this.dependencies = dependencies;
+    this.warehouseLifecycle = warehouseLifecycle;
     this.canonicalizer = canonicalizer;
     this.mapper = mapper;
+    this.requiresNew = transactionManager == null ? null : new TransactionTemplate(transactionManager);
+    if (requiresNew != null) {
+      requiresNew.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    }
   }
 
-  @Transactional
+  /**
+   * A frozen plan may need task-board routing truth. Keep that remote preflight outside a
+   * maintenance transaction, then redo the local work in one short transaction. A changed
+   * catalog/source is therefore revalidated by the final attempt; caller-owned transactions are
+   * rejected rather than suspended.
+   */
   public FreezeResult freeze(FreezeInventoryPlanRequest request) {
+    requireNoCallerTransaction("freeze an inventory plan");
+    List<InventoryPlanStageSnapshot> routingPreflightStages = null;
+    while (true) {
+      List<InventoryPlanStageSnapshot> preflightedStages = routingPreflightStages;
+      try {
+        return inNewTransaction(() -> freezeLocally(request, preflightedStages));
+      } catch (InventoryRemotePreflightRequired requirement) {
+        if (requirement.kind() != InventoryRemotePreflightKind.ROUTING
+            || requirement.stages().equals(routingPreflightStages)) {
+          throw new IllegalStateException("Inventory freeze repeated an already completed preflight");
+        }
+        requireWarehouseRoutingReady(requirement.warehouseId(), requirement.stages());
+        routingPreflightStages = requirement.stages();
+      }
+    }
+  }
+
+  private FreezeResult freezeLocally(
+      FreezeInventoryPlanRequest request, List<InventoryPlanStageSnapshot> routingPreflightStages) {
     if (request.sourceRevision() < 1) {
       throw invalid("Inventory source revision must be at least one");
     }
@@ -145,7 +232,8 @@ public class InventoryMaintenanceService {
         .collect(Collectors.toMap(CatalogNode::getId, Function.identity()));
     Map<UUID, List<UUID>> incomingLinks = CatalogRoutingResolver.incoming(
         catalogLinks.findAllByCatalogVersionIdOrderBySortOrderAscIdAsc(catalog.getId()));
-    FrozenInventoryPlanSnapshot snapshot = freezeSnapshot(request, catalog, nodes, incomingLinks);
+    FrozenInventoryPlanSnapshot snapshot = freezeSnapshot(
+        request, catalog, nodes, incomingLinks, routingPreflightStages);
     String fingerprint = frozenHash(snapshot);
 
     InventoryRepairSourceOperationId operationId =
@@ -217,9 +305,50 @@ public class InventoryMaintenanceService {
     return new InventoryRepairSnapshotsResponse(assets);
   }
 
-  @Transactional
+  /**
+   * Admission and task-board routing are external preflights. The sentinel rollback releases
+   * source/fact locks before either call; the last short transaction repeats every immutable
+   * source, asset-version and state check before it writes the repair/event/outbox mark.
+   */
   public UpsertResult upsert(
       UUID inventoryId, UUID findingId, UpsertInventoryRepairRequest request) {
+    requireNoCallerTransaction("upsert an inventory repair");
+    UUID incomingAdmissionWarehouseId = null;
+    List<InventoryPlanStageSnapshot> routingPreflightStages = null;
+    while (true) {
+      UUID admittedWarehouseId = incomingAdmissionWarehouseId;
+      List<InventoryPlanStageSnapshot> preflightedStages = routingPreflightStages;
+      try {
+        return inNewTransaction(
+            () -> upsertLocally(
+                inventoryId, findingId, request, admittedWarehouseId, preflightedStages));
+      } catch (InventoryRemotePreflightRequired requirement) {
+        switch (requirement.kind()) {
+          case INCOMING -> {
+            if (requirement.warehouseId().equals(incomingAdmissionWarehouseId)) {
+              throw new IllegalStateException("Inventory upsert repeated warehouse admission");
+            }
+            warehouseLifecycle.requireIncoming(requirement.warehouseId());
+            incomingAdmissionWarehouseId = requirement.warehouseId();
+          }
+          case ROUTING -> {
+            if (requirement.stages().equals(routingPreflightStages)) {
+              throw new IllegalStateException("Inventory upsert repeated routing preflight");
+            }
+            requireWarehouseRoutingReady(requirement.warehouseId(), requirement.stages());
+            routingPreflightStages = requirement.stages();
+          }
+        }
+      }
+    }
+  }
+
+  private UpsertResult upsertLocally(
+      UUID inventoryId,
+      UUID findingId,
+      UpsertInventoryRepairRequest request,
+      UUID incomingAdmissionWarehouseId,
+      List<InventoryPlanStageSnapshot> routingPreflightStages) {
     InventoryRepairSource source = sources.findBySourceForUpdate(inventoryId, findingId)
         .orElseThrow(() -> new MaintenanceNotFoundException("Frozen inventory plan not found"));
     requireHistoricalSource(source, request);
@@ -235,6 +364,10 @@ public class InventoryMaintenanceService {
       return result(existing, source, true);
     }
 
+    if (!request.warehouseId().equals(incomingAdmissionWarehouseId)) {
+      throw InventoryRemotePreflightRequired.incoming(request.warehouseId());
+    }
+
     RentalItemFactProjection rentalItem = rentalItems.findById(request.rentalItemId())
         .orElseThrow(() -> new MaintenanceDependencyException(
             org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
@@ -247,8 +380,10 @@ public class InventoryMaintenanceService {
       throw conflict("Current rental-item status is unsafe for maintenance queueing");
     }
     validateSnapshotMedia(findingId, request.warehouseId(), request.snapshot());
-    requireWarehouseRoutingReady(
-        request.warehouseId(), request.snapshot().stages());
+    if (!request.snapshot().stages().equals(routingPreflightStages)) {
+      throw InventoryRemotePreflightRequired.routing(
+          request.warehouseId(), request.snapshot().stages());
+    }
 
     MaintenanceRepair draft = MaintenanceRepair.primary(
         request.warehouseId(), request.rentalItemId(), request.rentalItemVersion(), null,
@@ -289,6 +424,8 @@ public class InventoryMaintenanceService {
         repair.getId(),
         repair.getVersion(),
         true);
+    warehouseLifecycle.recordOperation(
+        repair.getWarehouseId(), repair.getId(), repair.getCreatedAt());
     reconciliations.enqueue(
         repair.getId(), stableKey("inventory-queue-repair", inventoryId, findingId));
     return result(repair, bound, false);
@@ -298,7 +435,8 @@ public class InventoryMaintenanceService {
       FreezeInventoryPlanRequest request,
       CatalogVersion catalog,
       Map<UUID, CatalogNode> nodes,
-      Map<UUID, List<UUID>> incomingLinks) {
+      Map<UUID, List<UUID>> incomingLinks,
+      List<InventoryPlanStageSnapshot> routingPreflightStages) {
     validateMedia(request.findingId(), request.warehouseId(), request.mediaReferences());
     validateCoverMediaSelection(request.mediaReferences(), request.coverMediaId());
     if (request.priority() < 1 || request.priority() > 5) {
@@ -393,7 +531,9 @@ public class InventoryMaintenanceService {
       throw invalid(
           "Inventory logistics planning mode and date are inconsistent");
     }
-    requireWarehouseRoutingReady(request.warehouseId(), stages);
+    if (!stages.equals(routingPreflightStages)) {
+      throw InventoryRemotePreflightRequired.routing(request.warehouseId(), stages);
+    }
     FrozenInventoryPlanSnapshot snapshot = new FrozenInventoryPlanSnapshot(
         catalog.getId(), request.mode(), List.copyOf(lines), List.copyOf(stages),
         request.movementToRepair(),
@@ -1137,6 +1277,75 @@ public class InventoryMaintenanceService {
   private static UUID stableKey(String operation, UUID inventoryId, UUID findingId) {
     return UUID.nameUUIDFromBytes(
         (operation + ":" + inventoryId + ":" + findingId).getBytes(StandardCharsets.UTF_8));
+  }
+
+  private <T> T inNewTransaction(Supplier<T> action) {
+    if (requiresNew == null) {
+      throw new IllegalStateException(
+          "Inventory mutation requires the Spring-managed transaction constructor");
+    }
+    T result = requiresNew.execute(status -> action.get());
+    if (result == null) {
+      throw new IllegalStateException("Inventory maintenance transaction returned no result");
+    }
+    return result;
+  }
+
+  /**
+   * A caller-owned transaction can retain row locks while this boundary waits for a remote
+   * lifecycle/routing answer. Refuse it rather than trying to suspend it with NOT_SUPPORTED.
+   */
+  private static void requireNoCallerTransaction(String operation) {
+    if (TransactionSynchronizationManager.isActualTransactionActive()) {
+      throw new IllegalStateException(
+          "Inventory maintenance cannot " + operation + " inside a caller transaction");
+    }
+  }
+
+  private enum InventoryRemotePreflightKind { INCOMING, ROUTING }
+
+  /**
+   * Intentionally aborts a local prepare transaction. The caller performs the remote work only
+   * after its locks have gone away, then repeats the local state/version checks in a fresh
+   * transaction.
+   */
+  private static final class InventoryRemotePreflightRequired extends RuntimeException {
+    private final InventoryRemotePreflightKind kind;
+    private final UUID warehouseId;
+    private final List<InventoryPlanStageSnapshot> stages;
+
+    private InventoryRemotePreflightRequired(
+        InventoryRemotePreflightKind kind,
+        UUID warehouseId,
+        List<InventoryPlanStageSnapshot> stages) {
+      super(null, null, false, false);
+      this.kind = kind;
+      this.warehouseId = warehouseId;
+      this.stages = stages;
+    }
+
+    static InventoryRemotePreflightRequired incoming(UUID warehouseId) {
+      return new InventoryRemotePreflightRequired(
+          InventoryRemotePreflightKind.INCOMING, warehouseId, List.of());
+    }
+
+    static InventoryRemotePreflightRequired routing(
+        UUID warehouseId, List<InventoryPlanStageSnapshot> stages) {
+      return new InventoryRemotePreflightRequired(
+          InventoryRemotePreflightKind.ROUTING, warehouseId, List.copyOf(stages));
+    }
+
+    InventoryRemotePreflightKind kind() {
+      return kind;
+    }
+
+    UUID warehouseId() {
+      return warehouseId;
+    }
+
+    List<InventoryPlanStageSnapshot> stages() {
+      return stages;
+    }
   }
 
   private static MaintenanceValidationException invalid(String detail) {

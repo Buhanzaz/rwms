@@ -52,12 +52,20 @@ spring:
     open-in-view: false
   cloud:
     function:
-      definition: assetInbound
+      definition: assetInbound;assetRealtimeInvalidation
     stream:
       bindings:
         assetInbound-in-0:
           destination: rwms.asset.rental-item.v1,rwms.asset.equipment-catalog.v1,rwms.asset.equipment-balance.v1,rwms.asset.equipment-movement.v1,rwms.asset.equipment-allocation-hold.v1,rwms.asset.operation-lease.v1,rwms.asset.classifier.v1
           group: asset-service-inbox-v1
+          consumer:
+            max-attempts: 1
+            multiplex: true
+        assetRealtimeInvalidation-in-0:
+          destination: rwms.asset.rental-item.v1,rwms.asset.equipment-catalog.v1,rwms.asset.equipment-balance.v1,rwms.asset.equipment-movement.v1,rwms.asset.equipment-allocation-hold.v1,rwms.asset.operation-lease.v1,rwms.asset.classifier.v1
+          # Every replica needs every committed fact. HOSTNAME is unique per pod; non-Kubernetes
+          # multi-replica runtimes must set ASSET_REALTIME_KAFKA_GROUP uniquely per instance.
+          group: ${ASSET_REALTIME_KAFKA_GROUP:asset-service-realtime-${HOSTNAME:local}-v1}
           consumer:
             max-attempts: 1
             multiplex: true
@@ -79,6 +87,8 @@ spring:
         bindings:
           assetInbound-in-0:
             consumer: { enable-dlq: false, common-error-handler-bean-name: assetFailClosedConsumerErrorHandler }
+          assetRealtimeInvalidation-in-0:
+            consumer: { enable-dlq: false }
   security:
     oauth2:
       resourceserver:
@@ -121,6 +131,9 @@ rwms:
       client-secret: ${ASSET_WAREHOUSE_CLIENT_SECRET:}
       connect-timeout: ${ASSET_WAREHOUSE_CONNECT_TIMEOUT:2s}
       read-timeout: ${ASSET_WAREHOUSE_READ_TIMEOUT:3s}
+    warehouse-lifecycle:
+      initial-delay: ${ASSET_WAREHOUSE_LIFECYCLE_INITIAL_DELAY:5s}
+      reconciliation-delay: ${ASSET_WAREHOUSE_LIFECYCLE_RECONCILIATION_DELAY:30s}
     media-import:
       enabled: ${ASSET_MEDIA_IMPORT_ENABLED:false}
       base-url: ${MEDIA_SERVICE_INTERNAL_BASE_URL:}

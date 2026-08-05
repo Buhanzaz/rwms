@@ -19,6 +19,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
@@ -88,6 +89,11 @@ class DriverCapitalRepairPromotionIntegrationTest {
 
     when(dependencies.readWarehouseIdentity(WAREHOUSE))
         .thenReturn(new LogisticsDependencyGateway.WarehouseIdentity(WAREHOUSE, 0, true, "UTC"));
+    when(dependencies.warehouseTimeZoneAt(eq(WAREHOUSE), any(OffsetDateTime.class)))
+        .thenAnswer(
+            invocation ->
+                new LogisticsDependencyGateway.WarehouseTimeZone(
+                    WAREHOUSE, "UTC", invocation.getArgument(1)));
     when(dependencies.readWarehouseDriverQueue(WAREHOUSE))
         .thenReturn(
             new LogisticsDependencyGateway.WarehouseDriverQueue(

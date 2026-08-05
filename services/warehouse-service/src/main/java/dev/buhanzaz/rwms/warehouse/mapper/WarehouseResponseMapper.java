@@ -5,6 +5,7 @@ import dev.buhanzaz.rwms.warehouse.api.WarehouseResponse;
 import dev.buhanzaz.rwms.warehouse.domain.Warehouse;
 import org.mapstruct.InjectionStrategy;
 import org.mapstruct.Mapper;
+import org.mapstruct.Mapping;
 import org.mapstruct.MappingConstants;
 import org.mapstruct.ReportingPolicy;
 
@@ -13,7 +14,11 @@ import org.mapstruct.ReportingPolicy;
     injectionStrategy = InjectionStrategy.CONSTRUCTOR,
     unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface WarehouseResponseMapper {
-  WarehouseResponse toResponse(Warehouse warehouse);
+  @Mapping(target = "timeZone", source = "effectiveTimeZone")
+  @Mapping(target = "lifecycleState", expression = "java(warehouse.getLifecycleState().name())")
+  WarehouseResponse toResponse(Warehouse warehouse, String effectiveTimeZone);
 
-  LogisticsWarehouseIdentityResponse toLogisticsIdentity(Warehouse warehouse);
+  @Mapping(target = "timeZone", source = "effectiveTimeZone")
+  LogisticsWarehouseIdentityResponse toLogisticsIdentity(
+      Warehouse warehouse, String effectiveTimeZone);
 }

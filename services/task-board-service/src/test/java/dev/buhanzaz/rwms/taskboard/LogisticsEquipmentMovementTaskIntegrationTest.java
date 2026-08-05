@@ -68,11 +68,13 @@ class LogisticsEquipmentMovementTaskIntegrationTest extends PostgresIntegrationT
   @Autowired TaskBoardService board;
   @Autowired BoardTaskRepository tasks;
   @Autowired QueueEntryRepository entries;
+  @Autowired TestWarehouseLifecycleGateway warehouseLifecycle;
   private WorkQueueDto furnitureQueue;
 
   @BeforeEach
   void setUp() {
     cleanTaskBoardFixtures(jdbc);
+    warehouseLifecycle.reset();
     var definition =
         registry.createQueueDefinition(
             QueueRegistryTestFixtures.globalDefinition(
@@ -145,6 +147,7 @@ class LogisticsEquipmentMovementTaskIntegrationTest extends PostgresIntegrationT
                 Integer.class,
                 TaskBoardEventTypes.BOARD_TASK_CREATED))
         .isOne();
+    assertThat(warehouseLifecycle.admissionTransactionStates()).containsOnly(false);
 
     JsonNode replay =
         response(
@@ -216,6 +219,64 @@ class LogisticsEquipmentMovementTaskIntegrationTest extends PostgresIntegrationT
                 .content(body))
         .andExpect(status().isBadRequest())
         .andExpect(jsonPath("$.code").value("TASK_BOARD_VALIDATION_FAILED"));
+  }
+
+  @Test
+  void drainingWarehousePermitsOnlyPureFurnitureDrainAndInactiveRejectsNewWork() {
+    warehouseLifecycle.lifecycleState(TestWarehouseLifecycleGateway.LifecycleState.DRAINING);
+
+    assertThat(
+            board.registerLogisticsEquipmentMovementTask(
+                new RegisterLogisticsEquipmentMovementTaskRequest(
+                    WAREHOUSE,
+                    UUID.randomUUID(),
+                    "БЫТ-011",
+                    15,
+                    OffsetDateTime.now().plusDays(1),
+                    List.of(
+                        new EquipmentMovementOperation(
+                            EquipmentMovementDirection.TAKE_FROM_CABIN,
+                            OFFICE_TABLE_ID,
+                            "Стол офисный",
+                            1L)))))
+        .isNotNull();
+    assertThat(warehouseLifecycle.admissions())
+        .containsExactly(
+            new TestWarehouseLifecycleGateway.Admission(
+                WAREHOUSE,
+                dev.buhanzaz.rwms.taskboard.service.WarehouseLifecycleGateway.OperationDirection.OUTGOING));
+
+    assertThatThrownBy(
+            () ->
+                board.registerLogisticsEquipmentMovementTask(
+                    movementRequest(UUID.randomUUID(), OffsetDateTime.now().plusDays(1), 1L)))
+        .isInstanceOf(ConflictException.class);
+    assertThat(warehouseLifecycle.admissions().getLast())
+        .isEqualTo(
+            new TestWarehouseLifecycleGateway.Admission(
+                WAREHOUSE,
+                dev.buhanzaz.rwms.taskboard.service.WarehouseLifecycleGateway.OperationDirection.INCOMING));
+
+    warehouseLifecycle.reset();
+    warehouseLifecycle.lifecycleState(TestWarehouseLifecycleGateway.LifecycleState.INACTIVE);
+    assertThatThrownBy(
+            () ->
+                board.createTask(
+                    WAREHOUSE,
+                    new CreateBoardTaskRequest(
+                        null,
+                        "New work",
+                        null,
+                        null,
+                        null,
+                        null,
+                        List.of(new RouteStepRequest(furnitureQueue.definitionId(), null, null)))))
+        .isInstanceOf(ConflictException.class);
+    assertThat(warehouseLifecycle.admissions())
+        .containsExactly(
+            new TestWarehouseLifecycleGateway.Admission(
+                WAREHOUSE,
+                dev.buhanzaz.rwms.taskboard.service.WarehouseLifecycleGateway.OperationDirection.INCOMING));
   }
 
   @Test

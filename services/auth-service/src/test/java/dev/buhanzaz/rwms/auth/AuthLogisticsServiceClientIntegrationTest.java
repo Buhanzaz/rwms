@@ -43,6 +43,10 @@ class AuthLogisticsServiceClientIntegrationTest {
     @Test
     void mintsOnlySeparateExactScopeServiceTokens() throws Exception {
         assertExactToken("warehouse.logistics");
+        assertExactToken("warehouse.timezone.read");
+        assertExactToken("warehouse.operation.mark");
+        assertExactToken("warehouse.lifecycle.read");
+        assertExactToken("warehouse.lifecycle.confirm");
         assertExactToken("asset.logistics");
         assertExactToken("task-board.logistics");
         assertExactToken("maintenance.logistics");

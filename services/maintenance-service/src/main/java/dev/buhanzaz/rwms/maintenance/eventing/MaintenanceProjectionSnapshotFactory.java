@@ -4,6 +4,8 @@ import dev.buhanzaz.rwms.maintenance.domain.CatalogVersion;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceAggregateType;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceEstimate;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceRepair;
+import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionDecision;
+import dev.buhanzaz.rwms.maintenance.disposition.repository.PropertyDispositionDecisionRepository;
 import dev.buhanzaz.rwms.maintenance.repository.CatalogLinkRepository;
 import dev.buhanzaz.rwms.maintenance.repository.CatalogNodeRepository;
 import dev.buhanzaz.rwms.maintenance.repository.CatalogVersionRepository;
@@ -38,6 +40,7 @@ public class MaintenanceProjectionSnapshotFactory {
   private final EstimateLineRepository lines;
   private final EstimatePlanStageRepository plans;
   private final MaintenanceRepairRepository repairs;
+  private final PropertyDispositionDecisionRepository dispositions;
   private final RepairStageRepository stages;
   private final MaintenanceMediaReferenceRepository media;
   private final ObjectMapper mapper;
@@ -51,6 +54,7 @@ public class MaintenanceProjectionSnapshotFactory {
       EstimateLineRepository lines,
       EstimatePlanStageRepository plans,
       MaintenanceRepairRepository repairs,
+      PropertyDispositionDecisionRepository dispositions,
       RepairStageRepository stages,
       MaintenanceMediaReferenceRepository media,
       ObjectMapper mapper) {
@@ -62,6 +66,7 @@ public class MaintenanceProjectionSnapshotFactory {
     this.lines = lines;
     this.plans = plans;
     this.repairs = repairs;
+    this.dispositions = dispositions;
     this.stages = stages;
     this.media = media;
     this.mapper = mapper;
@@ -73,6 +78,9 @@ public class MaintenanceProjectionSnapshotFactory {
       case CATALOG_VERSION -> catalog(catalogs.findById(id).orElseThrow(() -> missing(type, id)));
       case ESTIMATE -> estimate(estimates.findById(id).orElseThrow(() -> missing(type, id)));
       case REPAIR -> repair(repairs.findById(id).orElseThrow(() -> missing(type, id)));
+      case PROPERTY_DISPOSITION ->
+          propertyDisposition(
+              dispositions.findById(id).orElseThrow(() -> missing(type, id)));
     };
   }
 
@@ -88,6 +96,15 @@ public class MaintenanceProjectionSnapshotFactory {
     repairs.findAll().stream()
         .sorted(Comparator.comparing(value -> value.getId().toString()))
         .forEach(value -> put(result, MaintenanceAggregateType.REPAIR, value.getId(), repair(value)));
+    dispositions.findAll().stream()
+        .sorted(Comparator.comparing(value -> value.getId().toString()))
+        .forEach(
+            value ->
+                put(
+                    result,
+                    MaintenanceAggregateType.PROPERTY_DISPOSITION,
+                    value.getId(),
+                    propertyDisposition(value)));
     return Collections.unmodifiableMap(result);
   }
 
@@ -311,6 +328,65 @@ public class MaintenanceProjectionSnapshotFactory {
     return immutable(result);
   }
 
+  public Map<String, Object> propertyDisposition(PropertyDispositionDecision value) {
+    Map<String, Object> result = base(value.getId(), value.getVersion(), value.getWarehouseId());
+    result.put("recoveryVersion", value.getRecoveryVersion());
+    result.put("assetKind", value.getAssetKind().name());
+    result.put("assetId", value.getAssetId().toString());
+    result.put("assetDisplayName", value.getAssetDisplayName());
+    result.put("disposition", value.getKind().name());
+    result.put("source", value.getSource().name());
+    result.put("state", value.getState().name());
+    result.put("assetEffectState", value.getAssetEffectState().name());
+    result.put("contentsMode", text(value.getContentsMode()));
+    result.put("expectedAssetVersion", value.getExpectedAssetVersion());
+    result.put("expectedSourceBalanceVersion", value.getExpectedSourceBalanceVersion());
+    result.put("quantity", value.getQuantity());
+    result.put("maintenanceCustodyClaimId", text(value.getMaintenanceCustodyClaimId()));
+    result.put("maintenanceCustodyVersion", value.getMaintenanceCustodyVersion());
+    result.put("reason", value.getReason());
+    result.put("evidenceLink", value.getEvidenceLink());
+    result.put("sourceRepairId", text(value.getSourceRepairId()));
+    result.put("rootRepairId", text(value.getRootRepairId()));
+    result.put("inventoryId", text(value.getInventoryId()));
+    result.put("findingId", text(value.getFindingId()));
+    result.put("initiatedBySubjectId", text(value.getInitiatedBySubjectId()));
+    result.put("idempotencyKey", text(value.getIdempotencyKey()));
+    result.put("requestSha256", value.getRequestSha256());
+    result.put("initiatedByActor", jsonNullable(value.getInitiatedByActorSnapshot()));
+    result.put("reviewedByActor", jsonNullable(value.getReviewedByActorSnapshot()));
+    result.put("reviewComment", value.getReviewComment());
+    result.put("rejectionReason", value.getRejectionReason());
+    result.put("movementTaskId", text(value.getMovementTaskId()));
+    result.put("effectId", text(value.getEffectId()));
+    result.put("failureCode", value.getFailureCode());
+    result.put("failureDetail", value.getFailureDetail());
+    result.put("quarantineResumeState", text(value.getQuarantineResumeState()));
+    result.put("recoveryReason", value.getRecoveryReason());
+    result.put("recoveryActor", jsonNullable(value.getRecoveryActorSnapshot()));
+    result.put("reviewedAt", text(value.getReviewedAt()));
+    result.put("quarantinedAt", text(value.getQuarantinedAt()));
+    result.put("recoveredAt", text(value.getRecoveredAt()));
+    result.put("createdAt", text(value.getCreatedAt()));
+    result.put("updatedAt", text(value.getUpdatedAt()));
+    result.put(
+        "contents",
+        value.getContents().stream()
+            .map(
+                line -> {
+                  Map<String, Object> item = new LinkedHashMap<>();
+                  item.put("equipmentId", line.getEquipmentId().toString());
+                  item.put("equipmentName", line.getEquipmentName());
+                  item.put("equipmentFormat", line.getEquipmentFormat());
+                  item.put("currentQuantity", line.getCurrentQuantity());
+                  item.put("moveQuantity", line.getMoveQuantity());
+                  item.put("expectedBalanceVersion", line.getExpectedBalanceVersion());
+                  return immutable(item);
+                })
+            .toList());
+    return immutable(result);
+  }
+
   private java.util.List<Map<String, Object>> media(String type, UUID id) {
     return media.findAllByAggregateTypeAndAggregateIdOrderByMediaId(type, id).stream().map(value -> {
       Map<String, Object> item = new LinkedHashMap<>();
@@ -346,6 +422,15 @@ public class MaintenanceProjectionSnapshotFactory {
     try {
       return mapper.readValue(value, new TypeReference<Map<String, Object>>() {});
     } catch (JacksonException exception) {
+      throw new IllegalStateException("Maintenance projection contains invalid JSON", exception);
+    }
+  }
+
+  private Object jsonNullable(String value) {
+    if (value == null) return null;
+    try {
+      return mapper.readTree(value);
+    } catch (RuntimeException exception) {
       throw new IllegalStateException("Maintenance projection contains invalid JSON", exception);
     }
   }

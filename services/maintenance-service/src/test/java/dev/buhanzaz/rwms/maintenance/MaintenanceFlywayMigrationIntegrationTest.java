@@ -42,7 +42,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsTheAuthoritativeMaintenanceSchema() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(32);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(39);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains(
@@ -58,7 +58,12 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "inventory_publication_source_operation", "inventory_publication_source",
         "inventory_publication_successor", "inventory_publication_prestart_replacement",
         "logistics_return_shortage", "repair_capacity_settings", "repair_task_evidence",
-        "repair_complexity_colors", "repair_complexity_settings", "repair_place_allocation");
+        "repair_complexity_colors", "repair_complexity_settings", "repair_place_allocation",
+        "property_disposition_decision", "property_disposition_contents_snapshot_line",
+        "property_disposition_processing_attempt", "property_disposition_processing_claim",
+        "warehouse_operation_mark_outbox", "warehouse_operation_mark_recovery_audit",
+        "furniture_equipment_link_intent", "furniture_equipment_link_review_audit",
+        "warehouse_readiness_fence");
     assertThat(columnCount("maintenance_estimate", "rental_item_version_snapshot")).isOne();
     assertThat(columnCount("maintenance_repair", "rental_item_version_snapshot")).isOne();
     assertThat(columnCount("maintenance_repair", "dispatch_date")).isOne();
@@ -211,6 +216,68 @@ class MaintenanceFlywayMigrationIntegrationTest {
             "catalog_version_id IS NOT NULL",
             "catalog_node_id IS NOT NULL",
             "catalog_queue_id IS NOT NULL");
+    assertThat(columns("warehouse_operation_mark_outbox")).contains(
+        "claim_token",
+        "claim_until",
+        "recovery_version",
+        "recovered_by_subject_id",
+        "recovery_reason",
+        "recovered_at");
+    assertThat(constraintDefinition(
+            "warehouse_operation_mark_outbox",
+            "ck_warehouse_operation_mark_outbox_claim"))
+        .contains("IN_FLIGHT", "claim_token IS NOT NULL", "claim_until IS NOT NULL");
+    assertThat(columns("warehouse_operation_mark_recovery_audit")).containsExactlyInAnyOrder(
+        "id",
+        "warehouse_id",
+        "operation_id",
+        "recovery_version",
+        "reviewed_by_subject_id",
+        "reason",
+        "reviewed_at");
+    assertThat(triggerDefinition("warehouse_operation_mark_recovery_audit_immutable"))
+        .contains("reject_warehouse_operation_mark_recovery_audit_mutation");
+    assertThat(columns("furniture_equipment_link_intent")).contains(
+        "node_id", "warehouse_id", "source_catalog_version_id",
+        "source_catalog_expected_version", "requested_name", "state", "equipment_id",
+        "equipment_name", "observed_equipment_id", "observed_equipment_name",
+        "attempt_count", "claim_token", "claim_until", "review_version");
+    assertThat(triggerDefinition("furniture_equipment_link_review_audit_immutable"))
+        .contains("reject_furniture_link_review_audit_mutation");
+    assertThat(columns("warehouse_readiness_fence")).containsExactlyInAnyOrder(
+        "id", "warehouse_id", "warehouse_version", "state", "release_reason", "fenced_at",
+        "sealed_at", "released_at", "updated_at");
+    assertThat(indexDefinition("uq_warehouse_readiness_fence_active"))
+        .contains("UNIQUE INDEX", "warehouse_id", "FENCED", "SEALED");
+    assertThat(triggerDefinition("maintenance_estimate_readiness_guard"))
+        .contains("guard_maintenance_warehouse_readiness_fence");
+    assertThat(triggerDefinition("repair_place_allocation_readiness_guard"))
+        .contains("guard_maintenance_warehouse_readiness_fence");
+    assertThat(triggerDefinition("property_disposition_claim_readiness_guard"))
+        .contains("guard_maintenance_disposition_claim_readiness");
+    assertThat(triggerDefinition("integration_reconciliation_readiness_guard"))
+        .contains("guard_maintenance_reconciliation_readiness");
+    assertThat(triggerDefinition("catalog_version_readiness_guard"))
+        .contains("guard_maintenance_warehouse_readiness_fence");
+    assertThat(columns("property_disposition_decision")).contains(
+        "maintenance_custody_claim_id", "maintenance_custody_version");
+    assertThat(columnNullable("property_disposition_decision", "expected_asset_version"))
+        .isEqualTo("YES");
+    assertThat(constraintDefinition(
+            "property_disposition_decision", "ck_property_disposition_decision_asset_kind"))
+        .contains(
+            "maintenance_custody_claim_id",
+            "maintenance_custody_version",
+            "expected_asset_version IS NOT NULL",
+            "expected_source_balance_version IS NULL");
+    assertThat(indexDefinition(
+            "uq_property_disposition_decision_maintenance_custody_claim"))
+        .contains("UNIQUE INDEX", "maintenance_custody_claim_id");
+    assertThat(columns("property_disposition_processing_claim")).contains("failure_count");
+    assertThat(constraintDefinition(
+            "property_disposition_processing_claim",
+            "ck_property_disposition_processing_claim_failure_count"))
+        .contains("failure_count >= 0");
     assertThat(indexDefinition("idx_reconciliation_catalog_operation_history"))
         .contains("catalog_version_id", "catalog_node_id", "operation_type", "created_at")
         .doesNotContain("UNIQUE INDEX");
@@ -252,6 +319,35 @@ class MaintenanceFlywayMigrationIntegrationTest {
         .contains("jsonb_typeof");
     assertThat(jdbc.queryForObject("select count(*) from catalog_version", Integer.class)).isZero();
     assertThat(jdbc.queryForObject("select count(*) from maintenance_repair", Integer.class)).isZero();
+  }
+
+  @Test
+  void appliedV34UpgradesAppendOnlyThroughFurnitureLinksAndReadinessFenceMigrations() {
+    Flyway throughV34 = Flyway.configure()
+        .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+        .locations(MIGRATIONS)
+        .target("34")
+        .baselineOnMigrate(false)
+        .cleanDisabled(true)
+        .validateOnMigrate(true)
+        .validateMigrationNaming(true)
+        .outOfOrder(false)
+        .load();
+    assertThat(throughV34.migrate().migrationsExecuted).isEqualTo(34);
+    throughV34.validate();
+
+    Flyway upgraded = flyway(MIGRATIONS);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(5);
+    upgraded.validate();
+    assertThat(constraintDefinition("event_stream_head", "ck_maintenance_stream_type"))
+        .contains("PROPERTY_DISPOSITION");
+    assertThat(triggerDefinition("property_disposition_processing_attempt_immutable"))
+        .contains("reject_property_disposition_processing_attempt_mutation");
+    assertThat(tableNames()).contains(
+        "furniture_equipment_link_intent", "furniture_equipment_link_review_audit",
+        "warehouse_readiness_fence");
+    assertThat(triggerDefinition("furniture_equipment_link_review_audit_immutable"))
+        .contains("reject_furniture_link_review_audit_mutation");
   }
 
   @Test
@@ -468,7 +564,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         catalogId.toString(),
         "0".repeat(64));
 
-    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(8);
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(15);
 
     assertThat(jdbc.queryForObject(
         "select count(*) from catalog_node where catalog_version_id=? and node_type='WORK'",
@@ -849,7 +945,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "0".repeat(64));
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(9);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(16);
     upgraded.validate();
 
     assertThat(
@@ -1012,7 +1108,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
     insertLegacyEstimateStage(estimateId, UUID.randomUUID(), 2, "MOVE_FROM_REPAIR");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(6);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(13);
     upgraded.validate();
 
     assertThat(jdbc.queryForMap(
@@ -1194,7 +1290,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         repairStageId);
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(5);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(12);
     upgraded.validate();
 
     assertThat(
@@ -1307,7 +1403,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "0".repeat(64));
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(4);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(11);
     upgraded.validate();
 
     assertThat(jdbc.queryForMap(
@@ -1407,7 +1503,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
     insertV20CatalogStreamArtifacts(otherCatalogId, otherNodeId, "ACTIVE");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(12);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(19);
     upgraded.validate();
 
     assertThat(jdbc.queryForObject(
@@ -2150,13 +2246,14 @@ class MaintenanceFlywayMigrationIntegrationTest {
                 jdbc.update(
                     """
                     insert into integration_reconciliation(
-                      id,dependency_type,operation_type,idempotency_key,state,attempt_count,
+                      id,repair_id,dependency_type,operation_type,idempotency_key,state,attempt_count,
                       next_attempt_at,response_snapshot,review_version,review_subject_id,reviewed_at,
                       created_at,updated_at)
-                    values (?,'ASSET','TEST',?,'PENDING',0,clock_timestamp(),'{}',1,?,
+                    values (?,?,'ASSET','TEST',?,'PENDING',0,clock_timestamp(),'{}',1,?,
                       clock_timestamp(),clock_timestamp(),clock_timestamp())
                     """,
                     UUID.randomUUID(),
+                    firstRepairId,
                     UUID.randomUUID(),
                     UUID.randomUUID()))
         .hasMessageContaining("ck_reconciliation_review");

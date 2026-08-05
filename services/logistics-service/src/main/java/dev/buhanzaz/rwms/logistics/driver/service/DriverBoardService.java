@@ -17,13 +17,16 @@ import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,8 +46,6 @@ public class DriverBoardService {
   private final DriverTaskService driverTaskService;
 
   public DriverBoardResponse board(UUID warehouseId) {
-    LogisticsDependencyGateway.WarehouseIdentity warehouse =
-        dependencies.readWarehouseIdentity(warehouseId);
     LogisticsDependencyGateway.DriverBoardSnapshot board =
         dependencies.readDriverBoard(warehouseId);
     LogisticsDependencyGateway.RepairPlaceProjection places =
@@ -57,7 +58,7 @@ public class DriverBoardService {
 
     return new DriverBoardResponse(
         warehouseId,
-        warehouseToday(warehouse),
+        warehouseToday(warehouseId),
         board.queueId(),
         board.queueVersion(),
         places.repairPlaceCount(),
@@ -103,12 +104,7 @@ public class DriverBoardService {
       throw new LogisticsConflictException(
           "Задание не принадлежит выбранному складу");
     }
-    LocalDate today =
-        LocalDate.now(
-            ZoneId.of(
-                dependencies
-                    .readWarehouseIdentity(request.warehouseId())
-                    .timeZone()));
+    LocalDate today = warehouseToday(request.warehouseId());
     if (request.targetDate().isBefore(today)) {
       throw new IllegalArgumentException(
           "Дата логистического задания не может быть в прошлом");
@@ -172,6 +168,31 @@ public class DriverBoardService {
             repairId,
             DriverTaskPlanningMode.FIXED_DATE,
             request.targetDate());
+    return scheduleCapitalRepair(created, request);
+  }
+
+  @Transactional
+  public CapitalRepairScheduleResult scheduleCapitalRepair(
+      UUID actorSubjectId,
+      UUID idempotencyKey,
+      UUID repairId,
+      ScheduleCapitalRepairRequest request,
+      AdmissionTicket admission) {
+    tasks.acquireTransactionLock("driver-queue:" + request.warehouseId());
+    DriverTaskService.CreateResult created =
+        driverTaskService.createCapitalMovement(
+            actorSubjectId,
+            idempotencyKey,
+            request.warehouseId(),
+            repairId,
+            DriverTaskPlanningMode.FIXED_DATE,
+            request.targetDate(),
+            admission);
+    return scheduleCapitalRepair(created, request);
+  }
+
+  private CapitalRepairScheduleResult scheduleCapitalRepair(
+      DriverTaskService.CreateResult created, ScheduleCapitalRepairRequest request) {
     processor.processUntilIdle(created.response().id());
 
     DriverLogisticsTask local =
@@ -268,10 +289,12 @@ public class DriverBoardService {
     return card(moved, refreshed);
   }
 
-  private static LocalDate warehouseToday(
-      LogisticsDependencyGateway.WarehouseIdentity warehouse) {
+  private LocalDate warehouseToday(UUID warehouseId) {
     try {
-      return LocalDate.now(ZoneId.of(warehouse.timeZone()));
+      OffsetDateTime at = OffsetDateTime.now(ZoneOffset.UTC);
+      return at.toInstant()
+          .atZone(ZoneId.of(dependencies.warehouseTimeZoneAt(warehouseId, at).timeZone()))
+          .toLocalDate();
     } catch (RuntimeException exception) {
       throw new LogisticsConflictException(
           "Для склада не настроен корректный часовой пояс");

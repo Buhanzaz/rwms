@@ -50,6 +50,10 @@ class HttpLogisticsDependencyGatewayTest {
           switch (request.getClientRegistrationId()) {
             case "logistics-asset" -> "asset.logistics";
             case "logistics-warehouse" -> "warehouse.logistics";
+            case "logistics-warehouse-timezone" -> "warehouse.timezone.read";
+            case "logistics-warehouse-operation" -> "warehouse.operation.mark";
+            case "logistics-warehouse-lifecycle-read" -> "warehouse.lifecycle.read";
+            case "logistics-warehouse-lifecycle-confirm" -> "warehouse.lifecycle.confirm";
             case "logistics-maintenance" -> "maintenance.logistics";
             case "logistics-media" -> "media.logistics";
             case "logistics-task-board" -> "task-board.logistics";
@@ -286,6 +290,7 @@ class HttpLogisticsDependencyGatewayTest {
         .andExpect(method(HttpMethod.POST))
         .andExpect(header("Authorization", "Bearer test-maintenance.logistics"))
         .andExpect(header("Idempotency-Key", key.toString()))
+        .andExpect(jsonPath("$.rentalItemVersion").value(9))
         .andExpect(jsonPath("$.priority").value(2))
         .andExpect(jsonPath("$.movementToShipment").doesNotExist())
         .andRespond(
@@ -327,6 +332,7 @@ class HttpLogisticsDependencyGatewayTest {
                 transferId,
                 lineId,
                 rentalItemId,
+                9,
                 sourceWarehouseId,
                 targetWarehouseId,
                 2))
@@ -1003,7 +1009,41 @@ class HttpLogisticsDependencyGatewayTest {
   }
 
   @Test
-  void usesFrozenEquipmentMovementReservationAndWorkerTaskContracts() {
+  void serializesAllocatableRebalancePurposeForEquipmentMovementReservations() {
+    assertEquipmentMovementReservationPurpose(
+        LogisticsDependencyGateway.EquipmentMovementPurpose.ALLOCATABLE_REBALANCE);
+  }
+
+  @Test
+  void serializesMaintenanceDispositionPurposeForEquipmentMovementReservations() {
+    assertEquipmentMovementReservationPurpose(
+        LogisticsDependencyGateway.EquipmentMovementPurpose.MAINTENANCE_DISPOSITION);
+  }
+
+  @Test
+  void rejectsMissingEquipmentMovementReservationPurposeBeforeSendingTheRequest() {
+    assertThatThrownBy(
+            () ->
+                gateway.acquireEquipmentMovementReservation(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    null,
+                    "STOCK",
+                    4,
+                    2,
+                    OffsetDateTime.now(ZoneOffset.UTC).plusHours(1),
+                    null))
+        .isInstanceOf(LogisticsDependencyException.class)
+        .extracting(exception -> ((LogisticsDependencyException) exception).kind())
+        .isEqualTo(LogisticsDependencyException.FailureKind.CONFIGURATION);
+    server.verify();
+  }
+
+  private void assertEquipmentMovementReservationPurpose(
+      LogisticsDependencyGateway.EquipmentMovementPurpose purpose) {
     UUID movementId = UUID.randomUUID();
     UUID lineId = UUID.randomUUID();
     UUID equipmentId = UUID.randomUUID();
@@ -1027,6 +1067,7 @@ class HttpLogisticsDependencyGatewayTest {
         .andExpect(jsonPath("$.expectedSourceBalanceVersion").value(4))
         .andExpect(jsonPath("$.quantity").value(2))
         .andExpect(jsonPath("$.reservedUntil").value("2026-07-20T15:00:00Z"))
+        .andExpect(jsonPath("$.purpose").value(purpose.name()))
         .andRespond(
             withSuccess(
                 """
@@ -1057,7 +1098,8 @@ class HttpLogisticsDependencyGatewayTest {
             "STOCK",
             4,
             2,
-            deadline);
+            deadline,
+            purpose);
     assertThat(reservation.equipmentName()).isEqualTo("Стол");
     server.verify();
   }
@@ -1513,6 +1555,137 @@ class HttpLogisticsDependencyGatewayTest {
 
     assertThat(allocation.rentalItemId()).isEqualTo(rentalItemId);
     assertThat(allocation.state()).isEqualTo("RESERVED");
+    server.verify();
+  }
+
+  @Test
+  void usesFourExactWarehouseLifecycleScopesAndVersionedRoutes() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID operationId = UUID.randomUUID();
+    OffsetDateTime at = OffsetDateTime.parse("2026-09-01T00:30:00Z");
+
+    server
+        .expect(
+            requestTo(
+                "http://warehouse.test/api/internal/warehouse/v1/warehouses/"
+                    + warehouseId
+                    + "/admission?direction=OUTGOING"))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header("Authorization", "Bearer test-warehouse.lifecycle.read"))
+        .andRespond(
+            withSuccess(
+                """
+                {"warehouseId":"%s","warehouseVersion":7,"lifecycleState":"DRAINING",
+                 "direction":"OUTGOING","admitted":true}
+                """
+                    .formatted(warehouseId),
+                MediaType.APPLICATION_JSON));
+    server
+        .expect(
+            requestTo(
+                "http://warehouse.test/api/internal/warehouse/v1/warehouses/"
+                    + warehouseId
+                    + "/time-zone?at="
+                    + at))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header("Authorization", "Bearer test-warehouse.timezone.read"))
+        .andRespond(
+            withSuccess(
+                """
+                {"warehouseId":"%s","timeZone":"Europe/Samara",
+                 "effectiveFrom":"2026-09-01T00:00:00Z"}
+                """
+                    .formatted(warehouseId),
+                MediaType.APPLICATION_JSON));
+    server
+        .expect(
+            requestTo(
+                "http://warehouse.test/api/internal/warehouse/v1/warehouses/"
+                    + warehouseId
+                    + "/operation-marks"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(header("Authorization", "Bearer test-warehouse.operation.mark"))
+        .andExpect(jsonPath("$.operationId").value(operationId.toString()))
+        .andExpect(jsonPath("$.occurredAt").value("2026-09-01T00:30:00Z"))
+        .andRespond(withSuccess());
+    server
+        .expect(
+            requestTo(
+                "http://warehouse.test/api/internal/warehouse/v1/lifecycle/readiness-work?limit=100"))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header("Authorization", "Bearer test-warehouse.lifecycle.read"))
+        .andRespond(
+            withSuccess(
+                """
+                {"items":[{"warehouseId":"%s","warehouseVersion":7,
+                  "lifecycleState":"DRAINING"}],"nextAfter":null}
+                """
+                    .formatted(warehouseId),
+                MediaType.APPLICATION_JSON));
+    server
+        .expect(
+            requestTo(
+                "http://warehouse.test/api/internal/warehouse/v1/warehouses/"
+                    + warehouseId
+                    + "/lifecycle-readiness"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(header("Authorization", "Bearer test-warehouse.lifecycle.confirm"))
+        .andExpect(jsonPath("$.expectedVersion").value(7))
+        .andRespond(
+            withSuccess(
+                """
+                {"warehouseId":"%s","warehouseVersion":8,"lifecycleState":"DRAINING",
+                 "readinessOwner":"LOGISTICS","confirmedAt":"2026-09-01T00:31:00Z"}
+                """
+                    .formatted(warehouseId),
+                MediaType.APPLICATION_JSON));
+
+    assertThat(
+            gateway.warehouseAdmission(
+                warehouseId,
+                LogisticsDependencyGateway.WarehouseOperationDirection.OUTGOING))
+        .extracting(LogisticsDependencyGateway.WarehouseOperationAdmission::warehouseVersion)
+        .isEqualTo(7L);
+    assertThat(gateway.warehouseTimeZoneAt(warehouseId, at).timeZone())
+        .isEqualTo("Europe/Samara");
+    gateway.markWarehouseOperation(warehouseId, operationId, at);
+    assertThat(gateway.warehouseLifecycleReadinessWork(null, 100).items())
+        .singleElement()
+        .extracting(LogisticsDependencyGateway.WarehouseLifecycleReadinessWork::warehouseId)
+        .isEqualTo(warehouseId);
+    assertThat(gateway.confirmWarehouseLifecycleReadiness(warehouseId, 7).warehouseVersion())
+        .isEqualTo(8);
+    server.verify();
+  }
+
+  @Test
+  void rejectsInconsistentWarehouseAdmissionTruth() {
+    UUID warehouseId = UUID.randomUUID();
+    server
+        .expect(
+            requestTo(
+                "http://warehouse.test/api/internal/warehouse/v1/warehouses/"
+                    + warehouseId
+                    + "/admission?direction=INCOMING"))
+        .andRespond(
+            withSuccess(
+                """
+                {"warehouseId":"%s","warehouseVersion":2,"lifecycleState":"DRAINING",
+                 "direction":"INCOMING","admitted":true}
+                """
+                    .formatted(warehouseId),
+                MediaType.APPLICATION_JSON));
+
+    assertThatThrownBy(
+            () ->
+                gateway.warehouseAdmission(
+                    warehouseId,
+                    LogisticsDependencyGateway.WarehouseOperationDirection.INCOMING))
+        .isInstanceOf(LogisticsDependencyException.class)
+        .satisfies(
+            failure ->
+                assertThat(((LogisticsDependencyException) failure).kind())
+                    .isEqualTo(LogisticsDependencyException.FailureKind.CONFIGURATION));
     server.verify();
   }
 }

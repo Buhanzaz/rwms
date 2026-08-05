@@ -46,7 +46,10 @@ import type {
   RepairTaskReworkSeed,
 } from "@/features/repair-tasks/model/repair-task"
 import { RepairTaskQueueDraftPersistedError } from "@/features/repair-tasks/ports/repair-tasks-client"
-import { RepairTaskWriteOffDialog } from "@/features/repair-tasks/repair-task-write-off-dialog"
+import {
+  RepairTaskWriteOffDialog,
+  type RepairTaskWriteOffDecision,
+} from "@/features/repair-tasks/repair-task-write-off-dialog"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
 import {
   maintenanceRepairMediaOwner,
@@ -452,7 +455,7 @@ function RepairTaskEditorContent({
     },
   })
   const writeOffMutation = useMutation({
-    mutationFn: (writeOffReason: string) => {
+    mutationFn: (writeOffDecision: RepairTaskWriteOffDecision) => {
       if (readOnly || !canManage) {
         throw new Error("Для списания бытовки нужен доступ MANAGE")
       }
@@ -473,10 +476,12 @@ function RepairTaskEditorContent({
         maintenanceMediaReferences: draft.maintenanceMediaReferences,
         coverMediaId: draft.coverMediaId,
         pendingUploads: draft.pendingUploads,
-        writeOffReason,
+        writeOffReason: writeOffDecision.reason,
+        contentsPlan: writeOffDecision.contentsPlan,
+        idempotencyKey: writeOffDecision.idempotencyKey,
       })
     },
-    onSuccess: (saved) => {
+    onSuccess: (decision) => {
       setWriteOffOpen(false)
       void queryClient.invalidateQueries({ queryKey: REPAIR_TASKS_QUERY_KEY })
       void queryClient.invalidateQueries({ queryKey: ["rental-items"] })
@@ -484,7 +489,7 @@ function RepairTaskEditorContent({
         queryKey: ["rental-item-filter-options"],
       })
       void queryClient.invalidateQueries({ queryKey: ["rental-item"] })
-      navigate(`/write-offs?writeOffId=${encodeURIComponent(saved.id)}`, {
+      navigate(`/write-offs?decisionId=${encodeURIComponent(decision.id)}`, {
         ...workspaceEntryNavigationOptions,
         replace: true,
       })
@@ -865,6 +870,9 @@ function RepairTaskEditorContent({
         }}
       />
       <RepairTaskWriteOffDialog
+        accessToken={accessToken}
+        warehouseId={warehouseId}
+        rentalItemId={draft.rentalItemId}
         open={writeOffOpen && canManage && !readOnly}
         pending={writeOffMutation.isPending}
         error={writeOffError}
@@ -872,9 +880,9 @@ function RepairTaskEditorContent({
           setWriteOffOpen(open)
           if (!open) setWriteOffError(null)
         }}
-        onConfirm={(reason) => {
+        onConfirm={(decision) => {
           if (canManage && !readOnly) {
-            writeOffMutation.mutate(reason)
+            writeOffMutation.mutate(decision)
           }
         }}
       />

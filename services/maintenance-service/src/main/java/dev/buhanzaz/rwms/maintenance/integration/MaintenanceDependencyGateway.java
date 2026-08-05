@@ -13,6 +13,19 @@ import java.util.UUID;
 public interface MaintenanceDependencyGateway {
   default boolean productionReady() { return true; }
 
+  WarehouseOperationAdmission warehouseAdmission(
+      UUID warehouseId, WarehouseOperationDirection direction);
+
+  WarehouseLifecycleReadinessWorkPage warehouseLifecycleReadinessWork(
+      UUID after, int limit);
+
+  WarehouseLifecycleReadinessConfirmation confirmWarehouseLifecycleReadiness(
+      UUID warehouseId, long expectedVersion);
+
+  WarehouseTimeZone warehouseTimeZoneAt(UUID warehouseId, OffsetDateTime at);
+
+  void markWarehouseOperation(UUID warehouseId, UUID operationId, OffsetDateTime occurredAt);
+
   AssetSnapshot getRentalItemSnapshot(UUID rentalItemId);
 
   /**
@@ -36,6 +49,10 @@ public interface MaintenanceDependencyGateway {
 
   /** Returns logistics' current durable movement truth for the given maintenance task. */
   PropertyEquipmentMovementTask getPropertyEquipmentMovementTask(UUID taskId);
+
+  /** Asset-owned pending-return truth for the exact estimate or direct-repair lease owner. */
+  List<MaintenanceFurnitureCustodyClaim> unresolvedFurnitureCustody(
+      String ownerType, UUID ownerId);
 
   FurnitureEquipmentSnapshot ensureFurnitureEquipment(
       UUID catalogNodeId, String equipmentName);
@@ -82,7 +99,6 @@ public interface MaintenanceDependencyGateway {
         ownerId,
         transition,
         linkedReturn,
-        null,
         List.of());
   }
 
@@ -97,8 +113,7 @@ public interface MaintenanceDependencyGateway {
       String ownerId,
       String transition,
       boolean linkedReturn,
-      UUID estimateId,
-      List<FurnitureLoss> furnitureLosses);
+      List<FurniturePendingReturn> furniturePendingReturns);
 
   void releaseLease(
       UUID idempotencyKey,
@@ -149,6 +164,7 @@ public interface MaintenanceDependencyGateway {
       UUID rentalItemId,
       String unitNumber,
       List<TaskStage> stages) {
+    OffsetDateTime at = OffsetDateTime.now(java.time.ZoneOffset.UTC);
     return registerTask(
         idempotencyKey,
         externalTaskId,
@@ -156,7 +172,9 @@ public interface MaintenanceDependencyGateway {
         warehouseId,
         rentalItemId,
         unitNumber,
-        LocalDate.now(java.time.ZoneId.of("Europe/Moscow")),
+        at.toInstant()
+            .atZone(java.time.ZoneId.of(warehouseTimeZoneAt(warehouseId, at).timeZone()))
+            .toLocalDate(),
         3,
         6,
         stages);
@@ -342,12 +360,13 @@ public interface MaintenanceDependencyGateway {
       Long expectedAssetVersion,
       Long expectedSourceBalanceVersion,
       Long quantity,
+      UUID maintenanceCustodyClaimId,
+      Long maintenanceCustodyVersion,
       PropertyDispositionContentsMode contentsMode,
       List<PropertyDispositionContent> contents,
       PropertyDispositionLeaseProof authorizedMaintenanceLease) {
     public PropertyDispositionPreparation {
-      if (warehouseId == null || assetKind == null || assetId == null || disposition == null
-          || expectedAssetVersion == null || expectedAssetVersion < 0) {
+      if (warehouseId == null || assetKind == null || assetId == null || disposition == null) {
         throw new IllegalArgumentException("Property disposition preparation is incomplete");
       }
       contents = contents == null ? List.of() : List.copyOf(contents);
@@ -357,8 +376,7 @@ public interface MaintenanceDependencyGateway {
         throw new IllegalArgumentException("Property disposition contents are invalid");
       }
       if (assetKind == PropertyAssetKind.EQUIPMENT
-          && (expectedSourceBalanceVersion == null
-              || expectedSourceBalanceVersion < 0
+          && (expectedAssetVersion != null
               || quantity == null
               || quantity < 1
               || contentsMode != null
@@ -366,8 +384,22 @@ public interface MaintenanceDependencyGateway {
               || authorizedMaintenanceLease != null)) {
         throw new IllegalArgumentException("Equipment disposition preparation is invalid");
       }
+      boolean custody = maintenanceCustodyClaimId != null || maintenanceCustodyVersion != null;
+      if (assetKind == PropertyAssetKind.EQUIPMENT
+          && (custody
+              ? maintenanceCustodyClaimId == null
+                  || maintenanceCustodyVersion == null
+                  || maintenanceCustodyVersion < 0
+                  || expectedSourceBalanceVersion != null
+              : expectedSourceBalanceVersion == null || expectedSourceBalanceVersion < 0)) {
+        throw new IllegalArgumentException("Equipment disposition source fence is invalid");
+      }
       if (assetKind == PropertyAssetKind.CABIN
-          && (expectedSourceBalanceVersion != null || quantity != null)) {
+          && (expectedAssetVersion == null
+              || expectedAssetVersion < 0
+              || expectedSourceBalanceVersion != null
+              || quantity != null
+              || custody)) {
         throw new IllegalArgumentException("Cabin disposition preparation cannot contain stock quantity");
       }
       if (assetKind == PropertyAssetKind.CABIN
@@ -375,6 +407,32 @@ public interface MaintenanceDependencyGateway {
               || (!contents.isEmpty() && contentsMode == null))) {
         throw new IllegalArgumentException("Cabin contents mode does not match the prepared contents");
       }
+    }
+
+    public PropertyDispositionPreparation(
+        UUID warehouseId,
+        PropertyAssetKind assetKind,
+        UUID assetId,
+        PropertyDispositionKind disposition,
+        Long expectedAssetVersion,
+        Long expectedSourceBalanceVersion,
+        Long quantity,
+        PropertyDispositionContentsMode contentsMode,
+        List<PropertyDispositionContent> contents,
+        PropertyDispositionLeaseProof authorizedMaintenanceLease) {
+      this(
+          warehouseId,
+          assetKind,
+          assetId,
+          disposition,
+          expectedAssetVersion,
+          expectedSourceBalanceVersion,
+          quantity,
+          null,
+          null,
+          contentsMode,
+          contents,
+          authorizedMaintenanceLease);
     }
   }
 
@@ -386,6 +444,8 @@ public interface MaintenanceDependencyGateway {
       PropertyAssetKind assetKind,
       UUID assetId,
       PropertyDispositionKind disposition,
+      UUID maintenanceCustodyClaimId,
+      Long maintenanceCustodyVersion,
       List<PropertyDispositionContent> contents,
       Instant preparedAt,
       Instant appliedAt) {
@@ -398,10 +458,38 @@ public interface MaintenanceDependencyGateway {
           || assetKind == null
           || assetId == null
           || disposition == null
+          || (maintenanceCustodyVersion != null && maintenanceCustodyVersion < 0)
+          || ((maintenanceCustodyClaimId == null) != (maintenanceCustodyVersion == null))
           || preparedAt == null) {
         throw new IllegalArgumentException("Property disposition fence is invalid");
       }
       contents = contents == null ? List.of() : List.copyOf(contents);
+    }
+
+    public PropertyDispositionFence(
+        UUID decisionId,
+        String state,
+        String requestSha256,
+        UUID warehouseId,
+        PropertyAssetKind assetKind,
+        UUID assetId,
+        PropertyDispositionKind disposition,
+        List<PropertyDispositionContent> contents,
+        Instant preparedAt,
+        Instant appliedAt) {
+      this(
+          decisionId,
+          state,
+          requestSha256,
+          warehouseId,
+          assetKind,
+          assetId,
+          disposition,
+          null,
+          null,
+          contents,
+          preparedAt,
+          appliedAt);
     }
   }
 
@@ -474,16 +562,28 @@ public interface MaintenanceDependencyGateway {
   record PropertyEquipmentMovementTask(
       UUID id,
       UUID warehouseId,
+      String ownerType,
+      UUID ownerId,
       String state,
       String terminalState,
       OffsetDateTime doneAt) {
     public PropertyEquipmentMovementTask {
       if (id == null
           || warehouseId == null
+          || ownerType == null
+          || ownerType.isBlank()
+          || ownerId == null
           || state == null
           || state.isBlank()) {
         throw new IllegalArgumentException("Property equipment movement task is invalid");
       }
+      ownerType = ownerType.trim();
+    }
+
+    public boolean isOwnedByMaintenanceDisposition(UUID decisionId) {
+      return decisionId != null
+          && "MAINTENANCE_DISPOSITION".equals(ownerType)
+          && decisionId.equals(ownerId);
     }
 
     public boolean completed() {
@@ -532,7 +632,70 @@ public interface MaintenanceDependencyGateway {
     }
   }
 
-  record FurnitureLoss(UUID equipmentId, long quantity) {}
+  record FurniturePendingReturn(
+      UUID equipmentId, long expectedSourceBalanceVersion, long quantity) {
+    public FurniturePendingReturn {
+      if (equipmentId == null || expectedSourceBalanceVersion < 0 || quantity < 1) {
+        throw new IllegalArgumentException("Furniture pending return is invalid");
+      }
+    }
+  }
+
+  record MaintenanceFurnitureCustodyClaim(
+      UUID id,
+      long custodyVersion,
+      String ownerType,
+      UUID ownerId,
+      UUID rentalItemId,
+      UUID warehouseId,
+      UUID equipmentId,
+      UUID sourceBalanceId,
+      long sourceBalanceVersion,
+      long quantity,
+      long returnedToStockQuantity,
+      long preparedDispositionQuantity,
+      long terminalDispositionQuantity,
+      long unresolvedQuantity,
+      long availableForDispositionQuantity,
+      OffsetDateTime selectedAt) {
+    public MaintenanceFurnitureCustodyClaim {
+      if (id == null
+          || custodyVersion < 0
+          || !("MAINTENANCE_ESTIMATE".equals(ownerType)
+              || "MAINTENANCE_REPAIR".equals(ownerType))
+          || ownerId == null
+          || rentalItemId == null
+          || warehouseId == null
+          || equipmentId == null
+          || sourceBalanceId == null
+          || sourceBalanceVersion < 0
+          || quantity < 1
+          || returnedToStockQuantity < 0
+          || preparedDispositionQuantity < 0
+          || terminalDispositionQuantity < 0
+          || unresolvedQuantity < 0
+          || availableForDispositionQuantity < 0
+          || unresolvedQuantity > quantity
+          || availableForDispositionQuantity > unresolvedQuantity
+          || selectedAt == null) {
+        throw new IllegalArgumentException("Maintenance furniture custody truth is invalid");
+      }
+      try {
+        long expectedUnresolved = Math.subtractExact(
+            Math.subtractExact(quantity, returnedToStockQuantity), terminalDispositionQuantity);
+        long expectedAvailable = Math.subtractExact(
+            Math.subtractExact(quantity, returnedToStockQuantity), preparedDispositionQuantity);
+        if (unresolvedQuantity != expectedUnresolved
+            || availableForDispositionQuantity != expectedAvailable
+            || terminalDispositionQuantity > preparedDispositionQuantity) {
+          throw new IllegalArgumentException("Maintenance furniture custody totals are inconsistent");
+        }
+      } catch (ArithmeticException exception) {
+        throw new IllegalArgumentException(
+            "Maintenance furniture custody totals are inconsistent", exception);
+      }
+    }
+  }
 
   /**
    * Immutable worker-facing work snapshot. Prices intentionally do not belong to this boundary.
@@ -999,6 +1162,78 @@ public interface MaintenanceDependencyGateway {
           || proofEventId == null) {
         throw new IllegalArgumentException("Maintenance media owner proof is invalid");
       }
+    }
+  }
+
+  enum WarehouseOperationDirection { INCOMING, OUTGOING }
+
+  enum WarehouseLifecycleState { ACTIVE, DRAINING, INACTIVE }
+
+  record WarehouseOperationAdmission(
+      UUID warehouseId,
+      long warehouseVersion,
+      WarehouseLifecycleState lifecycleState,
+      WarehouseOperationDirection direction,
+      boolean admitted) {
+    public WarehouseOperationAdmission {
+      if (warehouseId == null
+          || warehouseVersion < 0
+          || lifecycleState == null
+          || direction == null) {
+        throw new IllegalArgumentException("Warehouse admission truth is invalid");
+      }
+    }
+  }
+
+  record WarehouseLifecycleReadinessWork(
+      UUID warehouseId, long warehouseVersion, WarehouseLifecycleState lifecycleState) {
+    public WarehouseLifecycleReadinessWork {
+      if (warehouseId == null
+          || warehouseVersion < 0
+          || lifecycleState != WarehouseLifecycleState.DRAINING) {
+        throw new IllegalArgumentException("Warehouse readiness work is invalid");
+      }
+    }
+  }
+
+  record WarehouseLifecycleReadinessWorkPage(
+      List<WarehouseLifecycleReadinessWork> items, UUID nextAfter) {
+    public WarehouseLifecycleReadinessWorkPage {
+      if (items == null || items.stream().anyMatch(java.util.Objects::isNull)) {
+        throw new IllegalArgumentException("Warehouse readiness page is invalid");
+      }
+      items = List.copyOf(items);
+    }
+  }
+
+  record WarehouseLifecycleReadinessConfirmation(
+      UUID warehouseId,
+      long warehouseVersion,
+      WarehouseLifecycleState lifecycleState,
+      String readinessOwner,
+      OffsetDateTime confirmedAt) {
+    public WarehouseLifecycleReadinessConfirmation {
+      if (warehouseId == null
+          || warehouseVersion < 0
+          || lifecycleState != WarehouseLifecycleState.DRAINING
+          || !"MAINTENANCE".equals(readinessOwner)
+          || confirmedAt == null) {
+        throw new IllegalArgumentException("Warehouse readiness confirmation is invalid");
+      }
+    }
+  }
+
+  record WarehouseTimeZone(UUID warehouseId, String timeZone, OffsetDateTime effectiveFrom) {
+    public WarehouseTimeZone {
+      if (warehouseId == null
+          || timeZone == null
+          || timeZone.isBlank()
+          || timeZone.length() > 64
+          || effectiveFrom == null) {
+        throw new IllegalArgumentException("Warehouse timezone truth is invalid");
+      }
+      timeZone = timeZone.trim();
+      java.time.ZoneId.of(timeZone);
     }
   }
 }

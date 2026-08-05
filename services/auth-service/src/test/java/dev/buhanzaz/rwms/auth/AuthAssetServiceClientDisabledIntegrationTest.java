@@ -50,7 +50,14 @@ class AuthAssetServiceClientDisabledIntegrationTest {
         var stored = storedClients.findByClientId("asset-service");
         assertThat(stored).isNotNull();
         assertThat(stored.getClientSecret()).isNull();
-        assertThat(stored.getScopes()).containsExactlyInAnyOrder("warehouse.read", "media.asset-import");
+        assertThat(stored.getScopes())
+                .containsExactlyInAnyOrder(
+                        "warehouse.read",
+                        "warehouse.timezone.read",
+                        "warehouse.operation.mark",
+                        "warehouse.lifecycle.read",
+                        "warehouse.lifecycle.confirm",
+                        "media.asset-import");
         assertThat(configuredClients.findByClientId("asset-service")).isNull();
         assertThat(jdbc.queryForObject(
                         "select client_secret is null from oauth2_registered_client where client_id='asset-service'",

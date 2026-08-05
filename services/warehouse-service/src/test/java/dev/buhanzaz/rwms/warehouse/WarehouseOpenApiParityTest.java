@@ -25,7 +25,7 @@ import org.yaml.snakeyaml.Yaml;
 
 class WarehouseOpenApiParityTest {
   private static final String API_PACKAGE = "dev.buhanzaz.rwms.warehouse.api";
-  private static final Set<String> OPENAPI_METHODS = Set.of("get", "post", "put", "delete");
+  private static final Set<String> OPENAPI_METHODS = Set.of("get", "post", "put");
 
   @Test
   void openApiInventoryExactlyMatchesWarehouseControllers() throws Exception {
@@ -41,10 +41,19 @@ class WarehouseOpenApiParityTest {
         .containsKeys(
             "/api/warehouse/v1/warehouses",
             "/api/warehouse/v1/warehouses/{id}",
+            "/api/warehouse/v1/warehouses/{id}/draining",
+            "/api/warehouse/v1/warehouses/{id}/inactivation",
+            "/api/warehouse/v1/warehouses/{id}/time-zone-changes",
+            "/api/warehouse/v1/admin/outbox-events/{eventId}/recovery",
             "/api/internal/warehouse/v1/warehouses/{id}/existence",
             "/api/internal/warehouse/v1/warehouses/asset/{id}/existence",
             "/api/internal/warehouse/v1/warehouses/inventory/{id}/metadata",
-            "/api/internal/warehouse/v1/warehouses/logistics/{id}/identity");
+            "/api/internal/warehouse/v1/warehouses/logistics/{id}/identity",
+            "/api/internal/warehouse/v1/warehouses/{id}/time-zone",
+            "/api/internal/warehouse/v1/warehouses/{id}/operation-marks",
+            "/api/internal/warehouse/v1/warehouses/{id}/admission",
+            "/api/internal/warehouse/v1/warehouses/{id}/lifecycle-readiness",
+            "/api/internal/warehouse/v1/lifecycle/readiness-work");
     Map<String, Object> create = child(child(paths, "/api/warehouse/v1/warehouses"), "post");
     assertThat(list(create.get("parameters")).getFirst())
         .isInstanceOfSatisfying(
@@ -55,7 +64,19 @@ class WarehouseOpenApiParityTest {
     Map<String, Object> schemas = child(child(document, "components"), "schemas");
     assertThat(list(child(schemas, "Warehouse").get("required")))
         .containsExactlyInAnyOrder(
-            "id", "version", "name", "city", "address", "timeZone", "active", "sortOrder");
+            "id",
+            "version",
+            "name",
+            "city",
+            "address",
+            "timeZone",
+            "active",
+            "lifecycleState",
+            "sortOrder");
+    assertThat(list(child(schemas, "ReplaceWarehouseRequest").get("required")))
+        .containsExactlyInAnyOrder("expectedVersion", "name", "city", "timeZone");
+    assertThat(child(child(schemas, "ReplaceWarehouseRequest"), "properties"))
+        .doesNotContainKey("active");
     assertThat(list(child(schemas, "InternalWarehouseExistence").get("required")))
         .containsExactlyInAnyOrder("id", "version", "active");
     assertThat(child(schemas, "InternalWarehouseExistence").get("additionalProperties"))
@@ -75,6 +96,50 @@ class WarehouseOpenApiParityTest {
         .isEqualTo(false);
     assertThat(child(child(schemas, "LogisticsWarehouseIdentity"), "properties"))
         .containsKeys("id", "version", "active", "name", "city", "timeZone");
+    assertThat(list(child(schemas, "ScheduleWarehouseTimeZoneRequest").get("required")))
+        .containsExactlyInAnyOrder("expectedVersion", "timeZone", "effectiveFrom");
+    assertThat(list(child(schemas, "WarehouseTimeZoneChange").get("required")))
+        .containsExactlyInAnyOrder("warehouseId", "warehouseVersion", "timeZone", "effectiveFrom");
+    assertThat(list(child(schemas, "WarehouseTimeZoneAt").get("required")))
+        .containsExactlyInAnyOrder("warehouseId", "timeZone", "effectiveFrom");
+    assertThat(list(child(schemas, "WarehouseOperationMarkRequest").get("required")))
+        .containsExactlyInAnyOrder("operationId", "occurredAt");
+    assertThat(list(child(schemas, "WarehouseOutboxRecoveryRequest").get("required")))
+        .containsExactlyInAnyOrder("expectedReviewVersion", "reason");
+    assertThat(list(child(schemas, "WarehouseOutboxStatus").get("enum")))
+        .containsExactly("PENDING", "IN_FLIGHT", "PUBLISHED", "DLT", "QUARANTINED");
+    assertThat(list(child(schemas, "WarehouseOutboxRecovery").get("required")))
+        .containsExactlyInAnyOrder(
+            "eventId",
+            "aggregateType",
+            "aggregateId",
+            "aggregateVersion",
+            "status",
+            "attemptCount",
+            "reviewVersion",
+            "lastErrorCode",
+            "reviewedBySubjectId",
+            "recoveryReason",
+            "recoveredAt");
+    assertThat(list(child(schemas, "WarehouseLifecycleTransitionRequest").get("required")))
+        .containsExactly("expectedVersion");
+    assertThat(list(child(schemas, "WarehouseLifecycleReadinessRequest").get("required")))
+        .containsExactly("expectedVersion");
+    assertThat(list(child(schemas, "WarehouseLifecycleState").get("enum")))
+        .containsExactly("ACTIVE", "DRAINING", "INACTIVE");
+    assertThat(list(child(schemas, "WarehouseOperationDirection").get("enum")))
+        .containsExactly("INCOMING", "OUTGOING");
+    assertThat(list(child(schemas, "WarehouseOperationAdmission").get("required")))
+        .containsExactlyInAnyOrder(
+            "warehouseId", "warehouseVersion", "lifecycleState", "direction", "admitted");
+    assertThat(list(child(schemas, "WarehouseLifecycleReadinessConfirmation").get("required")))
+        .containsExactlyInAnyOrder(
+            "warehouseId", "warehouseVersion", "lifecycleState", "readinessOwner", "confirmedAt");
+    assertThat(list(child(schemas, "WarehouseLifecycleReadinessWork").get("required")))
+        .containsExactlyInAnyOrder("warehouseId", "warehouseVersion", "lifecycleState");
+    assertThat(list(child(schemas, "WarehouseLifecycleReadinessWorkPage").get("required")))
+        .containsExactlyInAnyOrder("items", "nextAfter");
+    assertThat(child(paths, "/api/warehouse/v1/warehouses/{id}")).doesNotContainKey("delete");
     assertAllLocalReferencesResolve(document, document);
   }
 

@@ -500,6 +500,43 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Conflict" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/admin/warehouse-operation-marks/{operationId}/recovery:
+    post:
+      operationId: recoverLogisticsWarehouseOperationMark
+      description: >-
+        Global-administrator-only, reviewed retry of one quarantined warehouse operation mark.
+        The expected recovery version fences concurrent reviews; every accepted review is appended
+        to an immutable audit table. Requires a USER token with rwms.write and SYSTEM_ADMIN or
+        WMS_ADMIN global role.
+      parameters:
+        - name: operationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: warehouseId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WarehouseOperationMarkRecoveryRequest" }
+      responses:
+        "200":
+          description: Requeued mark or the exact replay of an already accepted review.
+          headers:
+            Idempotency-Replayed:
+              required: false
+              schema: { type: string, const: "true" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WarehouseOperationMarkRecoveryResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/internal/logistics/v1/maintenance/driver-tasks:
     post:
       operationId: createMaintenanceDriverTask
@@ -3571,6 +3608,37 @@ components:
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         action: { $ref: "#/components/schemas/RentalBookingAlertAction" }
+    WarehouseOperationMarkRecoveryRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRecoveryVersion, reason]
+      properties:
+        expectedRecoveryVersion: { type: integer, format: int64, minimum: 0 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+    WarehouseOperationMarkRecoveryResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - warehouseId
+        - operationId
+        - state
+        - attemptCount
+        - recoveryVersion
+        - lastErrorCode
+        - recoveredBySubjectId
+        - recoveryReason
+        - recoveredAt
+      properties:
+        warehouseId: { type: string, format: uuid }
+        operationId: { type: string, format: uuid }
+        state: { type: string, enum: [PENDING, IN_FLIGHT, RETRY_PENDING, CONFIRMED, QUARANTINED] }
+        attemptCount: { type: integer, minimum: 0 }
+        recoveryVersion: { type: integer, format: int64, minimum: 1 }
+        lastErrorCode:
+          oneOf: [ { type: string, minLength: 1, maxLength: 96 }, { type: 'null' } ]
+        recoveredBySubjectId: { type: string, format: uuid }
+        recoveryReason: { type: string, minLength: 1, maxLength: 2000 }
+        recoveredAt: { type: string, format: date-time }
     ApiProblem:
       type: object
       additionalProperties: true

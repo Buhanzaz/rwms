@@ -79,7 +79,7 @@ class InventoryJpaValidationIntegrationTest {
         assertThat(
             jdbc.queryForObject(
                 "select count(*) from flyway_schema_history where success", Integer.class))
-        .isEqualTo(15);
+        .isEqualTo(16);
     assertThat(entityManagerFactory.getMetamodel().getEntities())
         .extracting(value -> value.getJavaType().getSimpleName())
         .contains(
@@ -90,6 +90,7 @@ class InventoryJpaValidationIntegrationTest {
             "InventoryPlanningSettings",
             "InventoryFinalPlan",
             "InventoryFinalPlanEntry",
+            "InventoryFurnitureLossIntent",
             "InventoryFurnitureReconciliationIntent");
   }
 

@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskOwnerType;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -31,6 +32,7 @@ class EquipmentMovementTaskProcessorOwnerTest {
         new EquipmentMovementWorkflowStore.ReserveWork(
             taskId,
             decisionId,
+            EquipmentMovementTaskOwnerType.MAINTENANCE_DISPOSITION,
             lineId,
             UUID.randomUUID(),
             UUID.randomUUID(),
@@ -73,7 +75,8 @@ class EquipmentMovementTaskProcessorOwnerTest {
             eq(reserve.sourceLocationKind()),
             eq(reserve.expectedSourceBalanceVersion()),
             eq(reserve.quantity()),
-            eq(reserve.reservedUntil()));
+            eq(reserve.reservedUntil()),
+            eq(LogisticsDependencyGateway.EquipmentMovementPurpose.MAINTENANCE_DISPOSITION));
     verify(dependencies).executeEquipmentMovement(eq(taskId), eq(decisionId), eq(execute.lines()));
     verify(dependencies)
         .releaseEquipmentMovementReservation(
@@ -82,5 +85,46 @@ class EquipmentMovementTaskProcessorOwnerTest {
             eq(4L),
             eq(decisionId),
             eq(lineId));
+  }
+
+  @Test
+  void userRequestedMovementUsesAllocatableRebalancePurpose() {
+    UUID taskId = UUID.randomUUID();
+    UUID lineId = UUID.randomUUID();
+    EquipmentMovementWorkflowStore.ReserveWork reserve =
+        new EquipmentMovementWorkflowStore.ReserveWork(
+            taskId,
+            taskId,
+            EquipmentMovementTaskOwnerType.USER_REQUEST,
+            lineId,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            null,
+            "STOCK",
+            3L,
+            2L,
+            OffsetDateTime.now(ZoneOffset.UTC).plusHours(1));
+    AtomicInteger workIndex = new AtomicInteger();
+    when(store.nextWork(taskId))
+        .thenAnswer(
+            ignored ->
+                workIndex.getAndIncrement() == 0 ? Optional.of(reserve) : Optional.empty());
+
+    int processed = processor.processUntilIdle(taskId);
+
+    assertThat(processed).isEqualTo(1);
+    verify(dependencies)
+        .acquireEquipmentMovementReservation(
+            eq(lineId),
+            eq(taskId),
+            eq(lineId),
+            eq(reserve.equipmentId()),
+            eq(reserve.sourceWarehouseId()),
+            eq(reserve.sourceRentalItemId()),
+            eq(reserve.sourceLocationKind()),
+            eq(reserve.expectedSourceBalanceVersion()),
+            eq(reserve.quantity()),
+            eq(reserve.reservedUntil()),
+            eq(LogisticsDependencyGateway.EquipmentMovementPurpose.ALLOCATABLE_REBALANCE));
   }
 }

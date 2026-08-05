@@ -368,11 +368,10 @@ public class OrderAssetService {
       for (UUID equipmentId : equipmentIds) {
         var totals = assets.equipmentTotals(equipmentId, request.warehouseId());
         long physicalAvailable =
-            Math.max(
-                0,
-                Math.subtractExact(
-                    Math.addExact(totals.stockQuantity(), totals.nonRentedCabinQuantity()),
-                    totals.activeHeldQuantity()));
+            totals.balances().stream()
+                .filter(EquipmentBalanceResponse::allocatable)
+                .mapToLong(EquipmentBalanceResponse::availableStock)
+                .sum();
         long availableForOrder =
             Math.max(
                 0,
@@ -562,31 +561,15 @@ public class OrderAssetService {
 
   private List<EquipmentBalanceResponse> eligibleSources(
       List<EquipmentBalanceResponse> balances, UUID targetRentalItemId) {
-    Set<UUID> candidateCabins =
-        balances.stream()
-            .filter(balance -> balance.locationKind() == BalanceLocationKind.CABIN_NON_RENTED)
-            .map(EquipmentBalanceResponse::rentalItemId)
-            .filter(Objects::nonNull)
-            .filter(id -> !id.equals(targetRentalItemId))
-            .collect(Collectors.toSet());
-    Set<UUID> reservedCabins =
-        candidateCabins.isEmpty()
-            ? Set.of()
-            : reservations
-                .findAllByRentalItemIdInAndState(
-                    List.copyOf(candidateCabins), OrderUnitReservationState.ACTIVE)
-                .stream()
-                .map(OrderUnitReservation::getRentalItemId)
-                .collect(Collectors.toSet());
     return balances.stream()
+        .filter(EquipmentBalanceResponse::allocatable)
         .filter(balance -> balance.availableStock() > 0)
         .filter(
             balance ->
                 balance.locationKind() == BalanceLocationKind.STOCK
                     || (balance.locationKind() == BalanceLocationKind.CABIN_NON_RENTED
                         && balance.rentalItemId() != null
-                        && !balance.rentalItemId().equals(targetRentalItemId)
-                        && !reservedCabins.contains(balance.rentalItemId())))
+                        && !balance.rentalItemId().equals(targetRentalItemId)))
         .sorted(
             Comparator.comparingInt(
                     (EquipmentBalanceResponse balance) ->

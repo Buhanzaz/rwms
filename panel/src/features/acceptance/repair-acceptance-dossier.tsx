@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Link } from "react-router-dom"
+import { Link, useNavigate } from "react-router-dom"
 
 import { PhotoCarousel } from "@/components/media/photo-carousel"
 import { Badge } from "@/components/ui/badge"
@@ -24,7 +24,6 @@ import {
 import {
   Field,
   FieldDescription,
-  FieldError,
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field"
@@ -50,6 +49,10 @@ import type {
   RepairTaskEvidenceDto,
   RepairTaskSubtaskDto,
 } from "@/features/repair-tasks/model/repair-task"
+import {
+  RepairTaskWriteOffDialog,
+  type RepairTaskWriteOffDecision,
+} from "@/features/repair-tasks/repair-task-write-off-dialog"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
 import {
   inventoryFindingMediaOwner,
@@ -441,7 +444,10 @@ function workSourceMediaOwner(
     return taskBoardEntryMediaOwner(subtask.taskBoardEntryId, task.warehouseId)
   }
   if (task.kind !== "REWORK" && task.sourceEstimateId) {
-    return maintenanceEstimateMediaOwner(task.sourceEstimateId, task.warehouseId)
+    return maintenanceEstimateMediaOwner(
+      task.sourceEstimateId,
+      task.warehouseId
+    )
   }
   if (task.origin === "INVENTORY" && task.sourceInventoryFindingId) {
     return inventoryFindingMediaOwner(
@@ -791,6 +797,7 @@ function RepairStageSection({
 }
 
 function DecisionDialogs({
+  accessToken,
   task,
   acceptanceMediaReferences,
   workReviewDecisions,
@@ -798,6 +805,7 @@ function DecisionDialogs({
   canManage,
   onDecision,
 }: {
+  accessToken: string | null
   task: RepairTaskDto
   acceptanceMediaReferences: ReadyMediaReference[]
   workReviewDecisions: Readonly<Record<string, WorkReviewDecision>>
@@ -806,12 +814,11 @@ function DecisionDialogs({
   onDecision?: () => void
 }) {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const [reworkOpen, setReworkOpen] = useState(false)
   const [acceptOpen, setAcceptOpen] = useState(false)
   const [writeOffOpen, setWriteOffOpen] = useState(false)
   const [acceptComment, setAcceptComment] = useState("")
-  const [writeOffReason, setWriteOffReason] = useState("")
-  const [writeOffSubmitted, setWriteOffSubmitted] = useState(false)
   const canAcceptWithMedia = acceptanceMediaReferences.length > 0
   const workLines = task.subtasks.flatMap((subtask) => subtask.workLines)
   const allWorksReviewed = workLines.every(
@@ -854,21 +861,27 @@ function DecisionDialogs({
     onSuccess: handleDecisionSuccess,
   })
   const writeOffMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: (decision: RepairTaskWriteOffDecision) => {
       if (!canManage) {
         throw new Error(
           "Недостаточно прав для списания бытовки на выбранном складе."
         )
       }
-      return writeOffRepairTask({ task, reason: writeOffReason })
+      return writeOffRepairTask({ task, ...decision })
     },
-    onSuccess: handleDecisionSuccess,
+    onSuccess: (decision) => {
+      setWriteOffOpen(false)
+      void queryClient.invalidateQueries({ queryKey: REPAIR_TASKS_QUERY_KEY })
+      void queryClient.invalidateQueries({
+        queryKey: ["property-dispositions"],
+      })
+      onDecision?.()
+      navigate(`/write-offs?decisionId=${encodeURIComponent(decision.id)}`, {
+        ...workspaceEntryNavigationOptions,
+        replace: true,
+      })
+    },
   })
-
-  function confirmWriteOff() {
-    setWriteOffSubmitted(true)
-    if (canManage && writeOffReason.trim()) writeOffMutation.mutate()
-  }
 
   return (
     <>
@@ -983,61 +996,24 @@ function DecisionDialogs({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={writeOffOpen && canManage} onOpenChange={setWriteOffOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Списать бытовку</DialogTitle>
-            <DialogDescription>
-              Команда завершит ремонтный цикл текущей версии ремонта.
-            </DialogDescription>
-          </DialogHeader>
-          <FieldGroup>
-            <Field data-invalid={writeOffSubmitted && !writeOffReason.trim()}>
-              <FieldLabel htmlFor="write-off-reason">
-                Причина списания
-              </FieldLabel>
-              <Textarea
-                id="write-off-reason"
-                value={writeOffReason}
-                aria-invalid={writeOffSubmitted && !writeOffReason.trim()}
-                onChange={(event) => setWriteOffReason(event.target.value)}
-              />
-              <FieldDescription>
-                Причина обязательна для команды, но публичная проекция списаний
-                сейчас возвращает только дату и автора решения.
-              </FieldDescription>
-              {writeOffSubmitted && !writeOffReason.trim() ? (
-                <FieldError>Укажите причину списания.</FieldError>
-              ) : null}
-            </Field>
-          </FieldGroup>
-          {writeOffMutation.isError ? (
-            <p role="alert" className="text-sm text-destructive">
-              {writeOffMutation.error instanceof Error
-                ? writeOffMutation.error.message
-                : "Не удалось списать бытовку."}
-            </p>
-          ) : null}
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={writeOffMutation.isPending}
-              onClick={() => setWriteOffOpen(false)}
-            >
-              Отмена
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              disabled={writeOffMutation.isPending}
-              onClick={confirmWriteOff}
-            >
-              Списать
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <RepairTaskWriteOffDialog
+        accessToken={accessToken}
+        warehouseId={task.warehouseId}
+        rentalItemId={task.rentalItemId}
+        open={writeOffOpen && canManage}
+        pending={writeOffMutation.isPending}
+        error={
+          writeOffMutation.isError
+            ? writeOffMutation.error instanceof Error
+              ? writeOffMutation.error.message
+              : "Не удалось создать решение о списании."
+            : null
+        }
+        onOpenChange={setWriteOffOpen}
+        onConfirm={(decision) => {
+          if (canManage) writeOffMutation.mutate(decision)
+        }}
+      />
     </>
   )
 }
@@ -1124,9 +1100,7 @@ export function RepairAcceptanceDossier({
                     setWorkReviewState((current) => ({
                       key: reviewKey,
                       decisions: {
-                        ...(current.key === reviewKey
-                          ? current.decisions
-                          : {}),
+                        ...(current.key === reviewKey ? current.decisions : {}),
                         [lineId]: decision,
                       },
                     }))
@@ -1141,6 +1115,7 @@ export function RepairAcceptanceDossier({
             <div className="sticky bottom-0 mt-auto bg-card py-2">
               <Separator className="mb-2" />
               <DecisionDialogs
+                accessToken={accessToken}
                 task={task}
                 acceptanceMediaReferences={acceptanceMediaReferences}
                 workReviewDecisions={workReviewDecisions}

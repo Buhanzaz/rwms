@@ -12,6 +12,41 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
   }
 
   @Override
+  public WarehouseOperationAdmission warehouseAdmission(
+      UUID warehouseId, WarehouseOperationDirection direction) {
+    throw unavailable();
+  }
+
+  @Override
+  public WarehouseLifecycleReadinessWorkPage warehouseLifecycleReadinessWork(
+      UUID after, int limit) {
+    throw unavailable();
+  }
+
+  @Override
+  public WarehouseLifecycleReadinessConfirmation confirmWarehouseLifecycleReadiness(
+      UUID warehouseId, long expectedVersion) {
+    throw unavailable();
+  }
+
+  @Override
+  public WarehouseTimeZone warehouseTimeZoneAt(
+      UUID warehouseId, java.time.OffsetDateTime at) {
+    throw unavailable();
+  }
+
+  @Override
+  public void markWarehouseOperation(
+      UUID warehouseId, UUID operationId, java.time.OffsetDateTime occurredAt) {
+    throw unavailable();
+  }
+
+  @Override
+  public boolean productionReady() {
+    return false;
+  }
+
+  @Override
   public RentalItemSnapshot readRentalItemSnapshot(UUID assetId) {
     throw unavailable();
   }
@@ -159,7 +194,8 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
       String sourceLocationKind,
       long expectedSourceBalanceVersion,
       long quantity,
-      java.time.OffsetDateTime reservedUntil) {
+      java.time.OffsetDateTime reservedUntil,
+      EquipmentMovementPurpose purpose) {
     throw unavailable();
   }
 

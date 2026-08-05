@@ -15,12 +15,18 @@ import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
 import dev.buhanzaz.rwms.logistics.equipment.mapper.EquipmentMovementTaskResponseMapper;
 import dev.buhanzaz.rwms.logistics.equipment.repository.EquipmentMovementTaskLineRepository;
 import dev.buhanzaz.rwms.logistics.equipment.repository.EquipmentMovementTaskRepository;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsNotFoundException;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseOperationMarkStore;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -42,6 +48,8 @@ public class EquipmentMovementTaskService {
   private final EquipmentMovementTaskRepository tasks;
   private final EquipmentMovementTaskLineRepository lines;
   private final EquipmentMovementTaskResponseMapper mapper;
+  private final LogisticsWarehouseLifecycle warehouseLifecycle;
+  private final LogisticsWarehouseOperationMarkStore warehouseOperationMarks;
 
   public EquipmentMovementTaskResponse get(UUID taskId) {
     EquipmentMovementTask task = required(taskId);
@@ -69,12 +77,33 @@ public class EquipmentMovementTaskService {
     if (actorSubjectId == null || idempotencyKey == null || request == null) {
       throw new IllegalArgumentException("Movement actor, request and Idempotency-Key are required");
     }
+    return create(
+        actorSubjectId,
+        idempotencyKey,
+        request,
+        warehouseLifecycle.disabledTicket(
+            actorSubjectId,
+            CREATE_OPERATION,
+            idempotencyKey,
+            admissionRequirements(request)));
+  }
+
+  @Transactional
+  public CreateResult create(
+      UUID actorSubjectId,
+      UUID idempotencyKey,
+      CreateEquipmentMovementTaskRequest request,
+      AdmissionTicket admission) {
+    if (actorSubjectId == null || idempotencyKey == null || request == null) {
+      throw new IllegalArgumentException("Movement actor, request and Idempotency-Key are required");
+    }
     return createInternal(
         actorSubjectId,
         idempotencyKey,
         request,
         EquipmentMovementTaskOwnerType.USER_REQUEST,
-        null);
+        null,
+        admission);
   }
 
   /**
@@ -97,12 +126,41 @@ public class EquipmentMovementTaskService {
             request.plannedDurationMinutes(),
             request.deadlineAt(),
             request.lines().stream().map(EquipmentMovementTaskService::toMovementLine).toList());
+    return createFromMaintenance(
+        idempotencyKey,
+        request,
+        warehouseLifecycle.disabledTicket(
+            MAINTENANCE_ACTOR,
+            CREATE_OPERATION,
+            idempotencyKey,
+            admissionRequirements(taskRequest)));
+  }
+
+  @Transactional
+  public CreateResult createFromMaintenance(
+      UUID idempotencyKey,
+      CreateMaintenanceEquipmentMovementTaskRequest request,
+      AdmissionTicket admission) {
+    if (idempotencyKey == null) {
+      throw new IllegalArgumentException(
+          "Maintenance equipment movement Idempotency-Key is required");
+    }
+    validateMaintenanceRequest(request);
+    CreateEquipmentMovementTaskRequest taskRequest =
+        new CreateEquipmentMovementTaskRequest(
+            request.warehouseId(),
+            null,
+            request.unitNumber(),
+            request.plannedDurationMinutes(),
+            request.deadlineAt(),
+            request.lines().stream().map(EquipmentMovementTaskService::toMovementLine).toList());
     return createInternal(
         MAINTENANCE_ACTOR,
         idempotencyKey,
         taskRequest,
         EquipmentMovementTaskOwnerType.MAINTENANCE_DISPOSITION,
-        request.decisionId());
+        request.decisionId(),
+        admission);
   }
 
   private CreateResult createInternal(
@@ -110,7 +168,8 @@ public class EquipmentMovementTaskService {
       UUID idempotencyKey,
       CreateEquipmentMovementTaskRequest request,
       EquipmentMovementTaskOwnerType ownerType,
-      UUID ownerId) {
+      UUID ownerId,
+      AdmissionTicket admission) {
     validateRequest(request);
     String checksum = creationChecksum(request, ownerType, ownerId);
     if (ownerType == EquipmentMovementTaskOwnerType.MAINTENANCE_DISPOSITION) {
@@ -135,6 +194,13 @@ public class EquipmentMovementTaskService {
       return new CreateResult(
           response(replay, lines.findAllByTask_IdOrderByLineNumberAsc(replay.getId())), true);
     }
+
+    List<AdmissionRequirement> requirements = admissionRequirements(request);
+    if (admission == null || !sorted(requirements).equals(admission.requirements())) {
+      throw new LogisticsConflictException(
+          "Warehouse admission ticket does not match the equipment movement");
+    }
+    warehouseLifecycle.consume(admission);
 
     EquipmentMovementTask task =
         tasks.saveAndFlush(
@@ -168,6 +234,12 @@ public class EquipmentMovementTaskService {
               line.quantity()));
     }
     List<EquipmentMovementTaskLine> savedLines = lines.saveAllAndFlush(planned);
+    warehouseOperationMarks.enqueue(
+        request.warehouseId(), task.getId(), admission.occurredAt());
+    if (!request.warehouseId().equals(targetWarehouseId)) {
+      warehouseOperationMarks.enqueue(
+          targetWarehouseId, task.getId(), admission.occurredAt());
+    }
     return new CreateResult(response(task, savedLines), false);
   }
 
@@ -325,6 +397,30 @@ public class EquipmentMovementTaskService {
         null,
         EquipmentMovementLocationKind.STOCK,
         line.quantity());
+  }
+
+  public static List<AdmissionRequirement> admissionRequirements(
+      CreateEquipmentMovementTaskRequest request) {
+    if (request == null || request.warehouseId() == null) {
+      throw new IllegalArgumentException("Equipment movement warehouse is required");
+    }
+    UUID target =
+        request.targetWarehouseId() == null ? request.warehouseId() : request.targetWarehouseId();
+    if (request.warehouseId().equals(target)) {
+      return List.of(
+          new AdmissionRequirement(
+              request.warehouseId(), WarehouseOperationDirection.OUTGOING));
+    }
+    return List.of(
+        new AdmissionRequirement(
+            request.warehouseId(), WarehouseOperationDirection.OUTGOING),
+        new AdmissionRequirement(target, WarehouseOperationDirection.INCOMING));
+  }
+
+  private static List<AdmissionRequirement> sorted(List<AdmissionRequirement> requirements) {
+    return requirements.stream()
+        .sorted(Comparator.comparing(AdmissionRequirement::warehouseId))
+        .toList();
   }
 
   private static String creationChecksum(

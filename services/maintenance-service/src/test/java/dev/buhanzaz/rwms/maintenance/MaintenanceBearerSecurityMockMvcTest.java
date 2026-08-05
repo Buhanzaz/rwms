@@ -16,6 +16,7 @@ import dev.buhanzaz.rwms.maintenance.api.MaintenanceRepairPlaceLogisticsControll
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceSettingsController;
 import dev.buhanzaz.rwms.maintenance.config.MaintenanceSecurityProblemWriter;
 import dev.buhanzaz.rwms.maintenance.config.SecurityConfiguration;
+import dev.buhanzaz.rwms.maintenance.disposition.application.PropertyDispositionApplicationService;
 import dev.buhanzaz.rwms.maintenance.security.MaintenanceAuthorizer;
 import dev.buhanzaz.rwms.maintenance.service.InventoryMaintenanceService;
 import dev.buhanzaz.rwms.maintenance.service.InventoryPublicationReconciliationService;
@@ -70,6 +71,7 @@ class MaintenanceBearerSecurityMockMvcTest {
   @MockitoBean InventoryMaintenanceService inventoryService;
   @MockitoBean InventoryPublicationReconciliationService publicationService;
   @MockitoBean LogisticsReturnShortageService logisticsService;
+  @MockitoBean PropertyDispositionApplicationService propertyDispositionService;
   @MockitoBean RepairCapacitySettingsService repairCapacitySettingsService;
   @MockitoBean RepairPlaceService repairPlaceService;
   @MockitoBean JwtDecoder jwtDecoder;
@@ -88,7 +90,10 @@ class MaintenanceBearerSecurityMockMvcTest {
                   .replace("{transferId}", ID.toString())
                   .replace("{repairId}", ID.toString())
                   .replace("{warehouseId}", ID.toString())
-                  .replace("{lineId}", ID.toString()))
+                  .replace("{lineId}", ID.toString())
+                  .replace("{nodeId}", ID.toString())
+                  .replace("{decisionId}", ID.toString())
+                  .replace("{operationId}", ID.toString()))
               .header(CorrelationIdFilter.HEADER_NAME, ID.toString()))
           .andExpect(status().isUnauthorized())
           .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
@@ -116,6 +121,7 @@ class MaintenanceBearerSecurityMockMvcTest {
           "lines":[{
             "aggregationKind":"CATALOG",
             "catalogNodeId":"10000000-0000-0000-0000-000000000006",
+            "routingCatalogNodeId":null,
             "description":null,
             "type":null,
             "unit":null,

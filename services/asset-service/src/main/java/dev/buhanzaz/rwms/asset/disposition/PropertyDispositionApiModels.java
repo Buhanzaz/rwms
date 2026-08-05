@@ -5,7 +5,6 @@ import dev.buhanzaz.rwms.asset.api.AssetApiModels.MovementResponse;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.time.OffsetDateTime;
@@ -78,6 +77,8 @@ public final class PropertyDispositionApiModels {
       @Min(0) Long expectedAssetVersion,
       @Min(0) Long expectedSourceBalanceVersion,
       @Min(1) Long quantity,
+      UUID maintenanceCustodyClaimId,
+      @Min(0) Long maintenanceCustodyVersion,
       PropertyDispositionContentsMode contentsMode,
       @NotNull
           @Size(max = 1000)
@@ -100,6 +101,8 @@ public final class PropertyDispositionApiModels {
       PropertyAssetKind assetKind,
       UUID assetId,
       PropertyDispositionKind disposition,
+      UUID maintenanceCustodyClaimId,
+      Long maintenanceCustodyVersion,
       List<MaintenancePropertyDispositionPreparedContent> contents,
       OffsetDateTime preparedAt,
       OffsetDateTime appliedAt) {}

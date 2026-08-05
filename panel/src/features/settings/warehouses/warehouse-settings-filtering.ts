@@ -1,12 +1,15 @@
-import type { WarehouseInfo } from "@/api/warehouse-api"
+import type {
+  WarehouseInfo,
+  WarehouseLifecycleState,
+} from "@/api/warehouse-api"
 
-export type WarehouseActivityFilter = "active" | "inactive"
+export type WarehouseLifecycleFilter = WarehouseLifecycleState
 
 export type WarehouseFiltersState = {
   names: string[]
   cities: string[]
   timeZones: string[]
-  statuses: WarehouseActivityFilter[]
+  statuses: WarehouseLifecycleFilter[]
 }
 
 export type WarehouseFilterOption = {
@@ -21,17 +24,24 @@ export type WarehouseFilterOptions = {
 }
 
 const warehouseStatusOptions: Array<{
-  value: WarehouseActivityFilter
+  value: WarehouseLifecycleFilter
   label: string
 }> = [
-  { value: "active", label: "Активные" },
-  { value: "inactive", label: "Неактивные" },
+  { value: "ACTIVE", label: "Активные" },
+  { value: "DRAINING", label: "Выводятся из работы" },
+  { value: "INACTIVE", label: "Неактивные" },
 ]
 
 const russianCollator = new Intl.Collator("ru", {
   numeric: true,
   sensitivity: "base",
 })
+
+const warehouseStatusSearchText: Record<WarehouseLifecycleState, string> = {
+  ACTIVE: "активен",
+  DRAINING: "выводится из работы",
+  INACTIVE: "неактивен",
+}
 
 export function createEmptyWarehouseFilters(): WarehouseFiltersState {
   return {
@@ -69,7 +79,7 @@ function matchesSearch(warehouse: WarehouseInfo, search: string) {
     warehouse.name,
     warehouse.city,
     warehouse.timeZone,
-    warehouse.active ? "активен" : "неактивен",
+    warehouseStatusSearchText[warehouse.lifecycleState],
   ].some((value) => value.toLocaleLowerCase("ru").includes(search))
 }
 
@@ -85,16 +95,12 @@ export function filterWarehouses(
   const normalizedSearch = search.trim().toLocaleLowerCase("ru")
 
   return warehouses.filter((warehouse) => {
-    const status: WarehouseActivityFilter = warehouse.active
-      ? "active"
-      : "inactive"
-
     return (
       matchesSearch(warehouse, normalizedSearch) &&
       matchesSelected(filters.names, warehouse.name) &&
       matchesSelected(filters.cities, warehouse.city) &&
       matchesSelected(filters.timeZones, warehouse.timeZone) &&
-      matchesSelected(filters.statuses, status)
+      matchesSelected(filters.statuses, warehouse.lifecycleState)
     )
   })
 }

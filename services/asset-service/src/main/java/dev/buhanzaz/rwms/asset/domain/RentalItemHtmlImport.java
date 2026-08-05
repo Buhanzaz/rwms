@@ -71,6 +71,20 @@ public class RentalItemHtmlImport {
   @Column(name = "media_job_id")
   private UUID mediaJobId;
 
+  /**
+   * Durable owner of the commit intent. A media preflight can succeed remotely
+   * while its response is lost, so recovery must not depend on a browser-held
+   * idempotency key.
+   */
+  @Column(name = "commit_actor_subject_id")
+  private UUID commitActorSubjectId;
+
+  @Column(name = "commit_idempotency_key")
+  private UUID commitIdempotencyKey;
+
+  @Column(name = "commit_request_sha256", length = 64)
+  private String commitRequestSha256;
+
   @Column(name = "failure_code", length = 128)
   private String failureCode;
 
@@ -137,10 +151,37 @@ public class RentalItemHtmlImport {
             : RentalItemHtmlImportState.REVIEW_REQUIRED;
   }
 
-  public void beginCommit() {
+  public void beginCommit(UUID actorSubjectId, UUID idempotencyKey, String requestSha256) {
+    if (actorSubjectId == null
+        || idempotencyKey == null
+        || requestSha256 == null
+        || !requestSha256.matches("^[0-9a-f]{64}$")) {
+      throw new IllegalArgumentException("HTML import commit identity is required");
+    }
+    if (state == RentalItemHtmlImportState.COMMITTING) {
+      if (actorSubjectId.equals(commitActorSubjectId)
+          && idempotencyKey.equals(commitIdempotencyKey)
+          && requestSha256.equals(commitRequestSha256)) {
+        return;
+      }
+      throw new IllegalStateException("HTML import is already committing");
+    }
     requireState(RentalItemHtmlImportState.READY);
+    commitActorSubjectId = actorSubjectId;
+    commitIdempotencyKey = idempotencyKey;
+    commitRequestSha256 = requestSha256;
     state = RentalItemHtmlImportState.COMMITTING;
     failureCode = null;
+  }
+
+  public boolean hasCommitIdentity(
+      UUID actorSubjectId, UUID idempotencyKey, String requestSha256) {
+    return actorSubjectId != null
+        && idempotencyKey != null
+        && requestSha256 != null
+        && actorSubjectId.equals(commitActorSubjectId)
+        && idempotencyKey.equals(commitIdempotencyKey)
+        && requestSha256.equals(commitRequestSha256);
   }
 
   public void attachMediaJob(UUID jobId) {
@@ -297,6 +338,18 @@ public class RentalItemHtmlImport {
 
   public UUID getMediaJobId() {
     return mediaJobId;
+  }
+
+  public UUID getCommitActorSubjectId() {
+    return commitActorSubjectId;
+  }
+
+  public UUID getCommitIdempotencyKey() {
+    return commitIdempotencyKey;
+  }
+
+  public String getCommitRequestSha256() {
+    return commitRequestSha256;
   }
 
   public String getFailureCode() {

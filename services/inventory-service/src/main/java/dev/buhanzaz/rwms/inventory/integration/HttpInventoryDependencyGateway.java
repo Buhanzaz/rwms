@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.inventory.integration;
 
 import dev.buhanzaz.rwms.inventory.service.InventoryException;
+import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.zone.ZoneRulesException;
 import java.util.List;
@@ -17,10 +18,19 @@ import org.springframework.web.util.UriComponentsBuilder;
 import tools.jackson.databind.JsonNode;
 
 final class HttpInventoryDependencyGateway implements InventoryDependencyGateway {
-  private static final String WAREHOUSE_CLIENT = "inventory-warehouse";
+  private static final String WAREHOUSE_TIME_ZONE_CLIENT = "inventory-warehouse-timezone";
+  private static final String WAREHOUSE_OPERATION_CLIENT = "inventory-warehouse-operation";
+  private static final String WAREHOUSE_LIFECYCLE_READ_CLIENT =
+      "inventory-warehouse-lifecycle-read";
+  private static final String WAREHOUSE_LIFECYCLE_CONFIRM_CLIENT =
+      "inventory-warehouse-lifecycle-confirm";
   private static final String ASSET_CLIENT = "inventory-asset";
   private static final String MAINTENANCE_CLIENT = "inventory-maintenance";
-  private static final String WAREHOUSE_SCOPE = "warehouse.read";
+  private static final String WAREHOUSE_TIME_ZONE_SCOPE = "warehouse.timezone.read";
+  private static final String WAREHOUSE_OPERATION_SCOPE = "warehouse.operation.mark";
+  private static final String WAREHOUSE_LIFECYCLE_READ_SCOPE = "warehouse.lifecycle.read";
+  private static final String WAREHOUSE_LIFECYCLE_CONFIRM_SCOPE =
+      "warehouse.lifecycle.confirm";
   private static final String ASSET_SCOPE = "asset.inventory";
   private static final String MAINTENANCE_SCOPE = "maintenance.inventory";
 
@@ -42,23 +52,159 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
   }
 
   @Override
-  public WarehouseMetadata warehouse(UUID warehouseId) {
-    WarehouseMetadata response =
+  public WarehouseOperation beginWarehouseOperation(
+      UUID warehouseId,
+      UUID operationId,
+      OffsetDateTime occurredAt,
+      WarehouseOperationDirection direction) {
+    if (warehouseId == null || operationId == null || occurredAt == null || direction == null) {
+      throw new IllegalArgumentException("Warehouse operation identity is incomplete");
+    }
+    WarehouseAdmission admission = warehouseAdmission(warehouseId, direction);
+
+    postNoContent(
+        warehouseBase
+            + "/api/internal/warehouse/v1/warehouses/"
+            + warehouseId
+            + "/operation-marks",
+        new WarehouseOperationMarkRequest(operationId, occurredAt),
+        WAREHOUSE_OPERATION_CLIENT,
+        WAREHOUSE_OPERATION_SCOPE);
+
+    String timeZoneUri =
+        UriComponentsBuilder.fromUriString(
+                warehouseBase
+                    + "/api/internal/warehouse/v1/warehouses/"
+                    + warehouseId
+                    + "/time-zone")
+            .queryParam("at", occurredAt)
+            .build()
+            .encode()
+            .toUriString();
+    WarehouseTimeZoneAt timeZone =
         get(
-            warehouseBase
-                + "/api/internal/warehouse/v1/warehouses/inventory/"
-                + warehouseId
-                + "/metadata",
-            WarehouseMetadata.class,
-            WAREHOUSE_CLIENT,
-            WAREHOUSE_SCOPE);
-    if (!warehouseId.equals(response.id()) || response.version() < 0 || !response.active()) {
-      throw malformed("Warehouse-service returned malformed inventory metadata");
+            timeZoneUri,
+            WarehouseTimeZoneAt.class,
+            WAREHOUSE_TIME_ZONE_CLIENT,
+            WAREHOUSE_TIME_ZONE_SCOPE);
+    if (!warehouseId.equals(timeZone.warehouseId())
+        || timeZone.effectiveFrom() == null
+        || timeZone.effectiveFrom().isAfter(occurredAt)) {
+      throw malformed("Warehouse-service returned malformed effective timezone");
     }
     try {
-      ZoneId.of(response.timeZone());
+      ZoneId.of(timeZone.timeZone());
     } catch (ZoneRulesException | NullPointerException exception) {
       throw malformed("Warehouse-service returned invalid IANA timezone");
+    }
+    return new WarehouseOperation(
+        warehouseId,
+        admission.warehouseVersion(),
+        admission.lifecycleState(),
+        direction,
+        timeZone.timeZone(),
+        timeZone.effectiveFrom());
+  }
+
+  @Override
+  public WarehouseAdmission warehouseAdmission(
+      UUID warehouseId, WarehouseOperationDirection direction) {
+    if (warehouseId == null || direction == null) {
+      throw new IllegalArgumentException("Warehouse admission identity is incomplete");
+    }
+    String admissionUri =
+        UriComponentsBuilder.fromUriString(
+                warehouseBase
+                    + "/api/internal/warehouse/v1/warehouses/"
+                    + warehouseId
+                    + "/admission")
+            .queryParam("direction", direction.name())
+            .build()
+            .encode()
+            .toUriString();
+    WarehouseAdmission admission =
+        get(
+            admissionUri,
+            WarehouseAdmission.class,
+            WAREHOUSE_LIFECYCLE_READ_CLIENT,
+            WAREHOUSE_LIFECYCLE_READ_SCOPE);
+    if (!warehouseId.equals(admission.warehouseId())
+        || admission.warehouseVersion() < 0
+        || admission.direction() != direction
+        || admission.lifecycleState() == null
+        || !Set.of("ACTIVE", "DRAINING", "INACTIVE").contains(admission.lifecycleState())) {
+      throw malformed("Warehouse-service returned malformed operation admission");
+    }
+    if (!admission.admitted()) {
+      throw InventoryException.conflict(
+          "Warehouse lifecycle does not admit this inventory operation");
+    }
+    return admission;
+  }
+
+  @Override
+  public WarehouseLifecycleReadinessWorkPage warehouseLifecycleReadinessWork(
+      UUID after, int limit) {
+    if (limit < 1 || limit > 500) {
+      throw new IllegalArgumentException("Warehouse readiness page size must be from 1 to 500");
+    }
+    UriComponentsBuilder uri =
+        UriComponentsBuilder.fromUriString(
+                warehouseBase + "/api/internal/warehouse/v1/lifecycle/readiness-work")
+            .queryParam("limit", limit);
+    if (after != null) {
+      uri.queryParam("after", after);
+    }
+    WarehouseLifecycleReadinessWorkPage page =
+        get(
+            uri.build().encode().toUriString(),
+            WarehouseLifecycleReadinessWorkPage.class,
+            WAREHOUSE_LIFECYCLE_READ_CLIENT,
+            WAREHOUSE_LIFECYCLE_READ_SCOPE);
+    if (page.items() == null) {
+      throw malformed("Warehouse-service returned malformed lifecycle readiness work");
+    }
+    Set<UUID> ids = new java.util.HashSet<>();
+    for (WarehouseLifecycleReadinessWork item : page.items()) {
+      if (item == null
+          || item.warehouseId() == null
+          || item.warehouseVersion() < 0
+          || !"DRAINING".equals(item.lifecycleState())
+          || !ids.add(item.warehouseId())) {
+        throw malformed("Warehouse-service returned malformed lifecycle readiness item");
+      }
+    }
+    if (page.nextAfter() != null
+        && (page.items().isEmpty()
+            || !page.nextAfter().equals(page.items().getLast().warehouseId()))) {
+      throw malformed("Warehouse-service returned an invalid lifecycle readiness cursor");
+    }
+    return page;
+  }
+
+  @Override
+  public WarehouseLifecycleReadinessConfirmation confirmWarehouseLifecycleReadiness(
+      UUID warehouseId, long expectedVersion) {
+    if (warehouseId == null || expectedVersion < 0) {
+      throw new IllegalArgumentException("Warehouse readiness fence is invalid");
+    }
+    WarehouseLifecycleReadinessConfirmation response =
+        post(
+            warehouseBase
+                + "/api/internal/warehouse/v1/warehouses/"
+                + warehouseId
+                + "/lifecycle-readiness",
+            null,
+            new WarehouseLifecycleReadinessRequest(expectedVersion),
+            WarehouseLifecycleReadinessConfirmation.class,
+            WAREHOUSE_LIFECYCLE_CONFIRM_CLIENT,
+            WAREHOUSE_LIFECYCLE_CONFIRM_SCOPE);
+    if (!warehouseId.equals(response.warehouseId())
+        || response.warehouseVersion() < 0
+        || !"DRAINING".equals(response.lifecycleState())
+        || !"INVENTORY".equals(response.readinessOwner())
+        || response.confirmedAt() == null) {
+      throw malformed("Warehouse-service returned malformed inventory readiness confirmation");
     }
     return response;
   }
@@ -287,6 +433,8 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
           || item.equipmentName() == null
           || item.equipmentName().isBlank()
           || item.currentStockQuantity() < 0
+          || (item.stockBalanceVersion() != null && item.stockBalanceVersion() < 0)
+          || (item.currentStockQuantity() > 0 && item.stockBalanceVersion() == null)
           || item.cabins() == null
           || !equipmentIds.add(item.equipmentId())) {
         throw malformed("Asset-service returned malformed furniture snapshot item");
@@ -337,6 +485,45 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
     } catch (RuntimeException exception) {
       throw dependencyFailure(exception);
     }
+  }
+
+  @Override
+  public InventoryLossDisposition createInventoryLossDisposition(
+      UUID idempotencyKey, InventoryLossDispositionRequest request) {
+    if (idempotencyKey == null
+        || request == null
+        || request.inventorySessionId() == null
+        || request.findingId() == null
+        || request.warehouseId() == null
+        || request.equipmentId() == null
+        || request.equipmentName() == null
+        || request.equipmentName().isBlank()
+        || request.expectedAssetVersion() < 0
+        || request.quantity() < 1
+        || request.expectedSourceBalanceVersion() < 0
+        || request.reason() == null
+        || request.reason().isBlank()) {
+      throw malformed("Inventory loss disposition request is incomplete");
+    }
+    InventoryLossDisposition response =
+        post(
+            maintenanceBase + "/api/internal/maintenance/v1/inventory/dispositions",
+            idempotencyKey,
+            request,
+            InventoryLossDisposition.class,
+            MAINTENANCE_CLIENT,
+            MAINTENANCE_SCOPE);
+    if (response.id() == null
+        || !request.inventorySessionId().equals(response.inventorySessionId())
+        || !request.findingId().equals(response.findingId())
+        || !request.warehouseId().equals(response.warehouseId())
+        || !request.equipmentId().equals(response.assetId())
+        || !"LOSS".equals(response.disposition())
+        || response.state() == null
+        || response.state().isBlank()) {
+      throw malformed("Maintenance-service returned malformed inventory loss decision");
+    }
+    return response;
   }
 
   private boolean malformedRepairAssetSnapshot(RepairAssetSnapshot asset) {
@@ -475,6 +662,21 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
       T value = request.body(body).retrieve().body(type);
       if (value == null) throw malformed("Dependency returned an empty response");
       return value;
+    } catch (RuntimeException exception) {
+      throw dependencyFailure(exception);
+    }
+  }
+
+  private void postNoContent(
+      String uri, Object body, String registration, String scope) {
+    try {
+      client
+          .post()
+          .uri(uri)
+          .header(HttpHeaders.AUTHORIZATION, bearer(registration, scope))
+          .body(body)
+          .retrieve()
+          .toBodilessEntity();
     } catch (RuntimeException exception) {
       throw dependencyFailure(exception);
     }
@@ -621,4 +823,11 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
   private record ValidationRequest(List<UUID> assetIds) {}
 
   private record RepairSnapshotRequest(List<UUID> assetIds) {}
+
+  private record WarehouseOperationMarkRequest(UUID operationId, OffsetDateTime occurredAt) {}
+
+  private record WarehouseTimeZoneAt(
+      UUID warehouseId, String timeZone, OffsetDateTime effectiveFrom) {}
+
+  private record WarehouseLifecycleReadinessRequest(long expectedVersion) {}
 }

@@ -24,7 +24,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.yaml.snakeyaml.Yaml;
 
 class AssetOpenApiParityTest {
-  private static final String API_PACKAGE = "dev.buhanzaz.rwms.asset.api";
+  private static final String ASSET_PACKAGE = "dev.buhanzaz.rwms.asset";
   private static final Set<String> OPENAPI_METHODS = Set.of("get", "post", "put", "delete");
 
   @Test
@@ -45,18 +45,20 @@ class AssetOpenApiParityTest {
         "/api/asset/v1/rental-items/availability",
         "/api/asset/v1/rental-items/{id}/manual-notes",
         "/api/asset/v1/equipment/transfers",
-        "/api/asset/v1/equipment/dispositions",
+        "/api/asset/v1/administrative-corrections",
+        "/api/asset/v1/operations/outbox/{eventId}/requeue",
         "/api/asset/v1/classifiers",
-        "/api/internal/asset/v1/equipment-holds",
-        "/api/internal/asset/v1/equipment-holds/{id}/commit",
-        "/api/internal/asset/v1/operation-leases",
-        "/api/internal/asset/v1/rental-items/{id}/fenced-status",
         "/api/internal/asset/v1/maintenance/operation-leases",
         "/api/internal/asset/v1/maintenance/operation-leases/{id}/renew",
         "/api/internal/asset/v1/maintenance/operation-leases/{id}/release",
         "/api/internal/asset/v1/maintenance/cabin-characteristics",
         "/api/internal/asset/v1/maintenance/equipment-catalog",
+        "/api/internal/asset/v1/maintenance/furniture-custody",
+        "/api/internal/asset/v1/maintenance/furniture-custody/{claimId}/return-to-stock",
         "/api/internal/asset/v1/maintenance/rental-items/{id}/snapshot",
+        "/api/internal/asset/v1/maintenance/property-assets/{assetKind}/{assetId}/snapshot",
+        "/api/internal/asset/v1/maintenance/property-dispositions/{decisionId}/prepare",
+        "/api/internal/asset/v1/maintenance/property-dispositions/{decisionId}/apply",
         "/api/internal/asset/v1/maintenance/rental-items/{rentalItemId}/characteristics/{characteristicId}",
         "/api/internal/asset/v1/maintenance/rental-items/{id}/fenced-status",
         "/api/internal/asset/v1/logistics/rental-items/{id}/snapshot",
@@ -204,6 +206,45 @@ class AssetOpenApiParityTest {
         .containsExactly("rentalItemId", "unitNumber", "lines");
     assertThat(list(child(schemas, "EquipmentTotals").get("required")))
         .contains("reservedQuantity", "availableQuantity");
+    Map<String, Object> equipmentTransfer = child(paths, "/api/asset/v1/equipment/transfers");
+    assertThat(child(equipmentTransfer, "post").get("operationId"))
+        .isEqualTo("transferEquipmentWithinWarehouse");
+    assertThat(child(equipmentTransfer, "post").get("description").toString())
+        .contains("same warehouse", "logistics document");
+    assertThat(list(child(schemas, "TransferEquipmentRequest").get("required")))
+        .containsExactly(
+            "equipmentId",
+            "sourceWarehouseId",
+            "sourceLocationKind",
+            "sourceExpectedVersion",
+            "targetWarehouseId",
+            "targetLocationKind",
+            "targetExpectedVersion",
+            "quantity");
+    assertThat(list(child(schemas, "TransferBalanceLocationKind").get("enum")))
+        .containsExactly("STOCK", "CABIN_NON_RENTED", "CABIN_RENTED");
+    Map<String, Object> correction = child(paths, "/api/asset/v1/administrative-corrections");
+    assertThat(child(correction, "post").get("operationId"))
+        .isEqualTo("createAdministrativeAssetCorrection");
+    assertThat(child(correction, "post").get("description").toString())
+        .contains("not a physical movement", "retrospective logistics document");
+    assertThat(list(child(schemas, "AdministrativeAssetCorrection").get("required")))
+        .containsExactly(
+            "id",
+            "assetKind",
+            "assetId",
+            "sourceWarehouseId",
+            "targetWarehouseId",
+            "quantity",
+            "reason",
+            "evidenceLink",
+            "requestSha256",
+            "appliedBy",
+            "appliedAt");
+    assertThat(child(child(schemas, "CreateCabinAdministrativeCorrectionRequest"), "properties")
+            .get("evidenceLink")
+            .toString())
+        .contains("uri", "HTTPS", "non-empty host");
     assertThat(list(child(schemas, "MaintenanceStatusAction").get("enum")))
         .containsExactly(
             "QUEUE_FOR_REPAIR",
@@ -255,29 +296,37 @@ class AssetOpenApiParityTest {
         child(schemas, "EnsureMaintenanceFurnitureEquipmentRequest");
     assertThat(ensureFurnitureRequest.get("additionalProperties")).isEqualTo(false);
     assertThat(list(ensureFurnitureRequest.get("required")))
-        .containsExactly("equipmentName");
+        .containsExactly("externalReferenceId", "equipmentName");
     assertThat(child(ensureFurnitureRequest, "properties").keySet())
-        .containsExactly("equipmentName");
+        .containsExactly("externalReferenceId", "equipmentName");
     Map<String, Object> maintenanceFurnitureEquipment =
         child(schemas, "MaintenanceFurnitureEquipment");
     assertThat(maintenanceFurnitureEquipment.get("additionalProperties")).isEqualTo(false);
     assertThat(list(maintenanceFurnitureEquipment.get("required")))
-        .containsExactly("equipmentId", "equipmentName");
+        .containsExactly("externalReferenceId", "equipmentId", "equipmentName");
     assertThat(child(maintenanceFurnitureEquipment, "properties").keySet())
-        .containsExactly("equipmentId", "equipmentName");
-    Map<String, Object> furnitureLoss = child(schemas, "MaintenanceFurnitureLoss");
-    assertThat(list(furnitureLoss.get("required")))
-        .containsExactly("equipmentId", "quantity");
-    assertThat(child(furnitureLoss, "properties").keySet())
-        .containsExactly("equipmentId", "quantity");
+        .containsExactly("externalReferenceId", "equipmentId", "equipmentName");
+    Map<String, Object> pendingReturn = child(schemas, "MaintenanceFurniturePendingReturn");
+    assertThat(list(pendingReturn.get("required")))
+        .containsExactly("equipmentId", "expectedSourceBalanceVersion", "quantity");
+    assertThat(child(pendingReturn, "properties").keySet())
+        .containsExactly("equipmentId", "expectedSourceBalanceVersion", "quantity");
     Map<String, Object> maintenanceFencedStatus =
         child(schemas, "MaintenanceFencedStatusRequest");
     assertThat(list(maintenanceFencedStatus.get("required")))
-        .contains("furnitureLosses");
+        .contains("furniturePendingReturns");
     assertThat(child(maintenanceFencedStatus, "properties").keySet())
-        .contains("estimateId", "furnitureLosses");
+        .contains("furniturePendingReturns")
+        .doesNotContain("estimateId", "furnitureLosses");
     assertThat(maintenanceFencedStatus.toString())
         .doesNotContain("RentalItemStatus", "status=");
+    Map<String, Object> custodyClaim = child(schemas, "MaintenanceFurnitureCustodyClaim");
+    assertThat(list(custodyClaim.get("required"))).contains(
+        "custodyVersion", "sourceBalanceVersion", "unresolvedQuantity", "availableForDispositionQuantity");
+    Map<String, Object> custodyReturn =
+        child(schemas, "ReturnMaintenanceFurnitureCustodyToStockRequest");
+    assertThat(list(custodyReturn.get("required"))).containsExactly(
+        "expectedCustodyVersion", "expectedStockBalanceVersion", "quantity", "returnReferenceId");
     assertThat(list(child(schemas, "LogisticsLeaseOwnerType").get("enum")))
         .containsExactly(
             "LOGISTICS_RETURN",
@@ -285,12 +334,14 @@ class AssetOpenApiParityTest {
             "LOGISTICS_TRANSFER");
     assertThat(list(child(
         schemas, "LogisticsEquipmentMovementReservationOwnerType").get("enum")))
-        .containsExactly("LOGISTICS_EQUIPMENT_MOVEMENT");
+        .containsExactly(
+            "LOGISTICS_EQUIPMENT_MOVEMENT", "MAINTENANCE_DISPOSITION_MOVEMENT");
     assertThat(list(child(
         schemas, "AcquireLogisticsEquipmentMovementReservationRequest").get("required")))
         .containsExactly(
             "movementId",
             "lineId",
+            "purpose",
             "equipmentId",
             "sourceWarehouseId",
             "sourceLocationKind",
@@ -375,9 +426,24 @@ class AssetOpenApiParityTest {
         .containsExactly("warehouseId", "assetIds");
     assertThat(list(child(schemas, "InventoryFurnitureSnapshot").get("required")))
         .containsExactly("warehouseId", "snapshotSha256", "items");
-    assertThat(list(child(schemas, "InventoryFurnitureSnapshotItem").get("required")))
+    Map<String, Object> furnitureSnapshotItem = child(schemas, "InventoryFurnitureSnapshotItem");
+    assertThat(list(furnitureSnapshotItem.get("required")))
         .containsExactly(
-            "equipmentId", "catalogVersion", "equipmentName", "currentStockQuantity", "cabins");
+            "equipmentId",
+            "catalogVersion",
+            "equipmentName",
+            "currentStockQuantity",
+            "stockBalanceVersion",
+            "cabins");
+    assertThat(child(furnitureSnapshotItem, "properties").keySet()).containsExactly(
+        "equipmentId",
+        "catalogVersion",
+        "equipmentName",
+        "currentStockQuantity",
+        "stockBalanceVersion",
+        "cabins");
+    assertThat(child(child(furnitureSnapshotItem, "properties"), "stockBalanceVersion").toString())
+        .contains("ExpectedVersion", "null");
     assertThat(list(child(schemas, "InventoryFurnitureSnapshotCabin").get("required")))
         .containsExactly(
             "assetId", "assetVersion", "displayCanonicalNumber", "status", "currentQuantity");
@@ -414,7 +480,7 @@ class AssetOpenApiParityTest {
     var scanner = new ClassPathScanningCandidateComponentProvider(false);
     scanner.addIncludeFilter(new AnnotationTypeFilter(RestController.class));
     Set<Endpoint> endpoints = new LinkedHashSet<>();
-    for (var component : scanner.findCandidateComponents(API_PACKAGE)) {
+    for (var component : scanner.findCandidateComponents(ASSET_PACKAGE)) {
       Class<?> controller = ClassUtils.forName(component.getBeanClassName(), getClass().getClassLoader());
       RequestMapping controllerMapping =
           AnnotatedElementUtils.findMergedAnnotation(controller, RequestMapping.class);

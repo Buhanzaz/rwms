@@ -27,6 +27,24 @@ spring:
             client-secret: test-secret
             authorization-grant-type: client_credentials
             scope: worker-credentials.manage
+          warehouse-lifecycle-read:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: test-secret
+            authorization-grant-type: client_credentials
+            scope: warehouse.lifecycle.read
+          warehouse-lifecycle-confirm:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: test-secret
+            authorization-grant-type: client_credentials
+            scope: warehouse.lifecycle.confirm
+          warehouse-timezone-read:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: test-secret
+            authorization-grant-type: client_credentials
+            scope: warehouse.timezone.read
         provider:
           auth-service:
             token-uri: http://localhost:9000/oauth2/token
@@ -42,5 +60,10 @@ rwms:
     connect-timeout: 250ms
     read-timeout: 500ms
     credential-operation-timeout: 1s
+  warehouse:
+    lifecycle:
+      base-url: http://localhost:9000
+      reconciliation:
+        enabled: false
   cors:
     allowed-origins: http://localhost:8080,http://localhost:8082

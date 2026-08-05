@@ -1,7 +1,12 @@
 import { useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
-import { useNavigate, useSearchParams } from "react-router-dom"
-import { ArrowLeft01Icon, FilterIcon } from "@hugeicons/core-free-icons"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  Link,
+  useLocation,
+  useNavigate,
+  useSearchParams,
+} from "react-router-dom"
+import { Add01Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 
 import { OperationsListGrid } from "@/components/operations-list-grid"
@@ -10,6 +15,7 @@ import {
   PageToolbarActions,
   PageToolbarContent,
 } from "@/components/page-toolbar"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -18,360 +24,670 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
 import {
-  formatAcceptanceDateTime,
-  repairTaskOriginLabel,
-} from "@/features/acceptance/acceptance-formatters"
-import { AcceptanceStatusBadge } from "@/features/acceptance/acceptance-presentation"
-import { RepairAcceptanceDossier } from "@/features/acceptance/repair-acceptance-dossier"
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useAuth } from "@/features/auth/use-auth"
-import { LogisticsDocumentFilters } from "@/features/logistics/logistics-document-filters"
-import {
-  getRepairTask,
-  listRepairWriteOffs,
-  repairTaskDetailQueryKey,
-  repairWriteOffsListQueryKey,
-} from "@/features/repair-tasks/api/repair-tasks-api"
-import type { RepairTaskDto } from "@/features/repair-tasks/model/repair-task"
 import { listDossierActorDisplays } from "@/features/rental-items/dossier/actor/actor-display-api"
-import type { DossierActorDisplay } from "@/features/rental-items/dossier/actor/actor-display"
-import { useResponsiveFiltersOpen } from "@/hooks/use-responsive-filters-open"
+import {
+  formatDossierActorDisplay,
+  type DossierActorDisplay,
+} from "@/features/rental-items/dossier/actor/actor-display"
 import { useWarehouse } from "@/hooks/use-warehouse"
+
+import { PropertyDispositionCreateDialog } from "./property-disposition-create-dialog"
 import {
-  useWorkspaceBack,
-  workspaceEntryNavigationOptions,
-} from "@/hooks/use-workspace-back"
-import { cn } from "@/lib/utils"
-
+  canInitiatePropertyDisposition,
+  canReviewPropertyDisposition,
+  propertyDispositionEffectLabel,
+  propertyDispositionSourceLabel,
+  propertyDispositionStatusLabel,
+} from "./property-disposition-presentation"
 import {
-  buildWriteOffFilterOptions,
-  EMPTY_WRITE_OFF_LIST_FILTERS,
-  filterWriteOffTasks,
-  formatWriteOffAuthor,
-  writeOffActorIds,
-  type WriteOffListFilters,
-} from "./write-off-list-filters"
+  PropertyDispositionReviewDialog,
+  type PropertyDispositionReviewAction,
+} from "./property-disposition-review-dialog"
+import {
+  getPropertyDisposition,
+  listPropertyDispositions,
+  propertyDispositionListQueryKey,
+  type PropertyDispositionActor,
+  type PropertyDispositionDecision,
+  type PropertyDispositionKind,
+  type PropertyDispositionState,
+} from "./property-dispositions-api"
 
-const EMPTY_WRITE_OFF_TASKS: RepairTaskDto[] = []
+const PAGE_SIZE = 50
 
-function WriteOffMobileCard({
-  task,
-  authorName,
-  onOpen,
+const STATE_OPTIONS: Array<{ value: PropertyDispositionState; label: string }> =
+  [
+    { value: "PENDING_APPROVAL", label: "На согласовании" },
+    { value: "APPROVED", label: "Одобрено" },
+    { value: "MOVEMENT_PENDING", label: "Ожидает перемещения" },
+    { value: "EFFECT_PENDING", label: "Эффект выполняется" },
+    { value: "EFFECTIVE", label: "Исполнено" },
+    { value: "REJECTED", label: "Отклонено" },
+    { value: "QUARANTINED", label: "Требует восстановления" },
+  ]
+
+function formatDateTime(value: string | null) {
+  if (!value) return "—"
+  return new Intl.DateTimeFormat("ru-RU", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value))
+}
+
+function statusVariant(decision: PropertyDispositionDecision) {
+  if (decision.state === "QUARANTINED") return "destructive" as const
+  if (
+    decision.state === "EFFECTIVE" &&
+    decision.assetEffectState === "APPLIED"
+  ) {
+    return "default" as const
+  }
+  if (decision.state === "REJECTED") return "outline" as const
+  return "secondary" as const
+}
+
+function actorLabel(
+  actor: PropertyDispositionActor | null,
+  actorsById: ReadonlyMap<string, DossierActorDisplay>
+) {
+  if (!actor) return "—"
+  if (actor.actorType === "SERVICE") return "Сервис"
+  const display = actorsById.get(actor.actorId)
+  return display
+    ? formatDossierActorDisplay(display)
+    : `Пользователь · ${actor.actorId.slice(0, 8)}`
+}
+
+function AssetLink({ decision }: { decision: PropertyDispositionDecision }) {
+  if (decision.assetKind === "CABIN") {
+    return (
+      <Button asChild variant="link" size="sm">
+        <Link to={`/warehouse/${decision.assetId}`}>
+          {decision.assetDisplayName}
+        </Link>
+      </Button>
+    )
+  }
+  return <span>{decision.assetDisplayName}</span>
+}
+
+function DecisionDetails({
+  decision,
+  actorsById,
 }: {
-  task: RepairTaskDto
-  authorName: string
-  onOpen: () => void
+  decision: PropertyDispositionDecision
+  actorsById: ReadonlyMap<string, DossierActorDisplay>
 }) {
+  return (
+    <div className="flex flex-col gap-4 text-sm">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="flex flex-col gap-1">
+          <span className="text-muted-foreground">Причина</span>
+          <span>{decision.reason}</span>
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="text-muted-foreground">Инициатор</span>
+          <span>{actorLabel(decision.requestedBy, actorsById)}</span>
+          <span>{formatDateTime(decision.requestedAt)}</span>
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="text-muted-foreground">Решение администратора</span>
+          <span>{actorLabel(decision.reviewedBy, actorsById)}</span>
+          <span>{formatDateTime(decision.reviewedAt)}</span>
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="text-muted-foreground">Корневое решение</span>
+          <span className="font-mono text-xs">{decision.id}</span>
+          <span>Версия {decision.version}</span>
+        </div>
+      </div>
+
+      {decision.reviewComment ? (
+        <p>
+          <span className="text-muted-foreground">Комментарий: </span>
+          {decision.reviewComment}
+        </p>
+      ) : null}
+      {decision.evidenceLink ? (
+        <p>
+          <a
+            className="underline underline-offset-4"
+            href={decision.evidenceLink}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Открыть подтверждение
+          </a>
+        </p>
+      ) : null}
+
+      {decision.contentsPlan ? (
+        <div className="flex flex-col gap-2">
+          <span className="font-medium">Наполнение бытовки</span>
+          <ul className="flex flex-col gap-1">
+            {decision.contentsPlan.lines.map((line) => (
+              <li key={line.equipmentId}>
+                {line.equipmentName}: в бытовке {line.currentQuantity}, в
+                перемещение {line.moveToStockQuantity}, списывается{" "}
+                {line.disposeQuantity} {line.equipmentFormat ?? "шт."}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {decision.repairChain.length > 0 ? (
+        <div className="flex flex-col gap-2">
+          <span className="font-medium">
+            Цепочка ремонта ({decision.repairChain.length})
+          </span>
+          <ul className="flex flex-col gap-1 font-mono text-xs">
+            {decision.repairChain.map((entry) => (
+              <li key={entry.repairId}>
+                {entry.repairId} · версия {entry.repairVersion}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {decision.failureDetail ? (
+        <p role="alert" className="text-destructive">
+          {decision.failureCode ? `${decision.failureCode}: ` : ""}
+          {decision.failureDetail}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+function DecisionActions({
+  decision,
+  canReview,
+  onReview,
+  expanded,
+  onToggleDetails,
+}: {
+  decision: PropertyDispositionDecision
+  canReview: boolean
+  onReview: (
+    action: PropertyDispositionReviewAction,
+    decision: PropertyDispositionDecision
+  ) => void
+  expanded: boolean
+  onToggleDetails: () => void
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={onToggleDetails}
+      >
+        {expanded ? "Скрыть" : "Подробнее"}
+      </Button>
+      {canReview && decision.state === "PENDING_APPROVAL" ? (
+        <>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => onReview("APPROVE", decision)}
+          >
+            Принять
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="destructive"
+            onClick={() => onReview("REJECT", decision)}
+          >
+            Отклонить
+          </Button>
+        </>
+      ) : null}
+      {canReview && decision.state === "QUARANTINED" ? (
+        <Button
+          type="button"
+          size="sm"
+          onClick={() => onReview("RECOVER", decision)}
+        >
+          Восстановить
+        </Button>
+      ) : null}
+    </div>
+  )
+}
+
+function DecisionMobileCard({
+  decision,
+  actorsById,
+  canReview,
+  onReview,
+}: {
+  decision: PropertyDispositionDecision
+  actorsById: ReadonlyMap<string, DossierActorDisplay>
+  canReview: boolean
+  onReview: (
+    action: PropertyDispositionReviewAction,
+    decision: PropertyDispositionDecision
+  ) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
   return (
     <Card>
       <CardHeader>
         <CardTitle>
-          <Button
-            type="button"
-            variant="link"
-            size="sm"
-            aria-label={`Открыть списание бытовки ${task.cabinNumber}`}
-            onClick={onOpen}
-          >
-            {task.cabinNumber}
-          </Button>
+          <AssetLink decision={decision} />
         </CardTitle>
         <CardDescription>
-          {repairTaskOriginLabel(task.origin, task.kind)}
+          {propertyDispositionSourceLabel(decision.source)}
         </CardDescription>
       </CardHeader>
-      <CardContent className="grid grid-cols-2 gap-2">
-        <span className="text-muted-foreground">Автор</span>
-        <span>{authorName}</span>
-        <span className="text-muted-foreground">Дата списания</span>
-        <span>{formatAcceptanceDateTime(task.writtenOffAt ?? null)}</span>
-        <span className="text-muted-foreground">Статус</span>
-        <span>
-          <AcceptanceStatusBadge status={task.acceptanceStatus} />
-        </span>
+      <CardContent className="flex flex-col gap-3">
+        <div className="grid grid-cols-2 gap-2 text-sm">
+          <span className="text-muted-foreground">Состояние</span>
+          <Badge variant={statusVariant(decision)}>
+            {propertyDispositionStatusLabel(decision)}
+          </Badge>
+          <span className="text-muted-foreground">Эффект</span>
+          <span>{propertyDispositionEffectLabel(decision)}</span>
+          <span className="text-muted-foreground">Инициатор</span>
+          <span>{actorLabel(decision.requestedBy, actorsById)}</span>
+        </div>
+        <DecisionActions
+          decision={decision}
+          canReview={canReview}
+          onReview={onReview}
+          expanded={expanded}
+          onToggleDetails={() => setExpanded((current) => !current)}
+        />
+        {expanded ? (
+          <DecisionDetails decision={decision} actorsById={actorsById} />
+        ) : null}
       </CardContent>
     </Card>
   )
 }
 
-export function WriteOffsPage() {
+export function WriteOffsPage({
+  initialDisposition = "WRITE_OFF",
+}: {
+  initialDisposition?: PropertyDispositionKind
+}) {
+  const { accessToken, currentUser } = useAuth()
   const { selectedWarehouseId } = useWarehouse()
-  const { accessToken } = useAuth()
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
-  const [search, setSearch] = useState("")
-  const [filters, setFilters] = useState<WriteOffListFilters>(
-    EMPTY_WRITE_OFF_LIST_FILTERS
+  const location = useLocation()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const queryClient = useQueryClient()
+  const disposition: PropertyDispositionKind =
+    location.pathname === "/write-offs/equipment" ? "LOSS" : initialDisposition
+  const [page, setPage] = useState(0)
+  const [state, setState] = useState<PropertyDispositionState | null>(null)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [expandedDecisionId, setExpandedDecisionId] = useState<string | null>(
+    searchParams.get("decisionId")
   )
-  const { filtersOpen, setFiltersOpen } = useResponsiveFiltersOpen()
-  const writeOffId = searchParams.get("writeOffId")
-  const listSearchParams = new URLSearchParams(searchParams)
-  listSearchParams.delete("writeOffId")
-  const listSearch = listSearchParams.toString()
-  const listHref = listSearch ? `/write-offs?${listSearch}` : "/write-offs"
-  const goBack = useWorkspaceBack(listHref)
+  const [review, setReview] = useState<{
+    action: PropertyDispositionReviewAction
+    decision: PropertyDispositionDecision
+  } | null>(null)
 
+  const listParams = {
+    warehouseId: selectedWarehouseId ?? "none",
+    disposition,
+    page,
+    size: PAGE_SIZE,
+    state,
+  }
   const listQuery = useQuery({
-    queryKey: repairWriteOffsListQueryKey(selectedWarehouseId ?? "none"),
-    queryFn: () => listRepairWriteOffs(selectedWarehouseId!),
-    enabled: selectedWarehouseId !== null,
+    queryKey: propertyDispositionListQueryKey(listParams),
+    queryFn: () =>
+      listPropertyDispositions({
+        ...listParams,
+        accessToken,
+        warehouseId: selectedWarehouseId!,
+      }),
+    enabled: Boolean(selectedWarehouseId && accessToken),
   })
+  const requestedDecisionId = searchParams.get("decisionId")
   const detailQuery = useQuery({
-    queryKey: repairTaskDetailQueryKey(
-      selectedWarehouseId ?? "none",
-      writeOffId
-    ),
-    queryFn: () => getRepairTask(writeOffId!, selectedWarehouseId!),
-    enabled: Boolean(writeOffId && selectedWarehouseId),
+    queryKey: [
+      "property-disposition",
+      selectedWarehouseId,
+      requestedDecisionId,
+    ],
+    queryFn: () =>
+      getPropertyDisposition({
+        accessToken,
+        warehouseId: selectedWarehouseId!,
+        decisionId: requestedDecisionId!,
+      }),
+    enabled: Boolean(selectedWarehouseId && accessToken && requestedDecisionId),
   })
-
-  const tasks = listQuery.data ?? EMPTY_WRITE_OFF_TASKS
-  const selectedTask = detailQuery.data ?? null
-  const authorIds = useMemo(
+  const items = useMemo(() => {
+    const values = listQuery.data?.items ?? []
+    const detail = detailQuery.data
+    if (
+      !detail ||
+      detail.disposition !== disposition ||
+      values.some((candidate) => candidate.id === detail.id)
+    ) {
+      return values
+    }
+    return [detail, ...values]
+  }, [detailQuery.data, disposition, listQuery.data?.items])
+  const actorIds = useMemo(
     () =>
       [
-        ...new Set([
-          ...writeOffActorIds(tasks),
-          ...(selectedTask?.actorId ? [selectedTask.actorId] : []),
-          ...(selectedTask?.decisionActorId
-            ? [selectedTask.decisionActorId]
-            : []),
-        ]),
+        ...new Set(
+          items.flatMap((decision) =>
+            [decision.requestedBy, decision.reviewedBy]
+              .filter(
+                (actor): actor is PropertyDispositionActor =>
+                  actor !== null && actor.actorType === "USER"
+              )
+              .map((actor) => actor.actorId)
+          )
+        ),
       ].sort(),
-    [selectedTask?.actorId, selectedTask?.decisionActorId, tasks]
+    [items]
   )
-  const actorDisplaysQuery = useQuery({
-    queryKey: ["write-offs", "actor-displays", authorIds],
-    queryFn: () => listDossierActorDisplays(accessToken!, authorIds),
-    enabled: Boolean(accessToken && authorIds.length > 0),
+  const actorsQuery = useQuery({
+    queryKey: ["property-dispositions", "actors", actorIds],
+    queryFn: () => listDossierActorDisplays(accessToken!, actorIds),
+    enabled: Boolean(accessToken && actorIds.length > 0),
   })
   const actorsById = useMemo(
     () =>
-      new Map<string, DossierActorDisplay>(
-        (actorDisplaysQuery.data ?? []).map((actor) => [actor.subjectId, actor])
+      new Map(
+        (actorsQuery.data ?? []).map(
+          (actor) => [actor.subjectId, actor] as const
+        )
       ),
-    [actorDisplaysQuery.data]
+    [actorsQuery.data]
   )
-  const filterOptions = useMemo(
-    () => buildWriteOffFilterOptions(tasks, actorsById),
-    [actorsById, tasks]
+  const canInitiate = Boolean(
+    selectedWarehouseId &&
+    canInitiatePropertyDisposition(currentUser, selectedWarehouseId)
   )
-  const visibleTasks = useMemo(
-    () => filterWriteOffTasks(tasks, search, filters, actorsById),
-    [actorsById, filters, search, tasks]
+  const canReview = Boolean(
+    selectedWarehouseId &&
+    canReviewPropertyDisposition(currentUser, selectedWarehouseId)
   )
-  const selectedTaskIsWrittenOff =
-    selectedTask?.acceptanceStatus === "WRITTEN_OFF"
+  const totalPages = listQuery.data
+    ? Math.ceil(listQuery.data.totalElements / listQuery.data.size)
+    : 0
 
-  function openTask(taskId: string) {
-    const next = new URLSearchParams(searchParams)
-    next.set("writeOffId", taskId)
-    navigate(`/write-offs?${next.toString()}`, workspaceEntryNavigationOptions)
+  function switchDisposition(value: string) {
+    if (value === "WRITE_OFF") navigate("/write-offs")
+    if (value === "LOSS") navigate("/write-offs/equipment")
   }
 
-  if (writeOffId) {
-    return (
-      <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
-        <header className="flex flex-wrap items-center gap-3">
-          <Button type="button" variant="outline" onClick={goBack}>
-            <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
-            Назад
-          </Button>
-        </header>
+  function toggleDetails(decisionId: string) {
+    const next = expandedDecisionId === decisionId ? null : decisionId
+    setExpandedDecisionId(next)
+    const params = new URLSearchParams(searchParams)
+    if (next) params.set("decisionId", next)
+    else params.delete("decisionId")
+    setSearchParams(params, { replace: true })
+  }
 
-        {detailQuery.isLoading ? (
-          <p className="text-xs text-muted-foreground">
-            Загрузка досье списания...
-          </p>
-        ) : detailQuery.isError || !selectedTaskIsWrittenOff ? (
-          <Card>
-            <CardHeader>
-              <CardTitle>Списание недоступно</CardTitle>
-              <CardDescription role="alert">
-                {detailQuery.isError
-                  ? "Не удалось загрузить досье списания."
-                  : "Списанная бытовка не найдена на выбранном складе."}
-              </CardDescription>
-            </CardHeader>
-          </Card>
-        ) : selectedTask ? (
-          <RepairAcceptanceDossier
-            accessToken={accessToken}
-            task={selectedTask}
-            mode="WRITE_OFF"
-            canEdit={false}
-            canManage={false}
-            actorName={formatWriteOffAuthor(selectedTask.actorId, actorsById)}
-            decisionActorName={formatWriteOffAuthor(
-              selectedTask.decisionActorId,
-              actorsById
-            )}
-          />
-        ) : null}
-      </div>
+  function refresh() {
+    void queryClient.invalidateQueries({ queryKey: ["property-dispositions"] })
+    void queryClient.invalidateQueries({ queryKey: ["property-disposition"] })
+  }
+
+  if (!selectedWarehouseId) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Склад не выбран</CardTitle>
+          <CardDescription>
+            Выберите склад, чтобы посмотреть решения.
+          </CardDescription>
+        </CardHeader>
+      </Card>
     )
   }
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
       <PageToolbar>
-        <PageToolbarContent className="max-w-xl">
-          <Input
-            type="search"
-            value={search}
-            aria-label="Поиск списаний"
-            name="write-offs-search"
-            autoComplete="off"
-            placeholder="Номер бытовки, источник или автор"
-            onChange={(event) => setSearch(event.target.value)}
-          />
+        <PageToolbarContent>
+          <Tabs value={disposition} onValueChange={switchDisposition}>
+            <TabsList>
+              <TabsTrigger value="WRITE_OFF">Списания</TabsTrigger>
+              <TabsTrigger value="LOSS">Утраты</TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <Select
+            value={state ?? "ALL"}
+            onValueChange={(value) => {
+              setState(
+                value === "ALL" ? null : (value as PropertyDispositionState)
+              )
+              setPage(0)
+            }}
+          >
+            <SelectTrigger
+              className="w-full max-w-64"
+              aria-label="Состояние решения"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="ALL">Все состояния</SelectItem>
+                {STATE_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
         </PageToolbarContent>
         <PageToolbarActions>
-          <Button
-            type="button"
-            size="icon"
-            variant={filtersOpen ? "secondary" : "outline"}
-            aria-label={
-              filtersOpen
-                ? "Скрыть фильтры списаний"
-                : "Показать фильтры списаний"
-            }
-            aria-controls="write-off-filters"
-            aria-expanded={filtersOpen}
-            onClick={() => setFiltersOpen((current) => !current)}
-          >
-            <HugeiconsIcon icon={FilterIcon} aria-hidden="true" />
-          </Button>
+          {canInitiate ? (
+            <Button type="button" onClick={() => setCreateOpen(true)}>
+              <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+              Добавить {disposition === "WRITE_OFF" ? "списание" : "утрату"}
+            </Button>
+          ) : null}
         </PageToolbarActions>
       </PageToolbar>
 
-      <div id="write-off-filters" hidden={!filtersOpen}>
-        <LogisticsDocumentFilters
-          filters={filters}
-          stateOptions={[{ value: "WRITTEN_OFF", label: "Списана" }]}
-          dateLabel="Дата списания"
-          showSchedule={false}
-          extraFilters={[
-            {
-              label: "Источник",
-              options: filterOptions.sources,
-              selected: filters.sources,
-              onApply: (sources) =>
-                setFilters((current) => ({ ...current, sources })),
-            },
-            {
-              label: "Автор",
-              options: filterOptions.authors,
-              selected: filters.authors,
-              onApply: (authors) =>
-                setFilters((current) => ({ ...current, authors })),
-            },
-          ]}
-          onChange={(nextFilters) =>
-            setFilters((current) => ({ ...current, ...nextFilters }))
-          }
-          onReset={() => setFilters(EMPTY_WRITE_OFF_LIST_FILTERS)}
-        />
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto md:flex">
-        {listQuery.isLoading ? (
-          <p className="text-xs text-muted-foreground">Загрузка списаний...</p>
-        ) : listQuery.isError ? (
-          <p role="alert" className="text-xs text-destructive">
-            Не удалось загрузить список списанных бытовок.
-          </p>
-        ) : (
-          <>
-            <div
-              className={cn(
-                "min-h-0 min-w-0 flex-1",
-                visibleTasks.length > 0 && "hidden md:block"
+      {!accessToken ? (
+        <p role="alert" className="text-sm text-destructive">
+          Для просмотра решений требуется авторизация.
+        </p>
+      ) : listQuery.isLoading ? (
+        <div className="flex flex-col gap-3">
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+        </div>
+      ) : listQuery.isError ? (
+        <p role="alert" className="text-sm text-destructive">
+          {listQuery.error instanceof Error
+            ? listQuery.error.message
+            : "Не удалось загрузить решения по имуществу."}
+        </p>
+      ) : items.length === 0 ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Решений пока нет</CardTitle>
+            <CardDescription>
+              Здесь появятся решения по одному корневому объекту имущества.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="hidden min-h-0 md:block">
+            <OperationsListGrid
+              items={items}
+              expandedItemId={expandedDecisionId}
+              renderExpandedRow={(decision) => (
+                <DecisionDetails decision={decision} actorsById={actorsById} />
               )}
-            >
-              <OperationsListGrid
-                className="min-h-full"
-                items={visibleTasks}
-                columns={[
-                  {
-                    id: "cabinNumber",
-                    label: "Номер бытовки",
-                    className: "w-48",
-                    getSortValue: (task) => task.cabinNumber,
-                    render: (task) => (
-                      <Button
-                        type="button"
-                        variant="link"
-                        size="sm"
-                        aria-label={`Открыть списание бытовки ${task.cabinNumber}`}
-                        onClick={() => openTask(task.id)}
-                      >
-                        {task.cabinNumber}
-                      </Button>
-                    ),
-                  },
-                  {
-                    id: "origin",
-                    label: "Источник",
-                    className: "w-44",
-                    getSortValue: (task) =>
-                      repairTaskOriginLabel(task.origin, task.kind),
-                    render: (task) =>
-                      repairTaskOriginLabel(task.origin, task.kind),
-                  },
-                  {
-                    id: "author",
-                    label: "Автор",
-                    className: "w-44",
-                    getSortValue: (task) =>
-                      formatWriteOffAuthor(task.decisionActorId, actorsById),
-                    render: (task) =>
-                      formatWriteOffAuthor(task.decisionActorId, actorsById),
-                  },
-                  {
-                    id: "decidedAt",
-                    label: "Дата списания",
-                    className: "w-48",
-                    getSortValue: (task) =>
-                      task.writtenOffAt
-                        ? new Date(task.writtenOffAt).getTime()
-                        : null,
-                    render: (task) =>
-                      formatAcceptanceDateTime(task.writtenOffAt ?? null),
-                  },
-                  {
-                    id: "status",
-                    label: "Статус",
-                    className: "w-40",
-                    getSortValue: (task) => task.acceptanceStatus,
-                    render: (task) => (
-                      <AcceptanceStatusBadge status={task.acceptanceStatus} />
-                    ),
-                  },
-                ]}
+              columns={[
+                {
+                  id: "asset",
+                  label: "Имущество",
+                  getSortValue: (decision) => decision.assetDisplayName,
+                  render: (decision) => <AssetLink decision={decision} />,
+                },
+                {
+                  id: "source",
+                  label: "Источник",
+                  getSortValue: (decision) => decision.source,
+                  render: (decision) =>
+                    propertyDispositionSourceLabel(decision.source),
+                },
+                {
+                  id: "reason",
+                  label: "Причина",
+                  getSortValue: (decision) => decision.reason,
+                  render: (decision) => (
+                    <span className="line-clamp-2">{decision.reason}</span>
+                  ),
+                },
+                {
+                  id: "requester",
+                  label: "Инициатор",
+                  getSortValue: (decision) =>
+                    actorLabel(decision.requestedBy, actorsById),
+                  render: (decision) =>
+                    actorLabel(decision.requestedBy, actorsById),
+                },
+                {
+                  id: "status",
+                  label: "Состояние",
+                  getSortValue: (decision) => decision.state,
+                  render: (decision) => (
+                    <Badge variant={statusVariant(decision)}>
+                      {propertyDispositionStatusLabel(decision)}
+                    </Badge>
+                  ),
+                },
+                {
+                  id: "effect",
+                  label: "Эффект",
+                  getSortValue: (decision) => decision.assetEffectState,
+                  render: (decision) =>
+                    propertyDispositionEffectLabel(decision),
+                },
+                {
+                  id: "actions",
+                  label: "Действия",
+                  getSortValue: () => null,
+                  render: (decision) => (
+                    <DecisionActions
+                      decision={decision}
+                      canReview={canReview}
+                      expanded={expandedDecisionId === decision.id}
+                      onToggleDetails={() => toggleDetails(decision.id)}
+                      onReview={(action, selected) =>
+                        setReview({ action, decision: selected })
+                      }
+                    />
+                  ),
+                },
+              ]}
+            />
+          </div>
+          <div className="grid gap-3 md:hidden">
+            {items.map((decision) => (
+              <DecisionMobileCard
+                key={decision.id}
+                decision={decision}
+                actorsById={actorsById}
+                canReview={canReview}
+                onReview={(action, selected) =>
+                  setReview({ action, decision: selected })
+                }
               />
-            </div>
+            ))}
+          </div>
+        </div>
+      )}
 
-            {visibleTasks.length > 0 ? (
-              <div className="grid gap-3 md:hidden">
-                {visibleTasks.map((task) => (
-                  <WriteOffMobileCard
-                    key={task.id}
-                    task={task}
-                    authorName={formatWriteOffAuthor(
-                      task.decisionActorId,
-                      actorsById
-                    )}
-                    onOpen={() => openTask(task.id)}
-                  />
-                ))}
-              </div>
-            ) : null}
-          </>
-        )}
-      </div>
+      {listQuery.data && listQuery.data.totalElements > 0 ? (
+        <div className="flex items-center justify-end gap-2">
+          <span className="text-sm text-muted-foreground">
+            Страница {page + 1} из {Math.max(totalPages, 1)} · решений{" "}
+            {listQuery.data.totalElements}
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={page === 0 || listQuery.isFetching}
+            onClick={() => setPage((current) => Math.max(0, current - 1))}
+          >
+            Назад
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={page + 1 >= totalPages || listQuery.isFetching}
+            onClick={() => setPage((current) => current + 1)}
+          >
+            Далее
+          </Button>
+        </div>
+      ) : null}
+
+      {canInitiate ? (
+        <PropertyDispositionCreateDialog
+          key={`${selectedWarehouseId}:${disposition}:${createOpen}`}
+          accessToken={accessToken}
+          warehouseId={selectedWarehouseId}
+          disposition={disposition}
+          open={createOpen}
+          onOpenChange={setCreateOpen}
+          onSaved={(decision) => {
+            setExpandedDecisionId(decision.id)
+            setSearchParams({ decisionId: decision.id }, { replace: true })
+            refresh()
+          }}
+        />
+      ) : null}
+
+      <PropertyDispositionReviewDialog
+        key={review ? `${review.decision.id}:${review.action}` : "closed"}
+        accessToken={accessToken}
+        decision={review?.decision ?? null}
+        action={review?.action ?? "APPROVE"}
+        open={review !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setReview(null)
+        }}
+        onSaved={(decision) => {
+          setReview(null)
+          setExpandedDecisionId(decision.id)
+          refresh()
+        }}
+        onConflict={() => {
+          setReview(null)
+          refresh()
+        }}
+      />
     </div>
   )
 }

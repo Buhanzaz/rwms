@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.equipment.service;
 
+import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskOwnerType;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import java.nio.charset.StandardCharsets;
@@ -48,7 +49,8 @@ public class EquipmentMovementTaskProcessor {
                 reserve.sourceLocationKind(),
                 reserve.expectedSourceBalanceVersion(),
                 reserve.quantity(),
-                reserve.reservedUntil()));
+                reserve.reservedUntil(),
+                reservationPurpose(reserve.ownerType())));
         return;
       }
       if (work instanceof EquipmentMovementWorkflowStore.RegisterWork register) {
@@ -117,6 +119,18 @@ public class EquipmentMovementTaskProcessor {
       case EquipmentMovementWorkflowStore.ExecuteWork value -> value.taskId();
       case EquipmentMovementWorkflowStore.CancelBoardTaskWork value -> value.taskId();
       case EquipmentMovementWorkflowStore.ReleaseWork value -> value.taskId();
+    };
+  }
+
+  private static LogisticsDependencyGateway.EquipmentMovementPurpose reservationPurpose(
+      EquipmentMovementTaskOwnerType ownerType) {
+    if (ownerType == null) {
+      throw new IllegalArgumentException("Equipment movement task owner type is required");
+    }
+    return switch (ownerType) {
+      case USER_REQUEST -> LogisticsDependencyGateway.EquipmentMovementPurpose.ALLOCATABLE_REBALANCE;
+      case MAINTENANCE_DISPOSITION ->
+          LogisticsDependencyGateway.EquipmentMovementPurpose.MAINTENANCE_DISPOSITION;
     };
   }
 

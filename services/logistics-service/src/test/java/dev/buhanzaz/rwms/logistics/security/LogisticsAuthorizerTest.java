@@ -94,16 +94,43 @@ class LogisticsAuthorizerTest {
         .isInstanceOf(AccessDeniedException.class);
   }
 
+  @Test
+  void warehouseOperationRecoveryRequiresWriteScopedGlobalAdministrator() {
+    Jwt administrator =
+        userJwt(
+            "rwms.write",
+            "WMS_ADMIN",
+            List.of(Map.of("warehouseId", WAREHOUSE.toString(), "level", "VIEW")));
+    Jwt manager =
+        userJwt(
+            "rwms.write",
+            "WAREHOUSE_MANAGER",
+            List.of(Map.of("warehouseId", WAREHOUSE.toString(), "level", "MANAGE")));
+
+    assertThatCode(() -> authorizer.requireWarehouseOperationRecoveryAdministrator(administrator))
+        .doesNotThrowAnyException();
+    assertThatThrownBy(() -> authorizer.requireWarehouseOperationRecoveryAdministrator(manager))
+        .isInstanceOf(AccessDeniedException.class)
+        .hasMessageContaining("Global administrator");
+  }
+
   private static Jwt userJwt(String scope, List<Map<String, String>> warehouseAccess) {
-    return Jwt.withTokenValue("token")
+    return userJwt(scope, null, warehouseAccess);
+  }
+
+  private static Jwt userJwt(
+      String scope, String globalRole, List<Map<String, String>> warehouseAccess) {
+    Jwt.Builder builder =
+        Jwt.withTokenValue("token")
         .header("alg", "none")
         .subject(SUBJECT.toString())
         .issuedAt(Instant.now())
         .expiresAt(Instant.now().plusSeconds(60))
         .claim("principal_type", "USER")
         .claim("scope", scope)
-        .claim("warehouse_access", warehouseAccess)
-        .build();
+        .claim("warehouse_access", warehouseAccess);
+    if (globalRole != null) builder.claim("global_role", globalRole);
+    return builder.build();
   }
 
   private static Jwt serviceJwt(

@@ -70,7 +70,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
   void cumulativeVersionFourEventSourcingAndTaskSyncMigrateCleanDatabaseAndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(23);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(24);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -100,6 +100,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
             "task_time_event",
             "task_sync_source",
             "task_relocation_receipt",
+            "task_board_warehouse_lifecycle_intent",
             "version_gap_quarantine",
             "work_queue",
             "work_queue_class_binding",
@@ -131,6 +132,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
                 Map.entry("task_board_outbox", 24),
                 Map.entry("task_sync_source", 6),
                 Map.entry("task_time_event", 10),
+                Map.entry("task_board_warehouse_lifecycle_intent", 10),
                 Map.entry("warehouse_kpi_settings", 10),
                 Map.entry("queue_definition", 16),
                 Map.entry("queue_definition_class_binding", 8),
@@ -309,6 +311,13 @@ class TaskBoardFlywayMigrationIntegrationTest {
                     + "where version='26'"))
         .containsEntry("version", "26")
         .containsEntry("script", "V26__use_contiguous_global_queue_positions.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='27'"))
+        .containsEntry("version", "27")
+        .containsEntry("script", "V27__warehouse_lifecycle_intents.sql")
         .containsEntry("success", true);
     assertThat(
             jdbc.queryForObject(
@@ -1196,7 +1205,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(22);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(23);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
 

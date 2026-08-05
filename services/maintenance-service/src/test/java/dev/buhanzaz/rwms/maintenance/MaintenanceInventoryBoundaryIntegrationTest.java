@@ -337,6 +337,112 @@ class MaintenanceInventoryBoundaryIntegrationTest {
   }
 
   @Test
+  void inventoryAdmissionAndRoutingPreflightsDoNotRunWithMaintenanceTransactions() {
+    when(dependencies.productionReady()).thenReturn(true);
+    when(dependencies.warehouseAdmission(any(UUID.class), any()))
+        .thenAnswer(invocation -> {
+          assertNoRemoteTransaction();
+          UUID requestedWarehouseId = invocation.getArgument(0);
+          MaintenanceDependencyGateway.WarehouseOperationDirection direction =
+              invocation.getArgument(1);
+          return new MaintenanceDependencyGateway.WarehouseOperationAdmission(
+              requestedWarehouseId,
+              1L,
+              MaintenanceDependencyGateway.WarehouseLifecycleState.ACTIVE,
+              direction,
+              true);
+        });
+    when(dependencies.preflightMaintenanceRouting(any(UUID.class), anyList()))
+        .thenAnswer(invocation -> {
+          assertNoRemoteTransaction();
+          UUID requestedWarehouseId = invocation.getArgument(0);
+          List<MaintenanceDependencyGateway.RoutingQueueRequirement> requirements =
+              invocation.getArgument(1);
+          return new MaintenanceDependencyGateway.RoutingPreflight(
+              requestedWarehouseId,
+              true,
+              List.of(),
+              List.of(),
+              List.of(),
+              requirements.stream()
+                  .map(requirement -> new MaintenanceDependencyGateway.RoutingQueueSnapshot(
+                      requirement.queueDefinitionId(),
+                      requirement.queueDefinitionId(),
+                      requirement.queueDefinitionId().toString(),
+                      requirement.type()))
+                  .toList());
+        });
+
+    UUID upsertInventoryId = UUID.randomUUID();
+    UUID upsertFindingId = UUID.randomUUID();
+    FrozenInventoryPlanResponse frozenUpsert = inventory.freeze(
+        autoRequest(upsertInventoryId, upsertFindingId, List.of())).response();
+    UUID upsertAssetId = UUID.randomUUID();
+    rentalItems.saveAndFlush(RentalItemFactProjection.create(
+        upsertAssetId, warehouseId, "FREE", 7L));
+    InventoryMaintenanceService.UpsertResult upsert = inventory.upsert(
+        upsertInventoryId,
+        upsertFindingId,
+        new UpsertInventoryRepairRequest(
+            warehouseId,
+            3L,
+            upsertAssetId,
+            7L,
+            LocalDate.of(2026, 8, 5),
+            frozenUpsert.fingerprint(),
+            frozenUpsert.snapshot()));
+
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from warehouse_operation_mark_outbox
+         where warehouse_id=? and operation_id=?
+        """, Integer.class, warehouseId, upsert.repairId())).isOne();
+
+    UUID publicationInventoryId = UUID.randomUUID();
+    UUID publicationFindingId = UUID.randomUUID();
+    FrozenInventoryPlanResponse frozenPublication = inventory.freeze(
+        autoRequest(publicationInventoryId, publicationFindingId, List.of())).response();
+    UUID publicationAssetId = UUID.randomUUID();
+    rentalItems.saveAndFlush(RentalItemFactProjection.create(
+        publicationAssetId, warehouseId, "FREE", 11L));
+    ObjectNode rawSnapshot = (ObjectNode) mapper.valueToTree(frozenPublication.snapshot());
+    InventoryPublicationFindingInput finding = publicationFinding(
+        publicationFindingId, publicationAssetId, 11L, rawSnapshot, 2, 3, false, null);
+    InventoryPublicationReconciliationService.PublicationResult publication = publications.apply(
+        publicationInventoryId,
+        publicationFindingId,
+        UUID.randomUUID(),
+        publicationApplyRequest(
+            finding, 1L, InventoryPublicationStrategy.CREATE, null, null));
+
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from warehouse_operation_mark_outbox
+         where warehouse_id=? and operation_id=?
+        """, Integer.class, warehouseId, publication.response().repairId())).isOne();
+    verify(dependencies, times(2)).warehouseAdmission(
+        eq(warehouseId),
+        eq(MaintenanceDependencyGateway.WarehouseOperationDirection.INCOMING));
+  }
+
+  @Test
+  void inventoryBoundariesRejectCallerTransactionsBeforeAnyGatewayCall() {
+    TransactionTemplate callerTransaction = new TransactionTemplate(transactionManager);
+
+    callerTransaction.executeWithoutResult(status ->
+        assertThatThrownBy(() -> inventory.freeze(autoRequest(UUID.randomUUID(), UUID.randomUUID(), List.of())))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("inside a caller transaction"));
+    callerTransaction.executeWithoutResult(status ->
+        assertThatThrownBy(() -> publications.apply(
+            UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), null))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("inside a caller transaction"));
+
+    verifyNoInteractions(dependencies);
+  }
+
+  @Test
   void autoFreezeUsesTheRouteInheritedThroughEveryCatalogGraphLevel() {
     UUID routedCategoryId = UUID.randomUUID();
     UUID intermediateNodeId = UUID.randomUUID();
@@ -1281,6 +1387,47 @@ class MaintenanceInventoryBoundaryIntegrationTest {
             UUID.randomUUID(), warehouseId, 1L, finalPlanSha(1), List.of(ambiguousFinding))))
         .isInstanceOf(MaintenanceValidationException.class)
         .hasMessageContaining("ambiguous");
+  }
+
+  @Test
+  void deniedIncomingAdmissionDoesNotBeginNewPrestartCompensation() {
+    QueuedPrestartRepair queued = queuedPrestartRepair(false);
+    InventoryPublicationApplyRequest replacement = publicationApplyRequest(
+        changedPublicationFinding(queued, "3.500000"),
+        2L,
+        InventoryPublicationStrategy.REPLACE,
+        InventoryPublicationTargetKind.REPAIR,
+        queued.repairId());
+    when(dependencies.productionReady()).thenReturn(true);
+    when(dependencies.warehouseAdmission(
+        warehouseId,
+        MaintenanceDependencyGateway.WarehouseOperationDirection.INCOMING))
+        .thenAnswer(invocation -> {
+          assertNoRemoteTransaction();
+          return new MaintenanceDependencyGateway.WarehouseOperationAdmission(
+              warehouseId,
+              1L,
+              MaintenanceDependencyGateway.WarehouseLifecycleState.DRAINING,
+              MaintenanceDependencyGateway.WarehouseOperationDirection.INCOMING,
+              false);
+        });
+
+    assertThatThrownBy(() -> publications.apply(
+        queued.inventoryId(), queued.findingId(), UUID.randomUUID(), replacement))
+        .isInstanceOfSatisfying(
+            MaintenanceConflictException.class,
+            failure -> assertThat(failure.code()).isEqualTo("WAREHOUSE_OPERATION_NOT_ADMITTED"));
+
+    assertPrestartIntent(queued, "PREPARED", 0L);
+    assertThat(publicationSourceCount(queued.inventoryId(), 2L, queued.findingId())).isZero();
+    assertThat(repairs.findById(queued.repairId()).orElseThrow().getExecutionState())
+        .isEqualTo(RepairExecutionState.QUEUED);
+    verify(dependencies, never()).cancelTaskIfPreStart(any(), any(), anyLong());
+    verify(dependencies, never()).maintenanceDriverTaskCompensation(
+        any(), any(MaintenanceDependencyGateway.MaintenanceDriverTaskKind.class));
+    verify(dependencies, never()).cancelMaintenanceDriverTaskCompensation(
+        any(), any(), any(MaintenanceDependencyGateway.MaintenanceDriverTaskKind.class));
+    verify(dependencies, never()).releaseLease(any(), any(), anyLong(), anyLong(), any(), any());
   }
 
   @Test

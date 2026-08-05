@@ -1,6 +1,6 @@
 # Contract Map And Evolution Rules
 
-Status: Confirmed repository layout as of 2026-08-04.
+Status: Confirmed repository layout as of 2026-08-05.
 
 ## Canonical Locations
 
@@ -41,6 +41,49 @@ its private logistics projection in
 The panel must not call that private route or infer status from browser state;
 `logistics-service` validates and republishes the needed fields through the
 public driver-board response.
+
+### Property Disposition And Asset Effects
+
+The public write-off/loss decision boundary belongs to
+[`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml).
+One list row represents one decision and root asset; repair/rework nodes are
+detail history, not duplicate decisions. Warehouse managers and global
+administrators may propose a mandatory-reason decision, while only
+`WMS_ADMIN` or `SYSTEM_ADMIN` may approve, reject or recover it. A cabin with
+non-zero contents must carry an exact versioned per-line plan; an empty cabin
+must carry no contents plan. Selected positive quantities become a
+logistics-owned furniture movement, and every unselected quantity is part of
+the terminal asset effect.
+
+[`asset-service.yaml`](../../contracts/openapi/asset-service.yaml) exposes only
+the narrow maintenance prepare/apply effects. It owns balances, terminal
+movement and permanent furniture custody; it never accepts the business
+decision itself. Inventory shortage publication creates an idempotent
+maintenance `LOSS` proposal and does not directly mutate a terminal balance.
+Decision, effect and recovery commands are version/idempotency fenced and
+return their honest pending, effective or quarantined state.
+
+### Warehouse Lifecycle And Time
+
+[`warehouse-service.yaml`](../../contracts/openapi/warehouse-service.yaml)
+defines directional admission, exact-version readiness confirmation, durable
+operation marks and an as-of timezone read. Incoming work is admitted only for
+`ACTIVE`; existing outgoing work may drain in `DRAINING`; no new owner-local
+blocker may commit behind a readiness fence. A timezone correction is immediate
+only before the first operation. Once used, a change has an `effectiveFrom` and
+historical operations keep the zone effective at their own timestamp.
+
+Actual inter-warehouse movement is represented by
+[`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml).
+When an arrived line continues an active repair, logistics reads the exact
+post-`TRANSFER_ARRIVE` asset version from its released guard, includes it in the
+durable maintenance-attempt fingerprint and sends it as required
+`rentalItemVersion` in `CompleteTransferRepairRequest`. Maintenance must use
+that original value for replayed lease/status commands; a fresh read cannot
+silently replace the version fence.
+The separate asset administrative-correction command is administrator-only,
+requires `expectedVersion`, reason and HTTPS evidence, rejects active
+workflow/reservation/lease blockers, and records immutable correction evidence.
 
 ## Event Families
 

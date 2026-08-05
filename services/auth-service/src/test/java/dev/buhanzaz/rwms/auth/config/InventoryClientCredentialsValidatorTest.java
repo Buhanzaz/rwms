@@ -55,7 +55,7 @@ class InventoryClientCredentialsValidatorTest {
                 Map.<String, Object>of("audience", "other-audience"),
                 Map.<String, Object>of("resource", "other-audience"))) {
             assertThatThrownBy(() -> AuthorizationServerConfiguration.validateInventoryDownstreamRequest(
-                            context("inventory-service", Set.of("warehouse.read"), overrides)))
+                            context("inventory-service", Set.of("warehouse.lifecycle.read"), overrides)))
                     .isInstanceOfSatisfying(OAuth2AuthenticationException.class, exception ->
                             org.assertj.core.api.Assertions.assertThat(exception.getError().getErrorCode())
                                     .isEqualTo("invalid_request"));

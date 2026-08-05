@@ -51,7 +51,13 @@ class AuthInventoryServiceClientDisabledIntegrationTest {
         assertThat(stored).isNotNull();
         assertThat(stored.getClientSecret()).isNull();
         assertThat(stored.getScopes())
-                .containsExactlyInAnyOrder("warehouse.read", "asset.inventory", "maintenance.inventory");
+                .containsExactlyInAnyOrder(
+                        "warehouse.timezone.read",
+                        "warehouse.operation.mark",
+                        "warehouse.lifecycle.read",
+                        "warehouse.lifecycle.confirm",
+                        "asset.inventory",
+                        "maintenance.inventory");
         assertThat(configuredClients.findByClientId("inventory-service")).isNull();
         assertThat(jdbc.queryForObject(
                         "select client_secret is null from oauth2_registered_client where client_id='inventory-service'",
@@ -62,7 +68,7 @@ class AuthInventoryServiceClientDisabledIntegrationTest {
                         .with(httpBasic("inventory-service", "inventory-test-secret"))
                         .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                         .param("grant_type", "client_credentials")
-                        .param("scope", "warehouse.read"))
+                        .param("scope", "warehouse.lifecycle.read"))
                 .andExpect(status().isUnauthorized());
     }
 }

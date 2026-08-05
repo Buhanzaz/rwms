@@ -25,6 +25,9 @@ import dev.buhanzaz.rwms.logistics.order.service.OrderClientService;
 import dev.buhanzaz.rwms.logistics.order.service.OrderUnitConflictException;
 import dev.buhanzaz.rwms.logistics.order.service.RentalOrderService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
 import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -60,6 +63,7 @@ public class OrderController {
   private final OrderClientService clients;
   private final OrderAuthorizer access;
   private final OrderAuditService audit;
+  private final LogisticsWarehouseLifecycle warehouseLifecycle;
 
   @GetMapping("/orders")
   public OrderPageResponse list(
@@ -180,13 +184,24 @@ public class OrderController {
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody CreateOrderRentalShipmentRequest request,
       HttpServletRequest servletRequest) {
+    OrderActor actor = access.writeActor(jwt);
+    UUID warehouseId = orders.rentalShipmentAdmissionWarehouse(actor, orderId);
+    var admission =
+        warehouseLifecycle.prepareDocument(
+            actor.subjectId(),
+            "CREATE_RENTAL_ORDER_SHIPMENT",
+            idempotencyKey,
+            List.of(
+                new AdmissionRequirement(
+                    warehouseId, WarehouseOperationDirection.OUTGOING)));
     LogisticsDocumentService.CreateResult result =
         orders.createRentalShipment(
-            access.writeActor(jwt),
+            actor,
             orderId,
             idempotencyKey,
             correlationId(servletRequest),
-            request);
+            request,
+            admission);
     return documentResponse(result.response(), result.replayed());
   }
 

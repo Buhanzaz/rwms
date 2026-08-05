@@ -6,6 +6,7 @@ import type {
   RepairTaskWriteOffCommand,
   RepairTaskWriteCommand,
 } from "@/features/repair-tasks/model/repair-task"
+import type { PropertyDispositionDecision } from "@/features/write-offs/property-dispositions-api"
 
 export class RepairTaskQueueDraftPersistedError extends Error {
   readonly taskId: string
@@ -27,7 +28,6 @@ export class RepairTaskQueueDraftPersistedError extends Error {
 export interface RepairTasksClient {
   list(warehouseId: string): Promise<RepairTaskDto[]>
   listPendingAcceptance(warehouseId: string): Promise<RepairTaskDto[]>
-  listWriteOffs(warehouseId: string): Promise<RepairTaskDto[]>
   getById(taskId: string, warehouseId: string): Promise<RepairTaskDto | null>
   getBySourceEstimateId(
     sourceEstimateId: string,
@@ -37,6 +37,10 @@ export interface RepairTasksClient {
   queue(command: RepairTaskWriteCommand): Promise<RepairTaskDto>
   updateSubtasks(command: RepairTaskSubtasksCommand): Promise<RepairTaskDto>
   accept(command: RepairTaskAcceptCommand): Promise<RepairTaskDto>
-  writeOff(command: RepairTaskWriteOffCommand): Promise<RepairTaskDto>
-  earlyWriteOff(command: RepairTaskEarlyWriteOffCommand): Promise<RepairTaskDto>
+  writeOff(
+    command: RepairTaskWriteOffCommand
+  ): Promise<PropertyDispositionDecision>
+  earlyWriteOff(
+    command: RepairTaskEarlyWriteOffCommand
+  ): Promise<PropertyDispositionDecision>
 }

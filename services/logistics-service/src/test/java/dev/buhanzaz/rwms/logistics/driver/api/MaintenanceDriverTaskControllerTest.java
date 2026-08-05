@@ -15,6 +15,7 @@ import dev.buhanzaz.rwms.logistics.driver.service.DriverTaskProcessor;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverTaskService;
 import dev.buhanzaz.rwms.logistics.driver.service.MaintenanceDriverTaskCompensationService;
 import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -30,13 +31,16 @@ class MaintenanceDriverTaskControllerTest {
   private final DriverQueueScheduler scheduler = mock(DriverQueueScheduler.class);
   private final MaintenanceDriverTaskCompensationService compensation =
       mock(MaintenanceDriverTaskCompensationService.class);
+  private final LogisticsWarehouseLifecycle warehouseLifecycle =
+      mock(LogisticsWarehouseLifecycle.class);
   private final MaintenanceDriverTaskController controller =
       new MaintenanceDriverTaskController(
           driverTasks,
           processor,
           scheduler,
           compensation,
-          new LogisticsAuthorizer(new MockEnvironment(), false));
+          new LogisticsAuthorizer(new MockEnvironment(), false),
+          warehouseLifecycle);
 
   @Test
   void exactMaintenanceServiceTokenCanLookupAndCancelThePrivateBoundary() {

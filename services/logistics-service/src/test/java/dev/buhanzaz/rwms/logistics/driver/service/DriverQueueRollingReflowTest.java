@@ -46,6 +46,11 @@ class DriverQueueRollingReflowTest {
     when(dependencies.readWarehouseIdentity(warehouseId))
         .thenReturn(
             new LogisticsDependencyGateway.WarehouseIdentity(warehouseId, 0, true, "UTC"));
+    when(dependencies.warehouseTimeZoneAt(eq(warehouseId), any(OffsetDateTime.class)))
+        .thenAnswer(
+            invocation ->
+                new LogisticsDependencyGateway.WarehouseTimeZone(
+                    warehouseId, "UTC", invocation.getArgument(1)));
   }
 
   @Test

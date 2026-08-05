@@ -37,9 +37,12 @@ import dev.buhanzaz.rwms.taskboard.repository.WorkerClassRepository;
 import dev.buhanzaz.rwms.taskboard.repository.WorkerGroupRepository;
 import dev.buhanzaz.rwms.taskboard.repository.WorkerRepository;
 import dev.buhanzaz.rwms.taskboard.service.GroupKpiEvidenceService;
+import dev.buhanzaz.rwms.taskboard.service.WarehouseTimeZoneGateway.TimeZoneDecision;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
@@ -72,11 +75,15 @@ class GroupKpiEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
   @Autowired BoardTaskRepository tasks;
   @Autowired QueueEntryRepository entries;
   @Autowired TaskAssignmentRepository assignments;
+  @Autowired TestWarehouseTimeZoneGateway timeZones;
   @Autowired JdbcTemplate jdbc;
 
   @BeforeEach
   void clean() {
     cleanTaskBoardFixtures(jdbc);
+    timeZones.reset();
+    timeZones.setTimeline(
+        WAREHOUSE_ID, List.of(new TimeZoneDecision(ZoneId.of("UTC"), Instant.EPOCH)));
   }
 
   @Test

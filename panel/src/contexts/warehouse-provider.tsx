@@ -89,9 +89,11 @@ export function WarehouseProvider({ children }: { children: ReactNode }) {
       }
 
       const data = await listWarehouses(currentAccessToken)
-      const activeWarehouses = data.filter((warehouse) => warehouse.active)
+      const availableWarehouses = data.filter(
+        (warehouse) => warehouse.lifecycleState !== "INACTIVE"
+      )
       const accessibleWarehouses = filterWarehousesByAccess(
-        activeWarehouses,
+        availableWarehouses,
         currentUser
       )
       const savedWarehouseId = getSavedWarehouseId()
@@ -100,7 +102,7 @@ export function WarehouseProvider({ children }: { children: ReactNode }) {
         accessibleWarehouses
       )
 
-      setWarehouseCatalog(activeWarehouses)
+      setWarehouseCatalog(availableWarehouses)
       setSelectedWarehouseIdState(nextSelectedWarehouseId)
 
       if (nextSelectedWarehouseId === null) {

@@ -3,12 +3,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 
 import {
+  completeWarehouseInactivation,
   createWarehouse,
-  deactivateWarehouse,
   listWarehouses,
   replaceWarehouse,
+  scheduleWarehouseTimeZone,
+  startWarehouseDraining,
   type WarehouseCreateInput,
   type WarehouseInfo,
+  type WarehouseLifecycleState,
   type WarehouseWriteInput,
 } from "@/api/warehouse-api"
 import { OperationsListGrid } from "@/components/operations-list-grid"
@@ -30,17 +33,16 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
 import {
   Field,
-  FieldContent,
   FieldError,
   FieldGroup,
   FieldLabel,
@@ -69,6 +71,15 @@ import { useResponsiveFiltersOpen } from "@/hooks/use-responsive-filters-open"
 import { useWarehouse } from "@/hooks/use-warehouse"
 
 const WAREHOUSES_QUERY_KEY = ["warehouse-settings"] as const
+
+const warehouseLifecyclePresentation: Record<
+  WarehouseLifecycleState,
+  { label: string; badge: "secondary" | "outline" | "destructive" }
+> = {
+  ACTIVE: { label: "Активен", badge: "secondary" },
+  DRAINING: { label: "Выводится из работы", badge: "destructive" },
+  INACTIVE: { label: "Неактивен", badge: "outline" },
+}
 
 function WarehouseEditorDialog({
   warehouse,
@@ -185,20 +196,6 @@ function WarehouseEditorDialog({
                 aria-invalid={formError !== null}
               />
             </Field>
-            {warehouse ? (
-              <Field orientation="horizontal" className="self-end pb-2">
-                <Checkbox
-                  id="warehouse-active"
-                  checked={values.active}
-                  onCheckedChange={(value) =>
-                    updateValue("active", value === true)
-                  }
-                />
-                <FieldContent>
-                  <FieldLabel htmlFor="warehouse-active">Активен</FieldLabel>
-                </FieldContent>
-              </Field>
-            ) : null}
           </FieldGroup>
 
           {formError ? (
@@ -224,18 +221,145 @@ function WarehouseEditorDialog({
   )
 }
 
+const OFFSET_DATE_TIME_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/
+
+function TimeZoneScheduleDialog({
+  warehouse,
+  pending,
+  serverError,
+  onOpenChange,
+  onSchedule,
+}: {
+  warehouse: WarehouseInfo
+  pending: boolean
+  serverError: string | null
+  onOpenChange: (open: boolean) => void
+  onSchedule: (timeZone: string, effectiveFrom: string) => void
+}) {
+  const [timeZone, setTimeZone] = useState(warehouse.timeZone)
+  const [effectiveFrom, setEffectiveFrom] = useState("")
+  const [validationError, setValidationError] = useState<string | null>(null)
+  const formError = validationError ?? serverError
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const normalizedTimeZone = timeZone.trim()
+    const normalizedEffectiveFrom = effectiveFrom.trim()
+
+    try {
+      Intl.DateTimeFormat("ru-RU", { timeZone: normalizedTimeZone })
+    } catch {
+      setValidationError(
+        "Укажите корректную временную зону IANA, например Europe/Samara."
+      )
+      return
+    }
+
+    if (
+      !OFFSET_DATE_TIME_PATTERN.test(normalizedEffectiveFrom) ||
+      !Number.isFinite(Date.parse(normalizedEffectiveFrom)) ||
+      Date.parse(normalizedEffectiveFrom) <= Date.now()
+    ) {
+      setValidationError(
+        "Укажите будущую дату в RFC 3339 с явным смещением, например 2026-09-01T00:00:00+04:00."
+      )
+      return
+    }
+
+    if (normalizedTimeZone === warehouse.timeZone) {
+      setValidationError("Новая временная зона совпадает с текущей.")
+      return
+    }
+
+    setValidationError(null)
+    onSchedule(normalizedTimeZone, normalizedEffectiveFrom)
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => !pending && onOpenChange(open)}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Запланировать смену часового пояса</DialogTitle>
+          <DialogDescription>
+            Для склада «{warehouse.name}» новая зона начнёт действовать только с
+            указанного момента. Уже рассчитанные операции и отчёты не изменятся.
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={submit}>
+          <FieldGroup>
+            <Field data-invalid={formError !== null || undefined}>
+              <FieldLabel htmlFor="warehouse-scheduled-time-zone">
+                Новая временная зона
+              </FieldLabel>
+              <Input
+                id="warehouse-scheduled-time-zone"
+                value={timeZone}
+                maxLength={64}
+                placeholder="Europe/Samara"
+                onChange={(event) => setTimeZone(event.target.value)}
+                aria-invalid={formError !== null}
+                required
+              />
+            </Field>
+            <Field data-invalid={formError !== null || undefined}>
+              <FieldLabel htmlFor="warehouse-time-zone-effective-from">
+                Начать с даты и времени
+              </FieldLabel>
+              <Input
+                id="warehouse-time-zone-effective-from"
+                value={effectiveFrom}
+                placeholder="2026-09-01T00:00:00+04:00"
+                onChange={(event) => setEffectiveFrom(event.target.value)}
+                aria-describedby="warehouse-time-zone-effective-from-hint"
+                aria-invalid={formError !== null}
+                required
+              />
+              <p
+                id="warehouse-time-zone-effective-from-hint"
+                className="text-xs text-muted-foreground"
+              >
+                Формат RFC 3339 с часовым смещением склада.
+              </p>
+            </Field>
+          </FieldGroup>
+
+          {formError ? (
+            <FieldError className="mt-4">{formError}</FieldError>
+          ) : null}
+
+          <DialogFooter className="mt-6">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending}
+              onClick={() => onOpenChange(false)}
+            >
+              Отмена
+            </Button>
+            <Button type="submit" disabled={pending}>
+              {pending ? "Планируем…" : "Запланировать"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function WarehouseActions({
   warehouse,
   pending,
   onEdit,
-  onDeactivate,
-  onReactivate,
+  onScheduleTimeZone,
+  onLifecycleTransition,
 }: {
   warehouse: WarehouseInfo
   pending: boolean
   onEdit: (warehouse: WarehouseInfo) => void
-  onDeactivate: (warehouse: WarehouseInfo) => void
-  onReactivate: (warehouse: WarehouseInfo) => void
+  onScheduleTimeZone: (warehouse: WarehouseInfo) => void
+  onLifecycleTransition: (warehouse: WarehouseInfo) => void
 }) {
   return (
     <div className="flex flex-wrap gap-2">
@@ -248,27 +372,36 @@ function WarehouseActions({
       >
         Изменить
       </Button>
-      {warehouse.active ? (
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        disabled={pending}
+        onClick={() => onScheduleTimeZone(warehouse)}
+      >
+        Сменить часовой пояс
+      </Button>
+      {warehouse.lifecycleState === "ACTIVE" ? (
         <Button
           type="button"
           size="sm"
           variant="ghost"
           disabled={pending}
-          onClick={() => onDeactivate(warehouse)}
+          onClick={() => onLifecycleTransition(warehouse)}
         >
-          Деактивировать
+          Начать вывод
         </Button>
-      ) : (
+      ) : warehouse.lifecycleState === "DRAINING" ? (
         <Button
           type="button"
           size="sm"
           variant="ghost"
           disabled={pending}
-          onClick={() => onReactivate(warehouse)}
+          onClick={() => onLifecycleTransition(warehouse)}
         >
-          Активировать
+          Завершить вывод
         </Button>
-      )}
+      ) : null}
     </div>
   )
 }
@@ -281,7 +414,10 @@ export function WarehouseSettingsPage() {
   const [filters, setFilters] = useState(createEmptyWarehouseFilters)
   const { filtersOpen, setFiltersOpen } = useResponsiveFiltersOpen()
   const [editor, setEditor] = useState<WarehouseInfo | "new" | null>(null)
-  const [deactivating, setDeactivating] = useState<WarehouseInfo | null>(null)
+  const [lifecycleTransition, setLifecycleTransition] =
+    useState<WarehouseInfo | null>(null)
+  const [timeZoneSchedule, setTimeZoneSchedule] =
+    useState<WarehouseInfo | null>(null)
   const [serverError, setServerError] = useState<string | null>(null)
   const canManage = currentUser?.globalRole === "SYSTEM_ADMIN"
 
@@ -301,7 +437,8 @@ export function WarehouseSettingsPage() {
   async function refreshAfterConflict() {
     await refreshAfterMutation()
     setEditor(null)
-    setDeactivating(null)
+    setLifecycleTransition(null)
+    setTimeZoneSchedule(null)
   }
 
   const saveMutation = useMutation({
@@ -346,23 +483,40 @@ export function WarehouseSettingsPage() {
     },
   })
 
-  const deactivateMutation = useMutation({
+  const lifecycleMutation = useMutation({
     mutationFn: async () => {
-      if (accessToken === null || deactivating === null) {
+      if (accessToken === null || lifecycleTransition === null) {
         throw new Error("Сессия завершена или склад не выбран.")
       }
 
-      await deactivateWarehouse(
-        accessToken,
-        deactivating.id,
-        deactivating.version
-      )
+      if (lifecycleTransition.lifecycleState === "ACTIVE") {
+        return startWarehouseDraining(
+          accessToken,
+          lifecycleTransition.id,
+          lifecycleTransition.version
+        )
+      }
+
+      if (lifecycleTransition.lifecycleState === "DRAINING") {
+        return completeWarehouseInactivation(
+          accessToken,
+          lifecycleTransition.id,
+          lifecycleTransition.version
+        )
+      }
+
+      throw new Error("Неактивный склад уже завершил жизненный цикл.")
     },
     onSuccess: async () => {
       await refreshAfterMutation()
-      setDeactivating(null)
+      const completed = lifecycleTransition?.lifecycleState === "DRAINING"
+      setLifecycleTransition(null)
       setServerError(null)
-      toast.success("Склад деактивирован.")
+      toast.success(
+        completed
+          ? "Склад переведён в неактивное состояние."
+          : "Начат вывод склада из работы."
+      )
     },
     onError: async (error) => {
       const message = getWarehouseMutationError(error)
@@ -377,25 +531,30 @@ export function WarehouseSettingsPage() {
     },
   })
 
-  const reactivateMutation = useMutation({
-    mutationFn: async (warehouse: WarehouseInfo) => {
-      if (accessToken === null) {
-        throw new Error("Сессия завершена.")
+  const timeZoneMutation = useMutation({
+    mutationFn: async (input: { timeZone: string; effectiveFrom: string }) => {
+      if (accessToken === null || timeZoneSchedule === null) {
+        throw new Error("Сессия завершена или склад не выбран.")
       }
 
-      return replaceWarehouse(accessToken, warehouse.id, warehouse.version, {
-        name: warehouse.name,
-        city: warehouse.city,
-        address: warehouse.address,
-        timeZone: warehouse.timeZone,
-        active: true,
-        sortOrder: warehouse.sortOrder,
-      })
+      return scheduleWarehouseTimeZone(
+        accessToken,
+        timeZoneSchedule.id,
+        timeZoneSchedule.version,
+        input.timeZone,
+        input.effectiveFrom
+      )
     },
-    onSuccess: async () => {
+    onSuccess: async (change) => {
       await refreshAfterMutation()
+      setTimeZoneSchedule(null)
       setServerError(null)
-      toast.success("Склад активирован.")
+      toast.success(
+        `Смена часового пояса запланирована на ${new Intl.DateTimeFormat(
+          "ru-RU",
+          { dateStyle: "medium", timeStyle: "short" }
+        ).format(new Date(change.effectiveFrom))}.`
+      )
     },
     onError: async (error) => {
       const message = getWarehouseMutationError(error)
@@ -438,8 +597,8 @@ export function WarehouseSettingsPage() {
 
   const isMutating =
     saveMutation.isPending ||
-    deactivateMutation.isPending ||
-    reactivateMutation.isPending
+    lifecycleMutation.isPending ||
+    timeZoneMutation.isPending
 
   function openEditor(nextEditor: WarehouseInfo | "new") {
     setServerError(null)
@@ -530,12 +689,16 @@ export function WarehouseSettingsPage() {
               {
                 id: "status",
                 label: "Статус",
-                getSortValue: (warehouse) => (warehouse.active ? 1 : 0),
-                render: (warehouse) => (
-                  <Badge variant={warehouse.active ? "secondary" : "outline"}>
-                    {warehouse.active ? "Активен" : "Неактивен"}
-                  </Badge>
-                ),
+                getSortValue: (warehouse) => warehouse.lifecycleState,
+                render: (warehouse) => {
+                  const presentation =
+                    warehouseLifecyclePresentation[warehouse.lifecycleState]
+                  return (
+                    <Badge variant={presentation.badge}>
+                      {presentation.label}
+                    </Badge>
+                  )
+                },
               },
               {
                 id: "actions",
@@ -547,13 +710,13 @@ export function WarehouseSettingsPage() {
                     warehouse={warehouse}
                     pending={isMutating}
                     onEdit={openEditor}
-                    onDeactivate={(selected) => {
+                    onScheduleTimeZone={(selected) => {
                       setServerError(null)
-                      setDeactivating(selected)
+                      setTimeZoneSchedule(selected)
                     }}
-                    onReactivate={(selected) => {
+                    onLifecycleTransition={(selected) => {
                       setServerError(null)
-                      reactivateMutation.mutate(selected)
+                      setLifecycleTransition(selected)
                     }}
                   />
                 ),
@@ -567,8 +730,16 @@ export function WarehouseSettingsPage() {
                 <CardHeader>
                   <div className="flex items-start justify-between gap-3">
                     <CardTitle>{warehouse.name}</CardTitle>
-                    <Badge variant={warehouse.active ? "secondary" : "outline"}>
-                      {warehouse.active ? "Активен" : "Неактивен"}
+                    <Badge
+                      variant={
+                        warehouseLifecyclePresentation[warehouse.lifecycleState]
+                          .badge
+                      }
+                    >
+                      {
+                        warehouseLifecyclePresentation[warehouse.lifecycleState]
+                          .label
+                      }
                     </Badge>
                   </div>
                 </CardHeader>
@@ -581,13 +752,13 @@ export function WarehouseSettingsPage() {
                     warehouse={warehouse}
                     pending={isMutating}
                     onEdit={openEditor}
-                    onDeactivate={(selected) => {
+                    onScheduleTimeZone={(selected) => {
                       setServerError(null)
-                      setDeactivating(selected)
+                      setTimeZoneSchedule(selected)
                     }}
-                    onReactivate={(selected) => {
+                    onLifecycleTransition={(selected) => {
                       setServerError(null)
-                      reactivateMutation.mutate(selected)
+                      setLifecycleTransition(selected)
                     }}
                   />
                 </CardContent>
@@ -613,38 +784,76 @@ export function WarehouseSettingsPage() {
         />
       ) : null}
 
-      {deactivating ? (
+      {timeZoneSchedule ? (
+        <TimeZoneScheduleDialog
+          key={`${timeZoneSchedule.id}-${timeZoneSchedule.version}`}
+          warehouse={timeZoneSchedule}
+          pending={timeZoneMutation.isPending}
+          serverError={serverError}
+          onOpenChange={(open) => {
+            if (!open) {
+              setTimeZoneSchedule(null)
+              setServerError(null)
+            }
+          }}
+          onSchedule={(timeZone, effectiveFrom) =>
+            timeZoneMutation.mutate({ timeZone, effectiveFrom })
+          }
+        />
+      ) : null}
+
+      {lifecycleTransition ? (
         <AlertDialog
           open
           onOpenChange={(open) => {
-            if (!open && !deactivateMutation.isPending) {
-              setDeactivating(null)
+            if (!open && !lifecycleMutation.isPending) {
+              setLifecycleTransition(null)
               setServerError(null)
             }
           }}
         >
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Деактивировать склад?</AlertDialogTitle>
+              <AlertDialogTitle>
+                {lifecycleTransition.lifecycleState === "ACTIVE"
+                  ? "Начать вывод склада из работы?"
+                  : "Завершить вывод склада из работы?"}
+              </AlertDialogTitle>
               <AlertDialogDescription>
-                Склад «{deactivating.name}» исчезнет из обычного выбора.
-                Реактивировать его можно из этого списка.
+                {lifecycleTransition.lifecycleState === "ACTIVE" ? (
+                  <>
+                    Склад «{lifecycleTransition.name}» перестанет принимать
+                    новые входящие операции, но исходящие операции останутся
+                    доступны для освобождения склада. Переход необратим.
+                  </>
+                ) : (
+                  <>
+                    Склад «{lifecycleTransition.name}» станет окончательно
+                    неактивным. Команда выполнится только после подтверждения
+                    готовности сервисами имущества, инвентаризации, логистики,
+                    ремонтов и заданий. Переход необратим.
+                  </>
+                )}
               </AlertDialogDescription>
             </AlertDialogHeader>
             {serverError ? <FieldError>{serverError}</FieldError> : null}
             <AlertDialogFooter>
-              <AlertDialogCancel disabled={deactivateMutation.isPending}>
+              <AlertDialogCancel disabled={lifecycleMutation.isPending}>
                 Отмена
               </AlertDialogCancel>
               <AlertDialogAction
                 variant="destructive"
-                disabled={deactivateMutation.isPending}
+                disabled={lifecycleMutation.isPending}
                 onClick={(event) => {
                   event.preventDefault()
-                  deactivateMutation.mutate()
+                  lifecycleMutation.mutate()
                 }}
               >
-                {deactivateMutation.isPending ? "Выполняем…" : "Деактивировать"}
+                {lifecycleMutation.isPending
+                  ? "Выполняем…"
+                  : lifecycleTransition.lifecycleState === "ACTIVE"
+                    ? "Начать вывод"
+                    : "Завершить вывод"}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

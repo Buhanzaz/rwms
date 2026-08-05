@@ -5,7 +5,9 @@ info:
   description: >-
     Committed warehouse lifecycle facts published through the warehouse-service
     transactional outbox. Delivery is at-least-once; aggregateId is the Kafka
-    key and eventId is the consumer deduplication identity.
+    key and eventId is the consumer deduplication identity. A changed fact may
+    carry an immutable future timezone decision; consumers with calendar
+    semantics retain it and resolve the zone as of the operation instant.
 defaultContentType: application/json
 servers:
   kafka:

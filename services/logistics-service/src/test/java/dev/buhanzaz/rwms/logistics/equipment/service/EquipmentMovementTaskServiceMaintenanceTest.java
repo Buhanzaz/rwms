@@ -24,15 +24,21 @@ import dev.buhanzaz.rwms.logistics.equipment.repository.EquipmentMovementTaskLin
 import dev.buhanzaz.rwms.logistics.equipment.repository.EquipmentMovementTaskRepository;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsNotFoundException;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseOperationMarkStore;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.IntStream;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -52,8 +58,32 @@ class EquipmentMovementTaskServiceMaintenanceTest {
       mock(EquipmentMovementTaskLineRepository.class);
   private final EquipmentMovementTaskResponseMapper mapper =
       mock(EquipmentMovementTaskResponseMapper.class);
+  private final LogisticsWarehouseLifecycle warehouseLifecycle =
+      mock(LogisticsWarehouseLifecycle.class);
+  private final LogisticsWarehouseOperationMarkStore warehouseOperationMarks =
+      mock(LogisticsWarehouseOperationMarkStore.class);
   private final EquipmentMovementTaskService service =
-      new EquipmentMovementTaskService(tasks, lines, mapper);
+      new EquipmentMovementTaskService(
+          tasks, lines, mapper, warehouseLifecycle, warehouseOperationMarks);
+
+  @BeforeEach
+  void admissionTicket() {
+    when(warehouseLifecycle.disabledTicket(any(), any(), any(), any()))
+        .thenAnswer(
+            invocation -> {
+              @SuppressWarnings("unchecked")
+              List<AdmissionRequirement> requirements = invocation.getArgument(3);
+              OffsetDateTime at = OffsetDateTime.now(ZoneOffset.UTC);
+              Map<UUID, java.time.LocalDate> dates =
+                  requirements.stream()
+                      .collect(
+                          java.util.stream.Collectors.toMap(
+                              AdmissionRequirement::warehouseId,
+                              ignored -> at.toLocalDate()));
+              return new AdmissionTicket(
+                  UUID.randomUUID(), requirements, at, dates, true);
+            });
+  }
 
   @Test
   void maintenanceDecisionOwnsOneExactCabinToStockMovementForever() {

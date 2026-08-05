@@ -3,16 +3,13 @@ package dev.buhanzaz.rwms.warehouse.api;
 import dev.buhanzaz.rwms.warehouse.security.WarehouseAuthorizer;
 import dev.buhanzaz.rwms.warehouse.service.WarehouseService;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.Min;
 import java.util.List;
 import java.util.UUID;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
-import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -72,13 +69,31 @@ public class WarehouseController {
     return service.replace(id, request);
   }
 
-  @DeleteMapping("/{id}")
-  public ResponseEntity<Void> deactivate(
+  @PostMapping("/{id}/draining")
+  public WarehouseResponse startDraining(
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID id,
-      @RequestParam @Min(0) long expectedVersion) {
+      @Valid @RequestBody WarehouseLifecycleTransitionRequest request) {
     access.requireSystemAdminWrite(jwt);
-    service.deactivate(id, expectedVersion);
-    return ResponseEntity.noContent().build();
+    return service.startDraining(id, request);
   }
+
+  @PostMapping("/{id}/inactivation")
+  public WarehouseResponse completeInactivation(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID id,
+      @Valid @RequestBody WarehouseLifecycleTransitionRequest request) {
+    access.requireSystemAdminWrite(jwt);
+    return service.completeInactivation(id, request);
+  }
+
+  @PostMapping("/{id}/time-zone-changes")
+  public WarehouseTimeZoneChangeResponse scheduleTimeZone(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID id,
+      @Valid @RequestBody ScheduleWarehouseTimeZoneRequest request) {
+    access.requireSystemAdminWrite(jwt);
+    return service.scheduleTimeZone(id, request);
+  }
+
 }

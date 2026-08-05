@@ -15,6 +15,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
@@ -36,6 +37,12 @@ class HttpInventoryDependencyGatewayTest {
   private final ObjectMapper mapper = new ObjectMapper();
   private final AtomicReference<String> requestBody = new AtomicReference<>();
   private final AtomicReference<String> authorization = new AtomicReference<>();
+  private final AtomicReference<String> idempotencyKey = new AtomicReference<>();
+  private final AtomicReference<String> lifecycleAuthorization = new AtomicReference<>();
+  private final AtomicReference<String> operationAuthorization = new AtomicReference<>();
+  private final AtomicReference<String> timeZoneAuthorization = new AtomicReference<>();
+  private final AtomicReference<String> readinessWorkAuthorization = new AtomicReference<>();
+  private final AtomicReference<String> readinessConfirmAuthorization = new AtomicReference<>();
   private final AtomicReference<UUID> responseWarehouseId = new AtomicReference<>();
   private final AtomicReference<Boolean> assetPresent = new AtomicReference<>(true);
   private final AtomicReference<String> reconciliationResponse = new AtomicReference<>();
@@ -57,6 +64,12 @@ class HttpInventoryDependencyGatewayTest {
         "/api/internal/maintenance/v1/inventory/repair-snapshots", this::repairSnapshots);
     server.createContext(
         "/api/internal/maintenance/v1/inventory/reconciliations", this::applyReconciliation);
+    server.createContext(
+        "/api/internal/maintenance/v1/inventory/dispositions", this::createLossDisposition);
+    server.createContext(
+        "/api/internal/warehouse/v1/warehouses", this::warehouseOperation);
+    server.createContext(
+        "/api/internal/warehouse/v1/lifecycle/readiness-work", this::warehouseReadinessWork);
     server.start();
     String base = "http://127.0.0.1:" + server.getAddress().getPort();
     OAuth2AuthorizedClientManager authorizedClients = mock(OAuth2AuthorizedClientManager.class);
@@ -78,6 +91,30 @@ class HttpInventoryDependencyGatewayTest {
                         "inventory-maintenance",
                         "inventory-maintenance-token",
                         "maintenance.inventory");
+                case "inventory-warehouse-lifecycle-read" ->
+                    authorizedClient(
+                        base,
+                        "inventory-warehouse-lifecycle-read",
+                        "inventory-warehouse-lifecycle-read-token",
+                        "warehouse.lifecycle.read");
+                case "inventory-warehouse-operation" ->
+                    authorizedClient(
+                        base,
+                        "inventory-warehouse-operation",
+                        "inventory-warehouse-operation-token",
+                        "warehouse.operation.mark");
+                case "inventory-warehouse-timezone" ->
+                    authorizedClient(
+                        base,
+                        "inventory-warehouse-timezone",
+                        "inventory-warehouse-timezone-token",
+                        "warehouse.timezone.read");
+                case "inventory-warehouse-lifecycle-confirm" ->
+                    authorizedClient(
+                        base,
+                        "inventory-warehouse-lifecycle-confirm",
+                        "inventory-warehouse-lifecycle-confirm-token",
+                        "warehouse.lifecycle.confirm");
                 default -> null;
               };
             });
@@ -124,6 +161,67 @@ class HttpInventoryDependencyGatewayTest {
     InventoryDependencyGateway.NumberResolution crossWarehouse =
         gateway.resolveNumber(warehouseId, "БЫТ-001");
     assertThat(crossWarehouse.asset().warehouseId()).isEqualTo(otherWarehouseId);
+  }
+
+  @Test
+  void beginsIncomingWarehouseOperationWithAdmissionMarkAndEffectiveTimeZone()
+      throws Exception {
+    UUID warehouseId = UUID.randomUUID();
+    UUID operationId = UUID.randomUUID();
+    responseWarehouseId.set(warehouseId);
+    OffsetDateTime occurredAt = OffsetDateTime.parse("2026-09-02T08:15:30Z");
+
+    InventoryDependencyGateway.WarehouseOperation operation =
+        gateway.beginWarehouseOperation(
+            warehouseId,
+            operationId,
+            occurredAt,
+            InventoryDependencyGateway.WarehouseOperationDirection.INCOMING);
+
+    assertThat(operation.warehouseId()).isEqualTo(warehouseId);
+    assertThat(operation.warehouseVersion()).isEqualTo(7);
+    assertThat(operation.lifecycleState()).isEqualTo("ACTIVE");
+    assertThat(operation.timeZone()).isEqualTo("Europe/Samara");
+    assertThat(operation.timeZoneEffectiveFrom())
+        .isEqualTo(OffsetDateTime.parse("2026-09-01T00:00:00Z"));
+    assertThat(lifecycleAuthorization.get())
+        .isEqualTo("Bearer inventory-warehouse-lifecycle-read-token");
+    assertThat(operationAuthorization.get())
+        .isEqualTo("Bearer inventory-warehouse-operation-token");
+    assertThat(timeZoneAuthorization.get())
+        .isEqualTo("Bearer inventory-warehouse-timezone-token");
+    JsonNode mark = mapper.readTree(requestBody.get());
+    assertThat(mark.path("operationId").asText()).isEqualTo(operationId.toString());
+    assertThat(mark.path("occurredAt").asText()).isEqualTo(occurredAt.toString());
+  }
+
+  @Test
+  void readsAndConfirmsOwnerScopedWarehouseLifecycleReadiness() throws Exception {
+    UUID warehouseId = UUID.randomUUID();
+    responseWarehouseId.set(warehouseId);
+
+    InventoryDependencyGateway.WarehouseLifecycleReadinessWorkPage work =
+        gateway.warehouseLifecycleReadinessWork(null, 100);
+    assertThat(work.nextAfter()).isNull();
+    assertThat(work.items())
+        .singleElement()
+        .satisfies(
+            item -> {
+              assertThat(item.warehouseId()).isEqualTo(warehouseId);
+              assertThat(item.warehouseVersion()).isEqualTo(11);
+              assertThat(item.lifecycleState()).isEqualTo("DRAINING");
+            });
+    assertThat(readinessWorkAuthorization.get())
+        .isEqualTo("Bearer inventory-warehouse-lifecycle-read-token");
+
+    InventoryDependencyGateway.WarehouseLifecycleReadinessConfirmation confirmed =
+        gateway.confirmWarehouseLifecycleReadiness(warehouseId, 11);
+    assertThat(confirmed.readinessOwner()).isEqualTo("INVENTORY");
+    assertThat(confirmed.warehouseVersion()).isEqualTo(11);
+    assertThat(readinessConfirmAuthorization.get())
+        .isEqualTo("Bearer inventory-warehouse-lifecycle-confirm-token");
+    assertThat(mapper.readTree(requestBody.get()).path("expectedVersion").asLong())
+        .isEqualTo(11);
   }
 
   @Test
@@ -216,6 +314,42 @@ class HttpInventoryDependencyGatewayTest {
         .hasMessageContaining("malformed reconciliation result");
   }
 
+  @Test
+  void createsInventoryLossWithExactMaintenanceIdentityAndBalanceFence() throws Exception {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID equipmentId = UUID.randomUUID();
+    UUID key = UUID.randomUUID();
+
+    InventoryDependencyGateway.InventoryLossDisposition response =
+        gateway.createInventoryLossDisposition(
+            key,
+            new InventoryDependencyGateway.InventoryLossDispositionRequest(
+                inventoryId,
+                findingId,
+                warehouseId,
+                equipmentId,
+                "Стул",
+                4,
+                3,
+                9,
+                "Недостача по итогам инвентаризации",
+                null));
+
+    assertThat(response.inventorySessionId()).isEqualTo(inventoryId);
+    assertThat(response.findingId()).isEqualTo(findingId);
+    assertThat(response.assetId()).isEqualTo(equipmentId);
+    assertThat(response.disposition()).isEqualTo("LOSS");
+    assertThat(authorization.get()).isEqualTo("Bearer inventory-maintenance-token");
+    assertThat(idempotencyKey.get()).isEqualTo(key.toString());
+    JsonNode body = mapper.readTree(requestBody.get());
+    assertThat(body.path("expectedAssetVersion").asLong()).isEqualTo(4);
+    assertThat(body.path("expectedSourceBalanceVersion").asLong()).isEqualTo(9);
+    assertThat(body.path("quantity").asLong()).isEqualTo(3);
+    assertThat(body.path("evidenceLink").isNull()).isTrue();
+  }
+
   private OAuth2AuthorizedClient authorizedClient(
       String base, String registrationId, String tokenValue, String scope) {
     ClientRegistration registration = ClientRegistration
@@ -232,6 +366,74 @@ class HttpInventoryDependencyGatewayTest {
         Instant.now().plusSeconds(60),
         Set.of(scope));
     return new OAuth2AuthorizedClient(registration, "inventory-service", token);
+  }
+
+  private void warehouseOperation(HttpExchange exchange) throws IOException {
+    UUID warehouseId = responseWarehouseId.get();
+    String path = exchange.getRequestURI().getPath();
+    if (path.endsWith("/admission")) {
+      lifecycleAuthorization.set(
+          exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION));
+      assertThat(exchange.getRequestURI().getRawQuery()).isEqualTo("direction=INCOMING");
+      respond(
+          exchange,
+          200,
+          """
+          {"warehouseId":"%s","warehouseVersion":7,"lifecycleState":"ACTIVE",
+           "direction":"INCOMING","admitted":true}
+          """.formatted(warehouseId));
+      return;
+    }
+    if (path.endsWith("/operation-marks")) {
+      operationAuthorization.set(
+          exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION));
+      requestBody.set(
+          new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+      exchange.sendResponseHeaders(204, -1);
+      exchange.close();
+      return;
+    }
+    if (path.endsWith("/lifecycle-readiness")) {
+      readinessConfirmAuthorization.set(
+          exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION));
+      requestBody.set(
+          new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+      respond(
+          exchange,
+          200,
+          """
+          {"warehouseId":"%s","warehouseVersion":11,"lifecycleState":"DRAINING",
+           "readinessOwner":"INVENTORY","confirmedAt":"2026-09-02T09:00:00Z"}
+          """.formatted(warehouseId));
+      return;
+    }
+    if (path.endsWith("/time-zone")) {
+      timeZoneAuthorization.set(
+          exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION));
+      assertThat(exchange.getRequestURI().getRawQuery()).contains("at=2026-09-02T08:15:30Z");
+      respond(
+          exchange,
+          200,
+          """
+          {"warehouseId":"%s","timeZone":"Europe/Samara",
+           "effectiveFrom":"2026-09-01T00:00:00Z"}
+          """.formatted(warehouseId));
+      return;
+    }
+    respond(exchange, 404, "{}");
+  }
+
+  private void warehouseReadinessWork(HttpExchange exchange) throws IOException {
+    readinessWorkAuthorization.set(
+        exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION));
+    assertThat(exchange.getRequestURI().getRawQuery()).isEqualTo("limit=100");
+    respond(
+        exchange,
+        200,
+        """
+        {"items":[{"warehouseId":"%s","warehouseVersion":11,
+                    "lifecycleState":"DRAINING"}],"nextAfter":null}
+        """.formatted(responseWarehouseId.get()));
   }
 
   private void resolveNumber(HttpExchange exchange) throws IOException {
@@ -303,6 +505,26 @@ class HttpInventoryDependencyGatewayTest {
     authorization.set(exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION));
     requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
     respond(exchange, 200, reconciliationResponse.get());
+  }
+
+  private void createLossDisposition(HttpExchange exchange) throws IOException {
+    authorization.set(exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION));
+    idempotencyKey.set(exchange.getRequestHeaders().getFirst("Idempotency-Key"));
+    requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+    JsonNode request = mapper.readTree(requestBody.get());
+    respond(
+        exchange,
+        201,
+        """
+        {"id":"%s","inventorySessionId":"%s","findingId":"%s", "warehouseId":"%s",
+         "assetId":"%s","disposition":"LOSS","state":"PENDING_APPROVAL"}
+        """
+            .formatted(
+                UUID.randomUUID(),
+                request.path("inventorySessionId").asText(),
+                request.path("findingId").asText(),
+                request.path("warehouseId").asText(),
+                request.path("equipmentId").asText()));
   }
 
   private static void respond(HttpExchange exchange, int status, String body) throws IOException {

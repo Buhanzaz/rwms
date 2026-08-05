@@ -172,6 +172,28 @@ class PropertyDispositionDecisionTest {
   }
 
   @Test
+  void reviewedProcessingRecoveryKeepsTheLastTruthfulBusinessState() {
+    PropertyDispositionDecision approved = equipmentDraft();
+    approved.approve(0, ACTOR, null);
+
+    approved.recoverProcessingReconciliation(
+        0, 0, ACTOR, "Verified the local processor can safely resume");
+
+    assertThat(approved.getState()).isEqualTo(PropertyDispositionState.APPROVED);
+    assertThat(approved.getRecoveryVersion()).isOne();
+    assertThat(approved.getRecoveryReason())
+        .isEqualTo("Verified the local processor can safely resume");
+    assertThatThrownBy(
+            () -> approved.recoverProcessingReconciliation(0, 0, ACTOR, "stale retry"))
+        .isInstanceOf(PropertyDispositionVersionConflictException.class);
+
+    PropertyDispositionDecision pending = equipmentDraft();
+    assertThatThrownBy(
+            () -> pending.recoverProcessingReconciliation(0, 0, ACTOR, "not processing"))
+        .isInstanceOf(PropertyDispositionConflictException.class);
+  }
+
+  @Test
   void inventoryDecisionRequiresTheDurableFindingIdentity() {
     assertThatThrownBy(
             () ->

@@ -4,8 +4,6 @@ import static dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateCabinCatalogItemR
 import static dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateEquipmentRequest;
 import static dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
 import static dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateGeneralCommentRequest;
-import static dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdatePassportRequest;
-import static dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateStatusRequest;
 import static dev.buhanzaz.rwms.asset.api.RentalItemHtmlImportApiModels.*;
 
 import dev.buhanzaz.rwms.asset.domain.CabinCatalogItem;
@@ -20,7 +18,6 @@ import dev.buhanzaz.rwms.asset.domain.RentalItemHtmlImportState;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import dev.buhanzaz.rwms.asset.integration.media.MediaAssetImportClient;
 import dev.buhanzaz.rwms.asset.integration.media.MediaAssetImportJob;
-import dev.buhanzaz.rwms.asset.integration.media.MediaAssetImportJob.Status;
 import dev.buhanzaz.rwms.asset.integration.media.MediaAssetImportSource;
 import dev.buhanzaz.rwms.asset.integration.media.MediaAssetImportBinding;
 import dev.buhanzaz.rwms.asset.integration.warehouse.WarehouseRegistryClient;
@@ -58,7 +55,9 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
@@ -87,6 +86,7 @@ public class RentalItemHtmlImportService {
   private final AssetIdempotencyStore idempotency;
   private final MediaAssetImportClient mediaImports;
   private final ObjectMapper objectMapper;
+  private final TransactionTemplate transactions;
 
   public RentalItemHtmlImportService(
       RentalItemHtmlParser parser,
@@ -102,7 +102,8 @@ public class RentalItemHtmlImportService {
       AssetService assets,
       AssetIdempotencyStore idempotency,
       MediaAssetImportClient mediaImports,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      PlatformTransactionManager transactionManager) {
     this.parser = parser;
     this.imports = imports;
     this.rows = rows;
@@ -117,6 +118,7 @@ public class RentalItemHtmlImportService {
     this.idempotency = idempotency;
     this.mediaImports = mediaImports;
     this.objectMapper = objectMapper;
+    this.transactions = new TransactionTemplate(transactionManager);
   }
 
   @Transactional
@@ -139,7 +141,7 @@ public class RentalItemHtmlImportService {
       return detail(existing);
     }
 
-    warehouses.requireActive(warehouseId);
+    warehouses.requireIncoming(warehouseId);
     ParsedImport parsed = parser.parse(html);
     List<CabinCatalogItem> catalogItems = catalog.findAll();
     List<HtmlImportSourceCandidate> candidates =
@@ -156,6 +158,23 @@ public class RentalItemHtmlImportService {
         (int) parsed.rows().stream().filter(row -> row.photoPublicKey() != null).count();
     int warnings = parsed.rows().stream().mapToInt(ParsedRow::warningCount).sum();
 
+    Map<String, RentalItem> existingByIdentity =
+        rentalItems.findAllByWarehouseIdOrderByNumber(warehouseId).stream()
+            .collect(
+                Collectors.toMap(
+                    RentalItem::getIdentityMatchKey,
+                    Function.identity(),
+                    (left, right) -> left,
+                    LinkedHashMap::new));
+    int existingCabinMatches =
+        (int)
+            parsed.rows().stream()
+                .filter(row -> !row.requiresManualReview())
+                .filter(
+                    row ->
+                        row.identityMatchKey() != null
+                            && existingByIdentity.containsKey(row.identityMatchKey()))
+                .count();
     RentalItemHtmlImport value =
         imports.saveAndFlush(
             RentalItemHtmlImport.create(
@@ -165,18 +184,9 @@ public class RentalItemHtmlImportService {
                 sourceSha256,
                 parsed.rows().size(),
                 parserInvalid,
-                unresolved,
+                unresolved + existingCabinMatches,
                 mediaLinks,
                 warnings));
-
-    Map<String, RentalItem> existingByIdentity =
-        rentalItems.findAllByWarehouseIdOrderByNumber(warehouseId).stream()
-            .collect(
-                Collectors.toMap(
-                    RentalItem::getIdentityMatchKey,
-                    Function.identity(),
-                    (left, right) -> left,
-                    LinkedHashMap::new));
     List<RentalItemHtmlImportRow> persistedRows = new ArrayList<>(parsed.rows().size());
     for (ParsedRow parsedRow : parsed.rows()) {
       RentalItem target =
@@ -188,7 +198,7 @@ public class RentalItemHtmlImportService {
               ? RentalItemHtmlImportRowAction.REVIEW
               : target == null
                   ? RentalItemHtmlImportRowAction.CREATE
-                  : RentalItemHtmlImportRowAction.MERGE;
+                  : RentalItemHtmlImportRowAction.REVIEW;
       persistedRows.add(
           RentalItemHtmlImportRow.create(
               value.getId(),
@@ -350,97 +360,25 @@ public class RentalItemHtmlImportService {
     imports.flush();
   }
 
-  @Transactional
   public HtmlImportDetailResponse commit(
       UUID actorSubjectId,
       UUID idempotencyKey,
       UUID id,
       CommitHtmlImportRequest request) {
-    if (actorSubjectId == null || idempotencyKey == null) {
+    if (actorSubjectId == null || idempotencyKey == null || request == null) {
       throw new IllegalArgumentException("HTML import commit identity is required");
     }
     String operation = "rental-item-html-import.commit." + id;
     String requestHash = hash(Map.of("importId", id, "expectedVersion", request.expectedVersion()));
-    Optional<tools.jackson.databind.JsonNode> replay =
-        idempotency.replay(actorSubjectId, operation, idempotencyKey, requestHash);
-    if (replay.isPresent()) {
-      return read(replay.get(), HtmlImportDetailResponse.class);
-    }
-
-    RentalItemHtmlImport value = requireImportForUpdate(id);
-    assertVersion(value, request.expectedVersion());
-    if (value.getState() != RentalItemHtmlImportState.READY) {
-      throw new AssetConflictException("HTML import still has unresolved decisions");
-    }
-    HtmlImportPlan plan = readPlan(value.getPlanJson());
-    List<RentalItemHtmlImportRow> importRows =
-        rows.findAllByImportIdOrderBySourcePositionAscIdAsc(id);
-    PlanEvaluation evaluation = evaluatePlan(value, importRows, plan);
-    if (evaluation.invalidCount() != 0 || evaluation.unresolvedCount() != 0) {
-      throw new AssetConflictException("HTML import plan is stale or incomplete");
-    }
-
-    List<MediaAssetImportSource> mediaSources = mediaSources(importRows);
-    if (!mediaSources.isEmpty()) {
-      MediaAssetImportJob mediaJob =
-          mediaImports.preflight(
-              value.getId(),
-              value.getWarehouseId(),
-              mediaSources,
-              stableKey("media-preflight", value.getId()));
-      requireMediaJobIdentity(value, mediaJob);
-      value.attachMediaJob(mediaJob.jobId());
-    }
-    for (RentalItemHtmlImportRow row : importRows) {
-      if (row.hasPhotoLink()) {
-        row.removePrivatePhotoKey(write(withoutPhotoPublicKey(parsed(row))));
-      }
-    }
-
-    value.beginCommit();
-    imports.saveAndFlush(value);
-    CommitCatalogs staged = stageCatalogs(actorSubjectId, value, plan);
-    Map<String, HtmlImportRowDecision> decisions =
-        plan.rows().stream()
-            .collect(Collectors.toMap(HtmlImportRowDecision::sourceRowId, Function.identity()));
-    Set<UUID> usedTargets = new HashSet<>();
-    for (RentalItemHtmlImportRow row : importRows) {
-      if (row.getAction() == RentalItemHtmlImportRowAction.EXCLUDE) continue;
-      ParsedRow source = parsed(row);
-      HtmlImportRowDecision decision = decisions.get(source.sourceRowId());
-      if (decision == null) decision = effectiveStoredDecision(row);
-      ResolvedRow resolved = resolveRow(source, decision, plan, staged);
-      ensureTypeDimension(resolved.rentalTypeId(), resolved.dimensionId());
-      if (row.getAction() == RentalItemHtmlImportRowAction.CREATE) {
-        RentalItemResponse created = createRentalItem(value, source, resolved);
-        row.decide(
-            RentalItemHtmlImportRowAction.MERGE,
-            created.number(),
-            created.id(),
-            write(
-                copyDecisionWithTarget(
-                    decision, created.id(), created.version(), created.number())));
-      } else {
-        UUID targetId =
-            decision.targetRentalItemId() == null
-                ? row.getTargetRentalItemId()
-                : decision.targetRentalItemId();
-        if (targetId == null || !usedTargets.add(targetId)) {
-          throw new AssetConflictException(
-              "Each HTML source row must have one distinct merge target");
-        }
-        mergeRentalItem(value, source, resolved, decision, targetId);
-      }
-    }
-    rows.flush();
-    value.assetsCommitted(!mediaSources.isEmpty());
-    imports.saveAndFlush(value);
-    HtmlImportDetailResponse response = detail(value);
-    idempotency.store(actorSubjectId, operation, idempotencyKey, requestHash, 202, response);
-    return response;
+    CommitOperation command =
+        new CommitOperation(actorSubjectId, idempotencyKey, operation, requestHash);
+    CommitPreparation prepared =
+        inTransaction(() -> beginCommit(id, request.expectedVersion(), command));
+    if (prepared.replay() != null) return prepared.replay();
+    warehouses.requireIncoming(prepared.intent().warehouseId());
+    return continueCommitting(prepared.intent(), command);
   }
 
-  @Transactional
   public HtmlImportDetailResponse retryMedia(
       UUID actorSubjectId,
       UUID idempotencyKey,
@@ -452,39 +390,22 @@ public class RentalItemHtmlImportService {
     String operation = "rental-item-html-import.retry-media." + id;
     String requestHash =
         hash(Map.of("importId", id, "expectedVersion", request.expectedVersion()));
-    Optional<tools.jackson.databind.JsonNode> replay =
-        idempotency.replay(actorSubjectId, operation, idempotencyKey, requestHash);
-    if (replay.isPresent()) return read(replay.get(), HtmlImportDetailResponse.class);
-
-    RentalItemHtmlImport value = requireImportForUpdate(id);
-    assertVersion(value, request.expectedVersion());
-    if (value.getMediaLinkCount() == 0) {
-      HtmlImportDetailResponse response = detail(value);
-      idempotency.store(actorSubjectId, operation, idempotencyKey, requestHash, 202, response);
-      return response;
+    CommitOperation command =
+        new CommitOperation(actorSubjectId, idempotencyKey, operation, requestHash);
+    RetryMediaPreparation prepared =
+        inTransaction(() -> prepareRetryMedia(id, request.expectedVersion(), command));
+    if (prepared.replay() != null) return prepared.replay();
+    if (prepared.synchronize()) {
+      synchronizeMedia(id);
+      return inTransaction(() -> storeMediaCommandResponse(id, command));
     }
-    if (value.getState() == RentalItemHtmlImportState.ASSETS_COMMITTED
-        || value.getState() == RentalItemHtmlImportState.MEDIA_IMPORTING) {
-      synchronizeMedia(value);
-      imports.saveAndFlush(value);
-    } else if (value.getState() == RentalItemHtmlImportState.FAILED
-        && value.getMediaJobId() != null) {
-      MediaAssetImportJob job =
-          mediaImports.retry(
-              value.getMediaJobId(),
-              stableKey("media-retry", value.getId(), idempotencyKey.toString()));
-      value.mediaPending();
-      applyMediaJob(value, job);
-      imports.saveAndFlush(value);
-    } else {
-      throw new AssetConflictException("HTML import media cannot be retried in its current state");
-    }
-    HtmlImportDetailResponse response = detail(value);
-    idempotency.store(actorSubjectId, operation, idempotencyKey, requestHash, 202, response);
-    return response;
+    MediaAssetImportJob job =
+        mediaImports.retry(
+            prepared.mediaJobId(),
+            stableKey("media-retry", id, idempotencyKey.toString()));
+    return inTransaction(() -> finishRetryMedia(id, prepared.mediaJobId(), job, command));
   }
 
-  @Transactional
   public HtmlImportDetailResponse replaceMedia(
       UUID actorSubjectId,
       UUID idempotencyKey,
@@ -500,29 +421,18 @@ public class RentalItemHtmlImportService {
                 "importId", id,
                 "expectedVersion", request.expectedVersion(),
                 "replacements", request.replacements()));
-    Optional<tools.jackson.databind.JsonNode> replay =
-        idempotency.replay(actorSubjectId, operation, idempotencyKey, requestHash);
-    if (replay.isPresent()) return read(replay.get(), HtmlImportDetailResponse.class);
-
-    RentalItemHtmlImport value = requireImportForUpdate(id);
-    assertVersion(value, request.expectedVersion());
-    if (value.getState() != RentalItemHtmlImportState.FAILED
-        || value.getMediaJobId() == null) {
-      throw new AssetConflictException("HTML import media links cannot be replaced in its current state");
-    }
-    List<MediaAssetImportSource> replacements = mediaReplacementSources(value, request.replacements());
+    CommitOperation command =
+        new CommitOperation(actorSubjectId, idempotencyKey, operation, requestHash);
+    ReplaceMediaPreparation prepared =
+        inTransaction(
+            () -> prepareReplaceMedia(id, request.expectedVersion(), request.replacements(), command));
+    if (prepared.replay() != null) return prepared.replay();
     MediaAssetImportJob job =
         mediaImports.replacePreflightSources(
-            value.getMediaJobId(),
-            replacements,
-            stableKey("media-replace", value.getId(), idempotencyKey.toString()));
-    requireMediaJobIdentity(value, job);
-    value.mediaPending();
-    applyMediaJob(value, job);
-    imports.saveAndFlush(value);
-    HtmlImportDetailResponse response = detail(value);
-    idempotency.store(actorSubjectId, operation, idempotencyKey, requestHash, 202, response);
-    return response;
+            prepared.mediaJobId(),
+            prepared.replacements(),
+            stableKey("media-replace", id, idempotencyKey.toString()));
+    return inTransaction(() -> finishReplaceMedia(id, prepared.mediaJobId(), job, command));
   }
 
   @Transactional
@@ -550,47 +460,414 @@ public class RentalItemHtmlImportService {
     return response;
   }
 
-  @Transactional
   public void synchronizeMedia(UUID id) {
-    RentalItemHtmlImport value = requireImportForUpdate(id);
-    synchronizeMedia(value);
+    CommitRecoveryPreparation recovery = inTransaction(() -> loadCommitRecovery(id));
+    if (recovery.intent() != null) {
+      continueCommitting(recovery.intent(), null);
+      return;
+    }
+    MediaSyncPreparation prepared = inTransaction(() -> prepareMediaSync(id));
+    if (prepared.mediaJobId() == null) return;
+    MediaAssetImportJob job;
+    try {
+      job = mediaImports.get(prepared.mediaJobId());
+    } catch (AssetNotFoundException ignored) {
+      inTransaction(() -> markMediaJobMissing(id, prepared.mediaJobId()));
+      return;
+    }
+    MediaActivationIntent activation =
+        inTransaction(() -> applyMediaObservation(id, job));
+    if (activation == null) return;
+    try {
+      MediaAssetImportJob activated =
+          mediaImports.activate(
+              activation.mediaJobId(),
+              activation.bindings(),
+              stableKey("media-activate", activation.importId()));
+      inTransaction(() -> applyMediaObservation(id, activated));
+    } catch (AssetConflictException ignored) {
+      // The CABIN owner proof is delivered asynchronously through Kafka.
+      // The next bounded poll repeats the stable activation command.
+    }
   }
 
-  private void synchronizeMedia(RentalItemHtmlImport value) {
+  private CommitPreparation beginCommit(
+      UUID id, Long expectedVersion, CommitOperation command) {
+    Optional<tools.jackson.databind.JsonNode> replay =
+        idempotency.replay(
+            command.actorSubjectId(), command.operation(), command.idempotencyKey(), command.requestHash());
+    if (replay.isPresent()) {
+      return new CommitPreparation(read(replay.get(), HtmlImportDetailResponse.class), null);
+    }
+    RentalItemHtmlImport value = requireImportForUpdate(id);
+    if (value.getState() != RentalItemHtmlImportState.READY) {
+      if (value.hasCommitIdentity(
+          command.actorSubjectId(), command.idempotencyKey(), command.requestHash())) {
+        if (value.getState() == RentalItemHtmlImportState.COMMITTING) {
+          List<RentalItemHtmlImportRow> importRows =
+              rows.findAllByImportIdOrderBySourcePositionAscIdAsc(value.getId());
+          return new CommitPreparation(null, commitIntent(value, importRows));
+        }
+        HtmlImportDetailResponse response = detail(value);
+        idempotency.store(
+            command.actorSubjectId(),
+            command.operation(),
+            command.idempotencyKey(),
+            command.requestHash(),
+            202,
+            response);
+        return new CommitPreparation(response, null);
+      }
+      throw new AssetConflictException("HTML import still has unresolved decisions");
+    }
+    assertVersion(value, expectedVersion);
+    HtmlImportPlan plan = readPlan(value.getPlanJson());
+    List<RentalItemHtmlImportRow> importRows =
+        rows.findAllByImportIdOrderBySourcePositionAscIdAsc(id);
+    rejectMergeRows(importRows);
+    PlanEvaluation evaluation = evaluatePlan(value, importRows, plan);
+    if (evaluation.invalidCount() != 0 || evaluation.unresolvedCount() != 0) {
+      throw new AssetConflictException("HTML import plan is stale or incomplete");
+    }
+    value.beginCommit(command.actorSubjectId(), command.idempotencyKey(), command.requestHash());
+    imports.saveAndFlush(value);
+    return new CommitPreparation(null, commitIntent(value, importRows));
+  }
+
+  private HtmlImportDetailResponse continueCommitting(
+      CommitIntent intent, CommitOperation command) {
+    MediaAssetImportJob mediaJob = null;
+    if (!intent.mediaSources().isEmpty()) {
+      mediaJob =
+          mediaImports.preflight(
+              intent.importId(),
+              intent.warehouseId(),
+              intent.mediaSources(),
+              stableKey("media-preflight", intent.importId()));
+    }
+    MediaAssetImportJob finalMediaJob = mediaJob;
+    return inTransaction(() -> finishCommit(intent, finalMediaJob, command));
+  }
+
+  private HtmlImportDetailResponse finishCommit(
+      CommitIntent intent, MediaAssetImportJob mediaJob, CommitOperation command) {
+    if (command != null) {
+      Optional<tools.jackson.databind.JsonNode> replay =
+          idempotency.replay(
+              command.actorSubjectId(),
+              command.operation(),
+              command.idempotencyKey(),
+              command.requestHash());
+      if (replay.isPresent()) {
+        return read(replay.get(), HtmlImportDetailResponse.class);
+      }
+    }
+    RentalItemHtmlImport value = requireImportForUpdate(intent.importId());
+    if (value.getState() != RentalItemHtmlImportState.COMMITTING) {
+      if (command != null) {
+        if (!value.hasCommitIdentity(
+            command.actorSubjectId(), command.idempotencyKey(), command.requestHash())) {
+          throw new AssetConflictException("HTML import commit identity is not current");
+        }
+        HtmlImportDetailResponse response = detail(value);
+        idempotency.store(
+            command.actorSubjectId(),
+            command.operation(),
+            command.idempotencyKey(),
+            command.requestHash(),
+            202,
+            response);
+        return response;
+      }
+      return detail(value);
+    }
+    if (command != null
+        && !value.hasCommitIdentity(
+            command.actorSubjectId(), command.idempotencyKey(), command.requestHash())) {
+      throw new AssetConflictException("HTML import commit identity is not current");
+    }
+    List<RentalItemHtmlImportRow> importRows =
+        rows.findAllByImportIdOrderBySourcePositionAscIdAsc(value.getId());
+    rejectMergeRows(importRows);
+    List<MediaAssetImportSource> expectedMediaSources = mediaSources(importRows);
+    if (!expectedMediaSources.equals(intent.mediaSources())) {
+      throw new AssetConflictException("HTML import media intent changed concurrently");
+    }
+    if (!expectedMediaSources.isEmpty()) {
+      requireMediaJobIdentity(value, mediaJob);
+      value.attachMediaJob(mediaJob.jobId());
+    }
+    for (RentalItemHtmlImportRow row : importRows) {
+      if (row.hasPhotoLink()) {
+        row.removePrivatePhotoKey(write(withoutPhotoPublicKey(parsed(row))));
+      }
+    }
+
+    HtmlImportPlan plan = readPlan(value.getPlanJson());
+    PlanEvaluation evaluation = evaluatePlan(value, importRows, plan);
+    if (evaluation.invalidCount() != 0 || evaluation.unresolvedCount() != 0) {
+      throw new AssetConflictException("HTML import plan is stale or incomplete");
+    }
+    UUID commitActorSubjectId =
+        value.getCommitActorSubjectId() == null
+            ? value.getActorSubjectId()
+            : value.getCommitActorSubjectId();
+    CommitCatalogs staged = stageCatalogs(commitActorSubjectId, value, plan);
+    Map<String, HtmlImportRowDecision> decisions =
+        plan.rows().stream()
+            .collect(Collectors.toMap(HtmlImportRowDecision::sourceRowId, Function.identity()));
+    for (RentalItemHtmlImportRow row : importRows) {
+      if (row.getAction() == RentalItemHtmlImportRowAction.EXCLUDE) continue;
+      if (row.getAction() != RentalItemHtmlImportRowAction.CREATE) {
+        throw new AssetConflictException("HTML import can only commit newly-created cabins");
+      }
+      ParsedRow source = parsed(row);
+      HtmlImportRowDecision decision = decisions.get(source.sourceRowId());
+      if (decision == null) decision = effectiveStoredDecision(row);
+      ResolvedRow resolved = resolveRow(source, decision, plan, staged);
+      if (!isHtmlImportManualStatus(resolved.status())) {
+        throw new AssetConflictException("HTML import cannot synthesize a workflow status");
+      }
+      ensureTypeDimension(resolved.rentalTypeId(), resolved.dimensionId());
+      RentalItemResponse created = createRentalItem(value, resolved);
+      row.bindCreatedRentalItem(created.id());
+      rows.flush();
+      if (!resolved.equipmentQuantities().isEmpty()) {
+        assets.recordHtmlImportEquipmentReceipts(
+            value.getId(),
+            row.getSourceRowId(),
+            commitActorSubjectId,
+            created.id(),
+            resolved.equipmentQuantities());
+      }
+    }
+    rows.flush();
+    value.assetsCommitted(!expectedMediaSources.isEmpty());
+    imports.saveAndFlush(value);
+    HtmlImportDetailResponse response = detail(value);
+    if (command != null) {
+      idempotency.store(
+          command.actorSubjectId(),
+          command.operation(),
+          command.idempotencyKey(),
+          command.requestHash(),
+          202,
+          response);
+    }
+    return response;
+  }
+
+  private RetryMediaPreparation prepareRetryMedia(
+      UUID id, Long expectedVersion, CommitOperation command) {
+    Optional<tools.jackson.databind.JsonNode> replay =
+        idempotency.replay(
+            command.actorSubjectId(), command.operation(), command.idempotencyKey(), command.requestHash());
+    if (replay.isPresent()) {
+      return new RetryMediaPreparation(
+          read(replay.get(), HtmlImportDetailResponse.class), null, false);
+    }
+    RentalItemHtmlImport value = requireImportForUpdate(id);
+    assertVersion(value, expectedVersion);
+    if (value.getMediaLinkCount() == 0) {
+      HtmlImportDetailResponse response = detail(value);
+      idempotency.store(
+          command.actorSubjectId(),
+          command.operation(),
+          command.idempotencyKey(),
+          command.requestHash(),
+          202,
+          response);
+      return new RetryMediaPreparation(response, null, false);
+    }
+    if (value.getState() == RentalItemHtmlImportState.ASSETS_COMMITTED
+        || value.getState() == RentalItemHtmlImportState.MEDIA_IMPORTING) {
+      return new RetryMediaPreparation(null, value.getMediaJobId(), true);
+    }
+    if (value.getState() == RentalItemHtmlImportState.FAILED && value.getMediaJobId() != null) {
+      return new RetryMediaPreparation(null, value.getMediaJobId(), false);
+    }
+    throw new AssetConflictException("HTML import media cannot be retried in its current state");
+  }
+
+  private HtmlImportDetailResponse finishRetryMedia(
+      UUID id, UUID expectedJobId, MediaAssetImportJob job, CommitOperation command) {
+    HtmlImportDetailResponse replay = replayCommand(command);
+    if (replay != null) return replay;
+    RentalItemHtmlImport value = requireImportForUpdate(id);
+    if (value.getState() != RentalItemHtmlImportState.FAILED
+        || !expectedJobId.equals(value.getMediaJobId())) {
+      throw new AssetConflictException("HTML import media retry is no longer current");
+    }
+    requireMediaJobIdentity(value, job);
+    value.mediaPending();
+    applyMediaJob(value, job);
+    imports.saveAndFlush(value);
+    HtmlImportDetailResponse response = detail(value);
+    idempotency.store(
+        command.actorSubjectId(),
+        command.operation(),
+        command.idempotencyKey(),
+        command.requestHash(),
+        202,
+        response);
+    return response;
+  }
+
+  private ReplaceMediaPreparation prepareReplaceMedia(
+      UUID id,
+      Long expectedVersion,
+      List<HtmlImportMediaReplacement> replacements,
+      CommitOperation command) {
+    Optional<tools.jackson.databind.JsonNode> replay =
+        idempotency.replay(
+            command.actorSubjectId(), command.operation(), command.idempotencyKey(), command.requestHash());
+    if (replay.isPresent()) {
+      return new ReplaceMediaPreparation(
+          read(replay.get(), HtmlImportDetailResponse.class), null, List.of());
+    }
+    RentalItemHtmlImport value = requireImportForUpdate(id);
+    assertVersion(value, expectedVersion);
+    if (value.getState() != RentalItemHtmlImportState.FAILED
+        || value.getMediaJobId() == null) {
+      throw new AssetConflictException("HTML import media links cannot be replaced in its current state");
+    }
+    return new ReplaceMediaPreparation(
+        null, value.getMediaJobId(), mediaReplacementSources(value, replacements));
+  }
+
+  private HtmlImportDetailResponse finishReplaceMedia(
+      UUID id, UUID expectedJobId, MediaAssetImportJob job, CommitOperation command) {
+    HtmlImportDetailResponse replay = replayCommand(command);
+    if (replay != null) return replay;
+    RentalItemHtmlImport value = requireImportForUpdate(id);
+    if (value.getState() != RentalItemHtmlImportState.FAILED
+        || !expectedJobId.equals(value.getMediaJobId())) {
+      throw new AssetConflictException("HTML import media replacement is no longer current");
+    }
+    requireMediaJobIdentity(value, job);
+    value.mediaPending();
+    applyMediaJob(value, job);
+    imports.saveAndFlush(value);
+    HtmlImportDetailResponse response = detail(value);
+    idempotency.store(
+        command.actorSubjectId(),
+        command.operation(),
+        command.idempotencyKey(),
+        command.requestHash(),
+        202,
+        response);
+    return response;
+  }
+
+  private HtmlImportDetailResponse storeMediaCommandResponse(UUID id, CommitOperation command) {
+    HtmlImportDetailResponse replay = replayCommand(command);
+    if (replay != null) return replay;
+    RentalItemHtmlImport value = requireImportForUpdate(id);
+    HtmlImportDetailResponse response = detail(value);
+    idempotency.store(
+        command.actorSubjectId(),
+        command.operation(),
+        command.idempotencyKey(),
+        command.requestHash(),
+        202,
+        response);
+    return response;
+  }
+
+  private HtmlImportDetailResponse replayCommand(CommitOperation command) {
+    return idempotency
+        .replay(
+            command.actorSubjectId(),
+            command.operation(),
+            command.idempotencyKey(),
+            command.requestHash())
+        .map(node -> read(node, HtmlImportDetailResponse.class))
+        .orElse(null);
+  }
+
+  private CommitRecoveryPreparation loadCommitRecovery(UUID id) {
+    RentalItemHtmlImport value = requireImport(id);
+    if (value.getState() != RentalItemHtmlImportState.COMMITTING) {
+      return new CommitRecoveryPreparation(null);
+    }
+    List<RentalItemHtmlImportRow> importRows =
+        rows.findAllByImportIdOrderBySourcePositionAscIdAsc(value.getId());
+    return new CommitRecoveryPreparation(commitIntent(value, importRows));
+  }
+
+  private MediaSyncPreparation prepareMediaSync(UUID id) {
+    RentalItemHtmlImport value = requireImportForUpdate(id);
     if (value.getState() != RentalItemHtmlImportState.ASSETS_COMMITTED
         && value.getState() != RentalItemHtmlImportState.MEDIA_IMPORTING) {
-      return;
+      return new MediaSyncPreparation(null);
     }
     if (value.getMediaJobId() == null) {
       value.fail("MEDIA_JOB_MISSING");
-      return;
+      imports.saveAndFlush(value);
+      return new MediaSyncPreparation(null);
     }
-    try {
-      applyMediaJob(value, mediaImports.get(value.getMediaJobId()));
-    } catch (AssetNotFoundException ignored) {
-      value.fail("MEDIA_JOB_NOT_FOUND");
-    }
+    return new MediaSyncPreparation(value.getMediaJobId());
   }
 
-  private void applyMediaJob(
+  private MediaActivationIntent applyMediaObservation(UUID id, MediaAssetImportJob job) {
+    RentalItemHtmlImport value = requireImportForUpdate(id);
+    if (value.getState() != RentalItemHtmlImportState.ASSETS_COMMITTED
+        && value.getState() != RentalItemHtmlImportState.MEDIA_IMPORTING) {
+      return null;
+    }
+    requireMediaJobIdentity(value, job);
+    if (!value.getMediaJobId().equals(job.jobId())) throw wrongMediaJob();
+    MediaActivationIntent activation = applyMediaJob(value, job);
+    imports.saveAndFlush(value);
+    return activation;
+  }
+
+  private Void markMediaJobMissing(UUID id, UUID jobId) {
+    RentalItemHtmlImport value = requireImportForUpdate(id);
+    if ((value.getState() == RentalItemHtmlImportState.ASSETS_COMMITTED
+            || value.getState() == RentalItemHtmlImportState.MEDIA_IMPORTING)
+        && jobId.equals(value.getMediaJobId())) {
+      value.fail("MEDIA_JOB_NOT_FOUND");
+      imports.saveAndFlush(value);
+    }
+    return null;
+  }
+
+  private MediaActivationIntent applyMediaJob(
       RentalItemHtmlImport value, MediaAssetImportJob job) {
     requireMediaJobIdentity(value, job);
     if (!value.getMediaJobId().equals(job.jobId())) throw wrongMediaJob();
-    switch (job.status()) {
-      case PREFLIGHT_PENDING, PREFLIGHT_RUNNING -> value.mediaPending();
-      case PREFLIGHT_READY -> activateMedia(value);
-      case ACTIVATION_PENDING, ACTIVATION_RUNNING -> value.mediaStarted(job.jobId());
+    return switch (job.status()) {
+      case PREFLIGHT_PENDING, PREFLIGHT_RUNNING -> {
+        value.mediaPending();
+        yield null;
+      }
+      case PREFLIGHT_READY -> {
+        List<MediaAssetImportBinding> bindings = mediaBindings(value);
+        if (bindings.isEmpty()) {
+          value.mediaCompleted(false);
+          yield null;
+        }
+        yield new MediaActivationIntent(value.getId(), value.getMediaJobId(), bindings);
+      }
+      case ACTIVATION_PENDING, ACTIVATION_RUNNING -> {
+        value.mediaStarted(job.jobId());
+        yield null;
+      }
       case COMPLETED -> {
         value.mediaStarted(job.jobId());
         value.mediaCompleted(job.hasWarnings());
+        yield null;
       }
-      case FAILED ->
-          value.fail(safeMediaFailureCode(job.failureCode()));
-    }
+      case FAILED -> {
+        value.fail(safeMediaFailureCode(job.failureCode()));
+        yield null;
+      }
+    };
   }
 
-  private void activateMedia(RentalItemHtmlImport value) {
-    List<MediaAssetImportBinding> bindings =
+  private List<MediaAssetImportBinding> mediaBindings(RentalItemHtmlImport value) {
+    return
         rows.findAllByImportIdOrderBySourcePositionAscIdAsc(value.getId()).stream()
             .filter(row -> row.getAction() != RentalItemHtmlImportRowAction.EXCLUDE)
             .filter(RentalItemHtmlImportRow::hasPhotoLink)
@@ -604,27 +881,6 @@ public class RentalItemHtmlImportService {
                       row.getId(), row.getTargetRentalItemId());
                 })
             .toList();
-    if (bindings.isEmpty()) {
-      value.mediaCompleted(false);
-      return;
-    }
-    try {
-      MediaAssetImportJob activated =
-          mediaImports.activate(
-              value.getMediaJobId(),
-              bindings,
-              stableKey("media-activate", value.getId()));
-      value.mediaStarted(activated.jobId());
-      if (activated.status() == Status.COMPLETED) {
-        value.mediaCompleted(activated.hasWarnings());
-      } else if (activated.status() == Status.FAILED) {
-        value.fail(safeMediaFailureCode(activated.failureCode()));
-      }
-    } catch (AssetConflictException ignored) {
-      // The CABIN owner proof is delivered asynchronously through Kafka.
-      // A stable activation command is retried by the scheduled coordinator.
-      value.mediaPending();
-    }
   }
 
   private List<MediaAssetImportSource> mediaSources(
@@ -934,7 +1190,6 @@ public class RentalItemHtmlImportService {
     Map<String, HtmlImportRowDecision> requestDecisions =
         plan.rows().stream()
             .collect(Collectors.toMap(HtmlImportRowDecision::sourceRowId, Function.identity()));
-    Set<UUID> mergeTargets = new HashSet<>();
     Set<String> createNumbers = new HashSet<>();
     int selected = 0;
     int invalid = 0;
@@ -955,11 +1210,9 @@ public class RentalItemHtmlImportService {
         unresolvedRows += 1;
       }
       if (action == RentalItemHtmlImportRowAction.MERGE) {
-        UUID targetId =
-            decision.targetRentalItemId() == null
-                ? row.getTargetRentalItemId()
-                : decision.targetRentalItemId();
-        if (targetId == null || !mergeTargets.add(targetId)) unresolvedRows += 1;
+        // A historical import record may still contain MERGE, but the active
+        // intake path never mutates a live cabin.
+        unresolvedRows += 1;
       } else if (action == RentalItemHtmlImportRowAction.CREATE) {
         String proposedNumber =
             decision.proposedNumber() == null
@@ -985,12 +1238,19 @@ public class RentalItemHtmlImportService {
   private boolean candidateResolved(
       HtmlImportSourceCandidate candidate, HtmlImportPlan plan) {
     if (candidate.kind() == HtmlImportCandidateKind.STATUS) {
-      if (candidate.suggestedValue() != null) return true;
+      if (candidate.suggestedValue() != null) {
+        try {
+          return isHtmlImportManualStatus(RentalItemStatus.valueOf(candidate.suggestedValue()));
+        } catch (IllegalArgumentException ignored) {
+          return false;
+        }
+      }
       return plan.statusMappings().stream()
           .anyMatch(
               mapping ->
                   normalizedKey(mapping.sourceValue())
-                      .equals(normalizedKey(candidate.sourceValue())));
+                      .equals(normalizedKey(candidate.sourceValue()))
+                      && isHtmlImportManualStatus(mapping.targetStatus()));
     }
     if (candidate.suggestedTargetId() != null) return true;
     if (candidate.kind() == HtmlImportCandidateKind.EQUIPMENT) {
@@ -1057,14 +1317,7 @@ public class RentalItemHtmlImportService {
       if (decision.action() == RentalItemHtmlImportRowAction.CREATE) {
         if (decision.targetRentalItemId() != null) return false;
       } else if (decision.action() == RentalItemHtmlImportRowAction.MERGE) {
-        if (decision.targetRentalItemId() == null
-            || decision.targetExpectedVersion() == null) return false;
-        RentalItem target =
-            rentalItems
-                .findByIdAndWarehouseId(decision.targetRentalItemId(), warehouseId)
-                .orElse(null);
-        if (target == null || target.getVersion() != decision.targetExpectedVersion()) return false;
-        if (unresolvedMergeConflicts(source, decision, target, plan) > 0) return false;
+        return false;
       } else {
         return false;
       }
@@ -1072,160 +1325,6 @@ public class RentalItemHtmlImportService {
     } catch (RuntimeException exception) {
       return false;
     }
-  }
-
-  private int unresolvedMergeConflicts(
-      ParsedRow source,
-      HtmlImportRowDecision decision,
-      RentalItem target,
-      HtmlImportPlan plan) {
-    Map<String, MergeWinner> choices =
-        decision.mergeChoices() == null ? Map.of() : decision.mergeChoices();
-    int unresolved = 0;
-    String sourceRentalType =
-        catalogRef(
-            CabinCatalogKind.TYPE, source.rentalType(), decision.rentalTypeId(), plan, false);
-    if (sourceRentalType != null) {
-      unresolved += conflict("rentalType", sourceRentalType, token(target.getRentalTypeId()), choices);
-    }
-    String sourceDimension =
-        catalogRef(
-            CabinCatalogKind.DIMENSION,
-            source.dimension(),
-            decision.dimensionId(),
-            plan,
-            false);
-    if (sourceDimension != null) {
-      unresolved += conflict("dimension", sourceDimension, token(target.getDimensionId()), choices);
-    }
-    unresolved +=
-        conflict(
-            "finishing",
-            catalogRef(
-                CabinCatalogKind.FINISHING,
-                source.finishing(),
-                decision.finishingId(),
-                plan,
-                true),
-            token(target.getFinishingId()),
-            choices);
-    String sourceCategory =
-        catalogRef(
-            CabinCatalogKind.CATEGORY,
-            source.category(),
-            decision.categoryId(),
-            plan,
-            false);
-    if (sourceCategory != null) {
-      unresolved += conflict("category", sourceCategory, token(target.getCategoryId()), choices);
-    }
-    if (source.linoleum() != null || decision.linoleum() != null) {
-      unresolved +=
-          conflict(
-              "linoleum",
-              String.valueOf(
-                  decision.linoleum() == null ? source.linoleum() : decision.linoleum()),
-              target.getLinoleum() == null ? null : String.valueOf(target.getLinoleum()),
-              choices);
-    }
-    RentalItemStatus sourceStatus = resolvedStatus(source, decision, plan);
-    unresolved +=
-        conflict(
-            "status",
-            sourceStatus == null ? null : sourceStatus.name(),
-            target.getStatus().name(),
-            choices);
-
-    if (decision.characteristicIds() != null || hasResolvedCharacteristics(source, plan)) {
-      List<String> sourceCharacteristics;
-      if (decision.characteristicIds() != null) {
-        sourceCharacteristics =
-            decision.characteristicIds().stream().map(UUID::toString).sorted().toList();
-      } else {
-        sourceCharacteristics =
-            source.characteristics().stream()
-                .map(
-                    value ->
-                        catalogRef(
-                            CabinCatalogKind.CHARACTERISTIC, value, null, plan, false))
-                .filter(java.util.Objects::nonNull)
-                .sorted()
-                .toList();
-      }
-      CabinCompositionService.CabinComposition current =
-          composition.compositionsFor(List.of(target)).get(target.getId());
-      List<String> targetCharacteristics =
-          current == null
-              ? List.of()
-              : current.characteristics().stream()
-                  .map(value -> value.id().toString())
-                  .sorted()
-                  .toList();
-      unresolved +=
-          conflict(
-              "characteristics",
-              sourceCharacteristics.toString(),
-              targetCharacteristics.toString(),
-              choices);
-    }
-
-    String sourceComment =
-        decision.comment() == null ? source.comment() : decision.comment();
-    if (sourceComment != null) {
-      unresolved +=
-          conflict("comment", sourceComment, target.getGeneralComment(), choices);
-    }
-    Map<String, Object> targetPassport = readMap(target.getPassportJson());
-    for (Map.Entry<String, Object> entry : sourcePassport(source).entrySet()) {
-      Object current = targetPassport.get(entry.getKey());
-      unresolved +=
-          conflict(
-              "passport." + entry.getKey(),
-              String.valueOf(entry.getValue()),
-              current == null ? null : String.valueOf(current),
-              choices);
-    }
-    if (hasResolvedFurniture(source, plan)) {
-      RentalItemResponse current = assets.rentalItem(target.getId());
-      if (!current.contents().isEmpty() && !choices.containsKey("furniture")) {
-        unresolved += 1;
-      }
-    }
-    return unresolved;
-  }
-
-  private boolean hasResolvedCharacteristics(ParsedRow source, HtmlImportPlan plan) {
-    return source.characteristics().stream()
-        .map(
-            value ->
-                catalogRef(
-                    CabinCatalogKind.CHARACTERISTIC, value, null, plan, false))
-        .anyMatch(java.util.Objects::nonNull);
-  }
-
-  private boolean hasResolvedFurniture(ParsedRow source, HtmlImportPlan plan) {
-    return source.furniture().stream()
-        .anyMatch(
-            line -> {
-              Optional<HtmlImportEquipmentMapping> explicit =
-                  plan.equipmentMappings().stream()
-                      .filter(
-                          mapping ->
-                              normalizedKey(mapping.sourceValue())
-                                  .equals(normalizedKey(line.sourceLabel())))
-                      .findFirst();
-              if (explicit.isPresent()) {
-                return explicit.get().action() != HtmlImportMappingAction.IGNORE
-                    && validEquipmentMapping(explicit.get());
-              }
-              return autoEquipment(line.sourceLabel()).isPresent();
-            });
-  }
-
-  private static int conflict(
-      String field, String source, String target, Map<String, MergeWinner> choices) {
-    if (source == null || target == null || source.equals(target)) return 0;
-    return choices.containsKey(field) ? 0 : 1;
   }
 
   private void validateMappingUniqueness(HtmlImportPlan plan) {
@@ -1249,8 +1348,7 @@ public class RentalItemHtmlImportService {
     Set<String> statusKeys = new HashSet<>();
     for (HtmlImportStatusMapping mapping : plan.statusMappings()) {
       if (!statusKeys.add(normalizedKey(mapping.sourceValue()))
-          || mapping.targetStatus() == RentalItemStatus.IN_TRANSFER
-          || mapping.targetStatus() == RentalItemStatus.WRITTEN_OFF) {
+          || !isHtmlImportManualStatus(mapping.targetStatus())) {
         throw new IllegalArgumentException("HTML status mapping is invalid");
       }
     }
@@ -1307,23 +1405,14 @@ public class RentalItemHtmlImportService {
       throw new IllegalArgumentException("CREATE row cannot have a merge target");
     }
     if (decision.action() == RentalItemHtmlImportRowAction.MERGE) {
-      if (decision.targetRentalItemId() == null
-          || decision.targetExpectedVersion() == null) {
-        throw new IllegalArgumentException("MERGE row target and version are required");
-      }
-      RentalItem target =
-          rentalItems
-              .findByIdAndWarehouseId(decision.targetRentalItemId(), warehouseId)
-              .orElseThrow(() -> new AssetNotFoundException("Merge target was not found"));
-      if (target.getVersion() != decision.targetExpectedVersion()) {
-        throw new AssetConflictException("Merge target changed concurrently");
-      }
+      throw new AssetConflictException(
+          "HTML import MERGE is retired; existing cabins must use their owning workflow");
     }
     if (decision.action() == RentalItemHtmlImportRowAction.EXCLUDE
         || decision.action() == RentalItemHtmlImportRowAction.REVIEW) return;
-    if (decision.status() == RentalItemStatus.IN_TRANSFER
-        || decision.status() == RentalItemStatus.WRITTEN_OFF) {
-      throw new IllegalArgumentException("HTML import cannot set a fenced or terminal status");
+    if (decision.status() != null && !isHtmlImportManualStatus(decision.status())) {
+      throw new IllegalArgumentException(
+          "HTML import can only set SALE, USED_SALE, FREE, WAREHOUSE, or OWN_NEEDS");
     }
   }
 
@@ -1404,17 +1493,23 @@ public class RentalItemHtmlImportService {
 
   private RentalItemStatus resolvedStatus(
       ParsedRow source, HtmlImportRowDecision decision, HtmlImportPlan plan) {
-    if (decision.status() != null) return decision.status();
-    if (source.proposedStatus() != null) return source.proposedStatus();
+    if (decision.status() != null) {
+      return isHtmlImportManualStatus(decision.status()) ? decision.status() : null;
+    }
+    if (source.proposedStatus() != null) {
+      return isHtmlImportManualStatus(source.proposedStatus()) ? source.proposedStatus() : null;
+    }
     String sourceValue = candidateSource(source.status());
     if (sourceValue == null) return null;
-    return plan.statusMappings().stream()
+    RentalItemStatus mapped =
+        plan.statusMappings().stream()
         .filter(
             value ->
                 normalizedKey(value.sourceValue()).equals(normalizedKey(sourceValue)))
         .map(HtmlImportStatusMapping::targetStatus)
         .findFirst()
         .orElse(null);
+    return isHtmlImportManualStatus(mapped) ? mapped : null;
   }
 
   private void requireResolvableEquipment(String sourceValue, HtmlImportPlan plan) {
@@ -1673,9 +1768,7 @@ public class RentalItemHtmlImportService {
   }
 
   private RentalItemResponse createRentalItem(
-      RentalItemHtmlImport value,
-      ParsedRow source,
-      ResolvedRow resolved) {
+      RentalItemHtmlImport value, ResolvedRow resolved) {
     RentalItemResponse result =
         assets
             .createRentalItemFromHtmlImport(
@@ -1696,134 +1789,7 @@ public class RentalItemHtmlImportService {
               result.id(),
               new UpdateGeneralCommentRequest(result.version(), resolved.comment()));
     }
-    if (!resolved.equipmentQuantities().isEmpty()) {
-      assets.initializeImportedEquipmentContents(
-          result.id(), resolved.equipmentQuantities());
-      result = assets.rentalItem(result.id());
-    }
     return result;
-  }
-
-  private RentalItemResponse mergeRentalItem(
-      RentalItemHtmlImport value,
-      ParsedRow source,
-      ResolvedRow resolved,
-      HtmlImportRowDecision decision,
-      UUID targetId) {
-    RentalItem target =
-        rentalItems
-            .findByIdAndWarehouseId(targetId, value.getWarehouseId())
-            .orElseThrow(() -> new AssetNotFoundException("Merge target was not found"));
-    if (decision.targetExpectedVersion() == null
-        || target.getVersion() != decision.targetExpectedVersion()) {
-      throw new AssetConflictException("Merge target changed concurrently");
-    }
-    Map<String, MergeWinner> choices =
-        decision.mergeChoices() == null ? Map.of() : decision.mergeChoices();
-    RentalItemResponse current = assets.rentalItem(targetId);
-
-    UUID rentalTypeId =
-        choose(
-            "rentalType",
-            resolved.rentalTypeId(),
-            current.rentalTypeId(),
-            choices);
-    UUID dimensionId =
-        choose("dimension", resolved.dimensionId(), current.dimensionId(), choices);
-    UUID finishingId =
-        choose("finishing", resolved.finishingId(), current.finishingId(), choices);
-    UUID categoryId =
-        resolved.categorySpecified() || target.getCategoryId() == null
-            ? choose(
-                "category", resolved.categoryId(), target.getCategoryId(), choices)
-            : target.getCategoryId();
-    CabinCatalogItem selectedCategory =
-        requireCatalogTarget(categoryId, CabinCatalogKind.CATEGORY);
-    Boolean linoleum =
-        resolved.linoleum() == null
-            ? current.linoleum()
-            : choose("linoleum", resolved.linoleum(), current.linoleum(), choices);
-    List<UUID> currentCharacteristics =
-        current.characteristics().stream().map(valueItem -> valueItem.id()).toList();
-    List<UUID> characteristics =
-        resolved.characteristicsSpecified()
-            ? choose(
-                "characteristics",
-                resolved.characteristicIds(),
-                currentCharacteristics,
-                choices)
-            : currentCharacteristics;
-    Map<String, Object> passport =
-        mergePassport(current.passport(), resolved.passport(), choices);
-
-    current =
-        assets.updatePassport(
-            targetId,
-            new UpdatePassportRequest(
-                current.version(),
-                rentalTypeId,
-                dimensionId,
-                finishingId,
-                selectedCategory.getName(),
-                characteristics,
-                linoleum == null ? false : linoleum,
-                passport,
-                current.tags()));
-    RentalItemStatus status =
-        choose("status", resolved.status(), current.status(), choices);
-    if (status != current.status()) {
-      current =
-          assets.updateStatus(
-              targetId, new UpdateStatusRequest(current.version(), status));
-    }
-    if (resolved.comment() != null) {
-      String comment =
-          choose("comment", resolved.comment(), current.generalComment(), choices);
-      if (!java.util.Objects.equals(comment, current.generalComment())) {
-        current =
-            assets.updateGeneralComment(
-                targetId,
-                new UpdateGeneralCommentRequest(current.version(), comment));
-      }
-    }
-    if (!resolved.equipmentQuantities().isEmpty()
-        && (current.contents().isEmpty()
-            || choices.get("furniture") == MergeWinner.SOURCE)) {
-      assets.initializeImportedEquipmentContents(
-          targetId, resolved.equipmentQuantities());
-      current = assets.rentalItem(targetId);
-    }
-    return current;
-  }
-
-  private static <T> T choose(
-      String field, T source, T target, Map<String, MergeWinner> choices) {
-    if (source == null) return target;
-    if (target == null || java.util.Objects.equals(source, target)) return source;
-    MergeWinner winner = choices.get(field);
-    if (winner == null) {
-      throw new AssetConflictException("Merge field requires an explicit winner: " + field);
-    }
-    return winner == MergeWinner.SOURCE ? source : target;
-  }
-
-  private static Map<String, Object> mergePassport(
-      Map<String, Object> target,
-      Map<String, Object> source,
-      Map<String, MergeWinner> choices) {
-    Map<String, Object> result = new LinkedHashMap<>();
-    if (target != null) result.putAll(target);
-    for (Map.Entry<String, Object> entry : source.entrySet()) {
-      Object current = result.get(entry.getKey());
-      Object selected =
-          choose(
-              "passport." + entry.getKey(),
-              entry.getValue(),
-              current,
-              choices);
-      if (selected != null) result.put(entry.getKey(), selected);
-    }
-    return java.util.Collections.unmodifiableMap(result);
   }
 
   private static Map<String, Object> sourcePassport(ParsedRow source) {
@@ -1924,6 +1890,34 @@ public class RentalItemHtmlImportService {
         .orElseThrow(() -> new AssetNotFoundException("HTML import was not found"));
   }
 
+  private <T> T inTransaction(java.util.function.Supplier<T> operation) {
+    return transactions.execute(status -> operation.get());
+  }
+
+  private CommitIntent commitIntent(
+      RentalItemHtmlImport value, List<RentalItemHtmlImportRow> importRows) {
+    UUID commitActorSubjectId =
+        value.getCommitActorSubjectId() == null
+            ? value.getActorSubjectId()
+            : value.getCommitActorSubjectId();
+    return new CommitIntent(
+        value.getId(),
+        value.getWarehouseId(),
+        commitActorSubjectId,
+        mediaSources(importRows));
+  }
+
+  private void rejectMergeRows(List<RentalItemHtmlImportRow> importRows) {
+    for (RentalItemHtmlImportRow row : importRows) {
+      HtmlImportRowDecision decision = readDecision(row.getDecisionJson());
+      if (row.getAction() == RentalItemHtmlImportRowAction.MERGE
+          || (decision != null && decision.action() == RentalItemHtmlImportRowAction.MERGE)) {
+        throw new AssetConflictException(
+            "HTML import MERGE is retired; existing cabins must use their owning workflow");
+      }
+    }
+  }
+
   private static void assertVersion(RentalItemHtmlImport value, Long expected) {
     if (expected == null || expected < 0) {
       throw new IllegalArgumentException("expectedVersion is required");
@@ -2013,25 +2007,6 @@ public class RentalItemHtmlImportService {
         Map.of());
   }
 
-  private static HtmlImportRowDecision copyDecisionWithTarget(
-      HtmlImportRowDecision source, UUID targetId, long targetVersion, String number) {
-    return new HtmlImportRowDecision(
-        source.sourceRowId(),
-        RentalItemHtmlImportRowAction.MERGE,
-        number,
-        targetId,
-        targetVersion,
-        source.rentalTypeId(),
-        source.dimensionId(),
-        source.finishingId(),
-        source.categoryId(),
-        source.characteristicIds(),
-        source.status(),
-        source.linoleum(),
-        source.comment(),
-        source.mergeChoices());
-  }
-
   private <T> T read(tools.jackson.databind.JsonNode node, Class<T> type) {
     try {
       return objectMapper.readerFor(type).readValue(node);
@@ -2093,8 +2068,21 @@ public class RentalItemHtmlImportService {
   }
 
   private static boolean candidateNeedsDecision(HtmlImportSourceCandidate candidate) {
-    return candidate.kind() == HtmlImportCandidateKind.STATUS
-        && candidate.suggestedValue() == null;
+    if (candidate.kind() != HtmlImportCandidateKind.STATUS) return false;
+    if (candidate.suggestedValue() == null) return true;
+    try {
+      return !isHtmlImportManualStatus(RentalItemStatus.valueOf(candidate.suggestedValue()));
+    } catch (IllegalArgumentException ignored) {
+      return true;
+    }
+  }
+
+  private static boolean isHtmlImportManualStatus(RentalItemStatus status) {
+    return status == RentalItemStatus.SALE
+        || status == RentalItemStatus.USED_SALE
+        || status == RentalItemStatus.FREE
+        || status == RentalItemStatus.WAREHOUSE
+        || status == RentalItemStatus.OWN_NEEDS;
   }
 
   private static boolean supportsUnspecifiedValue(CabinCatalogKind kind) {
@@ -2233,6 +2221,33 @@ public class RentalItemHtmlImportService {
   private record CommitCatalogs(
       Map<MappingKey, CatalogSelection> catalogMappings,
       Map<String, UUID> equipmentMappings) {}
+
+  private record CommitOperation(
+      UUID actorSubjectId, UUID idempotencyKey, String operation, String requestHash) {}
+
+  private record CommitIntent(
+      UUID importId,
+      UUID warehouseId,
+      UUID actorSubjectId,
+      List<MediaAssetImportSource> mediaSources) {}
+
+  private record CommitPreparation(
+      HtmlImportDetailResponse replay, CommitIntent intent) {}
+
+  private record CommitRecoveryPreparation(CommitIntent intent) {}
+
+  private record RetryMediaPreparation(
+      HtmlImportDetailResponse replay, UUID mediaJobId, boolean synchronize) {}
+
+  private record ReplaceMediaPreparation(
+      HtmlImportDetailResponse replay,
+      UUID mediaJobId,
+      List<MediaAssetImportSource> replacements) {}
+
+  private record MediaSyncPreparation(UUID mediaJobId) {}
+
+  private record MediaActivationIntent(
+      UUID importId, UUID mediaJobId, List<MediaAssetImportBinding> bindings) {}
 
   private record ResolvedRow(
       String number,

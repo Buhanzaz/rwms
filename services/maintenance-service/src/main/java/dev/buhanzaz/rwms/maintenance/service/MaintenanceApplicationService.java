@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.maintenance.service;
 
 import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.*;
 
+import dev.buhanzaz.rwms.maintenance.disposition.application.PropertyDispositionApplicationService;
 import dev.buhanzaz.rwms.maintenance.domain.CatalogLink;
 import dev.buhanzaz.rwms.maintenance.domain.CatalogNode;
 import dev.buhanzaz.rwms.maintenance.domain.CatalogVersion;
@@ -58,7 +59,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
-import java.time.ZoneId;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -74,12 +74,14 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Supplier;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
@@ -90,9 +92,10 @@ import tools.jackson.databind.ObjectMapper;
 public class MaintenanceApplicationService {
   private static final UUID LOGISTICS_SERVICE_SUBJECT =
       UUID.nameUUIDFromBytes("rwms:logistics-service".getBytes(StandardCharsets.UTF_8));
-  private static final ZoneId MOSCOW_ZONE_ID = ZoneId.of("Europe/Moscow");
   private static final int DELIVERED_REPAIR_TASK_BOARD_PRIORITY = 1;
   private static final Duration LEASE_RENEWAL_GUARD = Duration.ofMinutes(5);
+  /** Bounded durable ownership window for remote reconciliation effects. */
+  private static final Duration RECONCILIATION_CLAIM_LEASE = Duration.ofMinutes(2);
   private static final String AFTER_RENT_STATUS = "AFTER_RENT";
   private static final String RENTED_STATUS = "RENTED";
   private static final Set<String> EMPTY_DIRECT_REPAIR_SOURCE_STATUSES =
@@ -149,7 +152,10 @@ public class MaintenanceApplicationService {
   private final RepairPlaceService repairPlaces;
   private final InventoryPublicationSuccessorActivator inventorySuccessors;
   private final InventoryPublicationPrestartReplacementGuard prestartReplacementGuard;
+  private final PropertyDispositionApplicationService propertyDispositions;
+  private final FurnitureEquipmentLinkResolver furnitureEquipmentLinks;
   private final MaintenanceDependencyGateway dependencies;
+  private final WarehouseLifecycleOperations warehouseLifecycle;
   private final JdbcTemplate jdbc;
   private final ObjectMapper mapper;
   private final TransactionTemplate transactions;
@@ -184,7 +190,10 @@ public class MaintenanceApplicationService {
       RepairPlaceService repairPlaces,
       InventoryPublicationSuccessorActivator inventorySuccessors,
       InventoryPublicationPrestartReplacementGuard prestartReplacementGuard,
+      PropertyDispositionApplicationService propertyDispositions,
+      FurnitureEquipmentLinkResolver furnitureEquipmentLinks,
       MaintenanceDependencyGateway dependencies,
+      WarehouseLifecycleOperations warehouseLifecycle,
       JdbcTemplate jdbc,
       ObjectMapper mapper,
       PlatformTransactionManager transactionManager) {
@@ -217,18 +226,65 @@ public class MaintenanceApplicationService {
     this.repairPlaces = repairPlaces;
     this.inventorySuccessors = inventorySuccessors;
     this.prestartReplacementGuard = prestartReplacementGuard;
+    this.propertyDispositions = propertyDispositions;
+    this.furnitureEquipmentLinks = furnitureEquipmentLinks;
     this.dependencies = dependencies;
+    this.warehouseLifecycle = warehouseLifecycle;
     this.jdbc = jdbc;
     this.mapper = mapper;
     this.transactions = new TransactionTemplate(transactionManager);
   }
 
-  @Transactional
   public CreateResult<PrepareTransferRepairResponse> prepareTransferDeparture(
       UUID transferId,
       UUID lineId,
       UUID key,
       TransferRepairRequest request) {
+    requireNoCallerTransaction("prepare a repair transfer departure");
+    TransferDeparturePreflight preflight =
+        inLocalTransaction(
+            "repair transfer departure preflight",
+            () -> prepareTransferDeparturePreflight(transferId, lineId, key, request));
+    if (preflight.replay() != null) {
+      return preflight.replay();
+    }
+    TransferDeparturePlan plan = preflight.plan();
+    if (plan.warehouseId() != null) {
+      warehouseLifecycle.requireOutgoing(plan.warehouseId());
+    }
+    if (plan.leaseRelease() != null) {
+      releaseTransferLease(plan.leaseRelease(), key);
+    }
+    return inLocalTransaction(
+        "repair transfer departure finalization",
+        () -> prepareTransferDepartureInTransaction(transferId, lineId, key, request, plan));
+  }
+
+  private TransferDeparturePreflight
+      prepareTransferDeparturePreflight(
+          UUID transferId, UUID lineId, UUID key, TransferRepairRequest request) {
+    String scope = "transfer.prepare:" + transferId + ":" + lineId;
+    String requestHash = hash(request);
+    Optional<JsonNode> replay =
+        idempotency.replay(LOGISTICS_SERVICE_SUBJECT, scope, key, requestHash);
+    if (replay.isPresent()) {
+      return new TransferDeparturePreflight(
+          new CreateResult<>(
+              read(replay.get(), PrepareTransferRepairResponse.class), true),
+          null);
+    }
+    List<MaintenanceRepair> candidates =
+        repairs.findAllByRentalItemIdOrderByCreatedAtAscIdAsc(request.rentalItemId());
+    MaintenanceRepair active = requireSingleActiveRepair(candidates, false);
+    return new TransferDeparturePreflight(null, transferDeparturePlan(candidates, active, request));
+  }
+
+  private CreateResult<PrepareTransferRepairResponse> prepareTransferDepartureInTransaction(
+      UUID transferId,
+      UUID lineId,
+      UUID key,
+      TransferRepairRequest request,
+      TransferDeparturePlan expectedPlan) {
     String scope = "transfer.prepare:" + transferId + ":" + lineId;
     String requestHash = hash(request);
     Optional<JsonNode> replay =
@@ -240,6 +296,8 @@ public class MaintenanceApplicationService {
     List<MaintenanceRepair> candidates =
         repairs.findAllByRentalItemIdOrderByCreatedAtAscIdAsc(request.rentalItemId());
     MaintenanceRepair active = requireSingleActiveRepair(candidates, false);
+    TransferDeparturePlan currentPlan = transferDeparturePlan(candidates, active, request);
+    requireMatchingTransferDeparturePlan(expectedPlan, currentPlan);
     if (active == null) {
       PrepareTransferRepairResponse response =
           new PrepareTransferRepairResponse(null, null, "FREE");
@@ -249,22 +307,12 @@ public class MaintenanceApplicationService {
     }
     List<MaintenanceRepair> chain = lockRepairChain(active);
     active = requireRepairInChain(chain, active.getId());
-    requireTransferSource(
-        chain, request.rentalItemId(), request.sourceWarehouseId());
+    requireMatchingTransferDeparturePlan(
+        expectedPlan, transferDeparturePlan(chain, active, request));
     lockRepairStreams(chain);
 
     MaintenanceRepair leaseOwner = repairLifecycleOwner(chain, active);
-    if (leaseOwner.getLeaseId() != null
-        && ("ACTIVE".equals(leaseOwner.getLeaseReconciliationState())
-            || "RECONCILIATION_REQUIRED".equals(
-                leaseOwner.getLeaseReconciliationState()))) {
-      dependencies.releaseLease(
-          derived(key, "transfer-release:" + leaseOwner.getId()),
-          leaseOwner.getLeaseId(),
-          leaseOwner.getLeaseVersion(),
-          leaseOwner.getFencingToken(),
-          ownerType(leaseOwner),
-          ownerId(leaseOwner));
+    if (expectedPlan.leaseRelease() != null) {
       leaseOwner.releaseLease();
     }
 
@@ -281,6 +329,10 @@ public class MaintenanceApplicationService {
     appendRepairTransferEvents(
         saved, versions, MaintenanceEventType.REPAIR_TRANSFER_PREPARED);
     MaintenanceRepair savedActive = requireRepairInChain(saved, active.getId());
+    warehouseLifecycle.recordOperation(
+        request.sourceWarehouseId(),
+        derived(key, "warehouse-transfer-departure"),
+        savedActive.getUpdatedAt());
     PrepareTransferRepairResponse response =
         new PrepareTransferRepairResponse(
             savedActive.getId(), savedActive.getVersion(), "REPAIR");
@@ -289,45 +341,95 @@ public class MaintenanceApplicationService {
     return new CreateResult<>(response, false);
   }
 
-  @Transactional(readOnly = true)
   public TransferRepairArrivalPreflightResponse transferArrivalPreflight(
       UUID transferId, UUID lineId, TransferRepairRequest request) {
-    List<MaintenanceRepair> chain =
-        repairs.findAllByTransferLineIdOrderByCreatedAtAscIdAsc(lineId);
-    MaintenanceDependencyGateway.QueueCapabilities capabilities =
-        dependencies.queueCapabilities(request.targetWarehouseId());
-    if (chain.isEmpty()) {
-      return new TransferRepairArrivalPreflightResponse(
-          null,
-          false,
-          List.of());
+    requireNoCallerTransaction("preflight a repair transfer arrival");
+    TransferArrivalPlan plan =
+        inLocalTransaction(
+            "repair transfer arrival routing prepare",
+            () -> transferArrivalPlan(transferId, lineId, request));
+    if (plan.activeRepairId() == null) {
+      return new TransferRepairArrivalPreflightResponse(null, false, List.of());
     }
-    requirePreparedTransfer(
-        chain,
-        transferId,
-        lineId,
-        request.rentalItemId(),
-        request.sourceWarehouseId(),
-        request.targetWarehouseId());
-    MaintenanceRepair active = requireSingleActiveRepair(chain, true);
-    if (active == null) {
-      throw new MaintenanceConflictException(
-          "MAINTENANCE_STATE_CONFLICT",
-          "Prepared transfer no longer has an active repair");
-    }
-    RepairComplexitySnapshot targetComplexity =
-        repairComplexityFromStoredStages(
-            request.targetWarehouseId(), active.getId());
-    return transferArrivalPreflight(
-        active, chain, capabilities, targetComplexity);
+    TransferRoutingResult routing = resolveTransferArrivalRouting(plan);
+    return inLocalTransaction(
+        "repair transfer arrival routing finalization",
+        () -> {
+          TransferArrivalPlan current = transferArrivalPlan(transferId, lineId, request);
+          requireMatchingTransferArrivalPlan(plan, current);
+          return new TransferRepairArrivalPreflightResponse(
+              current.activeRepairId(), true, routing.missingQueueDefinitionIds());
+        });
   }
 
-  @Transactional
   public CreateResult<CompleteTransferRepairResponse> completeTransferArrival(
       UUID transferId,
       UUID lineId,
       UUID key,
       CompleteTransferRepairRequest request) {
+    requireNoCallerTransaction("complete a repair transfer arrival");
+    TransferArrivalCompletionPreflight preflight =
+        inLocalTransaction(
+            "repair transfer arrival preflight",
+            () -> completeTransferArrivalPreflight(transferId, lineId, key, request));
+    if (preflight.replay() != null) {
+      return preflight.replay();
+    }
+    TransferArrivalPlan plan = preflight.plan();
+    if (plan.activeRepairId() == null) {
+      return inLocalTransaction(
+          "repair transfer arrival empty finalization",
+          () -> completeTransferArrivalInTransaction(transferId, lineId, key, request, plan, null));
+    }
+    warehouseLifecycle.requireIncoming(plan.targetWarehouseId());
+    TransferRoutingResult routing = resolveTransferArrivalRouting(plan);
+    if (!routing.missingQueueDefinitionIds().isEmpty()) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_TARGET_QUEUE_MISSING",
+          "The target warehouse is missing queues required by the active repair");
+    }
+    TransferArrivalRemoteResult remote = completeTransferArrivalRemote(plan, key, routing);
+    return inLocalTransaction(
+        "repair transfer arrival finalization",
+        () -> completeTransferArrivalInTransaction(transferId, lineId, key, request, plan, remote));
+  }
+
+  private TransferArrivalCompletionPreflight
+      completeTransferArrivalPreflight(
+          UUID transferId, UUID lineId, UUID key, CompleteTransferRepairRequest request) {
+    String scope = "transfer.complete:" + transferId + ":" + lineId;
+    String requestHash = hash(request);
+    Optional<JsonNode> replay =
+        idempotency.replay(LOGISTICS_SERVICE_SUBJECT, scope, key, requestHash);
+    if (replay.isPresent()) {
+      return new TransferArrivalCompletionPreflight(
+          new CreateResult<>(
+              read(replay.get(), CompleteTransferRepairResponse.class), true),
+          null);
+    }
+    TransferArrivalPlan plan =
+        transferArrivalPlan(
+            transferId,
+            lineId,
+            request.rentalItemId(),
+            request.sourceWarehouseId(),
+            request.targetWarehouseId(),
+            request.rentalItemVersion());
+    if (plan.activeRepairId() != null && request.priority() == null) {
+      throw new MaintenanceValidationException(
+          "MAINTENANCE_TRANSFER_CONTINUATION_REQUIRED",
+          "The receiving employee must select the active repair priority");
+    }
+    return new TransferArrivalCompletionPreflight(null, plan);
+  }
+
+  private CreateResult<CompleteTransferRepairResponse> completeTransferArrivalInTransaction(
+      UUID transferId,
+      UUID lineId,
+      UUID key,
+      CompleteTransferRepairRequest request,
+      TransferArrivalPlan expectedPlan,
+      TransferArrivalRemoteResult remote) {
     String scope = "transfer.complete:" + transferId + ":" + lineId;
     String requestHash = hash(request);
     Optional<JsonNode> replay =
@@ -337,9 +439,16 @@ public class MaintenanceApplicationService {
           read(replay.get(), CompleteTransferRepairResponse.class), true);
     }
 
-    List<MaintenanceRepair> prepared =
-        repairs.findAllByTransferLineIdOrderByCreatedAtAscIdAsc(lineId);
-    if (prepared.isEmpty()) {
+    if (expectedPlan.activeRepairId() == null) {
+      TransferArrivalPlan current =
+          transferArrivalPlan(
+              transferId,
+              lineId,
+              request.rentalItemId(),
+              request.sourceWarehouseId(),
+              request.targetWarehouseId(),
+              request.rentalItemVersion());
+      requireMatchingTransferArrivalPlan(expectedPlan, current);
       CompleteTransferRepairResponse response =
           new CompleteTransferRepairResponse(
               null, null, request.targetWarehouseId());
@@ -347,35 +456,41 @@ public class MaintenanceApplicationService {
           LOGISTICS_SERVICE_SUBJECT, scope, key, requestHash, 200, response);
       return new CreateResult<>(response, false);
     }
+    List<MaintenanceRepair> observedChain =
+        repairs.findAllByTransferLineIdOrderByCreatedAtAscIdAsc(lineId);
+    TransferArrivalPlan observed =
+        transferArrivalPlan(
+            observedChain,
+            transferId,
+            lineId,
+            request.rentalItemId(),
+            request.sourceWarehouseId(),
+            request.targetWarehouseId(),
+            request.rentalItemVersion());
+    requireMatchingTransferArrivalPlan(expectedPlan, observed);
     List<MaintenanceRepair> chain =
         repairs.findAllByIdForUpdate(
-            prepared.stream().map(MaintenanceRepair::getId).toList());
-    requirePreparedTransfer(
-        chain,
-        transferId,
-        lineId,
-        request.rentalItemId(),
-        request.sourceWarehouseId(),
-        request.targetWarehouseId());
-    MaintenanceRepair active = requireSingleActiveRepair(chain, true);
-    if (active == null || request.priority() == null) {
+            observedChain.stream().map(MaintenanceRepair::getId).toList());
+    List<MaintenanceRepair> postLockChain =
+        repairs.findAllByTransferLineIdOrderByCreatedAtAscIdAsc(lineId);
+    TransferArrivalPlan current =
+        transferArrivalPlan(
+            postLockChain,
+            transferId,
+            lineId,
+            request.rentalItemId(),
+            request.sourceWarehouseId(),
+            request.targetWarehouseId(),
+            request.rentalItemVersion());
+    requireMatchingTransferArrivalPlan(expectedPlan, current);
+    MaintenanceRepair active = requireRepairInChain(chain, expectedPlan.activeRepairId());
+    RepairComplexity targetComplexity = expectedPlan.targetComplexity();
+    if (request.priority() == null || remote == null) {
       throw new MaintenanceValidationException(
           "MAINTENANCE_TRANSFER_CONTINUATION_REQUIRED",
           "The receiving employee must select the active repair priority");
     }
-    MaintenanceDependencyGateway.QueueCapabilities capabilities =
-        dependencies.queueCapabilities(request.targetWarehouseId());
-    RepairComplexitySnapshot targetComplexity =
-        repairComplexityFromStoredStages(
-            request.targetWarehouseId(), active.getId());
-    TransferRepairArrivalPreflightResponse preflight =
-        transferArrivalPreflight(
-            active, chain, capabilities, targetComplexity);
-    if (!preflight.missingQueueDefinitionIds().isEmpty()) {
-      throw new MaintenanceConflictException(
-          "MAINTENANCE_TARGET_QUEUE_MISSING",
-          "The target warehouse is missing queues required by the active repair");
-    }
+    validateTransferArrivalRemoteTruth(expectedPlan, remote);
     lockRepairStreams(chain);
     Map<UUID, Long> versions =
         chain.stream()
@@ -383,79 +498,8 @@ public class MaintenanceApplicationService {
                 java.util.stream.Collectors.toMap(
                     MaintenanceRepair::getId, MaintenanceRepair::getVersion));
 
-    Map<UUID, Long> relocatedTaskVersions = new LinkedHashMap<>();
-    for (MaintenanceRepair repair : chain) {
-      if (repair.getTaskBoardVersion() == null
-          || !hasUnfinishedStages(repair.getId())) {
-        continue;
-      }
-      MaintenanceDependencyGateway.TaskSnapshot currentTask =
-          dependencies.getTask(repair.getExternalTaskId());
-      if (targetComplexity.type() == RepairComplexity.CAPITAL) {
-        MaintenanceDependencyGateway.TaskSnapshot cancelled =
-            dependencies.cancelTask(
-                derived(key, "task-withdraw-capital:" + repair.getId()),
-                repair.getExternalTaskId(),
-                currentTask.version());
-        if (!"CANCELLED".equals(cancelled.state())) {
-          throw new MaintenanceDependencyException(
-              org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-              "Task-board did not confirm ordinary repair route withdrawal");
-        }
-      } else {
-        MaintenanceDependencyGateway.TaskSnapshot relocated =
-            dependencies.relocateTask(
-                derived(key, "task-relocate:" + repair.getId()),
-                repair.getExternalTaskId(),
-                currentTask.version(),
-                request.targetWarehouseId());
-        relocatedTaskVersions.put(repair.getId(), relocated.version());
-      }
-    }
-
     MaintenanceRepair leaseOwner = repairLifecycleOwner(chain, active);
-    MaintenanceDependencyGateway.AssetSnapshot asset =
-        dependencies.getRentalItemSnapshot(request.rentalItemId());
-    if (asset == null
-        || !request.rentalItemId().equals(asset.rentalItemId())
-        || !request.targetWarehouseId().equals(asset.warehouseId())
-        || !"REPAIR".equals(asset.status())) {
-      throw new MaintenanceDependencyException(
-          org.springframework.http.HttpStatus.CONFLICT,
-          "Asset must be received into the target warehouse as an active repair");
-    }
-    MaintenanceDependencyGateway.LeaseSnapshot lease =
-        dependencies.acquireLease(
-            derived(key, "transfer-arrival-lease:" + leaseOwner.getId()),
-            request.rentalItemId(),
-            asset.version(),
-            ownerType(leaseOwner),
-            ownerId(leaseOwner));
-    validateLeaseTruth(
-        request.rentalItemId(), lease, ownerType(leaseOwner), ownerId(leaseOwner));
-
-    MaintenanceDependencyGateway.AssetSnapshot finalAsset = asset;
-    if (targetComplexity.type() == RepairComplexity.CAPITAL) {
-      finalAsset =
-          dependencies.fencedStatus(
-              derived(key, "transfer-arrival-capital:" + active.getId()),
-              request.rentalItemId(),
-              request.targetWarehouseId(),
-              asset.version(),
-              lease.leaseId(),
-              lease.fencingToken(),
-              ownerType(leaseOwner),
-              ownerId(leaseOwner),
-              "QUEUE_TO_CAPITAL_REPAIR",
-              false);
-      if (!"CAPITAL_REPAIR".equals(finalAsset.status())) {
-        throw new MaintenanceDependencyException(
-            org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-            "Asset-service did not confirm capital repair status");
-      }
-    }
-
-    if (targetComplexity.type() == RepairComplexity.CAPITAL) {
+    if (targetComplexity == RepairComplexity.CAPITAL) {
       List<RepairStage> externalCapitalStages = new ArrayList<>();
       List<MaintenanceRepair> externalCapitalRepairs = new ArrayList<>();
       for (MaintenanceRepair repair : chain) {
@@ -482,21 +526,25 @@ public class MaintenanceApplicationService {
           lineId,
           request.targetWarehouseId(),
           request.priority());
-      Long taskVersion = relocatedTaskVersions.get(repair.getId());
+      Long taskVersion = remote.relocatedTaskVersions().get(repair.getId());
       if (taskVersion != null) {
         repair.markTaskRelocated(taskVersion);
       }
-      repair.confirmRentalItemVersion(finalAsset.version());
+      repair.confirmRentalItemVersion(remote.asset().version());
     }
     leaseOwner.adoptLeaseAfterTransfer(
-        lease.leaseId(),
-        lease.version(),
-        lease.fencingToken(),
-        lease.expiresAt());
+        remote.lease().leaseId(),
+        remote.lease().version(),
+        remote.lease().fencingToken(),
+        remote.lease().expiresAt());
     List<MaintenanceRepair> saved = repairs.saveAllAndFlush(chain);
     appendRepairTransferEvents(
         saved, versions, MaintenanceEventType.REPAIR_TRANSFERRED);
     MaintenanceRepair savedActive = requireRepairInChain(saved, active.getId());
+    warehouseLifecycle.recordOperation(
+        request.targetWarehouseId(),
+        derived(key, "warehouse-transfer-arrival"),
+        savedActive.getUpdatedAt());
     CompleteTransferRepairResponse response =
         new CompleteTransferRepairResponse(
             savedActive.getId(),
@@ -542,8 +590,39 @@ public class MaintenanceApplicationService {
         .toList();
   }
 
-  @Transactional
   public CreateResult<CatalogVersionResponse> createCatalog(
+      UUID subjectId, UUID key, CreateCatalogRequest request) {
+    requireNoCallerTransaction("create a catalog");
+    WarehouseAdmissionPreflight<CreateResult<CatalogVersionResponse>> preflight =
+        inLocalTransaction(
+            "catalog create preflight",
+            () -> createCatalogPreflight(subjectId, key, request));
+    if (preflight.replay() != null) {
+      return preflight.replay();
+    }
+    if (preflight.warehouseId() != null) {
+      warehouseLifecycle.requireIncoming(preflight.warehouseId());
+    }
+    return inLocalTransaction(
+        "catalog create finalization", () -> createCatalogInTransaction(subjectId, key, request));
+  }
+
+  private WarehouseAdmissionPreflight<CreateResult<CatalogVersionResponse>> createCatalogPreflight(
+      UUID subjectId, UUID key, CreateCatalogRequest request) {
+    String requestHash = hash(request);
+    Optional<JsonNode> replay =
+        idempotency.replay(subjectId, "catalog.create", key, requestHash);
+    if (replay.isPresent()) {
+      return new WarehouseAdmissionPreflight<>(
+          null, new CreateResult<>(read(replay.get(), CatalogVersionResponse.class), true));
+    }
+    boolean activeExists =
+        catalogVersions.findAllByOrderByCreatedAtDesc().stream()
+            .anyMatch(version -> version.getState() == CatalogVersionState.ACTIVE);
+    return new WarehouseAdmissionPreflight<>(activeExists ? null : request.warehouseId(), null);
+  }
+
+  private CreateResult<CatalogVersionResponse> createCatalogInTransaction(
       UUID subjectId, UUID key, CreateCatalogRequest request) {
     String requestHash = hash(request);
     Optional<JsonNode> replay =
@@ -596,12 +675,15 @@ public class MaintenanceApplicationService {
         catalogLocal(active),
         catalogFact(MaintenanceEventType.CATALOG_ACTIVATED, active),
         catalogSnapshot(active));
+    warehouseLifecycle.recordOperation(
+        active.getWarehouseId(), active.getId(), active.getActivatedAt());
     CatalogVersionResponse response = catalogResponse(active);
     idempotency.store(subjectId, "catalog.create", key, requestHash, 201, response);
     return new CreateResult<>(response, false);
   }
 
   public CatalogVersionResponse changeCatalog(UUID id, ChangeCatalogRequest request) {
+    requireNoCallerTransaction("change a catalog");
     UUID routingContextWarehouseId =
         transactions.execute(status -> requireCatalog(id).getWarehouseId());
     if (routingContextWarehouseId == null) {
@@ -612,6 +694,7 @@ public class MaintenanceApplicationService {
 
   public CatalogVersionResponse changeCatalog(
       UUID id, UUID routingContextWarehouseId, ChangeCatalogRequest request) {
+    requireNoCallerTransaction("change a catalog");
     Objects.requireNonNull(
         routingContextWarehouseId, "Catalog routing context warehouse is required");
     validateCatalog(request.nodes(), request.links());
@@ -625,7 +708,14 @@ public class MaintenanceApplicationService {
     if (target == null) {
       throw new IllegalStateException("Catalog mutation preflight was empty");
     }
-    List<CatalogNodeInput> resolvedNodes = resolveFurnitureEquipment(request.nodes());
+    if (target.state() == CatalogVersionState.ACTIVE) {
+      warehouseLifecycle.requireIncoming(routingContextWarehouseId);
+    }
+    List<CatalogNodeInput> resolvedNodes = furnitureEquipmentLinks.resolve(
+        id,
+        routingContextWarehouseId,
+        request.expectedVersion(),
+        request.nodes());
     Map<UUID, String> characteristicNames =
         resolveCabinCharacteristicNames(resolvedNodes);
     CatalogValidation validation = validateCatalog(resolvedNodes, request.links());
@@ -695,6 +785,7 @@ public class MaintenanceApplicationService {
   }
 
   public CatalogVersionResponse replaceCatalogNodes(UUID id, ReplaceCatalogNodesRequest request) {
+    requireNoCallerTransaction("replace catalog nodes");
     UUID routingContextWarehouseId =
         transactions.execute(status -> requireCatalog(id).getWarehouseId());
     if (routingContextWarehouseId == null) {
@@ -705,6 +796,7 @@ public class MaintenanceApplicationService {
 
   public CatalogVersionResponse replaceCatalogNodes(
       UUID id, UUID routingContextWarehouseId, ReplaceCatalogNodesRequest request) {
+    requireNoCallerTransaction("replace catalog nodes");
     List<CatalogLinkInput> links = transactions.execute(status -> {
       requireCatalog(id);
       return catalogLinkInputs(id);
@@ -717,6 +809,7 @@ public class MaintenanceApplicationService {
   }
 
   public CatalogVersionResponse replaceCatalogLinks(UUID id, ReplaceCatalogLinksRequest request) {
+    requireNoCallerTransaction("replace catalog links");
     UUID routingContextWarehouseId =
         transactions.execute(status -> requireCatalog(id).getWarehouseId());
     if (routingContextWarehouseId == null) {
@@ -727,6 +820,7 @@ public class MaintenanceApplicationService {
 
   public CatalogVersionResponse replaceCatalogLinks(
       UUID id, UUID routingContextWarehouseId, ReplaceCatalogLinksRequest request) {
+    requireNoCallerTransaction("replace catalog links");
     List<CatalogNodeInput> nodes = transactions.execute(status -> {
       requireCatalog(id);
       return catalogNodeInputs(id);
@@ -738,8 +832,41 @@ public class MaintenanceApplicationService {
         new ChangeCatalogRequest(request.expectedVersion(), nodes, request.links()));
   }
 
-  @Transactional
   public CreateResult<CatalogVersionResponse> forkCatalog(
+      UUID subjectId, UUID key, UUID id, VersionCommand request) {
+    requireNoCallerTransaction("fork a catalog");
+    WarehouseAdmissionPreflight<CreateResult<CatalogVersionResponse>> preflight =
+        inLocalTransaction(
+            "catalog fork preflight", () -> forkCatalogPreflight(subjectId, key, id, request));
+    if (preflight.replay() != null) {
+      return preflight.replay();
+    }
+    warehouseLifecycle.requireIncoming(preflight.warehouseId());
+    return inLocalTransaction(
+        "catalog fork finalization", () -> forkCatalogInTransaction(subjectId, key, id, request));
+  }
+
+  private WarehouseAdmissionPreflight<CreateResult<CatalogVersionResponse>> forkCatalogPreflight(
+      UUID subjectId, UUID key, UUID id, VersionCommand request) {
+    String requestHash = hash(request);
+    String scope = "catalog.fork:" + id;
+    Optional<JsonNode> replay = idempotency.replay(subjectId, scope, key, requestHash);
+    if (replay.isPresent()) {
+      return new WarehouseAdmissionPreflight<>(
+          null, new CreateResult<>(read(replay.get(), CatalogVersionResponse.class), true));
+    }
+    CatalogVersion source = requireCatalog(id);
+    assertVersion(source.getVersion(), request.expectedVersion());
+    if (source.getState() != CatalogVersionState.ACTIVE
+        && source.getState() != CatalogVersionState.SUPERSEDED) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Only an active or superseded catalog version can be forked");
+    }
+    return new WarehouseAdmissionPreflight<>(source.getWarehouseId(), null);
+  }
+
+  private CreateResult<CatalogVersionResponse> forkCatalogInTransaction(
       UUID subjectId, UUID key, UUID id, VersionCommand request) {
     String requestHash = hash(request);
     String scope = "catalog.fork:" + id;
@@ -796,6 +923,7 @@ public class MaintenanceApplicationService {
 
   public CreateResult<CatalogVersionResponse> activateCatalog(
       UUID subjectId, UUID key, UUID id, VersionCommand request) {
+    requireNoCallerTransaction("activate a catalog");
     UUID routingContextWarehouseId =
         transactions.execute(status -> requireCatalog(id).getWarehouseId());
     if (routingContextWarehouseId == null) {
@@ -810,6 +938,7 @@ public class MaintenanceApplicationService {
       UUID id,
       UUID routingContextWarehouseId,
       VersionCommand request) {
+    requireNoCallerTransaction("activate a catalog");
     Objects.requireNonNull(
         routingContextWarehouseId, "Catalog routing context warehouse is required");
     transactions.executeWithoutResult(status -> requireCatalog(id));
@@ -824,6 +953,7 @@ public class MaintenanceApplicationService {
     if (!Boolean.TRUE.equals(preflight)) {
       throw new IllegalStateException("Catalog activation preflight transaction was empty");
     }
+    warehouseLifecycle.requireIncoming(routingContextWarehouseId);
     canonicalCatalogRouting(catalogNodeInputs(id));
     CreateResult<CatalogVersionResponse> result = transactions.execute(
         status -> activateCatalogAfterPreflight(subjectId, key, id, request, requestHash));
@@ -899,6 +1029,8 @@ public class MaintenanceApplicationService {
         catalogLocal(saved),
         catalogFact(MaintenanceEventType.CATALOG_ACTIVATED, saved),
         catalogSnapshot(saved));
+    warehouseLifecycle.recordOperation(
+        saved.getWarehouseId(), saved.getId(), saved.getActivatedAt());
     enqueueCatalogRouting(saved, superseded);
     CatalogVersionResponse response = catalogResponse(saved);
     idempotency.store(subjectId, "catalog.activate:" + id, key, requestHash, 200, response);
@@ -919,8 +1051,40 @@ public class MaintenanceApplicationService {
         .orElseThrow(() -> new MaintenanceNotFoundException("Estimate not found")));
   }
 
-  @Transactional
   public CreateResult<EstimateResponse> createEstimate(
+      UUID subjectId, UUID key, CreateEstimateRequest request) {
+    requireNoCallerTransaction("create an estimate");
+    WarehouseAdmissionPreflight<CreateResult<EstimateResponse>> preflight =
+        inLocalTransaction(
+            "estimate create preflight", () -> createEstimatePreflight(subjectId, key, request));
+    if (preflight.replay() != null) {
+      return preflight.replay();
+    }
+    warehouseLifecycle.requireIncoming(preflight.warehouseId());
+    requireCustomRoutingReady(request.warehouseId(), request.plan());
+    return inLocalTransaction(
+        "estimate create finalization", () -> createEstimateInTransaction(subjectId, key, request));
+  }
+
+  private WarehouseAdmissionPreflight<CreateResult<EstimateResponse>> createEstimatePreflight(
+      UUID subjectId, UUID key, CreateEstimateRequest request) {
+    String requestHash = hash(request);
+    Optional<JsonNode> replay =
+        idempotency.replay(subjectId, "estimate.create", key, requestHash);
+    if (replay.isPresent()) {
+      return new WarehouseAdmissionPreflight<>(
+          null, new CreateResult<>(read(replay.get(), EstimateResponse.class), true));
+    }
+    RentalItemFactProjection rentalItem =
+        requireRentalItemFact(request.rentalItemId(), request.warehouseId());
+    requireEstimateSourceStatus(rentalItem);
+    requireActiveCatalog(request.warehouseId());
+    validateEstimatePlan(request.lines(), request.plan());
+    validateCoverMediaSelection(request.mediaReferences(), request.coverMediaId());
+    return new WarehouseAdmissionPreflight<>(request.warehouseId(), null);
+  }
+
+  private CreateResult<EstimateResponse> createEstimateInTransaction(
       UUID subjectId, UUID key, CreateEstimateRequest request) {
     String requestHash = hash(request);
     Optional<JsonNode> replay = idempotency.replay(subjectId, "estimate.create", key, requestHash);
@@ -954,6 +1118,8 @@ public class MaintenanceApplicationService {
         estimate.getId(),
         estimate.getVersion(),
         true);
+    warehouseLifecycle.recordOperation(
+        estimate.getWarehouseId(), estimate.getId(), estimate.getCreatedAt());
     EstimateResponse response = estimateResponse(estimate);
     idempotency.store(subjectId, "estimate.create", key, requestHash, 201, response);
     return new CreateResult<>(response, false);
@@ -1011,11 +1177,33 @@ public class MaintenanceApplicationService {
         estimate.getId(),
         estimate.getVersion(),
         true);
+    warehouseLifecycle.recordOperation(
+        estimate.getWarehouseId(), estimate.getId(), estimate.getCreatedAt());
     return estimate.getId();
   }
 
-  @Transactional
   public EstimateResponse updateEstimate(UUID id, UpdateEstimateRequest request) {
+    requireNoCallerTransaction("update an estimate");
+    WarehouseAdmissionPreflight<Void> preflight =
+        inLocalTransaction(
+            "estimate update preflight", () -> updateEstimatePreflight(id, request));
+    warehouseLifecycle.requireIncoming(preflight.warehouseId());
+    requireCustomRoutingReady(preflight.warehouseId(), request.plan());
+    return inLocalTransaction(
+        "estimate update finalization", () -> updateEstimateInTransaction(id, request));
+  }
+
+  private WarehouseAdmissionPreflight<Void> updateEstimatePreflight(
+      UUID id, UpdateEstimateRequest request) {
+    MaintenanceEstimate estimate = requireEstimate(id);
+    assertVersion(estimate.getVersion(), request.expectedVersion());
+    validateEstimatePlan(request.lines(), request.plan());
+    validateCoverMediaSelection(request.mediaReferences(), request.coverMediaId());
+    return new WarehouseAdmissionPreflight<>(estimate.getWarehouseId(), null);
+  }
+
+  private EstimateResponse updateEstimateInTransaction(
+      UUID id, UpdateEstimateRequest request) {
     MaintenanceEstimate estimate = requireEstimate(id);
     assertVersion(estimate.getVersion(), request.expectedVersion());
     validateEstimatePlan(request.lines(), request.plan());
@@ -1045,8 +1233,38 @@ public class MaintenanceApplicationService {
     return estimateResponse(saved);
   }
 
-  @Transactional
   public CreateResult<EstimateCommandResult> completeEstimate(
+      UUID subjectId, UUID key, UUID id, CompleteEstimateRequest request) {
+    requireNoCallerTransaction("complete an estimate");
+    EstimateCompletionPreflight preflight =
+        inLocalTransaction(
+            "estimate completion preflight",
+            () -> completeEstimatePreflight(subjectId, key, id, request));
+    if (preflight.replay() != null) {
+      return preflight.replay();
+    }
+    warehouseLifecycle.requireOutgoing(preflight.warehouseId());
+    requireCustomRoutingReady(preflight.warehouseId(), preflight.plan());
+    return inLocalTransaction(
+        "estimate completion finalization",
+        () -> completeEstimateInTransaction(subjectId, key, id, request));
+  }
+
+  private EstimateCompletionPreflight completeEstimatePreflight(
+      UUID subjectId, UUID key, UUID id, CompleteEstimateRequest request) {
+    String requestHash = hash(request);
+    Optional<JsonNode> replay = idempotency.replay(subjectId, "estimate.complete:" + id, key, requestHash);
+    if (replay.isPresent()) {
+      return new EstimateCompletionPreflight(
+          new CreateResult<>(read(replay.get(), EstimateCommandResult.class), true), null, List.of());
+    }
+    MaintenanceEstimate estimate = requireEstimate(id);
+    assertVersion(estimate.getVersion(), request.expectedVersion());
+    return new EstimateCompletionPreflight(
+        null, estimate.getWarehouseId(), storedPlanInputs(currentPlan(estimate)));
+  }
+
+  private CreateResult<EstimateCommandResult> completeEstimateInTransaction(
       UUID subjectId, UUID key, UUID id, CompleteEstimateRequest request) {
     String requestHash = hash(request);
     Optional<JsonNode> replay = idempotency.replay(subjectId, "estimate.complete:" + id, key, requestHash);
@@ -1095,8 +1313,39 @@ public class MaintenanceApplicationService {
     return new CreateResult<>(response, false);
   }
 
-  @Transactional
   public CreateResult<EstimateCommandResult> amendEstimate(
+      UUID subjectId, UUID key, UUID id, AmendEstimateRequest request) {
+    requireNoCallerTransaction("amend an estimate");
+    WarehouseAdmissionPreflight<CreateResult<EstimateCommandResult>> preflight =
+        inLocalTransaction(
+            "estimate amendment preflight",
+            () -> amendEstimatePreflight(subjectId, key, id, request));
+    if (preflight.replay() != null) {
+      return preflight.replay();
+    }
+    warehouseLifecycle.requireIncoming(preflight.warehouseId());
+    requireCustomRoutingReady(preflight.warehouseId(), request.plan());
+    return inLocalTransaction(
+        "estimate amendment finalization",
+        () -> amendEstimateInTransaction(subjectId, key, id, request));
+  }
+
+  private WarehouseAdmissionPreflight<CreateResult<EstimateCommandResult>> amendEstimatePreflight(
+      UUID subjectId, UUID key, UUID id, AmendEstimateRequest request) {
+    String requestHash = hash(request);
+    Optional<JsonNode> replay = idempotency.replay(subjectId, "estimate.amend:" + id, key, requestHash);
+    if (replay.isPresent()) {
+      return new WarehouseAdmissionPreflight<>(
+          null, new CreateResult<>(read(replay.get(), EstimateCommandResult.class), true));
+    }
+    MaintenanceEstimate estimate = requireEstimate(id);
+    assertVersion(estimate.getVersion(), request.expectedVersion());
+    validateEstimatePlan(request.lines(), request.plan());
+    validateCoverMediaSelection(request.mediaReferences(), request.coverMediaId());
+    return new WarehouseAdmissionPreflight<>(estimate.getWarehouseId(), null);
+  }
+
+  private CreateResult<EstimateCommandResult> amendEstimateInTransaction(
       UUID subjectId, UUID key, UUID id, AmendEstimateRequest request) {
     String requestHash = hash(request);
     Optional<JsonNode> replay = idempotency.replay(subjectId, "estimate.amend:" + id, key, requestHash);
@@ -1109,7 +1358,8 @@ public class MaintenanceApplicationService {
     validateCoverMediaSelection(request.mediaReferences(), request.coverMediaId());
     MaintenanceRepair repair = estimate.getRepairId() == null ? null : requireRepair(estimate.getRepairId());
     if (repair != null
-        && !furnitureLosses(estimate).equals(furnitureLosses(estimate, request.lines()))) {
+        && !estimateFurnitureQuantities(estimate)
+            .equals(estimateFurnitureQuantities(estimate, request.lines()))) {
       throw new MaintenanceConflictException(
           "MAINTENANCE_STATE_CONFLICT",
           "Furniture quantities cannot change after an estimate has created its repair");
@@ -1307,8 +1557,31 @@ public class MaintenanceApplicationService {
    * recovers a task registration if the first callback completed the place transition but failed
    * before it could enqueue the task-board work.</p>
    */
-  @Transactional
   public void activateQueuedRepairAfterDelivery(UUID warehouseId, UUID repairId) {
+    requireNoCallerTransaction("activate a delivered queued repair");
+    WarehouseAdmissionPreflight<Void> preflight =
+        inLocalTransaction(
+            "delivered queued repair preflight",
+            () -> activateQueuedRepairAfterDeliveryPreflight(warehouseId, repairId));
+    warehouseLifecycle.requireOutgoing(preflight.warehouseId());
+    inLocalTransaction(
+        "delivered queued repair finalization",
+        () -> {
+          activateQueuedRepairAfterDeliveryInTransaction(warehouseId, repairId);
+          return Boolean.TRUE;
+        });
+  }
+
+  private WarehouseAdmissionPreflight<Void> activateQueuedRepairAfterDeliveryPreflight(
+      UUID warehouseId, UUID repairId) {
+    MaintenanceRepair repair =
+        repairs
+            .findByIdAndWarehouseId(repairId, warehouseId)
+            .orElseThrow(() -> new MaintenanceNotFoundException("Repair not found"));
+    return new WarehouseAdmissionPreflight<>(repair.getWarehouseId(), null);
+  }
+
+  private void activateQueuedRepairAfterDeliveryInTransaction(UUID warehouseId, UUID repairId) {
     MaintenanceRepair repair =
         repairs
             .findByIdAndWarehouseId(repairId, warehouseId)
@@ -1335,8 +1608,45 @@ public class MaintenanceApplicationService {
     return new ReworkCandidatesResponse(reworkCandidateItems(source));
   }
 
-  @Transactional
   public CreateResult<RepairResponse> createDirectRepair(
+      UUID subjectId, UUID key, CreateDirectRepairRequest request) {
+    requireNoCallerTransaction("create a direct repair");
+    WarehouseAdmissionPreflight<CreateResult<RepairResponse>> preflight =
+        inLocalTransaction(
+            "direct repair preflight", () -> createDirectRepairPreflight(subjectId, key, request));
+    if (preflight.replay() != null) {
+      return preflight.replay();
+    }
+    warehouseLifecycle.requireIncoming(preflight.warehouseId());
+    requireCustomRoutingReady(preflight.warehouseId(), request.plan());
+    return inLocalTransaction(
+        "direct repair finalization", () -> createDirectRepairInTransaction(subjectId, key, request));
+  }
+
+  private WarehouseAdmissionPreflight<CreateResult<RepairResponse>> createDirectRepairPreflight(
+      UUID subjectId, UUID key, CreateDirectRepairRequest request) {
+    String requestHash = hash(request);
+    Optional<JsonNode> replay = idempotency.replay(subjectId, "repair.direct", key, requestHash);
+    if (replay.isPresent()) {
+      return new WarehouseAdmissionPreflight<>(
+          null, new CreateResult<>(read(replay.get(), RepairResponse.class), true));
+    }
+    RentalItemFactProjection rentalItem = requireRentalItemFact(
+        request.rentalItemId(), request.warehouseId());
+    requireDirectRepairSourceStatus(rentalItem);
+    if (request.lines() != null
+        && request.lines().isEmpty()
+        && !EMPTY_DIRECT_REPAIR_SOURCE_STATUSES.contains(rentalItem.getAssetStatus())) {
+      throw new MaintenanceValidationException(
+          "MAINTENANCE_VALIDATION_FAILED",
+          "An empty direct repair requires an unoccupied rental item");
+    }
+    validateCoverMediaSelection(request.mediaReferences(), request.coverMediaId());
+    validatePlan(request.plan(), request.lines() == null || request.lines().isEmpty());
+    return new WarehouseAdmissionPreflight<>(request.warehouseId(), null);
+  }
+
+  private CreateResult<RepairResponse> createDirectRepairInTransaction(
       UUID subjectId, UUID key, CreateDirectRepairRequest request) {
     String requestHash = hash(request);
     Optional<JsonNode> replay = idempotency.replay(subjectId, "repair.direct", key, requestHash);
@@ -1383,14 +1693,37 @@ public class MaintenanceApplicationService {
         repair.getId(),
         repair.getVersion(),
         true);
+    warehouseLifecycle.recordOperation(
+        repair.getWarehouseId(), repair.getId(), repair.getCreatedAt());
     RepairResponse response = repairResponse(repair);
     idempotency.store(subjectId, "repair.direct", key, requestHash, 201, response);
     return new CreateResult<>(response, false);
   }
 
-  @Transactional
   public RepairResponse updateRepairPlan(UUID id, UpdateRepairPlanRequest request) {
-    requireRepair(id);
+    requireNoCallerTransaction("update a repair plan");
+    WarehouseAdmissionPreflight<Void> preflight =
+        inLocalTransaction(
+            "repair plan update preflight", () -> updateRepairPlanPreflight(id, request));
+    warehouseLifecycle.requireIncoming(preflight.warehouseId());
+    requireCustomRoutingReady(preflight.warehouseId(), request.stages());
+    return inLocalTransaction(
+        "repair plan update finalization", () -> updateRepairPlanInTransaction(id, request));
+  }
+
+  private WarehouseAdmissionPreflight<Void> updateRepairPlanPreflight(
+      UUID id, UpdateRepairPlanRequest request) {
+    MaintenanceRepair initial = requireRepair(id);
+    assertVersion(initial.getVersion(), request.expectedVersion());
+    initial.requirePreStartAmendment();
+    validateCoverMediaSelection(request.mediaReferences(), request.coverMediaId());
+    validatePlan(
+        request.stages(), request.lines() == null || request.lines().isEmpty());
+    return new WarehouseAdmissionPreflight<>(initial.getWarehouseId(), null);
+  }
+
+  private RepairResponse updateRepairPlanInTransaction(
+      UUID id, UpdateRepairPlanRequest request) {
     Map<MaintenanceEventStore.StreamRef, Long> locked =
         events.lockStreams(List.of(stream(id)));
     assertVersion(locked.get(stream(id)), request.expectedVersion());
@@ -1466,9 +1799,66 @@ public class MaintenanceApplicationService {
     return repairResponse(saved);
   }
 
-  @Transactional
   public CreateResult<RepairCommandResult> queueRepair(
       UUID subjectId, UUID key, UUID id, QueueRepairRequest request) {
+    requireNoCallerTransaction("queue a repair");
+    QueueRepairCommandPreflight preflight =
+        inLocalTransaction(
+            "repair queue preflight", () -> queueRepairPreflight(subjectId, key, id, request));
+    if (preflight.replay() != null) {
+      return preflight.replay();
+    }
+    warehouseLifecycle.requireOutgoing(preflight.warehouseId());
+    LeaseRefresh leaseRefresh =
+        preflight.leasePlan() == null
+            ? null
+            : refreshLeaseForCommand(preflight.leasePlan(), key);
+    return inLocalTransaction(
+        "repair queue finalization",
+        () -> queueRepairInTransaction(subjectId, key, id, request, preflight.leasePlan(), leaseRefresh));
+  }
+
+  private QueueRepairCommandPreflight queueRepairPreflight(
+      UUID subjectId, UUID key, UUID id, QueueRepairRequest request) {
+    String requestHash = hash(request);
+    Optional<JsonNode> replay = idempotency.replay(subjectId, "repair.queue:" + id, key, requestHash);
+    if (replay.isPresent()) {
+      return new QueueRepairCommandPreflight(
+          new CreateResult<>(read(replay.get(), RepairCommandResult.class), true), null, null);
+    }
+    MaintenanceRepair repair = requireRepair(id);
+    assertVersion(repair.getVersion(), request.expectedVersion());
+    List<RepairStage> stages = repairStages.findAllByRepairIdOrderByStageNo(id);
+    if (stages.isEmpty()) {
+      if (repair.getOrigin() != RepairOrigin.DIRECT_REPAIR
+          || repair.getKind() != RepairKind.PRIMARY
+          || repair.getExecutionState() != RepairExecutionState.DRAFT) {
+        throw new MaintenanceValidationException(
+            "MAINTENANCE_VALIDATION_FAILED",
+            "Only an empty direct repair can be completed without planned stages");
+      }
+      return new QueueRepairCommandPreflight(null, repair.getWarehouseId(), null);
+    }
+    LeaseRefreshPlan leasePlan = null;
+    if (repair.getKind() == RepairKind.REWORK) {
+      MaintenanceRepair source =
+          requireRepair(
+              Objects.requireNonNull(
+                  repair.getSourceRepairId(), "Rework repair source is required"));
+      List<MaintenanceRepair> chain = sourceChain(repair);
+      MaintenanceRepair root = leaseOwner(repair, chain);
+      leasePlan = prepareLeaseRefreshPlan(root, List.of(source));
+    }
+    return new QueueRepairCommandPreflight(null, repair.getWarehouseId(), leasePlan);
+  }
+
+  private CreateResult<RepairCommandResult> queueRepairInTransaction(
+      UUID subjectId,
+      UUID key,
+      UUID id,
+      QueueRepairRequest request,
+      LeaseRefreshPlan expectedLeasePlan,
+      LeaseRefresh remoteLeaseRefresh) {
     String requestHash = hash(request);
     Optional<JsonNode> replay = idempotency.replay(subjectId, "repair.queue:" + id, key, requestHash);
     if (replay.isPresent()) {
@@ -1524,7 +1914,13 @@ public class MaintenanceApplicationService {
       repair = lockedRework.rework();
       MaintenanceRepair root = lockedRework.root();
       MaintenanceRepair source = lockedRework.source();
-      LeaseRefresh leaseRefresh = refreshLeaseForCommand(root, List.of(source), key);
+      if (expectedLeasePlan == null || remoteLeaseRefresh == null) {
+        throw new MaintenanceConflictException(
+            "MAINTENANCE_STATE_CONFLICT",
+            "Rework repair lease refresh was not prepared");
+      }
+      requireMatchingLeaseRefreshPlan(expectedLeasePlan, root, List.of(source));
+      LeaseRefresh leaseRefresh = remoteLeaseRefresh;
       if (leaseRefresh.ownerRenewed() && !root.getId().equals(source.getId())) {
         long rootExpectedVersion = lockedRework.streamVersions().get(stream(root.getId()));
         applyLeaseSnapshot(root, leaseRefresh.lease());
@@ -1637,6 +2033,7 @@ public class MaintenanceApplicationService {
       UUID id,
       UUID warehouseId,
       RetryInboundDeliveryRequest request) {
+    requireNoCallerTransaction("retry inbound delivery");
     validateInboundDeliveryRetryRequest(request);
     String scope = "repair.inbound-delivery-retry:" + id;
     String requestHash = hash(request);
@@ -1656,6 +2053,8 @@ public class MaintenanceApplicationService {
               return null;
             });
     if (replay != null) return replay;
+
+    warehouseLifecycle.requireOutgoing(warehouseId);
 
     requireAbsentInboundDriverTask(id);
 
@@ -1720,14 +2119,46 @@ public class MaintenanceApplicationService {
     return result;
   }
 
-  @Transactional
   public CreateResult<RepairCommandResult> queueRepair(
       UUID subjectId, UUID key, UUID id, VersionCommand request) {
+    requireNoCallerTransaction("queue a repair");
     return queueRepair(subjectId, key, id, new QueueRepairRequest(request.expectedVersion(), 3));
   }
 
-  @Transactional
   public CreateResult<RepairResponse> createRework(
+      UUID subjectId, UUID key, UUID sourceId, CreateReworkRequest request) {
+    requireNoCallerTransaction("create a rework repair");
+    WarehouseAdmissionPreflight<CreateResult<RepairResponse>> preflight =
+        inLocalTransaction(
+            "rework repair preflight",
+            () -> createReworkPreflight(subjectId, key, sourceId, request));
+    if (preflight.replay() != null) {
+      return preflight.replay();
+    }
+    warehouseLifecycle.requireIncoming(preflight.warehouseId());
+    requireCustomRoutingReady(preflight.warehouseId(), request.plan());
+    return inLocalTransaction(
+        "rework repair finalization",
+        () -> createReworkInTransaction(subjectId, key, sourceId, request));
+  }
+
+  private WarehouseAdmissionPreflight<CreateResult<RepairResponse>> createReworkPreflight(
+      UUID subjectId, UUID key, UUID sourceId, CreateReworkRequest request) {
+    String requestHash = hash(request);
+    Optional<JsonNode> replay = idempotency.replay(subjectId, "repair.rework:" + sourceId, key, requestHash);
+    if (replay.isPresent()) {
+      return new WarehouseAdmissionPreflight<>(
+          null, new CreateResult<>(read(replay.get(), RepairResponse.class), true));
+    }
+    MaintenanceRepair initialSource = requireRepair(sourceId);
+    assertVersion(initialSource.getVersion(), request.expectedVersion());
+    validateCoverMediaSelection(request.mediaReferences(), request.coverMediaId());
+    validatePlan(
+        request.plan(), request.lines() == null || request.lines().isEmpty());
+    return new WarehouseAdmissionPreflight<>(initialSource.getWarehouseId(), null);
+  }
+
+  private CreateResult<RepairResponse> createReworkInTransaction(
       UUID subjectId, UUID key, UUID sourceId, CreateReworkRequest request) {
     String requestHash = hash(request);
     Optional<JsonNode> replay = idempotency.replay(subjectId, "repair.rework:" + sourceId, key, requestHash);
@@ -1791,14 +2222,58 @@ public class MaintenanceApplicationService {
         child.getId(),
         child.getVersion(),
         true);
+    warehouseLifecycle.recordOperation(
+        child.getWarehouseId(), child.getId(), child.getCreatedAt());
     RepairResponse response = repairResponse(child);
     idempotency.store(subjectId, "repair.rework:" + sourceId, key, requestHash, 201, response);
     return new CreateResult<>(response, false);
   }
 
-  @Transactional
   public CreateResult<RepairCommandResult> accept(
       UUID subjectId, UUID key, UUID id, RepairDecisionRequest request) {
+    requireNoCallerTransaction("accept a repair");
+    AcceptanceCommandPreflight preflight =
+        inLocalTransaction(
+            "repair acceptance preflight", () -> acceptPreflight(subjectId, key, id, request));
+    if (preflight.replay() != null) {
+      return preflight.replay();
+    }
+    warehouseLifecycle.requireOutgoing(preflight.warehouseId());
+    LeaseRefresh leaseRefresh = refreshLeaseForCommand(preflight.leasePlan(), key);
+    return inLocalTransaction(
+        "repair acceptance finalization",
+        () -> acceptInTransaction(subjectId, key, id, request, preflight.leasePlan(), leaseRefresh));
+  }
+
+  private AcceptanceCommandPreflight acceptPreflight(
+      UUID subjectId, UUID key, UUID id, RepairDecisionRequest request) {
+    if (request.mediaReferences() == null || request.mediaReferences().isEmpty()) {
+      throw invalid("At least one acceptance photo is required");
+    }
+    String requestHash = hash(request);
+    Optional<JsonNode> replay = idempotency.replay(
+        subjectId, "repair.accept:" + id, key, requestHash);
+    if (replay.isPresent()) {
+      return new AcceptanceCommandPreflight(
+          new CreateResult<>(read(replay.get(), RepairCommandResult.class), true), null, null);
+    }
+    MaintenanceRepair initial = requireRepair(id);
+    assertVersion(initial.getVersion(), request.expectedVersion());
+    List<MaintenanceRepair> sources = sourceChain(initial);
+    requireNoActiveRework(initial);
+    return new AcceptanceCommandPreflight(
+        null,
+        initial.getWarehouseId(),
+        prepareLeaseRefreshPlan(initial, sources));
+  }
+
+  private CreateResult<RepairCommandResult> acceptInTransaction(
+      UUID subjectId,
+      UUID key,
+      UUID id,
+      RepairDecisionRequest request,
+      LeaseRefreshPlan expectedLeasePlan,
+      LeaseRefresh leaseRefresh) {
     if (request.mediaReferences() == null || request.mediaReferences().isEmpty()) {
       throw invalid("At least one acceptance photo is required");
     }
@@ -1814,13 +2289,13 @@ public class MaintenanceApplicationService {
     MaintenanceRepair repair = lockedChain.repair();
     List<MaintenanceRepair> sourceChain = lockedChain.sources();
     requireNoActiveRework(repair);
+    requireMatchingLeaseRefreshPlan(expectedLeasePlan, repair, sourceChain);
     replaceMedia(
         "ACCEPTANCE",
         "MAINTENANCE_ACCEPTANCE",
         repair.getId(),
         repair.getWarehouseId(),
         request.mediaReferences());
-    LeaseRefresh leaseRefresh = refreshLeaseForCommand(repair, sourceChain, key);
     applyLeaseSnapshot(repair, leaseRefresh.lease());
     repair.accept(request.comment(), actorJson());
     repair.markLeaseReconciliationRequired();
@@ -1852,43 +2327,6 @@ public class MaintenanceApplicationService {
     return new CreateResult<>(response, false);
   }
 
-  @Transactional
-  public CreateResult<RepairCommandResult> writeOff(
-      UUID subjectId, UUID key, UUID id, WriteOffRepairRequest request) {
-    String requestHash = hash(request);
-    Optional<JsonNode> replay = idempotency.replay(
-        subjectId, "repair.write-off:" + id, key, requestHash);
-    if (replay.isPresent()) {
-      return new CreateResult<>(read(replay.get(), RepairCommandResult.class), true);
-    }
-    MaintenanceRepair initial = requireRepair(id);
-    assertVersion(initial.getVersion(), request.expectedVersion());
-    LockedRepairChain lockedChain = lockAndReloadRepairChain(initial, request.expectedVersion());
-    MaintenanceRepair repair = lockedChain.repair();
-    List<MaintenanceRepair> sourceChain = lockedChain.sources();
-    requireNoActiveRework(repair);
-    LeaseRefresh leaseRefresh = refreshLeaseForCommand(repair, sourceChain, key);
-    applyLeaseSnapshot(repair, leaseRefresh.lease());
-    repair.writeOff(combineDecision(request.reason(), request.comment()), actorJson());
-    repair.markLeaseReconciliationRequired();
-    MaintenanceRepair saved = repairs.saveAndFlush(repair);
-    events.append(
-        MaintenanceAggregateType.REPAIR,
-        id,
-        request.expectedVersion(),
-        MaintenanceEventType.REPAIR_WRITTEN_OFF,
-        decisionLocal(id, combineDecision(request.reason(), request.comment())),
-        repairFact(MaintenanceEventType.REPAIR_WRITTEN_OFF, saved),
-        repairSnapshot(saved));
-    cascadeTerminal(saved, sourceChain, false, leaseRefresh.lease());
-    enqueueTerminalAsset(saved, "WRITE_OFF", stableOperationKey(
-        "write-off-asset", saved.getId(), saved.getVersion()));
-    RepairCommandResult response = new RepairCommandResult(
-        repairResponse(saved), sourceChain.stream().map(this::repairResponse).toList(), delivery(saved));
-    idempotency.store(subjectId, "repair.write-off:" + id, key, requestHash, 200, response);
-    return new CreateResult<>(response, false);
-  }
-
   @Transactional(readOnly = true)
   public List<AcceptanceProjection> acceptance(UUID warehouseId) {
     return repairs.findAllByWarehouseIdOrderByCreatedAtDesc(warehouseId).stream()
@@ -1901,18 +2339,6 @@ public class MaintenanceApplicationService {
         .map(value -> new AcceptanceProjection(
             value.getId(), rootId(value), value.getWarehouseId(), value.getRentalItemId(),
             value.getExecutionState(), value.getAcceptanceState(), value.getVersion(), value.getUpdatedAt()))
-        .toList();
-  }
-
-  @Transactional(readOnly = true)
-  public List<WriteOffProjection> writeOffs(UUID warehouseId) {
-    return repairs.findAllByWarehouseIdOrderByCreatedAtDesc(warehouseId).stream()
-        .filter(value -> value.getAcceptanceState() == RepairAcceptanceState.WRITTEN_OFF)
-        .map(value -> new WriteOffProjection(
-            value.getId(), rootId(value), value.getWarehouseId(), value.getRentalItemId(),
-            value.getVersion(), value.getDecisionRecordedAt() == null
-                ? value.getUpdatedAt() : value.getDecisionRecordedAt(),
-            actor(value.getDecisionActorRef() == null ? value.getActorRef() : value.getDecisionActorRef())))
         .toList();
   }
 
@@ -2098,6 +2524,12 @@ public class MaintenanceApplicationService {
         repairFact(maintenanceEvent, saved),
         repairSnapshot(saved));
     if (maintenanceEvent == MaintenanceEventType.REPAIR_PENDING_ACCEPTANCE) {
+      reconciliations.enqueue(
+          saved.getId(),
+          "ASSET",
+          "MATERIALIZE_FURNITURE_CUSTODY",
+          stableOperationKey("materialize-furniture-custody", saved.getId(), 0),
+          Map.of("repairId", saved.getId().toString()));
       inventorySuccessors.releaseAfterTaskBoardCompletion(saved, eventId, occurredAt);
       enqueueMediaOwnerProof(
           "MAINTENANCE_ACCEPTANCE",
@@ -2176,98 +2608,1466 @@ public class MaintenanceApplicationService {
   }
 
   public boolean reconcileOneTask() {
-    MaintenanceReconciliationStore.WorkItem[] attempted = new MaintenanceReconciliationStore.WorkItem[1];
+    Optional<MaintenanceReconciliationStore.WorkItem> candidate =
+        reconciliations.claimNextDue(RECONCILIATION_CLAIM_LEASE);
+    if (candidate.isEmpty()) {
+      Boolean enqueued = transactions.execute(status -> enqueueDueLeaseRenewal());
+      return Boolean.TRUE.equals(enqueued);
+    }
+    MaintenanceReconciliationStore.WorkItem work = candidate.orElseThrow();
     try {
-      Boolean processed = transactions.execute(status -> {
-        Optional<MaintenanceReconciliationStore.WorkItem> candidate = reconciliations.lockNextDue();
-        if (candidate.isEmpty()) return enqueueDueLeaseRenewal();
-        MaintenanceReconciliationStore.WorkItem work = candidate.get();
-        attempted[0] = work;
-        Object response = switch (work.operation()) {
-          case "QUEUE_REPAIR" -> reconcileRepairQueue(work);
-          case "COMPLETE_EMPTY_ESTIMATE" -> reconcileEmptyEstimate(work);
-          case "REGISTER_TASK" -> reconcileTask(work, false);
-          case "UPDATE_TASK" -> reconcileTask(work, true);
-          case "CREATE_DRIVER_TASK" ->
-              reconcileDriverLogisticsTask(work);
-          case "SYNC_REPAIR_COMPLEXITY_STATUS" ->
-              reconcileRepairComplexityStatus(work);
-          case "APPLY_CHARACTERISTIC" -> reconcileAcceptedCharacteristic(work);
-          case "REGISTER_CATALOG_POSITION" ->
-              catalogPositionReady(work)
-                  ? reconcileCatalogPositionRegistration(work)
-                  : null;
-          case "DELETE_CATALOG_POSITION" ->
-              catalogPositionReady(work)
-                  ? reconcileCatalogPositionDeletion(work)
-                  : null;
-          case "EMPTY_REPAIR_TO_FREE", "ACCEPT_TO_FREE", "WRITE_OFF", "PENDING_ACCEPTANCE" ->
-              reconcileAssetTransition(work);
-          case "RENEW_LEASE" -> reconcileLeaseRenewal(work);
-          default -> throw new IllegalStateException(
-              "Unsupported maintenance reconciliation operation " + work.operation());
-        };
-        if (response != null) reconciliations.confirmed(work, response);
-        return true;
-      });
-      return Boolean.TRUE.equals(processed);
+      reconcileClaimedTask(work);
+      return true;
     } catch (RuntimeException exception) {
-      MaintenanceReconciliationStore.WorkItem work = attempted[0];
-      if (work == null) throw exception;
-      transactions.executeWithoutResult(status -> {
-        boolean quarantined = reconciliations.failed(work, exception);
-        recordReconciliationFailure(work, quarantined);
-      });
+      recordClaimedTaskFailure(work, exception);
       return true;
     }
   }
 
   public boolean reconcileOneMediaOwnerProof() {
-    MaintenanceReconciliationStore.WorkItem[] attempted =
-        new MaintenanceReconciliationStore.WorkItem[1];
+    Optional<MaintenanceReconciliationStore.WorkItem> candidate =
+        reconciliations.claimNextDueMedia(RECONCILIATION_CLAIM_LEASE);
+    if (candidate.isEmpty()) return false;
+    MaintenanceReconciliationStore.WorkItem work = candidate.orElseThrow();
     try {
-      Boolean processed = transactions.execute(status -> {
-        Optional<MaintenanceReconciliationStore.WorkItem> candidate =
-            reconciliations.lockNextDueMedia();
-        if (candidate.isEmpty()) return false;
-        MaintenanceReconciliationStore.WorkItem work = candidate.get();
-        attempted[0] = work;
-        if (!"MEDIA".equals(work.dependency())
-            || !"UPSERT_MEDIA_OWNER_PROOF".equals(work.operation())
-            || work.mediaOwnerType() == null
-            || work.mediaOwnerId() == null
-            || work.mediaWarehouseId() == null
-            || work.mediaOwnerRevision() == null
-            || work.mediaAggregateVersion() == null
-            || work.mediaProofEventId() == null
-            || work.mediaActive() == null) {
-          throw new IllegalStateException("Stored media owner proof is incomplete");
-        }
-        MaintenanceDependencyGateway.MediaOwnerProof proof =
-            new MaintenanceDependencyGateway.MediaOwnerProof(
-                work.mediaOwnerType(),
-                work.mediaOwnerId(),
-                work.mediaWarehouseId(),
-                work.mediaOwnerRevision(),
-                work.mediaAggregateVersion(),
-                work.mediaProofEventId(),
-                work.mediaActive());
-        MaintenanceDependencyGateway.MediaOwnerProof response =
-            dependencies.upsertMediaOwnerProof(proof);
-        if (!proof.equals(response)) {
-          throw new MaintenanceDependencyException(
-              org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-              "Media-service returned mismatched owner proof truth");
-        }
-        reconciliations.confirmed(work, response);
-        return true;
-      });
-      return Boolean.TRUE.equals(processed);
-    } catch (RuntimeException exception) {
-      MaintenanceReconciliationStore.WorkItem work = attempted[0];
-      if (work == null) throw exception;
-      transactions.executeWithoutResult(status -> reconciliations.failed(work, exception));
+      // The durable claim committed above; no local transaction or row lock is held while
+      // media-service is called.
+      MaintenanceDependencyGateway.MediaOwnerProof proof = mediaProof(work);
+      MaintenanceDependencyGateway.MediaOwnerProof response =
+          dependencies.upsertMediaOwnerProof(proof);
+      if (!proof.equals(response)) {
+        throw new MaintenanceDependencyException(
+            org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+            "Media-service returned mismatched owner proof truth");
+      }
+      transactions.executeWithoutResult(status -> reconciliations.confirmed(work, response));
       return true;
+    } catch (RuntimeException exception) {
+      try {
+        transactions.executeWithoutResult(status -> reconciliations.failed(work, exception));
+      } catch (RuntimeException staleClaim) {
+        if (!MaintenanceReconciliationStore.isStaleClaim(staleClaim)) throw staleClaim;
+      }
+      return true;
+    }
+  }
+
+  private void reconcileClaimedTask(MaintenanceReconciliationStore.WorkItem work) {
+    switch (work.operation()) {
+      case "QUEUE_REPAIR" -> reconcileQueuedRepairClaim(work);
+      case "MATERIALIZE_FURNITURE_CUSTODY" -> reconcileFurnitureCustodyClaim(work);
+      case "COMPLETE_EMPTY_ESTIMATE" -> reconcileEmptyEstimateClaim(work);
+      case "REGISTER_TASK" -> reconcileTaskClaim(work, false);
+      case "UPDATE_TASK" -> reconcileTaskClaim(work, true);
+      case "CREATE_DRIVER_TASK" -> reconcileDriverLogisticsTaskClaim(work);
+      case "SYNC_REPAIR_COMPLEXITY_STATUS" -> reconcileRepairComplexityStatusClaim(work);
+      case "APPLY_CHARACTERISTIC" -> reconcileAcceptedCharacteristicClaim(work);
+      case "REGISTER_CATALOG_POSITION" -> reconcileCatalogPositionRegistrationClaim(work);
+      case "DELETE_CATALOG_POSITION" -> reconcileCatalogPositionDeletionClaim(work);
+      case "EMPTY_REPAIR_TO_FREE", "ACCEPT_TO_FREE", "WRITE_OFF", "PENDING_ACCEPTANCE" ->
+          reconcileAssetTransitionClaim(work);
+      case "RENEW_LEASE" -> reconcileLeaseRenewalClaim(work);
+      default -> throw new IllegalStateException(
+          "Unsupported maintenance reconciliation operation " + work.operation());
+    }
+  }
+
+  private void recordClaimedTaskFailure(
+      MaintenanceReconciliationStore.WorkItem work, RuntimeException exception) {
+    try {
+      transactions.executeWithoutResult(
+          status -> {
+            boolean quarantined = reconciliations.failed(work, exception);
+            recordReconciliationFailure(work, quarantined);
+          });
+    } catch (RuntimeException staleClaim) {
+      // The claim may have expired while a remote dependency was slow. A newer worker owns
+      // the durable outcome; never turn that harmless race into another failed attempt.
+      if (!MaintenanceReconciliationStore.isStaleClaim(staleClaim)) throw staleClaim;
+    }
+  }
+
+  private static MaintenanceDependencyGateway.MediaOwnerProof mediaProof(
+      MaintenanceReconciliationStore.WorkItem work) {
+    if (!"MEDIA".equals(work.dependency())
+        || !"UPSERT_MEDIA_OWNER_PROOF".equals(work.operation())
+        || work.mediaOwnerType() == null
+        || work.mediaOwnerId() == null
+        || work.mediaWarehouseId() == null
+        || work.mediaOwnerRevision() == null
+        || work.mediaAggregateVersion() == null
+        || work.mediaProofEventId() == null
+        || work.mediaActive() == null) {
+      throw new IllegalStateException("Stored media owner proof is incomplete");
+    }
+    return new MaintenanceDependencyGateway.MediaOwnerProof(
+        work.mediaOwnerType(),
+        work.mediaOwnerId(),
+        work.mediaWarehouseId(),
+        work.mediaOwnerRevision(),
+        work.mediaAggregateVersion(),
+        work.mediaProofEventId(),
+        work.mediaActive());
+  }
+
+  private void reconcileAcceptedCharacteristicClaim(
+      MaintenanceReconciliationStore.WorkItem work) {
+    CharacteristicPlan plan = requireReconciliationResult(
+        transactions.execute(status -> prepareCharacteristicPlan(work)));
+    MaintenanceDependencyGateway.AppliedCabinCharacteristic applied =
+        dependencies.applyCabinCharacteristic(
+            work.idempotencyKey(), plan.rentalItemId(), plan.characteristicId());
+    validateAppliedCharacteristicTruth(plan, applied);
+    transactions.executeWithoutResult(
+        status -> {
+          CharacteristicPlan current = prepareCharacteristicPlan(work);
+          if (!plan.equals(current)) {
+            throw new MaintenanceConflictException(
+                "MAINTENANCE_STATE_CONFLICT",
+                "Accepted-characteristic reconciliation changed before finalization");
+          }
+          reconciliations.confirmed(
+              work,
+              Map.of(
+                  "rentalItemId", applied.rentalItemId().toString(),
+                  "characteristicId", applied.characteristicId().toString(),
+                  "added", applied.added(),
+                  "rentalItemVersion", applied.rentalItemVersion()));
+        });
+  }
+
+  private CharacteristicPlan prepareCharacteristicPlan(
+      MaintenanceReconciliationStore.WorkItem work) {
+    MaintenanceRepair repair = requireWorkRepair(work);
+    UUID rentalItemId = uuidField(work.payload(), "rentalItemId");
+    UUID characteristicId = uuidField(work.payload(), "characteristicId");
+    UUID rootRepairId = uuidField(work.payload(), "rootRepairId");
+    if (!"ASSET".equals(work.dependency())
+        || !"APPLY_CHARACTERISTIC".equals(work.operation())
+        || !repair.getRentalItemId().equals(rentalItemId)
+        || !rootId(repair).equals(rootRepairId)
+        || repair.getAcceptanceState() != RepairAcceptanceState.ACCEPTED) {
+      throw new IllegalStateException("Stored accepted-characteristic reconciliation is incomplete");
+    }
+    return new CharacteristicPlan(
+        rentalItemId, characteristicId, rootRepairId, repair.getRentalItemVersionSnapshot());
+  }
+
+  private static void validateAppliedCharacteristicTruth(
+      CharacteristicPlan plan,
+      MaintenanceDependencyGateway.AppliedCabinCharacteristic applied) {
+    if (applied == null
+        || !plan.rentalItemId().equals(applied.rentalItemId())
+        || !plan.characteristicId().equals(applied.characteristicId())
+        || applied.rentalItemVersion() < plan.minimumRentalItemVersion()) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Asset-service returned mismatched cabin characteristic truth");
+    }
+  }
+
+  private void reconcileCatalogPositionRegistrationClaim(
+      MaintenanceReconciliationStore.WorkItem work) {
+    if (!catalogPositionReadyInClaim(work)) return;
+    MaintenanceDependencyGateway.CatalogPositionReference reference =
+        dependencies.registerCatalogPosition(
+            work.catalogQueueId(), work.catalogExternalReferenceId());
+    validateCatalogPositionReferenceTruth(work, reference);
+    transactions.executeWithoutResult(
+        status -> {
+          requireCatalogPositionWork(work, "REGISTER_CATALOG_POSITION");
+          reconciliations.confirmed(
+              work,
+              Map.of(
+                  "catalogVersionId", work.catalogVersionId().toString(),
+                  "catalogNodeId", work.catalogNodeId().toString(),
+                  "queueDefinitionId", reference.queueDefinitionId().toString(),
+                  "externalReferenceId", reference.externalReferenceId(),
+                  "referenceId", reference.id().toString(),
+                  "referenceVersion", reference.version()));
+        });
+  }
+
+  private void reconcileCatalogPositionDeletionClaim(
+      MaintenanceReconciliationStore.WorkItem work) {
+    if (!catalogPositionReadyInClaim(work)) return;
+    dependencies.deleteCatalogPosition(work.catalogExternalReferenceId(), 0L);
+    transactions.executeWithoutResult(
+        status -> {
+          requireCatalogPositionWork(work, "DELETE_CATALOG_POSITION");
+          reconciliations.confirmed(
+              work,
+              Map.of(
+                  "catalogVersionId", work.catalogVersionId().toString(),
+                  "catalogNodeId", work.catalogNodeId().toString(),
+                  "queueId", work.catalogQueueId().toString(),
+                  "externalReferenceId", work.catalogExternalReferenceId(),
+                  "deletedReferenceVersion", 0L));
+        });
+  }
+
+  private static void validateCatalogPositionReferenceTruth(
+      MaintenanceReconciliationStore.WorkItem work,
+      MaintenanceDependencyGateway.CatalogPositionReference reference) {
+    if (reference == null
+        || !work.catalogQueueId().equals(reference.queueDefinitionId())
+        || !work.catalogExternalReferenceId().equals(reference.externalReferenceId())
+        || !"CATALOG_POSITION".equals(reference.type())) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Task-board returned mismatched catalog-position truth");
+    }
+  }
+
+  private boolean catalogPositionReadyInClaim(
+      MaintenanceReconciliationStore.WorkItem work) {
+    Boolean ready = transactions.execute(
+        status -> {
+          requireCatalogPositionWork(work, work.operation());
+          List<UUID> predecessorKeys = uuidListField(work.payload(), "predecessorKeys");
+          if (reconciliations.allCatalogPositionPredecessorsConfirmed(predecessorKeys)) {
+            return true;
+          }
+          reconciliations.defer(work, Duration.ofSeconds(5));
+          return false;
+        });
+    return Boolean.TRUE.equals(ready);
+  }
+
+  private void reconcileDriverLogisticsTaskClaim(
+      MaintenanceReconciliationStore.WorkItem work) {
+    DriverTaskPlan plan = requireReconciliationResult(
+        transactions.execute(status -> prepareDriverTaskPlan(work)));
+    MaintenanceDependencyGateway.DriverTaskSnapshot task =
+        dependencies.createDriverTask(work.idempotencyKey(), plan.command());
+    validateDriverTaskTruth(plan.command(), task);
+    transactions.executeWithoutResult(
+        status -> {
+          DriverTaskPlan current = prepareDriverTaskPlan(work);
+          if (!plan.equals(current)) {
+            throw new MaintenanceConflictException(
+                "MAINTENANCE_STATE_CONFLICT",
+                "Driver-task reconciliation changed before finalization");
+          }
+          reconciliations.confirmed(
+              work,
+              Map.of(
+                  "repairId", plan.repairId().toString(),
+                  "driverTaskId", task.id().toString(),
+                  "driverTaskVersion", task.version(),
+                  "state", task.state()));
+        });
+  }
+
+  private DriverTaskPlan prepareDriverTaskPlan(
+      MaintenanceReconciliationStore.WorkItem work) {
+    if (!"LOGISTICS".equals(work.dependency())
+        || !"DELIVER_TO_REPAIR".equals(work.payload().path("kind").asText())) {
+      throw new IllegalStateException("Stored maintenance driver-task intent is invalid");
+    }
+    MaintenanceRepair repair = requireWorkRepair(work);
+    if (prestartReplacementGuard.blocksRepairExecution(repair.getId())) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT", "Repair is blocked by a pre-start replacement");
+    }
+    if (repair.getExecutionState() != RepairExecutionState.QUEUED
+        || repair.getReclassificationState() == RepairReclassificationState.EXTERNAL_CAPITAL) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Only queued ordinary repair work can create a delivery task");
+    }
+    if (!repair.isMovementToRepair()) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Repair no longer requires delivery to a repair place");
+    }
+    String sourceType;
+    UUID sourceId;
+    var inventorySource = inventorySources.findByRepairId(repair.getId()).orElse(null);
+    if (inventorySource != null) {
+      sourceType = "INVENTORY";
+      sourceId = inventorySource.getFindingId();
+    } else if (repair.getEstimateId() != null) {
+      sourceType = "ESTIMATE";
+      sourceId = repair.getEstimateId();
+    } else {
+      sourceType = "REPAIR";
+      sourceId = repair.getId();
+    }
+    return new DriverTaskPlan(
+        repair.getId(),
+        new MaintenanceDependencyGateway.DriverTaskCommand(
+            repair.getWarehouseId(),
+            repair.getRentalItemId(),
+            repair.getId(),
+            sourceType,
+            sourceId,
+            "DELIVER_TO_REPAIR",
+            repair.getLogisticsPlanningMode(),
+            repair.getLogisticsScheduledDate(),
+            repair.getPriority(),
+            false));
+  }
+
+  private static void validateDriverTaskTruth(
+      MaintenanceDependencyGateway.DriverTaskCommand command,
+      MaintenanceDependencyGateway.DriverTaskSnapshot task) {
+    if (task == null
+        || task.id() == null
+        || task.version() < 0
+        || !command.warehouseId().equals(task.warehouseId())
+        || !command.cabinId().equals(task.cabinId())
+        || !command.repairId().equals(task.repairId())
+        || !command.sourceType().equals(task.sourceType())
+        || !command.sourceId().equals(task.sourceId())
+        || !command.kind().equals(task.kind())
+        || command.planningMode() != task.planningMode()
+        || (command.planningMode() == RepairLogisticsPlanningMode.FIXED_DATE
+            && !command.scheduledDate().equals(task.scheduledDate()))
+        || command.priority() != task.priority()
+        || !Set.of("REGISTERING", "SCHEDULED", "CURRENT", "FINALIZING", "COMPLETED")
+            .contains(task.state())) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Logistics-service returned mismatched driver-task truth");
+    }
+  }
+
+  private void reconcileFurnitureCustodyClaim(
+      MaintenanceReconciliationStore.WorkItem work) {
+    FurnitureCustodyPlan plan = requireReconciliationResult(
+        transactions.execute(status -> prepareFurnitureCustodyPlan(work)));
+    List<MaintenanceDependencyGateway.MaintenanceFurnitureCustodyClaim> claims =
+        dependencies.unresolvedFurnitureCustody(plan.ownerType(), plan.ownerId());
+    // Property disposition admission is another remote warehouse-service read. It is deliberately
+    // completed before final local locks and before the local-only materializer below.
+    warehouseLifecycle.requireOutgoing(plan.warehouseId());
+    transactions.executeWithoutResult(
+        status -> {
+          FurnitureCustodyPlan current = prepareFurnitureCustodyPlan(work);
+          if (!plan.equals(current)) {
+            throw new MaintenanceConflictException(
+                "MAINTENANCE_STATE_CONFLICT",
+                "Furniture-custody reconciliation changed before finalization");
+          }
+          validateFurnitureCustodyClaims(current, claims);
+          int created = propertyDispositions.materializeFurnitureCustodyLocally(
+              requireRepair(current.repairId()), current.equipmentNames(), claims);
+          reconciliations.confirmed(
+              work,
+              Map.of(
+                  "repairId", current.repairId().toString(),
+                  "ownerType", current.ownerType(),
+                  "ownerId", current.ownerId().toString(),
+                  "claimCount", claims.size(),
+                  "createdDecisionCount", created));
+        });
+  }
+
+  private FurnitureCustodyPlan prepareFurnitureCustodyPlan(
+      MaintenanceReconciliationStore.WorkItem work) {
+    MaintenanceRepair repair = requireWorkRepair(work);
+    if (repair.getAcceptanceState() != RepairAcceptanceState.PENDING) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Furniture custody can be materialized only after repair completion");
+    }
+    return new FurnitureCustodyPlan(
+        repair.getId(),
+        repair.getWarehouseId(),
+        repair.getRentalItemId(),
+        ownerType(repair),
+        UUID.fromString(ownerId(repair)),
+        Map.copyOf(furnitureEquipmentNames(repair)));
+  }
+
+  private static void validateFurnitureCustodyClaims(
+      FurnitureCustodyPlan plan,
+      List<MaintenanceDependencyGateway.MaintenanceFurnitureCustodyClaim> claims) {
+    if (claims == null) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Asset-service did not return furniture custody truth");
+    }
+    for (MaintenanceDependencyGateway.MaintenanceFurnitureCustodyClaim claim : claims) {
+      if (!plan.warehouseId().equals(claim.warehouseId())
+          || !plan.rentalItemId().equals(claim.rentalItemId())
+          || !plan.ownerType().equals(claim.ownerType())
+          || !plan.ownerId().equals(claim.ownerId())) {
+        throw new MaintenanceDependencyException(
+            org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+            "Asset-service returned furniture custody for another repair asset");
+      }
+    }
+  }
+
+  private void reconcileEmptyEstimateClaim(
+      MaintenanceReconciliationStore.WorkItem work) {
+    EmptyEstimatePlan plan = requireReconciliationResult(
+        transactions.execute(status -> prepareEmptyEstimatePlan(work)));
+    MaintenanceDependencyGateway.LeaseSnapshot lease = dependencies.acquireLease(
+        derived(work.idempotencyKey(), "acquire"),
+        plan.rentalItemId(),
+        plan.rentalItemVersion(),
+        plan.ownerType(),
+        plan.ownerId());
+    validateLeaseTruth(plan.rentalItemId(), lease, plan.ownerType(), plan.ownerId());
+    if (!leaseIsFresh(lease.expiresAt())) {
+      lease = dependencies.renewLease(
+          derived(work.idempotencyKey(), "renew"),
+          lease.leaseId(),
+          lease.version(),
+          lease.fencingToken(),
+          plan.ownerType(),
+          plan.ownerId());
+      validateLeaseTruth(plan.rentalItemId(), lease, plan.ownerType(), plan.ownerId());
+    }
+    requireFreshDependencyLease(lease);
+    MaintenanceDependencyGateway.AssetSnapshot asset = dependencies.fencedStatus(
+        derived(work.idempotencyKey(), "status"),
+        plan.rentalItemId(),
+        plan.warehouseId(),
+        plan.rentalItemVersion(),
+        lease.leaseId(),
+        lease.fencingToken(),
+        plan.ownerType(),
+        plan.ownerId(),
+        "EMPTY_ESTIMATE_TO_FREE",
+        false);
+    validateEstimateAssetTruth(plan, asset);
+    dependencies.releaseLease(
+        derived(work.idempotencyKey(), "release"),
+        lease.leaseId(),
+        lease.version(),
+        lease.fencingToken(),
+        plan.ownerType(),
+        plan.ownerId());
+    MaintenanceDependencyGateway.LeaseSnapshot finalLease = lease;
+    transactions.executeWithoutResult(
+        status -> {
+          EmptyEstimatePlan current = prepareEmptyEstimatePlan(work);
+          if (!plan.equals(current)) {
+            throw new MaintenanceConflictException(
+                "MAINTENANCE_STATE_CONFLICT",
+                "Empty-estimate reconciliation changed before finalization");
+          }
+          validateEstimateAssetTruth(current, asset);
+          reconciliations.confirmed(
+              work,
+              Map.of(
+                  "estimateId", current.estimateId().toString(),
+                  "rentalItemVersion", asset.version(),
+                  "leaseReleased", true,
+                  "leaseId", finalLease.leaseId().toString()));
+        });
+  }
+
+  private EmptyEstimatePlan prepareEmptyEstimatePlan(
+      MaintenanceReconciliationStore.WorkItem work) {
+    UUID estimateId = uuidField(work.payload(), "estimateId");
+    MaintenanceEstimate estimate = requireEstimate(estimateId);
+    if (estimate.getState() != EstimateState.COMPLETED || estimate.getRepairId() != null) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT", "Estimate is no longer an empty completed estimate");
+    }
+    return new EmptyEstimatePlan(
+        estimate.getId(),
+        estimate.getWarehouseId(),
+        estimate.getRentalItemId(),
+        estimate.getRentalItemVersionSnapshot(),
+        "MAINTENANCE_ESTIMATE",
+        estimate.getId().toString());
+  }
+
+  private static void validateEstimateAssetTruth(
+      EmptyEstimatePlan plan, MaintenanceDependencyGateway.AssetSnapshot asset) {
+    if (asset == null
+        || !plan.rentalItemId().equals(asset.rentalItemId())
+        || !plan.warehouseId().equals(asset.warehouseId())
+        || asset.version() <= plan.rentalItemVersion()) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Asset-service fenced truth does not advance the expected rental item");
+    }
+  }
+
+  private void reconcileTaskClaim(
+      MaintenanceReconciliationStore.WorkItem work, boolean update) {
+    Optional<TaskPlan> prepared = transactions.execute(status -> prepareTaskPlan(work, update));
+    if (prepared == null || prepared.isEmpty()) return;
+    TaskPlan plan = prepared.orElseThrow();
+
+    // Both the canonical cabin read and the task-board mutation are deliberately outside any
+    // maintenance transaction. The task command retains its stable reconciliation key.
+    MaintenanceDependencyGateway.AssetSnapshot asset =
+        dependencies.getRentalItemSnapshot(plan.rentalItemId());
+    validateTaskAssetTruth(plan, asset);
+    LocalDate scheduledDate = plan.resolveDeliveredLocalDate()
+        ? warehouseLifecycle.localDateAt(
+            plan.warehouseId(), OffsetDateTime.now(java.time.ZoneOffset.UTC))
+        : plan.scheduledDate();
+    int priority = plan.resolveDeliveredLocalDate()
+        ? DELIVERED_REPAIR_TASK_BOARD_PRIORITY
+        : plan.priority();
+    MaintenanceDependencyGateway.TaskSnapshot task = update
+        ? dependencies.updatePreStartTask(
+            work.idempotencyKey(),
+            plan.externalTaskId(),
+            plan.expectedTaskVersion(),
+            asset.number(),
+            plan.stages())
+        : dependencies.registerTask(
+            work.idempotencyKey(),
+            plan.externalTaskId(),
+            plan.repairId(),
+            plan.warehouseId(),
+            plan.rentalItemId(),
+            asset.number(),
+            scheduledDate,
+            priority,
+            plan.dailyCapacity(),
+            plan.stages());
+    validateTaskPlanTruth(plan, task);
+
+    transactions.executeWithoutResult(
+        status -> {
+          Optional<TaskPlan> current = prepareTaskPlan(work, update);
+          if (current == null || current.isEmpty()) return;
+          if (!plan.equals(current.orElseThrow())) {
+            throw new MaintenanceConflictException(
+                "MAINTENANCE_STATE_CONFLICT", "Task reconciliation changed before finalization");
+          }
+          MaintenanceRepair repair = requireRepair(plan.repairId());
+          long expectedVersion =
+              events.lockCurrentVersion(MaintenanceAggregateType.REPAIR, repair.getId());
+          assertVersion(repair.getVersion(), expectedVersion);
+          validateTaskTruth(repair, task, plan.stages().size());
+          confirmTaskRegistration(repair.getId(), task);
+          repair.markTaskGenerated(task.version());
+          repair.markReconciled();
+          MaintenanceRepair saved = repairs.saveAndFlush(repair);
+          MaintenanceEventType eventType =
+              update ? MaintenanceEventType.REPAIR_PLAN_CHANGED : MaintenanceEventType.REPAIR_QUEUED;
+          events.append(
+              MaintenanceAggregateType.REPAIR,
+              saved.getId(),
+              expectedVersion,
+              eventType,
+              repairLocal(saved),
+              repairFact(eventType, saved),
+              repairSnapshot(saved));
+          reconciliations.confirmed(
+              work,
+              Map.of(
+                  "repairId", saved.getId().toString(),
+                  "externalTaskId", task.externalTaskId().toString(),
+                  "taskBoardVersion", task.version()));
+        });
+  }
+
+  private Optional<TaskPlan> prepareTaskPlan(
+      MaintenanceReconciliationStore.WorkItem work, boolean update) {
+    MaintenanceRepair repair = requireWorkRepair(work);
+    if (prestartReplacementGuard.blocksRepairExecution(repair.getId())) {
+      reconciliations.defer(work, Duration.ofSeconds(2));
+      return Optional.empty();
+    }
+    if (repair.getExecutionState() != RepairExecutionState.QUEUED) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT", "Only a queued repair can reconcile its task");
+    }
+    if (update && repair.getTaskBoardVersion() == null) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT", "Task update has no confirmed task-board version");
+    }
+    LocalDate scheduledDate = repair.getDispatchDate();
+    int priority = repair.getPriority();
+    boolean resolveDeliveredLocalDate = !update
+        && requiresDriverDeliveryToRepair(repair)
+        && repairPlaces.isOccupied(repair.getWarehouseId(), repair.getId());
+    return Optional.of(
+        new TaskPlan(
+            repair.getId(),
+            repair.getWarehouseId(),
+            repair.getRentalItemId(),
+            repair.getExternalTaskId(),
+            update,
+            update ? repair.getTaskBoardVersion() : -1L,
+            scheduledDate,
+            priority,
+            resolveDeliveredLocalDate,
+            repairCapacitySettings.get(repair.getWarehouseId()).repairPlaceCount(),
+            List.copyOf(taskStages(repair))));
+  }
+
+  private static void validateTaskAssetTruth(
+      TaskPlan plan, MaintenanceDependencyGateway.AssetSnapshot asset) {
+    if (asset == null
+        || !plan.rentalItemId().equals(asset.rentalItemId())
+        || !plan.warehouseId().equals(asset.warehouseId())
+        || asset.number() == null
+        || asset.number().isBlank()
+        || asset.number().length() > 64) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Canonical rental-item snapshot is not safe for task synchronization");
+    }
+  }
+
+  private static void validateTaskPlanTruth(
+      TaskPlan plan, MaintenanceDependencyGateway.TaskSnapshot task) {
+    if (task == null
+        || !plan.externalTaskId().equals(task.externalTaskId())
+        || task.version() < 0
+        || !"ACTIVE".equals(task.state())
+        || task.stages() == null
+        || task.stages().size() != plan.stages().size()) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Task-board truth does not match the maintenance repair");
+    }
+  }
+
+  private void reconcileQueuedRepairClaim(
+      MaintenanceReconciliationStore.WorkItem work) {
+    Optional<QueueRepairPlan> prepared = transactions.execute(status -> prepareQueueRepairPlan(work));
+    if (prepared == null || prepared.isEmpty()) return;
+    QueueRepairPlan plan = prepared.orElseThrow();
+    if (plan.alreadyQueued()) {
+      transactions.executeWithoutResult(
+          status -> {
+            Optional<QueueRepairPlan> current = prepareQueueRepairPlan(work);
+            if (current == null || current.isEmpty() || !plan.equals(current.orElseThrow())) {
+              throw new MaintenanceConflictException(
+                  "MAINTENANCE_STATE_CONFLICT",
+                  "Repair queue reconciliation changed before finalization");
+            }
+            reconciliations.confirmed(
+                work, Map.of("repairId", plan.repairId().toString(), "alreadyQueued", true));
+          });
+      return;
+    }
+
+    // All asset reads and mutations take place only after the prepare transaction has committed.
+    MaintenanceDependencyGateway.AssetSnapshot liveAsset =
+        dependencies.getRentalItemSnapshot(plan.rentalItemId());
+    validateQueueAssetTruth(plan, liveAsset);
+    List<MaintenanceDependencyGateway.FurniturePendingReturn> furniture =
+        plan.requestedFurniture().isEmpty()
+            ? List.of()
+            : pendingReturnsFromCabinSnapshot(
+                plan,
+                dependencies.getPropertyAssetSnapshot(
+                    MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
+                    plan.rentalItemId(),
+                    plan.warehouseId()));
+
+    QueueRepairRemoteResult remote;
+    if (("REPAIR".equals(liveAsset.status()) || "CAPITAL_REPAIR".equals(liveAsset.status()))
+        && plan.existingLifecycleOwner()) {
+      remote = QueueRepairRemoteResult.adopt(liveAsset, furniture);
+    } else {
+      if (("REPAIR".equals(liveAsset.status()) || "CAPITAL_REPAIR".equals(liveAsset.status()))
+          && !liveAsset.status().equals(plan.projectedAssetStatus())) {
+        throw new MaintenanceDependencyException(
+            org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+            "Rental item repair adoption requires a matching canonical asset fact");
+      }
+      MaintenanceDependencyGateway.LeaseSnapshot lease = dependencies.acquireLease(
+          derived(work.idempotencyKey(), "acquire"),
+          plan.rentalItemId(),
+          liveAsset.version(),
+          plan.ownerType(),
+          plan.ownerId());
+      validateLeaseTruth(plan.rentalItemId(), lease, plan.ownerType(), plan.ownerId());
+      if (!leaseIsFresh(lease.expiresAt())) {
+        lease = dependencies.renewLease(
+            derived(work.idempotencyKey(), "renew"),
+            lease.leaseId(),
+            lease.version(),
+            lease.fencingToken(),
+            plan.ownerType(),
+            plan.ownerId());
+        validateLeaseTruth(plan.rentalItemId(), lease, plan.ownerType(), plan.ownerId());
+      }
+      requireFreshDependencyLease(lease);
+      MaintenanceDependencyGateway.AssetSnapshot asset = furniture.isEmpty()
+          ? dependencies.fencedStatus(
+              derived(work.idempotencyKey(), "status"),
+              plan.rentalItemId(),
+              plan.warehouseId(),
+              liveAsset.version(),
+              lease.leaseId(),
+              lease.fencingToken(),
+              plan.ownerType(),
+              plan.ownerId(),
+              plan.queueTransition(),
+              plan.linkedReturn())
+          : dependencies.fencedStatus(
+              derived(work.idempotencyKey(), "status"),
+              plan.rentalItemId(),
+              plan.warehouseId(),
+              liveAsset.version(),
+              lease.leaseId(),
+              lease.fencingToken(),
+              plan.ownerType(),
+              plan.ownerId(),
+              plan.queueTransition(),
+              plan.linkedReturn(),
+              furniture);
+      validateQueueTransitionTruth(plan, liveAsset, asset);
+      remote = QueueRepairRemoteResult.queued(liveAsset, lease, asset, furniture);
+    }
+
+    transactions.executeWithoutResult(status -> finalizeQueuedRepairClaim(work, plan, remote));
+  }
+
+  private Optional<QueueRepairPlan> prepareQueueRepairPlan(
+      MaintenanceReconciliationStore.WorkItem work) {
+    MaintenanceRepair repair = requireWorkRepair(work);
+    if (prestartReplacementGuard.blocksRepairExecution(repair.getId())) {
+      reconciliations.defer(work, Duration.ofSeconds(2));
+      return Optional.empty();
+    }
+    if (repair.getExecutionState() == RepairExecutionState.QUEUED) {
+      return Optional.of(QueueRepairPlan.alreadyQueued(repair));
+    }
+    if (repair.getExecutionState() != RepairExecutionState.DRAFT || repair.getKind() == RepairKind.REWORK) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Repair is no longer eligible for primary queue reconciliation");
+    }
+    List<RepairStage> stages = repairStages.findAllByRepairIdOrderByStageNo(repair.getId());
+    if (stages.isEmpty()) {
+      throw invalid("Repair needs at least one planned stage before queueing");
+    }
+    RepairComplexitySnapshot complexity =
+        repairComplexityFromStoredStages(repair.getWarehouseId(), repair.getId());
+    RentalItemFactProjection fact = requireRentalItemFact(
+        repair.getRentalItemId(), repair.getWarehouseId());
+    boolean existingOwner = primaryLifecycleOwnerWithLeaseIdentity(repair).isPresent();
+    return Optional.of(
+        new QueueRepairPlan(
+            repair.getId(),
+            repair.getVersion(),
+            false,
+            repair.getWarehouseId(),
+            repair.getRentalItemId(),
+            repair.getRentalItemVersionSnapshot(),
+            repair.getOrigin(),
+            complexity.type() == RepairComplexity.CAPITAL,
+            complexity.type() == RepairComplexity.CAPITAL ? "CAPITAL_REPAIR" : "REPAIR",
+            complexity.type() == RepairComplexity.CAPITAL
+                ? "QUEUE_TO_CAPITAL_REPAIR"
+                : "QUEUE_TO_REPAIR",
+            ownerType(repair),
+            ownerId(repair),
+            work.payload().path("linkedReturn").asBoolean(false),
+            fact.getAssetStatus(),
+            fact.getAggregateVersion(),
+            existingOwner,
+            List.copyOf(furnitureQuantities(repair))));
+  }
+
+  private void finalizeQueuedRepairClaim(
+      MaintenanceReconciliationStore.WorkItem work,
+      QueueRepairPlan plan,
+      QueueRepairRemoteResult remote) {
+    Optional<QueueRepairPlan> currentOptional = prepareQueueRepairPlan(work);
+    if (currentOptional == null || currentOptional.isEmpty()) return;
+    QueueRepairPlan current = currentOptional.orElseThrow();
+    if (!plan.equals(current)) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT", "Repair queue reconciliation changed before finalization");
+    }
+    MaintenanceRepair repair = requireRepair(plan.repairId());
+    long expectedVersion = events.lockCurrentVersion(MaintenanceAggregateType.REPAIR, repair.getId());
+    assertVersion(repair.getVersion(), expectedVersion);
+    if (repair.getExecutionState() == RepairExecutionState.QUEUED) {
+      reconciliations.confirmed(
+          work, Map.of("repairId", repair.getId().toString(), "alreadyQueued", true));
+      return;
+    }
+    List<RepairStage> stages = repairStages.findAllByRepairIdOrderByStageNo(repair.getId());
+    if (remote.adoptExistingRepair()) {
+      if (!current.existingLifecycleOwner()) {
+        throw new MaintenanceConflictException(
+            "MAINTENANCE_STATE_CONFLICT", "Repair lifecycle owner disappeared before finalization");
+      }
+      prepareStagesForQueue(stages, current.capital());
+      repairStages.saveAllAndFlush(stages);
+      repair.confirmRentalItemVersion(remote.liveAsset().version());
+      if (current.capital()) {
+        repair.queueExternalCapitalUnderExistingRepair();
+      } else {
+        repair.queueUnderExistingRepair();
+      }
+      MaintenanceRepair saved = repairs.saveAndFlush(repair);
+      if (!current.capital()) {
+        enqueueOrdinaryRepairExecution(
+            saved,
+            stableOperationKey("register-task", saved.getExternalTaskId(), 0),
+            stableOperationKey("driver-logistics-task", saved.getId(), 0));
+        enqueueRepairComplexityStatusSync(
+            saved, derived(work.idempotencyKey(), "repair-complexity-status"));
+      }
+      events.append(
+          MaintenanceAggregateType.REPAIR,
+          saved.getId(),
+          expectedVersion,
+          MaintenanceEventType.REPAIR_QUEUED,
+          repairLocal(saved),
+          repairFact(MaintenanceEventType.REPAIR_QUEUED, saved),
+          repairSnapshot(saved));
+      reconciliations.confirmed(
+          work,
+          Map.of(
+              "repairId", saved.getId().toString(),
+              "assetAlreadyInRepair", true,
+              "rentalItemVersion", remote.liveAsset().version()));
+      return;
+    }
+
+    MaintenanceDependencyGateway.LeaseSnapshot lease = remote.lease();
+    MaintenanceDependencyGateway.AssetSnapshot asset = remote.asset();
+    if (lease == null || asset == null) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Repair queue remote result is incomplete");
+    }
+    validateLeaseTruth(repair, lease, current.ownerType(), current.ownerId());
+    validateQueueTransitionTruth(current, remote.liveAsset(), asset);
+    prepareStagesForQueue(stages, current.capital());
+    repairStages.saveAllAndFlush(stages);
+    repair.confirmRentalItemVersion(asset.version());
+    if (current.capital()) {
+      repair.queueExternalCapital(
+          lease.leaseId(), lease.version(), lease.fencingToken(), lease.expiresAt());
+    } else {
+      repair.queue(lease.leaseId(), lease.version(), lease.fencingToken(), lease.expiresAt());
+    }
+    MaintenanceRepair saved = repairs.saveAndFlush(repair);
+    if (!current.capital()) {
+      enqueueOrdinaryRepairExecution(
+          saved,
+          stableOperationKey("register-task", saved.getExternalTaskId(), 0),
+          stableOperationKey("driver-logistics-task", saved.getId(), 0));
+    }
+    events.append(
+        MaintenanceAggregateType.REPAIR,
+        saved.getId(),
+        expectedVersion,
+        MaintenanceEventType.REPAIR_QUEUED,
+        repairLocal(saved),
+        repairFact(MaintenanceEventType.REPAIR_QUEUED, saved),
+        repairSnapshot(saved));
+    reconciliations.confirmed(
+        work,
+        Map.of(
+            "repairId", saved.getId().toString(),
+            "leaseId", lease.leaseId().toString(),
+            "rentalItemVersion", asset.version()));
+  }
+
+  private static void validateQueueAssetTruth(
+      QueueRepairPlan plan, MaintenanceDependencyGateway.AssetSnapshot snapshot) {
+    Set<String> eligibleStatuses = plan.origin() == RepairOrigin.DIRECT_REPAIR
+        ? DIRECT_REPAIR_QUEUE_SOURCE_STATUSES
+        : ESTIMATE_REPAIR_QUEUE_SOURCE_STATUSES;
+    if (snapshot == null
+        || !plan.rentalItemId().equals(snapshot.rentalItemId())
+        || !plan.warehouseId().equals(snapshot.warehouseId())
+        || snapshot.version() < 0
+        || snapshot.status() == null
+        || !eligibleStatuses.contains(snapshot.status())
+        || snapshot.version() < plan.rentalItemVersion()
+        || snapshot.version() < plan.projectedAssetVersion()
+        || (snapshot.version() == plan.projectedAssetVersion()
+            && !snapshot.status().equals(plan.projectedAssetStatus()))) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Canonical rental-item snapshot is not safe for repair queueing");
+    }
+  }
+
+  private static List<MaintenanceDependencyGateway.FurniturePendingReturn>
+      pendingReturnsFromCabinSnapshot(
+          QueueRepairPlan plan, MaintenanceDependencyGateway.PropertyAssetSnapshot snapshot) {
+    if (snapshot == null
+        || snapshot.assetKind() != MaintenanceDependencyGateway.PropertyAssetKind.CABIN
+        || !plan.rentalItemId().equals(snapshot.assetId())
+        || !plan.warehouseId().equals(snapshot.warehouseId())) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Asset-service returned another cabin while selecting repair furniture");
+    }
+    Map<UUID, MaintenanceDependencyGateway.PropertyAssetContentSnapshot> contents =
+        snapshot.contents().stream().collect(
+            java.util.stream.Collectors.toMap(
+                MaintenanceDependencyGateway.PropertyAssetContentSnapshot::equipmentId,
+                value -> value));
+    return plan.requestedFurniture().stream().map(
+        line -> {
+          MaintenanceDependencyGateway.PropertyAssetContentSnapshot content =
+              contents.get(line.equipmentId());
+          if (content == null || content.quantity() < line.quantity()) {
+            throw new MaintenanceConflictException(
+                "MAINTENANCE_STATE_CONFLICT",
+                "Cabin no longer contains the furniture selected for maintenance");
+          }
+          return new MaintenanceDependencyGateway.FurniturePendingReturn(
+              line.equipmentId(), content.balanceVersion(), line.quantity());
+        }).toList();
+  }
+
+  private static void validateQueueTransitionTruth(
+      QueueRepairPlan plan,
+      MaintenanceDependencyGateway.AssetSnapshot liveAsset,
+      MaintenanceDependencyGateway.AssetSnapshot asset) {
+    if (liveAsset == null) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Repair queue live asset snapshot is missing");
+    }
+    if (asset == null
+        || !plan.rentalItemId().equals(asset.rentalItemId())
+        || !plan.warehouseId().equals(asset.warehouseId())
+        || asset.version() < liveAsset.version()
+        || (asset.version() == liveAsset.version() && !plan.desiredAssetStatus().equals(liveAsset.status()))
+        || !plan.desiredAssetStatus().equals(asset.status())) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Asset-service did not confirm the calculated repair status");
+    }
+  }
+
+  private void reconcileAssetTransitionClaim(
+      MaintenanceReconciliationStore.WorkItem work) {
+    AssetTransitionPlan plan = requireReconciliationResult(
+        transactions.execute(status -> prepareAssetTransitionPlan(work)));
+    MaintenanceDependencyGateway.LeaseSnapshot lease = plan.localLease();
+    if (lease == null) {
+      lease = dependencies.acquireLease(
+          derived(work.idempotencyKey(), "acquire"),
+          plan.rentalItemId(),
+          plan.rentalItemVersion(),
+          plan.ownerType(),
+          plan.ownerId());
+    }
+    validateLeaseTruth(plan.rentalItemId(), lease, plan.ownerType(), plan.ownerId());
+    if (!leaseIsFresh(lease.expiresAt())) {
+      lease = dependencies.renewLease(
+          derived(work.idempotencyKey(), "renew"),
+          lease.leaseId(),
+          lease.version(),
+          lease.fencingToken(),
+          plan.ownerType(),
+          plan.ownerId());
+      validateLeaseTruth(plan.rentalItemId(), lease, plan.ownerType(), plan.ownerId());
+    }
+    requireFreshDependencyLease(lease);
+    MaintenanceDependencyGateway.AssetSnapshot asset = dependencies.fencedStatus(
+        derived(work.idempotencyKey(), "status"),
+        plan.rentalItemId(),
+        plan.warehouseId(),
+        plan.rentalItemVersion(),
+        lease.leaseId(),
+        lease.fencingToken(),
+        plan.ownerType(),
+        plan.ownerId(),
+        plan.transition(),
+        false);
+    validateAssetTransitionTruth(plan, asset);
+    boolean terminal = !"PENDING_ACCEPTANCE".equals(plan.transition());
+    if (terminal) {
+      dependencies.releaseLease(
+          derived(work.idempotencyKey(), "release"),
+          lease.leaseId(),
+          lease.version(),
+          lease.fencingToken(),
+          plan.ownerType(),
+          plan.ownerId());
+    }
+    MaintenanceDependencyGateway.LeaseSnapshot finalLease = lease;
+    transactions.executeWithoutResult(
+        status -> finalizeAssetTransitionClaim(work, plan, asset, finalLease, terminal));
+  }
+
+  private AssetTransitionPlan prepareAssetTransitionPlan(
+      MaintenanceReconciliationStore.WorkItem work) {
+    MaintenanceRepair repair = requireWorkRepair(work);
+    List<MaintenanceRepair> sources = sourceChain(repair);
+    String ownerType = ownerType(repair);
+    String ownerId = ownerId(repair);
+    return new AssetTransitionPlan(
+        repair.getId(),
+        repair.getVersion(),
+        sources.stream().map(MaintenanceRepair::getId).toList(),
+        repair.getWarehouseId(),
+        repair.getRentalItemId(),
+        repair.getRentalItemVersionSnapshot(),
+        ownerType,
+        ownerId,
+        work.operation(),
+        localLease(repair, sources, ownerType, ownerId).orElse(null));
+  }
+
+  private void finalizeAssetTransitionClaim(
+      MaintenanceReconciliationStore.WorkItem work,
+      AssetTransitionPlan plan,
+      MaintenanceDependencyGateway.AssetSnapshot asset,
+      MaintenanceDependencyGateway.LeaseSnapshot lease,
+      boolean terminal) {
+    MaintenanceRepair initial = requireRepair(plan.repairId());
+    LockedRepairChain locked = lockAndReloadRepairChain(initial, plan.repairVersion());
+    MaintenanceRepair repair = locked.repair();
+    List<MaintenanceRepair> sources = locked.sources();
+    if (!plan.sourceRepairIds().equals(sources.stream().map(MaintenanceRepair::getId).toList())
+        || !plan.warehouseId().equals(repair.getWarehouseId())
+        || !plan.rentalItemId().equals(repair.getRentalItemId())
+        || !plan.transition().equals(work.operation())
+        || !plan.ownerType().equals(ownerType(repair))
+        || !plan.ownerId().equals(ownerId(repair))) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Asset-transition reconciliation changed before finalization");
+    }
+    validateLeaseTruth(repair, lease, plan.ownerType(), plan.ownerId());
+    validateAssetTruth(repair, asset);
+    reconcileLeaseProjection(
+        repair,
+        locked.streamVersions().get(stream(repair.getId())),
+        asset.version(),
+        lease,
+        terminal,
+        transitionEvent(repair, plan.transition()));
+    for (MaintenanceRepair source : sources) {
+      reconcileLeaseProjection(
+          source,
+          locked.streamVersions().get(stream(source.getId())),
+          asset.version(),
+          lease,
+          terminal,
+          transitionEvent(source, plan.transition()));
+    }
+    reconciliations.confirmed(
+        work,
+        Map.of(
+            "repairId", repair.getId().toString(),
+            "rentalItemVersion", asset.version(),
+            "leaseReleased", terminal));
+  }
+
+  private static void validateAssetTransitionTruth(
+      AssetTransitionPlan plan, MaintenanceDependencyGateway.AssetSnapshot asset) {
+    if (asset == null
+        || !plan.rentalItemId().equals(asset.rentalItemId())
+        || !plan.warehouseId().equals(asset.warehouseId())
+        || asset.version() <= plan.rentalItemVersion()) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Asset-service fenced truth does not match the expected rental item");
+    }
+  }
+
+  private void reconcileLeaseRenewalClaim(
+      MaintenanceReconciliationStore.WorkItem work) {
+    LeaseRenewalPlan plan = requireReconciliationResult(
+        transactions.execute(status -> prepareLeaseRenewalPlan(work)));
+    MaintenanceDependencyGateway.LeaseSnapshot lease = dependencies.renewLease(
+        work.idempotencyKey(),
+        plan.leaseId(),
+        plan.leaseVersion(),
+        plan.fencingToken(),
+        plan.ownerType(),
+        plan.ownerId());
+    validateLeaseRenewalTruth(plan, lease);
+    requireFreshDependencyLease(lease);
+    transactions.executeWithoutResult(
+        status -> {
+          LeaseRenewalPlan current = prepareLeaseRenewalPlan(work);
+          if (!plan.equals(current)) {
+            throw new MaintenanceConflictException(
+                "MAINTENANCE_STATE_CONFLICT", "Lease renewal changed before finalization");
+          }
+          MaintenanceRepair repair = requireRepair(plan.repairId());
+          long expectedVersion =
+              events.lockCurrentVersion(MaintenanceAggregateType.REPAIR, repair.getId());
+          assertVersion(repair.getVersion(), expectedVersion);
+          repair.renewLease(lease.version(), lease.expiresAt());
+          MaintenanceRepair saved = repairs.saveAndFlush(repair);
+          MaintenanceEventType renewalEvent = renewalEvent(saved);
+          events.append(
+              MaintenanceAggregateType.REPAIR,
+              saved.getId(),
+              expectedVersion,
+              renewalEvent,
+              repairLocal(saved),
+              repairFact(renewalEvent, saved),
+              repairSnapshot(saved));
+          reconciliations.confirmed(
+              work,
+              Map.of(
+                  "repairId", saved.getId().toString(),
+                  "leaseVersion", lease.version(),
+                  "expiresAt", lease.expiresAt().toString()));
+        });
+  }
+
+  private LeaseRenewalPlan prepareLeaseRenewalPlan(
+      MaintenanceReconciliationStore.WorkItem work) {
+    MaintenanceRepair repair = requireWorkRepair(work);
+    requireRenewableLease(repair);
+    return new LeaseRenewalPlan(
+        repair.getId(),
+        repair.getVersion(),
+        repair.getRentalItemId(),
+        repair.getLeaseId(),
+        repair.getLeaseVersion(),
+        repair.getFencingToken(),
+        ownerType(repair),
+        ownerId(repair));
+  }
+
+  private static void validateLeaseRenewalTruth(
+      LeaseRenewalPlan plan, MaintenanceDependencyGateway.LeaseSnapshot lease) {
+    validateLeaseTruth(plan.rentalItemId(), lease, plan.ownerType(), plan.ownerId());
+    if (!plan.leaseId().equals(lease.leaseId())
+        || plan.fencingToken() != lease.fencingToken()
+        || lease.version() != Math.addExact(plan.leaseVersion(), 1)) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Asset-service lease renewal does not preserve the current fence and version");
+    }
+  }
+
+  private void reconcileRepairComplexityStatusClaim(
+      MaintenanceReconciliationStore.WorkItem work) {
+    ComplexitySyncPlan plan = requireReconciliationResult(
+        transactions.execute(status -> prepareComplexitySyncPlan(work, false)));
+
+    // Withdraw existing ordinary routes first. Each call has a stable derived key, so a crash
+    // before the final local commit replays the same task-board effect safely.
+    for (TaskCancellationPlan cancellation : plan.taskCancellations()) {
+      MaintenanceDependencyGateway.TaskSnapshot cancelled = dependencies.cancelTask(
+          derived(work.idempotencyKey(), "withdraw-task:" + cancellation.repairId()),
+          cancellation.externalTaskId(),
+          cancellation.expectedVersion());
+      if (cancelled == null || !"CANCELLED".equals(cancelled.state())) {
+        throw new MaintenanceDependencyException(
+            org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+            "Task-board did not confirm ordinary repair route withdrawal");
+      }
+    }
+
+    MaintenanceDependencyGateway.AssetSnapshot currentAsset =
+        dependencies.getRentalItemSnapshot(plan.rentalItemId());
+    validateComplexityAssetTruth(plan, currentAsset);
+    MaintenanceDependencyGateway.AssetSnapshot synchronizedAsset = currentAsset;
+    MaintenanceDependencyGateway.LeaseSnapshot lease = plan.lease();
+    if (!plan.desiredStatus().equals(currentAsset.status())) {
+      validateLeaseTruth(plan.rentalItemId(), lease, plan.ownerType(), plan.ownerId());
+      if (!leaseIsFresh(lease.expiresAt())) {
+        lease = dependencies.renewLease(
+            derived(work.idempotencyKey(), "renew"),
+            lease.leaseId(),
+            lease.version(),
+            lease.fencingToken(),
+            plan.ownerType(),
+            plan.ownerId());
+        validateComplexityRenewedLeaseTruth(plan, lease);
+      }
+      requireFreshDependencyLease(lease);
+      synchronizedAsset = dependencies.fencedStatus(
+          derived(work.idempotencyKey(), "status"),
+          plan.rentalItemId(),
+          plan.warehouseId(),
+          currentAsset.version(),
+          lease.leaseId(),
+          lease.fencingToken(),
+          plan.ownerType(),
+          plan.ownerId(),
+          plan.transition(),
+          false);
+      validateComplexityTransitionTruth(plan, currentAsset, synchronizedAsset);
+    }
+    MaintenanceDependencyGateway.LeaseSnapshot finalLease = lease;
+    MaintenanceDependencyGateway.AssetSnapshot finalAsset = synchronizedAsset;
+    transactions.executeWithoutResult(
+        status -> finalizeComplexitySyncClaim(work, plan, finalLease, finalAsset));
+  }
+
+  private ComplexitySyncPlan prepareComplexitySyncPlan(
+      MaintenanceReconciliationStore.WorkItem work, boolean lockRepairs) {
+    MaintenanceRepair requested = requireWorkRepair(work);
+    List<MaintenanceRepair> rentalItemRepairs = lockRepairs
+        ? repairs.findAllByRentalItemIdForUpdate(requested.getRentalItemId())
+        : repairs.findAllByRentalItemIdOrderByCreatedAtAscIdAsc(requested.getRentalItemId());
+    return complexitySyncPlan(work, requested.getId(), rentalItemRepairs);
+  }
+
+  private ComplexitySyncPlan complexitySyncPlan(
+      MaintenanceReconciliationStore.WorkItem work,
+      UUID requestedRepairId,
+      List<MaintenanceRepair> rentalItemRepairs) {
+    MaintenanceRepair repair = rentalItemRepairs.stream()
+        .filter(value -> value.getId().equals(requestedRepairId))
+        .findFirst()
+        .orElseThrow(
+            () -> new MaintenanceConflictException(
+                "MAINTENANCE_STATE_CONFLICT",
+                "Queued repair disappeared during complexity synchronization"));
+    boolean externalCapitalPendingStatusSync =
+        repair.getExecutionState() == RepairExecutionState.COMPLETED
+            && repair.getAcceptanceState() == RepairAcceptanceState.PENDING
+            && repair.getReclassificationState() == RepairReclassificationState.EXTERNAL_CAPITAL;
+    if (repair.getExecutionState() != RepairExecutionState.QUEUED
+        && repair.getExecutionState() != RepairExecutionState.IN_PROGRESS
+        && !externalCapitalPendingStatusSync) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Only active ordinary work or pending external capital repair can synchronize its calculated status");
+    }
+    List<MaintenanceRepair> complexityRepairs = rentalItemRepairs.stream().filter(
+        value -> value.getExecutionState() != RepairExecutionState.DRAFT
+            && value.getExecutionState() != RepairExecutionState.CANCELLED
+            && value.getAcceptanceState() != RepairAcceptanceState.ACCEPTED
+            && value.getAcceptanceState() != RepairAcceptanceState.WRITTEN_OFF).toList();
+    List<MaintenanceRepair> leaseOwners = rentalItemRepairs.stream()
+        .filter(value -> value.getKind() == RepairKind.PRIMARY)
+        .filter(
+            value -> value.getExecutionState() != RepairExecutionState.DRAFT
+                && value.getAcceptanceState() != RepairAcceptanceState.ACCEPTED
+                && value.getAcceptanceState() != RepairAcceptanceState.WRITTEN_OFF
+                && value.getLeaseId() != null
+                && value.getLeaseVersion() != null
+                && value.getFencingToken() != null
+                && value.getLeaseExpiresAt() != null
+                && Set.of("ACTIVE", "RECONCILIATION_REQUIRED")
+                    .contains(value.getLeaseReconciliationState()))
+        .toList();
+    if (leaseOwners.size() != 1) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_LEASE_CONFLICT",
+          "Repair complexity synchronization requires one cabin lifecycle owner");
+    }
+    MaintenanceRepair leaseOwner = leaseOwners.getFirst();
+    Map<UUID, MaintenanceRepair> scope = new LinkedHashMap<>();
+    complexityRepairs.forEach(value -> scope.put(value.getId(), value));
+    scope.put(leaseOwner.getId(), leaseOwner);
+    List<MaintenanceRepair> synchronizedRepairs = List.copyOf(scope.values());
+    requireTransferSource(synchronizedRepairs, repair.getRentalItemId(), repair.getWarehouseId());
+
+    boolean capital = complexityRepairs.stream().map(
+        value -> repairComplexityFromStoredStages(value.getWarehouseId(), value.getId()))
+        .anyMatch(complexity -> complexity.type() == RepairComplexity.CAPITAL);
+    List<TaskCancellationPlan> cancellations = capital
+        ? complexityRepairs.stream()
+            .filter(value -> value.getExecutionState() == RepairExecutionState.QUEUED
+                || value.getExecutionState() == RepairExecutionState.IN_PROGRESS)
+            .filter(value -> value.getTaskBoardVersion() != null)
+            .map(value -> new TaskCancellationPlan(
+                value.getId(), value.getExternalTaskId(), value.getTaskBoardVersion()))
+            .toList()
+        : List.of();
+    long latestProjectedVersion = synchronizedRepairs.stream()
+        .mapToLong(MaintenanceRepair::getRentalItemVersionSnapshot)
+        .max()
+        .orElseThrow();
+    String ownerType = ownerType(leaseOwner);
+    String ownerId = ownerId(leaseOwner);
+    MaintenanceDependencyGateway.LeaseSnapshot lease =
+        new MaintenanceDependencyGateway.LeaseSnapshot(
+            leaseOwner.getLeaseId(),
+            leaseOwner.getLeaseVersion(),
+            leaseOwner.getRentalItemId(),
+            ownerType,
+            UUID.fromString(ownerId),
+            leaseOwner.getFencingToken(),
+            leaseOwner.getLeaseExpiresAt());
+    List<RepairSyncSignature> signatures = synchronizedRepairs.stream()
+        .sorted(Comparator.comparing(value -> value.getId().toString()))
+        .map(MaintenanceApplicationService::repairSyncSignature)
+        .toList();
+    return new ComplexitySyncPlan(
+        repair.getId(),
+        repair.getWarehouseId(),
+        repair.getRentalItemId(),
+        capital,
+        capital ? "CAPITAL_REPAIR" : "REPAIR",
+        capital ? "QUEUE_TO_CAPITAL_REPAIR" : "QUEUE_TO_REPAIR",
+        latestProjectedVersion,
+        ownerType,
+        ownerId,
+        lease,
+        leaseOwner.getId(),
+        complexityRepairs.stream().map(MaintenanceRepair::getId).sorted(
+            Comparator.comparing(UUID::toString)).toList(),
+        signatures,
+        List.copyOf(cancellations));
+  }
+
+  private void finalizeComplexitySyncClaim(
+      MaintenanceReconciliationStore.WorkItem work,
+      ComplexitySyncPlan plan,
+      MaintenanceDependencyGateway.LeaseSnapshot lease,
+      MaintenanceDependencyGateway.AssetSnapshot synchronizedAsset) {
+    ComplexitySyncPlan current = prepareComplexitySyncPlan(work, true);
+    if (!plan.equals(current)) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Repair complexity synchronization changed before finalization");
+    }
+    validateComplexityAssetTruth(plan, synchronizedAsset);
+    if (!plan.desiredStatus().equals(synchronizedAsset.status())) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Asset-service did not confirm the recalculated repair status");
+    }
+    validateLeaseTruth(plan.rentalItemId(), lease, plan.ownerType(), plan.ownerId());
+
+    Map<UUID, MaintenanceRepair> byId = repairs
+        .findAllByRentalItemIdForUpdate(plan.rentalItemId())
+        .stream()
+        .collect(java.util.stream.Collectors.toMap(MaintenanceRepair::getId, value -> value));
+    List<MaintenanceRepair> synchronizedRepairs = plan.signatures().stream()
+        .map(signature -> Optional.ofNullable(byId.get(signature.id())).orElseThrow(
+            () -> new MaintenanceConflictException(
+                "MAINTENANCE_STATE_CONFLICT", "Repair synchronization scope changed")))
+        .toList();
+    Map<MaintenanceEventStore.StreamRef, Long> streamVersions = events.lockStreams(
+        synchronizedRepairs.stream().map(value -> stream(value.getId())).toList());
+    synchronizedRepairs.forEach(value -> assertStreamParity(value, streamVersions));
+    Map<UUID, MaintenanceRepair> changed = new LinkedHashMap<>();
+    if (plan.capital()) {
+      for (MaintenanceRepair value : synchronizedRepairs) {
+        if (!plan.complexityRepairIds().contains(value.getId())) continue;
+        if (value.getExecutionState() != RepairExecutionState.QUEUED
+            && value.getExecutionState() != RepairExecutionState.IN_PROGRESS) {
+          continue;
+        }
+        List<RepairStage> stages = repairStages.findAllByRepairIdOrderByStageNo(value.getId());
+        stages.forEach(RepairStage::completeAsExternalCapital);
+        repairStages.saveAllAndFlush(stages);
+        value.completeAsExternalCapital();
+        repairPlaces.completeAfterRepair(
+            value.getWarehouseId(), value.getId(), value.isMovementToRepair());
+        changed.put(value.getId(), value);
+      }
+    } else {
+      for (MaintenanceRepair value : synchronizedRepairs) {
+        if (!plan.complexityRepairIds().contains(value.getId())) continue;
+        if ((value.getExecutionState() == RepairExecutionState.QUEUED
+                || value.getExecutionState() == RepairExecutionState.IN_PROGRESS)
+            && value.stabilizeOrdinaryClassification()) {
+          changed.put(value.getId(), value);
+        }
+      }
+    }
+    for (MaintenanceRepair value : synchronizedRepairs) {
+      if (value.getRentalItemVersionSnapshot() != synchronizedAsset.version()) {
+        value.confirmRentalItemVersion(synchronizedAsset.version());
+        changed.put(value.getId(), value);
+      }
+    }
+    RepairSyncSignature ownerSignature = plan.signatures().stream()
+        .filter(signature -> signature.id().equals(plan.leaseOwnerRepairId()))
+        .findFirst()
+        .orElseThrow(() -> new IllegalStateException("Repair lifecycle owner is missing"));
+    if (lease.version() != ownerSignature.leaseVersion()
+        || !lease.expiresAt().equals(ownerSignature.leaseExpiresAt())) {
+      UUID previousLeaseId = ownerSignature.leaseId();
+      long previousFencingToken = ownerSignature.fencingToken();
+      for (MaintenanceRepair value : synchronizedRepairs) {
+        if (previousLeaseId.equals(value.getLeaseId())
+            && value.getFencingToken() != null
+            && value.getFencingToken() == previousFencingToken) {
+          applyLeaseSnapshot(value, lease);
+          changed.put(value.getId(), value);
+        }
+      }
+    }
+    if (!changed.isEmpty()) {
+      List<MaintenanceRepair> saved = repairs.saveAllAndFlush(
+          changed.values().stream()
+              .sorted(Comparator.comparing(value -> value.getId().toString()))
+              .toList());
+      for (MaintenanceRepair value : saved) {
+        long expectedVersion = streamVersions.get(stream(value.getId()));
+        events.append(
+            MaintenanceAggregateType.REPAIR,
+            value.getId(),
+            expectedVersion,
+            MaintenanceEventType.REPAIR_PLAN_CHANGED,
+            repairLocal(value),
+            repairFact(MaintenanceEventType.REPAIR_PLAN_CHANGED, value),
+            repairSnapshot(value));
+      }
+    }
+    reconciliations.confirmed(
+        work,
+        Map.of(
+            "repairId", plan.repairId().toString(),
+            "repairStatus", plan.desiredStatus(),
+            "rentalItemVersion", synchronizedAsset.version()));
+  }
+
+  private static RepairSyncSignature repairSyncSignature(MaintenanceRepair value) {
+    return new RepairSyncSignature(
+        value.getId(),
+        value.getVersion(),
+        value.getExecutionState(),
+        value.getAcceptanceState(),
+        value.getReclassificationState(),
+        value.getTaskBoardVersion(),
+        value.getExternalTaskId(),
+        value.getRentalItemVersionSnapshot(),
+        value.getLeaseId(),
+        value.getLeaseVersion(),
+        value.getFencingToken(),
+        value.getLeaseExpiresAt(),
+        value.isMovementToRepair());
+  }
+
+  private static void validateComplexityAssetTruth(
+      ComplexitySyncPlan plan, MaintenanceDependencyGateway.AssetSnapshot asset) {
+    if (asset == null
+        || !plan.rentalItemId().equals(asset.rentalItemId())
+        || !plan.warehouseId().equals(asset.warehouseId())
+        || asset.version() < plan.latestProjectedVersion()
+        || !Set.of("REPAIR", "CAPITAL_REPAIR").contains(asset.status())) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Canonical rental-item snapshot is not safe for repair complexity synchronization");
+    }
+  }
+
+  private static void validateComplexityRenewedLeaseTruth(
+      ComplexitySyncPlan plan, MaintenanceDependencyGateway.LeaseSnapshot lease) {
+    validateLeaseTruth(plan.rentalItemId(), lease, plan.ownerType(), plan.ownerId());
+    if (!plan.lease().leaseId().equals(lease.leaseId())
+        || plan.lease().fencingToken() != lease.fencingToken()
+        || lease.version() != Math.addExact(plan.lease().version(), 1)) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Asset-service lease renewal does not preserve the current fence and version");
+    }
+  }
+
+  private static void validateComplexityTransitionTruth(
+      ComplexitySyncPlan plan,
+      MaintenanceDependencyGateway.AssetSnapshot current,
+      MaintenanceDependencyGateway.AssetSnapshot synchronizedAsset) {
+    if (synchronizedAsset == null
+        || !plan.rentalItemId().equals(synchronizedAsset.rentalItemId())
+        || !plan.warehouseId().equals(synchronizedAsset.warehouseId())
+        || synchronizedAsset.version() < current.version()
+        || (synchronizedAsset.version() == current.version()
+            && !plan.desiredStatus().equals(current.status()))
+        || !plan.desiredStatus().equals(synchronizedAsset.status())) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Asset-service did not confirm the recalculated repair status");
     }
   }
 
@@ -2300,7 +4100,17 @@ public class MaintenanceApplicationService {
       boolean movementToRepair,
       RepairLogisticsPlanningMode logisticsPlanningMode,
       LocalDate logisticsScheduledDate) {
-    List<PlanStageInput> plan = estimatePlan.stream()
+    return createEstimateRepairFromPlan(
+        estimate,
+        storedPlanInputs(estimatePlan),
+        priority,
+        movementToRepair,
+        logisticsPlanningMode,
+        logisticsScheduledDate);
+  }
+
+  private List<PlanStageInput> storedPlanInputs(List<EstimatePlanStage> estimatePlan) {
+    return estimatePlan.stream()
         .map(value -> new PlanStageInput(
             value.getId(), value.getStageKind(), value.getStageNo(),
             new RoutingSnapshot(value.getRoutingQueueId(), value.getRoutingQueueName(),
@@ -2310,13 +4120,6 @@ public class MaintenanceApplicationService {
             value.getGroupComment(),
             value.getTaskDeadline()))
         .toList();
-    return createEstimateRepairFromPlan(
-        estimate,
-        plan,
-        priority,
-        movementToRepair,
-        logisticsPlanningMode,
-        logisticsScheduledDate);
   }
 
   private MaintenanceRepair createEstimateRepairFromPlan(
@@ -2443,8 +4246,7 @@ public class MaintenanceApplicationService {
         resolvePlanContent(canonicalLines, planInputs);
     validateEstimateRouting(canonicalSnapshots, resolvedPlanInputs);
     validatePlanContent(canonicalLines, resolvedPlanInputs);
-    requireCustomRoutingReady(
-        estimate.getWarehouseId(), canonicalLines, resolvedPlanInputs);
+    validateCustomRoutingStructure(canonicalLines, resolvedPlanInputs);
     List<EstimatePlanStage> plan = new ArrayList<>();
     for (int index = 0; index < resolvedPlanInputs.size(); index++) {
       PlanStageInput input = resolvedPlanInputs.get(index);
@@ -2619,40 +4421,49 @@ public class MaintenanceApplicationService {
     return normalized;
   }
 
-  private FurnitureLossCommand furnitureLosses(MaintenanceRepair repair) {
-    if (repair.getEstimateId() == null) {
-      return new FurnitureLossCommand(null, List.of());
+  private List<FurnitureQuantity> furnitureQuantities(MaintenanceRepair repair) {
+    if (repair.getEstimateId() != null) {
+      return estimateFurnitureQuantities(requireEstimate(repair.getEstimateId()));
     }
-    MaintenanceEstimate estimate = requireEstimate(repair.getEstimateId());
-    return new FurnitureLossCommand(estimate.getId(), furnitureLosses(estimate));
+    Map<UUID, FurnitureQuantity> quantities = new HashMap<>();
+    for (RepairStage stage : repairStages.findAllByRepairIdOrderByStageNo(repair.getId())) {
+      java.util.stream.Stream.concat(
+              readList(stage.getWorkLines(), EstimateLineResponse.class).stream(),
+              readList(stage.getMaterialLines(), EstimateLineResponse.class).stream())
+          .forEach(
+              line ->
+                  addFurnitureQuantity(
+                      quantities, line.catalogSnapshot(), new BigDecimal(line.quantity())));
+    }
+    return orderedFurnitureQuantities(quantities);
   }
 
-  private List<MaintenanceDependencyGateway.FurnitureLoss> furnitureLosses(
+  private List<FurnitureQuantity> estimateFurnitureQuantities(
       MaintenanceEstimate estimate) {
-    Map<UUID, MaintenanceDependencyGateway.FurnitureLoss> losses = new HashMap<>();
+    Map<UUID, FurnitureQuantity> losses = new HashMap<>();
     for (EstimateLine line : currentLines(estimate)) {
       if (line.getCatalogSnapshot() == null) continue;
       CatalogNodeSnapshot storedSnapshot = read(
           line.getCatalogSnapshot(), CatalogNodeSnapshot.class);
       CatalogNodeSnapshot canonicalSnapshot = canonicalCatalogSnapshot(estimate, storedSnapshot);
-      addFurnitureLoss(losses, canonicalSnapshot, line.getQuantity());
+      addFurnitureQuantity(losses, canonicalSnapshot, line.getQuantity());
     }
-    return orderedFurnitureLosses(losses);
+    return orderedFurnitureQuantities(losses);
   }
 
-  private List<MaintenanceDependencyGateway.FurnitureLoss> furnitureLosses(
+  private List<FurnitureQuantity> estimateFurnitureQuantities(
       MaintenanceEstimate estimate, List<EstimateLineInput> inputs) {
-    Map<UUID, MaintenanceDependencyGateway.FurnitureLoss> losses = new HashMap<>();
+    Map<UUID, FurnitureQuantity> losses = new HashMap<>();
     for (EstimateLineInput input : inputs) {
       CatalogNodeSnapshot snapshot = canonicalCatalogSnapshot(
           estimate, input.catalogSnapshot());
-      addFurnitureLoss(losses, snapshot, new BigDecimal(input.quantity()));
+      addFurnitureQuantity(losses, snapshot, new BigDecimal(input.quantity()));
     }
-    return orderedFurnitureLosses(losses);
+    return orderedFurnitureQuantities(losses);
   }
 
-  private static void addFurnitureLoss(
-      Map<UUID, MaintenanceDependencyGateway.FurnitureLoss> losses,
+  private static void addFurnitureQuantity(
+      Map<UUID, FurnitureQuantity> losses,
       CatalogNodeSnapshot snapshot,
       BigDecimal quantity) {
     if (snapshot == null || snapshot.furnitureEquipment() == null || quantity.signum() == 0) {
@@ -2665,7 +4476,7 @@ public class MaintenanceApplicationService {
       throw invalid("Furniture quantity must be a whole number within the supported range");
     }
     FurnitureEquipmentReference equipment = snapshot.furnitureEquipment();
-    MaintenanceDependencyGateway.FurnitureLoss previous = losses.get(equipment.equipmentId());
+    FurnitureQuantity previous = losses.get(equipment.equipmentId());
     final long aggregateQuantity;
     try {
       aggregateQuantity = Math.addExact(previous == null ? 0 : previous.quantity(), wholeQuantity);
@@ -2674,20 +4485,40 @@ public class MaintenanceApplicationService {
     }
     losses.put(
         equipment.equipmentId(),
-        new MaintenanceDependencyGateway.FurnitureLoss(
-            equipment.equipmentId(),
-            aggregateQuantity));
+        new FurnitureQuantity(equipment.equipmentId(), aggregateQuantity));
   }
 
-  private static List<MaintenanceDependencyGateway.FurnitureLoss> orderedFurnitureLosses(
-      Map<UUID, MaintenanceDependencyGateway.FurnitureLoss> losses) {
+  private static List<FurnitureQuantity> orderedFurnitureQuantities(
+      Map<UUID, FurnitureQuantity> losses) {
     return losses.values().stream()
         .sorted(Comparator.comparing(value -> value.equipmentId().toString()))
         .toList();
   }
 
-  private record FurnitureLossCommand(
-      UUID estimateId, List<MaintenanceDependencyGateway.FurnitureLoss> losses) {}
+  private Map<UUID, String> furnitureEquipmentNames(MaintenanceRepair repair) {
+    Map<UUID, String> names = new HashMap<>();
+    for (RepairStage stage : repairStages.findAllByRepairIdOrderByStageNo(repair.getId())) {
+      java.util.stream.Stream.concat(
+              readList(stage.getWorkLines(), EstimateLineResponse.class).stream(),
+              readList(stage.getMaterialLines(), EstimateLineResponse.class).stream())
+          .map(EstimateLineResponse::catalogSnapshot)
+          .filter(Objects::nonNull)
+          .map(CatalogNodeSnapshot::furnitureEquipment)
+          .filter(Objects::nonNull)
+          .forEach(
+              equipment -> {
+                String previous = names.putIfAbsent(
+                    equipment.equipmentId(), equipment.equipmentName());
+                if (previous != null && !previous.equals(equipment.equipmentName())) {
+                  throw new IllegalStateException(
+                      "Stored repair furniture has conflicting equipment names");
+                }
+              });
+    }
+    return Map.copyOf(names);
+  }
+
+  private record FurnitureQuantity(UUID equipmentId, long quantity) {}
 
   private void replaceRepairStages(MaintenanceRepair repair, List<PlanStageInput> inputs) {
     replaceRepairStages(repair, inputs, List.of());
@@ -2700,7 +4531,7 @@ public class MaintenanceApplicationService {
     validatePlan(inputs, lines.isEmpty());
     inputs = resolvePlanContent(lines, inputs);
     validatePlanContent(lines, inputs);
-    requireCustomRoutingReady(repair.getWarehouseId(), lines, inputs);
+    validateCustomRoutingStructure(lines, inputs);
     Map<UUID, EstimateLineResponse> lineById =
         lines.stream()
             .collect(
@@ -3145,15 +4976,47 @@ public class MaintenanceApplicationService {
     }
   }
 
-  private void requireCustomRoutingReady(
-      UUID warehouseId,
-      List<EstimateLineResponse> lines,
-      List<PlanStageInput> plan) {
+  /**
+   * Performs only local syntax and lineage validation. The task-board preflight is intentionally
+   * separated into {@link #requireCustomRoutingReady(UUID, List)} so callers can make that
+   * remote read after their prepare transaction has committed.
+   */
+  private void validateCustomRoutingStructure(
+      List<EstimateLineResponse> lines, List<PlanStageInput> plan) {
     Set<UUID> customLineIds =
         lines.stream()
             .filter(line -> line.catalogSnapshot() == null)
             .map(EstimateLineResponse::id)
             .collect(java.util.stream.Collectors.toSet());
+    List<MaintenanceDependencyGateway.RoutingQueueRequirement> requirements =
+        customRoutingRequirements(plan);
+    if (requirements.isEmpty() && !customLineIds.isEmpty()) {
+      throw invalid("Every custom repair line requires a selected queue");
+    }
+  }
+
+  /**
+   * Reads task-board routing truth outside a local transaction. This method deliberately rejects
+   * an ambient transaction instead of suspending it: suspending would retain caller locks while
+   * the dependency request waits.
+   */
+  private void requireCustomRoutingReady(UUID warehouseId, List<PlanStageInput> plan) {
+    requireNoCallerTransaction("validate task-board routing");
+    List<MaintenanceDependencyGateway.RoutingQueueRequirement> requirements =
+        customRoutingRequirements(plan);
+    if (requirements.isEmpty()) return;
+    MaintenanceDependencyGateway.RoutingPreflight preflight =
+        dependencies.preflightMaintenanceRouting(
+            warehouseId, requirements);
+    if (preflight == null || !preflight.ready()) {
+      throw new MaintenanceValidationException(
+          "MAINTENANCE_ROUTING_INVALID",
+          "A required global queue is not connected to this warehouse");
+    }
+  }
+
+  private static List<MaintenanceDependencyGateway.RoutingQueueRequirement>
+      customRoutingRequirements(List<PlanStageInput> plan) {
     Map<UUID, MaintenanceDependencyGateway.RoutingQueueRequirement> requirements =
         new LinkedHashMap<>();
     for (PlanStageInput stage : plan) {
@@ -3161,26 +5024,14 @@ public class MaintenanceApplicationService {
       requireCustomWorkRouting(stage.routing());
       MaintenanceDependencyGateway.RoutingQueueRequirement requirement =
           new MaintenanceDependencyGateway.RoutingQueueRequirement(
-              stage.routing().queueId(),
-              queueType);
+              stage.routing().queueId(), queueType);
       MaintenanceDependencyGateway.RoutingQueueRequirement previous =
           requirements.putIfAbsent(requirement.queueDefinitionId(), requirement);
       if (previous != null && !previous.equals(requirement)) {
         throw invalid("One custom-line queue ID has conflicting routing snapshots");
       }
     }
-    if (requirements.isEmpty() && !customLineIds.isEmpty()) {
-      throw invalid("Every custom repair line requires a selected queue");
-    }
-    if (requirements.isEmpty()) return;
-    MaintenanceDependencyGateway.RoutingPreflight preflight =
-        dependencies.preflightMaintenanceRouting(
-            warehouseId, List.copyOf(requirements.values()));
-    if (preflight == null || !preflight.ready()) {
-      throw new MaintenanceValidationException(
-          "MAINTENANCE_ROUTING_INVALID",
-          "A required global queue is not connected to this warehouse");
-    }
+    return List.copyOf(requirements.values());
   }
 
   private void replaceMedia(
@@ -3350,83 +5201,9 @@ public class MaintenanceApplicationService {
     return version;
   }
 
-  private List<CatalogNodeInput> resolveFurnitureEquipment(List<CatalogNodeInput> nodes) {
-    Map<UUID, CatalogNodeInput> nodesById = nodes.stream().collect(
-        java.util.stream.Collectors.toMap(CatalogNodeInput::id, value -> value));
-    Set<UUID> furnitureRoots = nodes.stream()
-        .filter(MaintenanceApplicationService::marksFurnitureTree)
-        .map(CatalogNodeInput::id)
-        .collect(java.util.stream.Collectors.toSet());
-    List<CatalogNodeInput> missing = nodes.stream()
-        .filter(node -> node.nodeType() == CatalogNodeType.MATERIAL)
-        .filter(node -> node.furnitureEquipment() == null)
-        .filter(node -> belongsToFurnitureTree(node.id(), furnitureRoots, nodesById))
-        .sorted(Comparator.comparing(CatalogNodeInput::name).thenComparing(CatalogNodeInput::id))
-        .toList();
-    if (missing.isEmpty()) return nodes;
-
-    Map<UUID, FurnitureEquipmentReference> equipmentById = new HashMap<>();
-    nodes.stream()
-        .map(CatalogNodeInput::furnitureEquipment)
-        .filter(java.util.Objects::nonNull)
-        .forEach(reference -> equipmentById.put(reference.equipmentId(), reference));
-    Map<UUID, FurnitureEquipmentReference> resolvedByNodeId = new HashMap<>();
-    for (CatalogNodeInput node : missing) {
-      String name = node.name().trim();
-      MaintenanceDependencyGateway.FurnitureEquipmentSnapshot snapshot =
-          dependencies.ensureFurnitureEquipment(node.id(), name);
-      if (snapshot == null
-          || snapshot.equipmentId() == null
-          || !name.equals(snapshot.equipmentName())) {
-        throw new MaintenanceDependencyException(
-            org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-            "Asset-service returned mismatched furniture equipment truth");
-      }
-      FurnitureEquipmentReference reference = new FurnitureEquipmentReference(
-          snapshot.equipmentId(), snapshot.equipmentName());
-      FurnitureEquipmentReference previous = equipmentById.putIfAbsent(
-          reference.equipmentId(), reference);
-      if (previous != null && !previous.equals(reference)) {
-        throw new MaintenanceDependencyException(
-            org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-            "Asset-service returned conflicting furniture equipment truth");
-      }
-      resolvedByNodeId.put(node.id(), reference);
-    }
-    return nodes.stream()
-        .map(node -> resolvedByNodeId.containsKey(node.id())
-            ? withFurnitureEquipment(node, resolvedByNodeId.get(node.id()))
-            : node)
-        .toList();
-  }
-
-  private static CatalogNodeInput withFurnitureEquipment(
-      CatalogNodeInput node, FurnitureEquipmentReference furnitureEquipment) {
-    return new CatalogNodeInput(
-        node.id(),
-        node.nodeType(),
-        node.name(),
-        node.active(),
-        node.parentNodeId(),
-        node.furnitureCategory(),
-        furnitureEquipment,
-        node.unit(),
-        node.unitPrice(),
-        node.durationMinutes(),
-        node.includeInEstimate(),
-        node.commonItem(),
-        node.showInMainMenu(),
-        node.canvasX(),
-        node.canvasY(),
-        node.routing(),
-        node.comment(),
-        node.displayColor(),
-        node.forcesCapitalRepair(),
-        node.characteristicId());
-  }
-
   private Map<UUID, String> resolveCabinCharacteristicNames(
       List<CatalogNodeInput> nodes) {
+    requireNoCallerTransaction("resolve cabin characteristic truth");
     Set<UUID> requestedIds =
         nodes.stream()
             .map(CatalogNodeInput::characteristicId)
@@ -3599,6 +5376,7 @@ public class MaintenanceApplicationService {
 
   private Map<UUID, RoutingSnapshot> canonicalCatalogRouting(
       List<CatalogNodeInput> nodes) {
+    requireNoCallerTransaction("resolve canonical catalog routing");
     Map<UUID, CatalogRoutingInput> unique = new LinkedHashMap<>();
     for (CatalogNodeInput node : nodes) {
       CatalogRoutingInput routing = directRouting(node);
@@ -4173,8 +5951,9 @@ public class MaintenanceApplicationService {
             List.of(RepairAcceptanceState.PENDING, RepairAcceptanceState.IN_REWORK));
   }
 
-  private LeaseRefresh refreshLeaseForCommand(
-      MaintenanceRepair repair, List<MaintenanceRepair> sourceChain, UUID commandKey) {
+  /** Builds an exact local lease signature while the caller still owns only a short transaction. */
+  private LeaseRefreshPlan prepareLeaseRefreshPlan(
+      MaintenanceRepair repair, List<MaintenanceRepair> sourceChain) {
     MaintenanceRepair owner = leaseOwner(repair, sourceChain);
     List<MaintenanceRepair> copies = leaseCopies(repair, sourceChain, owner);
     requireRenewableLease(owner);
@@ -4188,28 +5967,88 @@ public class MaintenanceApplicationService {
             "Repair chain does not have one current renewable lease snapshot");
       }
     }
-    String ownerType = ownerType(owner);
-    String ownerId = ownerId(owner);
+    List<LeaseCopySignature> copySignatures =
+        copies.stream()
+            .map(
+                value ->
+                    new LeaseCopySignature(
+                        value.getId(),
+                        value.getVersion(),
+                        value.getLeaseId(),
+                        value.getLeaseVersion(),
+                        value.getFencingToken(),
+                        value.getLeaseExpiresAt(),
+                        value.getLeaseReconciliationState()))
+            .toList();
+    return new LeaseRefreshPlan(
+        owner.getId(),
+        owner.getRentalItemId(),
+        owner.getRentalItemVersionSnapshot(),
+        ownerType(owner),
+        ownerId(owner),
+        owner.getLeaseId(),
+        owner.getLeaseVersion(),
+        owner.getFencingToken(),
+        owner.getLeaseExpiresAt(),
+        copySignatures);
+  }
+
+  /**
+   * The only remote portion of command lease refresh. It receives an immutable signature that
+   * was committed by a preceding prepare transaction, and therefore may never run in a local
+   * transaction.
+   */
+  private LeaseRefresh refreshLeaseForCommand(LeaseRefreshPlan plan, UUID commandKey) {
+    requireNoCallerTransaction("refresh a repair operation lease");
     MaintenanceDependencyGateway.LeaseSnapshot lease = new MaintenanceDependencyGateway.LeaseSnapshot(
-        owner.getLeaseId(), owner.getLeaseVersion(), owner.getRentalItemId(), ownerType,
-        UUID.fromString(ownerId), owner.getFencingToken(), owner.getLeaseExpiresAt());
+        plan.leaseId(),
+        plan.leaseVersion(),
+        plan.rentalItemId(),
+        plan.ownerType(),
+        UUID.fromString(plan.ownerId()),
+        plan.fencingToken(),
+        plan.expiresAt());
     boolean ownerRenewed = false;
     if (leaseHasExpired(lease.expiresAt())) {
       lease = dependencies.acquireLease(
-          derived(commandKey, "reacquire-lease"), owner.getRentalItemId(),
-          owner.getRentalItemVersionSnapshot(), ownerType, ownerId);
-      validateLeaseTruth(owner, lease, ownerType, ownerId);
+          derived(commandKey, "reacquire-lease"),
+          plan.rentalItemId(),
+          plan.rentalItemVersion(),
+          plan.ownerType(),
+          plan.ownerId());
+      validateLeaseTruth(plan.rentalItemId(), lease, plan.ownerType(), plan.ownerId());
       requireFreshDependencyLease(lease);
       ownerRenewed = true;
     } else if (!leaseIsFresh(lease.expiresAt())) {
       lease = dependencies.renewLease(
-          derived(commandKey, "renew-lease"), owner.getLeaseId(), owner.getLeaseVersion(),
-          owner.getFencingToken(), ownerType, ownerId);
-      validateRenewedLeaseTruth(owner, lease, ownerType, ownerId);
+          derived(commandKey, "renew-lease"),
+          plan.leaseId(),
+          plan.leaseVersion(),
+          plan.fencingToken(),
+          plan.ownerType(),
+          plan.ownerId());
+      validateLeaseTruth(plan.rentalItemId(), lease, plan.ownerType(), plan.ownerId());
+      if (!plan.leaseId().equals(lease.leaseId())
+          || plan.fencingToken() != lease.fencingToken()
+          || lease.version() != Math.addExact(plan.leaseVersion(), 1)) {
+        throw new MaintenanceDependencyException(
+            org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+            "Asset-service lease renewal does not preserve the current fence and version");
+      }
       requireFreshDependencyLease(lease);
       ownerRenewed = true;
     }
     return new LeaseRefresh(lease, ownerRenewed);
+  }
+
+  private void requireMatchingLeaseRefreshPlan(
+      LeaseRefreshPlan expected, MaintenanceRepair repair, List<MaintenanceRepair> sourceChain) {
+    LeaseRefreshPlan current = prepareLeaseRefreshPlan(repair, sourceChain);
+    if (!expected.equals(current)) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Repair lease changed before command finalization");
+    }
   }
 
   private static void applyLeaseSnapshot(
@@ -4602,164 +6441,6 @@ public class MaintenanceApplicationService {
     repairStages.saveAllAndFlush(stages);
   }
 
-  /**
-   * A pre-start replacement owns the right to decide whether the old external effect survives.
-   * Do not acknowledge its queued work: deferred work remains recoverable if the saga waits for
-   * an inbound delivery or the remote response is lost.
-   */
-  private Object deferForPrestartReplacement(MaintenanceReconciliationStore.WorkItem work) {
-    reconciliations.defer(work, Duration.ofSeconds(2));
-    return null;
-  }
-
-  private Object reconcileRepairQueue(MaintenanceReconciliationStore.WorkItem work) {
-    MaintenanceRepair repair = requireWorkRepair(work);
-    if (prestartReplacementGuard.blocksRepairExecution(repair.getId())) {
-      return deferForPrestartReplacement(work);
-    }
-    long expectedVersion = events.lockCurrentVersion(MaintenanceAggregateType.REPAIR, repair.getId());
-    assertVersion(repair.getVersion(), expectedVersion);
-    if (repair.getExecutionState() == RepairExecutionState.QUEUED) {
-      if (repair.getReclassificationState() == RepairReclassificationState.STABLE) {
-        enqueueOrdinaryRepairExecution(
-            repair,
-            stableOperationKey("register-task", repair.getExternalTaskId(), 0),
-            stableOperationKey("driver-logistics-task", repair.getId(), 0));
-      }
-      return Map.of("repairId", repair.getId().toString(), "alreadyQueued", true);
-    }
-    if (repair.getExecutionState() != RepairExecutionState.DRAFT || repair.getKind() == RepairKind.REWORK) {
-      throw new MaintenanceConflictException(
-          "MAINTENANCE_STATE_CONFLICT", "Repair is no longer eligible for primary queue reconciliation");
-    }
-    List<RepairStage> stages = repairStages.findAllByRepairIdOrderByStageNo(repair.getId());
-    if (stages.isEmpty()) throw invalid("Repair needs at least one planned stage before queueing");
-    RepairComplexitySnapshot complexity =
-        repairComplexityFromStoredStages(repair.getWarehouseId(), repair.getId());
-    String desiredAssetStatus =
-        complexity.type() == RepairComplexity.CAPITAL
-            ? "CAPITAL_REPAIR"
-            : "REPAIR";
-    String queueTransition =
-        complexity.type() == RepairComplexity.CAPITAL
-            ? "QUEUE_TO_CAPITAL_REPAIR"
-            : "QUEUE_TO_REPAIR";
-    FurnitureLossCommand furniture = furnitureLosses(repair);
-    String ownerType = ownerType(repair);
-    String ownerId = ownerId(repair);
-    MaintenanceDependencyGateway.AssetSnapshot liveAsset = requireQueueAssetSnapshot(repair);
-    if ("REPAIR".equals(liveAsset.status())
-        || "CAPITAL_REPAIR".equals(liveAsset.status())) {
-      Optional<MaintenanceRepair> lifecycleOwner =
-          primaryLifecycleOwnerWithLeaseIdentity(repair);
-      if (lifecycleOwner.isPresent()) {
-        prepareStagesForQueue(
-            stages, complexity.type() == RepairComplexity.CAPITAL);
-        repairStages.saveAllAndFlush(stages);
-        repair.confirmRentalItemVersion(liveAsset.version());
-        if (complexity.type() == RepairComplexity.CAPITAL) {
-          repair.queueExternalCapitalUnderExistingRepair();
-        } else {
-          repair.queueUnderExistingRepair();
-        }
-        MaintenanceRepair saved = repairs.saveAndFlush(repair);
-        if (complexity.type() != RepairComplexity.CAPITAL) {
-          enqueueOrdinaryRepairExecution(
-              saved,
-              stableOperationKey("register-task", saved.getExternalTaskId(), 0),
-              stableOperationKey("driver-logistics-task", saved.getId(), 0));
-        }
-        if (complexity.type() != RepairComplexity.CAPITAL) {
-          enqueueRepairComplexityStatusSync(
-              saved, derived(work.idempotencyKey(), "repair-complexity-status"));
-        }
-        events.append(
-            MaintenanceAggregateType.REPAIR,
-            saved.getId(),
-            expectedVersion,
-            MaintenanceEventType.REPAIR_QUEUED,
-            repairLocal(saved),
-            repairFact(MaintenanceEventType.REPAIR_QUEUED, saved),
-            repairSnapshot(saved));
-        return Map.of(
-            "repairId", saved.getId().toString(),
-            "assetAlreadyInRepair", true,
-            "lifecycleOwnerRepairId", lifecycleOwner.orElseThrow().getId().toString(),
-            "rentalItemVersion", liveAsset.version());
-      }
-      RentalItemFactProjection canonicalFact =
-          requireRentalItemFact(repair.getRentalItemId(), repair.getWarehouseId());
-      if (!liveAsset.status().equals(canonicalFact.getAssetStatus())) {
-        throw new MaintenanceDependencyException(
-            org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-            "Rental item repair adoption requires a matching canonical asset fact");
-      }
-    }
-    long rentalItemExpectedVersion = liveAsset.version();
-    MaintenanceDependencyGateway.LeaseSnapshot lease = dependencies.acquireLease(
-        derived(work.idempotencyKey(), "acquire"), repair.getRentalItemId(),
-        rentalItemExpectedVersion, ownerType, ownerId);
-    validateLeaseTruth(repair, lease, ownerType, ownerId);
-    if (!leaseIsFresh(lease.expiresAt())) {
-      lease = dependencies.renewLease(
-          derived(work.idempotencyKey(), "renew"), lease.leaseId(), lease.version(),
-          lease.fencingToken(), ownerType, ownerId);
-      validateLeaseTruth(repair, lease, ownerType, ownerId);
-    }
-    requireFreshDependencyLease(lease);
-    UUID statusKey = derived(work.idempotencyKey(), "status");
-    boolean linkedReturn = work.payload().path("linkedReturn").asBoolean(false);
-    MaintenanceDependencyGateway.AssetSnapshot asset = furniture.losses().isEmpty()
-        ? dependencies.fencedStatus(
-            statusKey, repair.getRentalItemId(), repair.getWarehouseId(),
-            rentalItemExpectedVersion, lease.leaseId(), lease.fencingToken(), ownerType,
-            ownerId, queueTransition, linkedReturn)
-        : dependencies.fencedStatus(
-            statusKey, repair.getRentalItemId(), repair.getWarehouseId(),
-            rentalItemExpectedVersion, lease.leaseId(), lease.fencingToken(), ownerType,
-            ownerId, queueTransition, linkedReturn,
-            furniture.estimateId(), furniture.losses());
-    validateAssetTruth(
-        repair,
-        asset,
-        rentalItemExpectedVersion,
-        desiredAssetStatus.equals(liveAsset.status()));
-    if (!desiredAssetStatus.equals(asset.status())) {
-      throw new MaintenanceDependencyException(
-          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-          "Asset-service did not confirm the calculated repair status");
-    }
-    prepareStagesForQueue(
-        stages, complexity.type() == RepairComplexity.CAPITAL);
-    repairStages.saveAllAndFlush(stages);
-    repair.confirmRentalItemVersion(asset.version());
-    if (complexity.type() == RepairComplexity.CAPITAL) {
-      repair.queueExternalCapital(
-          lease.leaseId(), lease.version(), lease.fencingToken(), lease.expiresAt());
-    } else {
-      repair.queue(lease.leaseId(), lease.version(), lease.fencingToken(), lease.expiresAt());
-    }
-    MaintenanceRepair saved = repairs.saveAndFlush(repair);
-    if (complexity.type() != RepairComplexity.CAPITAL) {
-      enqueueOrdinaryRepairExecution(
-          saved,
-          stableOperationKey("register-task", saved.getExternalTaskId(), 0),
-          stableOperationKey("driver-logistics-task", saved.getId(), 0));
-    }
-    events.append(
-        MaintenanceAggregateType.REPAIR,
-        saved.getId(),
-        expectedVersion,
-        MaintenanceEventType.REPAIR_QUEUED,
-        repairLocal(saved),
-        repairFact(MaintenanceEventType.REPAIR_QUEUED, saved),
-        repairSnapshot(saved));
-    return Map.of(
-        "repairId", saved.getId().toString(),
-        "leaseId", lease.leaseId().toString(),
-        "rentalItemVersion", asset.version());
-  }
-
   private Optional<MaintenanceRepair> primaryLifecycleOwnerWithLeaseIdentity(
       MaintenanceRepair repair) {
     List<MaintenanceRepair> owners = repairs.findPrimaryLifecycleOwnerWithLeaseIdentity(
@@ -4782,464 +6463,6 @@ public class MaintenanceApplicationService {
     return Optional.of(owner);
   }
 
-  private Object reconcileEmptyEstimate(MaintenanceReconciliationStore.WorkItem work) {
-    UUID estimateId = uuidField(work.payload(), "estimateId");
-    MaintenanceEstimate estimate = requireEstimate(estimateId);
-    if (estimate.getState() != EstimateState.COMPLETED || estimate.getRepairId() != null) {
-      throw new MaintenanceConflictException(
-          "MAINTENANCE_STATE_CONFLICT", "Estimate is no longer an empty completed estimate");
-    }
-    String ownerType = "MAINTENANCE_ESTIMATE";
-    String ownerId = estimate.getId().toString();
-    MaintenanceDependencyGateway.LeaseSnapshot lease = dependencies.acquireLease(
-        derived(work.idempotencyKey(), "acquire"), estimate.getRentalItemId(),
-        estimate.getRentalItemVersionSnapshot(), ownerType, ownerId);
-    validateLeaseTruth(estimate, lease, ownerType, ownerId);
-    if (!leaseIsFresh(lease.expiresAt())) {
-      lease = dependencies.renewLease(
-          derived(work.idempotencyKey(), "renew"), lease.leaseId(), lease.version(),
-          lease.fencingToken(), ownerType, ownerId);
-      validateLeaseTruth(estimate, lease, ownerType, ownerId);
-    }
-    requireFreshDependencyLease(lease);
-    MaintenanceDependencyGateway.AssetSnapshot asset = dependencies.fencedStatus(
-        derived(work.idempotencyKey(), "status"), estimate.getRentalItemId(), estimate.getWarehouseId(),
-        estimate.getRentalItemVersionSnapshot(), lease.leaseId(), lease.fencingToken(), ownerType,
-        ownerId, "EMPTY_ESTIMATE_TO_FREE", false);
-    validateAssetTruth(estimate, asset);
-    dependencies.releaseLease(
-        derived(work.idempotencyKey(), "release"), lease.leaseId(), lease.version(),
-        lease.fencingToken(), ownerType, ownerId);
-    return Map.of(
-        "estimateId", estimate.getId().toString(),
-        "rentalItemVersion", asset.version(),
-        "leaseReleased", true);
-  }
-
-  private Object reconcileTask(
-      MaintenanceReconciliationStore.WorkItem work, boolean update) {
-    MaintenanceRepair repair = requireWorkRepair(work);
-    if (prestartReplacementGuard.blocksRepairExecution(repair.getId())) {
-      return deferForPrestartReplacement(work);
-    }
-    long expectedVersion = events.lockCurrentVersion(MaintenanceAggregateType.REPAIR, repair.getId());
-    assertVersion(repair.getVersion(), expectedVersion);
-    if (repair.getExecutionState() != RepairExecutionState.QUEUED) {
-      throw new MaintenanceConflictException(
-          "MAINTENANCE_STATE_CONFLICT", "Only a queued repair can reconcile its task");
-    }
-    List<MaintenanceDependencyGateway.TaskStage> stages = taskStages(repair);
-    MaintenanceDependencyGateway.AssetSnapshot asset = requireTaskAssetSnapshot(repair);
-    MaintenanceDependencyGateway.TaskSnapshot task;
-    if (update) {
-      if (repair.getTaskBoardVersion() == null) {
-        throw new MaintenanceConflictException(
-            "MAINTENANCE_STATE_CONFLICT", "Task update has no confirmed task-board version");
-      }
-      task = dependencies.updatePreStartTask(
-          work.idempotencyKey(), repair.getExternalTaskId(), repair.getTaskBoardVersion(),
-          asset.number(), stages);
-    } else {
-      LocalDate scheduledDate = repair.getDispatchDate();
-      int priority = repair.getPriority();
-      if (requiresDriverDeliveryToRepair(repair)
-          && repairPlaces.isOccupied(repair.getWarehouseId(), repair.getId())) {
-        scheduledDate = LocalDate.now(MOSCOW_ZONE_ID);
-        priority = DELIVERED_REPAIR_TASK_BOARD_PRIORITY;
-      }
-      task = dependencies.registerTask(
-          work.idempotencyKey(), repair.getExternalTaskId(), repair.getId(), repair.getWarehouseId(),
-          repair.getRentalItemId(), asset.number(), scheduledDate, priority,
-          repairCapacitySettings.get(repair.getWarehouseId()).repairPlaceCount(), stages);
-    }
-    validateTaskTruth(repair, task, stages.size());
-    confirmTaskRegistration(repair.getId(), task);
-    repair.markTaskGenerated(task.version());
-    repair.markReconciled();
-    MaintenanceRepair saved = repairs.saveAndFlush(repair);
-    events.append(
-        MaintenanceAggregateType.REPAIR,
-        saved.getId(),
-        expectedVersion,
-        update ? MaintenanceEventType.REPAIR_PLAN_CHANGED : MaintenanceEventType.REPAIR_QUEUED,
-        repairLocal(saved),
-        repairFact(
-            update ? MaintenanceEventType.REPAIR_PLAN_CHANGED
-                : MaintenanceEventType.REPAIR_QUEUED,
-            saved),
-        repairSnapshot(saved));
-    return Map.of(
-        "repairId", saved.getId().toString(),
-        "externalTaskId", task.externalTaskId().toString(),
-        "taskBoardVersion", task.version());
-  }
-
-  private Object reconcileDriverLogisticsTask(
-      MaintenanceReconciliationStore.WorkItem work) {
-    if (!"LOGISTICS".equals(work.dependency())
-        || !"DELIVER_TO_REPAIR"
-            .equals(work.payload().path("kind").asText())) {
-      throw new IllegalStateException(
-          "Stored maintenance driver-task intent is invalid");
-    }
-    MaintenanceRepair repair = requireWorkRepair(work);
-    if (prestartReplacementGuard.blocksRepairExecution(repair.getId())) {
-      return deferForPrestartReplacement(work);
-    }
-    if (repair.getExecutionState() != RepairExecutionState.QUEUED
-        || repair.getReclassificationState()
-            == RepairReclassificationState.EXTERNAL_CAPITAL) {
-      throw new MaintenanceConflictException(
-          "MAINTENANCE_STATE_CONFLICT",
-          "Only queued ordinary repair work can create a delivery task");
-    }
-    if (!repair.isMovementToRepair()) {
-      throw new MaintenanceConflictException(
-          "MAINTENANCE_STATE_CONFLICT",
-          "Repair no longer requires delivery to a repair place");
-    }
-
-    String sourceType;
-    UUID sourceId;
-    var inventorySource =
-        inventorySources.findByRepairId(repair.getId()).orElse(null);
-    if (inventorySource != null) {
-      sourceType = "INVENTORY";
-      sourceId = inventorySource.getFindingId();
-    } else if (repair.getEstimateId() != null) {
-      sourceType = "ESTIMATE";
-      sourceId = repair.getEstimateId();
-    } else {
-      sourceType = "REPAIR";
-      sourceId = repair.getId();
-    }
-
-    MaintenanceDependencyGateway.DriverTaskSnapshot task =
-        dependencies.createDriverTask(
-            work.idempotencyKey(),
-            new MaintenanceDependencyGateway.DriverTaskCommand(
-                repair.getWarehouseId(),
-                repair.getRentalItemId(),
-                repair.getId(),
-                sourceType,
-                sourceId,
-                "DELIVER_TO_REPAIR",
-                repair.getLogisticsPlanningMode(),
-                repair.getLogisticsScheduledDate(),
-                repair.getPriority(),
-                false));
-    return Map.of(
-        "repairId", repair.getId().toString(),
-        "driverTaskId", task.id().toString(),
-        "driverTaskVersion", task.version(),
-        "state", task.state());
-  }
-
-  private Object reconcileRepairComplexityStatus(
-      MaintenanceReconciliationStore.WorkItem work) {
-    MaintenanceRepair requested = requireWorkRepair(work);
-    List<MaintenanceRepair> rentalItemRepairs =
-        repairs.findAllByRentalItemIdForUpdate(requested.getRentalItemId());
-    MaintenanceRepair repair =
-        rentalItemRepairs.stream()
-            .filter(value -> value.getId().equals(requested.getId()))
-            .findFirst()
-            .orElseThrow(
-                () ->
-                    new MaintenanceConflictException(
-                        "MAINTENANCE_STATE_CONFLICT",
-                        "Queued repair disappeared during complexity synchronization"));
-    boolean externalCapitalPendingStatusSync =
-        repair.getExecutionState() == RepairExecutionState.COMPLETED
-            && repair.getAcceptanceState() == RepairAcceptanceState.PENDING
-            && repair.getReclassificationState()
-                == RepairReclassificationState.EXTERNAL_CAPITAL;
-    if (repair.getExecutionState() != RepairExecutionState.QUEUED
-        && repair.getExecutionState() != RepairExecutionState.IN_PROGRESS
-        && !externalCapitalPendingStatusSync) {
-      throw new MaintenanceConflictException(
-          "MAINTENANCE_STATE_CONFLICT",
-          "Only active ordinary work or pending external capital repair can synchronize its calculated status");
-    }
-
-    List<MaintenanceRepair> complexityRepairs =
-        rentalItemRepairs.stream()
-            .filter(
-                value ->
-                    value.getExecutionState() != RepairExecutionState.DRAFT
-                        && value.getExecutionState()
-                            != RepairExecutionState.CANCELLED
-                        && value.getAcceptanceState()
-                            != RepairAcceptanceState.ACCEPTED
-                        && value.getAcceptanceState()
-                            != RepairAcceptanceState.WRITTEN_OFF)
-            .toList();
-    List<MaintenanceRepair> leaseOwners =
-        rentalItemRepairs.stream()
-            .filter(value -> value.getKind() == RepairKind.PRIMARY)
-            .filter(
-                value ->
-                    value.getExecutionState() != RepairExecutionState.DRAFT
-                        && value.getAcceptanceState()
-                            != RepairAcceptanceState.ACCEPTED
-                        && value.getAcceptanceState()
-                            != RepairAcceptanceState.WRITTEN_OFF
-                        && value.getLeaseId() != null
-                        && value.getLeaseVersion() != null
-                        && value.getFencingToken() != null
-                        && value.getLeaseExpiresAt() != null
-                        && Set.of("ACTIVE", "RECONCILIATION_REQUIRED")
-                            .contains(value.getLeaseReconciliationState()))
-            .toList();
-    if (leaseOwners.size() != 1) {
-      throw new MaintenanceConflictException(
-          "MAINTENANCE_LEASE_CONFLICT",
-          "Repair complexity synchronization requires one cabin lifecycle owner");
-    }
-    MaintenanceRepair leaseOwner = leaseOwners.getFirst();
-    Map<UUID, MaintenanceRepair> synchronizationScope = new LinkedHashMap<>();
-    complexityRepairs.forEach(value -> synchronizationScope.put(value.getId(), value));
-    synchronizationScope.put(leaseOwner.getId(), leaseOwner);
-    List<MaintenanceRepair> synchronizedRepairs =
-        List.copyOf(synchronizationScope.values());
-    requireTransferSource(
-        synchronizedRepairs, repair.getRentalItemId(), repair.getWarehouseId());
-
-    Map<MaintenanceEventStore.StreamRef, Long> streamVersions =
-        events.lockStreams(
-            synchronizedRepairs.stream()
-                .map(value -> stream(value.getId()))
-                .toList());
-    synchronizedRepairs.forEach(
-        value -> assertStreamParity(value, streamVersions));
-
-    boolean capital =
-        complexityRepairs.stream()
-            .map(
-                value ->
-                    repairComplexityFromStoredStages(
-                        value.getWarehouseId(), value.getId()))
-            .anyMatch(
-                complexity ->
-                    complexity.type() == RepairComplexity.CAPITAL);
-    Map<UUID, MaintenanceRepair> changed = new LinkedHashMap<>();
-    if (capital) {
-      for (MaintenanceRepair value : complexityRepairs) {
-        if (value.getExecutionState() != RepairExecutionState.QUEUED
-            && value.getExecutionState() != RepairExecutionState.IN_PROGRESS) {
-          continue;
-        }
-        if (value.getTaskBoardVersion() != null) {
-          MaintenanceDependencyGateway.TaskSnapshot cancelled =
-              dependencies.cancelTask(
-                  derived(work.idempotencyKey(), "withdraw-task:" + value.getId()),
-                  value.getExternalTaskId(),
-                  value.getTaskBoardVersion());
-          if (!"CANCELLED".equals(cancelled.state())) {
-            throw new MaintenanceDependencyException(
-                org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-                "Task-board did not confirm ordinary repair route withdrawal");
-          }
-        }
-        List<RepairStage> stages =
-            repairStages.findAllByRepairIdOrderByStageNo(value.getId());
-        stages.forEach(RepairStage::completeAsExternalCapital);
-        repairStages.saveAllAndFlush(stages);
-        value.completeAsExternalCapital();
-        repairPlaces.completeAfterRepair(
-            value.getWarehouseId(), value.getId(), value.isMovementToRepair());
-        changed.put(value.getId(), value);
-      }
-    } else {
-      for (MaintenanceRepair value : complexityRepairs) {
-        if ((value.getExecutionState() == RepairExecutionState.QUEUED
-                || value.getExecutionState() == RepairExecutionState.IN_PROGRESS)
-            && value.stabilizeOrdinaryClassification()) {
-          changed.put(value.getId(), value);
-        }
-      }
-    }
-    String desiredStatus = capital ? "CAPITAL_REPAIR" : "REPAIR";
-    String transition =
-        capital ? "QUEUE_TO_CAPITAL_REPAIR" : "QUEUE_TO_REPAIR";
-
-    MaintenanceDependencyGateway.AssetSnapshot currentAsset =
-        dependencies.getRentalItemSnapshot(repair.getRentalItemId());
-    long latestProjectedVersion =
-        synchronizedRepairs.stream()
-            .mapToLong(MaintenanceRepair::getRentalItemVersionSnapshot)
-            .max()
-            .orElseThrow();
-    if (currentAsset == null
-        || !repair.getRentalItemId().equals(currentAsset.rentalItemId())
-        || !repair.getWarehouseId().equals(currentAsset.warehouseId())
-        || currentAsset.version() < latestProjectedVersion
-        || !Set.of("REPAIR", "CAPITAL_REPAIR")
-            .contains(currentAsset.status())) {
-      throw new MaintenanceDependencyException(
-          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-          "Canonical rental-item snapshot is not safe for repair complexity synchronization");
-    }
-
-    MaintenanceDependencyGateway.AssetSnapshot synchronizedAsset = currentAsset;
-    MaintenanceDependencyGateway.LeaseSnapshot lease =
-        new MaintenanceDependencyGateway.LeaseSnapshot(
-            leaseOwner.getLeaseId(),
-            leaseOwner.getLeaseVersion(),
-            leaseOwner.getRentalItemId(),
-            ownerType(leaseOwner),
-            UUID.fromString(ownerId(leaseOwner)),
-            leaseOwner.getFencingToken(),
-            leaseOwner.getLeaseExpiresAt());
-    if (!desiredStatus.equals(currentAsset.status())) {
-      validateLeaseTruth(
-          repair, lease, ownerType(leaseOwner), ownerId(leaseOwner));
-      if (!leaseIsFresh(lease.expiresAt())) {
-        lease =
-            dependencies.renewLease(
-                derived(work.idempotencyKey(), "renew"),
-                lease.leaseId(),
-                lease.version(),
-                lease.fencingToken(),
-                ownerType(leaseOwner),
-                ownerId(leaseOwner));
-        validateRenewedLeaseTruth(
-            leaseOwner, lease, ownerType(leaseOwner), ownerId(leaseOwner));
-      }
-      requireFreshDependencyLease(lease);
-      synchronizedAsset =
-          dependencies.fencedStatus(
-              derived(work.idempotencyKey(), "status"),
-              repair.getRentalItemId(),
-              repair.getWarehouseId(),
-              currentAsset.version(),
-              lease.leaseId(),
-              lease.fencingToken(),
-              ownerType(leaseOwner),
-              ownerId(leaseOwner),
-              transition,
-              false);
-      validateAssetTruth(
-          repair, synchronizedAsset, currentAsset.version(), false);
-      if (!desiredStatus.equals(synchronizedAsset.status())) {
-        throw new MaintenanceDependencyException(
-            org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-            "Asset-service did not confirm the recalculated repair status");
-      }
-    }
-
-    long synchronizedAssetVersion = synchronizedAsset.version();
-    for (MaintenanceRepair value : synchronizedRepairs) {
-      if (value.getRentalItemVersionSnapshot() != synchronizedAssetVersion) {
-        value.confirmRentalItemVersion(synchronizedAssetVersion);
-        changed.put(value.getId(), value);
-      }
-    }
-    if (lease.version() != leaseOwner.getLeaseVersion()
-        || !lease.expiresAt().equals(leaseOwner.getLeaseExpiresAt())) {
-      UUID previousLeaseId = leaseOwner.getLeaseId();
-      long previousFencingToken = leaseOwner.getFencingToken();
-      for (MaintenanceRepair value : synchronizedRepairs) {
-        if (previousLeaseId.equals(value.getLeaseId())
-            && value.getFencingToken() != null
-            && value.getFencingToken() == previousFencingToken) {
-          applyLeaseSnapshot(value, lease);
-          changed.put(value.getId(), value);
-        }
-      }
-    }
-    if (!changed.isEmpty()) {
-      List<MaintenanceRepair> saved =
-          repairs.saveAllAndFlush(
-              changed.values().stream()
-                  .sorted(Comparator.comparing(value -> value.getId().toString()))
-                  .toList());
-      for (MaintenanceRepair value : saved) {
-        long expectedVersion =
-            streamVersions.get(stream(value.getId()));
-        events.append(
-            MaintenanceAggregateType.REPAIR,
-            value.getId(),
-            expectedVersion,
-            MaintenanceEventType.REPAIR_PLAN_CHANGED,
-            repairLocal(value),
-            repairFact(MaintenanceEventType.REPAIR_PLAN_CHANGED, value),
-            repairSnapshot(value));
-      }
-    }
-    return Map.of(
-        "repairId", repair.getId().toString(),
-        "repairStatus", desiredStatus,
-        "rentalItemVersion", synchronizedAssetVersion);
-  }
-
-  private Object reconcileAcceptedCharacteristic(
-      MaintenanceReconciliationStore.WorkItem work) {
-    MaintenanceRepair repair = requireWorkRepair(work);
-    UUID rentalItemId = uuidField(work.payload(), "rentalItemId");
-    UUID characteristicId = uuidField(work.payload(), "characteristicId");
-    UUID rootRepairId = uuidField(work.payload(), "rootRepairId");
-    if (!"ASSET".equals(work.dependency())
-        || !"APPLY_CHARACTERISTIC".equals(work.operation())
-        || !repair.getRentalItemId().equals(rentalItemId)
-        || !rootId(repair).equals(rootRepairId)
-        || repair.getAcceptanceState() != RepairAcceptanceState.ACCEPTED) {
-      throw new IllegalStateException(
-          "Stored accepted-characteristic reconciliation is incomplete");
-    }
-    MaintenanceDependencyGateway.AppliedCabinCharacteristic applied =
-        dependencies.applyCabinCharacteristic(
-            work.idempotencyKey(), rentalItemId, characteristicId);
-    return Map.of(
-        "rentalItemId", applied.rentalItemId().toString(),
-        "characteristicId", applied.characteristicId().toString(),
-        "added", applied.added(),
-        "rentalItemVersion", applied.rentalItemVersion());
-  }
-
-  private Object reconcileCatalogPositionRegistration(
-      MaintenanceReconciliationStore.WorkItem work) {
-    requireCatalogPositionWork(work, "REGISTER_CATALOG_POSITION");
-    MaintenanceDependencyGateway.CatalogPositionReference reference =
-        dependencies.registerCatalogPosition(
-            work.catalogQueueId(), work.catalogExternalReferenceId());
-    return Map.of(
-        "catalogVersionId", work.catalogVersionId().toString(),
-        "catalogNodeId", work.catalogNodeId().toString(),
-        "queueDefinitionId", reference.queueDefinitionId().toString(),
-        "externalReferenceId", reference.externalReferenceId(),
-        "referenceId", reference.id().toString(),
-        "referenceVersion", reference.version());
-  }
-
-  private boolean catalogPositionReady(MaintenanceReconciliationStore.WorkItem work) {
-    requireCatalogPositionWork(work, work.operation());
-    List<UUID> predecessorKeys = uuidListField(work.payload(), "predecessorKeys");
-    if (reconciliations.allCatalogPositionPredecessorsConfirmed(predecessorKeys)) {
-      return true;
-    }
-    reconciliations.defer(work, Duration.ofSeconds(5));
-    return false;
-  }
-
-  private Object reconcileCatalogPositionDeletion(
-      MaintenanceReconciliationStore.WorkItem work) {
-    requireCatalogPositionWork(work, "DELETE_CATALOG_POSITION");
-    // Queue routing may be repaired precisely because the previously stored
-    // queue was deleted or belonged to an obsolete bootstrap. A deletion must
-    // therefore never recreate the old reference through that queue first.
-    // Queue references are immutable and start at version zero; the gateway
-    // treats an already absent reference as a successful replay.
-    dependencies.deleteCatalogPosition(
-        work.catalogExternalReferenceId(), 0L);
-    return Map.of(
-        "catalogVersionId", work.catalogVersionId().toString(),
-        "catalogNodeId", work.catalogNodeId().toString(),
-        "queueId", work.catalogQueueId().toString(),
-        "externalReferenceId", work.catalogExternalReferenceId(),
-        "deletedReferenceVersion", 0L);
-  }
-
   private static void requireCatalogPositionWork(
       MaintenanceReconciliationStore.WorkItem work, String operation) {
     if (work.repairId() != null
@@ -5257,80 +6480,6 @@ public class MaintenanceApplicationService {
             stringField(work.payload(), "externalReferenceId"))) {
       throw new IllegalStateException("Stored catalog-position reconciliation is incomplete");
     }
-  }
-
-  private Object reconcileAssetTransition(MaintenanceReconciliationStore.WorkItem work) {
-    MaintenanceRepair initial = requireWorkRepair(work);
-    LockedRepairChain locked = lockAndReloadRepairChain(initial, initial.getVersion());
-    MaintenanceRepair repair = locked.repair();
-    List<MaintenanceRepair> sources = locked.sources();
-    String ownerType = ownerType(repair);
-    String ownerId = ownerId(repair);
-    MaintenanceDependencyGateway.LeaseSnapshot lease = localLease(repair, sources, ownerType, ownerId)
-        .orElseGet(() -> dependencies.acquireLease(
-            derived(work.idempotencyKey(), "acquire"), repair.getRentalItemId(),
-            repair.getRentalItemVersionSnapshot(), ownerType, ownerId));
-    validateLeaseTruth(repair, lease, ownerType, ownerId);
-    if (!leaseIsFresh(lease.expiresAt())) {
-      lease = dependencies.renewLease(
-          derived(work.idempotencyKey(), "renew"), lease.leaseId(), lease.version(),
-          lease.fencingToken(), ownerType, ownerId);
-      validateLeaseTruth(repair, lease, ownerType, ownerId);
-    }
-    requireFreshDependencyLease(lease);
-    String transition = work.operation();
-    MaintenanceDependencyGateway.AssetSnapshot asset = dependencies.fencedStatus(
-        derived(work.idempotencyKey(), "status"), repair.getRentalItemId(), repair.getWarehouseId(),
-        repair.getRentalItemVersionSnapshot(), lease.leaseId(), lease.fencingToken(), ownerType,
-        ownerId, transition, false);
-    validateAssetTruth(repair, asset);
-    boolean terminal = !"PENDING_ACCEPTANCE".equals(transition);
-    if (terminal) {
-      dependencies.releaseLease(
-          derived(work.idempotencyKey(), "release"), lease.leaseId(), lease.version(),
-          lease.fencingToken(), ownerType, ownerId);
-    }
-    reconcileLeaseProjection(
-        repair, locked.streamVersions().get(stream(repair.getId())), asset.version(), lease,
-        terminal, transitionEvent(repair, transition));
-    for (MaintenanceRepair source : sources) {
-      reconcileLeaseProjection(
-          source, locked.streamVersions().get(stream(source.getId())), asset.version(), lease,
-          terminal, transitionEvent(source, transition));
-    }
-    return Map.of(
-        "repairId", repair.getId().toString(),
-        "rentalItemVersion", asset.version(),
-        "leaseReleased", terminal);
-  }
-
-  private Object reconcileLeaseRenewal(MaintenanceReconciliationStore.WorkItem work) {
-    MaintenanceRepair repair = requireWorkRepair(work);
-    long expectedVersion = events.lockCurrentVersion(MaintenanceAggregateType.REPAIR, repair.getId());
-    assertVersion(repair.getVersion(), expectedVersion);
-    requireRenewableLease(repair);
-    String ownerType = ownerType(repair);
-    String ownerId = ownerId(repair);
-    MaintenanceDependencyGateway.LeaseSnapshot lease = dependencies.renewLease(
-        work.idempotencyKey(), repair.getLeaseId(), repair.getLeaseVersion(),
-        repair.getFencingToken(), ownerType, ownerId);
-    validateRenewedLeaseTruth(repair, lease, ownerType, ownerId);
-    requireFreshDependencyLease(lease);
-    repair.renewLease(lease.version(), lease.expiresAt());
-    MaintenanceRepair saved = repairs.saveAndFlush(repair);
-    MaintenanceEventType renewalEvent = renewalEvent(saved);
-    events.append(
-        MaintenanceAggregateType.REPAIR,
-        saved.getId(),
-        expectedVersion,
-        renewalEvent,
-        repairLocal(saved),
-        repairFact(renewalEvent, saved),
-        repairSnapshot(saved));
-    return Map.of(
-        "repairId", saved.getId().toString(),
-        "leaseVersion", lease.version(),
-        "expiresAt", lease.expiresAt().toString());
   }
 
   private boolean enqueueDueLeaseRenewal() {
@@ -5787,54 +6936,6 @@ public class MaintenanceApplicationService {
           org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
           "Asset-service fenced truth does not match the expected rental item");
     }
-  }
-
-  private MaintenanceDependencyGateway.AssetSnapshot requireQueueAssetSnapshot(
-      MaintenanceRepair repair) {
-    MaintenanceDependencyGateway.AssetSnapshot snapshot =
-        dependencies.getRentalItemSnapshot(repair.getRentalItemId());
-    Set<String> eligibleStatuses =
-        repair.getOrigin() == RepairOrigin.DIRECT_REPAIR
-            ? DIRECT_REPAIR_QUEUE_SOURCE_STATUSES
-            : ESTIMATE_REPAIR_QUEUE_SOURCE_STATUSES;
-    if (snapshot == null
-        || !repair.getRentalItemId().equals(snapshot.rentalItemId())
-        || !repair.getWarehouseId().equals(snapshot.warehouseId())
-        || snapshot.version() < 0
-        || snapshot.status() == null
-        || !eligibleStatuses.contains(snapshot.status())) {
-      throw new MaintenanceDependencyException(
-          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-          "Canonical rental-item snapshot is not safe for repair queueing");
-    }
-    RentalItemFactProjection projection = requireRentalItemFact(
-        repair.getRentalItemId(), repair.getWarehouseId());
-    if (snapshot.version() < repair.getRentalItemVersionSnapshot()
-        || snapshot.version() < projection.getAggregateVersion()
-        || (snapshot.version() == projection.getAggregateVersion()
-            && !snapshot.status().equals(projection.getAssetStatus()))) {
-      throw new MaintenanceDependencyException(
-          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-          "Canonical rental-item snapshot is older than maintenance truth");
-    }
-    return snapshot;
-  }
-
-  private MaintenanceDependencyGateway.AssetSnapshot requireTaskAssetSnapshot(
-      MaintenanceRepair repair) {
-    MaintenanceDependencyGateway.AssetSnapshot snapshot =
-        dependencies.getRentalItemSnapshot(repair.getRentalItemId());
-    if (snapshot == null
-        || !repair.getRentalItemId().equals(snapshot.rentalItemId())
-        || !repair.getWarehouseId().equals(snapshot.warehouseId())
-        || snapshot.number() == null
-        || snapshot.number().isBlank()
-        || snapshot.number().length() > 64) {
-      throw new MaintenanceDependencyException(
-          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-          "Canonical rental-item snapshot is not safe for task synchronization");
-    }
-    return snapshot;
   }
 
   private static void validateAssetTruth(
@@ -6345,14 +7446,446 @@ public class MaintenanceApplicationService {
                     && stage.getState() != RepairStageState.CANCELLED);
   }
 
-  private TransferRepairArrivalPreflightResponse transferArrivalPreflight(
+  private TransferDeparturePlan transferDeparturePlan(
+      List<MaintenanceRepair> candidates,
       MaintenanceRepair active,
+      TransferRepairRequest request) {
+    if (active == null) {
+      return new TransferDeparturePlan(null, null, List.of(), null);
+    }
+    List<MaintenanceRepair> chain = repairs.findRepairChain(rootId(active));
+    if (chain.isEmpty()) {
+      throw new MaintenanceNotFoundException("Active repair chain not found");
+    }
+    requireTransferSource(chain, request.rentalItemId(), request.sourceWarehouseId());
+    MaintenanceRepair owner = repairLifecycleOwner(chain, active);
+    TransferLeaseReleasePlan leaseRelease = null;
+    if (owner.getLeaseId() != null
+        && ("ACTIVE".equals(owner.getLeaseReconciliationState())
+            || "RECONCILIATION_REQUIRED".equals(owner.getLeaseReconciliationState()))) {
+      if (owner.getLeaseVersion() == null || owner.getFencingToken() == null) {
+        throw new MaintenanceConflictException(
+            "MAINTENANCE_LEASE_CONFLICT",
+            "Transfer departure lease snapshot is incomplete");
+      }
+      leaseRelease =
+          new TransferLeaseReleasePlan(
+              owner.getId(),
+              owner.getLeaseId(),
+              owner.getLeaseVersion(),
+              owner.getFencingToken(),
+              ownerType(owner),
+              ownerId(owner));
+    }
+    return new TransferDeparturePlan(
+        request.sourceWarehouseId(),
+        active.getId(),
+        transferRepairSignatures(chain),
+        leaseRelease);
+  }
+
+  private void releaseTransferLease(TransferLeaseReleasePlan plan, UUID key) {
+    requireNoCallerTransaction("release a transfer departure lease");
+    dependencies.releaseLease(
+        derived(key, "transfer-release:" + plan.ownerRepairId()),
+        plan.leaseId(),
+        plan.leaseVersion(),
+        plan.fencingToken(),
+        plan.ownerType(),
+        plan.ownerId());
+  }
+
+  private static void requireMatchingTransferDeparturePlan(
+      TransferDeparturePlan expected, TransferDeparturePlan current) {
+    if (!expected.equals(current)) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Repair transfer departure changed before finalization");
+    }
+  }
+
+  private TransferArrivalPlan transferArrivalPlan(
+      UUID transferId, UUID lineId, TransferRepairRequest request) {
+    return transferArrivalPlan(
+        transferId,
+        lineId,
+        request.rentalItemId(),
+        request.sourceWarehouseId(),
+        request.targetWarehouseId(),
+        null);
+  }
+
+  private TransferArrivalPlan transferArrivalPlan(
+      UUID transferId,
+      UUID lineId,
+      UUID rentalItemId,
+      UUID sourceWarehouseId,
+      UUID targetWarehouseId) {
+    return transferArrivalPlan(
+        transferId,
+        lineId,
+        rentalItemId,
+        sourceWarehouseId,
+        targetWarehouseId,
+        null);
+  }
+
+  private TransferArrivalPlan transferArrivalPlan(
+      UUID transferId,
+      UUID lineId,
+      UUID rentalItemId,
+      UUID sourceWarehouseId,
+      UUID targetWarehouseId,
+      Long expectedAssetVersion) {
+    return transferArrivalPlan(
+        repairs.findAllByTransferLineIdOrderByCreatedAtAscIdAsc(lineId),
+        transferId,
+        lineId,
+        rentalItemId,
+        sourceWarehouseId,
+        targetWarehouseId,
+        expectedAssetVersion);
+  }
+
+  private TransferArrivalPlan transferArrivalPlan(
       List<MaintenanceRepair> chain,
-      MaintenanceDependencyGateway.QueueCapabilities capabilities,
-      RepairComplexitySnapshot targetComplexity) {
+      UUID transferId,
+      UUID lineId,
+      UUID rentalItemId,
+      UUID sourceWarehouseId,
+      UUID targetWarehouseId) {
+    return transferArrivalPlan(
+        chain,
+        transferId,
+        lineId,
+        rentalItemId,
+        sourceWarehouseId,
+        targetWarehouseId,
+        null);
+  }
+
+  private TransferArrivalPlan transferArrivalPlan(
+      List<MaintenanceRepair> chain,
+      UUID transferId,
+      UUID lineId,
+      UUID rentalItemId,
+      UUID sourceWarehouseId,
+      UUID targetWarehouseId,
+      Long expectedAssetVersion) {
+    if (chain.isEmpty()) {
+      return new TransferArrivalPlan(
+          null,
+          rentalItemId,
+          sourceWarehouseId,
+          targetWarehouseId,
+          expectedAssetVersion,
+          null,
+          List.of(),
+          List.of(),
+          null,
+          List.of());
+    }
+    requirePreparedTransfer(
+        chain, transferId, lineId, rentalItemId, sourceWarehouseId, targetWarehouseId);
+    MaintenanceRepair active = requireSingleActiveRepair(chain, true);
+    if (active == null) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Prepared transfer no longer has an active repair");
+    }
+    RepairComplexity targetComplexity =
+        repairComplexityFromStoredStages(targetWarehouseId, active.getId()).type();
+    List<TransferTaskPlan> tasks =
+        chain.stream()
+            .filter(repair -> repair.getTaskBoardVersion() != null)
+            .filter(repair -> hasUnfinishedStages(repair.getId()))
+            .sorted(Comparator.comparing(repair -> repair.getId().toString()))
+            .map(
+                repair ->
+                    new TransferTaskPlan(
+                        repair.getId(),
+                        repair.getExternalTaskId(),
+                        repair.getTaskBoardVersion(),
+                        targetComplexity == RepairComplexity.CAPITAL))
+            .toList();
+    MaintenanceRepair owner = repairLifecycleOwner(chain, active);
+    return new TransferArrivalPlan(
+        active.getId(),
+        rentalItemId,
+        sourceWarehouseId,
+        targetWarehouseId,
+        expectedAssetVersion,
+        targetComplexity,
+        transferRepairSignatures(chain),
+        tasks,
+        new TransferLeaseOwnerPlan(owner.getId(), ownerType(owner), ownerId(owner)),
+        transferRoutingRequirements(chain, targetComplexity));
+  }
+
+  private static void requireMatchingTransferArrivalPlan(
+      TransferArrivalPlan expected, TransferArrivalPlan current) {
+    if (!expected.equals(current)) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Repair transfer arrival changed before finalization");
+    }
+  }
+
+  private TransferRoutingResult resolveTransferArrivalRouting(TransferArrivalPlan plan) {
+    requireNoCallerTransaction("resolve repair transfer routing truth");
+    MaintenanceDependencyGateway.QueueCapabilities capabilities =
+        dependencies.queueCapabilities(plan.targetWarehouseId());
+    if (capabilities == null
+        || !plan.targetWarehouseId().equals(capabilities.warehouseId())
+        || capabilities.movementQueueDefinitions() == null) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Task-board returned queue capabilities for another warehouse");
+    }
+    if (plan.routingRequirements().isEmpty()) {
+      return new TransferRoutingResult(List.of());
+    }
+    MaintenanceDependencyGateway.RoutingPreflight preflight =
+        dependencies.preflightMaintenanceRouting(
+            capabilities.warehouseId(), plan.routingRequirements());
+    if (preflight == null
+        || !capabilities.warehouseId().equals(preflight.warehouseId())
+        || preflight.missingQueueDefinitionIds() == null
+        || preflight.missingWarehouseBindingDefinitionIds() == null
+        || preflight.mismatches() == null) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Task-board returned malformed repair transfer routing truth");
+    }
+    Set<UUID> missing = new LinkedHashSet<>();
+    missing.addAll(preflight.missingQueueDefinitionIds());
+    missing.addAll(preflight.missingWarehouseBindingDefinitionIds());
+    preflight.mismatches().stream()
+        .map(MaintenanceDependencyGateway.RoutingMismatch::queueDefinitionId)
+        .forEach(missing::add);
+    if (preflight.ready() != missing.isEmpty()) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Task-board returned inconsistent repair transfer routing truth");
+    }
+    return new TransferRoutingResult(
+        missing.stream().sorted(Comparator.comparing(UUID::toString)).toList());
+  }
+
+  private TransferArrivalRemoteResult completeTransferArrivalRemote(
+      TransferArrivalPlan plan, UUID key, TransferRoutingResult routing) {
+    requireNoCallerTransaction("apply repair transfer arrival dependency effects");
+    if (!routing.missingQueueDefinitionIds().isEmpty()) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_TARGET_QUEUE_MISSING",
+          "The target warehouse is missing queues required by the active repair");
+    }
+    Map<UUID, Long> relocatedTaskVersions = new LinkedHashMap<>();
+    Set<UUID> cancelledTaskRepairIds = new LinkedHashSet<>();
+    for (TransferTaskPlan task : plan.tasks()) {
+      MaintenanceDependencyGateway.TaskSnapshot current = dependencies.getTask(task.externalTaskId());
+      validateTransferTaskReplayDiagnostic(task, current);
+      if (task.cancelForCapital()) {
+        MaintenanceDependencyGateway.TaskSnapshot cancelled =
+            dependencies.cancelTask(
+                derived(key, "task-withdraw-capital:" + task.repairId()),
+                task.externalTaskId(),
+                task.expectedVersion());
+        validateCancelledTransferTask(task, cancelled);
+        cancelledTaskRepairIds.add(task.repairId());
+      } else {
+        MaintenanceDependencyGateway.TaskSnapshot relocated =
+            dependencies.relocateTask(
+                derived(key, "task-relocate:" + task.repairId()),
+                task.externalTaskId(),
+                task.expectedVersion(),
+                plan.targetWarehouseId());
+        validateRelocatedTransferTask(task, relocated);
+        relocatedTaskVersions.put(task.repairId(), relocated.version());
+      }
+    }
+
+    MaintenanceDependencyGateway.AssetSnapshot asset =
+        dependencies.getRentalItemSnapshot(plan.rentalItemId());
+    validateTransferArrivalAssetReplayDiagnostic(plan, asset);
+    long expectedAssetVersion = requiredTransferArrivalAssetVersion(plan);
+    MaintenanceDependencyGateway.LeaseSnapshot lease =
+        dependencies.acquireLease(
+            derived(key, "transfer-arrival-lease:" + plan.leaseOwner().repairId()),
+            plan.rentalItemId(),
+            expectedAssetVersion,
+            plan.leaseOwner().ownerType(),
+            plan.leaseOwner().ownerId());
+    validateLeaseTruth(
+        plan.rentalItemId(), lease, plan.leaseOwner().ownerType(), plan.leaseOwner().ownerId());
+
+    MaintenanceDependencyGateway.AssetSnapshot finalAsset = asset;
+    if (plan.targetComplexity() == RepairComplexity.CAPITAL) {
+      finalAsset =
+          dependencies.fencedStatus(
+              derived(key, "transfer-arrival-capital:" + plan.activeRepairId()),
+              plan.rentalItemId(),
+              plan.targetWarehouseId(),
+              expectedAssetVersion,
+              lease.leaseId(),
+              lease.fencingToken(),
+              plan.leaseOwner().ownerType(),
+              plan.leaseOwner().ownerId(),
+              "QUEUE_TO_CAPITAL_REPAIR",
+              false);
+    }
+    validateTransferArrivalAssetAfterEffects(plan, finalAsset);
+    return new TransferArrivalRemoteResult(
+        routing,
+        Map.copyOf(relocatedTaskVersions),
+        Set.copyOf(cancelledTaskRepairIds),
+        finalAsset,
+        lease);
+  }
+
+  private static void validateTransferTaskReplayDiagnostic(
+      TransferTaskPlan plan, MaintenanceDependencyGateway.TaskSnapshot task) {
+    boolean preEffect =
+        task != null
+            && plan.externalTaskId().equals(task.externalTaskId())
+            && task.version() == plan.expectedVersion()
+            && "ACTIVE".equals(task.state());
+    boolean postEffect =
+        task != null
+            && plan.externalTaskId().equals(task.externalTaskId())
+            && task.version() == Math.addExact(plan.expectedVersion(), 1)
+            && (plan.cancelForCapital()
+                ? "CANCELLED".equals(task.state())
+                : "ACTIVE".equals(task.state()));
+    if (!preEffect && !postEffect) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.CONFLICT,
+          "Task-board task changed before repair transfer arrival");
+    }
+  }
+
+  private static void validateCancelledTransferTask(
+      TransferTaskPlan plan, MaintenanceDependencyGateway.TaskSnapshot task) {
+    if (task == null
+        || !plan.externalTaskId().equals(task.externalTaskId())
+        || task.version() != Math.addExact(plan.expectedVersion(), 1)
+        || !"CANCELLED".equals(task.state())) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Task-board did not confirm ordinary repair route withdrawal");
+    }
+  }
+
+  private static void validateRelocatedTransferTask(
+      TransferTaskPlan plan, MaintenanceDependencyGateway.TaskSnapshot task) {
+    if (task == null
+        || !plan.externalTaskId().equals(task.externalTaskId())
+        || task.version() != Math.addExact(plan.expectedVersion(), 1)
+        || !"ACTIVE".equals(task.state())) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Task-board did not confirm repair task relocation");
+    }
+  }
+
+  private static long requiredTransferArrivalAssetVersion(TransferArrivalPlan plan) {
+    if (plan.expectedAssetVersion() == null || plan.expectedAssetVersion() < 0) {
+      throw new MaintenanceValidationException(
+          "MAINTENANCE_TRANSFER_ASSET_VERSION_REQUIRED",
+          "Transfer arrival must include the immutable asset version observed by logistics");
+    }
+    return plan.expectedAssetVersion();
+  }
+
+  private static void validateTransferArrivalAssetReplayDiagnostic(
+      TransferArrivalPlan plan, MaintenanceDependencyGateway.AssetSnapshot asset) {
+    long expectedVersion = requiredTransferArrivalAssetVersion(plan);
+    boolean preEffect =
+        asset != null
+            && plan.rentalItemId().equals(asset.rentalItemId())
+            && plan.targetWarehouseId().equals(asset.warehouseId())
+            && asset.version() == expectedVersion
+            && "REPAIR".equals(asset.status());
+    boolean postCapitalEffect =
+        plan.targetComplexity() == RepairComplexity.CAPITAL
+            && asset != null
+            && plan.rentalItemId().equals(asset.rentalItemId())
+            && plan.targetWarehouseId().equals(asset.warehouseId())
+            && asset.version() == Math.addExact(expectedVersion, 1)
+            && "CAPITAL_REPAIR".equals(asset.status());
+    if (!preEffect && !postCapitalEffect) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.CONFLICT,
+          "Asset changed before repair transfer arrival replay");
+    }
+  }
+
+  private static void validateTransferArrivalAssetAfterEffects(
+      TransferArrivalPlan plan,
+      MaintenanceDependencyGateway.AssetSnapshot after) {
+    long expectedVersion = requiredTransferArrivalAssetVersion(plan);
+    String expectedStatus =
+        plan.targetComplexity() == RepairComplexity.CAPITAL ? "CAPITAL_REPAIR" : "REPAIR";
+    long expectedResultVersion =
+        plan.targetComplexity() == RepairComplexity.CAPITAL
+            ? Math.addExact(expectedVersion, 1)
+            : expectedVersion;
+    if (after == null
+        || !plan.rentalItemId().equals(after.rentalItemId())
+        || !plan.targetWarehouseId().equals(after.warehouseId())
+        || after.version() != expectedResultVersion
+        || !expectedStatus.equals(after.status())) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Asset-service did not confirm repair transfer arrival status");
+    }
+  }
+
+  private static void validateTransferArrivalRemoteTruth(
+      TransferArrivalPlan plan, TransferArrivalRemoteResult remote) {
+    if (remote.routing() == null
+        || !remote.routing().missingQueueDefinitionIds().isEmpty()) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Repair transfer arrival routing result is incomplete");
+    }
+    Set<UUID> expectedTaskRepairIds =
+        plan.tasks().stream().map(TransferTaskPlan::repairId).collect(java.util.stream.Collectors.toSet());
+    if (plan.targetComplexity() == RepairComplexity.CAPITAL) {
+      if (!expectedTaskRepairIds.equals(remote.cancelledTaskRepairIds())
+          || !remote.relocatedTaskVersions().isEmpty()) {
+        throw new MaintenanceDependencyException(
+            org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+            "Repair transfer capital task reconciliation is incomplete");
+      }
+    } else if (!expectedTaskRepairIds.equals(remote.relocatedTaskVersions().keySet())
+        || !remote.cancelledTaskRepairIds().isEmpty()) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Repair transfer task relocation result is incomplete");
+    }
+    for (TransferTaskPlan task : plan.tasks()) {
+      if (!task.cancelForCapital()
+          && !Long.valueOf(Math.addExact(task.expectedVersion(), 1))
+              .equals(remote.relocatedTaskVersions().get(task.repairId()))) {
+        throw new MaintenanceDependencyException(
+            org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+            "Task-board did not return the immutable transfer relocation result");
+      }
+    }
+    validateTransferArrivalAssetAfterEffects(plan, remote.asset());
+    validateLeaseTruth(
+        plan.rentalItemId(),
+        remote.lease(),
+        plan.leaseOwner().ownerType(),
+        plan.leaseOwner().ownerId());
+  }
+
+  private List<MaintenanceDependencyGateway.RoutingQueueRequirement> transferRoutingRequirements(
+      List<MaintenanceRepair> chain, RepairComplexity targetComplexity) {
     Map<UUID, MaintenanceDependencyGateway.RoutingQueueRequirement> requirements =
         new LinkedHashMap<>();
-    if (targetComplexity.type() != RepairComplexity.CAPITAL) {
+    if (targetComplexity != RepairComplexity.CAPITAL) {
       for (MaintenanceRepair repair : chain) {
         for (RepairStage stage :
             repairStages.findAllByRepairIdOrderByStageNo(repair.getId())) {
@@ -6375,25 +7908,38 @@ public class MaintenanceApplicationService {
         }
       }
     }
-    Set<UUID> missing = new LinkedHashSet<>();
-    if (!requirements.isEmpty()) {
-      MaintenanceDependencyGateway.RoutingPreflight preflight =
-          dependencies.preflightMaintenanceRouting(
-              capabilities.warehouseId(),
-              List.copyOf(requirements.values()));
-      missing.addAll(preflight.missingQueueDefinitionIds());
-      missing.addAll(
-          preflight.missingWarehouseBindingDefinitionIds());
-      preflight.mismatches().stream()
-          .map(
-              MaintenanceDependencyGateway.RoutingMismatch::
-                  queueDefinitionId)
-          .forEach(missing::add);
-    }
-    return new TransferRepairArrivalPreflightResponse(
-        active.getId(),
-        true,
-        List.copyOf(missing));
+    return List.copyOf(requirements.values());
+  }
+
+  private static List<TransferRepairSignature> transferRepairSignatures(
+      List<MaintenanceRepair> values) {
+    return values.stream()
+        .map(
+            repair ->
+                new TransferRepairSignature(
+                    repair.getId(),
+                    repair.getVersion(),
+                    repair.getWarehouseId(),
+                    repair.getRentalItemId(),
+                    repair.getRentalItemVersionSnapshot(),
+                    repair.getRootRepairId(),
+                    repair.getSourceRepairId(),
+                    repair.getExecutionState(),
+                    repair.getAcceptanceState(),
+                    repair.getReclassificationState(),
+                    repair.getTransferState(),
+                    repair.getTransferDocumentId(),
+                    repair.getTransferLineId(),
+                    repair.getTransferTargetWarehouseId(),
+                    repair.getExternalTaskId(),
+                    repair.getTaskBoardVersion(),
+                    repair.getLeaseId(),
+                    repair.getLeaseVersion(),
+                    repair.getFencingToken(),
+                    repair.getLeaseExpiresAt(),
+                    repair.getLeaseReconciliationState()))
+        .sorted(Comparator.comparing(value -> value.id().toString()))
+        .toList();
   }
 
   private void appendRepairTransferEvents(
@@ -6620,11 +8166,6 @@ public class MaintenanceApplicationService {
     return result;
   }
 
-  private static String combineDecision(String reason, String comment) {
-    if (comment == null || comment.isBlank()) return reason.trim();
-    return reason.trim() + "\n" + comment.trim();
-  }
-
   private static UUID rootId(MaintenanceRepair value) {
     return value.getRootRepairId() == null ? value.getId() : value.getRootRepairId();
   }
@@ -6725,6 +8266,33 @@ public class MaintenanceApplicationService {
     return new MaintenanceValidationException("MAINTENANCE_VALIDATION_FAILED", message);
   }
 
+  private static <T> T requireReconciliationResult(T value) {
+    if (value == null) {
+      throw new IllegalStateException("Reconciliation transaction did not return a result");
+    }
+    return value;
+  }
+
+  /**
+   * Remote warehouse admission must run after the prepare transaction has committed and before
+   * final local locks are acquired. A caller-owned transaction would keep those locks alive while
+   * the remote call waits, so public orchestration boundaries reject it instead of suspending it.
+   */
+  private static void requireNoCallerTransaction(String operation) {
+    if (TransactionSynchronizationManager.isActualTransactionActive()) {
+      throw new IllegalStateException(
+          "Maintenance cannot " + operation + " inside a caller transaction");
+    }
+  }
+
+  private <T> T inLocalTransaction(String operation, Supplier<T> action) {
+    T result = transactions.execute(status -> action.get());
+    if (result == null) {
+      throw new IllegalStateException("Maintenance " + operation + " transaction was empty");
+    }
+    return result;
+  }
+
   private static UUID derived(UUID key, String suffix) {
     return UUID.nameUUIDFromBytes((key + ":" + suffix).getBytes(StandardCharsets.UTF_8));
   }
@@ -6766,6 +8334,103 @@ public class MaintenanceApplicationService {
       MaintenanceDependencyGateway.LeaseSnapshot lease, boolean ownerRenewed) {}
   private record CatalogValidation(boolean dependencyAcyclic) {}
   private record CatalogMutationTarget(CatalogVersionState state) {}
+  private record WarehouseAdmissionPreflight<T>(UUID warehouseId, T replay) {}
+  private record EstimateCompletionPreflight(
+      CreateResult<EstimateCommandResult> replay,
+      UUID warehouseId,
+      List<PlanStageInput> plan) {}
+  private record QueueRepairCommandPreflight(
+      CreateResult<RepairCommandResult> replay,
+      UUID warehouseId,
+      LeaseRefreshPlan leasePlan) {}
+  private record AcceptanceCommandPreflight(
+      CreateResult<RepairCommandResult> replay,
+      UUID warehouseId,
+      LeaseRefreshPlan leasePlan) {}
+  private record LeaseCopySignature(
+      UUID repairId,
+      long repairVersion,
+      UUID leaseId,
+      Long leaseVersion,
+      Long fencingToken,
+      OffsetDateTime expiresAt,
+      String reconciliationState) {}
+  private record LeaseRefreshPlan(
+      UUID ownerRepairId,
+      UUID rentalItemId,
+      long rentalItemVersion,
+      String ownerType,
+      String ownerId,
+      UUID leaseId,
+      long leaseVersion,
+      long fencingToken,
+      OffsetDateTime expiresAt,
+      List<LeaseCopySignature> copies) {}
+  private record TransferDeparturePreflight(
+      CreateResult<PrepareTransferRepairResponse> replay,
+      TransferDeparturePlan plan) {}
+  private record TransferLeaseReleasePlan(
+      UUID ownerRepairId,
+      UUID leaseId,
+      long leaseVersion,
+      long fencingToken,
+      String ownerType,
+      String ownerId) {}
+  private record TransferDeparturePlan(
+      UUID warehouseId,
+      UUID activeRepairId,
+      List<TransferRepairSignature> chain,
+      TransferLeaseReleasePlan leaseRelease) {}
+  private record TransferArrivalCompletionPreflight(
+      CreateResult<CompleteTransferRepairResponse> replay,
+      TransferArrivalPlan plan) {}
+  private record TransferLeaseOwnerPlan(
+      UUID repairId, String ownerType, String ownerId) {}
+  private record TransferTaskPlan(
+      UUID repairId,
+      UUID externalTaskId,
+      long expectedVersion,
+      boolean cancelForCapital) {}
+  private record TransferRoutingResult(List<UUID> missingQueueDefinitionIds) {}
+  private record TransferArrivalRemoteResult(
+      TransferRoutingResult routing,
+      Map<UUID, Long> relocatedTaskVersions,
+      Set<UUID> cancelledTaskRepairIds,
+      MaintenanceDependencyGateway.AssetSnapshot asset,
+      MaintenanceDependencyGateway.LeaseSnapshot lease) {}
+  private record TransferArrivalPlan(
+      UUID activeRepairId,
+      UUID rentalItemId,
+      UUID sourceWarehouseId,
+      UUID targetWarehouseId,
+      Long expectedAssetVersion,
+      RepairComplexity targetComplexity,
+      List<TransferRepairSignature> chain,
+      List<TransferTaskPlan> tasks,
+      TransferLeaseOwnerPlan leaseOwner,
+      List<MaintenanceDependencyGateway.RoutingQueueRequirement> routingRequirements) {}
+  private record TransferRepairSignature(
+      UUID id,
+      long version,
+      UUID warehouseId,
+      UUID rentalItemId,
+      long rentalItemVersion,
+      UUID rootRepairId,
+      UUID sourceRepairId,
+      RepairExecutionState executionState,
+      RepairAcceptanceState acceptanceState,
+      RepairReclassificationState reclassificationState,
+      String transferState,
+      UUID transferDocumentId,
+      UUID transferLineId,
+      UUID transferTargetWarehouseId,
+      UUID externalTaskId,
+      Long taskBoardVersion,
+      UUID leaseId,
+      Long leaseVersion,
+      Long fencingToken,
+      OffsetDateTime leaseExpiresAt,
+      String leaseReconciliationState) {}
   private record RoutingIdentity(UUID queueId) {}
   private record ReworkCandidateKey(UUID repairId, UUID lineId) {}
   private record CatalogContent(
@@ -6789,4 +8454,147 @@ public class MaintenanceApplicationService {
       MaintenanceRepair repair,
       MaintenanceRepair source,
       Map<MaintenanceEventStore.StreamRef, Long> streamVersions) {}
+  private record CharacteristicPlan(
+      UUID rentalItemId,
+      UUID characteristicId,
+      UUID rootRepairId,
+      long minimumRentalItemVersion) {}
+  private record DriverTaskPlan(
+      UUID repairId, MaintenanceDependencyGateway.DriverTaskCommand command) {}
+  private record FurnitureCustodyPlan(
+      UUID repairId,
+      UUID warehouseId,
+      UUID rentalItemId,
+      String ownerType,
+      UUID ownerId,
+      Map<UUID, String> equipmentNames) {}
+  private record EmptyEstimatePlan(
+      UUID estimateId,
+      UUID warehouseId,
+      UUID rentalItemId,
+      long rentalItemVersion,
+      String ownerType,
+      String ownerId) {}
+  private record TaskPlan(
+      UUID repairId,
+      UUID warehouseId,
+      UUID rentalItemId,
+      UUID externalTaskId,
+      boolean update,
+      long expectedTaskVersion,
+      LocalDate scheduledDate,
+      int priority,
+      boolean resolveDeliveredLocalDate,
+      int dailyCapacity,
+      List<MaintenanceDependencyGateway.TaskStage> stages) {}
+  private record QueueRepairPlan(
+      UUID repairId,
+      long repairVersion,
+      boolean alreadyQueued,
+      UUID warehouseId,
+      UUID rentalItemId,
+      long rentalItemVersion,
+      RepairOrigin origin,
+      boolean capital,
+      String desiredAssetStatus,
+      String queueTransition,
+      String ownerType,
+      String ownerId,
+      boolean linkedReturn,
+      String projectedAssetStatus,
+      long projectedAssetVersion,
+      boolean existingLifecycleOwner,
+      List<FurnitureQuantity> requestedFurniture) {
+    static QueueRepairPlan alreadyQueued(MaintenanceRepair repair) {
+      return new QueueRepairPlan(
+          repair.getId(),
+          repair.getVersion(),
+          true,
+          null,
+          null,
+          0,
+          null,
+          false,
+          null,
+          null,
+          null,
+          null,
+          false,
+          null,
+          0,
+          false,
+          List.of());
+    }
+  }
+  private record QueueRepairRemoteResult(
+      boolean adoptExistingRepair,
+      MaintenanceDependencyGateway.AssetSnapshot liveAsset,
+      MaintenanceDependencyGateway.LeaseSnapshot lease,
+      MaintenanceDependencyGateway.AssetSnapshot asset,
+      List<MaintenanceDependencyGateway.FurniturePendingReturn> furniture) {
+    static QueueRepairRemoteResult adopt(
+        MaintenanceDependencyGateway.AssetSnapshot liveAsset,
+        List<MaintenanceDependencyGateway.FurniturePendingReturn> furniture) {
+      return new QueueRepairRemoteResult(true, liveAsset, null, null, List.copyOf(furniture));
+    }
+
+    static QueueRepairRemoteResult queued(
+        MaintenanceDependencyGateway.AssetSnapshot liveAsset,
+        MaintenanceDependencyGateway.LeaseSnapshot lease,
+        MaintenanceDependencyGateway.AssetSnapshot asset,
+        List<MaintenanceDependencyGateway.FurniturePendingReturn> furniture) {
+      return new QueueRepairRemoteResult(false, liveAsset, lease, asset, List.copyOf(furniture));
+    }
+  }
+  private record AssetTransitionPlan(
+      UUID repairId,
+      long repairVersion,
+      List<UUID> sourceRepairIds,
+      UUID warehouseId,
+      UUID rentalItemId,
+      long rentalItemVersion,
+      String ownerType,
+      String ownerId,
+      String transition,
+      MaintenanceDependencyGateway.LeaseSnapshot localLease) {}
+  private record LeaseRenewalPlan(
+      UUID repairId,
+      long repairVersion,
+      UUID rentalItemId,
+      UUID leaseId,
+      long leaseVersion,
+      long fencingToken,
+      String ownerType,
+      String ownerId) {}
+  private record TaskCancellationPlan(
+      UUID repairId, UUID externalTaskId, long expectedVersion) {}
+  private record RepairSyncSignature(
+      UUID id,
+      long version,
+      RepairExecutionState executionState,
+      RepairAcceptanceState acceptanceState,
+      RepairReclassificationState reclassificationState,
+      Long taskBoardVersion,
+      UUID externalTaskId,
+      long rentalItemVersion,
+      UUID leaseId,
+      Long leaseVersion,
+      Long fencingToken,
+      OffsetDateTime leaseExpiresAt,
+      boolean movementToRepair) {}
+  private record ComplexitySyncPlan(
+      UUID repairId,
+      UUID warehouseId,
+      UUID rentalItemId,
+      boolean capital,
+      String desiredStatus,
+      String transition,
+      long latestProjectedVersion,
+      String ownerType,
+      String ownerId,
+      MaintenanceDependencyGateway.LeaseSnapshot lease,
+      UUID leaseOwnerRepairId,
+      List<UUID> complexityRepairIds,
+      List<RepairSyncSignature> signatures,
+      List<TaskCancellationPlan> taskCancellations) {}
 }

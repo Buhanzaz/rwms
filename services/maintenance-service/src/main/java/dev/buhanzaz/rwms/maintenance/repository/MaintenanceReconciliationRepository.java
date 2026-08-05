@@ -37,6 +37,15 @@ public interface MaintenanceReconciliationRepository
       findByDependencyTypeAndOperationTypeAndIdempotencyKey(
           String dependencyType, String operationType, UUID idempotencyKey);
 
+  /**
+   * Reads the database-normalized timestamp after a claim flush. PostgreSQL stores timestamptz
+   * with microsecond precision, so callers must use this scalar value as their durable claim
+   * fence instead of the pre-flush Java value.
+   */
+  @Query(
+      "select value.nextAttemptAt from MaintenanceReconciliation value where value.id = :id")
+  Optional<OffsetDateTime> findNextAttemptAtById(@Param("id") UUID id);
+
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query(
       """

@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.maintenance.integration.MaintenanceDependencyGateway;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -24,6 +25,7 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -203,5 +205,90 @@ class MaintenanceMediaOwnerProofIntegrationTest {
         order by media_owner_revision
         """))
         .allSatisfy(row -> assertThat(row.get("state")).isEqualTo("CONFIRMED"));
+  }
+
+  @Test
+  void mediaProofClaimCommitsBeforeRemoteCallAndStaleClaimCannotFinalizeANewerLease() {
+    UUID ownerId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    transactions.executeWithoutResult(
+        status ->
+            reconciliations.enqueueMediaOwnerProof(
+                "MAINTENANCE_REPAIR", ownerId, warehouseId, ownerId, 1, true));
+
+    when(dependencies.upsertMediaOwnerProof(any()))
+        .thenAnswer(
+            invocation -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+              assertThat(
+                      jdbc.queryForObject(
+                          """
+                          select next_attempt_at > clock_timestamp()
+                          from integration_reconciliation
+                          where dependency_type='MEDIA' and media_owner_id=?
+                          """,
+                          Boolean.class,
+                          ownerId))
+                  .isTrue();
+              return invocation.getArgument(0);
+            });
+
+    assertThat(service.reconcileOneMediaOwnerProof()).isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select state from integration_reconciliation
+                where dependency_type='MEDIA' and media_owner_id=?
+                """,
+                String.class,
+                ownerId))
+        .isEqualTo("CONFIRMED");
+
+    UUID secondOwnerId = UUID.randomUUID();
+    transactions.executeWithoutResult(
+        status ->
+            reconciliations.enqueueMediaOwnerProof(
+                "MAINTENANCE_REPAIR", secondOwnerId, warehouseId, secondOwnerId, 1, true));
+    MaintenanceReconciliationStore.WorkItem first =
+        reconciliations.claimNextDueMedia(Duration.ofMinutes(2)).orElseThrow();
+    assertThat(reconciliations.claimNextDueMedia(Duration.ofMinutes(2))).isEmpty();
+
+    jdbc.update(
+        """
+        update integration_reconciliation
+           set next_attempt_at=clock_timestamp() - interval '1 second'
+         where id=?
+        """,
+        first.id());
+    MaintenanceReconciliationStore.WorkItem second =
+        reconciliations.claimNextDueMedia(Duration.ofMinutes(2)).orElseThrow();
+    assertThat(second.id()).isEqualTo(first.id());
+    assertThat(second.nextAttemptAt()).isAfter(first.nextAttemptAt());
+
+    assertThatThrownBy(
+            () ->
+                transactions.executeWithoutResult(
+                    status -> reconciliations.confirmed(first, Map.of("result", "stale"))))
+        .isInstanceOf(MaintenanceConflictException.class)
+        .extracting(exception -> ((MaintenanceConflictException) exception).code())
+        .isEqualTo("MAINTENANCE_RECONCILIATION_CLAIM_STALE");
+    assertThatThrownBy(
+            () ->
+                transactions.executeWithoutResult(
+                    status ->
+                        reconciliations.failed(
+                            first,
+                            new MaintenanceDependencyException(
+                                HttpStatus.SERVICE_UNAVAILABLE, "stale"))))
+        .isInstanceOf(MaintenanceConflictException.class)
+        .extracting(exception -> ((MaintenanceConflictException) exception).code())
+        .isEqualTo("MAINTENANCE_RECONCILIATION_CLAIM_STALE");
+
+    transactions.executeWithoutResult(
+        status -> reconciliations.confirmed(second, Map.of("result", "current")));
+    assertThat(
+            jdbc.queryForObject(
+                "select state from integration_reconciliation where id=?", String.class, second.id()))
+        .isEqualTo("CONFIRMED");
   }
 }

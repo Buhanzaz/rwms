@@ -1,23 +1,28 @@
 package dev.buhanzaz.rwms.asset;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.DIMENSION_24_X_6;
 import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.FINISHING_DVP;
 import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.TYPE_BK_1;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireMaintenanceOperationLeaseRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateRentalItemRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.EquipmentBalanceResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.EquipmentResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceFencedStatusRequest;
-import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceFurnitureLoss;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceFurnitureCustodyClaim;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceFurniturePendingReturn;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceLeaseOwnerType;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceStatusAction;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.OperationLeaseResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.ReturnMaintenanceFurnitureCustodyToStockRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.TransferEquipmentRequest;
-import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateStatusRequest;
 import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
 import dev.buhanzaz.rwms.asset.domain.AssetEventType;
@@ -25,10 +30,10 @@ import dev.buhanzaz.rwms.asset.domain.BalanceLocationKind;
 import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import dev.buhanzaz.rwms.asset.eventing.AssetEventStore;
+import dev.buhanzaz.rwms.asset.integration.warehouse.WarehouseRegistryClient;
 import dev.buhanzaz.rwms.asset.service.AssetConflictException;
 import dev.buhanzaz.rwms.asset.service.AssetService;
-import java.util.ArrayList;
-import java.util.Comparator;
+import dev.buhanzaz.rwms.asset.service.MaintenanceFurnitureCustodyService;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -40,10 +45,16 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
+/**
+ * Regression boundary for the unified estimate/direct-repair custody move.
+ * Furniture leaves the cabin exactly once, but only an approved property
+ * disposition can ever put it in a terminal balance.
+ */
 @SpringBootTest(
     properties = {
       "spring.jpa.hibernate.ddl-auto=validate",
@@ -62,9 +73,11 @@ class MaintenanceFurnitureLossIntegrationTest {
   }
 
   @Autowired AssetService service;
+  @Autowired MaintenanceFurnitureCustodyService custody;
   @Autowired AssetEventStore events;
   @Autowired JdbcTemplate jdbc;
   @Autowired PlatformTransactionManager transactionManager;
+  @MockitoBean WarehouseRegistryClient warehouses;
 
   @DynamicPropertySource
   static void properties(DynamicPropertyRegistry registry) {
@@ -84,282 +97,183 @@ class MaintenanceFurnitureLossIntegrationTest {
   }
 
   @Test
-  void queueMovesFurnitureToLostOnceAndReturnsTheOriginalReplay() {
+  void estimateAndDirectRepairSelectTheSamePendingReturnEffectWithoutTerminalSink() {
     UUID subjectId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
+    EquipmentResponse estimateFurniture = createFurniture(subjectId);
+    EquipmentResponse repairFurniture = createFurniture(subjectId);
+
     UUID estimateId = UUID.randomUUID();
-    EquipmentResponse furniture = createEquipment(subjectId, EquipmentCategory.FURNITURE);
-    RentalItemResponse rental = createFreeRental(subjectId, warehouseId);
-    attach(subjectId, warehouseId, rental.id(), furniture.id(), 4);
-    OperationLeaseResponse lease = acquireEstimateLease(subjectId, rental, estimateId);
-    MaintenanceFencedStatusRequest request = queueRequest(
-        rental,
-        lease,
-        estimateId,
-        List.of(new MaintenanceFurnitureLoss(furniture.id(), 2)));
-    UUID idempotencyKey = UUID.randomUUID();
+    RentalItemResponse estimateCabin = createFreeRental(subjectId, warehouseId);
+    attach(subjectId, warehouseId, estimateCabin.id(), estimateFurniture.id(), 3);
+    OperationLeaseResponse estimateLease = acquireLease(
+        subjectId, estimateCabin, MaintenanceLeaseOwnerType.MAINTENANCE_ESTIMATE, estimateId);
+    MaintenanceFurniturePendingReturn estimateLine = pendingLine(
+        estimateFurniture.id(), warehouseId, estimateCabin.id());
+    UUID estimateKey = UUID.randomUUID();
 
-    var queued = service.maintenanceFencedStatus(
-        subjectId, idempotencyKey, rental.id(), request);
-    var replayed = service.maintenanceFencedStatus(
-        subjectId, idempotencyKey, rental.id(), request);
-
-    assertThat(queued.replayed()).isFalse();
-    assertThat(queued.response().status()).isEqualTo(RentalItemStatus.REPAIR);
-    assertThat(queued.response().version()).isEqualTo(rental.version() + 1);
-    assertThat(queued.response().contents())
-        .singleElement()
-        .satisfies(content -> {
-          assertThat(content.equipmentId()).isEqualTo(furniture.id());
-          assertThat(content.quantity()).isEqualTo(2);
-        });
-    assertThat(replayed.replayed()).isTrue();
-    assertThat(replayed.response()).isEqualTo(queued.response());
-
-    var totals = service.equipmentTotals(furniture.id(), warehouseId);
-    assertThat(totals.nonRentedCabinQuantity()).isEqualTo(2);
-    assertThat(totals.lostQuantity()).isEqualTo(2);
-    assertThat(lossMovementCount(furniture.id())).isEqualTo(1);
-    assertThat(jdbc.queryForObject(
-        """
-        select count(*) from equipment_movement_ledger ledger
-        join equipment_movement movement on movement.id=ledger.movement_id
-        where movement.equipment_id=? and movement.movement_kind='LOSS'
-        """,
-        Integer.class,
-        furniture.id())).isEqualTo(2);
-    assertThat(jdbc.queryForObject(
-        """
-        select count(*) from domain_event event
-        where event.event_type=?
-          and event.aggregate_id in (
-            select movement.id::text from equipment_movement movement
-            where movement.equipment_id=? and movement.movement_kind='LOSS')
-        """,
-        Integer.class,
-        AssetEventType.EQUIPMENT_LOST.value(),
-        furniture.id())).isEqualTo(1);
-  }
-
-  @Test
-  void rejectsStaleInactiveAndNonFurnitureReferencesAndInvalidCommandShapes() {
-    UUID subjectId = UUID.randomUUID();
-    UUID warehouseId = UUID.randomUUID();
-    UUID estimateId = UUID.randomUUID();
-    RentalItemResponse rental = createFreeRental(subjectId, warehouseId);
-    EquipmentResponse furniture = createEquipment(subjectId, EquipmentCategory.FURNITURE);
-    EquipmentResponse electrical = createEquipment(subjectId, EquipmentCategory.ELECTRICAL);
-    EquipmentResponse inactive = createEquipment(subjectId, EquipmentCategory.FURNITURE);
-    attach(subjectId, warehouseId, rental.id(), furniture.id(), 1);
-    attach(subjectId, warehouseId, rental.id(), electrical.id(), 1);
-    attach(subjectId, warehouseId, rental.id(), inactive.id(), 1);
-    inactive = service.updateEquipment(
-        inactive.id(),
-        new UpdateEquipmentRequest(
-            inactive.version(),
-            inactive.name(),
-            inactive.category(),
-            false,
-            inactive.comment()));
-    OperationLeaseResponse lease = acquireEstimateLease(subjectId, rental, estimateId);
-
-    EquipmentResponse finalInactive = inactive;
-    assertThatThrownBy(() -> service.maintenanceFencedStatus(
+    var estimateQueued = service.maintenanceFencedStatus(
         subjectId,
-        UUID.randomUUID(),
-        rental.id(),
+        estimateKey,
+        estimateCabin.id(),
         queueRequest(
-            rental,
-            lease,
-            estimateId,
-            List.of(new MaintenanceFurnitureLoss(electrical.id(), 1)))))
-        .isInstanceOf(AssetConflictException.class)
-        .hasMessageContaining("active FURNITURE");
-    assertThatThrownBy(() -> service.maintenanceFencedStatus(
-        subjectId,
-        UUID.randomUUID(),
-        rental.id(),
-        queueRequest(
-            rental,
-            lease,
-            estimateId,
-            List.of(new MaintenanceFurnitureLoss(finalInactive.id(), 1)))))
-        .isInstanceOf(AssetConflictException.class)
-        .hasMessageContaining("active FURNITURE");
-    assertThatThrownBy(() -> service.maintenanceFencedStatus(
-        subjectId,
-        UUID.randomUUID(),
-        rental.id(),
-        new MaintenanceFencedStatusRequest(
-            rental.version(),
-            MaintenanceStatusAction.MARK_PENDING_ACCEPTANCE,
-            lease.id(),
-            lease.fencingToken(),
+            estimateCabin,
+            estimateLease,
             MaintenanceLeaseOwnerType.MAINTENANCE_ESTIMATE,
             estimateId,
-            null,
-            estimateId,
-            List.of(new MaintenanceFurnitureLoss(furniture.id(), 1)))))
-        .isInstanceOf(AssetConflictException.class)
-        .hasMessageContaining("estimate-owned queue action");
-    assertThatThrownBy(() -> service.maintenanceFencedStatus(
+            List.of(estimateLine)));
+    var estimateReplay = service.maintenanceFencedStatus(
         subjectId,
-        UUID.randomUUID(),
-        rental.id(),
-        new MaintenanceFencedStatusRequest(
-            rental.version(),
-            MaintenanceStatusAction.QUEUE_FOR_REPAIR,
-            lease.id(),
-            lease.fencingToken(),
-            MaintenanceLeaseOwnerType.MAINTENANCE_ESTIMATE,
-            estimateId,
-            null,
-            UUID.randomUUID(),
-            List.of(new MaintenanceFurnitureLoss(furniture.id(), 1)))))
-        .isInstanceOf(AssetConflictException.class)
-        .hasMessageContaining("matching estimateId");
-    UUID anotherEstimateId = UUID.randomUUID();
-    assertThatThrownBy(() -> service.maintenanceFencedStatus(
-        subjectId,
-        UUID.randomUUID(),
-        rental.id(),
-        new MaintenanceFencedStatusRequest(
-            rental.version(),
-            MaintenanceStatusAction.QUEUE_FOR_REPAIR,
-            lease.id(),
-            lease.fencingToken(),
-            MaintenanceLeaseOwnerType.MAINTENANCE_ESTIMATE,
-            anotherEstimateId,
-            null,
-            anotherEstimateId,
-            List.of(new MaintenanceFurnitureLoss(furniture.id(), 1)))))
-        .isInstanceOf(AssetConflictException.class)
-        .hasMessageContaining("another maintenance owner");
-    assertThatThrownBy(() -> service.maintenanceFencedStatus(
-        subjectId,
-        UUID.randomUUID(),
-        rental.id(),
+        estimateKey,
+        estimateCabin.id(),
         queueRequest(
-            rental,
-            lease,
+            estimateCabin,
+            estimateLease,
+            MaintenanceLeaseOwnerType.MAINTENANCE_ESTIMATE,
             estimateId,
-            List.of(
-                new MaintenanceFurnitureLoss(furniture.id(), 1),
-                new MaintenanceFurnitureLoss(furniture.id(), 1)))))
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("unique equipment");
+            List.of(estimateLine)));
 
-    UUID directRepairId = UUID.randomUUID();
-    RentalItemResponse directRepairRental = createFreeRental(subjectId, warehouseId);
-    OperationLeaseResponse directRepairLease = acquireRepairLease(
-        subjectId, directRepairRental, directRepairId);
-    assertThatThrownBy(() -> service.maintenanceFencedStatus(
+    UUID repairId = UUID.randomUUID();
+    RentalItemResponse repairCabin = createFreeRental(subjectId, warehouseId);
+    attach(subjectId, warehouseId, repairCabin.id(), repairFurniture.id(), 2);
+    OperationLeaseResponse repairLease = acquireLease(
+        subjectId, repairCabin, MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR, repairId);
+    MaintenanceFurniturePendingReturn repairLine = pendingLine(
+        repairFurniture.id(), warehouseId, repairCabin.id());
+    var repairQueued = service.maintenanceFencedStatus(
         subjectId,
         UUID.randomUUID(),
-        directRepairRental.id(),
-        new MaintenanceFencedStatusRequest(
-            directRepairRental.version(),
-            MaintenanceStatusAction.QUEUE_FOR_REPAIR,
-            directRepairLease.id(),
-            directRepairLease.fencingToken(),
+        repairCabin.id(),
+        queueRequest(
+            repairCabin,
+            repairLease,
             MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR,
-            directRepairId,
-            null,
-            estimateId,
-            List.of(new MaintenanceFurnitureLoss(furniture.id(), 1)))))
-        .isInstanceOf(AssetConflictException.class)
-        .hasMessageContaining("estimate-owned queue action");
+            repairId,
+            List.of(repairLine)));
 
-    assertThat(service.rentalItem(rental.id()).status()).isEqualTo(RentalItemStatus.FREE);
-    assertThat(lossMovementCount(furniture.id())).isZero();
-    assertThat(lossMovementCount(electrical.id())).isZero();
-    assertThat(lossMovementCount(inactive.id())).isZero();
+    assertThat(estimateQueued.response().status()).isEqualTo(RentalItemStatus.REPAIR);
+    assertThat(repairQueued.response().status()).isEqualTo(RentalItemStatus.REPAIR);
+    assertThat(estimateReplay.replayed()).isTrue();
+    assertThat(estimateReplay.response()).isEqualTo(estimateQueued.response());
+    assertThat(service.rentalItem(estimateCabin.id()).contents()).isEmpty();
+    assertThat(service.rentalItem(repairCabin.id()).contents()).isEmpty();
+
+    List<MaintenanceFurnitureCustodyClaim> estimateClaims = custody.unresolvedClaims(
+        MaintenanceLeaseOwnerType.MAINTENANCE_ESTIMATE, estimateId);
+    List<MaintenanceFurnitureCustodyClaim> repairClaims = custody.unresolvedClaims(
+        MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR, repairId);
+    assertThat(estimateClaims).singleElement().satisfies(claim -> {
+      assertThat(claim.quantity()).isEqualTo(3);
+      assertThat(claim.availableForDispositionQuantity()).isEqualTo(3);
+      assertThat(claim.sourceBalanceVersion()).isEqualTo(estimateLine.expectedSourceBalanceVersion());
+    });
+    assertThat(repairClaims).singleElement().satisfies(claim -> {
+      assertThat(claim.quantity()).isEqualTo(2);
+      assertThat(claim.availableForDispositionQuantity()).isEqualTo(2);
+      assertThat(claim.sourceBalanceVersion()).isEqualTo(repairLine.expectedSourceBalanceVersion());
+    });
+
+    var estimateTotals = service.equipmentTotals(estimateFurniture.id(), warehouseId);
+    var repairTotals = service.equipmentTotals(repairFurniture.id(), warehouseId);
+    assertThat(estimateTotals.nonRentedCabinQuantity()).isZero();
+    assertThat(repairTotals.nonRentedCabinQuantity()).isZero();
+    assertThat(estimateTotals.lostQuantity()).isZero();
+    assertThat(repairTotals.writtenOffQuantity()).isZero();
+    assertThat(terminalMovementCount(estimateFurniture.id())).isZero();
+    assertThat(terminalMovementCount(repairFurniture.id())).isZero();
+    assertThat(custodyEventCount("DISPOSITION_APPLIED")).isZero();
+
+    assertThatThrownBy(
+        () ->
+            service.maintenanceFencedStatus(
+                subjectId,
+                estimateKey,
+                estimateCabin.id(),
+                queueRequest(
+                    estimateCabin,
+                    estimateLease,
+                    MaintenanceLeaseOwnerType.MAINTENANCE_ESTIMATE,
+                    estimateId,
+                    List.of(new MaintenanceFurniturePendingReturn(
+                        estimateFurniture.id(), estimateLine.expectedSourceBalanceVersion(), 2)))))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("Idempotency-Key");
   }
 
   @Test
-  void insufficientLaterLossRollsBackEveryBalanceMovementAndStatusChange() {
+  void returnToStockClosesSelectedQuantityWithPermanentReplayAndNoTerminalMovement() {
     UUID subjectId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
-    UUID estimateId = UUID.randomUUID();
-    RentalItemResponse rental = createFreeRental(subjectId, warehouseId);
-    List<EquipmentResponse> furniture = new ArrayList<>(List.of(
-        createEquipment(subjectId, EquipmentCategory.FURNITURE),
-        createEquipment(subjectId, EquipmentCategory.FURNITURE)));
-    furniture.sort(Comparator.comparing(item -> item.id().toString()));
-    attach(subjectId, warehouseId, rental.id(), furniture.get(0).id(), 2);
-    attach(subjectId, warehouseId, rental.id(), furniture.get(1).id(), 1);
-    OperationLeaseResponse lease = acquireEstimateLease(subjectId, rental, estimateId);
-    UUID idempotencyKey = UUID.randomUUID();
-
-    assertThatThrownBy(() -> service.maintenanceFencedStatus(
-        subjectId,
-        idempotencyKey,
-        rental.id(),
-        queueRequest(
-            rental,
-            lease,
-            estimateId,
-            List.of(
-                new MaintenanceFurnitureLoss(furniture.get(0).id(), 1),
-                new MaintenanceFurnitureLoss(furniture.get(1).id(), 2)))))
-        .isInstanceOf(AssetConflictException.class)
-        .hasMessageContaining("insufficient furniture");
-
-    assertUnchangedAfterFailedLoss(rental, warehouseId, furniture.get(0), 2);
-    assertUnchangedAfterFailedLoss(rental, warehouseId, furniture.get(1), 1);
-    assertThat(jdbc.queryForObject(
-        "select count(*) from asset_idempotency_record where idempotency_key=?",
-        Integer.class,
-        idempotencyKey)).isZero();
-  }
-
-  @Test
-  void absentLaterBalanceRollsBackThePreparedLostBucketAndStatusChange() {
-    UUID subjectId = UUID.randomUUID();
-    UUID warehouseId = UUID.randomUUID();
-    UUID estimateId = UUID.randomUUID();
-    RentalItemResponse rental = createFreeRental(subjectId, warehouseId);
-    List<EquipmentResponse> furniture = new ArrayList<>(List.of(
-        createEquipment(subjectId, EquipmentCategory.FURNITURE),
-        createEquipment(subjectId, EquipmentCategory.FURNITURE)));
-    furniture.sort(Comparator.comparing(item -> item.id().toString()));
-    attach(subjectId, warehouseId, rental.id(), furniture.get(0).id(), 1);
-    OperationLeaseResponse lease = acquireEstimateLease(subjectId, rental, estimateId);
-
-    assertThatThrownBy(() -> service.maintenanceFencedStatus(
+    UUID repairId = UUID.randomUUID();
+    EquipmentResponse furniture = createFurniture(subjectId);
+    RentalItemResponse cabin = createFreeRental(subjectId, warehouseId);
+    attach(subjectId, warehouseId, cabin.id(), furniture.id(), 3);
+    OperationLeaseResponse lease = acquireLease(
+        subjectId, cabin, MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR, repairId);
+    MaintenanceFurniturePendingReturn selected = pendingLine(furniture.id(), warehouseId, cabin.id());
+    service.maintenanceFencedStatus(
         subjectId,
         UUID.randomUUID(),
-        rental.id(),
+        cabin.id(),
         queueRequest(
-            rental,
+            cabin,
             lease,
-            estimateId,
-            List.of(
-                new MaintenanceFurnitureLoss(furniture.get(0).id(), 1),
-                new MaintenanceFurnitureLoss(furniture.get(1).id(), 1)))))
-        .isInstanceOf(AssetConflictException.class)
-        .hasMessageContaining("does not contain");
+            MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR,
+            repairId,
+            List.of(selected)));
+    MaintenanceFurnitureCustodyClaim claim = custody.unresolvedClaims(
+        MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR, repairId).getFirst();
+    EquipmentBalanceResponse stockBefore = stockBalance(furniture.id(), warehouseId);
+    UUID commandKey = UUID.randomUUID();
+    ReturnMaintenanceFurnitureCustodyToStockRequest request =
+        new ReturnMaintenanceFurnitureCustodyToStockRequest(
+            claim.custodyVersion(),
+            stockBefore.version(),
+            2,
+            UUID.randomUUID());
 
-    assertUnchangedAfterFailedLoss(rental, warehouseId, furniture.get(0), 1);
-    assertUnchangedAfterFailedLoss(rental, warehouseId, furniture.get(1), 0);
-    assertThat(jdbc.queryForObject(
-        """
-        select count(*) from equipment_balance
-        where equipment_id=? and warehouse_id=? and rental_item_id is null
-          and location_kind='LOST'
-        """,
-        Integer.class,
-        furniture.get(0).id(),
-        warehouseId)).isZero();
+    clearInvocations(warehouses);
+    var returned = custody.returnToStock(subjectId, commandKey, claim.id(), request);
+    var replayed = custody.returnToStock(subjectId, commandKey, claim.id(), request);
+
+    assertThat(returned.replayed()).isFalse();
+    assertThat(replayed.replayed()).isTrue();
+    verify(warehouses, times(1)).requireIncoming(warehouseId);
+    assertThat(replayed.response()).isEqualTo(returned.response());
+    assertThat(returned.response().stockBalanceVersion()).isEqualTo(stockBefore.version() + 1);
+    assertThat(returned.response().stockQuantity()).isEqualTo(2);
+    MaintenanceFurnitureCustodyClaim remaining = custody.unresolvedClaims(
+        MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR, repairId).getFirst();
+    assertThat(remaining.returnedToStockQuantity()).isEqualTo(2);
+    assertThat(remaining.unresolvedQuantity()).isEqualTo(1);
+    assertThat(remaining.availableForDispositionQuantity()).isEqualTo(1);
+    assertThat(service.equipmentTotals(furniture.id(), warehouseId).stockQuantity()).isEqualTo(2);
+    assertThat(service.equipmentTotals(furniture.id(), warehouseId).lostQuantity()).isZero();
+    assertThat(terminalMovementCount(furniture.id())).isZero();
+
+    assertThatThrownBy(
+        () ->
+            custody.returnToStock(
+                subjectId,
+                commandKey,
+                claim.id(),
+                new ReturnMaintenanceFurnitureCustodyToStockRequest(
+                    claim.custodyVersion(),
+                    stockBefore.version(),
+                    2,
+                    UUID.randomUUID())))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("idempotency");
   }
 
-  private EquipmentResponse createEquipment(UUID subjectId, EquipmentCategory category) {
-    String name = "Equipment " + category.name() + ' '
-        + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+  private EquipmentResponse createFurniture(UUID subjectId) {
     return service.createEquipment(
         subjectId,
         UUID.randomUUID(),
-        new CreateEquipmentRequest(name, category, null)).response();
+        new CreateEquipmentRequest(
+            "Furniture " + UUID.randomUUID().toString().substring(0, 8),
+            EquipmentCategory.FURNITURE,
+            null)).response();
   }
 
   private RentalItemResponse createFreeRental(UUID subjectId, UUID warehouseId) {
@@ -368,7 +282,7 @@ class MaintenanceFurnitureLossIntegrationTest {
         UUID.randomUUID(),
         new CreateRentalItemRequest(
             warehouseId,
-            "cabin-" + UUID.randomUUID(),
+            "cabin" + UUID.randomUUID().toString().replace("-", ""),
             TYPE_BK_1,
             DIMENSION_24_X_6,
             FINISHING_DVP,
@@ -404,45 +318,51 @@ class MaintenanceFurnitureLossIntegrationTest {
             quantity));
   }
 
-  private OperationLeaseResponse acquireEstimateLease(
-      UUID subjectId, RentalItemResponse rental, UUID estimateId) {
+  private OperationLeaseResponse acquireLease(
+      UUID subjectId,
+      RentalItemResponse rental,
+      MaintenanceLeaseOwnerType ownerType,
+      UUID ownerId) {
     return service.acquireMaintenanceLease(
         subjectId,
         UUID.randomUUID(),
         new AcquireMaintenanceOperationLeaseRequest(
-            rental.id(),
-            MaintenanceLeaseOwnerType.MAINTENANCE_ESTIMATE,
-            estimateId,
-            rental.version())).response();
+            rental.id(), ownerType, ownerId, rental.version())).response();
   }
 
-  private OperationLeaseResponse acquireRepairLease(
-      UUID subjectId, RentalItemResponse rental, UUID repairId) {
-    return service.acquireMaintenanceLease(
-        subjectId,
-        UUID.randomUUID(),
-        new AcquireMaintenanceOperationLeaseRequest(
-            rental.id(),
-            MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR,
-            repairId,
-            rental.version())).response();
+  private MaintenanceFurniturePendingReturn pendingLine(
+      UUID equipmentId, UUID warehouseId, UUID rentalItemId) {
+    EquipmentBalanceResponse balance = service.equipmentTotals(equipmentId, warehouseId).balances().stream()
+        .filter(value -> rentalItemId.equals(value.rentalItemId()))
+        .filter(value -> value.locationKind() == BalanceLocationKind.CABIN_NON_RENTED)
+        .findFirst()
+        .orElseThrow();
+    return new MaintenanceFurniturePendingReturn(equipmentId, balance.version(), balance.quantity());
   }
 
-  private static MaintenanceFencedStatusRequest queueRequest(
+  private MaintenanceFencedStatusRequest queueRequest(
       RentalItemResponse rental,
       OperationLeaseResponse lease,
-      UUID estimateId,
-      List<MaintenanceFurnitureLoss> losses) {
+      MaintenanceLeaseOwnerType ownerType,
+      UUID ownerId,
+      List<MaintenanceFurniturePendingReturn> lines) {
     return new MaintenanceFencedStatusRequest(
         rental.version(),
         MaintenanceStatusAction.QUEUE_FOR_REPAIR,
         lease.id(),
         lease.fencingToken(),
-        MaintenanceLeaseOwnerType.MAINTENANCE_ESTIMATE,
-        estimateId,
+        ownerType,
+        ownerId,
         null,
-        estimateId,
-        losses);
+        lines);
+  }
+
+  private EquipmentBalanceResponse stockBalance(UUID equipmentId, UUID warehouseId) {
+    return service.equipmentTotals(equipmentId, warehouseId).balances().stream()
+        .filter(value -> value.rentalItemId() == null)
+        .filter(value -> value.locationKind() == BalanceLocationKind.STOCK)
+        .findFirst()
+        .orElseThrow();
   }
 
   private void seedStockBalance(UUID equipmentId, UUID warehouseId, long quantity) {
@@ -477,24 +397,22 @@ class MaintenanceFurnitureLossIntegrationTest {
     });
   }
 
-  private void assertUnchangedAfterFailedLoss(
-      RentalItemResponse rental,
-      UUID warehouseId,
-      EquipmentResponse furniture,
-      long expectedCabinQuantity) {
-    assertThat(service.rentalItem(rental.id()).status()).isEqualTo(RentalItemStatus.FREE);
-    assertThat(service.rentalItem(rental.id()).version()).isEqualTo(rental.version());
-    var totals = service.equipmentTotals(furniture.id(), warehouseId);
-    assertThat(totals.nonRentedCabinQuantity()).isEqualTo(expectedCabinQuantity);
-    assertThat(totals.lostQuantity()).isZero();
-    assertThat(lossMovementCount(furniture.id())).isZero();
-  }
-
-  private int lossMovementCount(UUID equipmentId) {
-    Integer count = jdbc.queryForObject(
-        "select count(*) from equipment_movement where equipment_id=? and movement_kind='LOSS'",
+  private int terminalMovementCount(UUID equipmentId) {
+    Integer value = jdbc.queryForObject(
+        """
+        select count(*) from equipment_movement
+        where equipment_id=? and movement_kind in ('LOSS','WRITE_OFF')
+        """,
         Integer.class,
         equipmentId);
-    return count == null ? 0 : count;
+    return value == null ? 0 : value;
+  }
+
+  private int custodyEventCount(String eventType) {
+    Integer value = jdbc.queryForObject(
+        "select count(*) from maintenance_furniture_custody_event where event_type=?",
+        Integer.class,
+        eventType);
+    return value == null ? 0 : value;
   }
 }

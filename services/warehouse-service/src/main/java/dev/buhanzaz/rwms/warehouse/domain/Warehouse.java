@@ -2,6 +2,8 @@ package dev.buhanzaz.rwms.warehouse.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -17,6 +19,7 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
 import org.hibernate.proxy.HibernateProxy;
@@ -29,6 +32,7 @@ import org.hibernate.proxy.HibernateProxy;
 public class Warehouse {
   private static final Pattern DISPLAY_NAME_WHITESPACE =
       Pattern.compile("\\s+", Pattern.UNICODE_CHARACTER_CLASS);
+  private static final Set<String> CANONICAL_IANA_ZONE_IDS = ZoneId.getAvailableZoneIds();
 
   @Id
   @GeneratedValue(strategy = GenerationType.UUID)
@@ -58,6 +62,26 @@ public class Warehouse {
   @Column(name = "time_zone", nullable = false, length = 64)
   private String timeZone;
 
+  /**
+   * A private domain revision for append-only timezone decisions. It deliberately is not exposed
+   * as a separate public field: the aggregate @Version is the concurrency fence visible to callers.
+   */
+  @Column(name = "time_zone_revision", nullable = false)
+  private long timeZoneRevision;
+
+  @NotNull
+  @Enumerated(EnumType.STRING)
+  @Column(name = "lifecycle_state", nullable = false, length = 16)
+  private WarehouseLifecycleState lifecycleState = WarehouseLifecycleState.ACTIVE;
+
+  /** Forces aggregate-version increments for immutable lifecycle readiness confirmations. */
+  @Column(name = "lifecycle_revision", nullable = false)
+  private long lifecycleRevision;
+
+  /**
+   * Compatibility projection for pre-lifecycle consumers. It is true only while new incoming
+   * operations are allowed and is never accepted as a lifecycle command.
+   */
   @Column(name = "active", nullable = false)
   private boolean active = true;
 
@@ -81,46 +105,76 @@ public class Warehouse {
       ZoneId timeZone,
       Integer sortOrder) {
     Warehouse warehouse = new Warehouse();
-    warehouse.assign(name, city, address, timeZone, true, sortOrder);
+    warehouse.assign(name, city, address, timeZone, sortOrder);
     return warehouse;
   }
 
-  public Mutation replace(
-      String name,
-      String city,
-      String address,
-      ZoneId timeZone,
-      boolean active,
-      Integer sortOrder) {
+  public Mutation replace(String name, String city, String address, Integer sortOrder) {
     CanonicalName canonicalName = canonicalName(name);
     String normalizedCity = normalizeRequired(city, "city", 255);
     String normalizedAddress = normalizeOptional(address, 1000);
-    String normalizedTimeZone = normalizeTimeZone(timeZone);
     validateSortOrder(sortOrder);
-    boolean deactivating = this.active && !active;
     boolean changed =
         !Objects.equals(this.name, canonicalName.displayName())
             || !Objects.equals(this.normalizedName, canonicalName.normalizedName())
             || !Objects.equals(this.city, normalizedCity)
             || !Objects.equals(this.address, normalizedAddress)
-            || !Objects.equals(this.timeZone, normalizedTimeZone)
-            || this.active != active
             || !Objects.equals(this.sortOrder, sortOrder);
     if (!changed) return Mutation.NONE;
     this.name = canonicalName.displayName();
     this.normalizedName = canonicalName.normalizedName();
     this.city = normalizedCity;
     this.address = normalizedAddress;
-    this.timeZone = normalizedTimeZone;
-    this.active = active;
     this.sortOrder = sortOrder;
-    return deactivating ? Mutation.DEACTIVATED : Mutation.CHANGED;
+    return Mutation.CHANGED;
   }
 
-  public boolean deactivate() {
-    if (!active) return false;
-    active = false;
+  /**
+   * Corrects the current timezone only before the warehouse has operated. Once operations exist,
+   * the application layer must append an effective-dated history entry instead.
+   */
+  public boolean correctTimeZone(ZoneId value) {
+    String normalized = normalizeTimeZone(value);
+    if (Objects.equals(timeZone, normalized)) return false;
+    timeZone = normalized;
+    timeZoneRevision++;
     return true;
+  }
+
+  /** Forces an aggregate version increment for an append-only future timezone decision. */
+  public void recordTimeZoneDecision() {
+    timeZoneRevision++;
+  }
+
+  /** Starts the one-way drain. New incoming operations stop; outgoing operations remain valid. */
+  public boolean startDraining() {
+    if (lifecycleState != WarehouseLifecycleState.ACTIVE) return false;
+    lifecycleState = WarehouseLifecycleState.DRAINING;
+    active = false;
+    lifecycleRevision++;
+    return true;
+  }
+
+  /** Completes the one-way lifecycle after every resource owner has confirmed readiness. */
+  public boolean completeInactivation() {
+    if (lifecycleState != WarehouseLifecycleState.DRAINING) return false;
+    lifecycleState = WarehouseLifecycleState.INACTIVE;
+    active = false;
+    lifecycleRevision++;
+    return true;
+  }
+
+  /** Forces an aggregate version increment when immutable readiness evidence is appended. */
+  public void recordLifecycleReadiness() {
+    lifecycleRevision++;
+  }
+
+  public boolean allowsIncomingOperations() {
+    return lifecycleState == WarehouseLifecycleState.ACTIVE;
+  }
+
+  public boolean allowsOutgoingOperations() {
+    return lifecycleState != WarehouseLifecycleState.INACTIVE;
   }
 
   @PrePersist
@@ -142,7 +196,6 @@ public class Warehouse {
       String city,
       String address,
       ZoneId timeZone,
-      boolean active,
       Integer sortOrder) {
     CanonicalName canonicalName = canonicalName(name);
     this.name = canonicalName.displayName();
@@ -151,7 +204,9 @@ public class Warehouse {
     this.address = normalizeOptional(address, 1000);
     this.timeZone = normalizeTimeZone(timeZone);
     validateSortOrder(sortOrder);
-    this.active = active;
+    this.lifecycleState = WarehouseLifecycleState.ACTIVE;
+    this.lifecycleRevision = 0;
+    this.active = true;
     this.sortOrder = sortOrder;
   }
 
@@ -163,13 +218,26 @@ public class Warehouse {
     address = normalizeOptional(address, 1000);
     timeZone = normalizeTimeZone(ZoneId.of(timeZone));
     validateSortOrder(sortOrder);
+    if (lifecycleState == null) throw new IllegalArgumentException("lifecycleState is required");
+    if (lifecycleRevision < 0) throw new IllegalArgumentException("lifecycleRevision must not be negative");
+    active = lifecycleState == WarehouseLifecycleState.ACTIVE;
   }
 
   private static String normalizeTimeZone(ZoneId value) {
     if (value == null) throw new IllegalArgumentException("timeZone is required");
     String normalized = value.getId();
+    if (!CANONICAL_IANA_ZONE_IDS.contains(normalized)) {
+      throw new IllegalArgumentException("timeZone must be a canonical IANA identifier");
+    }
     if (normalized.length() > 64) throw new IllegalArgumentException("timeZone is too long");
     return normalized;
+  }
+
+  public static ZoneId requireCanonicalTimeZone(String value) {
+    if (value == null || value.isBlank()) throw new IllegalArgumentException("timeZone is required");
+    ZoneId parsed = ZoneId.of(value.trim());
+    normalizeTimeZone(parsed);
+    return parsed;
   }
 
   public static String normalizeName(String value) {
@@ -234,8 +302,20 @@ public class Warehouse {
     return timeZone;
   }
 
+  public long getTimeZoneRevision() {
+    return timeZoneRevision;
+  }
+
+  public WarehouseLifecycleState getLifecycleState() {
+    return lifecycleState;
+  }
+
+  public long getLifecycleRevision() {
+    return lifecycleRevision;
+  }
+
   public boolean isActive() {
-    return active;
+    return lifecycleState == WarehouseLifecycleState.ACTIVE;
   }
 
   public Integer getSortOrder() {
@@ -276,8 +356,7 @@ public class Warehouse {
 
   public enum Mutation {
     NONE,
-    CHANGED,
-    DEACTIVATED
+    CHANGED
   }
 
   private record CanonicalName(String displayName, String normalizedName) {}

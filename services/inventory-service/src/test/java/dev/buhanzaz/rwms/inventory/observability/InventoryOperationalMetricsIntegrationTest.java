@@ -52,6 +52,9 @@ class InventoryOperationalMetricsIntegrationTest {
           "rwms.inventory.furniture.reconciliation.unresolved.current",
           "rwms.inventory.furniture.reconciliation.failed.current",
           "rwms.inventory.furniture.reconciliation.oldest.unresolved.age.seconds",
+          "rwms.inventory.furniture.loss.unresolved.current",
+          "rwms.inventory.furniture.loss.failed.current",
+          "rwms.inventory.furniture.loss.oldest.unresolved.age.seconds",
           "rwms.inventory.dlt.backlog");
 
   static {
@@ -118,6 +121,9 @@ class InventoryOperationalMetricsIntegrationTest {
     insertFurnitureReconciliation("PENDING", 180);
     insertFurnitureReconciliation("TRANSIENT_FAILED", 300);
     insertFurnitureReconciliation("BLOCKED", 420);
+    insertFurnitureLoss("PENDING", 200);
+    insertFurnitureLoss("TRANSIENT_FAILED", 320);
+    insertFurnitureLoss("BLOCKED", 440);
 
     assertThat(metric("rwms.inventory.outbox.backlog")).isEqualTo(2.0);
     assertAgeAtLeast("rwms.inventory.outbox.oldest.age.seconds", 175.0);
@@ -133,6 +139,9 @@ class InventoryOperationalMetricsIntegrationTest {
     assertThat(metric("rwms.inventory.furniture.reconciliation.failed.current")).isEqualTo(2.0);
     assertAgeAtLeast(
         "rwms.inventory.furniture.reconciliation.oldest.unresolved.age.seconds", 415.0);
+    assertThat(metric("rwms.inventory.furniture.loss.unresolved.current")).isEqualTo(3.0);
+    assertThat(metric("rwms.inventory.furniture.loss.failed.current")).isEqualTo(2.0);
+    assertAgeAtLeast("rwms.inventory.furniture.loss.oldest.unresolved.age.seconds", 435.0);
     assertThat(metric("rwms.inventory.dlt.backlog")).isEqualTo(3.0);
   }
 
@@ -425,5 +434,32 @@ class InventoryOperationalMetricsIntegrationTest {
         "{}",
         failureCode,
         ageSeconds);
+  }
+
+  private void insertFurnitureLoss(String state, int ageSeconds) {
+    UUID inventoryId = insertSession();
+    String failureCode = "PENDING".equals(state) ? null : "MAINTENANCE_SERVICE_UNAVAILABLE";
+    OffsetDateTime completedAt =
+        "BLOCKED".equals(state) ? OffsetDateTime.now(ZoneOffset.UTC) : null;
+    jdbc.update(
+        """
+        insert into inventory_furniture_loss_intent(
+          finding_id,intent_revision,inventory_id,warehouse_id,equipment_id,state,idempotency_key,
+          request_sha256,request_body,attempt_count,next_attempt_at,failure_code,created_at,
+          updated_at,completed_at)
+        values (?,0,?,?,?,?,?,?,?::jsonb,1,clock_timestamp(),?,
+          clock_timestamp()-(? * interval '1 second'),clock_timestamp(),?)
+        """,
+        UUID.randomUUID(),
+        inventoryId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        state,
+        UUID.randomUUID(),
+        HASH_A,
+        "{}",
+        failureCode,
+        ageSeconds,
+        completedAt);
   }
 }

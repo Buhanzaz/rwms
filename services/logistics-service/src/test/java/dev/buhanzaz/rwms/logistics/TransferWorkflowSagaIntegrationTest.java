@@ -300,6 +300,7 @@ class TransferWorkflowSagaIntegrationTest {
             eq(fixture.documentId()),
             eq(fixture.lineId()),
             eq(ASSET),
+            eq(9L),
             eq(ORIGIN),
             eq(DESTINATION),
             eq(2)))

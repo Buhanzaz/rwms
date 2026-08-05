@@ -9,7 +9,9 @@ import dev.buhanzaz.rwms.inventory.domain.FinalPlanState;
 import dev.buhanzaz.rwms.inventory.domain.FinalPlanTargetKind;
 import dev.buhanzaz.rwms.inventory.domain.ConflictResolutionStrategy;
 import dev.buhanzaz.rwms.inventory.domain.FurnitureReconciliationState;
+import dev.buhanzaz.rwms.inventory.domain.FurnitureLossIntentState;
 import dev.buhanzaz.rwms.inventory.domain.InspectionState;
+import dev.buhanzaz.rwms.inventory.domain.InventoryFurnitureLossIntent;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFurnitureReconciliationIntent;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinding;
 import dev.buhanzaz.rwms.inventory.domain.InventoryExpectedItem;
@@ -45,6 +47,7 @@ import dev.buhanzaz.rwms.inventory.repository.InventoryFindingRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryFinalPlanEntryRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryFinalPlanRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryFurnitureReconciliationIntentRepository;
+import dev.buhanzaz.rwms.inventory.repository.InventoryFurnitureLossIntentRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryPublicationIntentRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryPublicationAttemptRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryPublicationAttemptResultRepository;
@@ -167,6 +170,7 @@ public class InventoryApplicationService {
   private final InventoryFinalPlanRepository finalPlans;
   private final InventoryFinalPlanEntryRepository finalPlanEntries;
   private final InventoryFurnitureReconciliationIntentRepository furnitureReconciliations;
+  private final InventoryFurnitureLossIntentRepository furnitureLosses;
   private final InventoryPublicationIntentRepository publications;
   private final InventoryPublicationAttemptRepository publicationAttempts;
   private final InventoryPublicationAttemptResultRepository publicationAttemptResults;
@@ -201,6 +205,7 @@ public class InventoryApplicationService {
       InventoryFinalPlanRepository finalPlans,
       InventoryFinalPlanEntryRepository finalPlanEntries,
       InventoryFurnitureReconciliationIntentRepository furnitureReconciliations,
+      InventoryFurnitureLossIntentRepository furnitureLosses,
       InventoryPublicationIntentRepository publications,
       InventoryPublicationAttemptRepository publicationAttempts,
       InventoryPublicationAttemptResultRepository publicationAttemptResults,
@@ -232,6 +237,7 @@ public class InventoryApplicationService {
     this.finalPlans = finalPlans;
     this.finalPlanEntries = finalPlanEntries;
     this.furnitureReconciliations = furnitureReconciliations;
+    this.furnitureLosses = furnitureLosses;
     this.publications = publications;
     this.publicationAttempts = publicationAttempts;
     this.publicationAttemptResults = publicationAttemptResults;
@@ -287,8 +293,12 @@ public class InventoryApplicationService {
               .orElseThrow(() ->
                   new IllegalStateException("Start operation points to a missing session")));
     }
-    InventoryDependencyGateway.WarehouseMetadata warehouse =
-        dependencies.warehouse(request.warehouseId());
+    InventoryDependencyGateway.WarehouseOperation warehouse =
+        dependencies.beginWarehouseOperation(
+            request.warehouseId(),
+            operation.operationId(),
+            operation.createdAt(),
+            InventoryDependencyGateway.WarehouseOperationDirection.INCOMING);
     InventoryDependencyGateway.Capture previousCapture = captured(operation);
     InventoryDependencyGateway.Capture capture =
         previousCapture == null ? acquireCapture(operation, requestHash) : previousCapture;
@@ -308,8 +318,8 @@ public class InventoryApplicationService {
                 InventorySession session =
                     sessions.saveAndFlush(
                         InventorySession.start(
-                            warehouse.id(),
-                            warehouse.version(),
+                            warehouse.warehouseId(),
+                            warehouse.warehouseVersion(),
                             warehouse.timeZone(),
                             LocalDate.now(ZoneId.of(warehouse.timeZone())),
                             operation.operationId(),
@@ -2599,6 +2609,9 @@ public class InventoryApplicationService {
   private SessionView doComplete(Jwt jwt, UUID inventoryId, CompleteSessionRequest request) {
     InventorySession session = requireActive(inventoryId);
     authorizer.requireManage(jwt, session.getWarehouseId());
+    dependencies.warehouseAdmission(
+        session.getWarehouseId(),
+        InventoryDependencyGateway.WarehouseOperationDirection.OUTGOING);
     RevisionState revisions =
         revisionState(session, request.expectedSessionRevision(), request.findingRevisions());
     CompletionFinalPlan finalPlan =
@@ -2705,6 +2718,7 @@ public class InventoryApplicationService {
               FrozenStatistics finalStatistics =
                   calculateStatistics(result, lockedRevisions.findings(), validatedFindings);
               persistStatistics(result, finalStatistics);
+              createFurnitureLossIntents(result);
               createFurnitureReconciliationIntent(result);
               createPublicationIntents(result, lockedFinalPlan, lockedPlanEntries, actor(jwt));
               events.append(
@@ -2726,6 +2740,7 @@ public class InventoryApplicationService {
   private void dispatchCompletionEffectsAfterCommit(UUID inventoryId) {
     Runnable dispatch =
         () -> {
+          dispatchFurnitureLosses(inventoryId);
           dispatchFurnitureReconciliation(inventoryId);
           dispatchReadyPublications(inventoryId);
         };
@@ -2758,6 +2773,9 @@ public class InventoryApplicationService {
   private SessionView doCancel(Jwt jwt, UUID inventoryId, CancelSessionRequest request) {
     InventorySession session = requireActive(inventoryId);
     authorizer.requireManage(jwt, session.getWarehouseId());
+    dependencies.warehouseAdmission(
+        session.getWarehouseId(),
+        InventoryDependencyGateway.WarehouseOperationDirection.OUTGOING);
     InventorySession cancelled =
         transactions.execute(
             status -> {
@@ -2807,6 +2825,9 @@ public class InventoryApplicationService {
       Jwt jwt, UUID inventoryId, UUID idempotencyKey, PublishFindingsRequest request) {
     InventorySession session = requireCompleted(inventoryId);
     authorizer.requireManage(jwt, session.getWarehouseId());
+    dependencies.warehouseAdmission(
+        session.getWarehouseId(),
+        InventoryDependencyGateway.WarehouseOperationDirection.OUTGOING);
     expectRevision(session.getRevision(), request.expectedSessionRevision());
     List<InventoryPublicationIntent> selected =
         selectPublications(inventoryId, idempotencyKey, request);
@@ -2842,6 +2863,9 @@ public class InventoryApplicationService {
       RetryPublicationRequest request) {
     InventorySession session = requireCompleted(inventoryId);
     authorizer.requireManage(jwt, session.getWarehouseId());
+    dependencies.warehouseAdmission(
+        session.getWarehouseId(),
+        InventoryDependencyGateway.WarehouseOperationDirection.OUTGOING);
     InventoryPublicationIntent intent = requirePublication(inventoryId, findingId);
     expectRevision(intent.getRevision(), request.expectedPublicationRevision());
     if (intent.getState() == PublicationState.BLOCKED
@@ -3658,6 +3682,8 @@ public class InventoryApplicationService {
           || item.equipmentName() == null
           || item.equipmentName().isBlank()
           || item.currentStockQuantity() < 0
+          || (item.stockBalanceVersion() != null && item.stockBalanceVersion() < 0)
+          || (item.currentStockQuantity() > 0 && item.stockBalanceVersion() == null)
           || item.cabins() == null) {
         throw InventoryException.dependency("Asset-service returned malformed furniture item");
       }
@@ -4014,6 +4040,91 @@ public class InventoryApplicationService {
     }
   }
 
+  private void createFurnitureLossIntents(InventorySession session) {
+    if (session.getLifecycle() != SessionLifecycle.COMPLETED) {
+      throw new IllegalStateException("Furniture loss proposals require a completed inventory");
+    }
+    InventoryDependencyGateway.FurnitureSnapshot snapshot = furnitureSnapshot(session);
+    JsonNode review = confirmedFurnitureReview(session);
+    for (InventoryDependencyGateway.FurnitureSnapshotItem source : snapshot.items()) {
+      long observed =
+          reviewStockQuantity(review, source.equipmentId())
+              .orElseThrow(
+                  () ->
+                      new IllegalStateException(
+                          "Stored furniture review omits a warehouse stock quantity"));
+      if (observed >= source.currentStockQuantity()) {
+        continue;
+      }
+      if (source.stockBalanceVersion() == null) {
+        throw new IllegalStateException(
+            "A positive warehouse stock balance must carry its optimistic version");
+      }
+      long shortage = Math.subtractExact(source.currentStockQuantity(), observed);
+      UUID findingId =
+          stableUuid(
+              "rwms:inventory:furniture-loss:"
+                  + session.getId()
+                  + ":"
+                  + source.equipmentId());
+      UUID idempotencyKey =
+          stableUuid(
+              "rwms:inventory:furniture-loss-delivery:"
+                  + session.getId()
+                  + ":"
+                  + source.equipmentId());
+      InventoryDependencyGateway.InventoryLossDispositionRequest request =
+          new InventoryDependencyGateway.InventoryLossDispositionRequest(
+              session.getId(),
+              findingId,
+              session.getWarehouseId(),
+              source.equipmentId(),
+              source.equipmentName(),
+              source.catalogVersion(),
+              shortage,
+              source.stockBalanceVersion(),
+              "Недостача «"
+                  + source.equipmentName()
+                  + "» по итогам инвентаризации "
+                  + session.getId()
+                  + ": ожидалось "
+                  + source.currentStockQuantity()
+                  + ", фактически "
+                  + observed
+                  + ".",
+              null);
+      String requestBody = canonicalWrite(request);
+      furnitureLosses.saveAndFlush(
+          InventoryFurnitureLossIntent.pending(
+              findingId,
+              session.getId(),
+              session.getWarehouseId(),
+              source.equipmentId(),
+              idempotencyKey,
+              canonicalJsonTreeHash(read(requestBody)),
+              requestBody));
+    }
+  }
+
+  private JsonNode confirmedFurnitureReview(InventorySession session) {
+    if (session.getFurnitureReviewSha256() == null || session.getFurnitureStockObservation() == null) {
+      throw new IllegalStateException("Completed inventory has no confirmed furniture review");
+    }
+    JsonNode review = read(session.getFurnitureStockObservation());
+    if (!review.isObject()
+        || !session
+            .getFurnitureAssetSnapshotSha256()
+            .equals(review.path("assetSnapshotSha256").asText())
+        || !session.getFurnitureReviewSha256().equals(canonicalJsonTreeHash(review))) {
+      throw new IllegalStateException("Stored furniture review is invalid");
+    }
+    return review;
+  }
+
+  private static UUID stableUuid(String source) {
+    return UUID.nameUUIDFromBytes(source.getBytes(StandardCharsets.UTF_8));
+  }
+
   private void createFurnitureReconciliationIntent(InventorySession session) {
     if (session.getLifecycle() != SessionLifecycle.COMPLETED) {
       throw new IllegalStateException("Furniture reconciliation requires a completed inventory");
@@ -4046,16 +4157,7 @@ public class InventoryApplicationService {
   private InventoryDependencyGateway.FurnitureReconciliationRequest furnitureReconciliationRequest(
       InventorySession session) {
     InventoryDependencyGateway.FurnitureSnapshot snapshot = furnitureSnapshot(session);
-    if (session.getFurnitureReviewSha256() == null || session.getFurnitureStockObservation() == null) {
-      throw new IllegalStateException("Completed inventory has no confirmed furniture review");
-    }
-    JsonNode review = read(session.getFurnitureStockObservation());
-    if (!review.isObject()
-        || !session
-            .getFurnitureAssetSnapshotSha256()
-            .equals(review.path("assetSnapshotSha256").asText())) {
-      throw new IllegalStateException("Stored furniture review is invalid");
-    }
+    JsonNode review = confirmedFurnitureReview(session);
     Map<UUID, JsonNode> reviewedItems = new LinkedHashMap<>();
     for (JsonNode item : review.path("items")) {
       UUID equipmentId = requiredUuid(item, "equipmentId", "furniture review equipment id");
@@ -4104,8 +4206,11 @@ public class InventoryApplicationService {
           new InventoryDependencyGateway.FurnitureReconciliationItem(
               source.equipmentId(),
               source.catalogVersion(),
-              requiredNonNegativeLong(
-                  reviewedItem.path("observedStockQuantity"), "furniture review stock quantity"),
+              Math.max(
+                  source.currentStockQuantity(),
+                  requiredNonNegativeLong(
+                      reviewedItem.path("observedStockQuantity"),
+                      "furniture review stock quantity")),
               List.copyOf(cabins)));
     }
     if (!reviewedItems.isEmpty()) {
@@ -4126,7 +4231,7 @@ public class InventoryApplicationService {
   private void dispatchFurnitureReconciliation(UUID inventoryId) {
     try {
       FurnitureReconciliationDispatch dispatch =
-          transactions.execute(
+          independentTransactions.execute(
               status -> {
                 InventoryFurnitureReconciliationIntent intent =
                     furnitureReconciliations.findByInventoryIdForUpdate(inventoryId).orElse(null);
@@ -4155,7 +4260,7 @@ public class InventoryApplicationService {
         settleFurnitureReconciliationFailure(inventoryId, dispatch.attemptCount(), exception);
         return;
       }
-      transactions.executeWithoutResult(
+      independentTransactions.executeWithoutResult(
           status -> {
             InventoryFurnitureReconciliationIntent intent =
                 furnitureReconciliations
@@ -4204,10 +4309,139 @@ public class InventoryApplicationService {
     return request;
   }
 
+  private void dispatchFurnitureLosses(UUID inventoryId) {
+    for (InventoryFurnitureLossIntent intent :
+        furnitureLosses.findAllByInventoryIdOrderByFindingIdAsc(inventoryId)) {
+      if (intent.getState() == FurnitureLossIntentState.PENDING
+          || intent.getState() == FurnitureLossIntentState.TRANSIENT_FAILED) {
+        dispatchFurnitureLoss(intent.getFindingId());
+      }
+    }
+  }
+
+  private void dispatchFurnitureLoss(UUID findingId) {
+    FurnitureLossDispatch dispatch;
+    try {
+      dispatch =
+          independentTransactions.execute(
+              status -> {
+                InventoryFurnitureLossIntent intent =
+                    furnitureLosses.findByFindingIdForUpdate(findingId).orElse(null);
+                if (intent == null
+                    || (intent.getState() != FurnitureLossIntentState.PENDING
+                        && intent.getState() != FurnitureLossIntentState.TRANSIENT_FAILED)) {
+                  return null;
+                }
+                InventoryDependencyGateway.InventoryLossDispositionRequest request =
+                    frozenFurnitureLossRequest(intent);
+                intent.beginAttempt(OffsetDateTime.now(ZoneOffset.UTC).plusSeconds(60));
+                InventoryFurnitureLossIntent saved = furnitureLosses.saveAndFlush(intent);
+                return new FurnitureLossDispatch(
+                    saved.getFindingId(),
+                    saved.getIdempotencyKey(),
+                    saved.getAttemptCount(),
+                    request);
+              });
+    } catch (RuntimeException exception) {
+      log.warn("Furniture loss proposal dispatch deferred for finding {}", findingId, exception);
+      settleFurnitureLossFailure(findingId, null, exception);
+      return;
+    }
+    if (dispatch == null) {
+      return;
+    }
+    InventoryDependencyGateway.InventoryLossDisposition decision;
+    try {
+      decision =
+          dependencies.createInventoryLossDisposition(
+              dispatch.idempotencyKey(), dispatch.request());
+    } catch (RuntimeException exception) {
+      settleFurnitureLossFailure(findingId, dispatch.attemptCount(), exception);
+      return;
+    }
+    independentTransactions.executeWithoutResult(
+        status -> {
+          InventoryFurnitureLossIntent intent =
+              furnitureLosses
+                  .findByFindingIdForUpdate(findingId)
+                  .orElseThrow(
+                      () ->
+                          new IllegalStateException(
+                              "Furniture loss intent disappeared during dispatch"));
+          if (intent.getState() == FurnitureLossIntentState.PENDING
+              && intent.getAttemptCount() == dispatch.attemptCount()) {
+            intent.succeed(decision.id());
+            furnitureLosses.saveAndFlush(intent);
+          }
+        });
+  }
+
+  private InventoryDependencyGateway.InventoryLossDispositionRequest frozenFurnitureLossRequest(
+      InventoryFurnitureLossIntent intent) {
+    JsonNode requestBody = read(intent.getRequestBody());
+    if (!canonicalJsonTreeHash(requestBody).equals(intent.getRequestSha256())) {
+      throw new IllegalStateException("Furniture loss request snapshot is inconsistent");
+    }
+    InventoryDependencyGateway.InventoryLossDispositionRequest request =
+        convert(requestBody, InventoryDependencyGateway.InventoryLossDispositionRequest.class);
+    if (!intent.getInventoryId().equals(request.inventorySessionId())
+        || !intent.getFindingId().equals(request.findingId())
+        || !intent.getWarehouseId().equals(request.warehouseId())
+        || !intent.getEquipmentId().equals(request.equipmentId())
+        || request.equipmentName() == null
+        || request.equipmentName().isBlank()
+        || request.expectedAssetVersion() < 0
+        || request.expectedSourceBalanceVersion() < 0
+        || request.quantity() < 1
+        || request.reason() == null
+        || request.reason().isBlank()) {
+      throw new IllegalStateException("Furniture loss request snapshot is invalid");
+    }
+    return request;
+  }
+
+  private void settleFurnitureLossFailure(
+      UUID findingId, Integer attemptCount, RuntimeException failure) {
+    try {
+      independentTransactions.executeWithoutResult(
+          status -> {
+            InventoryFurnitureLossIntent intent =
+                furnitureLosses.findByFindingIdForUpdate(findingId).orElse(null);
+            if (intent == null
+                || intent.getState() != FurnitureLossIntentState.PENDING
+                || (attemptCount != null && intent.getAttemptCount() != attemptCount)) {
+              return;
+            }
+            if (failure instanceof InventoryException exception
+                && (exception.status() == HttpStatus.CONFLICT
+                    || exception.status() == HttpStatus.UNPROCESSABLE_ENTITY
+                    || exception.status() == HttpStatus.BAD_REQUEST)) {
+              intent.block(
+                  exception.status() == HttpStatus.CONFLICT
+                      ? "MAINTENANCE_DECISION_CONFLICT"
+                      : "MAINTENANCE_REQUEST_REJECTED");
+            } else if (failure instanceof IllegalStateException) {
+              intent.block("FROZEN_REQUEST_CORRUPTED");
+            } else {
+              long retrySeconds = Math.min(300L, 15L * Math.max(1, intent.getAttemptCount()));
+              intent.transientFailure(
+                  "MAINTENANCE_SERVICE_UNAVAILABLE",
+                  OffsetDateTime.now(ZoneOffset.UTC).plusSeconds(retrySeconds));
+            }
+            furnitureLosses.saveAndFlush(intent);
+          });
+    } catch (RuntimeException persistenceFailure) {
+      log.error(
+          "Could not persist furniture loss retry state for finding {}",
+          findingId,
+          persistenceFailure);
+    }
+  }
+
   private void settleFurnitureReconciliationFailure(
       UUID inventoryId, Integer attemptCount, RuntimeException failure) {
     try {
-      transactions.executeWithoutResult(
+      independentTransactions.executeWithoutResult(
           status -> {
             InventoryFurnitureReconciliationIntent intent =
                 furnitureReconciliations.findByInventoryIdForUpdate(inventoryId).orElse(null);
@@ -4246,6 +4480,20 @@ public class InventoryApplicationService {
                     FurnitureReconciliationState.TRANSIENT_FAILED),
                 now)) {
       dispatchFurnitureReconciliation(intent.getInventoryId());
+    }
+  }
+
+  @Scheduled(fixedDelayString = "${rwms.inventory.furniture-loss-recovery-delay-ms:5000}")
+  public void recoverFurnitureLosses() {
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    for (InventoryFurnitureLossIntent intent :
+        furnitureLosses
+            .findTop20ByStateInAndNextAttemptAtLessThanEqualOrderByNextAttemptAtAscFindingIdAsc(
+                List.of(
+                    FurnitureLossIntentState.PENDING,
+                    FurnitureLossIntentState.TRANSIENT_FAILED),
+                now)) {
+      dispatchFurnitureLoss(intent.getFindingId());
     }
   }
 
@@ -6771,6 +7019,12 @@ public class InventoryApplicationService {
 
   private record FurnitureCompletionFact(
       String assetSnapshotSha256, String reviewSha256, JsonNode observation) {}
+
+  private record FurnitureLossDispatch(
+      UUID findingId,
+      UUID idempotencyKey,
+      int attemptCount,
+      InventoryDependencyGateway.InventoryLossDispositionRequest request) {}
 
   private record FurnitureReconciliationDispatch(
       UUID inventoryId,
