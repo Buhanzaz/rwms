@@ -6,6 +6,7 @@ import dev.buhanzaz.rwms.asset.mapper.AssetMaintenanceResponseMapper;
 import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
 import dev.buhanzaz.rwms.asset.security.AssetAuthorizer;
 import dev.buhanzaz.rwms.asset.service.AssetService;
+import dev.buhanzaz.rwms.asset.service.MaintenanceFurnitureCustodyService;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
@@ -22,6 +23,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /** Least-privilege maintenance surface; equipment holds are intentionally absent. */
@@ -31,6 +33,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class MaintenanceAssetController {
   private final AssetService service;
+  private final MaintenanceFurnitureCustodyService furnitureCustody;
   private final AssetAuthorizer access;
   private final AssetMaintenanceResponseMapper responseMapper;
 
@@ -72,7 +75,7 @@ public class MaintenanceAssetController {
     AssetService.CreateResult<MaintenanceFurnitureEquipmentResponse> result =
         service.ensureMaintenanceFurnitureEquipment(
             access.maintenanceSubjectId(jwt), idempotencyKey, request);
-    return result.replayed() ? idempotentOk(result) : created(result);
+    return created(result);
   }
 
   @PostMapping("/operation-leases")
@@ -116,6 +119,35 @@ public class MaintenanceAssetController {
       @Valid @RequestBody MaintenanceFencedStatusRequest request) {
     return idempotentOk(service.maintenanceFencedStatus(
         access.maintenanceSubjectId(jwt), idempotencyKey, id, request));
+  }
+
+  /**
+   * Maintenance reads only the custody facts it owns. The values are not a
+   * substitute for an admin disposition decision: availableForDisposition is
+   * merely the exact quantity that can be proposed for approval.
+   */
+  @GetMapping("/furniture-custody")
+  public List<MaintenanceFurnitureCustodyClaim> unresolvedFurnitureCustody(
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestParam MaintenanceLeaseOwnerType ownerType,
+      @RequestParam UUID ownerId) {
+    access.requireMaintenanceAssetAccess(jwt);
+    return furnitureCustody.unresolvedClaims(ownerType, ownerId);
+  }
+
+  @PostMapping("/furniture-custody/{claimId}/return-to-stock")
+  public ResponseEntity<MaintenanceFurnitureCustodyReturnReceipt> returnFurnitureCustodyToStock(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID claimId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody ReturnMaintenanceFurnitureCustodyToStockRequest request) {
+    MaintenanceFurnitureCustodyService.CommandResult<MaintenanceFurnitureCustodyReturnReceipt>
+        result = furnitureCustody.returnToStock(
+            access.maintenanceSubjectId(jwt), idempotencyKey, claimId, request);
+    ResponseEntity.BodyBuilder response = result.replayed()
+        ? ResponseEntity.ok().header("Idempotency-Replayed", "true")
+        : ResponseEntity.status(HttpStatus.CREATED);
+    return response.body(result.response());
   }
 
   private static <T> ResponseEntity<T> idempotentOk(AssetService.CreateResult<T> result) {

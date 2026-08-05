@@ -39,7 +39,22 @@ class InventoryDependencyConfiguration {
     InventoryDependencyProperties.Validated validated = properties.validated();
     var registrations =
         new InMemoryClientRegistrationRepository(
-            registration(validated, "inventory-warehouse", "warehouse.read"),
+            registration(
+                validated,
+                "inventory-warehouse-timezone",
+                "warehouse.timezone.read"),
+            registration(
+                validated,
+                "inventory-warehouse-operation",
+                "warehouse.operation.mark"),
+            registration(
+                validated,
+                "inventory-warehouse-lifecycle-read",
+                "warehouse.lifecycle.read"),
+            registration(
+                validated,
+                "inventory-warehouse-lifecycle-confirm",
+                "warehouse.lifecycle.confirm"),
             registration(validated, "inventory-asset", "asset.inventory"),
             registration(validated, "inventory-maintenance", "maintenance.inventory"));
     var manager =

@@ -12,10 +12,8 @@ import {
   getMaintenanceRepair,
   listMaintenanceAcceptance,
   listMaintenanceRepairs,
-  listMaintenanceWriteOffs,
   queueMaintenanceRepair,
   replaceMaintenanceRepairPlan,
-  writeOffMaintenanceRepair,
   type MaintenanceAcceptanceProjection,
   type MaintenanceEstimateLine,
   type MaintenanceEstimateLineInput,
@@ -25,7 +23,6 @@ import {
   type MaintenanceRepairStage,
   type MaintenanceReworkLineInput,
   type MaintenanceRoutingSnapshot,
-  type MaintenanceWriteOffProjection,
 } from "@/features/repair-estimates/api/http-maintenance-lifecycle-client"
 import {
   currentMaintenanceAccessToken,
@@ -35,7 +32,9 @@ import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/re
 import type {
   RepairTaskAcceptCommand,
   RepairTaskDto,
+  RepairTaskEarlyWriteOffCommand,
   RepairTaskSubtaskDto,
+  RepairTaskWriteOffCommand,
   RepairTaskWriteCommand,
 } from "@/features/repair-tasks/model/repair-task"
 import type { RepairTaskRentalItemsClient } from "@/features/repair-tasks/ports/repair-task-rental-items-client"
@@ -51,6 +50,7 @@ import type {
   TaskBoardSnapshotDto,
 } from "@/features/task-board/model/task-board"
 import { ApiError } from "@/lib/api-client"
+import { writeOffRepairDisposition } from "@/features/write-offs/property-dispositions-api"
 
 function repairPriority(value: number) {
   if (!Number.isInteger(value) || value < 1 || value > 5) {
@@ -758,18 +758,6 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
       )
       return projection ? { readyAt: projection.readyAt } : undefined
     }
-    if (repair.acceptanceState === "WRITTEN_OFF") {
-      const page = await listMaintenanceWriteOffs(accessToken, warehouseId)
-      const projection = page.items.find(
-        (candidate) => candidate.repairId === repair.id
-      )
-      return projection
-        ? {
-            writtenOffAt: projection.writtenOffAt,
-            decisionActorId: projection.actor.actorId,
-          }
-        : undefined
-    }
     return undefined
   }
 
@@ -801,31 +789,6 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
           this.rentalItemsClient,
           board,
           { readyAt: projection.readyAt }
-        )
-      )
-    )
-  }
-
-  async listWriteOffs(warehouseId: string) {
-    const accessToken = await this.tokenProvider()
-    const [page, board] = await Promise.all([
-      listMaintenanceWriteOffs(accessToken, warehouseId),
-      this.board(accessToken, warehouseId),
-    ])
-    return Promise.all(
-      page.items.map(async (projection: MaintenanceWriteOffProjection) =>
-        toTask(
-          await getMaintenanceRepair(
-            accessToken,
-            warehouseId,
-            projection.repairId
-          ),
-          this.rentalItemsClient,
-          board,
-          {
-            writtenOffAt: projection.writtenOffAt,
-            decisionActorId: projection.actor.actorId,
-          }
         )
       )
     )
@@ -1135,48 +1098,33 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
     )
   }
 
-  async writeOff(command: {
-    taskId: string
-    expectedVersion: number
-    warehouseId: string
-    reason: string
-  }) {
+  async writeOff(command: RepairTaskWriteOffCommand) {
     if (!command.reason.trim()) throw new Error("Укажите причину списания.")
     const accessToken = await this.tokenProvider()
-    const result = await writeOffMaintenanceRepair(
+    return writeOffRepairDisposition({
       accessToken,
-      command.warehouseId,
-      command.taskId,
-      command.expectedVersion,
-      command.reason.trim(),
-      null,
-      createMaintenanceIdempotencyKey()
-    )
-    return toTask(
-      result.repair,
-      this.rentalItemsClient,
-      await this.board(accessToken, command.warehouseId)
-    )
+      warehouseId: command.warehouseId,
+      repairId: command.taskId,
+      expectedVersion: command.expectedVersion,
+      reason: command.reason.trim(),
+      comment: null,
+      contentsPlan: command.contentsPlan,
+      idempotencyKey: command.idempotencyKey,
+    })
   }
 
-  async earlyWriteOff(
-    command: RepairTaskWriteCommand & { writeOffReason: string }
-  ) {
+  async earlyWriteOff(command: RepairTaskEarlyWriteOffCommand) {
     const accessToken = await this.tokenProvider()
     const draft = await this.saveWithToken(accessToken, command)
-    const result = await writeOffMaintenanceRepair(
+    return writeOffRepairDisposition({
       accessToken,
-      command.warehouseId,
-      draft.id,
-      draft.version,
-      command.writeOffReason.trim(),
-      null,
-      createMaintenanceIdempotencyKey()
-    )
-    return toTask(
-      result.repair,
-      this.rentalItemsClient,
-      await this.board(accessToken, command.warehouseId)
-    )
+      warehouseId: command.warehouseId,
+      repairId: draft.id,
+      expectedVersion: draft.version,
+      reason: command.writeOffReason.trim(),
+      comment: null,
+      contentsPlan: command.contentsPlan,
+      idempotencyKey: command.idempotencyKey,
+    })
   }
 }

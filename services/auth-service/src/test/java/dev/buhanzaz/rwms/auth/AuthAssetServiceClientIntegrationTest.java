@@ -47,14 +47,24 @@ class AuthAssetServiceClientIntegrationTest {
     MockMvc mvc;
 
     @Test
-    void provisionsOnlyWarehouseReadAndMediaAssetImportScopes() {
+    void provisionsOnlyAssetOwnedDownstreamScopes() {
         assertThat(storedClients.findByClientId("asset-service").getScopes())
-                .containsExactlyInAnyOrder("warehouse.read", "media.asset-import");
+                .containsExactlyInAnyOrder(
+                        "warehouse.read",
+                        "warehouse.timezone.read",
+                        "warehouse.operation.mark",
+                        "warehouse.lifecycle.read",
+                        "warehouse.lifecycle.confirm",
+                        "media.asset-import");
     }
 
     @Test
     void mintsOnlySeparateExactScopeServiceTokens() throws Exception {
         assertExactToken("warehouse.read");
+        assertExactToken("warehouse.timezone.read");
+        assertExactToken("warehouse.operation.mark");
+        assertExactToken("warehouse.lifecycle.read");
+        assertExactToken("warehouse.lifecycle.confirm");
         assertExactToken("media.asset-import");
     }
 

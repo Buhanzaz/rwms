@@ -101,17 +101,17 @@ describe("resolveHeaderBreadcrumbs", () => {
   it("keeps only meaningful write-off and inventory breadcrumbs navigable", () => {
     expect(resolveHeaderBreadcrumbs("/write-offs", "", null, null)).toEqual([
       { title: "Списание" },
-      { title: "Склад" },
+      { title: "Списания" },
     ])
     expect(
       resolveHeaderBreadcrumbs("/write-offs/equipment", "", null, null)
-    ).toEqual([{ title: "Списание" }, { title: "Доп. оборудование" }])
+    ).toEqual([{ title: "Списание" }, { title: "Утраты" }])
     expect(
-      resolveHeaderBreadcrumbs("/write-offs", "?writeOffId=1", null, "Б-1")
+      resolveHeaderBreadcrumbs("/write-offs", "?decisionId=1", null, null)
     ).toEqual([
       { title: "Списание" },
-      { title: "Склад", to: "/write-offs" },
-      { title: "Б-1" },
+      { title: "Списания", to: "/write-offs" },
+      { title: "Решение" },
     ])
 
     expect(

@@ -1,9 +1,9 @@
 package dev.buhanzaz.rwms.taskboard.eventing;
 
 import dev.buhanzaz.rwms.taskboard.domain.WarehouseMetadata;
-import dev.buhanzaz.rwms.taskboard.repository.WarehouseKpiSettingsRepository;
 import dev.buhanzaz.rwms.taskboard.repository.WarehouseMetadataRepository;
 import dev.buhanzaz.rwms.taskboard.service.GlobalQueueProjectionService;
+import dev.buhanzaz.rwms.taskboard.service.WarehouseTimeZoneGateway;
 import java.time.ZoneId;
 import java.util.Set;
 import java.util.UUID;
@@ -27,8 +27,8 @@ public class WarehouseMetadataEventProcessor {
   private final ObjectMapper objectMapper;
   private final JdbcTemplate jdbc;
   private final WarehouseMetadataRepository warehouses;
-  private final WarehouseKpiSettingsRepository settings;
   private final GlobalQueueProjectionService globalQueues;
+  private final WarehouseTimeZoneGateway timeZones;
 
   @Transactional
   public void process(byte[] body) {
@@ -64,17 +64,13 @@ public class WarehouseMetadataEventProcessor {
     } else if (projection.getSourceVersion() < aggregateVersion) {
       projection.applyFact(aggregateVersion, timeZone, active);
       warehouses.save(projection);
-      settings
-          .findByWarehouseId(warehouseId)
-          .ifPresent(
-              value -> {
-                value.synchronizeTimeZone(timeZone);
-                settings.save(value);
-              });
     }
     // Every active warehouse receives the same GENERAL task-board standard.
     // Existing physical work_queue UUIDs are preserved by the projection service.
     globalQueues.synchronizeWarehouse(warehouseId);
+    // Scheduled timezone decisions remain warehouse-owned. This delivery is only a hint to drop
+    // the bounded HTTP cache; old events without timeZoneDecision retain the same behavior.
+    timeZones.invalidate(warehouseId);
     jdbc.update(
         """
         insert into warehouse_event_inbox(event_id,event_hash,aggregate_version,processed_at)

@@ -32,7 +32,10 @@ class WarehouseEventContractTest {
     assertThat(strings(schema.at("/$defs/warehouseFact/required")))
         .containsExactlyInAnyOrder("warehouseId", "timeZone", "active", "sortOrder");
     assertThat(fieldNames(schema.at("/$defs/warehouseFact/properties")))
-        .containsExactlyInAnyOrder("warehouseId", "timeZone", "active", "sortOrder");
+        .containsExactlyInAnyOrder(
+            "warehouseId", "timeZone", "active", "sortOrder", "timeZoneDecision");
+    assertThat(strings(schema.at("/$defs/timeZoneDecision/required")))
+        .containsExactlyInAnyOrder("timeZone", "effectiveFrom");
   }
 
   private Set<String> strings(JsonNode node) {

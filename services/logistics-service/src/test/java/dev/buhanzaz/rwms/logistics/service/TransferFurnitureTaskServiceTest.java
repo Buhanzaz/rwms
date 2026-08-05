@@ -110,6 +110,7 @@ class TransferFurnitureTaskServiceTest {
     TransferFurnitureMovementTaskRepository links = mock(TransferFurnitureMovementTaskRepository.class);
     CabinFurnitureTaskService cabinFurnitureTasks = mock(CabinFurnitureTaskService.class);
     EquipmentMovementTaskService movementTasks = mock(EquipmentMovementTaskService.class);
+    LogisticsWarehouseLifecycle warehouseLifecycle = mock(LogisticsWarehouseLifecycle.class);
     LogisticsDocument transfer = mock(LogisticsDocument.class);
     when(transfer.getId()).thenReturn(TRANSFER_ID);
     when(transfer.getVersion()).thenReturn(7L);
@@ -140,6 +141,7 @@ class TransferFurnitureTaskServiceTest {
             links,
             cabinFurnitureTasks,
             movementTasks,
+            warehouseLifecycle,
             Mappers.getMapper(TransferFurnitureTaskResponseMapper.class)),
         movementTasks);
   }

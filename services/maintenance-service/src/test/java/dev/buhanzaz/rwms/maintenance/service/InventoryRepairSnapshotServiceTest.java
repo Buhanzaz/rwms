@@ -73,6 +73,7 @@ class InventoryRepairSnapshotServiceTest {
         mock(MaintenanceReconciliationStore.class),
         mock(InventoryRepairSourceOperationRegistrar.class),
         mock(MaintenanceDependencyGateway.class),
+        mock(WarehouseLifecycleOperations.class),
         mock(MaintenanceJsonbCanonicalizer.class),
         JsonMapper.builder().findAndAddModules().build());
   }

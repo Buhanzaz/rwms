@@ -103,6 +103,7 @@ public class TransferProcessor {
                     work.documentId(),
                     work.lineId(),
                     work.assetId(),
+                    work.rentalItemVersion(),
                     work.sourceWarehouseId(),
                     work.warehouseId(),
                     work.priority()));

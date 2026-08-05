@@ -32,7 +32,9 @@ import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.TransferEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateGeneralCommentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdatePassportRequest;
-import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateWarehouseRequest;
+import dev.buhanzaz.rwms.asset.administrative.AdministrativeAssetCorrectionService;
+import dev.buhanzaz.rwms.asset.api.AdministrativeAssetCorrectionApiModels.CreateCabinAdministrativeCorrectionRequest;
+import dev.buhanzaz.rwms.asset.api.AdministrativeAssetCorrectionApiModels.AdministrativeCorrectionAssetKind;
 import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
 import dev.buhanzaz.rwms.asset.domain.AssetEventType;
 import dev.buhanzaz.rwms.asset.domain.BalanceLocationKind;
@@ -98,6 +100,7 @@ class AssetJpaValidationIntegrationTest {
   @Autowired JdbcTemplate jdbc;
   @Autowired EntityManager entityManager;
   @Autowired AssetService service;
+  @Autowired AdministrativeAssetCorrectionService administrativeCorrections;
   @Autowired InventoryAssetBoundaryRegistrar inventoryAssetRegistrar;
   @Autowired InventoryAssetService inventoryAssetService;
   @Autowired DataSource dataSource;
@@ -206,8 +209,19 @@ class AssetJpaValidationIntegrationTest {
             List.of())))
         .isInstanceOf(AssetConflictException.class)
         .hasMessageContaining("this warehouse");
-    assertThatThrownBy(() -> service.updateWarehouse(
-        first.id(), new UpdateWarehouseRequest(first.version(), secondWarehouseId)))
+    assertThatThrownBy(
+            () ->
+                administrativeCorrections.create(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    new CreateCabinAdministrativeCorrectionRequest(
+                        AdministrativeCorrectionAssetKind.CABIN,
+                        first.id(),
+                        first.version(),
+                        firstWarehouseId,
+                        secondWarehouseId,
+                        "duplicate recorded warehouse correction",
+                        "https://evidence.example/correction")))
         .isInstanceOf(AssetConflictException.class)
         .hasMessageContaining("destination warehouse");
   }
@@ -753,6 +767,13 @@ class AssetJpaValidationIntegrationTest {
         .isEqualTo(4);
     assertThat(jdbc.queryForObject("select count(*) from equipment_balance where id=?", Integer.class, stockBalanceId))
         .isEqualTo(1);
+
+    var warehouseListEntry =
+        service.equipmentAtWarehouse(warehouseId).stream()
+            .filter(value -> value.equipment().id().equals(catalog.id()))
+            .findFirst()
+            .orElseThrow();
+    assertThat(warehouseListEntry.totals()).isEqualTo(afterDisposition);
   }
 
   @Test

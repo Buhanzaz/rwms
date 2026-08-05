@@ -6,6 +6,7 @@ import dev.buhanzaz.rwms.logistics.driver.service.DriverQueueScheduler;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverTaskProcessor;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverTaskService;
 import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
@@ -34,6 +35,7 @@ public class DriverTaskController {
   private final DriverTaskProcessor processor;
   private final DriverQueueScheduler scheduler;
   private final LogisticsAuthorizer access;
+  private final LogisticsWarehouseLifecycle warehouseLifecycle;
 
   @PostMapping
   public ResponseEntity<DriverTaskResponse> create(
@@ -41,8 +43,14 @@ public class DriverTaskController {
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody CreateDriverTaskRequest request) {
     access.requireEdit(jwt, request.warehouseId());
+    UUID subjectId = access.subjectId(jwt);
+    var admission =
+        warehouseLifecycle.prepareDriverTask(
+            subjectId,
+            idempotencyKey,
+            DriverTaskService.admissionRequirements(request));
     DriverTaskService.CreateResult result =
-        service.create(access.subjectId(jwt), idempotencyKey, request);
+        service.create(subjectId, idempotencyKey, request, admission);
     processor.processUntilIdle(result.response().id());
     if (result.activateNow()) scheduler.promoteRequested(result.response().id());
     DriverTaskResponse response = service.get(result.response().id());

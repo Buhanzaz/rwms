@@ -62,6 +62,7 @@ class MaintenanceDependencyGatewayTest {
             URI.create("http://task.test"),
             URI.create("http://media.test"),
             URI.create("http://logistics.test"),
+            URI.create("http://warehouse.test"),
             Duration.ofSeconds(1),
             Duration.ofSeconds(2)));
   }
@@ -159,6 +160,248 @@ class MaintenanceDependencyGatewayTest {
   }
 
   @Test
+  void warehouseAdmissionAndReadinessUseSeparateExactLifecycleRegistrations() {
+    UUID warehouseId = UUID.randomUUID();
+    authorize("warehouse-read-token", "warehouse.lifecycle.read");
+    server.expect(requestTo(
+        "http://warehouse.test/api/internal/warehouse/v1/warehouses/"
+            + warehouseId
+            + "/admission?direction=INCOMING"))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer warehouse-read-token"))
+        .andRespond(withSuccess(
+            """
+            {"warehouseId":"%s","warehouseVersion":4,"lifecycleState":"ACTIVE","direction":"INCOMING","admitted":true}
+            """.formatted(warehouseId),
+            MediaType.APPLICATION_JSON));
+    server.expect(requestTo(
+        "http://warehouse.test/api/internal/warehouse/v1/lifecycle/readiness-work?limit=100"))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer warehouse-read-token"))
+        .andRespond(withSuccess(
+            """
+            {"items":[{"warehouseId":"%s","warehouseVersion":5,"lifecycleState":"DRAINING"}],"nextAfter":null}
+            """.formatted(warehouseId),
+            MediaType.APPLICATION_JSON));
+
+    var admission = gateway.warehouseAdmission(
+        warehouseId, MaintenanceDependencyGateway.WarehouseOperationDirection.INCOMING);
+    var work = gateway.warehouseLifecycleReadinessWork(null, 100);
+
+    assertThat(admission.admitted()).isTrue();
+    assertThat(work.items()).singleElement()
+        .extracting(MaintenanceDependencyGateway.WarehouseLifecycleReadinessWork::warehouseId)
+        .isEqualTo(warehouseId);
+    server.verify();
+  }
+
+  @Test
+  void warehouseReadinessConfirmationUsesExactConfirmScopeAndVersionFence() {
+    UUID warehouseId = UUID.randomUUID();
+    authorize("warehouse-confirm-token", "warehouse.lifecycle.confirm");
+    server.expect(requestTo(
+        "http://warehouse.test/api/internal/warehouse/v1/warehouses/"
+            + warehouseId
+            + "/lifecycle-readiness"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer warehouse-confirm-token"))
+        .andExpect(content().string(equalTo("{\"expectedVersion\":7}")))
+        .andRespond(withSuccess(
+            """
+            {"warehouseId":"%s","warehouseVersion":7,"lifecycleState":"DRAINING","readinessOwner":"MAINTENANCE","confirmedAt":"2026-08-05T09:00:00Z"}
+            """.formatted(warehouseId),
+            MediaType.APPLICATION_JSON));
+
+    var confirmation = gateway.confirmWarehouseLifecycleReadiness(warehouseId, 7);
+
+    assertThat(confirmation.readinessOwner()).isEqualTo("MAINTENANCE");
+    server.verify();
+  }
+
+  @Test
+  void warehouseTimezoneUsesItsExactAsOfScope() {
+    UUID warehouseId = UUID.randomUUID();
+    OffsetDateTime occurredAt = OffsetDateTime.parse("2026-08-05T09:00:00Z");
+    authorize("timezone-token", "warehouse.timezone.read");
+    server.expect(requestTo(containsString(
+        "http://warehouse.test/api/internal/warehouse/v1/warehouses/"
+            + warehouseId
+            + "/time-zone?at=")))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer timezone-token"))
+        .andRespond(withSuccess(
+            """
+            {"warehouseId":"%s","timeZone":"Europe/Samara","effectiveFrom":"2026-08-01T00:00:00Z"}
+            """.formatted(warehouseId),
+            MediaType.APPLICATION_JSON));
+
+    var timeZone = gateway.warehouseTimeZoneAt(warehouseId, occurredAt);
+
+    assertThat(timeZone.timeZone()).isEqualTo("Europe/Samara");
+    server.verify();
+  }
+
+  @Test
+  void warehouseOperationMarkUsesItsSeparateExactScope() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID operationId = UUID.randomUUID();
+    OffsetDateTime occurredAt = OffsetDateTime.parse("2026-08-05T09:00:00Z");
+
+    authorize("operation-token", "warehouse.operation.mark");
+    server.expect(requestTo(
+        "http://warehouse.test/api/internal/warehouse/v1/warehouses/"
+            + warehouseId
+            + "/operation-marks"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer operation-token"))
+        .andExpect(content().string(equalTo(
+            "{\"operationId\":\""
+                + operationId
+                + "\",\"occurredAt\":\"2026-08-05T09:00:00Z\"}")))
+        .andRespond(withNoContent());
+
+    gateway.markWarehouseOperation(warehouseId, operationId, occurredAt);
+    server.verify();
+  }
+
+  @Test
+  void propertyDispositionAssetCallsUseExactPrivateBoundariesAndPreserveFences() {
+    UUID key = UUID.randomUUID();
+    UUID decisionId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    UUID equipmentId = UUID.randomUUID();
+    UUID effectId = UUID.randomUUID();
+    Instant preparedAt = Instant.parse("2026-08-05T00:00:00Z");
+    Instant appliedAt = Instant.parse("2026-08-05T00:01:00Z");
+    authorize("asset-token", "asset.maintenance");
+    server.expect(requestTo(
+        "http://asset.test/api/internal/asset/v1/maintenance/property-assets/CABIN/"
+            + cabinId
+            + "/snapshot?warehouseId="
+            + warehouseId))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer asset-token"))
+        .andRespond(withSuccess(
+            """
+            {"assetKind":"CABIN","assetId":"%s","assetDisplayName":"БТ-42","warehouseId":"%s","version":7,"sourceBalanceVersion":null,"status":"REPAIR","quantity":null,"contents":[{"equipmentId":"%s","equipmentName":"Chair","equipmentFormat":"pcs","balanceVersion":3,"quantity":2}],"activeReservation":false,"activeHold":false,"activeLease":true,"dispositionAllowed":true}
+            """.formatted(cabinId, warehouseId, equipmentId),
+            MediaType.APPLICATION_JSON));
+    server.expect(requestTo(
+        "http://asset.test/api/internal/asset/v1/maintenance/property-dispositions/"
+            + decisionId
+            + "/prepare"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer asset-token"))
+        .andExpect(header("Idempotency-Key", key.toString()))
+        .andExpect(content().string(equalTo(
+            """
+            {"warehouseId":"%s","assetKind":"CABIN","assetId":"%s","disposition":"WRITE_OFF","expectedAssetVersion":7,"expectedSourceBalanceVersion":null,"quantity":null,"maintenanceCustodyClaimId":null,"maintenanceCustodyVersion":null,"contentsMode":null,"contents":[],"authorizedMaintenanceLease":null}
+            """.formatted(warehouseId, cabinId).strip())))
+        .andRespond(withSuccess(
+            """
+            {"decisionId":"%s","state":"PREPARED","requestSha256":"%s","warehouseId":"%s","assetKind":"CABIN","assetId":"%s","disposition":"WRITE_OFF","maintenanceCustodyClaimId":null,"maintenanceCustodyVersion":null,"contents":[],"preparedAt":"%s","appliedAt":null}
+            """.formatted(decisionId, "a".repeat(64), warehouseId, cabinId, preparedAt),
+            MediaType.APPLICATION_JSON));
+    server.expect(requestTo(
+        "http://asset.test/api/internal/asset/v1/maintenance/property-dispositions/"
+            + decisionId
+            + "/apply"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer asset-token"))
+        .andExpect(header("Idempotency-Key", key.toString()))
+        .andExpect(content().string(equalTo("{\"completedMovementTaskId\":null}")))
+        .andRespond(withSuccess(
+            """
+            {"effectId":"%s","decisionId":"%s","assetKind":"CABIN","assetId":"%s","disposition":"WRITE_OFF","assetVersion":8,"equipmentMovements":[],"appliedAt":"%s"}
+            """.formatted(effectId, decisionId, cabinId, appliedAt),
+            MediaType.APPLICATION_JSON));
+
+    var snapshot = gateway.getPropertyAssetSnapshot(
+        MaintenanceDependencyGateway.PropertyAssetKind.CABIN, cabinId, warehouseId);
+    var preparation = new MaintenanceDependencyGateway.PropertyDispositionPreparation(
+        warehouseId,
+        MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
+        cabinId,
+        MaintenanceDependencyGateway.PropertyDispositionKind.WRITE_OFF,
+        7L,
+        null,
+        null,
+        null,
+        List.of(),
+        null);
+    var fence = gateway.preparePropertyDisposition(key, decisionId, preparation);
+    var effect = gateway.applyPropertyDisposition(key, decisionId, null);
+
+    assertThat(snapshot.contents()).singleElement()
+        .extracting(MaintenanceDependencyGateway.PropertyAssetContentSnapshot::equipmentId)
+        .isEqualTo(equipmentId);
+    assertThat(fence.state()).isEqualTo("PREPARED");
+    assertThat(effect).isEqualTo(new MaintenanceDependencyGateway.PropertyDispositionEffect(
+        effectId,
+        decisionId,
+        MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
+        cabinId,
+        MaintenanceDependencyGateway.PropertyDispositionKind.WRITE_OFF,
+        8L,
+        appliedAt));
+    server.verify();
+  }
+
+  @Test
+  void maintenanceFurnitureMovementPreservesLogisticsOwnerProof() {
+    UUID key = UUID.randomUUID();
+    UUID decisionId = UUID.randomUUID();
+    UUID taskId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    UUID equipmentId = UUID.randomUUID();
+    UUID externalTaskId = UUID.randomUUID();
+    OffsetDateTime deadlineAt = OffsetDateTime.parse("2026-08-06T12:00:00Z");
+    authorize("logistics-token", "logistics.maintenance");
+    String task = """
+        {"id":"%s","version":0,"warehouseId":"%s","ownerType":"MAINTENANCE_DISPOSITION","ownerId":"%s","externalTaskId":"%s","taskBoardTaskId":null,"taskBoardTaskVersion":null,"taskBoardDoneAt":null,"unitNumber":"БТ-42","plannedDurationMinutes":15,"deadlineAt":"%s","state":"SCHEDULED","terminalState":null,"failureCode":null,"lines":[],"createdAt":"2026-08-05T00:00:00Z","updatedAt":"2026-08-05T00:00:00Z"}
+        """.formatted(taskId, warehouseId, decisionId, externalTaskId, deadlineAt);
+    server.expect(requestTo(
+        "http://logistics.test/api/internal/logistics/v1/maintenance/equipment-movement-tasks"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer logistics-token"))
+        .andExpect(header("Idempotency-Key", key.toString()))
+        .andExpect(content().string(equalTo(
+            """
+            {"decisionId":"%s","warehouseId":"%s","unitNumber":"БТ-42","plannedDurationMinutes":15,"deadlineAt":"%s","lines":[{"equipmentId":"%s","sourceRentalItemId":"%s","expectedSourceBalanceVersion":3,"quantity":2}]}
+            """.formatted(
+                decisionId,
+                warehouseId,
+                "2026-08-06T12:00:00Z",
+                equipmentId,
+                cabinId).strip())))
+        .andRespond(withSuccess(task, MediaType.APPLICATION_JSON));
+    server.expect(requestTo(
+        "http://logistics.test/api/internal/logistics/v1/maintenance/equipment-movement-tasks/"
+            + taskId))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer logistics-token"))
+        .andRespond(withSuccess(task, MediaType.APPLICATION_JSON));
+
+    var command = new MaintenanceDependencyGateway.PropertyEquipmentMovementCommand(
+        decisionId,
+        warehouseId,
+        "БТ-42",
+        15,
+        deadlineAt,
+        List.of(new MaintenanceDependencyGateway.PropertyEquipmentMovementLine(
+            equipmentId, cabinId, 3, 2)));
+    var created = gateway.createPropertyEquipmentMovementTask(key, command);
+    var observed = gateway.getPropertyEquipmentMovementTask(taskId);
+
+    assertThat(created.isOwnedByMaintenanceDisposition(decisionId)).isTrue();
+    assertThat(observed.ownerId()).isEqualTo(decisionId);
+    assertThat(observed.ownerType()).isEqualTo("MAINTENANCE_DISPOSITION");
+    server.verify();
+  }
+
+  @Test
   void rentalItemSnapshotRejectsMismatchedTruth() {
     UUID rentalItemId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
@@ -243,11 +486,13 @@ class MaintenanceDependencyGatewayTest {
         .andExpect(method(HttpMethod.POST))
         .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer asset-token"))
         .andExpect(header("Idempotency-Key", catalogNodeId.toString()))
-        .andExpect(content().string(equalTo("{\"equipmentName\":\"Chair\"}")))
+        .andExpect(content().string(equalTo(
+            "{\"externalReferenceId\":\"%s\",\"equipmentName\":\"Chair\"}"
+                .formatted(catalogNodeId))))
         .andRespond(withSuccess(
             """
-            {"equipmentId":"%s","equipmentName":"Chair"}
-            """.formatted(equipmentId),
+            {"externalReferenceId":"%s","equipmentId":"%s","equipmentName":"Chair"}
+            """.formatted(catalogNodeId, equipmentId),
             MediaType.APPLICATION_JSON));
 
     var response = gateway.ensureFurnitureEquipment(catalogNodeId, "Chair");
@@ -266,8 +511,8 @@ class MaintenanceDependencyGatewayTest {
         "http://asset.test/api/internal/asset/v1/maintenance/equipment-catalog"))
         .andRespond(withSuccess(
             """
-            {"equipmentId":"%s","equipmentName":"Table"}
-            """.formatted(UUID.randomUUID()),
+            {"externalReferenceId":"%s","equipmentId":"%s","equipmentName":"Table"}
+            """.formatted(catalogNodeId, UUID.randomUUID()),
             MediaType.APPLICATION_JSON));
 
     assertThatThrownBy(() -> gateway.ensureFurnitureEquipment(catalogNodeId, "Chair"))
@@ -313,7 +558,7 @@ class MaintenanceDependencyGatewayTest {
   }
 
   @Test
-  void furnitureLossUsesTheExactFencedAssetRequest() {
+  void furniturePendingReturnUsesTheExactFencedAssetRequest() {
     UUID key = UUID.randomUUID();
     UUID rentalItemId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
@@ -329,8 +574,8 @@ class MaintenanceDependencyGatewayTest {
         .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer asset-token"))
         .andExpect(header("Idempotency-Key", key.toString()))
         .andExpect(content().string(equalTo("""
-            {"expectedVersion":7,"action":"QUEUE_FOR_REPAIR","leaseId":"%s","fencingToken":17,"ownerType":"MAINTENANCE_ESTIMATE","ownerId":"%s","linkedReturnEstimateId":null,"estimateId":"%s","furnitureLosses":[{"equipmentId":"%s","quantity":2},{"equipmentId":"%s","quantity":4}]}
-            """.formatted(leaseId, estimateId, estimateId, chairId, tableId).strip())))
+            {"expectedVersion":7,"action":"QUEUE_FOR_REPAIR","leaseId":"%s","fencingToken":17,"ownerType":"MAINTENANCE_ESTIMATE","ownerId":"%s","linkedReturnEstimateId":null,"furniturePendingReturns":[{"equipmentId":"%s","expectedSourceBalanceVersion":3,"quantity":2},{"equipmentId":"%s","expectedSourceBalanceVersion":5,"quantity":4}]}
+            """.formatted(leaseId, estimateId, chairId, tableId).strip())))
         .andRespond(withSuccess(
             """
             {"id":"%s","version":8,"warehouseId":"%s","number":"C-1","status":"REPAIR"}
@@ -348,13 +593,43 @@ class MaintenanceDependencyGatewayTest {
         estimateId.toString(),
         "QUEUE_TO_REPAIR",
         false,
-        estimateId,
         List.of(
-            new MaintenanceDependencyGateway.FurnitureLoss(chairId, 2),
-            new MaintenanceDependencyGateway.FurnitureLoss(tableId, 4)));
+            new MaintenanceDependencyGateway.FurniturePendingReturn(chairId, 3, 2),
+            new MaintenanceDependencyGateway.FurniturePendingReturn(tableId, 5, 4)));
 
     assertThat(snapshot).isEqualTo(new MaintenanceDependencyGateway.AssetSnapshot(
         rentalItemId, 8, warehouseId, "C-1", "REPAIR"));
+    server.verify();
+  }
+
+  @Test
+  void unresolvedFurnitureCustodyUsesTheExactOwnerBoundary() {
+    UUID ownerId = UUID.randomUUID();
+    UUID claimId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID equipmentId = UUID.randomUUID();
+    UUID sourceBalanceId = UUID.randomUUID();
+    authorize("asset-token", "asset.maintenance");
+    server.expect(requestTo(
+            "http://asset.test/api/internal/asset/v1/maintenance/furniture-custody"
+                + "?ownerType=MAINTENANCE_REPAIR&ownerId="
+                + ownerId))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer asset-token"))
+        .andRespond(withSuccess(
+            """
+            [{"id":"%s","custodyVersion":2,"ownerType":"MAINTENANCE_REPAIR","ownerId":"%s","rentalItemId":"%s","warehouseId":"%s","equipmentId":"%s","sourceBalanceId":"%s","sourceBalanceVersion":7,"quantity":4,"returnedToStockQuantity":1,"preparedDispositionQuantity":0,"terminalDispositionQuantity":0,"unresolvedQuantity":3,"availableForDispositionQuantity":3,"selectedAt":"2026-08-05T00:00:00Z"}]
+            """.formatted(
+                claimId, ownerId, rentalItemId, warehouseId, equipmentId, sourceBalanceId),
+            MediaType.APPLICATION_JSON));
+
+    var claims = gateway.unresolvedFurnitureCustody("MAINTENANCE_REPAIR", ownerId);
+
+    assertThat(claims).singleElement().satisfies(claim -> {
+      assertThat(claim.id()).isEqualTo(claimId);
+      assertThat(claim.availableForDispositionQuantity()).isEqualTo(3);
+    });
     server.verify();
   }
 
@@ -634,7 +909,15 @@ class MaintenanceDependencyGatewayTest {
     OffsetDateTime second = first.plusMinutes(1);
 
     assertThatThrownBy(() -> gateway.registerTask(
-        UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), "БТ-42",
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        null,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "БТ-42",
+        LocalDate.of(2026, 7, 18),
+        3,
+        6,
         List.of(
             taskStage(0, UUID.randomUUID(), first),
             taskStage(1, UUID.randomUUID(), second))))
@@ -835,7 +1118,7 @@ class MaintenanceDependencyGatewayTest {
   }
 
   @Test
-  void noOpFixtureCannotDropFurnitureLosses() {
+  void noOpFixtureCannotDropFurniturePendingReturns() {
     assertThatThrownBy(() -> new NoOpMaintenanceDependencyGateway().fencedStatus(
         UUID.randomUUID(),
         UUID.randomUUID(),
@@ -847,9 +1130,8 @@ class MaintenanceDependencyGatewayTest {
         UUID.randomUUID().toString(),
         "QUEUE_TO_REPAIR",
         false,
-        UUID.randomUUID(),
-        List.of(new MaintenanceDependencyGateway.FurnitureLoss(
-            UUID.randomUUID(), 1))))
+        List.of(new MaintenanceDependencyGateway.FurniturePendingReturn(
+            UUID.randomUUID(), 0, 1))))
         .isInstanceOfSatisfying(MaintenanceDependencyException.class,
             exception -> assertThat(exception.status()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE));
   }

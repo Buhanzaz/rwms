@@ -60,6 +60,7 @@ const WAREHOUSE: WarehouseInfo = {
   address: null,
   timeZone: "Europe/Moscow",
   active: true,
+  lifecycleState: "ACTIVE",
   sortOrder: 0,
 }
 
@@ -455,12 +456,12 @@ describe("AppSidebar collapsed desktop navigation", () => {
 
     const writeOffsLinks = within(writeOffsFlyout)
     expect(
-      writeOffsLinks.getByRole("link", { name: "Склад" }).getAttribute("href")
+      writeOffsLinks
+        .getByRole("link", { name: "Списания" })
+        .getAttribute("href")
     ).toBe("/write-offs")
 
-    await user.click(
-      writeOffsLinks.getByRole("link", { name: "Доп. оборудование" })
-    )
+    await user.click(writeOffsLinks.getByRole("link", { name: "Утраты" }))
     await waitFor(() => {
       expect(screen.getByTestId("location").textContent).toBe(
         "/write-offs/equipment"

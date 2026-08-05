@@ -69,13 +69,15 @@ class MaintenanceFurnitureCatalogIntegrationTest {
   @Test
   void createsFurnitureOnceAndReplaysTheSameUuidIdentity() throws Exception {
     UUID idempotencyKey = UUID.randomUUID();
-    JsonNode created = create(idempotencyKey, "Стол", status().isCreated());
+    String equipmentName = "Стол автосвязь " + UUID.randomUUID();
+    JsonNode created = create(idempotencyKey, equipmentName, status().isCreated());
     UUID equipmentId = UUID.fromString(created.get("equipmentId").asText());
-    JsonNode repeated = create(idempotencyKey, "Стол", status().isCreated());
+    JsonNode repeated = create(idempotencyKey, equipmentName, status().isCreated());
 
     assertThat(Set.copyOf(created.propertyNames()))
-        .containsExactlyInAnyOrder("equipmentId", "equipmentName");
-    assertThat(created.get("equipmentName").asText()).isEqualTo("Стол");
+        .containsExactlyInAnyOrder("externalReferenceId", "equipmentId", "equipmentName");
+    assertThat(created.get("externalReferenceId").asText()).isEqualTo(idempotencyKey.toString());
+    assertThat(created.get("equipmentName").asText()).isEqualTo(equipmentName);
     assertThat(repeated).isEqualTo(created);
     assertThat(catalogCount(equipmentId)).isOne();
     assertThat(eventCount(equipmentId)).isOne();
@@ -86,7 +88,8 @@ class MaintenanceFurnitureCatalogIntegrationTest {
   @Test
   void rejectsADifferentNameForTheSameIdempotencyKeyWithoutMutation() throws Exception {
     UUID idempotencyKey = UUID.randomUUID();
-    JsonNode created = create(idempotencyKey, "Стул", status().isCreated());
+    JsonNode created =
+        create(idempotencyKey, "Стул автосвязь " + UUID.randomUUID(), status().isCreated());
     UUID equipmentId = UUID.fromString(created.get("equipmentId").asText());
 
     create(idempotencyKey, "Другой стул", status().isConflict());
@@ -99,7 +102,8 @@ class MaintenanceFurnitureCatalogIntegrationTest {
   @Test
   void replayKeepsCreatedStatusAndMarksTheResponseHeader() throws Exception {
     UUID idempotencyKey = UUID.randomUUID();
-    create(idempotencyKey, "Стол с заголовком", status().isCreated());
+    String equipmentName = "Стол с заголовком " + UUID.randomUUID();
+    create(idempotencyKey, equipmentName, status().isCreated());
 
     MvcResult replay =
         mvc.perform(
@@ -108,7 +112,7 @@ class MaintenanceFurnitureCatalogIntegrationTest {
                     .with(serviceJwt(
                         "maintenance-service", "maintenance-service", "asset.maintenance"))
                     .contentType(MediaType.APPLICATION_JSON)
-                    .content(requestBody("Стол с заголовком")))
+                    .content(requestBody(idempotencyKey, equipmentName)))
             .andExpect(status().isCreated())
             .andReturn();
 
@@ -118,7 +122,7 @@ class MaintenanceFurnitureCatalogIntegrationTest {
   @Test
   void requiresExactlyTheMaintenanceServiceCredentialAndScope() throws Exception {
     String path = "/api/internal/asset/v1/maintenance/equipment-catalog";
-    String request = requestBody("Автосвязь");
+    String request = requestBody(UUID.randomUUID(), "Автосвязь");
 
     mvc.perform(post(path).header("Idempotency-Key", UUID.randomUUID()).with(userJwt("asset.maintenance"))
             .contentType(MediaType.APPLICATION_JSON).content(request))
@@ -160,14 +164,17 @@ class MaintenanceFurnitureCatalogIntegrationTest {
                 .with(serviceJwt(
                     "maintenance-service", "maintenance-service", "asset.maintenance"))
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(requestBody(equipmentName)))
+                .content(requestBody(idempotencyKey, equipmentName)))
         .andExpect(expectedStatus)
         .andReturn();
     return objectMapper.readTree(result.getResponse().getContentAsString());
   }
 
-  private String requestBody(String equipmentName) throws Exception {
-    return objectMapper.writeValueAsString(Map.of("equipmentName", equipmentName));
+  private String requestBody(UUID externalReferenceId, String equipmentName) throws Exception {
+    return objectMapper.writeValueAsString(
+        Map.of(
+            "externalReferenceId", externalReferenceId,
+            "equipmentName", equipmentName));
   }
 
   private int catalogCount(UUID equipmentId) {

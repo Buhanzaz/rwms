@@ -386,10 +386,15 @@ public class LogisticsDocument {
   }
 
   public void requireShipmentDepartureAllowed(OffsetDateTime currentTime) {
+    requireShipmentDepartureAllowed(
+        Objects.requireNonNull(currentTime, "currentTime").toLocalDate());
+  }
+
+  public void requireShipmentDepartureAllowed(LocalDate currentDate) {
     if (documentType != LogisticsDocumentType.SHIPMENT || scheduledDate == null) {
       throw new IllegalStateException("Shipment date is required");
     }
-    if (scheduledDate.isAfter(Objects.requireNonNull(currentTime, "currentTime").toLocalDate())) {
+    if (scheduledDate.isAfter(Objects.requireNonNull(currentDate, "currentDate"))) {
       throw new IllegalStateException("Shipment date is in the future");
     }
   }

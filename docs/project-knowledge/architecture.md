@@ -1,6 +1,6 @@
 # Current Architecture
 
-Status: Confirmed repository structure as of 2026-08-04.
+Status: Confirmed repository structure as of 2026-08-05.
 
 Primary evidence:
 
@@ -90,6 +90,53 @@ aggregates.
 - MinIO is private and media ownership stays in `media-service`.
 - Multi-service workflows are owned and persisted by the initiating service;
   there is no 2PC and no browser saga.
+
+## Warehouse Lifecycle Coordination
+
+`warehouse-service` is the only owner of warehouse lifecycle
+`ACTIVE -> DRAINING -> INACTIVE`, directional operation admission and
+effective-dated timezone history. Deactivation is a version-fenced distributed
+readiness protocol, not a direct Boolean update. Each stateful operation owner
+keeps its own durable readiness/admission intent, uses a service-local
+PostgreSQL advisory lock and commit guard, calls warehouse-service outside its
+database transaction, and confirms the exact warehouse lifecycle version only
+after local blockers have drained. Pending, indeterminate and quarantined work
+remains a blocker; a timeout is never interpreted as readiness.
+
+An accepted operation records a durable service-local operated-boundary mark
+in the same transaction as its first warehouse-bound fact. Delivery to
+warehouse-service is idempotent and recoverable, so a later timezone change
+cannot mistake an already operating warehouse for an unused one. Physical
+inter-warehouse movement remains logistics-owned. `asset-service` exposes only
+a separate administrator correction for a record that was wrong without a
+physical movement; that correction is not a replacement for a retrospective
+logistics document.
+
+Evidence:
+[`warehouse-service.yaml`](../../contracts/openapi/warehouse-service.yaml),
+[`WarehouseLifecycleController.java`](../../services/warehouse-service/src/main/java/dev/buhanzaz/rwms/warehouse/api/WarehouseLifecycleController.java),
+[`V5__warehouse_lifecycle.sql`](../../services/warehouse-service/src/main/resources/db/migration/V5__warehouse_lifecycle.sql),
+[`AssetWarehouseLifecycleStore.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/AssetWarehouseLifecycleStore.java),
+[`LogisticsWarehouseLifecycle.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/service/LogisticsWarehouseLifecycle.java),
+[`WarehouseLifecycleOperations.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/WarehouseLifecycleOperations.java),
+[`TaskBoardWarehouseLifecycleFence.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardWarehouseLifecycleFence.java).
+
+## Maintenance Remote Effects
+
+`maintenance-service` never waits for asset, task-board, logistics or warehouse
+HTTP while holding its local transaction. Commands use short local
+prepare/finalize transactions around an immutable remote plan; background work
+uses durable claims with exact lease fencing. A retry replays the same derived
+idempotency key and original expected version even when a diagnostic read sees
+the post-effect state. For transfer arrival, logistics supplies the exact asset
+version persisted by its released guard, and that version is part of the
+durable attempt fingerprint.
+
+Evidence:
+[`MaintenanceApplicationService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceApplicationService.java),
+[`MaintenanceReconciliationStore.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceReconciliationStore.java),
+[`TransferWorkflowStore.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/service/TransferWorkflowStore.java),
+[`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml).
 
 ## Architecture Change Rule
 

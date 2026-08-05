@@ -44,12 +44,22 @@ class WarehouseFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndOwnsOnlyWarehouseOutboxAndIdempotencyData() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(3);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(6);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
     assertThat(tableNames())
-        .containsExactly("flyway_schema_history", "idempotency_record", "outbox_event", "warehouse");
+        .containsExactly(
+            "flyway_schema_history",
+            "idempotency_record",
+            "outbox_event",
+            "warehouse",
+            "warehouse_lifecycle_readiness",
+            "warehouse_lifecycle_transition",
+            "warehouse_operation_mark",
+            "warehouse_operation_state",
+            "warehouse_outbox_recovery_audit",
+            "warehouse_time_zone_history");
     assertThat(toRegclass("domain_event")).isNull();
     assertThat(toRegclass("aggregate_snapshot")).isNull();
     assertThat(toRegclass("event_stream_head")).isNull();
@@ -58,6 +68,10 @@ class WarehouseFlywayMigrationIntegrationTest {
     assertThat(toRegclass("warehouse_topology")).isNull();
     assertThat(columnExists("warehouse", "code")).isFalse();
     assertThat(columnExists("warehouse", "normalized_name")).isTrue();
+    assertThat(columnExists("warehouse", "time_zone_revision")).isTrue();
+    assertThat(columnExists("warehouse", "lifecycle_state")).isTrue();
+    assertThat(columnExists("warehouse", "lifecycle_revision")).isTrue();
+    assertThat(columnExists("outbox_event", "review_version")).isTrue();
     assertThat(
             jdbc.queryForList(
                 """
@@ -70,6 +84,10 @@ class WarehouseFlywayMigrationIntegrationTest {
         .containsExactly(
             "00000000-0000-0000-0000-000000000001|СПБ|спб|Санкт-Петербург|<null>|Europe/Moscow|true|<null>",
             "00000000-0000-0000-0000-000000000002|Москва|москва|Москва|<null>|Europe/Moscow|true|<null>");
+    assertThat(
+            jdbc.queryForList(
+                "select lifecycle_state from warehouse order by id", String.class))
+        .containsExactly("ACTIVE", "ACTIVE");
     assertThat(
             jdbc.queryForObject(
                 """
@@ -98,6 +116,68 @@ class WarehouseFlywayMigrationIntegrationTest {
             jdbc.queryForObject(
                 "select count(*) from outbox_event", Integer.class))
         .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from warehouse_time_zone_history", Integer.class))
+        .isEqualTo(2);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from warehouse_operation_state", Integer.class))
+        .isEqualTo(2);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    update warehouse_time_zone_history
+                       set time_zone='Europe/Samara'
+                     where warehouse_id=?
+                    """,
+                    UUID.fromString("00000000-0000-0000-0000-000000000001")))
+        .isInstanceOf(RuntimeException.class)
+        .hasMessageContaining("immutable");
+    jdbc.update(
+        """
+        insert into warehouse_lifecycle_readiness(
+            warehouse_id,readiness_owner,warehouse_version,confirmed_at)
+        values (?, 'ASSET', 1, clock_timestamp())
+        """,
+        UUID.fromString("00000000-0000-0000-0000-000000000001"));
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    update warehouse_lifecycle_readiness
+                       set warehouse_version=2
+                     where warehouse_id=? and readiness_owner='ASSET'
+                    """,
+                    UUID.fromString("00000000-0000-0000-0000-000000000001")))
+        .isInstanceOf(RuntimeException.class)
+        .hasMessageContaining("immutable");
+    jdbc.update(
+        """
+        insert into warehouse_lifecycle_transition(
+            warehouse_id,warehouse_version,transition,recorded_at)
+        values (?, 1, 'DRAINING_STARTED', clock_timestamp())
+        """,
+        UUID.fromString("00000000-0000-0000-0000-000000000001"));
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    update warehouse_lifecycle_transition
+                       set transition='INACTIVATED'
+                     where warehouse_id=? and warehouse_version=1
+                    """,
+                    UUID.fromString("00000000-0000-0000-0000-000000000001")))
+        .isInstanceOf(RuntimeException.class)
+        .hasMessageContaining("immutable");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "delete from warehouse_time_zone_history where warehouse_id=?",
+                    UUID.fromString("00000000-0000-0000-0000-000000000001")))
+        .isInstanceOf(RuntimeException.class)
+        .hasMessageContaining("immutable");
   }
 
   @Test
@@ -149,7 +229,7 @@ class WarehouseFlywayMigrationIntegrationTest {
         warehouseId);
 
     Flyway versionTwo = flyway(MIGRATIONS);
-    assertThat(versionTwo.migrate().migrationsExecuted).isEqualTo(2);
+    assertThat(versionTwo.migrate().migrationsExecuted).isEqualTo(5);
     versionTwo.validate();
 
     assertThat(columnExists("warehouse", "code")).isFalse();
@@ -162,6 +242,13 @@ class WarehouseFlywayMigrationIntegrationTest {
         Boolean.class,
         subjectId,
         idempotencyKey)).isFalse();
+    assertThat(
+            jdbc.queryForObject(
+                "select response_body->>'lifecycleState' from idempotency_record where subject_id=? and idempotency_key=?",
+                String.class,
+                subjectId,
+                idempotencyKey))
+        .isEqualTo("ACTIVE");
     assertThat(jdbc.queryForObject(
         """
         select envelope_sha256=encode(sha256(convert_to(envelope_body::text,'UTF8')),'hex')

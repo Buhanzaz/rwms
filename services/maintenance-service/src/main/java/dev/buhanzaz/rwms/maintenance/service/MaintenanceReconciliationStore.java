@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -391,6 +392,62 @@ public class MaintenanceReconciliationStore {
         .map(this::workItem);
   }
 
+  /**
+   * Commits a short, recoverable ownership lease before a worker makes any remote call.
+   *
+   * <p>The existing {@code next_attempt_at} column is the durable lease fence: while it points
+   * into the future, no other worker can pick the item. The exact persisted timestamp is carried
+   * in {@link WorkItem} and compared again by every terminal mutation, so a worker whose lease
+   * expired cannot confirm, defer, or fail a newer claim.
+   */
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
+  public Optional<WorkItem> claimNextDue(Duration lease) {
+    return claimNextDue(lease, false);
+  }
+
+  /** Same durable claim protocol as {@link #claimNextDue(Duration)}, preserving media ordering. */
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
+  public Optional<WorkItem> claimNextDueMedia(Duration lease) {
+    return claimNextDue(lease, true);
+  }
+
+  private Optional<WorkItem> claimNextDue(Duration lease, boolean mediaOnly) {
+    if (lease == null
+        || lease.isZero()
+        || lease.isNegative()
+        || lease.compareTo(Duration.ofHours(1)) > 0) {
+      throw new IllegalArgumentException("Reconciliation claim lease is invalid");
+    }
+    OffsetDateTime claimedAt = now();
+    MaintenanceReconciliation candidate =
+        (mediaOnly
+                ? reconciliations.findDueMediaForUpdateSkipLocked(
+                    MAX_ATTEMPTS, claimedAt, PageRequest.of(0, 1))
+                : reconciliations.findDueForUpdateSkipLocked(
+                    MAX_ATTEMPTS, claimedAt, PageRequest.of(0, 1)))
+            .stream()
+            .findFirst()
+            .orElse(null);
+    if (candidate == null) return Optional.empty();
+
+    OffsetDateTime claimedLeaseUntil =
+        claimedAt.plus(lease).truncatedTo(ChronoUnit.MICROS);
+    try {
+      candidate.defer(candidate.getAttemptCount(), claimedLeaseUntil, claimedAt);
+      reconciliations.flush();
+    } catch (IllegalArgumentException exception) {
+      throw claimConflict();
+    }
+
+    // PostgreSQL timestamptz stores microseconds. Re-read the JPA scalar after flush instead of
+    // returning a pre-flush Java timestamp so finalization uses the exact durable lease fence.
+    OffsetDateTime persistedLeaseUntil =
+        reconciliations.findNextAttemptAtById(candidate.getId())
+            .orElseThrow(
+                () -> new MaintenanceNotFoundException("Reconciliation record not found"));
+    return Optional.of(workItem(candidate, persistedLeaseUntil));
+  }
+
   @Transactional(propagation = Propagation.MANDATORY)
   public Optional<WorkItem> lockNextDueMedia() {
     return reconciliations
@@ -446,8 +503,10 @@ public class MaintenanceReconciliationStore {
     }
     MaintenanceReconciliation reconciliation = requireLocked(item.id());
     OffsetDateTime now = now();
+    OffsetDateTime nextAttemptAt = now.plus(delay).truncatedTo(ChronoUnit.MICROS);
     try {
-      reconciliation.defer(item.attemptCount(), now.plus(delay), now);
+      requireLeaseFence(reconciliation, item);
+      reconciliation.defer(item.attemptCount(), nextAttemptAt, now);
       reconciliations.flush();
     } catch (IllegalArgumentException exception) {
       throw claimConflict();
@@ -456,9 +515,13 @@ public class MaintenanceReconciliationStore {
 
   @Transactional(propagation = Propagation.MANDATORY)
   public void confirmed(WorkItem item, Object response) {
+    // Payload serialization is a programming/data error, not a lease race. Keep it outside the
+    // stale-claim translation so the worker records a real failure instead of silently losing it.
+    String serializedResponse = write(response);
     MaintenanceReconciliation reconciliation = requireLocked(item.id());
     try {
-      reconciliation.confirm(item.attemptCount(), write(response), now());
+      requireLeaseFence(reconciliation, item);
+      reconciliation.confirm(item.attemptCount(), serializedResponse, now());
       reconciliations.flush();
     } catch (IllegalArgumentException exception) {
       throw claimConflict();
@@ -467,11 +530,13 @@ public class MaintenanceReconciliationStore {
 
   @Transactional(propagation = Propagation.MANDATORY)
   public boolean failed(WorkItem item, RuntimeException failure) {
+    String code = failureCode(failure);
     MaintenanceReconciliation reconciliation = requireLocked(item.id());
     try {
+      requireLeaseFence(reconciliation, item);
       boolean quarantined =
           reconciliation.fail(
-              item.attemptCount(), MAX_ATTEMPTS, failureCode(failure), now());
+              item.attemptCount(), MAX_ATTEMPTS, code, now());
       reconciliations.flush();
       return quarantined;
     } catch (IllegalArgumentException exception) {
@@ -485,7 +550,23 @@ public class MaintenanceReconciliationStore {
         .orElseThrow(() -> new MaintenanceNotFoundException("Reconciliation record not found"));
   }
 
+  private static void requireLeaseFence(
+      MaintenanceReconciliation reconciliation, WorkItem item) {
+    if (item == null
+        || reconciliation.getAttemptCount() != item.attemptCount()
+        || reconciliation.getNextAttemptAt() == null
+        || item.nextAttemptAt() == null
+        || !reconciliation.getNextAttemptAt().toInstant().equals(item.nextAttemptAt().toInstant())) {
+      throw new IllegalArgumentException("CLAIM_CHANGED");
+    }
+  }
+
   private WorkItem workItem(MaintenanceReconciliation value) {
+    return workItem(value, value.getNextAttemptAt());
+  }
+
+  private WorkItem workItem(
+      MaintenanceReconciliation value, OffsetDateTime persistedNextAttemptAt) {
     return new WorkItem(
         value.getId(),
         value.getRepairId(),
@@ -494,7 +575,7 @@ public class MaintenanceReconciliationStore {
         value.getIdempotencyKey(),
         value.getState(),
         value.getAttemptCount(),
-        value.getNextAttemptAt(),
+        persistedNextAttemptAt,
         read(value.getResponseSnapshot()),
         value.getMediaOwnerType(),
         value.getMediaOwnerId(),
@@ -558,7 +639,13 @@ public class MaintenanceReconciliationStore {
 
   private static MaintenanceConflictException claimConflict() {
     return new MaintenanceConflictException(
-        "MAINTENANCE_STATE_CONFLICT", "Reconciliation claim changed concurrently");
+        "MAINTENANCE_RECONCILIATION_CLAIM_STALE",
+        "Reconciliation claim changed concurrently");
+  }
+
+  static boolean isStaleClaim(RuntimeException exception) {
+    return exception instanceof MaintenanceConflictException conflict
+        && "MAINTENANCE_RECONCILIATION_CLAIM_STALE".equals(conflict.code());
   }
 
   private static String failureCode(RuntimeException failure) {
@@ -583,7 +670,7 @@ public class MaintenanceReconciliationStore {
   }
 
   private static OffsetDateTime now() {
-    return OffsetDateTime.now(ZoneOffset.UTC);
+    return OffsetDateTime.now(ZoneOffset.UTC).truncatedTo(ChronoUnit.MICROS);
   }
 
   private static UUID stableProofEventId(

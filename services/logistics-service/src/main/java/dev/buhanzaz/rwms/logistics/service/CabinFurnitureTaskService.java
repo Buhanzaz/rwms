@@ -7,6 +7,9 @@ import dev.buhanzaz.rwms.logistics.equipment.api.EquipmentMovementTaskApiModels.
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementLocationKind;
 import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskService;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -28,6 +31,7 @@ public class CabinFurnitureTaskService {
   private static final int DEFAULT_PLANNED_DURATION_MINUTES = 60;
   private final LogisticsDependencyGateway dependencies;
   private final EquipmentMovementTaskService movementTasks;
+  private final LogisticsWarehouseLifecycle warehouseLifecycle;
 
   @Transactional
   public CabinFurnitureTaskResult create(
@@ -37,6 +41,35 @@ public class CabinFurnitureTaskService {
       UUID rentalItemId,
       LocalDate scheduledDate,
       List<CabinFurnitureRequirement> requirements) {
+    AdmissionTicket admission =
+        warehouseLifecycle.disabledTicket(
+            actorSubjectId,
+            "CREATE_CABIN_FURNITURE_TASK",
+            idempotencyKey,
+            List.of(
+                new AdmissionRequirement(
+                    warehouseId, WarehouseOperationDirection.OUTGOING)));
+    return create(
+        actorSubjectId,
+        idempotencyKey,
+        warehouseId,
+        rentalItemId,
+        scheduledDate,
+        requirements,
+        admission,
+        OffsetDateTime.now(ZoneOffset.UTC).toLocalDate());
+  }
+
+  @Transactional
+  public CabinFurnitureTaskResult create(
+      UUID actorSubjectId,
+      UUID idempotencyKey,
+      UUID warehouseId,
+      UUID rentalItemId,
+      LocalDate scheduledDate,
+      List<CabinFurnitureRequirement> requirements,
+      AdmissionTicket admission,
+      LocalDate warehouseToday) {
     if (actorSubjectId == null
         || idempotencyKey == null
         || warehouseId == null
@@ -45,8 +78,16 @@ public class CabinFurnitureTaskService {
         || requirements == null) {
       throw new IllegalArgumentException("Cabin furniture task command is invalid");
     }
-    if (scheduledDate.isBefore(OffsetDateTime.now(ZoneOffset.UTC).toLocalDate())) {
+    if (warehouseToday == null || scheduledDate.isBefore(warehouseToday)) {
       throw new IllegalArgumentException("Cabin furniture task date cannot be in the past");
+    }
+    List<AdmissionRequirement> expectedAdmission =
+        List.of(
+            new AdmissionRequirement(
+                warehouseId, WarehouseOperationDirection.OUTGOING));
+    if (admission == null || !expectedAdmission.equals(admission.requirements())) {
+      throw new LogisticsConflictException(
+          "Warehouse admission ticket does not match the cabin furniture task");
     }
 
     LogisticsDependencyGateway.CabinFurnitureMovementPlan plan =
@@ -61,6 +102,7 @@ public class CabinFurnitureTaskService {
                 .toList());
     validatePlan(plan, warehouseId, rentalItemId);
     if (plan.lines().isEmpty()) {
+      warehouseLifecycle.consume(admission);
       return new CabinFurnitureTaskResult(plan.rentalItemId(), plan.unitNumber(), null, 0);
     }
 
@@ -74,7 +116,8 @@ public class CabinFurnitureTaskService {
                 plan.unitNumber(),
                 DEFAULT_PLANNED_DURATION_MINUTES,
                 reservationDeadline(scheduledDate),
-                plan.lines().stream().map(CabinFurnitureTaskService::toTaskLine).toList()));
+                plan.lines().stream().map(CabinFurnitureTaskService::toTaskLine).toList()),
+            admission);
     return new CabinFurnitureTaskResult(
         plan.rentalItemId(), plan.unitNumber(), task.response().id(), plan.lines().size());
   }

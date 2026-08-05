@@ -53,7 +53,7 @@ class AuthFlywayConfigurationTest {
         assertThat(source.getProperty("rwms.auth.oauth.clients[6].enabled"))
                 .isEqualTo("${MAINTENANCE_CLIENT_ENABLED:false}");
         assertThat(source.getProperty("rwms.auth.oauth.clients[6].revision"))
-                .isEqualTo("${MAINTENANCE_CLIENT_REVISION:2}");
+                .isEqualTo("${MAINTENANCE_CLIENT_REVISION:3}");
         assertThat(source.getProperty("rwms.auth.oauth.clients[6].authentication-methods[0]"))
                 .isEqualTo("client_secret_basic");
         assertThat(source.getProperty("rwms.auth.oauth.clients[6].grant-types[0]"))
@@ -69,9 +69,25 @@ class AuthFlywayConfigurationTest {
         assertThat(source.getProperty("rwms.auth.oauth.clients[6].scopes[4]"))
                 .isEqualTo("logistics.maintenance");
         assertThat(source.getProperty("rwms.auth.oauth.clients[6].scopes[5]"))
+                .isEqualTo("warehouse.timezone.read");
+        assertThat(source.getProperty("rwms.auth.oauth.clients[6].scopes[6]"))
+                .isEqualTo("warehouse.operation.mark");
+        assertThat(source.getProperty("rwms.auth.oauth.clients[6].scopes[7]"))
+                .isEqualTo("warehouse.lifecycle.read");
+        assertThat(source.getProperty("rwms.auth.oauth.clients[6].scopes[8]"))
+                .isEqualTo("warehouse.lifecycle.confirm");
+        assertThat(source.getProperty("rwms.auth.oauth.clients[6].scopes[9]"))
                 .isNull();
         assertThat(source.getProperty("rwms.auth.oauth.clients[6].audiences[0]"))
                 .isEqualTo("rwms-services");
+    }
+
+    @Test
+    void taskBoardClientHasOnlyWorkerAndWarehouseReadinessScopes() throws IOException {
+        assertTaskBoardClient(load("application.yaml"), 3, 3);
+        assertTaskBoardClient(load("application-dev.yaml"), 3, 3);
+        assertTaskBoardClient(load("application-test.yaml"), 3, 3);
+        assertTaskBoardClient(load("application-warehouse-client.yaml"), 3, 3);
     }
 
     @Test
@@ -80,18 +96,18 @@ class AuthFlywayConfigurationTest {
                 load("application.yaml"),
                 5,
                 "${ASSET_WAREHOUSE_CLIENT_ENABLED:false}",
-                "${ASSET_WAREHOUSE_CLIENT_REVISION:2}");
+                "${ASSET_WAREHOUSE_CLIENT_REVISION:3}");
         assertAssetClient(
                 load("application-dev.yaml"),
                 5,
                 "${ASSET_WAREHOUSE_CLIENT_ENABLED:false}",
-                "${ASSET_WAREHOUSE_CLIENT_REVISION:2}");
-        assertAssetClient(load("application-test.yaml"), 5, false, 2);
+                "${ASSET_WAREHOUSE_CLIENT_REVISION:3}");
+        assertAssetClient(load("application-test.yaml"), 5, false, 3);
         assertAssetClient(
                 load("application-asset-client.yaml"),
                 0,
                 "${ASSET_WAREHOUSE_CLIENT_ENABLED:false}",
-                "${ASSET_WAREHOUSE_CLIENT_REVISION:2}");
+                "${ASSET_WAREHOUSE_CLIENT_REVISION:3}");
     }
 
     @Test
@@ -119,8 +135,12 @@ class AuthFlywayConfigurationTest {
         assertThat(source.getProperty(prefix + ".grant-types[0]")).isEqualTo("client_credentials");
         assertThat(source.getProperty(prefix + ".grant-types[1]")).isNull();
         assertThat(source.getProperty(prefix + ".scopes[0]")).isEqualTo("warehouse.read");
-        assertThat(source.getProperty(prefix + ".scopes[1]")).isEqualTo("media.asset-import");
-        assertThat(source.getProperty(prefix + ".scopes[2]")).isNull();
+        assertThat(source.getProperty(prefix + ".scopes[1]")).isEqualTo("warehouse.timezone.read");
+        assertThat(source.getProperty(prefix + ".scopes[2]")).isEqualTo("warehouse.operation.mark");
+        assertThat(source.getProperty(prefix + ".scopes[3]")).isEqualTo("warehouse.lifecycle.read");
+        assertThat(source.getProperty(prefix + ".scopes[4]")).isEqualTo("warehouse.lifecycle.confirm");
+        assertThat(source.getProperty(prefix + ".scopes[5]")).isEqualTo("media.asset-import");
+        assertThat(source.getProperty(prefix + ".scopes[6]")).isNull();
         assertThat(source.getProperty(prefix + ".audiences[0]")).isEqualTo("rwms-services");
         assertThat(source.getProperty(prefix + ".audiences[1]")).isNull();
         assertThat(source.getProperty(prefix + ".secret-environment"))
@@ -132,6 +152,26 @@ class AuthFlywayConfigurationTest {
         assertThat(source.getProperty(prefix + ".allowed-origins[0]")).isNull();
     }
 
+    private void assertTaskBoardClient(
+            PropertySource<?> source, int index, Object expectedRevision) {
+        String prefix = "rwms.auth.oauth.clients[" + index + "]";
+        assertThat(source.getProperty(prefix + ".client-id")).isEqualTo("task-board-service");
+        assertThat(source.getProperty(prefix + ".revision")).isEqualTo(expectedRevision);
+        assertThat(source.getProperty(prefix + ".authentication-methods[0]"))
+                .isEqualTo("client_secret_basic");
+        assertThat(source.getProperty(prefix + ".grant-types[0]")).isEqualTo("client_credentials");
+        assertThat(source.getProperty(prefix + ".scopes[0]"))
+                .isEqualTo("worker-credentials.manage");
+        assertThat(source.getProperty(prefix + ".scopes[1]"))
+                .isEqualTo("warehouse.timezone.read");
+        assertThat(source.getProperty(prefix + ".scopes[2]"))
+                .isEqualTo("warehouse.lifecycle.read");
+        assertThat(source.getProperty(prefix + ".scopes[3]"))
+                .isEqualTo("warehouse.lifecycle.confirm");
+        assertThat(source.getProperty(prefix + ".scopes[4]")).isNull();
+        assertThat(source.getProperty(prefix + ".audiences[0]")).isEqualTo("rwms-services");
+    }
+
     private void assertInventoryClient(PropertySource<?> source, int index) {
         String prefix = "rwms.auth.oauth.clients[" + index + "]";
         assertThat(source.getProperty(prefix + ".client-id")).isEqualTo("inventory-service");
@@ -140,10 +180,13 @@ class AuthFlywayConfigurationTest {
         assertThat(source.getProperty(prefix + ".authentication-methods[1]")).isNull();
         assertThat(source.getProperty(prefix + ".grant-types[0]")).isEqualTo("client_credentials");
         assertThat(source.getProperty(prefix + ".grant-types[1]")).isNull();
-        assertThat(source.getProperty(prefix + ".scopes[0]")).isEqualTo("warehouse.read");
-        assertThat(source.getProperty(prefix + ".scopes[1]")).isEqualTo("asset.inventory");
-        assertThat(source.getProperty(prefix + ".scopes[2]")).isEqualTo("maintenance.inventory");
-        assertThat(source.getProperty(prefix + ".scopes[3]")).isNull();
+        assertThat(source.getProperty(prefix + ".scopes[0]")).isEqualTo("warehouse.timezone.read");
+        assertThat(source.getProperty(prefix + ".scopes[1]")).isEqualTo("warehouse.operation.mark");
+        assertThat(source.getProperty(prefix + ".scopes[2]")).isEqualTo("warehouse.lifecycle.read");
+        assertThat(source.getProperty(prefix + ".scopes[3]")).isEqualTo("warehouse.lifecycle.confirm");
+        assertThat(source.getProperty(prefix + ".scopes[4]")).isEqualTo("asset.inventory");
+        assertThat(source.getProperty(prefix + ".scopes[5]")).isEqualTo("maintenance.inventory");
+        assertThat(source.getProperty(prefix + ".scopes[6]")).isNull();
         assertThat(source.getProperty(prefix + ".audiences[0]")).isEqualTo("rwms-services");
         assertThat(source.getProperty(prefix + ".audiences[1]")).isNull();
         assertThat(source.getProperty(prefix + ".secret-environment")).isEqualTo("INVENTORY_CLIENT_SECRET");
@@ -163,11 +206,15 @@ class AuthFlywayConfigurationTest {
         assertThat(source.getProperty(prefix + ".grant-types[0]")).isEqualTo("client_credentials");
         assertThat(source.getProperty(prefix + ".grant-types[1]")).isNull();
         assertThat(source.getProperty(prefix + ".scopes[0]")).isEqualTo("warehouse.logistics");
-        assertThat(source.getProperty(prefix + ".scopes[1]")).isEqualTo("asset.logistics");
-        assertThat(source.getProperty(prefix + ".scopes[2]")).isEqualTo("task-board.logistics");
-        assertThat(source.getProperty(prefix + ".scopes[3]")).isEqualTo("maintenance.logistics");
-        assertThat(source.getProperty(prefix + ".scopes[4]")).isEqualTo("media.logistics");
-        assertThat(source.getProperty(prefix + ".scopes[5]")).isNull();
+        assertThat(source.getProperty(prefix + ".scopes[1]")).isEqualTo("warehouse.timezone.read");
+        assertThat(source.getProperty(prefix + ".scopes[2]")).isEqualTo("warehouse.operation.mark");
+        assertThat(source.getProperty(prefix + ".scopes[3]")).isEqualTo("warehouse.lifecycle.read");
+        assertThat(source.getProperty(prefix + ".scopes[4]")).isEqualTo("warehouse.lifecycle.confirm");
+        assertThat(source.getProperty(prefix + ".scopes[5]")).isEqualTo("asset.logistics");
+        assertThat(source.getProperty(prefix + ".scopes[6]")).isEqualTo("task-board.logistics");
+        assertThat(source.getProperty(prefix + ".scopes[7]")).isEqualTo("maintenance.logistics");
+        assertThat(source.getProperty(prefix + ".scopes[8]")).isEqualTo("media.logistics");
+        assertThat(source.getProperty(prefix + ".scopes[9]")).isNull();
         assertThat(source.getProperty(prefix + ".audiences[0]")).isEqualTo("rwms-services");
         assertThat(source.getProperty(prefix + ".audiences[1]")).isNull();
         assertThat(source.getProperty(prefix + ".secret-environment")).isEqualTo("LOGISTICS_CLIENT_SECRET");

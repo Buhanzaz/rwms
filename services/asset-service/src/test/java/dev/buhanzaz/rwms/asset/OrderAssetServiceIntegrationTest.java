@@ -15,7 +15,9 @@ import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsLeaseOwnerType;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceLeaseOwnerType;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateStatusRequest;
-import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateWarehouseRequest;
+import dev.buhanzaz.rwms.asset.administrative.AdministrativeAssetCorrectionService;
+import dev.buhanzaz.rwms.asset.api.AdministrativeAssetCorrectionApiModels.AdministrativeCorrectionAssetKind;
+import dev.buhanzaz.rwms.asset.api.AdministrativeAssetCorrectionApiModels.CreateCabinAdministrativeCorrectionRequest;
 import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderActorRequest;
 import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderEquipmentRequirement;
 import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderFurnitureMovementPlanRequest;
@@ -72,6 +74,7 @@ class OrderAssetServiceIntegrationTest {
 
   @Autowired OrderAssetService orders;
   @Autowired AssetService assets;
+  @Autowired AdministrativeAssetCorrectionService administrativeCorrections;
   @Autowired AssetEventStore events;
   @Autowired OperationLeaseRepository leases;
   @Autowired JdbcTemplate jdbc;
@@ -308,7 +311,7 @@ class OrderAssetServiceIntegrationTest {
         value -> {
           assertThat(value.equipmentId()).isEqualTo(equipmentId);
           assertThat(value.quantity()).isEqualTo(3);
-          assertThat(value.availableQuantity()).isEqualTo(6);
+          assertThat(value.availableQuantity()).isEqualTo(5);
         });
     assertThat(reservationReplay.replayed()).isTrue();
     assertThat(balance(equipmentId, warehouseId, rental.id(), "CABIN_NON_RENTED"))
@@ -606,7 +609,7 @@ class OrderAssetServiceIntegrationTest {
   }
 
   @Test
-  void publicWarehouseAndIncompatibleStatusChangesRequireReservationRelease() {
+  void administrativeCorrectionAndIncompatibleStatusChangesRequireReservationRelease() {
     UUID actorSubjectId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
     UUID nextWarehouseId = UUID.randomUUID();
@@ -620,11 +623,19 @@ class OrderAssetServiceIntegrationTest {
 
     assertThatThrownBy(
             () ->
-                assets.updateWarehouse(
-                    rental.id(),
-                    new UpdateWarehouseRequest(booked.version(), nextWarehouseId)))
+                administrativeCorrections.create(
+                    actorSubjectId,
+                    UUID.randomUUID(),
+                    new CreateCabinAdministrativeCorrectionRequest(
+                        AdministrativeCorrectionAssetKind.CABIN,
+                        rental.id(),
+                        booked.version(),
+                        warehouseId,
+                        nextWarehouseId,
+                        "booked cabin recorded at the wrong warehouse",
+                        "https://evidence.example/booked-cabin")))
         .isInstanceOf(AssetConflictException.class)
-        .hasMessageContaining("cannot change warehouse");
+        .hasMessageContaining("manual-status");
     assertThatThrownBy(
             () ->
                 assets.updateStatus(
@@ -648,9 +659,18 @@ class OrderAssetServiceIntegrationTest {
         rental.id(),
         new OrderActorRequest(actorSubjectId, "RENTAL_MANAGER"));
     RentalItemResponse released = assets.rentalItem(rental.id());
-    RentalItemResponse moved =
-        assets.updateWarehouse(
-            rental.id(), new UpdateWarehouseRequest(released.version(), nextWarehouseId));
+    administrativeCorrections.create(
+        actorSubjectId,
+        UUID.randomUUID(),
+        new CreateCabinAdministrativeCorrectionRequest(
+            AdministrativeCorrectionAssetKind.CABIN,
+            rental.id(),
+            released.version(),
+            warehouseId,
+            nextWarehouseId,
+            "released cabin recorded at the wrong warehouse",
+            "https://evidence.example/released-cabin"));
+    RentalItemResponse moved = assets.rentalItem(rental.id());
     RentalItemResponse ownNeeds =
         assets.updateStatus(
             rental.id(),

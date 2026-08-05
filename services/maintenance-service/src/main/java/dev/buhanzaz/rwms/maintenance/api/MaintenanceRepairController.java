@@ -2,6 +2,9 @@ package dev.buhanzaz.rwms.maintenance.api;
 
 import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.*;
 
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.PropertyDispositionDecisionResponse;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.WriteOffRepairRequest;
+import dev.buhanzaz.rwms.maintenance.disposition.application.PropertyDispositionApplicationService;
 import dev.buhanzaz.rwms.maintenance.security.MaintenanceAuthorizer;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
 import dev.buhanzaz.rwms.maintenance.domain.RepairAcceptanceState;
@@ -35,6 +38,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class MaintenanceRepairController {
   private final MaintenanceApplicationService service;
   private final MaintenanceAuthorizer access;
+  private final PropertyDispositionApplicationService dispositions;
 
   @GetMapping("/repairs")
   public ResponseEntity<PageResponse<RepairResponse>> list(
@@ -188,16 +192,19 @@ public class MaintenanceRepairController {
   }
 
   @PostMapping("/repairs/{id}/write-off")
-  public ResponseEntity<RepairCommandResult> writeOff(
+  public ResponseEntity<PropertyDispositionDecisionResponse> writeOff(
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID id,
       @RequestParam UUID warehouseId,
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody WriteOffRepairRequest request) {
-    access.requireManage(jwt, warehouseId);
-    requireWarehouse(id, warehouseId);
-    return idempotentOk(service.writeOff(
-        access.subjectId(jwt), idempotencyKey, id, request));
+    access.requireDispositionInitiator(jwt, warehouseId);
+    var result = dispositions.createRepairWriteOff(
+        access.subjectId(jwt), idempotencyKey, id, warehouseId, request);
+    ResponseEntity.BodyBuilder response = ResponseEntity.status(
+        result.replayed() ? HttpStatus.OK : HttpStatus.CREATED);
+    if (result.replayed()) response.header("Idempotency-Replayed", "true");
+    return response.body(result.response());
   }
 
   @GetMapping("/acceptance")
@@ -212,16 +219,6 @@ public class MaintenanceRepairController {
         .filter(value -> state == null || value.acceptanceState() == state)
         .toList();
     return page(values, page, size);
-  }
-
-  @GetMapping("/write-offs")
-  public PageResponse<WriteOffProjection> writeOffs(
-      @AuthenticationPrincipal Jwt jwt,
-      @RequestParam UUID warehouseId,
-      @RequestParam(defaultValue = "0") @Min(0) int page,
-      @RequestParam(defaultValue = "50") @Min(1) @Max(200) int size) {
-    access.requireRead(jwt, warehouseId);
-    return page(service.writeOffs(warehouseId), page, size);
   }
 
   private RepairResponse requireWarehouse(UUID id, UUID warehouseId) {

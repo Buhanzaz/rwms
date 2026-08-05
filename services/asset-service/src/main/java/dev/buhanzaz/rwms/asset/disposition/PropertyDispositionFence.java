@@ -64,6 +64,12 @@ public class PropertyDispositionFence {
   @Column(name = "quantity")
   private Long quantity;
 
+  @Column(name = "maintenance_custody_claim_id")
+  private UUID maintenanceCustodyClaimId;
+
+  @Column(name = "maintenance_custody_version")
+  private Long maintenanceCustodyVersion;
+
   @Enumerated(EnumType.STRING)
   @Column(name = "contents_mode", length = 32)
   private PropertyDispositionContentsMode contentsMode;
@@ -118,6 +124,8 @@ public class PropertyDispositionFence {
       UUID sourceBalanceId,
       Long expectedSourceBalanceVersion,
       Long quantity,
+      UUID maintenanceCustodyClaimId,
+      Long maintenanceCustodyVersion,
       PropertyDispositionContentsMode contentsMode,
       UUID maintenanceLeaseId,
       Long maintenanceLeaseFencingToken,
@@ -146,6 +154,8 @@ public class PropertyDispositionFence {
     value.sourceBalanceId = sourceBalanceId;
     value.expectedSourceBalanceVersion = expectedSourceBalanceVersion;
     value.quantity = quantity;
+    value.maintenanceCustodyClaimId = maintenanceCustodyClaimId;
+    value.maintenanceCustodyVersion = maintenanceCustodyVersion;
     value.contentsMode = contentsMode;
     value.maintenanceLeaseId = maintenanceLeaseId;
     value.maintenanceLeaseFencingToken = maintenanceLeaseFencingToken;
@@ -187,7 +197,7 @@ public class PropertyDispositionFence {
 
   @PreUpdate
   void preUpdate() {
-    updatedAt = now();
+    if (updatedAt == null) updatedAt = now();
   }
 
   public UUID getDecisionId() { return decisionId; }
@@ -201,6 +211,8 @@ public class PropertyDispositionFence {
   public UUID getSourceBalanceId() { return sourceBalanceId; }
   public Long getExpectedSourceBalanceVersion() { return expectedSourceBalanceVersion; }
   public Long getQuantity() { return quantity; }
+  public UUID getMaintenanceCustodyClaimId() { return maintenanceCustodyClaimId; }
+  public Long getMaintenanceCustodyVersion() { return maintenanceCustodyVersion; }
   public PropertyDispositionContentsMode getContentsMode() { return contentsMode; }
   public UUID getMaintenanceLeaseId() { return maintenanceLeaseId; }
   public Long getMaintenanceLeaseFencingToken() { return maintenanceLeaseFencingToken; }

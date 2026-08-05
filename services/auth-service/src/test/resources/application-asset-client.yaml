@@ -5,10 +5,10 @@ rwms:
         - client-id: asset-service
           client-name: Asset Service Warehouse Registry Client
           enabled: ${ASSET_WAREHOUSE_CLIENT_ENABLED:false}
-          revision: ${ASSET_WAREHOUSE_CLIENT_REVISION:2}
+          revision: ${ASSET_WAREHOUSE_CLIENT_REVISION:3}
           authentication-methods: [client_secret_basic]
           grant-types: [client_credentials]
-          scopes: [warehouse.read, media.asset-import]
+          scopes: [warehouse.read, warehouse.timezone.read, warehouse.operation.mark, warehouse.lifecycle.read, warehouse.lifecycle.confirm, media.asset-import]
           secret-environment: ASSET_WAREHOUSE_CLIENT_SECRET
           audiences: [rwms-services]
           access-token-ttl: 5m

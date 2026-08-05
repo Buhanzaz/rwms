@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.inventory.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -499,7 +500,7 @@ class InventoryInspectionApiContractIntegrationTest {
                 "5".repeat(64),
                 List.of(
                     new InventoryDependencyGateway.FurnitureSnapshotItem(
-                        equipmentId, 1L, "Стол", 0L, List.of()))));
+                        equipmentId, 1L, "Стол", 0L, 0L, List.of()))));
     ObjectNode start = mapper.createObjectNode();
     start.put("expectedSessionRevision", 0);
     start.put("acknowledgeIncomplete", true);
@@ -579,6 +580,167 @@ class InventoryInspectionApiContractIntegrationTest {
                 fixture.inventoryId()))
         .isZero();
     verify(dependencies, never()).reconcileFurniture(any(), any(), any());
+  }
+
+  @Test
+  void furnitureShortageCreatesLossDecisionAndDoesNotDirectlyDecreaseStock() throws Exception {
+    Fixture fixture = fixture("READY");
+    UUID equipmentId = UUID.randomUUID();
+    String snapshotSha256 = "7".repeat(64);
+    InventoryDependencyGateway.FurnitureSnapshot snapshot =
+        new InventoryDependencyGateway.FurnitureSnapshot(
+            fixture.warehouseId(),
+            snapshotSha256,
+            List.of(
+                new InventoryDependencyGateway.FurnitureSnapshotItem(
+                    equipmentId,
+                    4,
+                    "Стул",
+                    5,
+                    9L,
+                    List.of(
+                        new InventoryDependencyGateway.FurnitureSnapshotCabin(
+                            fixture.assetId(), 7, "БЫТ-API", "WAREHOUSE", 0)))));
+    when(dependencies.furnitureSnapshot(fixture.warehouseId(), List.of(fixture.assetId())))
+        .thenReturn(snapshot);
+    UUID decisionId = UUID.randomUUID();
+    when(dependencies.createInventoryLossDisposition(any(), any()))
+        .thenAnswer(
+            invocation -> {
+              InventoryDependencyGateway.InventoryLossDispositionRequest request =
+                  invocation.getArgument(1);
+              return new InventoryDependencyGateway.InventoryLossDisposition(
+                  decisionId,
+                  request.inventorySessionId(),
+                  request.findingId(),
+                  request.warehouseId(),
+                  request.equipmentId(),
+                  "LOSS",
+                  "PENDING_APPROVAL");
+            });
+
+    HttpResponse<String> inspection =
+        request(
+            inspectionPath(fixture),
+            requestBody(fixture, ObservationPresence.EXPLICIT_EMPTY, mapper.createArrayNode())
+                .toString());
+    assertThat(inspection.statusCode()).withFailMessage(inspection.body()).isEqualTo(200);
+    long inspectionFindingRevision =
+        mapper.readTree(inspection.body()).required("findingRevision").asLong();
+
+    ObjectNode start = mapper.createObjectNode();
+    start.put("expectedSessionRevision", 0);
+    start.put("acknowledgeIncomplete", false);
+    start
+        .putArray("findingRevisions")
+        .addObject()
+        .put("findingId", fixture.findingId().toString())
+        .put("expectedFindingRevision", inspectionFindingRevision);
+    HttpResponse<String> started =
+        post(
+            "/api/inventory/v1/sessions/"
+                + fixture.inventoryId()
+                + "/furniture-review/start",
+            start.toString());
+    assertThat(started.statusCode()).withFailMessage(started.body()).isEqualTo(200);
+
+    ObjectNode save = mapper.createObjectNode();
+    save.put(
+        "expectedSessionRevision",
+        mapper.readTree(started.body()).required("sessionRevision").asLong());
+    save.put("assetSnapshotSha256", snapshotSha256);
+    ObjectNode item = save.putArray("items").addObject();
+    item.put("equipmentId", equipmentId.toString());
+    item.put("catalogVersion", 4);
+    item.put("observedStockQuantity", 3);
+    item
+        .putArray("cabins")
+        .addObject()
+        .put("findingId", fixture.findingId().toString())
+        .put("expectedFindingRevision", inspectionFindingRevision)
+        .put("observedQuantity", 0);
+    HttpResponse<String> reviewed =
+        request(
+            "/api/inventory/v1/sessions/" + fixture.inventoryId() + "/furniture-review",
+            save.toString());
+    assertThat(reviewed.statusCode()).withFailMessage(reviewed.body()).isEqualTo(200);
+    long reviewedSessionRevision =
+        mapper.readTree(reviewed.body()).required("sessionRevision").asLong();
+    long reviewedFindingRevision =
+        jdbc.queryForObject(
+            "select finding_revision from inventory_finding where id=?",
+            Long.class,
+            fixture.findingId());
+    FinalPlanFixture finalPlan = prepareFinalPlan(fixture, reviewedSessionRevision);
+
+    ObjectNode previewRequest = mapper.createObjectNode();
+    previewRequest.put("expectedSessionRevision", reviewedSessionRevision);
+    previewRequest.put("finalPlanVersion", finalPlan.version());
+    previewRequest.put("finalPlanSha256", finalPlan.sha256());
+    previewRequest
+        .putArray("findingRevisions")
+        .addObject()
+        .put("findingId", fixture.findingId().toString())
+        .put("expectedFindingRevision", reviewedFindingRevision);
+    HttpResponse<String> preview =
+        post(
+            "/api/inventory/v1/sessions/"
+                + fixture.inventoryId()
+                + "/completion-preview",
+            previewRequest.toString());
+    assertThat(preview.statusCode()).withFailMessage(preview.body()).isEqualTo(200);
+    JsonNode previewBody = mapper.readTree(preview.body());
+
+    ObjectNode completeRequest = mapper.createObjectNode();
+    completeRequest.put("expectedSessionRevision", reviewedSessionRevision);
+    completeRequest.put("finalPlanVersion", finalPlan.version());
+    completeRequest.put("finalPlanSha256", finalPlan.sha256());
+    completeRequest.put(
+        "acknowledgementSha256", previewBody.required("acknowledgementSha256").asText());
+    completeRequest.put("validationSha256", previewBody.required("validationSha256").asText());
+    completeRequest
+        .putArray("findingRevisions")
+        .addObject()
+        .put("findingId", fixture.findingId().toString())
+        .put("expectedFindingRevision", reviewedFindingRevision);
+    HttpResponse<String> completed =
+        post(
+            "/api/inventory/v1/sessions/" + fixture.inventoryId() + "/complete",
+            completeRequest.toString());
+
+    assertThat(completed.statusCode()).withFailMessage(completed.body()).isEqualTo(200);
+    verify(dependencies)
+        .createInventoryLossDisposition(
+            any(),
+            argThat(
+                request ->
+                    request.inventorySessionId().equals(fixture.inventoryId())
+                        && request.equipmentId().equals(equipmentId)
+                        && request.expectedAssetVersion() == 4
+                        && request.expectedSourceBalanceVersion() == 9
+                        && request.quantity() == 2));
+    verify(dependencies)
+        .reconcileFurniture(
+            org.mockito.ArgumentMatchers.eq(fixture.inventoryId()),
+            any(),
+            argThat(
+                request ->
+                    request.items().size() == 1
+                        && request.items().getFirst().stockQuantity() == 5));
+    assertThat(
+            jdbc.queryForObject(
+                "select state from inventory_furniture_loss_intent where inventory_id=? and equipment_id=?",
+                String.class,
+                fixture.inventoryId(),
+                equipmentId))
+        .isEqualTo("SUCCEEDED");
+    assertThat(
+            jdbc.queryForObject(
+                "select decision_id from inventory_furniture_loss_intent where inventory_id=? and equipment_id=?",
+                UUID.class,
+                fixture.inventoryId(),
+                equipmentId))
+        .isEqualTo(decisionId);
   }
 
   @ParameterizedTest(name = "{0} title media returns canonical Problem Details")

@@ -1,6 +1,8 @@
 package dev.buhanzaz.rwms.maintenance;
 
 import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.*;
+import static dev.buhanzaz.rwms.maintenance.api.FurnitureEquipmentLinkApiModels.*;
+import static dev.buhanzaz.rwms.maintenance.api.WarehouseOperationMarkRecoveryApiModels.*;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -10,6 +12,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceCatalogController;
+import dev.buhanzaz.rwms.maintenance.api.FurnitureEquipmentLinkController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceEstimateController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceInventoryController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceLogisticsController;
@@ -17,6 +20,32 @@ import dev.buhanzaz.rwms.maintenance.api.MaintenanceRepairController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceRepairPlaceLogisticsController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceSettingsController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceTransferRepairController;
+import dev.buhanzaz.rwms.maintenance.api.WarehouseOperationMarkRecoveryController;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionController;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionInventoryController;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.ApprovePropertyDispositionRequest;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CabinContentsDispositionLine;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CabinContentsDispositionLineInput;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CabinContentsDispositionPlan;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CabinContentsDispositionPlanInput;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CreateCabinPropertyDispositionRequest;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CreateEquipmentPropertyDispositionRequest;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CreateInventoryLossDispositionRequest;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CreatePropertyDispositionRequest;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.CreateResult;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.PropertyDispositionDecisionResponse;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.PropertyDispositionPage;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.PropertyDispositionRepairChainEntry;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.RecoverPropertyDispositionRequest;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.RejectPropertyDispositionRequest;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.WriteOffRepairRequest;
+import dev.buhanzaz.rwms.maintenance.disposition.application.PropertyDispositionApplicationService;
+import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionAssetEffectState;
+import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionAssetKind;
+import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionContentsMode;
+import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionKind;
+import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionSource;
+import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionState;
 import dev.buhanzaz.rwms.maintenance.api.LogisticsCapitalRepairResponse;
 import dev.buhanzaz.rwms.maintenance.api.LogisticsRepairPlaceAllocationResponse;
 import dev.buhanzaz.rwms.maintenance.api.LogisticsRepairPlaceProjectionAllocationResponse;
@@ -48,6 +77,7 @@ import dev.buhanzaz.rwms.maintenance.domain.RepairStageKind;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStageState;
 import dev.buhanzaz.rwms.maintenance.security.MaintenanceAuthorizer;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
+import dev.buhanzaz.rwms.maintenance.service.FurnitureEquipmentLinkReviewService;
 import dev.buhanzaz.rwms.maintenance.service.InventoryMaintenanceService;
 import dev.buhanzaz.rwms.maintenance.service.InventoryPublicationReconciliationService;
 import dev.buhanzaz.rwms.maintenance.service.LogisticsReturnShortageService;
@@ -55,6 +85,8 @@ import dev.buhanzaz.rwms.maintenance.service.RepairCapacitySettingsService;
 import dev.buhanzaz.rwms.maintenance.service.RepairComplexityColorsService;
 import dev.buhanzaz.rwms.maintenance.service.RepairComplexitySettingsService;
 import dev.buhanzaz.rwms.maintenance.service.RepairPlaceService;
+import dev.buhanzaz.rwms.maintenance.service.WarehouseOperationMarkRecoveryService;
+import dev.buhanzaz.rwms.maintenance.service.WarehouseOperationMarkStore;
 import dev.buhanzaz.rwms.platform.contracts.ApiProblem;
 import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
 import jakarta.validation.Valid;
@@ -69,6 +101,7 @@ import java.lang.reflect.Type;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -115,12 +148,12 @@ class MaintenanceOpenApiParityTest {
   private static final List<OperationSpec> OPERATIONS = canonicalOperations();
 
   @Test
-  void allFortyFourPathsAndFiftyFiveOperationsExactlyMatchTheApprovedAcceptanceMatrix()
+  void allFiftyFourPathsAndSixtyFiveOperationsExactlyMatchTheApprovedAcceptanceMatrix()
       throws Exception {
     Map<String, Object> document = openApi();
-    assertThat(child(document, "paths")).hasSize(44);
-    assertThat(openApiOperationCount(document)).isEqualTo(55);
-    assertThat(controllerOperations()).hasSize(55);
+    assertThat(child(document, "paths")).hasSize(54);
+    assertThat(openApiOperationCount(document)).isEqualTo(65);
+    assertThat(controllerOperations()).hasSize(65);
 
     for (OperationSpec expected : OPERATIONS) {
       assertOpenApiOperation(document, expected);
@@ -136,6 +169,7 @@ class MaintenanceOpenApiParityTest {
         .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
 
     assertThat(inventoryPaths).containsExactly(
+        "/api/internal/maintenance/v1/inventory/dispositions",
         "/api/internal/maintenance/v1/inventory/plans",
         "/api/internal/maintenance/v1/inventory/repair-snapshots",
         "/api/internal/maintenance/v1/inventory/sources/{inventoryId}/findings/{findingId}",
@@ -313,7 +347,6 @@ class MaintenanceOpenApiParityTest {
     assertPage(document, "EstimatePage", EstimateResponse.class);
     assertPage(document, "RepairPage", RepairResponse.class);
     assertPage(document, "AcceptanceProjectionPage", AcceptanceProjection.class);
-    assertPage(document, "WriteOffProjectionPage", WriteOffProjection.class);
   }
 
   @Test
@@ -400,6 +433,15 @@ class MaintenanceOpenApiParityTest {
     assertEnum(document, RepairKind.class, "RepairKind");
     assertEnum(document, RepairExecutionState.class, "RepairExecutionState");
     assertEnum(document, RepairAcceptanceState.class, "RepairAcceptanceState");
+    assertEnum(document, PropertyDispositionAssetKind.class, "PropertyDispositionAssetKind");
+    assertEnum(document, PropertyDispositionKind.class, "PropertyDispositionKind");
+    assertEnum(document, PropertyDispositionSource.class, "PropertyDispositionSource");
+    assertEnum(document, PropertyDispositionState.class, "PropertyDispositionState");
+    assertEnum(
+        document,
+        PropertyDispositionAssetEffectState.class,
+        "PropertyDispositionAssetEffectState");
+    assertEnum(document, PropertyDispositionContentsMode.class, "CabinContentsDispositionMode");
     assertEnum(document, RepairReclassificationState.class, "RepairReclassificationState");
     assertEnum(document, RepairPlaceAllocationState.class, "RepairPlaceAllocationState");
     assertEnum(document, RepairStageKind.class, "RepairStageKind");
@@ -407,6 +449,11 @@ class MaintenanceOpenApiParityTest {
     assertEnum(document, CatalogNodeType.class, "CatalogNodeType");
     assertEnum(document, CatalogLinkType.class, "CatalogLinkType");
     assertEnum(document, CatalogLinkAnchor.class, "CatalogLinkAnchor");
+    assertEnum(document, FurnitureEquipmentLinkState.class, "FurnitureEquipmentLinkState");
+    assertEnum(
+        document,
+        FurnitureEquipmentLinkReviewAction.class,
+        "FurnitureEquipmentLinkReviewAction");
     assertEnum(document, DeliveryState.class, "DeliveryState");
     assertEnum(document, LeaseReconciliationState.class, "LeaseReconciliationState");
     assertEnum(document, GenerationState.class, "GenerationState");
@@ -447,13 +494,21 @@ class MaintenanceOpenApiParityTest {
     RepairComplexitySettingsService complexitySettings = complexitySettingsFixture();
     RepairComplexityColorsService colors = colorsFixture();
     RepairPlaceService repairPlaces = repairPlacesFixture();
+    PropertyDispositionApplicationService dispositions = dispositionFixture();
+    WarehouseOperationMarkRecoveryService operationMarkRecovery =
+        warehouseOperationMarkRecoveryFixture();
+    FurnitureEquipmentLinkReviewService furnitureLinks = furnitureLinkReviewFixture();
     MaintenanceAuthorizer authorizer = mock(MaintenanceAuthorizer.class);
     when(authorizer.subjectId(null)).thenReturn(ID);
     MockMvc mvc = MockMvcBuilders.standaloneSetup(
             new MaintenanceCatalogController(service, authorizer),
+            new FurnitureEquipmentLinkController(furnitureLinks, authorizer),
             new MaintenanceEstimateController(service, authorizer),
-            new MaintenanceRepairController(service, authorizer),
+            new MaintenanceRepairController(service, authorizer, dispositions),
             new MaintenanceInventoryController(inventory, publications, service, authorizer),
+            new PropertyDispositionController(dispositions, authorizer),
+            new PropertyDispositionInventoryController(dispositions, authorizer),
+            new WarehouseOperationMarkRecoveryController(operationMarkRecovery, authorizer),
             new MaintenanceLogisticsController(logistics, authorizer),
             new MaintenanceTransferRepairController(service, authorizer),
             new MaintenanceRepairPlaceLogisticsController(
@@ -476,6 +531,9 @@ class MaintenanceOpenApiParityTest {
               .replace("{returnId}", ID.toString())
               .replace("{transferId}", ID.toString())
               .replace("{repairId}", ID.toString())
+              .replace("{decisionId}", ID.toString())
+              .replace("{operationId}", ID.toString())
+              .replace("{nodeId}", ID.toString())
               .replace("{lineId}", ID.toString())
               .replace("{warehouseId}", ID.toString()));
       for (ParameterSpec parameter : operation.parameters()) {
@@ -524,6 +582,8 @@ class MaintenanceOpenApiParityTest {
         path("id"), query("warehouseId", true, "uuid", null));
     List<ParameterSpec> repairId = List.of(
         path("id"), query("warehouseId", true, "uuid", null));
+    List<ParameterSpec> dispositionId = List.of(
+        path("decisionId"), query("warehouseId", true, "uuid", null));
     List<ParameterSpec> repairCapacityWarehouse = List.of(path("warehouseId"));
     List<ParameterSpec> idempotency = List.of(requiredHeader("Idempotency-Key"));
     List<OperationSpec> result = new ArrayList<>();
@@ -563,11 +623,38 @@ class MaintenanceOpenApiParityTest {
         MaintenanceCatalogController.class, "activate", append(catalogId, requiredHeader("Idempotency-Key")),
         VersionCommand.class, "ExpectedVersionRequest", "200", "CatalogVersion", true,
         "400", "401", "403", "404", "409", "422", "503"));
+    result.add(op("GET", "/api/maintenance/v1/catalog/furniture-equipment-links",
+        "listFurnitureEquipmentLinks", FurnitureEquipmentLinkController.class, "list",
+        append(warehousePage,
+            query("state", false, "$FurnitureEquipmentLinkState", null)),
+        null, null, "200", "FurnitureEquipmentLinkPage", false,
+        "400", "401", "403"));
+    result.add(op("POST",
+        "/api/maintenance/v1/catalog/furniture-equipment-links/{nodeId}/review",
+        "reviewFurnitureEquipmentLink", FurnitureEquipmentLinkController.class, "review",
+        List.of(path("nodeId"), query("warehouseId", true, "uuid", null)),
+        FurnitureEquipmentLinkReviewRequest.class, "FurnitureEquipmentLinkReviewRequest",
+        "200", "FurnitureEquipmentLink", true,
+        "400", "401", "403", "404", "409"));
 
     result.add(op("POST", "/api/internal/maintenance/v1/inventory/plans",
         "freezeInventoryRepairPlan", MaintenanceInventoryController.class, "freezePlan",
         List.of(), FreezeInventoryPlanRequest.class, "FreezeInventoryPlanRequest",
         "200", "FrozenInventoryPlan", true, "400", "401", "403", "409", "422"));
+    result.add(opWithAlternateSuccess(
+        "POST",
+        "/api/internal/maintenance/v1/inventory/dispositions",
+        "createInventoryLossDisposition",
+        PropertyDispositionInventoryController.class,
+        "createLoss",
+        idempotency,
+        CreateInventoryLossDispositionRequest.class,
+        "CreateInventoryLossDispositionRequest",
+        "200",
+        "201",
+        "PropertyDispositionDecision",
+        true,
+        "400", "401", "403", "409"));
     result.add(op("POST", "/api/internal/maintenance/v1/inventory/repair-snapshots",
         "getInventoryRepairSnapshots", MaintenanceInventoryController.class, "repairSnapshots",
         List.of(), InventoryRepairSnapshotRequest.class, "InventoryRepairSnapshotRequest",
@@ -823,17 +910,56 @@ class MaintenanceOpenApiParityTest {
         MaintenanceRepairController.class, "accept", append(repairId, requiredHeader("Idempotency-Key")),
         RepairDecisionRequest.class, "RepairDecisionRequest", "200", "RepairCommandResult", true,
         "400", "401", "403", "404", "409", "422", "503"));
-    result.add(op("POST", "/api/maintenance/v1/repairs/{id}/write-off", "writeOffRepair",
+    result.add(opWithAlternateSuccess(
+        "POST", "/api/maintenance/v1/repairs/{id}/write-off", "writeOffRepair",
         MaintenanceRepairController.class, "writeOff", append(repairId, requiredHeader("Idempotency-Key")),
-        WriteOffRepairRequest.class, "WriteOffRepairRequest", "200", "RepairCommandResult", true,
+        WriteOffRepairRequest.class, "WriteOffRepairRequest", "200", "201", "PropertyDispositionDecision", true,
         "400", "401", "403", "404", "409", "422", "503"));
     result.add(op("GET", "/api/maintenance/v1/acceptance", "listAcceptanceProjection",
         MaintenanceRepairController.class, "acceptance",
         append(warehousePage, query("state", false, "$RepairAcceptanceState", null)),
         null, null, "200", "AcceptanceProjectionPage", false, "401", "403"));
     result.add(op("GET", "/api/maintenance/v1/write-offs", "listWriteOffProjection",
-        MaintenanceRepairController.class, "writeOffs", warehousePage,
-        null, null, "200", "WriteOffProjectionPage", false, "401", "403"));
+        PropertyDispositionController.class, "writeOffs",
+        append(warehousePage, query("state", false, "$PropertyDispositionState", null)),
+        null, null, "200", "PropertyDispositionPage", false, "401", "403"));
+    result.add(op("GET", "/api/maintenance/v1/losses", "listLossProjection",
+        PropertyDispositionController.class, "losses",
+        append(warehousePage, query("state", false, "$PropertyDispositionState", null)),
+        null, null, "200", "PropertyDispositionPage", false, "401", "403"));
+    result.add(opWithAlternateSuccess(
+        "POST", "/api/maintenance/v1/dispositions", "createPropertyDisposition",
+        PropertyDispositionController.class, "create", idempotency,
+        CreatePropertyDispositionRequest.class, "CreatePropertyDispositionRequest",
+        "200", "201", "PropertyDispositionDecision", true,
+        "400", "401", "403", "404", "409", "503"));
+    result.add(op("GET", "/api/maintenance/v1/dispositions/{decisionId}", "getPropertyDisposition",
+        PropertyDispositionController.class, "get", dispositionId,
+        null, null, "200", "PropertyDispositionDecision", false, "401", "403", "404"));
+    result.add(op("POST", "/api/maintenance/v1/dispositions/{decisionId}/approve",
+        "approvePropertyDisposition", PropertyDispositionController.class, "approve",
+        dispositionId,
+        ApprovePropertyDispositionRequest.class, "ApprovePropertyDispositionRequest",
+        "200", "PropertyDispositionDecision", false,
+        "400", "401", "403", "404", "409", "503"));
+    result.add(op("POST", "/api/maintenance/v1/dispositions/{decisionId}/reject",
+        "rejectPropertyDisposition", PropertyDispositionController.class, "reject",
+        dispositionId,
+        RejectPropertyDispositionRequest.class, "RejectPropertyDispositionRequest",
+        "200", "PropertyDispositionDecision", false,
+        "400", "401", "403", "404", "409"));
+    result.add(op("POST", "/api/maintenance/v1/dispositions/{decisionId}/recovery",
+        "recoverPropertyDisposition", PropertyDispositionController.class, "recover",
+        dispositionId,
+        RecoverPropertyDispositionRequest.class, "RecoverPropertyDispositionRequest",
+        "200", "PropertyDispositionDecision", false,
+        "400", "401", "403", "404", "409", "503"));
+    result.add(op("POST", "/api/maintenance/v1/warehouse-operation-marks/{operationId}/recovery",
+        "recoverWarehouseOperationMark", WarehouseOperationMarkRecoveryController.class, "recover",
+        List.of(path("operationId"), query("warehouseId", true, "uuid", null)),
+        WarehouseOperationMarkRecoveryRequest.class, "WarehouseOperationMarkRecoveryRequest",
+        "200", "WarehouseOperationMarkRecoveryResponse", true,
+        "400", "401", "403", "404", "409"));
     result.add(op("GET",
         "/api/maintenance/v1/settings/repair-capacity/{warehouseId}",
         "getRepairCapacitySettings", MaintenanceSettingsController.class, "get",
@@ -1049,7 +1175,9 @@ class MaintenanceOpenApiParityTest {
       return "LogisticsCapitalRepairPage";
     }
     if (itemType == AcceptanceProjection.class) return "AcceptanceProjectionPage";
-    if (itemType == WriteOffProjection.class) return "WriteOffProjectionPage";
+    if (itemType == FurnitureEquipmentLinkResponse.class) {
+      return "FurnitureEquipmentLinkPage";
+    }
     throw new AssertionError("No page schema for " + itemType.getName());
   }
 
@@ -1187,8 +1315,17 @@ class MaintenanceOpenApiParityTest {
             .toList();
       }
       assertThat(candidates).as(path + " oneOf").hasSize(1);
+      if (schema.containsKey("type")) {
+        Map<String, Object> base = new LinkedHashMap<>(schema);
+        base.remove("oneOf");
+        assertJsonMatchesSchema(document, node, base, path);
+      }
       assertJsonMatchesSchema(document, node, candidates.getFirst(), path);
       return;
+    }
+    if (schema.containsKey("const")) {
+      assertThat(node).as(path).isEqualTo(MAPPER.valueToTree(schema.get("const")));
+      if (!schema.containsKey("type")) return;
     }
     Object enumDeclaration = schema.get("enum");
     if (enumDeclaration instanceof List<?> values) {
@@ -1208,8 +1345,20 @@ class MaintenanceOpenApiParityTest {
         }
         assertThat(actual).as(path + " required")
             .containsAll(stringList(schema.get("required")));
-        node.properties().forEach(entry -> assertJsonMatchesSchema(
-            document, entry.getValue(), child(properties, entry.getKey()), path + "." + entry.getKey()));
+        boolean closedShape = schema.containsKey("additionalProperties") || schema.containsKey("required");
+        Iterable<Map.Entry<String, JsonNode>> propertiesToValidate = closedShape
+            ? node.properties()::iterator
+            : properties.entrySet().stream()
+                .filter(entry -> node.has(entry.getKey()))
+                .map(entry -> Map.entry(entry.getKey(), node.get(entry.getKey())))
+                .toList();
+        propertiesToValidate.forEach(entry -> {
+          Map<String, Object> propertySchema = map(properties.get(entry.getKey()));
+          assertThat(propertySchema)
+              .as(path + " missing schema property " + entry.getKey())
+              .isNotNull();
+          assertJsonMatchesSchema(document, entry.getValue(), propertySchema, path + "." + entry.getKey());
+        });
       }
       case "array" -> {
         assertThat(node.isArray()).as(path).isTrue();
@@ -1289,7 +1438,6 @@ class MaintenanceOpenApiParityTest {
       case "completeTransferArrival" -> createResult(CompleteTransferRepairResponse.class);
       case "activateQueuedRepairAfterDelivery" -> null;
       case "acceptance" -> List.of(sample(AcceptanceProjection.class, "acceptance"));
-      case "writeOffs" -> List.of(sample(WriteOffProjection.class, "writeOff"));
       default -> invocation.callRealMethod();
     });
   }
@@ -1312,6 +1460,101 @@ class MaintenanceOpenApiParityTest {
         org.mockito.ArgumentMatchers.any()))
         .thenReturn(new InventoryMaintenanceService.UpsertResult(ID, source, delivery, true));
     return inventory;
+  }
+
+  private static PropertyDispositionApplicationService dispositionFixture() throws Exception {
+    PropertyDispositionApplicationService service = mock(PropertyDispositionApplicationService.class);
+    PropertyDispositionDecisionResponse decision =
+        (PropertyDispositionDecisionResponse)
+            sample(PropertyDispositionDecisionResponse.class, "propertyDispositionDecision");
+    PropertyDispositionPage page =
+        (PropertyDispositionPage) sample(PropertyDispositionPage.class, "propertyDispositionPage");
+    CreateResult created = new CreateResult(decision, true);
+    when(service.createManual(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any()))
+        .thenReturn(created);
+    when(service.createRepairWriteOff(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any()))
+        .thenReturn(created);
+    when(service.createInventoryLoss(
+            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+        .thenReturn(created);
+    when(service.get(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+        .thenReturn(decision);
+    when(service.approve(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any()))
+        .thenReturn(decision);
+    when(service.reject(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any()))
+        .thenReturn(decision);
+    when(service.recover(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any()))
+        .thenReturn(decision);
+    when(service.list(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.anyInt(),
+            org.mockito.ArgumentMatchers.anyInt()))
+        .thenReturn(page);
+    return service;
+  }
+
+  private static WarehouseOperationMarkRecoveryService warehouseOperationMarkRecoveryFixture() {
+    WarehouseOperationMarkRecoveryService service =
+        mock(WarehouseOperationMarkRecoveryService.class);
+    when(service.recover(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.anyLong(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any()))
+        .thenReturn(new WarehouseOperationMarkStore.RecoveryResult(
+            ID,
+            ID,
+            "PENDING",
+            0,
+            1,
+            "HTTP_503",
+            ID,
+            "Reviewed recovery",
+            OffsetDateTime.parse("2026-08-05T00:00:00Z"),
+            true));
+    return service;
+  }
+
+  private static FurnitureEquipmentLinkReviewService furnitureLinkReviewFixture()
+      throws Exception {
+    FurnitureEquipmentLinkReviewService service = mock(FurnitureEquipmentLinkReviewService.class);
+    FurnitureEquipmentLinkResponse response = (FurnitureEquipmentLinkResponse) sample(
+        FurnitureEquipmentLinkResponse.class, "furnitureEquipmentLink");
+    when(service.list(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.anyInt(),
+            org.mockito.ArgumentMatchers.anyInt()))
+        .thenReturn(new PageResponse<>(List.of(response), 0, 50, 1));
+    when(service.review(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.anyLong(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any()))
+        .thenReturn(new FurnitureEquipmentLinkReviewService.ReviewedLink(response, true));
+    return service;
   }
 
   private static InventoryPublicationReconciliationService publicationsFixture() throws Exception {
@@ -1453,10 +1696,14 @@ class MaintenanceOpenApiParityTest {
     if (raw == int.class || raw == Integer.class) return 1;
     if (raw == long.class || raw == Long.class) return 1L;
     if (raw == LocalDate.class) return LocalDate.of(2026, 7, 16);
+    if (raw == Instant.class) return Instant.parse("2026-07-16T12:00:00Z");
     if (raw == OffsetDateTime.class) return OffsetDateTime.parse("2026-07-16T12:00:00Z");
     if (raw.isEnum()) return raw.getEnumConstants()[0];
     if (raw == ReworkLineInput.class) {
       return sample(AddedReworkLineInput.class, name);
+    }
+    if (raw == CreatePropertyDispositionRequest.class) {
+      return sample(CreateCabinPropertyDispositionRequest.class, name);
     }
     if (raw.isRecord()) return canonicalConstructor(raw).newInstance(sampleArguments(raw));
     throw new AssertionError("No JSON fixture for " + type);
@@ -1484,9 +1731,21 @@ class MaintenanceOpenApiParityTest {
           arguments[index] = null;
         }
       }
+      if (recordType == CreateCabinPropertyDispositionRequest.class
+          && "assetKind".equals(components[index].getName())) {
+        arguments[index] = PropertyDispositionAssetKind.CABIN;
+      }
+      if (recordType == CreateEquipmentPropertyDispositionRequest.class
+          && "assetKind".equals(components[index].getName())) {
+        arguments[index] = PropertyDispositionAssetKind.EQUIPMENT;
+      }
       if (recordType == PrepareTransferRepairResponse.class
           && "assetStatus".equals(components[index].getName())) {
         arguments[index] = "FREE";
+      }
+      if (recordType == WarehouseOperationMarkRecoveryResponse.class
+          && "state".equals(components[index].getName())) {
+        arguments[index] = "PENDING";
       }
       if (recordType == RepairComplexitySnapshot.class) {
         if ("name".equals(components[index].getName())) {
@@ -1570,6 +1829,32 @@ class MaintenanceOpenApiParityTest {
   private static Map<Class<?>, String> schemaMappings() {
     Map<Class<?>, String> values = new LinkedHashMap<>();
     values.put(ActorSnapshot.class, "ActorSnapshot");
+    values.put(CabinContentsDispositionLineInput.class, "CabinContentsDispositionLineInput");
+    values.put(CabinContentsDispositionPlanInput.class, "CabinContentsDispositionPlanInput");
+    values.put(CabinContentsDispositionLine.class, "CabinContentsDispositionLine");
+    values.put(CabinContentsDispositionPlan.class, "CabinContentsDispositionPlan");
+    values.put(CreateCabinPropertyDispositionRequest.class, "CreateCabinPropertyDispositionRequest");
+    values.put(
+        CreateEquipmentPropertyDispositionRequest.class,
+        "CreateEquipmentPropertyDispositionRequest");
+    values.put(CreateInventoryLossDispositionRequest.class, "CreateInventoryLossDispositionRequest");
+    values.put(ApprovePropertyDispositionRequest.class, "ApprovePropertyDispositionRequest");
+    values.put(RejectPropertyDispositionRequest.class, "RejectPropertyDispositionRequest");
+    values.put(RecoverPropertyDispositionRequest.class, "RecoverPropertyDispositionRequest");
+    values.put(
+        WarehouseOperationMarkRecoveryRequest.class,
+        "WarehouseOperationMarkRecoveryRequest");
+    values.put(
+        WarehouseOperationMarkRecoveryResponse.class,
+        "WarehouseOperationMarkRecoveryResponse");
+    values.put(
+        FurnitureEquipmentLinkReviewRequest.class,
+        "FurnitureEquipmentLinkReviewRequest");
+    values.put(FurnitureEquipmentLinkResponse.class, "FurnitureEquipmentLink");
+    values.put(WriteOffRepairRequest.class, "WriteOffRepairRequest");
+    values.put(PropertyDispositionRepairChainEntry.class, "PropertyDispositionRepairChainEntry");
+    values.put(PropertyDispositionDecisionResponse.class, "PropertyDispositionDecision");
+    values.put(PropertyDispositionPage.class, "PropertyDispositionPage");
     values.put(LogisticsEquipmentShortage.class, "LogisticsEquipmentShortage");
     values.put(UpsertLogisticsReturnShortageRequest.class, "UpsertLogisticsReturnShortageRequest");
     values.put(LogisticsReturnShortageResponse.class, "LogisticsReturnShortage");
@@ -1684,15 +1969,25 @@ class MaintenanceOpenApiParityTest {
     values.put(ReworkCandidateLine.class, "ReworkCandidateLine");
     values.put(ReworkCandidatesResponse.class, "ReworkCandidates");
     values.put(RepairDecisionRequest.class, "RepairDecisionRequest");
-    values.put(WriteOffRepairRequest.class, "WriteOffRepairRequest");
     values.put(EstimateCommandResult.class, "EstimateCommandResult");
     values.put(RepairCommandResult.class, "RepairCommandResult");
     values.put(AcceptanceProjection.class, "AcceptanceProjection");
-    values.put(WriteOffProjection.class, "WriteOffProjection");
     values.put(CatalogVersionState.class, "CatalogLifecycle");
     values.put(EstimateState.class, "EstimateLifecycle");
     values.put(RepairExecutionState.class, "RepairExecutionState");
     values.put(RepairAcceptanceState.class, "RepairAcceptanceState");
+    values.put(PropertyDispositionAssetKind.class, "PropertyDispositionAssetKind");
+    values.put(PropertyDispositionKind.class, "PropertyDispositionKind");
+    values.put(PropertyDispositionSource.class, "PropertyDispositionSource");
+    values.put(PropertyDispositionState.class, "PropertyDispositionState");
+    values.put(FurnitureEquipmentLinkState.class, "FurnitureEquipmentLinkState");
+    values.put(
+        FurnitureEquipmentLinkReviewAction.class,
+        "FurnitureEquipmentLinkReviewAction");
+    values.put(
+        PropertyDispositionAssetEffectState.class,
+        "PropertyDispositionAssetEffectState");
+    values.put(PropertyDispositionContentsMode.class, "CabinContentsDispositionMode");
     values.put(InventoryPlanMode.class, "InventoryPlanMode");
     values.put(InventoryPlanLineKind.class, "InventoryPlanLineKind");
     values.put(InventoryPlanLineType.class, "InventoryPlanLineType");
@@ -1726,6 +2021,20 @@ class MaintenanceOpenApiParityTest {
 
   private static Map<Class<?>, String> requestSchemaMappings() {
     Map<Class<?>, String> values = new LinkedHashMap<>();
+    values.put(CabinContentsDispositionLineInput.class, "CabinContentsDispositionLineInput");
+    values.put(CabinContentsDispositionPlanInput.class, "CabinContentsDispositionPlanInput");
+    values.put(CreateCabinPropertyDispositionRequest.class, "CreateCabinPropertyDispositionRequest");
+    values.put(
+        CreateEquipmentPropertyDispositionRequest.class,
+        "CreateEquipmentPropertyDispositionRequest");
+    values.put(CreateInventoryLossDispositionRequest.class, "CreateInventoryLossDispositionRequest");
+    values.put(ApprovePropertyDispositionRequest.class, "ApprovePropertyDispositionRequest");
+    values.put(RejectPropertyDispositionRequest.class, "RejectPropertyDispositionRequest");
+    values.put(RecoverPropertyDispositionRequest.class, "RecoverPropertyDispositionRequest");
+    values.put(
+        FurnitureEquipmentLinkReviewRequest.class,
+        "FurnitureEquipmentLinkReviewRequest");
+    values.put(WriteOffRepairRequest.class, "WriteOffRepairRequest");
     values.put(LogisticsEquipmentShortage.class, "LogisticsEquipmentShortage");
     values.put(UpsertLogisticsReturnShortageRequest.class, "UpsertLogisticsReturnShortageRequest");
     values.put(TransferRepairRequest.class, "TransferRepairRequest");
@@ -1795,7 +2104,37 @@ class MaintenanceOpenApiParityTest {
       String... errors) {
     return new OperationSpec(
         method, path, operationId, controller, controllerMethod, List.copyOf(parameters),
-        bodyType, bodySchema, successStatus, responseSchema, idempotent, List.of(errors));
+        bodyType, bodySchema, successStatus, List.of(), responseSchema, idempotent, List.of(errors));
+  }
+
+  private static OperationSpec opWithAlternateSuccess(
+      String method,
+      String path,
+      String operationId,
+      Class<?> controller,
+      String controllerMethod,
+      List<ParameterSpec> parameters,
+      Class<?> bodyType,
+      String bodySchema,
+      String successStatus,
+      String alternateSuccessStatus,
+      String responseSchema,
+      boolean idempotent,
+      String... errors) {
+    return new OperationSpec(
+        method,
+        path,
+        operationId,
+        controller,
+        controllerMethod,
+        List.copyOf(parameters),
+        bodyType,
+        bodySchema,
+        successStatus,
+        List.of(alternateSuccessStatus),
+        responseSchema,
+        idempotent,
+        List.of(errors));
   }
 
   private static ParameterSpec path(String name) {
@@ -1851,7 +2190,11 @@ class MaintenanceOpenApiParityTest {
         MaintenanceSettingsController.class,
         RepairComplexitySettingsController.class,
         RepairPlaceController.class,
-        RepairComplexityColorsController.class)) {
+        RepairComplexityColorsController.class,
+        PropertyDispositionController.class,
+        PropertyDispositionInventoryController.class,
+        WarehouseOperationMarkRecoveryController.class,
+        FurnitureEquipmentLinkController.class)) {
       RequestMapping root = AnnotatedElementUtils.findMergedAnnotation(controller, RequestMapping.class);
       for (Method method : controller.getDeclaredMethods()) {
         RequestMapping mapping = AnnotatedElementUtils.findMergedAnnotation(method, RequestMapping.class);
@@ -1967,6 +2310,7 @@ class MaintenanceOpenApiParityTest {
       Class<?> bodyType,
       String bodySchema,
       String successStatus,
+      List<String> alternateSuccessStatuses,
       String responseSchema,
       boolean idempotent,
       List<String> errors) {
@@ -1977,6 +2321,7 @@ class MaintenanceOpenApiParityTest {
     Set<String> allStatuses() {
       Set<String> result = new LinkedHashSet<>();
       result.add(successStatus);
+      result.addAll(alternateSuccessStatuses);
       result.addAll(errors);
       return result;
     }

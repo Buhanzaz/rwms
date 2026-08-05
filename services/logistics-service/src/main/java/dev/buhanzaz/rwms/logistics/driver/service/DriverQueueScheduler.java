@@ -500,8 +500,10 @@ public class DriverQueueScheduler {
 
   private LocalDate warehouseToday(UUID warehouseId) {
     try {
-      return LocalDate.now(
-          ZoneId.of(dependencies.readWarehouseIdentity(warehouseId).timeZone()));
+      OffsetDateTime at = OffsetDateTime.now(ZoneOffset.UTC);
+      return at.toInstant()
+          .atZone(ZoneId.of(dependencies.warehouseTimeZoneAt(warehouseId, at).timeZone()))
+          .toLocalDate();
     } catch (RuntimeException exception) {
       throw new LogisticsConflictException(
           "Для склада не настроен корректный часовой пояс");

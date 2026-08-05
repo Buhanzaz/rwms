@@ -46,8 +46,23 @@
       "properties": {
         "warehouseId": {"type": "string", "format": "uuid"},
         "timeZone": {"type": "string", "minLength": 1, "maxLength": 64},
+        "timeZoneDecision": {
+          "oneOf": [
+            {"$ref": "#/$defs/timeZoneDecision"},
+            {"type": "null"}
+          ]
+        },
         "active": {"type": "boolean"},
         "sortOrder": {"oneOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]}
+      }
+    },
+    "timeZoneDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timeZone", "effectiveFrom"],
+      "properties": {
+        "timeZone": {"type": "string", "minLength": 1, "maxLength": 64},
+        "effectiveFrom": {"type": "string", "format": "date-time"}
       }
     }
   }

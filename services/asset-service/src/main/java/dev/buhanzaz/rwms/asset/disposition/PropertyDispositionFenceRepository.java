@@ -26,8 +26,9 @@ public interface PropertyDispositionFenceRepository
         and fence.assetId = :assetId
         and fence.warehouseId = :warehouseId
         and fence.state = :state
+        and fence.maintenanceCustodyClaimId is null
       """)
-  Optional<PropertyDispositionFence> findByAssetForUpdate(
+  Optional<PropertyDispositionFence> findByPhysicalAssetForUpdate(
       @Param("assetKind") PropertyAssetKind assetKind,
       @Param("assetId") UUID assetId,
       @Param("warehouseId") UUID warehouseId,

@@ -22,7 +22,15 @@ channels:
     messages: { factV1: { $ref: '#/components/messages/AssetFactV1' } }
   equipmentCatalogFacts: { address: rwms.asset.equipment-catalog.v1, messages: { factV1: { $ref: '#/components/messages/AssetFactV1' } } }
   equipmentBalanceFacts: { address: rwms.asset.equipment-balance.v1, messages: { factV1: { $ref: '#/components/messages/AssetFactV1' } } }
-  equipmentMovementFacts: { address: rwms.asset.equipment-movement.v1, messages: { factV1: { $ref: '#/components/messages/AssetFactV1' } } }
+  equipmentMovementFacts:
+    address: rwms.asset.equipment-movement.v1
+    description: >-
+      Append-only movement facts. Facts committed from asset migration V30
+      include one coherent immutable source/target warehouse, cabin and
+      location context plus the equipment category, so consumers do not join
+      independently ordered balance streams. Older retained facts remain
+      valid without that optional context and are never rewritten.
+    messages: { factV1: { $ref: '#/components/messages/AssetFactV1' } }
   equipmentHoldFacts: { address: rwms.asset.equipment-allocation-hold.v1, messages: { factV1: { $ref: '#/components/messages/AssetFactV1' } } }
   operationLeaseFacts: { address: rwms.asset.operation-lease.v1, messages: { factV1: { $ref: '#/components/messages/AssetFactV1' } } }
   classifierFacts: { address: rwms.asset.classifier.v1, messages: { factV1: { $ref: '#/components/messages/AssetFactV1' } } }

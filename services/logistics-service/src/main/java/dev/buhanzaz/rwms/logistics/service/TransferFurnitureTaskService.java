@@ -11,9 +11,12 @@ import dev.buhanzaz.rwms.logistics.equipment.api.EquipmentMovementTaskApiModels.
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTask;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
 import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskService;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.mapper.TransferFurnitureTaskResponseMapper;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.repository.TransferFurnitureMovementTaskRepository;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -32,6 +35,7 @@ public class TransferFurnitureTaskService {
   private final TransferFurnitureMovementTaskRepository links;
   private final CabinFurnitureTaskService cabinFurnitureTasks;
   private final EquipmentMovementTaskService movementTasks;
+  private final LogisticsWarehouseLifecycle warehouseLifecycle;
   private final TransferFurnitureTaskResponseMapper mapper;
 
   /**
@@ -85,15 +89,49 @@ public class TransferFurnitureTaskService {
     if (replacements == null || replacements.isEmpty()) {
       return;
     }
+    AdmissionTicket admission =
+        warehouseLifecycle.disabledTicket(
+            actorSubjectId,
+            "CREATE_TRANSFER_FURNITURE_TASKS",
+            document.getId(),
+            List.of(
+                new AdmissionRequirement(
+                    document.getWarehouseId(), WarehouseOperationDirection.OUTGOING)));
+    createForTransfer(actorSubjectId, document, scheduledDate, replacements, admission);
+  }
+
+  @Transactional
+  public void createForTransfer(
+      UUID actorSubjectId,
+      LogisticsDocument document,
+      LocalDate scheduledDate,
+      List<TransferFurnitureReplacementRequest> replacements,
+      AdmissionTicket parentAdmission) {
+    if (replacements == null || replacements.isEmpty()) {
+      return;
+    }
+    AdmissionRequirement sourceRequirement =
+        new AdmissionRequirement(
+            document.getWarehouseId(), WarehouseOperationDirection.OUTGOING);
+    if (parentAdmission == null || !parentAdmission.requirements().contains(sourceRequirement)) {
+      throw new LogisticsConflictException(
+          "Warehouse admission ticket does not match transfer furniture tasks");
+    }
     for (TransferFurnitureReplacementRequest replacement : replacements) {
+      UUID taskKey = taskIdempotencyKey(document.getId(), replacement.assetId());
+      AdmissionTicket childAdmission =
+          warehouseLifecycle.ownedContinuation(
+              parentAdmission.operationId(), taskKey, List.of(sourceRequirement));
       var task =
           cabinFurnitureTasks.create(
               actorSubjectId,
-              taskIdempotencyKey(document.getId(), replacement.assetId()),
+              taskKey,
               document.getWarehouseId(),
               replacement.assetId(),
               scheduledDate,
-              replacement.contents());
+              replacement.contents(),
+              childAdmission,
+              parentAdmission.localDate(document.getWarehouseId()));
       if (task.taskId() == null) {
         continue;
       }

@@ -162,6 +162,24 @@ spring:
             client-secret: ${TASK_BOARD_CLIENT_SECRET}
             authorization-grant-type: client_credentials
             scope: worker-credentials.manage
+          warehouse-lifecycle-read:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: ${TASK_BOARD_CLIENT_SECRET}
+            authorization-grant-type: client_credentials
+            scope: warehouse.lifecycle.read
+          warehouse-lifecycle-confirm:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: ${TASK_BOARD_CLIENT_SECRET}
+            authorization-grant-type: client_credentials
+            scope: warehouse.lifecycle.confirm
+          warehouse-timezone-read:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: ${TASK_BOARD_CLIENT_SECRET}
+            authorization-grant-type: client_credentials
+            scope: warehouse.timezone.read
         provider:
           auth-service:
             token-uri: ${AUTH_TOKEN_URI}
@@ -196,5 +214,10 @@ rwms:
     connect-timeout: ${AUTH_CONNECT_TIMEOUT:2s}
     read-timeout: ${AUTH_READ_TIMEOUT:5s}
     credential-operation-timeout: ${AUTH_CREDENTIAL_OPERATION_TIMEOUT:15m}
+  warehouse:
+    lifecycle:
+      base-url: ${WAREHOUSE_SERVICE_INTERNAL_BASE_URL:}
+      reconciliation:
+        enabled: ${TASK_BOARD_WAREHOUSE_LIFECYCLE_RECONCILIATION_ENABLED:true}
   cors:
     allowed-origins: ${PANEL_ORIGIN},${WORKER_ORIGIN}

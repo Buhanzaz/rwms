@@ -5,6 +5,7 @@ import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementLocationKin
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTask;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskLine;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskLimits;
+import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskOwnerType;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
 import dev.buhanzaz.rwms.logistics.equipment.repository.EquipmentMovementTaskLineRepository;
 import dev.buhanzaz.rwms.logistics.equipment.repository.EquipmentMovementTaskRepository;
@@ -216,6 +217,7 @@ class EquipmentMovementWorkflowStore {
         new ReserveWork(
             task.getId(),
             task.assetMovementOwnerId(),
+            task.getOwnerType(),
             pending.getId(),
             pending.getEquipmentId(),
             pending.getSourceWarehouseId(),
@@ -402,6 +404,7 @@ class EquipmentMovementWorkflowStore {
   record ReserveWork(
       UUID taskId,
       UUID assetMovementOwnerId,
+      EquipmentMovementTaskOwnerType ownerType,
       UUID lineId,
       UUID equipmentId,
       UUID sourceWarehouseId,

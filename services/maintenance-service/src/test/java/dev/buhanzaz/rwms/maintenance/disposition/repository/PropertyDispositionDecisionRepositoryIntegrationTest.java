@@ -75,7 +75,8 @@ class PropertyDispositionDecisionRepositoryIntegrationTest {
                             equipmentId, "Table", "pcs", 2, 1, 11)))));
 
     assertThat(saved.getId()).isNotNull();
-    assertThat(repository.findBySourceAndRootRepairId(PropertyDispositionSource.REPAIR, rootRepairId))
+    assertThat(repository.findByAssetKindAndRootRepairId(
+            PropertyDispositionAssetKind.CABIN, rootRepairId))
         .hasValueSatisfying(
             found -> {
               assertThat(found.getId()).isEqualTo(saved.getId());

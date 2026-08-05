@@ -13,8 +13,27 @@ import java.util.UUID;
 public interface LogisticsDependencyGateway {
   WarehouseIdentity readWarehouseIdentity(UUID warehouseId);
 
+  /** Exact owner-side admission truth for a new physical warehouse operation. */
+  WarehouseOperationAdmission warehouseAdmission(
+      UUID warehouseId, WarehouseOperationDirection direction);
+
+  /** Durable warehouse-service worklist for logistics-owned draining readiness. */
+  WarehouseLifecycleReadinessWorkPage warehouseLifecycleReadinessWork(UUID after, int limit);
+
+  WarehouseLifecycleReadinessConfirmation confirmWarehouseLifecycleReadiness(
+      UUID warehouseId, long expectedVersion);
+
+  WarehouseTimeZone warehouseTimeZoneAt(UUID warehouseId, OffsetDateTime at);
+
+  /** Idempotent immutable marker that makes a warehouse's operated boundary durable. */
+  void markWarehouseOperation(UUID warehouseId, UUID operationId, OffsetDateTime occurredAt);
+
   default List<WarehouseIdentity> listWarehouseIdentities() {
     throw unavailable("Warehouse identity listing is not configured");
+  }
+
+  default boolean productionReady() {
+    return true;
   }
 
   RentalItemSnapshot readRentalItemSnapshot(UUID assetId);
@@ -153,6 +172,7 @@ public interface LogisticsDependencyGateway {
       UUID transferId,
       UUID lineId,
       UUID rentalItemId,
+      long rentalItemVersion,
       UUID sourceWarehouseId,
       UUID targetWarehouseId,
       Integer priority) {
@@ -222,7 +242,8 @@ public interface LogisticsDependencyGateway {
       String sourceLocationKind,
       long expectedSourceBalanceVersion,
       long quantity,
-      OffsetDateTime reservedUntil);
+      OffsetDateTime reservedUntil,
+      EquipmentMovementPurpose purpose);
 
   EquipmentMovementReservation releaseEquipmentMovementReservation(
       UUID idempotencyKey,
@@ -505,6 +526,85 @@ public interface LogisticsDependencyGateway {
     }
   }
 
+  enum WarehouseOperationDirection {
+    INCOMING,
+    OUTGOING
+  }
+
+  enum WarehouseLifecycleState {
+    ACTIVE,
+    DRAINING,
+    INACTIVE
+  }
+
+  record WarehouseOperationAdmission(
+      UUID warehouseId,
+      long warehouseVersion,
+      WarehouseLifecycleState lifecycleState,
+      WarehouseOperationDirection direction,
+      boolean admitted) {
+    public WarehouseOperationAdmission {
+      if (warehouseId == null
+          || warehouseVersion < 0
+          || lifecycleState == null
+          || direction == null) {
+        throw new IllegalArgumentException("Warehouse admission truth is invalid");
+      }
+    }
+  }
+
+  record WarehouseLifecycleReadinessWork(
+      UUID warehouseId, long warehouseVersion, WarehouseLifecycleState lifecycleState) {
+    public WarehouseLifecycleReadinessWork {
+      if (warehouseId == null
+          || warehouseVersion < 0
+          || lifecycleState != WarehouseLifecycleState.DRAINING) {
+        throw new IllegalArgumentException("Warehouse readiness work is invalid");
+      }
+    }
+  }
+
+  record WarehouseLifecycleReadinessWorkPage(
+      List<WarehouseLifecycleReadinessWork> items, UUID nextAfter) {
+    public WarehouseLifecycleReadinessWorkPage {
+      if (items == null || items.stream().anyMatch(java.util.Objects::isNull)) {
+        throw new IllegalArgumentException("Warehouse readiness page is invalid");
+      }
+      items = List.copyOf(items);
+    }
+  }
+
+  record WarehouseLifecycleReadinessConfirmation(
+      UUID warehouseId,
+      long warehouseVersion,
+      WarehouseLifecycleState lifecycleState,
+      String readinessOwner,
+      OffsetDateTime confirmedAt) {
+    public WarehouseLifecycleReadinessConfirmation {
+      if (warehouseId == null
+          || warehouseVersion < 0
+          || lifecycleState != WarehouseLifecycleState.DRAINING
+          || !"LOGISTICS".equals(readinessOwner)
+          || confirmedAt == null) {
+        throw new IllegalArgumentException("Warehouse readiness confirmation is invalid");
+      }
+    }
+  }
+
+  record WarehouseTimeZone(UUID warehouseId, String timeZone, OffsetDateTime effectiveFrom) {
+    public WarehouseTimeZone {
+      if (warehouseId == null
+          || timeZone == null
+          || timeZone.isBlank()
+          || timeZone.length() > 64
+          || effectiveFrom == null) {
+        throw new IllegalArgumentException("Warehouse timezone truth is invalid");
+      }
+      timeZone = timeZone.trim();
+      java.time.ZoneId.of(timeZone);
+    }
+  }
+
   record EquipmentContent(UUID equipmentId, long quantity) {}
 
   record RentalItemSnapshot(
@@ -536,6 +636,11 @@ public interface LogisticsDependencyGateway {
     LOGISTICS_RETURN,
     LOGISTICS_SHIPMENT,
     LOGISTICS_TRANSFER
+  }
+
+  enum EquipmentMovementPurpose {
+    ALLOCATABLE_REBALANCE,
+    MAINTENANCE_DISPOSITION
   }
 
   enum AssetEffect {

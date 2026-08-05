@@ -69,4 +69,55 @@ class AssetEventPayloadPolicyTest {
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("forbidden field");
   }
+
+  @Test
+  void acceptsCompleteImmutableMovementLocationContext() {
+    UUID movementId = UUID.randomUUID();
+    var payload = mapper.createObjectNode();
+    payload.put("movementId", movementId.toString());
+    payload.put("equipmentId", UUID.randomUUID().toString());
+    payload.put("sourceBalanceId", UUID.randomUUID().toString());
+    payload.put("targetBalanceId", UUID.randomUUID().toString());
+    payload.put("quantity", 3);
+    payload.put("movementKind", "CABIN_TO_STOCK");
+    payload.put("equipmentCategory", "FURNITURE");
+    payload.put("sourceWarehouseId", UUID.randomUUID().toString());
+    payload.put("sourceRentalItemId", UUID.randomUUID().toString());
+    payload.put("sourceLocationKind", "CABIN_NON_RENTED");
+    payload.put("targetWarehouseId", UUID.randomUUID().toString());
+    payload.putNull("targetRentalItemId");
+    payload.put("targetLocationKind", "STOCK");
+
+    assertThatCode(
+            () ->
+                policy.validateNode(
+                    AssetEventType.EQUIPMENT_TRANSFERRED.value(),
+                    AssetAggregateType.EQUIPMENT_MOVEMENT,
+                    movementId,
+                    payload))
+        .doesNotThrowAnyException();
+  }
+
+  @Test
+  void rejectsPartialMovementLocationContext() {
+    UUID movementId = UUID.randomUUID();
+    var payload = mapper.createObjectNode();
+    payload.put("movementId", movementId.toString());
+    payload.put("equipmentId", UUID.randomUUID().toString());
+    payload.put("sourceBalanceId", UUID.randomUUID().toString());
+    payload.put("targetBalanceId", UUID.randomUUID().toString());
+    payload.put("quantity", 1);
+    payload.put("movementKind", "WAREHOUSE_TO_WAREHOUSE");
+    payload.put("sourceWarehouseId", UUID.randomUUID().toString());
+
+    assertThatThrownBy(
+            () ->
+                policy.validateNode(
+                    AssetEventType.EQUIPMENT_TRANSFERRED.value(),
+                    AssetAggregateType.EQUIPMENT_MOVEMENT,
+                    movementId,
+                    payload))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("absent or complete");
+  }
 }

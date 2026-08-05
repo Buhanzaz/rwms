@@ -50,6 +50,23 @@ public class AssetAuthorizer {
     }
   }
 
+  /**
+   * A correction changes recorded custody in two warehouse scopes. It is not
+   * an operator movement permission: only global administrators can make the
+   * exceptional correction after both warehouse MANAGE grants have passed.
+   */
+  public void requireAdministrativeCorrection(
+      Jwt jwt, UUID sourceWarehouseId, UUID targetWarehouseId) {
+    requireManage(jwt, sourceWarehouseId);
+    requireManage(jwt, targetWarehouseId);
+    if (developmentPublicBypass) return;
+    String role = jwt == null ? null : jwt.getClaimAsString("global_role");
+    if (!"SYSTEM_ADMIN".equals(role) && !"WMS_ADMIN".equals(role)) {
+      throw new AccessDeniedException(
+          "Administrative correction requires a SYSTEM_ADMIN or WMS_ADMIN role");
+    }
+  }
+
   /** Orders use the constrained internal API; only warehouse operators and admins may mutate arbitrary balances. */
   public void requireEquipmentMovement(Jwt jwt, UUID warehouseId) {
     requireManage(jwt, warehouseId);

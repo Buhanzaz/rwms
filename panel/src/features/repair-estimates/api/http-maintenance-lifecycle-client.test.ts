@@ -12,11 +12,9 @@ import {
   listMaintenanceAcceptance,
   listMaintenanceEstimates,
   listMaintenanceRepairs,
-  listMaintenanceWriteOffs,
   queueMaintenanceRepair,
   replaceMaintenanceEstimate,
   replaceMaintenanceRepairPlan,
-  writeOffMaintenanceRepair,
   type MaintenanceEstimateWrite,
   type MaintenancePlanStageInput,
 } from "@/features/repair-estimates/api/http-maintenance-lifecycle-client"
@@ -100,7 +98,6 @@ describe("maintenance lifecycle HTTP client", () => {
     })
     await getMaintenanceRepair("token", warehouseId, repairId)
     await listMaintenanceAcceptance("token", warehouseId)
-    await listMaintenanceWriteOffs("token", warehouseId)
 
     for (const [url, init] of fetchMock.mock.calls as Array<
       [string, RequestInit]
@@ -308,16 +305,6 @@ describe("maintenance lifecycle HTTP client", () => {
       [],
       idempotencyKey
     )
-    await writeOffMaintenanceRepair(
-      "token",
-      warehouseId,
-      repairId,
-      6,
-      "Неремонтопригодна",
-      null,
-      idempotencyKey
-    )
-
     expect(requestAt(fetchMock, 0)[0]).toMatch(/\/v1\/repairs\/direct$/)
     expect(JSON.parse(String(requestAt(fetchMock, 0)[1].body))).toMatchObject({
       lines: estimateWrite.lines,
@@ -354,12 +341,7 @@ describe("maintenance lifecycle HTTP client", () => {
       comment: "Принято",
       mediaReferences: [],
     })
-    expect(JSON.parse(String(requestAt(fetchMock, 5)[1].body))).toEqual({
-      expectedVersion: 6,
-      reason: "Неремонтопригодна",
-      comment: null,
-    })
-    for (const index of [0, 2, 3, 4, 5]) {
+    for (const index of [0, 2, 3, 4]) {
       expect(
         new Headers(requestAt(fetchMock, index)[1].headers).get(
           "Idempotency-Key"

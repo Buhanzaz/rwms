@@ -47,6 +47,11 @@ class DriverQueueSchedulerTest {
         .thenReturn(
             new LogisticsDependencyGateway.WarehouseIdentity(
                 warehouseId, 0, true, "UTC"));
+    when(dependencies.warehouseTimeZoneAt(eq(warehouseId), any(OffsetDateTime.class)))
+        .thenAnswer(
+            invocation ->
+                new LogisticsDependencyGateway.WarehouseTimeZone(
+                    warehouseId, "UTC", invocation.getArgument(1)));
     when(tasks.existsByWarehouseIdAndStateIn(eq(warehouseId), any())).thenReturn(false);
     when(tasks.findRecentByWarehouseAndState(warehouseId, DriverTaskState.COMPLETED))
         .thenReturn(List.of());

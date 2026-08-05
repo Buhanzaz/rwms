@@ -22,6 +22,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -291,6 +292,7 @@ class OrderApiIntegrationTest {
   @Test
   void savingOrderKeepsItEditableUntilTheDraftShipmentStartsOrGetsFurnitureTasks()
       throws Exception {
+    String shipmentDate = futureDate(1);
     UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент сохранённого заказа");
     selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
     addUnit(orderId, MANAGER_1, UNIT_1, 1);
@@ -332,7 +334,7 @@ class OrderApiIntegrationTest {
                 orderId))
         .isZero();
 
-    createRentalShipment(orderId, MANAGER_1, 4, UNIT_1, "2026-07-29", "Водитель");
+    createRentalShipment(orderId, MANAGER_1, 4, UNIT_1, shipmentDate, "Водитель");
 
     mvc.perform(
             get("/api/logistics/v1/shipments")
@@ -341,7 +343,7 @@ class OrderApiIntegrationTest {
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.length()").value(1))
         .andExpect(jsonPath("$[0].state").value("DRAFT"))
-        .andExpect(jsonPath("$[0].scheduledDate").value("2026-07-29"))
+        .andExpect(jsonPath("$[0].scheduledDate").value(shipmentDate))
         .andExpect(jsonPath("$[0].driverSnapshot").value("Водитель"))
         .andExpect(jsonPath("$[0].rentalOrderId").value(orderId.toString()))
         .andExpect(jsonPath("$[0].lines.length()").value(1))
@@ -388,6 +390,7 @@ class OrderApiIntegrationTest {
 
   @Test
   void startingShipmentLocksTheSavedBookingAgainstFurtherEdits() throws Exception {
+    String shipmentDate = futureDate(1);
     UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент начатой отгрузки");
     selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
     addUnit(orderId, MANAGER_1, UNIT_1, 1);
@@ -400,7 +403,7 @@ class OrderApiIntegrationTest {
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.status").value("SAVED"));
 
-    JsonNode shipment = createRentalShipment(orderId, MANAGER_1, 4, UNIT_1, "2026-07-29", "Водитель");
+    JsonNode shipment = createRentalShipment(orderId, MANAGER_1, 4, UNIT_1, shipmentDate, "Водитель");
     UUID shipmentId = UUID.fromString(shipment.get("id").stringValue());
     long shipmentVersion =
         jdbc.queryForObject(
@@ -412,8 +415,9 @@ class OrderApiIntegrationTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
                     """
-                    {"driverSnapshot":"Водитель","scheduledDate":"2026-07-29"}
-                    """)
+                    {"driverSnapshot":"Водитель","scheduledDate":"%s"}
+                    """
+                        .formatted(shipmentDate))
                 .with(manager(MANAGER_1, "manager-one")))
         .andExpect(status().isAccepted())
         .andExpect(jsonPath("$.state").value("PREPARING"));
@@ -433,6 +437,7 @@ class OrderApiIntegrationTest {
   @Test
   void createdShipmentFurnitureTaskLocksTheSavedBookingAgainstFurtherEdits()
       throws Exception {
+    String shipmentDate = futureDate(1);
     UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент задания на мебель");
     selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
     addUnit(orderId, MANAGER_1, UNIT_1, 1);
@@ -445,7 +450,7 @@ class OrderApiIntegrationTest {
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.status").value("SAVED"));
 
-    JsonNode shipment = createRentalShipment(orderId, MANAGER_1, 4, UNIT_1, "2026-07-29", "Водитель");
+    JsonNode shipment = createRentalShipment(orderId, MANAGER_1, 4, UNIT_1, shipmentDate, "Водитель");
     UUID shipmentId = UUID.fromString(shipment.get("id").stringValue());
     linkFurnitureMovementTask(shipmentId, UNIT_1);
 
@@ -470,6 +475,8 @@ class OrderApiIntegrationTest {
   @Test
   void rentalTermsRequireACompleteDraftVectorAndKeepPartialShipmentDatesIndependent()
       throws Exception {
+    LocalDate firstDate = LocalDate.parse(futureDate(1));
+    LocalDate secondDate = firstDate.plusDays(7);
     UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент частичных отгрузок");
     selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
     addUnit(orderId, MANAGER_1, UNIT_1, 1);
@@ -503,7 +510,7 @@ class OrderApiIntegrationTest {
         .andExpect(jsonPath("$.status").value("SAVED"));
 
     JsonNode firstShipment =
-        createRentalShipment(orderId, MANAGER_1, 5, UNIT_1, "2026-08-01", "Водитель 1");
+        createRentalShipment(orderId, MANAGER_1, 5, UNIT_1, firstDate.toString(), "Водитель 1");
     JsonNode afterFirstShipment =
         json(
             mvc.perform(
@@ -512,12 +519,12 @@ class OrderApiIntegrationTest {
                 .andExpect(status().isOk())
                 .andReturn());
     assertThat(rentalTerm(afterFirstShipment, UNIT_1).get("shipmentDate").stringValue())
-        .isEqualTo("2026-08-01");
+        .isEqualTo(firstDate.toString());
     assertThat(rentalTerm(afterFirstShipment, UNIT_1).get("returnDate").stringValue())
-        .isEqualTo("2026-10-01");
+        .isEqualTo(firstDate.plusMonths(2).toString());
     assertThat(rentalTerm(afterFirstShipment, UNIT_2).get("shipmentDate").isNull()).isTrue();
 
-    createRentalShipment(orderId, MANAGER_1, 5, UNIT_2, "2026-08-08", "Водитель 2");
+    createRentalShipment(orderId, MANAGER_1, 5, UNIT_2, secondDate.toString(), "Водитель 2");
     JsonNode afterSecondShipment =
         json(
             mvc.perform(
@@ -526,9 +533,9 @@ class OrderApiIntegrationTest {
                 .andExpect(status().isOk())
                 .andReturn());
     assertThat(rentalTerm(afterSecondShipment, UNIT_2).get("shipmentDate").stringValue())
-        .isEqualTo("2026-08-08");
+        .isEqualTo(secondDate.toString());
     assertThat(rentalTerm(afterSecondShipment, UNIT_2).get("returnDate").stringValue())
-        .isEqualTo("2026-11-08");
+        .isEqualTo(secondDate.plusMonths(3).toString());
 
     mvc.perform(
             post("/api/logistics/v1/orders/{orderId}/shipments", orderId)
@@ -539,11 +546,11 @@ class OrderApiIntegrationTest {
                     {
                       "expectedVersion": 5,
                       "driverSnapshot": "Повтор",
-                      "scheduledDate": "2026-08-09",
+                      "scheduledDate": "%s",
                       "unitIds": ["%s"]
                     }
                     """
-                        .formatted(UNIT_1))
+                        .formatted(secondDate.plusDays(1), UNIT_1))
                 .with(manager(MANAGER_1, "manager-one")))
         .andExpect(status().isConflict());
 
@@ -597,7 +604,7 @@ class OrderApiIntegrationTest {
                 String.class,
                 orderId,
                 UNIT_1))
-        .isEqualTo("2026-11-01");
+        .isEqualTo(firstDate.plusMonths(3).toString());
   }
 
   @Test
@@ -1452,6 +1459,10 @@ class OrderApiIntegrationTest {
     return "+7999%07d".formatted(NEXT_TEST_PHONE.getAndIncrement());
   }
 
+  private static String futureDate(int days) {
+    return LocalDate.now(ZoneOffset.UTC).plusDays(days).toString();
+  }
+
   private void linkFurnitureMovementTask(UUID shipmentId, UUID unitId) {
     UUID taskId = UUID.randomUUID();
     OffsetDateTime createdAt = now();
@@ -1459,9 +1470,9 @@ class OrderApiIntegrationTest {
         """
         insert into equipment_movement_task(
           id,version,warehouse_id,external_task_id,unit_number,deadline_at,
-          planned_duration_minutes,state,
+          planned_duration_minutes,state,owner_type,
           created_by_subject_id,idempotency_key,request_sha256,retry_count,created_at,updated_at)
-        values (?,0,?,?,?,?,?,?,?,?,?,0,?,?)
+        values (?,0,?,?,?,?,?,?,'USER_REQUEST',?,?,?,0,?,?)
         """,
         taskId,
         WAREHOUSE_1,

@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.inventory.integration;
 
 import dev.buhanzaz.rwms.inventory.service.InventoryException;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -12,7 +13,29 @@ final class DisabledInventoryDependencyGateway implements InventoryDependencyGat
   }
 
   @Override
-  public WarehouseMetadata warehouse(UUID warehouseId) {
+  public WarehouseOperation beginWarehouseOperation(
+      UUID warehouseId,
+      UUID operationId,
+      OffsetDateTime occurredAt,
+      WarehouseOperationDirection direction) {
+    throw unavailable();
+  }
+
+  @Override
+  public WarehouseAdmission warehouseAdmission(
+      UUID warehouseId, WarehouseOperationDirection direction) {
+    throw unavailable();
+  }
+
+  @Override
+  public WarehouseLifecycleReadinessWorkPage warehouseLifecycleReadinessWork(
+      UUID after, int limit) {
+    throw unavailable();
+  }
+
+  @Override
+  public WarehouseLifecycleReadinessConfirmation confirmWarehouseLifecycleReadiness(
+      UUID warehouseId, long expectedVersion) {
     throw unavailable();
   }
 
@@ -64,6 +87,12 @@ final class DisabledInventoryDependencyGateway implements InventoryDependencyGat
   @Override
   public void reconcileFurniture(
       UUID inventoryId, UUID idempotencyKey, FurnitureReconciliationRequest request) {
+    throw unavailable();
+  }
+
+  @Override
+  public InventoryLossDisposition createInventoryLossDisposition(
+      UUID idempotencyKey, InventoryLossDispositionRequest request) {
     throw unavailable();
   }
 

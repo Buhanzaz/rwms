@@ -9,6 +9,10 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateShipmentRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentLineRequest;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseOperationMarkStore;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -23,6 +27,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -42,6 +48,9 @@ class LogisticsServiceIntegrationTest {
   }
 
   @Autowired LogisticsDocumentService service;
+  @Autowired LogisticsWarehouseOperationMarkStore warehouseOperationMarks;
+  @Autowired LogisticsWarehouseLifecycleStore warehouseLifecycleStore;
+  @Autowired PlatformTransactionManager transactionManager;
   @Autowired JdbcTemplate jdbc;
 
   @DynamicPropertySource
@@ -59,10 +68,150 @@ class LogisticsServiceIntegrationTest {
 
   @BeforeEach
   void cleanFixtures() {
+    jdbc.update("delete from logistics_warehouse_readiness_fence");
+    jdbc.update("delete from logistics_warehouse_admission_intent");
+    jdbc.execute("truncate table warehouse_operation_mark_recovery_audit");
+    jdbc.update("delete from warehouse_operation_mark_outbox");
     jdbc.update("delete from logistics_idempotency_record");
     jdbc.update("delete from logistics_external_attempt");
     jdbc.update("delete from logistics_document_line");
     jdbc.update("delete from logistics_document");
+    jdbc.update("delete from rental_order");
+    jdbc.update("delete from order_client");
+  }
+
+  @Test
+  void expiredAdmissionCannotCommitAndIsRemovedBeforeReadiness() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID operationId = UUID.randomUUID();
+    List<AdmissionRequirement> requirements =
+        List.of(new AdmissionRequirement(warehouseId, WarehouseOperationDirection.OUTGOING));
+    assertThat(warehouseLifecycleStore.reserve(operationId, requirements)).isFalse();
+    warehouseLifecycleStore.admit(operationId, requirements, List.of(7L));
+    jdbc.update(
+        "update logistics_warehouse_admission_intent set expires_at=clock_timestamp()-interval '1 second' where operation_id=?",
+        operationId);
+
+    assertThatThrownBy(
+            () ->
+                new TransactionTemplate(transactionManager)
+                    .executeWithoutResult(
+                        ignored -> warehouseLifecycleStore.consume(operationId, requirements, false)))
+        .isInstanceOf(LogisticsConflictException.class)
+        .hasMessageContaining("expired");
+
+    var readiness = warehouseLifecycleStore.beginReadiness(warehouseId, 8);
+    assertThat(readiness.shouldConfirm()).isTrue();
+    assertThat(readiness.sealed()).isFalse();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_warehouse_admission_intent where operation_id=?",
+                Long.class,
+                operationId))
+        .isZero();
+    assertThatThrownBy(
+            () ->
+                jdbc.queryForObject(
+                    "select logistics_assert_warehouse_lifecycle_open(?)",
+                    Object.class,
+                    warehouseId))
+        .hasMessageContaining("fenced for readiness");
+  }
+
+  @Test
+  void recoversAQuarantinedWarehouseMarkOnceWithImmutableReviewAudit() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID operationId = UUID.randomUUID();
+    UUID reviewer = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into warehouse_operation_mark_outbox(
+          operation_id,warehouse_id,occurred_at,state,attempt_count,next_attempt_at,
+          last_error_code,created_at,updated_at)
+        values (?,?,clock_timestamp(),'QUARANTINED',8,clock_timestamp(),
+                'WAREHOUSE_UNAVAILABLE',clock_timestamp(),clock_timestamp())
+        """,
+        operationId,
+        warehouseId);
+
+    var recovered =
+        warehouseOperationMarks.recoverQuarantined(
+            warehouseId, operationId, 0, reviewer, "Проверено администратором");
+    var replayed =
+        warehouseOperationMarks.recoverQuarantined(
+            warehouseId, operationId, 0, reviewer, "Проверено администратором");
+
+    assertThat(recovered.replayed()).isFalse();
+    assertThat(recovered.state()).isEqualTo("PENDING");
+    assertThat(recovered.recoveryVersion()).isOne();
+    assertThat(replayed.replayed()).isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from warehouse_operation_mark_recovery_audit where warehouse_id=? and operation_id=?",
+                Long.class,
+                warehouseId,
+                operationId))
+        .isOne();
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "delete from warehouse_operation_mark_recovery_audit where warehouse_id=? and operation_id=?",
+                    warehouseId,
+                    operationId))
+        .hasMessageContaining("immutable");
+    assertThatThrownBy(
+            () ->
+                warehouseOperationMarks.recoverQuarantined(
+                    warehouseId, operationId, 0, reviewer, "Другая причина"))
+        .isInstanceOf(LogisticsConflictException.class)
+        .hasMessageContaining("another reviewed command");
+  }
+
+  @Test
+  void firstWarehouseBoundRentalOrderAtomicallyMarksTheWarehouseAsOperated() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID clientId = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into order_client(
+          id,version,client_type,display_name,normalized_name,created_by_subject_id,
+          creation_idempotency_key,creation_request_sha256,created_at,updated_at)
+        values (?,0,'LEGAL_ENTITY','Клиент','клиент',?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        clientId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "a".repeat(64));
+    jdbc.update(
+        """
+        insert into rental_order(
+          id,version,order_number,status,client_id,manager_id,manager_display_name,
+          created_by_subject_id,created_by_display_name,created_by_role,warehouse_id,
+          creation_idempotency_key,creation_request_sha256,created_at,updated_at)
+        values (?,0,'ORD-900001','DRAFT',?,?,'Управляющий',?,'Управляющий',
+                'WAREHOUSE_MANAGER',?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        orderId,
+        clientId,
+        SUBJECT,
+        SUBJECT,
+        warehouseId,
+        UUID.randomUUID(),
+        "b".repeat(64));
+
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from warehouse_operation_mark_outbox where warehouse_id=?",
+                Long.class,
+                warehouseId))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select state from warehouse_operation_mark_outbox where warehouse_id=?",
+                String.class,
+                warehouseId))
+        .isEqualTo("PENDING");
   }
 
   @Test

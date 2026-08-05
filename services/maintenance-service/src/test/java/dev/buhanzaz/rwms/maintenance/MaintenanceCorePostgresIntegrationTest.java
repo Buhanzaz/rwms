@@ -7,6 +7,14 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import dev.buhanzaz.rwms.maintenance.api.ReplaceRepairCapacitySettingsRequest;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.ApprovePropertyDispositionRequest;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.RecoverPropertyDispositionRequest;
+import dev.buhanzaz.rwms.maintenance.disposition.api.PropertyDispositionApiModels.WriteOffRepairRequest;
+import dev.buhanzaz.rwms.maintenance.disposition.application.PropertyDispositionApplicationService;
+import dev.buhanzaz.rwms.maintenance.disposition.application.PropertyDispositionProcessor;
+import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionKind;
+import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionSource;
+import dev.buhanzaz.rwms.maintenance.disposition.domain.PropertyDispositionState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairPlaceAllocationState;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceMediaReference;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceEventType;
@@ -28,6 +36,8 @@ import dev.buhanzaz.rwms.maintenance.repository.RentalItemFactProjectionReposito
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceConflictException;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceDependencyException;
+import dev.buhanzaz.rwms.maintenance.service.FurnitureEquipmentLinkReviewService;
+import dev.buhanzaz.rwms.maintenance.service.FurnitureEquipmentLinkStore;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceIdempotencyStore;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceNotFoundException;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceReconciliationReviewService;
@@ -35,6 +45,13 @@ import dev.buhanzaz.rwms.maintenance.service.MaintenanceReconciliationStore;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceValidationException;
 import dev.buhanzaz.rwms.maintenance.service.RepairCapacitySettingsService;
 import dev.buhanzaz.rwms.maintenance.service.RepairPlaceService;
+import dev.buhanzaz.rwms.maintenance.service.WarehouseLifecycleReconciliationScheduler;
+import dev.buhanzaz.rwms.maintenance.service.WarehouseLifecycleOperations;
+import dev.buhanzaz.rwms.maintenance.service.WarehouseOperationMarkRecoveryService;
+import dev.buhanzaz.rwms.maintenance.service.WarehouseOperationMarkStore;
+import dev.buhanzaz.rwms.maintenance.service.WarehouseReadinessFenceStore;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -59,11 +76,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -74,6 +93,14 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
     "rwms.platform.kafka.enabled=false",
     "rwms.maintenance.task-reconciliation.initial-delay=1h",
     "rwms.maintenance.task-reconciliation.delay=1h",
+    "rwms.maintenance.property-disposition.initial-delay=1h",
+    "rwms.maintenance.property-disposition.delay=1h",
+    "rwms.maintenance.warehouse-lifecycle.operation-mark-initial-delay=1h",
+    "rwms.maintenance.warehouse-lifecycle.operation-mark-delay=1h",
+    "rwms.maintenance.warehouse-lifecycle.readiness-initial-delay=1h",
+    "rwms.maintenance.warehouse-lifecycle.readiness-delay=1h",
+    "rwms.maintenance.furniture-equipment-link.initial-delay=1h",
+    "rwms.maintenance.furniture-equipment-link.delay=1h",
     "AUTH_ISSUER=http://auth.test",
     "PANEL_ORIGIN=http://panel.test"
 })
@@ -89,6 +116,8 @@ class MaintenanceCorePostgresIntegrationTest {
   static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
   @Autowired MaintenanceApplicationService service;
+  @Autowired PropertyDispositionApplicationService dispositions;
+  @Autowired PropertyDispositionProcessor dispositionProcessor;
   @Autowired MaintenanceIdempotencyStore idempotency;
   @Autowired RentalItemFactProjectionRepository rentalItemFacts;
   @Autowired MaintenanceRepairRepository repairs;
@@ -97,6 +126,12 @@ class MaintenanceCorePostgresIntegrationTest {
   @Autowired MaintenanceReconciliationStore reconciliations;
   @Autowired RepairCapacitySettingsService repairCapacitySettings;
   @Autowired RepairPlaceService repairPlaces;
+  @Autowired WarehouseOperationMarkStore warehouseOperationMarks;
+  @Autowired WarehouseLifecycleReconciliationScheduler warehouseLifecycleScheduler;
+  @Autowired WarehouseLifecycleOperations warehouseLifecycle;
+  @Autowired WarehouseReadinessFenceStore warehouseReadinessFences;
+  @Autowired FurnitureEquipmentLinkStore furnitureEquipmentLinks;
+  @Autowired FurnitureEquipmentLinkReviewService furnitureEquipmentLinkReviews;
   @Autowired
   dev.buhanzaz.rwms.maintenance.service.RepairComplexitySettingsService
       repairComplexitySettings;
@@ -121,6 +156,15 @@ class MaintenanceCorePostgresIntegrationTest {
           repair_place_allocation,
           maintenance_idempotency_record,
           integration_reconciliation,
+          property_disposition_processing_attempt,
+          property_disposition_processing_claim,
+          property_disposition_contents_snapshot_line,
+          property_disposition_decision,
+          furniture_equipment_link_review_audit,
+          furniture_equipment_link_intent,
+          warehouse_operation_mark_recovery_audit,
+          warehouse_operation_mark_outbox,
+          warehouse_readiness_fence,
           event_stream_head
         cascade
         """);
@@ -159,6 +203,130 @@ class MaintenanceCorePostgresIntegrationTest {
                   .toList());
         });
     clearInvocations(eventFacts);
+  }
+
+  @Test
+  void warehouseOperationClaimCommitsBeforeRemoteCallAndExpiredLeaseIsFenced() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID operationId = UUID.randomUUID();
+    OffsetDateTime occurredAt = OffsetDateTime.now(ZoneOffset.UTC).minusMinutes(5).withNano(0);
+    new TransactionTemplate(transactionManager).executeWithoutResult(
+        ignored -> warehouseOperationMarks.enqueue(warehouseId, operationId, occurredAt));
+    when(dependencies.productionReady()).thenReturn(true);
+    doAnswer(
+            invocation -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+              assertThat(jdbc.queryForObject(
+                      """
+                      select state from warehouse_operation_mark_outbox
+                       where warehouse_id=? and operation_id=?
+                      """,
+                      String.class,
+                      warehouseId,
+                      operationId))
+                  .isEqualTo("IN_FLIGHT");
+              return null;
+            })
+        .when(dependencies)
+        .markWarehouseOperation(warehouseId, operationId, occurredAt);
+
+    warehouseLifecycleScheduler.reconcileOperationMarks();
+
+    assertThat(jdbc.queryForObject(
+            """
+            select state from warehouse_operation_mark_outbox
+             where warehouse_id=? and operation_id=?
+            """,
+            String.class,
+            warehouseId,
+            operationId))
+        .isEqualTo("CONFIRMED");
+
+    UUID recoveredOperation = UUID.randomUUID();
+    new TransactionTemplate(transactionManager).executeWithoutResult(
+        ignored -> warehouseOperationMarks.enqueue(warehouseId, recoveredOperation, occurredAt));
+    WarehouseOperationMarkStore.WorkItem first =
+        warehouseOperationMarks.claimNextDue(Duration.ofMinutes(2)).orElseThrow();
+    jdbc.update(
+        """
+        update warehouse_operation_mark_outbox set claim_until=clock_timestamp()-interval '1 second'
+         where warehouse_id=? and operation_id=?
+        """,
+        warehouseId,
+        recoveredOperation);
+    WarehouseOperationMarkStore.WorkItem reclaimed =
+        warehouseOperationMarks.claimNextDue(Duration.ofMinutes(2)).orElseThrow();
+    assertThat(reclaimed.claimToken()).isNotEqualTo(first.claimToken());
+    assertThatThrownBy(() -> warehouseOperationMarks.confirmed(first))
+        .isInstanceOf(MaintenanceConflictException.class);
+    warehouseOperationMarks.confirmed(reclaimed);
+  }
+
+  @Test
+  void quarantinedWarehouseOperationSurvivesRestartAndReviewedRecoveryIsReplaySafe() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID operationId = UUID.randomUUID();
+    OffsetDateTime occurredAt = OffsetDateTime.now(ZoneOffset.UTC).minusMinutes(10).withNano(0);
+    new TransactionTemplate(transactionManager).executeWithoutResult(
+        ignored -> warehouseOperationMarks.enqueue(warehouseId, operationId, occurredAt));
+    for (int attempt = 0; attempt < WarehouseOperationMarkStore.MAX_ATTEMPTS; attempt++) {
+      jdbc.update(
+          """
+          update warehouse_operation_mark_outbox set next_attempt_at=clock_timestamp()-interval '1 second'
+           where warehouse_id=? and operation_id=?
+          """,
+          warehouseId,
+          operationId);
+      WarehouseOperationMarkStore.WorkItem work =
+          warehouseOperationMarks.claimNextDue(Duration.ofMinutes(2)).orElseThrow();
+      warehouseOperationMarks.failed(work, new IllegalStateException("warehouse unavailable"));
+    }
+    assertThat(jdbc.queryForObject(
+            """
+            select state from warehouse_operation_mark_outbox
+             where warehouse_id=? and operation_id=?
+            """,
+            String.class,
+            warehouseId,
+            operationId))
+        .isEqualTo("QUARANTINED");
+
+    UUID reviewer = UUID.randomUUID();
+    WarehouseOperationMarkRecoveryService restartedBoundary =
+        new WarehouseOperationMarkRecoveryService(warehouseOperationMarks);
+    var recovered = restartedBoundary.recover(
+        warehouseId, operationId, 0, reviewer, "warehouse-service incident resolved");
+    assertThat(recovered.state()).isEqualTo("PENDING");
+    assertThat(recovered.recoveryVersion()).isOne();
+    assertThat(recovered.replayed()).isFalse();
+    var replay = restartedBoundary.recover(
+        warehouseId, operationId, 0, reviewer, "warehouse-service incident resolved");
+    assertThat(replay.replayed()).isTrue();
+    assertThatThrownBy(
+            () ->
+                restartedBoundary.recover(
+                    warehouseId, operationId, 0, reviewer, "different reviewed reason"))
+        .isInstanceOf(MaintenanceConflictException.class)
+        .hasMessageContaining("another reviewed command");
+    assertThat(jdbc.queryForObject(
+            """
+            select count(*) from warehouse_operation_mark_recovery_audit
+             where warehouse_id=? and operation_id=?
+            """,
+            Integer.class,
+            warehouseId,
+            operationId))
+        .isOne();
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    update warehouse_operation_mark_recovery_audit set reason='rewritten'
+                     where warehouse_id=? and operation_id=?
+                    """,
+                    warehouseId,
+                    operationId))
+        .hasMessageContaining("immutable");
   }
 
   @Test
@@ -1310,6 +1478,11 @@ class MaintenanceCorePostgresIntegrationTest {
                     UUID.randomUUID(),
                     new CompleteTransferRepairRequest(
                         fixture.rentalItemId(),
+                        repairs
+                                .findById(fixture.repairId())
+                                .orElseThrow()
+                                .getRentalItemVersionSnapshot()
+                            + 1,
                         fixture.warehouseId(),
                         targetWarehouseId,
                         4)))
@@ -1381,19 +1554,20 @@ class MaintenanceCorePostgresIntegrationTest {
 
     var repairBeforeArrival =
         repairs.findById(fixture.repairId()).orElseThrow();
+    long taskVersion = repairBeforeArrival.getTaskBoardVersion();
     long targetAssetVersion =
         repairBeforeArrival.getRentalItemVersionSnapshot() + 1;
     UUID targetLeaseId = UUID.randomUUID();
     when(dependencies.getTask(fixture.externalTaskId()))
         .thenReturn(
             new MaintenanceDependencyGateway.TaskSnapshot(
-                fixture.externalTaskId(), 3, "ACTIVE", List.of()));
+                fixture.externalTaskId(), taskVersion, "ACTIVE", List.of()));
     when(
             dependencies.cancelTask(
-                any(), eq(fixture.externalTaskId()), eq(3L)))
+                any(), eq(fixture.externalTaskId()), eq(taskVersion)))
         .thenReturn(
             new MaintenanceDependencyGateway.TaskSnapshot(
-                fixture.externalTaskId(), 4, "CANCELLED", List.of()));
+                fixture.externalTaskId(), taskVersion + 1, "CANCELLED", List.of()));
     when(dependencies.getRentalItemSnapshot(fixture.rentalItemId()))
         .thenReturn(
             new MaintenanceDependencyGateway.AssetSnapshot(
@@ -1446,6 +1620,7 @@ class MaintenanceCorePostgresIntegrationTest {
                 UUID.randomUUID(),
                 new CompleteTransferRepairRequest(
                     fixture.rentalItemId(),
+                    targetAssetVersion,
                     fixture.warehouseId(),
                     targetWarehouseId,
                     4))
@@ -1483,9 +1658,166 @@ class MaintenanceCorePostgresIntegrationTest {
                 .type())
         .isEqualTo(RepairComplexity.CAPITAL);
     verify(dependencies)
-        .cancelTask(any(), eq(fixture.externalTaskId()), eq(3L));
+        .cancelTask(any(), eq(fixture.externalTaskId()), eq(taskVersion));
     verify(dependencies, never())
         .relocateTask(any(), any(), anyLong(), any());
+  }
+
+  @Test
+  void transferArrivalReplaysEveryRemoteEffectAfterPostRemoteLocalRollback() {
+    RegisteredRepairFixture registered = createRegisteredPrimaryRepair();
+    RepairFixture fixture = registered.repair();
+    UUID transferId = UUID.randomUUID();
+    UUID lineId = UUID.randomUUID();
+    UUID targetWarehouseId = UUID.randomUUID();
+    repairComplexitySettings.replace(
+        targetWarehouseId,
+        new dev.buhanzaz.rwms.maintenance.api.ReplaceRepairComplexitySettingsRequest(
+            0L, 1, 2, 3));
+    when(dependencies.queueCapabilities(targetWarehouseId))
+        .thenReturn(
+            new MaintenanceDependencyGateway.QueueCapabilities(targetWarehouseId, List.of()));
+    service.prepareTransferDeparture(
+        transferId,
+        lineId,
+        UUID.randomUUID(),
+        new TransferRepairRequest(
+            fixture.rentalItemId(), fixture.warehouseId(), targetWarehouseId));
+
+    var repairBeforeArrival = repairs.findById(fixture.repairId()).orElseThrow();
+    long taskVersion = repairBeforeArrival.getTaskBoardVersion();
+    long targetAssetVersion = repairBeforeArrival.getRentalItemVersionSnapshot() + 1;
+    UUID targetLeaseId = UUID.randomUUID();
+    MaintenanceDependencyGateway.TaskSnapshot taskBefore =
+        new MaintenanceDependencyGateway.TaskSnapshot(
+            fixture.externalTaskId(), taskVersion, "ACTIVE", List.of());
+    MaintenanceDependencyGateway.TaskSnapshot taskAfter =
+        new MaintenanceDependencyGateway.TaskSnapshot(
+            fixture.externalTaskId(), taskVersion + 1, "CANCELLED", List.of());
+    MaintenanceDependencyGateway.AssetSnapshot assetBefore =
+        new MaintenanceDependencyGateway.AssetSnapshot(
+            fixture.rentalItemId(),
+            targetAssetVersion,
+            targetWarehouseId,
+            "БТ-42",
+            "REPAIR");
+    MaintenanceDependencyGateway.AssetSnapshot assetAfter =
+        new MaintenanceDependencyGateway.AssetSnapshot(
+            fixture.rentalItemId(),
+            targetAssetVersion + 1,
+            targetWarehouseId,
+            "БТ-42",
+            "CAPITAL_REPAIR");
+    MaintenanceDependencyGateway.LeaseSnapshot lease =
+        new MaintenanceDependencyGateway.LeaseSnapshot(
+            targetLeaseId,
+            0,
+            fixture.rentalItemId(),
+            "MAINTENANCE_REPAIR",
+            fixture.repairId(),
+            31,
+            OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(15));
+    when(dependencies.getTask(fixture.externalTaskId())).thenReturn(taskBefore, taskAfter);
+    when(dependencies.cancelTask(any(), eq(fixture.externalTaskId()), eq(taskVersion)))
+        .thenAnswer(
+            invocation -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+              return taskAfter;
+            });
+    when(dependencies.getRentalItemSnapshot(fixture.rentalItemId()))
+        .thenReturn(assetBefore, assetAfter);
+    when(
+            dependencies.acquireLease(
+                any(),
+                eq(fixture.rentalItemId()),
+                eq(targetAssetVersion),
+                eq("MAINTENANCE_REPAIR"),
+                eq(fixture.repairId().toString())))
+        .thenAnswer(
+            invocation -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+              return lease;
+            });
+    when(
+            dependencies.fencedStatus(
+                any(),
+                eq(fixture.rentalItemId()),
+                eq(targetWarehouseId),
+                eq(targetAssetVersion),
+                eq(targetLeaseId),
+                eq(31L),
+                eq("MAINTENANCE_REPAIR"),
+                eq(fixture.repairId().toString()),
+                eq("QUEUE_TO_CAPITAL_REPAIR"),
+                eq(false)))
+        .thenAnswer(
+            invocation -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+              return assetAfter;
+            });
+
+    CompleteTransferRepairRequest request =
+        new CompleteTransferRepairRequest(
+            fixture.rentalItemId(),
+            targetAssetVersion,
+            fixture.warehouseId(),
+            targetWarehouseId,
+            4);
+    UUID key = UUID.randomUUID();
+    doThrow(new IllegalStateException("synthetic post-remote local failure"))
+        .doCallRealMethod()
+        .when(eventFacts)
+        .repairPayload(eq(MaintenanceEventType.REPAIR_TRANSFERRED), any(), anyList());
+
+    assertThatThrownBy(
+            () -> service.completeTransferArrival(transferId, lineId, key, request))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("synthetic post-remote local failure");
+    assertThat(repairs.findById(fixture.repairId()).orElseThrow().getWarehouseId())
+        .isEqualTo(fixture.warehouseId());
+
+    MaintenanceApplicationService.CreateResult<CompleteTransferRepairResponse> completed =
+        service.completeTransferArrival(transferId, lineId, key, request);
+    assertThat(completed.replayed()).isFalse();
+    assertThat(completed.response().warehouseId()).isEqualTo(targetWarehouseId);
+
+    ArgumentCaptor<UUID> cancelKeys = ArgumentCaptor.forClass(UUID.class);
+    verify(dependencies, times(2))
+        .cancelTask(cancelKeys.capture(), eq(fixture.externalTaskId()), eq(taskVersion));
+    assertThat(cancelKeys.getAllValues())
+        .hasSize(2)
+        .allMatch(cancelKeys.getAllValues().getFirst()::equals);
+    ArgumentCaptor<UUID> leaseKeys = ArgumentCaptor.forClass(UUID.class);
+    verify(dependencies, times(2))
+        .acquireLease(
+            leaseKeys.capture(),
+            eq(fixture.rentalItemId()),
+            eq(targetAssetVersion),
+            eq("MAINTENANCE_REPAIR"),
+            eq(fixture.repairId().toString()));
+    assertThat(leaseKeys.getAllValues())
+        .hasSize(2)
+        .allMatch(leaseKeys.getAllValues().getFirst()::equals);
+    ArgumentCaptor<UUID> statusKeys = ArgumentCaptor.forClass(UUID.class);
+    verify(dependencies, times(2))
+        .fencedStatus(
+            statusKeys.capture(),
+            eq(fixture.rentalItemId()),
+            eq(targetWarehouseId),
+            eq(targetAssetVersion),
+            eq(targetLeaseId),
+            eq(31L),
+            eq("MAINTENANCE_REPAIR"),
+            eq(fixture.repairId().toString()),
+            eq("QUEUE_TO_CAPITAL_REPAIR"),
+            eq(false));
+    assertThat(statusKeys.getAllValues())
+        .hasSize(2)
+        .allMatch(statusKeys.getAllValues().getFirst()::equals);
+
+    clearInvocations(dependencies);
+    assertThat(service.completeTransferArrival(transferId, lineId, key, request).replayed()).isTrue();
+    verifyNoInteractions(dependencies);
   }
 
   @Test
@@ -1960,6 +2292,7 @@ class MaintenanceCorePostgresIntegrationTest {
         new QueueRepairRequest(0L, 1));
 
     verify(dependencies).preflightMaintenanceRouting(eq(fixture.warehouseId()), anyList());
+    verify(dependencies, times(2)).productionReady();
     verifyNoMoreInteractions(dependencies);
     assertThat(repairs.findById(fixture.repairId()).orElseThrow().getPriority()).isEqualTo(1);
     assertThat(jdbc.queryForObject("""
@@ -1999,6 +2332,98 @@ class MaintenanceCorePostgresIntegrationTest {
         keys.capture(), eq(fixture.rentalItemId()), eq(7L),
         eq("MAINTENANCE_REPAIR"), eq(fixture.repairId().toString()));
     assertThat(keys.getAllValues()).hasSize(2).allMatch(keys.getAllValues().getFirst()::equals);
+  }
+
+  @Test
+  void reconciliationCallsAssetAndTaskBoardOutsideTheLocalTransaction() {
+    RepairFixture fixture = createDirectRepair();
+    service.queueRepair(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        fixture.repairId(),
+        new QueueRepairRequest(0L, 2));
+
+    UUID leaseId = UUID.randomUUID();
+    AtomicInteger rentalSnapshotCalls = new AtomicInteger();
+    when(dependencies.getRentalItemSnapshot(fixture.rentalItemId()))
+        .thenAnswer(
+            invocation -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+              int call = rentalSnapshotCalls.incrementAndGet();
+              return new MaintenanceDependencyGateway.AssetSnapshot(
+                  fixture.rentalItemId(),
+                  call == 1 ? 7 : 8,
+                  fixture.warehouseId(),
+                  "БТ-42",
+                  call == 1 ? "FREE" : "REPAIR");
+            });
+    when(
+            dependencies.acquireLease(
+                any(),
+                eq(fixture.rentalItemId()),
+                eq(7L),
+                eq("MAINTENANCE_REPAIR"),
+                eq(fixture.repairId().toString())))
+        .thenAnswer(
+            invocation -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+              return new MaintenanceDependencyGateway.LeaseSnapshot(
+                  leaseId,
+                  0,
+                  fixture.rentalItemId(),
+                  "MAINTENANCE_REPAIR",
+                  fixture.repairId(),
+                  11,
+                  OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(15));
+            });
+    when(
+            dependencies.fencedStatus(
+                any(),
+                eq(fixture.rentalItemId()),
+                eq(fixture.warehouseId()),
+                eq(7L),
+                eq(leaseId),
+                eq(11L),
+                eq("MAINTENANCE_REPAIR"),
+                eq(fixture.repairId().toString()),
+                eq("QUEUE_TO_REPAIR"),
+                eq(false)))
+        .thenAnswer(
+            invocation -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+              return new MaintenanceDependencyGateway.AssetSnapshot(
+                  fixture.rentalItemId(), 8, fixture.warehouseId(), "БТ-42", "REPAIR");
+            });
+
+    assertThat(service.reconcileOneTask()).isTrue();
+
+    UUID queueEntryId = UUID.randomUUID();
+    when(
+            dependencies.registerTask(
+                any(),
+                eq(fixture.externalTaskId()),
+                eq(fixture.repairId()),
+                eq(fixture.warehouseId()),
+                eq(fixture.rentalItemId()),
+                eq("БТ-42"),
+                any(LocalDate.class),
+                eq(2),
+                eq(6),
+                anyList()))
+        .thenAnswer(
+            invocation -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+              return new MaintenanceDependencyGateway.TaskSnapshot(
+                  fixture.externalTaskId(),
+                  0,
+                  "ACTIVE",
+                  List.of(
+                      new MaintenanceDependencyGateway.TaskStageSnapshot(0, queueEntryId, 0)));
+            });
+    deferOtherReconciliations(fixture.repairId(), "REGISTER_TASK");
+
+    assertThat(service.reconcileOneTask()).isTrue();
+    assertThat(rentalSnapshotCalls.get()).isEqualTo(2);
   }
 
   @Test
@@ -2069,6 +2494,7 @@ class MaintenanceCorePostgresIntegrationTest {
         .isOne();
     verify(dependencies)
         .preflightMaintenanceRouting(eq(fixture.warehouseId()), anyList());
+    verify(dependencies).productionReady();
     verifyNoMoreInteractions(dependencies);
 
     when(dependencies.updatePreStartTask(
@@ -2797,6 +3223,7 @@ class MaintenanceCorePostgresIntegrationTest {
         .isInstanceOf(MaintenanceValidationException.class)
         .hasMessageContaining("execution time");
 
+    clearInvocations(dependencies);
     var created =
         service.createEstimate(
             UUID.randomUUID(),
@@ -3301,6 +3728,12 @@ class MaintenanceCorePostgresIntegrationTest {
         new RoutingSnapshot(UUID.randomUUID(), "REPAIR", "REPAIR");
     UUID chairEquipmentId = UUID.fromString("52000000-0000-4000-8000-000000000001");
     UUID tableEquipmentId = UUID.fromString("52000000-0000-4000-8000-000000000002");
+    when(dependencies.ensureFurnitureEquipment(chairMaterialId, "Chair"))
+        .thenReturn(new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
+            chairEquipmentId, "Chair"));
+    when(dependencies.ensureFurnitureEquipment(tableMaterialId, "Table"))
+        .thenReturn(new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
+            tableEquipmentId, "Table"));
     CatalogNodeInput category = new CatalogNodeInput(
         categoryId, CatalogNodeType.CATEGORY, "Furniture", true, null,
         true, null, null, null, 0, false, false, true,
@@ -3481,18 +3914,41 @@ class MaintenanceCorePostgresIntegrationTest {
     when(dependencies.getRentalItemSnapshot(rentalItemId))
         .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
             rentalItemId, 7, warehouseId, "AFTER_RENT"));
+    when(dependencies.getPropertyAssetSnapshot(
+            MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
+            rentalItemId,
+            warehouseId))
+        .thenReturn(
+            new MaintenanceDependencyGateway.PropertyAssetSnapshot(
+                MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
+                rentalItemId,
+                "C-1",
+                warehouseId,
+                7,
+                "AFTER_RENT",
+                null,
+                null,
+                List.of(
+                    new MaintenanceDependencyGateway.PropertyAssetContentSnapshot(
+                        chairEquipmentId, "Chair", null, 3, 2),
+                    new MaintenanceDependencyGateway.PropertyAssetContentSnapshot(
+                        tableEquipmentId, "Table", null, 5, 4)),
+                false,
+                false,
+                false,
+                true));
     when(dependencies.acquireLease(
         any(), eq(rentalItemId), eq(7L), eq("MAINTENANCE_ESTIMATE"), eq(estimateId.toString())))
         .thenReturn(new MaintenanceDependencyGateway.LeaseSnapshot(
             leaseId, 0, rentalItemId, "MAINTENANCE_ESTIMATE", estimateId, 17,
             OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(15)));
-    List<MaintenanceDependencyGateway.FurnitureLoss> losses = List.of(
-        new MaintenanceDependencyGateway.FurnitureLoss(chairEquipmentId, 2),
-        new MaintenanceDependencyGateway.FurnitureLoss(tableEquipmentId, 4));
+    List<MaintenanceDependencyGateway.FurniturePendingReturn> pendingReturns = List.of(
+        new MaintenanceDependencyGateway.FurniturePendingReturn(chairEquipmentId, 3, 2),
+        new MaintenanceDependencyGateway.FurniturePendingReturn(tableEquipmentId, 5, 4));
     when(dependencies.fencedStatus(
         any(), eq(rentalItemId), eq(warehouseId), eq(7L), eq(leaseId), eq(17L),
         eq("MAINTENANCE_ESTIMATE"), eq(estimateId.toString()), eq("QUEUE_TO_REPAIR"),
-        eq(false), eq(estimateId), eq(losses)))
+        eq(false), eq(pendingReturns)))
         .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
             rentalItemId, 8, warehouseId, "REPAIR"));
 
@@ -3501,13 +3957,302 @@ class MaintenanceCorePostgresIntegrationTest {
     verify(dependencies).fencedStatus(
         any(), eq(rentalItemId), eq(warehouseId), eq(7L), eq(leaseId), eq(17L),
         eq("MAINTENANCE_ESTIMATE"), eq(estimateId.toString()), eq("QUEUE_TO_REPAIR"),
-        eq(false), eq(estimateId), eq(losses));
+        eq(false), eq(pendingReturns));
     assertThat(repairs.findById(repairId).orElseThrow().getExecutionState())
         .isEqualTo(RepairExecutionState.QUEUED);
     assertThat(jdbc.queryForObject("""
         select state from integration_reconciliation
         where repair_id=? and operation_type='QUEUE_REPAIR'
         """, String.class, repairId)).isEqualTo("CONFIRMED");
+  }
+
+  @Test
+  void directRepairFurnitureUsesTheSameVersionFencedPendingReturnCommand() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    UUID catalogId = insertDraftCatalog(warehouseId, "a".repeat(64));
+    UUID categoryId = UUID.randomUUID();
+    UUID materialId = UUID.randomUUID();
+    UUID workId = UUID.randomUUID();
+    UUID equipmentId = UUID.randomUUID();
+    when(dependencies.ensureFurnitureEquipment(materialId, "Chair"))
+        .thenReturn(new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
+            equipmentId, "Chair"));
+    RoutingSnapshot routing = new RoutingSnapshot(UUID.randomUUID(), "REPAIR", "REPAIR");
+    CatalogNodeInput category = new CatalogNodeInput(
+        categoryId, CatalogNodeType.CATEGORY, "Furniture", true, null,
+        true, null, null, null, 0, false, false, true,
+        null, null, null, null, null, false, null);
+    CatalogNodeInput material = new CatalogNodeInput(
+        materialId, CatalogNodeType.MATERIAL, "Chair", true, categoryId,
+        false, new FurnitureEquipmentReference(equipmentId, "Chair"),
+        "piece", "100.00", 0, true, false, false,
+        null, null, null, null, null, false, null);
+    CatalogNodeInput work = new CatalogNodeInput(
+        workId, CatalogNodeType.WORK, "Repair chair", true, null,
+        false, null, "piece", "100.00", 15, true, false, true,
+        null, null, new CatalogRoutingInput(routing.queueId(), routing.queueType()),
+        null, null, false, null);
+    CatalogVersionResponse changed = service.changeCatalog(
+        catalogId,
+        new ChangeCatalogRequest(0L, List.of(category, material, work), List.of()));
+    service.activateCatalog(
+        UUID.randomUUID(), UUID.randomUUID(), catalogId,
+        new VersionCommand(changed.version()));
+    reconcileCatalogRoute(routing.queueId());
+    clearInvocations(dependencies);
+    rentalItemFacts.saveAndFlush(
+        RentalItemFactProjection.create(rentalItemId, warehouseId, "FREE", 7));
+
+    UUID materialLineId = UUID.randomUUID();
+    UUID workLineId = UUID.randomUUID();
+    EstimateLineInput materialLine = new EstimateLineInput(
+        materialLineId,
+        new CatalogNodeSnapshot(
+            catalogId, materialId, CatalogNodeType.MATERIAL, "Chair", "piece", "100.00",
+            0, null, new FurnitureEquipmentReference(equipmentId, "Chair"), false, null),
+        EstimateLineType.MATERIAL,
+        "Replace chairs",
+        "piece",
+        "2",
+        "100.00",
+        0,
+        null,
+        List.of());
+    EstimateLineInput workLine = new EstimateLineInput(
+        workLineId,
+        new CatalogNodeSnapshot(
+            catalogId, workId, CatalogNodeType.WORK, "Repair chair", "piece", "100.00",
+            15, routing, null, false, null),
+        EstimateLineType.WORK,
+        "Repair chair",
+        "piece",
+        "1",
+        "100.00",
+        15,
+        null,
+        List.of());
+    PlanStageInput plan = new PlanStageInput(
+        UUID.randomUUID(),
+        RepairStageKind.REPAIR_WORK,
+        0,
+        routing,
+        List.of(materialLineId, workLineId),
+        workLineId,
+        "",
+        null);
+    RepairResponse created = service.createDirectRepair(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        new CreateDirectRepairRequest(
+            warehouseId,
+            rentalItemId,
+            LocalDate.of(2026, 8, 5),
+            null,
+            List.of(materialLine, workLine),
+            List.of(plan),
+            List.of()))
+        .response();
+    service.queueRepair(
+        UUID.randomUUID(), UUID.randomUUID(), created.id(), new VersionCommand(created.version()));
+
+    UUID leaseId = UUID.randomUUID();
+    when(dependencies.getRentalItemSnapshot(rentalItemId))
+        .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
+            rentalItemId, 7, warehouseId, "FREE"));
+    when(dependencies.getPropertyAssetSnapshot(
+            MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
+            rentalItemId,
+            warehouseId))
+        .thenReturn(new MaintenanceDependencyGateway.PropertyAssetSnapshot(
+            MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
+            rentalItemId,
+            "C-1",
+            warehouseId,
+            7,
+            "FREE",
+            null,
+            null,
+            List.of(new MaintenanceDependencyGateway.PropertyAssetContentSnapshot(
+                equipmentId, "Chair", null, 11, 3)),
+            false,
+            false,
+            false,
+            true));
+    when(dependencies.acquireLease(
+            any(), eq(rentalItemId), eq(7L), eq("MAINTENANCE_REPAIR"), eq(created.id().toString())))
+        .thenReturn(new MaintenanceDependencyGateway.LeaseSnapshot(
+            leaseId,
+            0,
+            rentalItemId,
+            "MAINTENANCE_REPAIR",
+            created.id(),
+            17,
+            OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(15)));
+    List<MaintenanceDependencyGateway.FurniturePendingReturn> pendingReturns = List.of(
+        new MaintenanceDependencyGateway.FurniturePendingReturn(equipmentId, 11, 2));
+    when(dependencies.fencedStatus(
+            any(),
+            eq(rentalItemId),
+            eq(warehouseId),
+            eq(7L),
+            eq(leaseId),
+            eq(17L),
+            eq("MAINTENANCE_REPAIR"),
+            eq(created.id().toString()),
+            eq("QUEUE_TO_REPAIR"),
+            eq(false),
+            eq(pendingReturns)))
+        .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
+            rentalItemId, 8, warehouseId, "REPAIR"));
+
+    assertThat(service.reconcileOneTask()).isTrue();
+
+    verify(dependencies).fencedStatus(
+        any(),
+        eq(rentalItemId),
+        eq(warehouseId),
+        eq(7L),
+        eq(leaseId),
+        eq(17L),
+        eq("MAINTENANCE_REPAIR"),
+        eq(created.id().toString()),
+        eq("QUEUE_TO_REPAIR"),
+        eq(false),
+        eq(pendingReturns));
+    assertThat(repairs.findById(created.id()).orElseThrow().getExecutionState())
+        .isEqualTo(RepairExecutionState.QUEUED);
+  }
+
+  @Test
+  void completedRepairCustodyCreatesOneReviewedEquipmentDecisionAndUsesTheCustodyFence() {
+    RepairFixture fixture = createQueuedPendingAcceptanceRepair();
+    var repair = repairs.findById(fixture.repairId()).orElseThrow();
+    UUID custodyClaimId = UUID.randomUUID();
+    UUID equipmentId = UUID.randomUUID();
+    MaintenanceDependencyGateway.MaintenanceFurnitureCustodyClaim claim =
+        new MaintenanceDependencyGateway.MaintenanceFurnitureCustodyClaim(
+            custodyClaimId,
+            4,
+            "MAINTENANCE_REPAIR",
+            fixture.repairId(),
+            fixture.rentalItemId(),
+            fixture.warehouseId(),
+            equipmentId,
+            UUID.randomUUID(),
+            11,
+            3,
+            1,
+            0,
+            0,
+            2,
+            2,
+            OffsetDateTime.now(ZoneOffset.UTC).minusHours(1));
+
+    assertThat(dispositions.materializeFurnitureCustody(
+            repair, Map.of(equipmentId, "Chair"), List.of(claim)))
+        .isOne();
+    assertThat(dispositions.materializeFurnitureCustody(
+            repair, Map.of(equipmentId, "Chair"), List.of(claim)))
+        .isZero();
+
+    var pendingPage = dispositions.list(
+        fixture.warehouseId(), PropertyDispositionKind.WRITE_OFF,
+        PropertyDispositionState.PENDING_APPROVAL, 0, 20);
+    assertThat(pendingPage.items()).singleElement().satisfies(decision -> {
+      assertThat(decision.assetId()).isEqualTo(equipmentId);
+      assertThat(decision.quantity()).isEqualTo(2);
+      assertThat(decision.source()).isEqualTo(PropertyDispositionSource.REPAIR);
+      assertThat(decision.maintenanceCustodyClaimId()).isEqualTo(custodyClaimId);
+      assertThat(decision.maintenanceCustodyVersion()).isEqualTo(4);
+      assertThat(decision.expectedAssetVersion()).isNull();
+      assertThat(decision.expectedSourceBalanceVersion()).isNull();
+      assertThat(decision.reviewedBy()).isNull();
+    });
+    var pending = pendingPage.items().getFirst();
+
+    var approved = dispositions.approve(
+        pending.id(),
+        fixture.warehouseId(),
+        new ApprovePropertyDispositionRequest(pending.version(), "approved"));
+    assertThat(approved.state()).isEqualTo(PropertyDispositionState.APPROVED);
+    when(dependencies.preparePropertyDisposition(
+            any(),
+            eq(approved.id()),
+            argThat(preparation ->
+                preparation.assetKind()
+                    == MaintenanceDependencyGateway.PropertyAssetKind.EQUIPMENT
+                    && preparation.assetId().equals(equipmentId)
+                    && preparation.expectedAssetVersion() == null
+                    && preparation.expectedSourceBalanceVersion() == null
+                    && preparation.quantity() == 2
+                    && preparation.maintenanceCustodyClaimId().equals(custodyClaimId)
+                    && preparation.maintenanceCustodyVersion() == 4)))
+        .thenReturn(new MaintenanceDependencyGateway.PropertyDispositionFence(
+            approved.id(),
+            "PREPARED",
+            "0".repeat(64),
+            fixture.warehouseId(),
+            MaintenanceDependencyGateway.PropertyAssetKind.EQUIPMENT,
+            equipmentId,
+            MaintenanceDependencyGateway.PropertyDispositionKind.WRITE_OFF,
+            custodyClaimId,
+            4L,
+            List.of(),
+            Instant.now(),
+            null));
+
+    dispositionProcessor.processOne();
+
+    assertThat(dispositions.get(approved.id(), fixture.warehouseId()).state())
+        .isEqualTo(PropertyDispositionState.EFFECT_PENDING);
+    verify(dependencies).preparePropertyDisposition(
+        any(), eq(approved.id()), any(MaintenanceDependencyGateway.PropertyDispositionPreparation.class));
+    verify(dependencies, never()).applyPropertyDisposition(any(), any(), any());
+
+    jdbc.update(
+        """
+        update property_disposition_processing_claim
+           set status='QUARANTINED',failure_count=4,claim_token=null,lease_owner=null,lease_until=null
+         where decision_id=?
+        """,
+        approved.id());
+    var effectPending = dispositions.get(approved.id(), fixture.warehouseId());
+    when(dependencies.getPropertyAssetSnapshot(
+            MaintenanceDependencyGateway.PropertyAssetKind.EQUIPMENT,
+            equipmentId,
+            fixture.warehouseId()))
+        .thenReturn(new MaintenanceDependencyGateway.PropertyAssetSnapshot(
+            MaintenanceDependencyGateway.PropertyAssetKind.EQUIPMENT,
+            equipmentId,
+            "Chair",
+            fixture.warehouseId(),
+            5,
+            null,
+            0L,
+            0L,
+            List.of(),
+            false,
+            false,
+            false,
+            true));
+
+    var recovered = dispositions.recover(
+        approved.id(),
+        fixture.warehouseId(),
+        new RecoverPropertyDispositionRequest(
+            effectPending.version(), 0L, "Reviewed processor recovery"));
+
+    assertThat(recovered.state()).isEqualTo(PropertyDispositionState.EFFECT_PENDING);
+    assertThat(recovered.recoveryVersion()).isOne();
+    assertThat(jdbc.queryForMap(
+            """
+            select status,failure_count from property_disposition_processing_claim
+             where decision_id=?
+            """,
+            approved.id()))
+        .containsEntry("status", "PENDING")
+        .containsEntry("failure_count", 0);
   }
 
   @Test
@@ -3560,6 +4305,316 @@ class MaintenanceCorePostgresIntegrationTest {
         .isInstanceOf(
             dev.buhanzaz.rwms.maintenance.service.MaintenanceValidationException.class)
         .hasMessageContaining("Furniture material must be linked");
+  }
+
+  @Test
+  void furnitureAutoLinkCommitsEveryIntentBeforeRemoteAndRetriesOnlyThePartialFailure() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID catalogId = insertDraftCatalog(warehouseId, "a".repeat(64));
+    UUID categoryId = UUID.randomUUID();
+    UUID chairNodeId = UUID.randomUUID();
+    UUID tableNodeId = UUID.randomUUID();
+    UUID chairEquipmentId = UUID.randomUUID();
+    UUID tableEquipmentId = UUID.randomUUID();
+    List<CatalogNodeInput> nodes = List.of(
+        furnitureCategory(categoryId),
+        furnitureMaterial(chairNodeId, categoryId, "Chair", null),
+        furnitureMaterial(tableNodeId, categoryId, "Table", null));
+    AtomicInteger tableAttempts = new AtomicInteger();
+    when(dependencies.ensureFurnitureEquipment(chairNodeId, "Chair"))
+        .thenAnswer(invocation -> {
+          assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+          assertThat(jdbc.queryForObject(
+              "select count(*) from furniture_equipment_link_intent where node_id in (?,?)",
+              Integer.class,
+              chairNodeId,
+              tableNodeId)).isEqualTo(2);
+          return new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
+              chairEquipmentId, "Chair");
+        });
+    when(dependencies.ensureFurnitureEquipment(tableNodeId, "Table"))
+        .thenAnswer(invocation -> {
+          if (tableAttempts.incrementAndGet() == 1) {
+            throw new MaintenanceDependencyException(
+                org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+                "asset temporarily unavailable");
+          }
+          return new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
+              tableEquipmentId, "Table");
+        });
+
+    ChangeCatalogRequest exactRequest =
+        new ChangeCatalogRequest(0L, nodes, List.of());
+    assertThatThrownBy(() -> service.changeCatalog(catalogId, exactRequest))
+        .isInstanceOf(MaintenanceDependencyException.class);
+
+    assertThat(jdbc.queryForMap(
+            "select state,equipment_id from furniture_equipment_link_intent where node_id=?",
+            chairNodeId))
+        .containsEntry("state", "CONFIRMED")
+        .containsEntry("equipment_id", chairEquipmentId);
+    assertThat(jdbc.queryForMap(
+            "select state,attempt_count from furniture_equipment_link_intent where node_id=?",
+            tableNodeId))
+        .containsEntry("state", "RETRY_PENDING")
+        .containsEntry("attempt_count", 1);
+    assertThat(service.catalogVersion(catalogId).version()).isZero();
+
+    var changed = service.changeCatalog(catalogId, exactRequest);
+    assertThat(changed.version()).isOne();
+    assertThat(service.catalogNodes(catalogId))
+        .filteredOn(node -> node.nodeType() == CatalogNodeType.MATERIAL)
+        .extracting(node -> node.furnitureEquipment().equipmentId())
+        .containsExactlyInAnyOrder(chairEquipmentId, tableEquipmentId);
+    verify(dependencies, times(1)).ensureFurnitureEquipment(chairNodeId, "Chair");
+    verify(dependencies, times(2)).ensureFurnitureEquipment(tableNodeId, "Table");
+
+    // A late replay after generic request replay retention uses the durable confirmed mapping.
+    var lateReplay = service.changeCatalog(
+        catalogId,
+        new ChangeCatalogRequest(changed.version(), nodes, List.of()));
+    assertThat(lateReplay.version()).isEqualTo(changed.version());
+    verifyNoMoreInteractions(dependencies);
+  }
+
+  @Test
+  void confirmedFurnitureNodeRejectsRenameAndCallerSuppliedRemapWithoutRemoteMutation() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID catalogId = insertDraftCatalog(warehouseId, "b".repeat(64));
+    UUID categoryId = UUID.randomUUID();
+    UUID nodeId = UUID.randomUUID();
+    UUID equipmentId = UUID.randomUUID();
+    when(dependencies.ensureFurnitureEquipment(nodeId, "Chair"))
+        .thenReturn(new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
+            equipmentId, "Chair"));
+    CatalogNodeInput category = furnitureCategory(categoryId);
+    CatalogNodeInput chair = furnitureMaterial(nodeId, categoryId, "Chair", null);
+    var changed = service.changeCatalog(
+        catalogId, new ChangeCatalogRequest(0L, List.of(category, chair), List.of()));
+
+    assertThatThrownBy(() -> service.changeCatalog(
+        catalogId,
+        new ChangeCatalogRequest(
+            changed.version(),
+            List.of(category, furnitureMaterial(nodeId, categoryId, "Seat", null)),
+            List.of())))
+        .isInstanceOf(MaintenanceConflictException.class)
+        .hasMessageContaining("another immutable equipment name");
+    assertThatThrownBy(() -> service.changeCatalog(
+        catalogId,
+        new ChangeCatalogRequest(
+            changed.version(),
+            List.of(
+                category,
+                furnitureMaterial(
+                    nodeId,
+                    categoryId,
+                    "Chair",
+                    new FurnitureEquipmentReference(UUID.randomUUID(), "Chair"))),
+            List.of())))
+        .isInstanceOf(MaintenanceConflictException.class)
+        .hasMessageContaining("another asset equipment mapping");
+    verify(dependencies, times(1)).ensureFurnitureEquipment(nodeId, "Chair");
+  }
+
+  @Test
+  void remoteFurnitureConfirmationRemainsDurableWhenTheCatalogCommitLosesItsVersionRace() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID catalogId = insertDraftCatalog(warehouseId, "c".repeat(64));
+    UUID categoryId = UUID.randomUUID();
+    UUID nodeId = UUID.randomUUID();
+    UUID equipmentId = UUID.randomUUID();
+    List<CatalogNodeInput> nodes = List.of(
+        furnitureCategory(categoryId),
+        furnitureMaterial(nodeId, categoryId, "Chair", null));
+    when(dependencies.ensureFurnitureEquipment(nodeId, "Chair"))
+        .thenAnswer(invocation -> {
+          assertThat(jdbc.queryForObject(
+              "select state from furniture_equipment_link_intent where node_id=?",
+              String.class,
+              nodeId)).isEqualTo("IN_FLIGHT");
+          jdbc.update("update catalog_version set version=version+1 where id=?", catalogId);
+          return new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
+              equipmentId, "Chair");
+        });
+    ChangeCatalogRequest request = new ChangeCatalogRequest(0L, nodes, List.of());
+
+    assertThatThrownBy(() -> service.changeCatalog(catalogId, request))
+        .isInstanceOf(MaintenanceConflictException.class);
+    assertThat(jdbc.queryForMap(
+            "select state,equipment_id from furniture_equipment_link_intent where node_id=?",
+            nodeId))
+        .containsEntry("state", "CONFIRMED")
+        .containsEntry("equipment_id", equipmentId);
+    assertThatThrownBy(() -> service.changeCatalog(catalogId, request))
+        .isInstanceOf(MaintenanceConflictException.class);
+    verify(dependencies, times(1)).ensureFurnitureEquipment(nodeId, "Chair");
+  }
+
+  @Test
+  void furnitureLinkRetryAndAbandonAreVersionFencedReplaySafeAndImmutablyAudited() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID catalogId = insertDraftCatalog(warehouseId, "d".repeat(64));
+    UUID nodeId = UUID.randomUUID();
+    furnitureEquipmentLinks.prepareAll(
+        warehouseId,
+        catalogId,
+        0,
+        List.of(new FurnitureEquipmentLinkStore.LinkRequirement(nodeId, "Chair")));
+    exhaustFurnitureLink(nodeId);
+    UUID reviewer = UUID.randomUUID();
+
+    var retried = furnitureEquipmentLinkReviews.review(
+        warehouseId,
+        nodeId,
+        0,
+        dev.buhanzaz.rwms.maintenance.api.FurnitureEquipmentLinkApiModels
+            .FurnitureEquipmentLinkReviewAction.RETRY,
+        reviewer,
+        "Asset mapping was reviewed and corrected");
+    assertThat(retried.response().state().name()).isEqualTo("PENDING");
+    assertThat(retried.response().reviewVersion()).isOne();
+    assertThat(retried.replayed()).isFalse();
+    assertThat(furnitureEquipmentLinkReviews.review(
+            warehouseId,
+            nodeId,
+            0,
+            dev.buhanzaz.rwms.maintenance.api.FurnitureEquipmentLinkApiModels
+                .FurnitureEquipmentLinkReviewAction.RETRY,
+            reviewer,
+            "Asset mapping was reviewed and corrected").replayed())
+        .isTrue();
+
+    exhaustFurnitureLink(nodeId);
+    var abandoned = furnitureEquipmentLinkReviews.review(
+        warehouseId,
+        nodeId,
+        1,
+        dev.buhanzaz.rwms.maintenance.api.FurnitureEquipmentLinkApiModels
+            .FurnitureEquipmentLinkReviewAction.ABANDON,
+        reviewer,
+        "Catalog node will be replaced with a new stable UUID");
+    assertThat(abandoned.response().state().name()).isEqualTo("ABANDONED");
+    assertThat(abandoned.response().reviewVersion()).isEqualTo(2);
+    assertThat(jdbc.queryForObject(
+        "select count(*) from furniture_equipment_link_review_audit where node_id=?",
+        Integer.class,
+        nodeId)).isEqualTo(2);
+    assertThatThrownBy(() -> jdbc.update(
+        "update furniture_equipment_link_review_audit set reason='rewritten' where node_id=?",
+        nodeId)).hasMessageContaining("immutable");
+  }
+
+  @Test
+  void operationAdmittedBeforeDrainingCannotCommitAfterTheLocalReadinessFence() throws Exception {
+    UUID warehouseId = UUID.randomUUID();
+    UUID catalogId = insertDraftCatalog(warehouseId, "f".repeat(64));
+    when(dependencies.productionReady()).thenReturn(true);
+    when(dependencies.warehouseAdmission(
+            warehouseId,
+            MaintenanceDependencyGateway.WarehouseOperationDirection.INCOMING))
+        .thenReturn(new MaintenanceDependencyGateway.WarehouseOperationAdmission(
+            warehouseId,
+            6,
+            MaintenanceDependencyGateway.WarehouseLifecycleState.ACTIVE,
+            MaintenanceDependencyGateway.WarehouseOperationDirection.INCOMING,
+            true));
+    CountDownLatch admitted = new CountDownLatch(1);
+    CountDownLatch commit = new CountDownLatch(1);
+    try (var executor = Executors.newSingleThreadExecutor()) {
+      Future<Throwable> lateOperation = executor.submit(() -> {
+        warehouseLifecycle.requireIncoming(warehouseId);
+        admitted.countDown();
+        if (!commit.await(10, TimeUnit.SECONDS)) {
+          return new AssertionError("readiness fence was not installed");
+        }
+        try {
+          new TransactionTemplate(transactionManager).executeWithoutResult(ignored -> jdbc.update(
+              """
+              insert into maintenance_estimate(
+                id,version,warehouse_id,rental_item_id,rental_item_version_snapshot,
+                catalog_version_id,state,revision,priority,movement_to_repair,actor_ref,
+                created_at,updated_at)
+              values (?,0,?,?,0,?,'DRAFT',1,3,false,'{}'::jsonb,
+                      clock_timestamp(),clock_timestamp())
+              """,
+              UUID.randomUUID(),
+              warehouseId,
+              UUID.randomUUID(),
+              catalogId));
+          return null;
+        } catch (Throwable failure) {
+          return failure;
+        }
+      });
+      assertThat(admitted.await(10, TimeUnit.SECONDS)).isTrue();
+      assertThat(warehouseReadinessFences.begin(warehouseId, 7).state())
+          .isEqualTo(WarehouseReadinessFenceStore.BeginState.FENCED);
+      commit.countDown();
+      assertThat(lateOperation.get(10, TimeUnit.SECONDS))
+          .isInstanceOf(DataIntegrityViolationException.class)
+          .hasMessageContaining("readiness fence");
+    }
+    UUID terminalEstimateId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into maintenance_estimate(
+          id,version,warehouse_id,rental_item_id,rental_item_version_snapshot,
+          catalog_version_id,state,revision,priority,movement_to_repair,actor_ref,
+          created_at,updated_at)
+        values (?,0,?,?,0,?,'COMPLETED',1,3,false,'{}'::jsonb,
+                clock_timestamp(),clock_timestamp())
+        """,
+        terminalEstimateId,
+        warehouseId,
+        UUID.randomUUID(),
+        catalogId);
+    assertThatThrownBy(() -> jdbc.update(
+            "update maintenance_estimate set state='DRAFT' where id=?",
+            terminalEstimateId))
+        .isInstanceOf(DataIntegrityViolationException.class)
+        .hasMessageContaining("readiness fence");
+    assertThatThrownBy(() -> jdbc.update(
+            """
+            insert into integration_reconciliation(
+              id,dependency_type,operation_type,idempotency_key,state,attempt_count,
+              next_attempt_at,response_snapshot,review_version,created_at,updated_at,
+              catalog_version_id)
+            values (?,'ASSET','TEST_READINESS',?,'PENDING',0,clock_timestamp(),'{}',0,
+                    clock_timestamp(),clock_timestamp(),?)
+            """,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            catalogId))
+        .isInstanceOf(DataIntegrityViolationException.class)
+        .hasMessageContaining("readiness fence");
+    verify(dependencies).warehouseAdmission(
+        warehouseId,
+        MaintenanceDependencyGateway.WarehouseOperationDirection.INCOMING);
+  }
+
+  @Test
+  void readinessReleaseCannotReleaseAReplacementFenceAndPendingOutboxesRemainBlockers() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID operationId = UUID.randomUUID();
+    OffsetDateTime occurredAt = OffsetDateTime.now(ZoneOffset.UTC).minusMinutes(1);
+    new TransactionTemplate(transactionManager).executeWithoutResult(
+        ignored -> warehouseOperationMarks.enqueue(warehouseId, operationId, occurredAt));
+    assertThat(warehouseReadinessFences.begin(warehouseId, 3).state())
+        .isEqualTo(WarehouseReadinessFenceStore.BeginState.BLOCKED);
+    jdbc.update(
+        "update warehouse_operation_mark_outbox set state='CONFIRMED' where warehouse_id=?",
+        warehouseId);
+
+    assertThat(warehouseReadinessFences.begin(warehouseId, 3).state())
+        .isEqualTo(WarehouseReadinessFenceStore.BeginState.FENCED);
+    assertThat(warehouseReadinessFences.release(warehouseId, 3, "REMOTE_409")).isTrue();
+    assertThat(warehouseReadinessFences.begin(warehouseId, 4).state())
+        .isEqualTo(WarehouseReadinessFenceStore.BeginState.FENCED);
+    assertThat(warehouseReadinessFences.release(warehouseId, 3, "LATE_REMOTE_409")).isFalse();
+    assertThat(warehouseReadinessFences.active(warehouseId)).get()
+        .extracting(WarehouseReadinessFenceStore.FenceSnapshot::warehouseVersion)
+        .isEqualTo(4L);
   }
 
   @Test
@@ -3625,6 +4680,9 @@ class MaintenanceCorePostgresIntegrationTest {
     UUID materialId = UUID.randomUUID();
     UUID workId = UUID.randomUUID();
     UUID equipmentId = UUID.randomUUID();
+    when(dependencies.ensureFurnitureEquipment(materialId, "Chair"))
+        .thenReturn(new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
+            equipmentId, "Chair"));
     RoutingSnapshot routing =
         new RoutingSnapshot(UUID.randomUUID(), "REPAIR", "REPAIR");
     CatalogNodeInput category = new CatalogNodeInput(
@@ -4398,18 +5456,114 @@ class MaintenanceCorePostgresIntegrationTest {
   }
 
   @Test
-  void completedReworkReturnsSourceToPendingAndWriteOffCascadesWithoutDuplicateStatus() {
+  void completedReworkWriteOffWaitsForApprovalAndConfirmedAssetEffectBeforeCascading() {
     ReworkFixture fixture = createCompletedRework();
 
     long childVersion = repairs.findById(fixture.child().repairId()).orElseThrow().getVersion();
-    service.writeOff(
-        UUID.randomUUID(), UUID.randomUUID(), fixture.child().repairId(),
-        new WriteOffRepairRequest(childVersion, "not repairable", "reviewed"));
+    var source = repairs.findById(fixture.source().repairId()).orElseThrow();
+    when(dependencies.getPropertyAssetSnapshot(
+        eq(MaintenanceDependencyGateway.PropertyAssetKind.CABIN),
+        eq(fixture.source().rentalItemId()),
+        eq(fixture.source().warehouseId())))
+        .thenReturn(new MaintenanceDependencyGateway.PropertyAssetSnapshot(
+            MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
+            fixture.source().rentalItemId(),
+            "БТ-42",
+            fixture.source().warehouseId(),
+            source.getRentalItemVersionSnapshot(),
+            "REPAIR",
+            null,
+            null,
+            List.of(),
+            false,
+            false,
+            true,
+            true));
+
+    UUID dispositionSubjectId = UUID.randomUUID();
+    UUID dispositionKey = UUID.randomUUID();
+    WriteOffRepairRequest writeOffRequest =
+        new WriteOffRepairRequest(childVersion, "not repairable", "reviewed", null);
+    var requestedResult = dispositions.createRepairWriteOff(
+        dispositionSubjectId,
+        dispositionKey,
+        fixture.child().repairId(),
+        fixture.child().warehouseId(),
+        writeOffRequest);
+    var requested = requestedResult.response();
+
+    reset(dependencies);
+    var replayedRequest = dispositions.createRepairWriteOff(
+        dispositionSubjectId,
+        dispositionKey,
+        fixture.child().repairId(),
+        fixture.child().warehouseId(),
+        writeOffRequest);
+    assertThat(requestedResult.replayed()).isFalse();
+    assertThat(replayedRequest.replayed()).isTrue();
+    assertThat(replayedRequest.response()).isEqualTo(requested);
+    verifyNoInteractions(dependencies);
+
+    assertThat(requested.state()).isEqualTo(PropertyDispositionState.PENDING_APPROVAL);
+    assertThat(repairs.findById(fixture.child().repairId()).orElseThrow().getAcceptanceState())
+        .isEqualTo(RepairAcceptanceState.PENDING);
+    assertThat(repairs.findById(fixture.source().repairId()).orElseThrow().getAcceptanceState())
+        .isEqualTo(RepairAcceptanceState.PENDING);
+
+    var approved = dispositions.approve(
+        requested.id(),
+        fixture.child().warehouseId(),
+        new ApprovePropertyDispositionRequest(requested.version(), "approved"));
+    assertThat(approved.state()).isEqualTo(PropertyDispositionState.APPROVED);
+    assertThat(repairs.findById(fixture.child().repairId()).orElseThrow().getAcceptanceState())
+        .isEqualTo(RepairAcceptanceState.PENDING);
+
+    when(dependencies.preparePropertyDisposition(
+        any(), eq(approved.id()), any(MaintenanceDependencyGateway.PropertyDispositionPreparation.class)))
+        .thenReturn(new MaintenanceDependencyGateway.PropertyDispositionFence(
+            approved.id(),
+            "PREPARED",
+            "0".repeat(64),
+            fixture.source().warehouseId(),
+            MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
+            fixture.source().rentalItemId(),
+            MaintenanceDependencyGateway.PropertyDispositionKind.WRITE_OFF,
+            List.of(),
+            Instant.now(),
+            null));
+    UUID effectId = UUID.randomUUID();
+    when(dependencies.applyPropertyDisposition(any(), eq(approved.id()), isNull()))
+        .thenReturn(new MaintenanceDependencyGateway.PropertyDispositionEffect(
+            effectId,
+            approved.id(),
+            MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
+            fixture.source().rentalItemId(),
+            MaintenanceDependencyGateway.PropertyDispositionKind.WRITE_OFF,
+            source.getRentalItemVersionSnapshot() + 1,
+            Instant.now()));
+
+    dispositionProcessor.processOne();
+    assertThat(dispositions.get(approved.id(), fixture.source().warehouseId()).state())
+        .isEqualTo(PropertyDispositionState.EFFECT_PENDING);
+    dispositionProcessor.processOne();
+    assertThat(dispositions.get(approved.id(), fixture.source().warehouseId()).state())
+        .isEqualTo(PropertyDispositionState.EFFECTIVE);
+    dispositionProcessor.processOne();
 
     assertThat(repairs.findById(fixture.child().repairId()).orElseThrow().getAcceptanceState())
         .isEqualTo(RepairAcceptanceState.WRITTEN_OFF);
     assertThat(repairs.findById(fixture.source().repairId()).orElseThrow().getAcceptanceState())
         .isEqualTo(RepairAcceptanceState.WRITTEN_OFF);
+    verify(dependencies).preparePropertyDisposition(
+        any(), eq(approved.id()), any(MaintenanceDependencyGateway.PropertyDispositionPreparation.class));
+    verify(dependencies).applyPropertyDisposition(any(), eq(approved.id()), isNull());
+    verify(dependencies).releaseLease(
+        any(),
+        eq(source.getLeaseId()),
+        eq(source.getLeaseVersion()),
+        eq(source.getFencingToken()),
+        eq("MAINTENANCE_REPAIR"),
+        eq(fixture.source().repairId().toString()));
     assertSinglePendingAcceptanceIntent(fixture.source().repairId());
   }
 
@@ -5555,11 +6709,13 @@ class MaintenanceCorePostgresIntegrationTest {
         .thenReturn(new MaintenanceDependencyGateway.TaskSnapshot(
             fixture.externalTaskId(), 0, "ACTIVE",
             List.of(new MaintenanceDependencyGateway.TaskStageSnapshot(0, entryId, 0))));
-    assertThat(service.reconcileOneTask()).isTrue();
-    assertThat(
-            service.repair(fixture.repairId())
-                .plan().stages().getFirst().taskSync().taskBoardEntryId())
-        .isEqualTo(entryId);
+    UUID registeredEntryId = null;
+    for (int attempt = 0; attempt < 3 && registeredEntryId == null; attempt++) {
+      assertThat(service.reconcileOneTask()).isTrue();
+      registeredEntryId = service.repair(fixture.repairId())
+          .plan().stages().getFirst().taskSync().taskBoardEntryId();
+    }
+    assertThat(registeredEntryId).isEqualTo(entryId);
     return new RegisteredRepairFixture(fixture, entryId);
   }
 
@@ -6338,6 +7494,72 @@ class MaintenanceCorePostgresIntegrationTest {
         work.routing(),
         new CabinCharacteristicReference(
             characteristicId, characteristicName));
+  }
+
+  private static CatalogNodeInput furnitureCategory(UUID categoryId) {
+    return new CatalogNodeInput(
+        categoryId,
+        CatalogNodeType.CATEGORY,
+        "Furniture",
+        true,
+        null,
+        true,
+        null,
+        null,
+        null,
+        0,
+        false,
+        false,
+        true,
+        null,
+        null,
+        null,
+        null,
+        null,
+        false,
+        null);
+  }
+
+  private static CatalogNodeInput furnitureMaterial(
+      UUID nodeId,
+      UUID categoryId,
+      String name,
+      FurnitureEquipmentReference equipment) {
+    return new CatalogNodeInput(
+        nodeId,
+        CatalogNodeType.MATERIAL,
+        name,
+        true,
+        categoryId,
+        false,
+        equipment,
+        "piece",
+        "100.00",
+        0,
+        true,
+        false,
+        false,
+        null,
+        null,
+        null,
+        null,
+        null,
+        false,
+        null);
+  }
+
+  private void exhaustFurnitureLink(UUID nodeId) {
+    for (int attempt = 0; attempt < FurnitureEquipmentLinkStore.MAX_ATTEMPTS; attempt++) {
+      FurnitureEquipmentLinkStore.WorkItem work = furnitureEquipmentLinks
+          .claimExact(nodeId, Duration.ofMinutes(2))
+          .orElseThrow();
+      furnitureEquipmentLinks.failed(
+          work,
+          new MaintenanceDependencyException(
+              org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+              "asset unavailable"));
+    }
+    assertThat(furnitureEquipmentLinks.require(nodeId).state()).isEqualTo("REVIEW_REQUIRED");
   }
 
   private void reconcileCatalogRoute(UUID queueId) {

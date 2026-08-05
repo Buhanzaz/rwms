@@ -93,7 +93,17 @@ class EquipmentMovementTaskIntegrationTest {
 
     when(
             dependencies.acquireEquipmentMovementReservation(
-                any(), any(), any(), any(), any(), any(), any(), anyLong(), anyLong(), any()))
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                anyLong(),
+                anyLong(),
+                any(),
+                any()))
         .thenAnswer(
             invocation ->
                 new LogisticsDependencyGateway.EquipmentMovementReservation(

@@ -41,6 +41,7 @@ const warehouse: WarehouseInfo = {
   address: null,
   timeZone: "Europe/Moscow",
   active: true,
+  lifecycleState: "ACTIVE",
   sortOrder: null,
 }
 
@@ -217,6 +218,31 @@ describe("WarehouseProvider", () => {
     )
     expect(window.localStorage.getItem("wms:selected-warehouse-id")).toBe(
       warehouse.id
+    )
+  })
+
+  it("keeps a DRAINING warehouse selectable for outbound work", async () => {
+    const drainingWarehouse: WarehouseInfo = {
+      ...secondWarehouse,
+      active: false,
+      lifecycleState: "DRAINING",
+    }
+    auth.currentUser = {
+      ...currentUser,
+      warehouseAccesses: [
+        { warehouseId: drainingWarehouse.id, level: "MANAGE" },
+      ],
+    }
+    listWarehouses.mockResolvedValue([drainingWarehouse])
+
+    render(
+      <WarehouseProvider>
+        <SelectionProbe />
+      </WarehouseProvider>
+    )
+
+    await waitFor(() =>
+      expect(screen.getByText(drainingWarehouse.id)).toBeTruthy()
     )
   })
 

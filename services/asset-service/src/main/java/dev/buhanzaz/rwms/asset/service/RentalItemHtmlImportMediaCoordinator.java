@@ -22,6 +22,7 @@ import org.springframework.stereotype.Component;
 public class RentalItemHtmlImportMediaCoordinator {
   private static final List<RentalItemHtmlImportState> ACTIVE_STATES =
       List.of(
+          RentalItemHtmlImportState.COMMITTING,
           RentalItemHtmlImportState.ASSETS_COMMITTED,
           RentalItemHtmlImportState.MEDIA_IMPORTING);
 

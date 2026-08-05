@@ -7,12 +7,17 @@ import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.PromoteCapita
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.ReturnCapitalRepairRequest;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.ScheduleCapitalRepairRequest;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.DriverTaskResponse;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskPlanningMode;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverBoardService;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverQueueScheduler;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverTaskProcessor;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverTaskService;
 import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
 import jakarta.validation.Valid;
+import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
@@ -40,6 +45,7 @@ public class DriverBoardController {
   private final DriverTaskProcessor processor;
   private final DriverQueueScheduler scheduler;
   private final LogisticsAuthorizer access;
+  private final LogisticsWarehouseLifecycle warehouseLifecycle;
 
   @GetMapping
   public DriverBoardResponse board(
@@ -74,9 +80,23 @@ public class DriverBoardController {
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody PromoteCapitalRepairRequest request) {
     access.requireEdit(jwt, request.warehouseId());
+    UUID subjectId = access.subjectId(jwt);
+    var admission =
+        warehouseLifecycle.prepareDriverTask(
+            subjectId,
+            idempotencyKey,
+            List.of(
+                new AdmissionRequirement(
+                    request.warehouseId(), WarehouseOperationDirection.OUTGOING)));
     DriverTaskService.CreateResult result =
         tasks.createCapitalMovement(
-            access.subjectId(jwt), idempotencyKey, request.warehouseId(), repairId);
+            subjectId,
+            idempotencyKey,
+            request.warehouseId(),
+            repairId,
+            DriverTaskPlanningMode.AUTO,
+            null,
+            admission);
     processor.processUntilIdle(result.response().id());
     scheduler.promoteRequested(result.response().id());
     DriverTaskResponse response = tasks.get(result.response().id());
@@ -96,8 +116,17 @@ public class DriverBoardController {
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody ScheduleCapitalRepairRequest request) {
     access.requireEdit(jwt, request.warehouseId());
+    UUID subjectId = access.subjectId(jwt);
+    var admission =
+        warehouseLifecycle.prepareDriverTask(
+            subjectId,
+            idempotencyKey,
+            List.of(
+                new AdmissionRequirement(
+                    request.warehouseId(), WarehouseOperationDirection.OUTGOING)));
     DriverBoardService.CapitalRepairScheduleResult result =
-        board.scheduleCapitalRepair(access.subjectId(jwt), idempotencyKey, repairId, request);
+        board.scheduleCapitalRepair(
+            subjectId, idempotencyKey, repairId, request, admission);
     ResponseEntity.BodyBuilder builder =
         ResponseEntity.status(result.replayed() ? HttpStatus.OK : HttpStatus.CREATED)
             .header(

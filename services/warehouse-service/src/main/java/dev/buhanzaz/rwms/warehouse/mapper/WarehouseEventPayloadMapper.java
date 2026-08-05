@@ -13,6 +13,8 @@ import org.mapstruct.ReportingPolicy;
     injectionStrategy = InjectionStrategy.CONSTRUCTOR,
     unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface WarehouseEventPayloadMapper {
-  @Mapping(target = "warehouseId", source = "id")
-  WarehouseEventPayload toPayload(Warehouse warehouse);
+  @Mapping(target = "warehouseId", source = "warehouse.id")
+  @Mapping(target = "timeZone", source = "effectiveTimeZone")
+  @Mapping(target = "timeZoneDecision", ignore = true)
+  WarehouseEventPayload toPayload(Warehouse warehouse, String effectiveTimeZone);
 }

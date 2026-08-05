@@ -5,7 +5,6 @@ export type WarehouseFormValues = {
   city: string
   address: string
   timeZone: string
-  active: boolean
   sortOrder: string
 }
 
@@ -20,7 +19,6 @@ export function createWarehouseFormValues(
     city: warehouse?.city ?? "",
     address: warehouse?.address ?? "",
     timeZone: warehouse?.timeZone ?? "Europe/Moscow",
-    active: warehouse?.active ?? true,
     sortOrder:
       warehouse?.sortOrder === null || warehouse?.sortOrder === undefined
         ? ""
@@ -78,7 +76,6 @@ export function parseWarehouseForm(
       city,
       address,
       timeZone,
-      active: values.active,
       sortOrder,
     },
     error: null,

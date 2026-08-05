@@ -27,13 +27,31 @@ class LogisticsDependencyConfiguration {
         registration(validated, "logistics-asset", "asset.logistics");
     ClientRegistration warehouse =
         registration(validated, "logistics-warehouse", "warehouse.logistics");
+    ClientRegistration warehouseTimeZone =
+        registration(validated, "logistics-warehouse-timezone", "warehouse.timezone.read");
+    ClientRegistration warehouseOperation =
+        registration(validated, "logistics-warehouse-operation", "warehouse.operation.mark");
+    ClientRegistration warehouseLifecycleRead =
+        registration(validated, "logistics-warehouse-lifecycle-read", "warehouse.lifecycle.read");
+    ClientRegistration warehouseLifecycleConfirm =
+        registration(
+            validated, "logistics-warehouse-lifecycle-confirm", "warehouse.lifecycle.confirm");
     ClientRegistration maintenance =
         registration(validated, "logistics-maintenance", "maintenance.logistics");
     ClientRegistration media = registration(validated, "logistics-media", "media.logistics");
     ClientRegistration taskBoard =
         registration(validated, "logistics-task-board", "task-board.logistics");
     var registrations =
-        new InMemoryClientRegistrationRepository(asset, warehouse, maintenance, media, taskBoard);
+        new InMemoryClientRegistrationRepository(
+            asset,
+            warehouse,
+            warehouseTimeZone,
+            warehouseOperation,
+            warehouseLifecycleRead,
+            warehouseLifecycleConfirm,
+            maintenance,
+            media,
+            taskBoard);
     var manager =
         new AuthorizedClientServiceOAuth2AuthorizedClientManager(
             registrations, new InMemoryOAuth2AuthorizedClientService(registrations));

@@ -6,6 +6,7 @@ import dev.buhanzaz.rwms.logistics.equipment.api.EquipmentMovementTaskApiModels.
 import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskProcessor;
 import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskService;
 import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
 import jakarta.validation.Valid;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +32,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class EquipmentMovementTaskController {
   private final EquipmentMovementTaskService service;
   private final EquipmentMovementTaskProcessor processor;
+  private final LogisticsWarehouseLifecycle warehouseLifecycle;
   private final LogisticsAuthorizer access;
 
   @PostMapping
@@ -42,8 +44,14 @@ public class EquipmentMovementTaskController {
     if (request.targetWarehouseId() != null) {
       access.requireEdit(jwt, request.targetWarehouseId());
     }
+    UUID subjectId = access.subjectId(jwt);
+    var admission =
+        warehouseLifecycle.prepareEquipmentMovement(
+            subjectId,
+            idempotencyKey,
+            EquipmentMovementTaskService.admissionRequirements(request));
     EquipmentMovementTaskService.CreateResult result =
-        service.create(access.subjectId(jwt), idempotencyKey, request);
+        service.create(subjectId, idempotencyKey, request, admission);
     processor.processUntilIdle(result.response().id());
     EquipmentMovementTaskResponse response = service.get(result.response().id());
     return response(response, result.replayed() ? HttpStatus.OK : HttpStatus.CREATED, result.replayed());

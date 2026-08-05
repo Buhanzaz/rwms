@@ -203,6 +203,8 @@ class TaskBoardSecurityPolicyTest {
         "rwms.auth.worker-credentials-url",
         "https://auth.example.test/api/internal/worker-credentials");
     environment.setProperty(
+        "rwms.warehouse.lifecycle.base-url", "https://warehouse.example.test");
+    environment.setProperty(
         "rwms.cors.allowed-origins", "https://panel.example.test,https://worker.example.test");
     environment.setProperty("rwms.platform.kafka.enabled", "true");
     List<String> destinations =

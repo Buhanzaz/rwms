@@ -130,6 +130,7 @@ public final class MaintenanceApiModels {
       @NotNull List<UUID> missingQueueDefinitionIds) {}
   public record CompleteTransferRepairRequest(
       @NotNull UUID rentalItemId,
+      @NotNull @Min(0) Long rentalItemVersion,
       @NotNull UUID sourceWarehouseId,
       @NotNull UUID targetWarehouseId,
       @JsonProperty(required = true) @Min(1) @Max(5) Integer priority) {
@@ -1359,11 +1360,6 @@ public final class MaintenanceApiModels {
       this(expectedVersion, comment, List.of());
     }
   }
-  public record WriteOffRepairRequest(
-      @NotNull @Min(0) Long expectedVersion,
-      @NotBlank @Size(max = 2000) String reason,
-      @Size(max = 2000) String comment) {}
-
   public record EstimateCommandResult(
       EstimateResponse estimate, RepairResponse repair, DeliverySnapshot delivery) {}
   public record RepairCommandResult(
@@ -1379,13 +1375,5 @@ public final class MaintenanceApiModels {
       RepairAcceptanceState acceptanceState,
       long repairVersion,
       OffsetDateTime readyAt) {}
-  public record WriteOffProjection(
-      UUID repairId,
-      UUID rootRepairId,
-      UUID warehouseId,
-      UUID rentalItemId,
-      long repairVersion,
-      OffsetDateTime writtenOffAt,
-      ActorSnapshot actor) {}
   public record PageResponse<T>(List<T> items, int page, int size, long totalElements) {}
 }
