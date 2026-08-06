@@ -123,6 +123,12 @@ data class InventoryUploadCommand(
     val passportObservation: ObservationInput,
     val equipmentObservation: ObservationInput,
     val existingMedia: List<MediaReferenceDto> = emptyList(),
+    /**
+     * Requested absolute rotations for already attached inventory media. The worker resolves
+     * these against the current owner projection and persists the new generations before it
+     * saves the inventory finding.
+     */
+    val existingMediaRotations: List<InventoryExistingMediaRotation> = emptyList(),
     val existingCoverMediaId: String? = null,
     val planSelection: InventoryPlanSelectionDto? = null,
     val planLineIds: List<String> = emptyList(),
@@ -131,6 +137,17 @@ data class InventoryUploadCommand(
     val furnitureMove: InventoryFurnitureUploadCommand? = null,
     val inspectionSaved: Boolean = false,
 )
+
+data class InventoryExistingMediaRotation(
+    val reference: MediaReferenceDto,
+    val rotationDegrees: Int,
+) {
+    init {
+        require(rotationDegrees in setOf(0, 90, 180, 270)) {
+            "Недопустимый поворот фотографии инвентаризации"
+        }
+    }
+}
 
 data class InventoryFurnitureUploadCommand(
     val rentalItemId: String,

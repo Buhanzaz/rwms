@@ -13,12 +13,18 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,8 +56,10 @@ fun BackgroundUploadsScreen(
     onBack: () -> Unit,
     onRetryOperation: (String) -> Unit,
     onRetryPhoto: (String, String) -> Unit,
+    onCancelOperation: (String) -> Unit,
 ) {
     val groupedOperations = operations.groupBy(BackgroundUploadOperation::area)
+    var pendingCancellationOperationId by remember { mutableStateOf<String?>(null) }
 
     ManagerScreenScaffold(title = "Загрузки", onBack = onBack) { padding ->
         if (operations.isEmpty()) {
@@ -98,12 +106,40 @@ fun BackgroundUploadsScreen(
                                 operation = operation,
                                 onRetryOperation = onRetryOperation,
                                 onRetryPhoto = onRetryPhoto,
+                                onCancelOperation = { pendingCancellationOperationId = it },
                             )
                         }
                     }
                 }
             }
         }
+    }
+
+    pendingCancellationOperationId?.let { operationId ->
+        AlertDialog(
+            onDismissRequest = { pendingCancellationOperationId = null },
+            title = { Text("Удалить отправку из очереди?") },
+            text = {
+                Text(
+                    "Операция и сохранённые на устройстве фотографии будут удалены из очереди.\n\n" +
+                        "Уже загруженные фотографии не удаляются с сервера. Если итоговая " +
+                        "команда уже принята сервером, это действие её не откатит.",
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    pendingCancellationOperationId = null
+                    onCancelOperation(operationId)
+                }) {
+                    Text("Удалить из очереди")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingCancellationOperationId = null }) {
+                    Text("Назад")
+                }
+            },
+        )
     }
 }
 
@@ -112,6 +148,7 @@ private fun BackgroundUploadOperationPanel(
     operation: BackgroundUploadOperation,
     onRetryOperation: (String) -> Unit,
     onRetryPhoto: (String, String) -> Unit,
+    onCancelOperation: (String) -> Unit,
 ) {
     ManagerPanel {
         Row(
@@ -182,6 +219,12 @@ private fun BackgroundUploadOperationPanel(
             ) {
                 Text("Повторить")
             }
+        }
+        OutlinedButton(
+            onClick = { onCancelOperation(operation.id) },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Отменить отправку")
         }
     }
 }

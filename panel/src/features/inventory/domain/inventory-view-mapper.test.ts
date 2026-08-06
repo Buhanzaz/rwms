@@ -24,8 +24,19 @@ const finding: InventoryFinding = {
   assetVersion: 7,
   displayCanonicalNumber: "СПБ-01",
   identityMatchKey: "СПБ01",
-  passportObservation: { presence: "ABSENT", value: null },
-  equipmentObservation: { presence: "ABSENT", value: null },
+  passportObservation: {
+    presence: "PRESENT",
+    value: { rentalType: "БК-1", linoleum: true },
+  },
+  equipmentObservation: {
+    presence: "PRESENT",
+    value: [
+      {
+        equipmentId: "00000000-0000-4000-8000-000000000250",
+        quantity: 2,
+      },
+    ],
+  },
   mutationState: "IDLE",
   planFingerprintSha256: "a".repeat(64),
   comment: "Заменить дверь",
@@ -101,6 +112,12 @@ const finding: InventoryFinding = {
         unitPriceMinor: 20000,
         normativeMinutes: "45",
         groupComment: "Проверить проём",
+        mediaReferences: [
+          {
+            mediaId: "00000000-0000-4000-8000-000000000251",
+            generation: 3,
+          },
+        ],
       },
     ],
     stages: [
@@ -203,6 +220,19 @@ describe("inventory service view mapper", () => {
       version: 4,
       cabinNumber: "СПБ-01",
       comment: "Заменить дверь",
+      passportObservation: {
+        presence: "PRESENT",
+        value: { rentalType: "БК-1", linoleum: true },
+      },
+      equipmentObservation: {
+        presence: "PRESENT",
+        value: [
+          {
+            equipmentId: "00000000-0000-4000-8000-000000000250",
+            quantity: 2,
+          },
+        ],
+      },
       currentSnapshot: {
         status: "WAREHOUSE",
         tenant: "Арендатор 1",
@@ -226,6 +256,12 @@ describe("inventory service view mapper", () => {
             nodeId: "00000000-0000-4000-8000-000000000207",
             name: "Замена двери",
           },
+          maintenanceMediaReferences: [
+            {
+              mediaId: "00000000-0000-4000-8000-000000000251",
+              generation: 3,
+            },
+          ],
         },
       ],
       repairPlans: [

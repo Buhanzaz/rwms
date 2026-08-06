@@ -758,7 +758,7 @@ components:
     InspectionSource: { type: string, enum: [INVENTORY] }
     RentalItemStatus:
       type: string
-      enum: [RENTED, BOOKED, REPAIR, WAITING_REPAIR_CHECK, WRITTEN_OFF, CAPITAL_REPAIR, AFTER_RENT, WAITING_ESTIMATE_CONFIRMATION, SALE, USED_SALE, RESERVED, FREE, WAREHOUSE, OWN_NEEDS, IN_TRANSFER]
+      enum: [RENTED, BOOKED, REPAIR, WAITING_REPAIR_CHECK, WRITTEN_OFF, LOST, CAPITAL_REPAIR, AFTER_RENT, WAITING_ESTIMATE_CONFIRMATION, SALE, USED_SALE, RESERVED, FREE, WAREHOUSE, OWN_NEEDS, IN_TRANSFER]
     InspectionState: { type: string, enum: [NOT_INSPECTED, READY, WORK_STAGED] }
     LogisticsPlanningMode: { type: string, enum: [AUTO, FIXED_DATE] }
     ReconciliationState: { type: string, enum: [MATCHED, MISSING, CONFLICT] }
@@ -1593,7 +1593,7 @@ components:
     FrozenPlanLine:
       type: object
       additionalProperties: false
-      required: [id, sourceKind, lineType, catalogVersionId, catalogNodeId, description, normalizedDescription, unit, quantity, unitPriceMinor, normativeMinutes, groupComment]
+      required: [id, sourceKind, lineType, catalogVersionId, catalogNodeId, description, normalizedDescription, unit, quantity, unitPriceMinor, normativeMinutes, groupComment, mediaReferences]
       properties:
         id: { type: string, format: uuid }
         sourceKind: { type: string, enum: [CATALOG, MANUAL] }
@@ -1607,6 +1607,7 @@ components:
         unitPriceMinor: { type: integer, format: int64, minimum: 0 }
         normativeMinutes: { type: string, pattern: '^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,3})?$' }
         groupComment: { type: [string, 'null'], maxLength: 2000 }
+        mediaReferences: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/MediaReference' } }
     FrozenPlanStage:
       type: object
       additionalProperties: false

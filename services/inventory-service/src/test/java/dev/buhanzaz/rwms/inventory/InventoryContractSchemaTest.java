@@ -366,7 +366,7 @@ class InventoryContractSchemaTest {
                   "sourceKind":"MANUAL","lineType":"WORK","catalogVersionId":null,
                   "catalogNodeId":null,"description":"Work","normalizedDescription":"work",
                   "unit":"HOUR","quantity":"1.25","unitPriceMinor":1234,
-                  "normativeMinutes":"2.5","groupComment":null
+                  "normativeMinutes":"2.5","groupComment":null,"mediaReferences":[]
                 }],
                 "stages":[{
                   "id":"00000000-0000-0000-0000-000000000737",
@@ -410,6 +410,10 @@ class InventoryContractSchemaTest {
     ((ObjectNode) numericQuantity.required("frozenPlan").required("lines").get(0))
         .put("quantity", 1.25);
     assertThat(finding.validate(numericQuantity)).isNotEmpty();
+    ObjectNode missingLineMedia = staged.deepCopy();
+    ((ObjectNode) missingLineMedia.required("frozenPlan").required("lines").get(0))
+        .remove("mediaReferences");
+    assertThat(finding.validate(missingLineMedia)).isNotEmpty();
     ObjectNode excessiveScale = staged.deepCopy();
     ((ObjectNode) excessiveScale.required("frozenPlan").required("lines").get(0))
         .put("normativeMinutes", "2.5000");

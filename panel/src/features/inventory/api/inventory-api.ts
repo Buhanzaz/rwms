@@ -21,6 +21,7 @@ import type {
 import type {
   InventoryCompletionPreview,
   InventoryFinalPlan,
+  InventoryObservation,
   InventoryPlanningSettings,
   InventorySessionView,
   UpdateInventoryFinalPlanRequest,
@@ -373,6 +374,8 @@ export async function saveInventoryFinding(input: {
   actor: InventoryActorSnapshot
   findingId: string
   comment: string
+  passportObservation: InventoryObservation
+  equipmentObservation: InventoryObservation
   media: Array<{ mediaId: string; generation: number }>
   coverMediaId: string | null
   lines: RepairEstimateLineDto[]
@@ -436,6 +439,8 @@ export async function saveInventoryFinding(input: {
     expectedFindingRevision: input.expectedFindingVersion,
     inspection,
     comment: input.comment,
+    passportObservation: input.passportObservation,
+    equipmentObservation: input.equipmentObservation,
     media: input.media,
     coverMediaId: input.coverMediaId,
     planSelection,

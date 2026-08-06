@@ -70,6 +70,7 @@ import dev.buhanzaz.rwms.manager.network.InventorySessionDto
 import dev.buhanzaz.rwms.manager.network.CatalogNodeDto
 import dev.buhanzaz.rwms.manager.network.RentalItemDto
 import dev.buhanzaz.rwms.manager.ui.InventoryEditorState
+import dev.buhanzaz.rwms.manager.ui.InventoryReinspectionMode
 import dev.buhanzaz.rwms.manager.ui.InventorySemanticChange
 import dev.buhanzaz.rwms.manager.ui.ManagerUiState
 import dev.buhanzaz.rwms.manager.ui.inventoryBusinessStatus
@@ -86,10 +87,12 @@ import dev.buhanzaz.rwms.manager.ui.inventoryFinishingOptions
 import dev.buhanzaz.rwms.manager.ui.inventoryInspectionLabel
 import dev.buhanzaz.rwms.manager.ui.inventoryPassportFacts
 import dev.buhanzaz.rwms.manager.ui.inventoryPhotoValidationError
+import dev.buhanzaz.rwms.manager.ui.inventoryPhotoPreviewRotation
 import dev.buhanzaz.rwms.manager.ui.inventoryRentalItemSuggestions
 import dev.buhanzaz.rwms.manager.ui.inventoryRentalTypeOptions
 import dev.buhanzaz.rwms.manager.ui.inventorySemanticChanges
 import dev.buhanzaz.rwms.manager.ui.persistedInventoryMediaReferences
+import dev.buhanzaz.rwms.manager.ui.requiresInventoryReinspectionChoice
 import dev.buhanzaz.rwms.manager.ui.hasExactInventoryRentalItemNumber
 import dev.buhanzaz.rwms.manager.ui.withInventoryRentalType
 import dev.buhanzaz.rwms.manager.ui.toMaintenancePlanEditor
@@ -117,6 +120,10 @@ internal const val INVENTORY_AFTER_RENT_ESTIMATE_NOTICE =
     "Замечания по бытовке после аренды станут черновиком сметы после общей сверки " +
         "инвентаризации. Задача ремонта из этой проверки не создаётся."
 
+internal const val INVENTORY_REINSPECTION_DIALOG_TITLE = "Бытовка уже проверена"
+internal const val INVENTORY_REINSPECTION_SUPPLEMENT_LABEL = "Дополнить осмотр"
+internal const val INVENTORY_REINSPECTION_REPLACE_LABEL = "Перезаписать осмотр"
+
 internal fun inventoryAfterRentEstimateNotice(status: String?): String? =
     INVENTORY_AFTER_RENT_ESTIMATE_NOTICE.takeIf { status == "AFTER_RENT" }
 
@@ -126,7 +133,11 @@ fun InventoryDashboardScreen(
     uiState: ManagerUiState,
     onBack: () -> Unit,
     onLoadInventory: () -> Unit,
-    onPrepareNewNumber: (String, () -> Unit) -> Unit,
+    onPrepareNewNumber: (
+        String,
+        (InventoryFindingDto) -> Unit,
+        () -> Unit,
+    ) -> Unit,
     onOpenEditor: () -> Unit,
     onResolveConflict: (
         InventoryFindingDto,
@@ -134,7 +145,11 @@ fun InventoryDashboardScreen(
         String?,
         () -> Unit,
     ) -> Unit,
-    onSupplementInspection: (InventoryFindingDto, () -> Unit) -> Unit,
+    onOpenInventoryFinding: (
+        InventoryFindingDto,
+        InventoryReinspectionMode,
+        () -> Unit,
+    ) -> Unit,
 ) {
     LaunchedEffect(uiState.selectedWarehouseId) {
         if (uiState.selectedWarehouseId != null) onLoadInventory()
@@ -143,23 +158,33 @@ fun InventoryDashboardScreen(
     var selectedConflictFindingId by remember(uiState.inventorySession?.id) {
         mutableStateOf<String?>(null)
     }
+    var selectedReinspectionFinding by remember(uiState.inventorySession?.id) {
+        mutableStateOf<InventoryFindingDto?>(null)
+    }
     var filters by remember(uiState.inventorySession?.id) {
         mutableStateOf(InventoryHistoryFilters())
     }
-    val openExistingNumber: (String) -> Unit = { selectedNumber ->
-        onPrepareNewNumber(selectedNumber) {
-            number = ""
-            onOpenEditor()
-        }
+    val prepareNumber: (String) -> Unit = { selectedNumber ->
+        onPrepareNewNumber(
+            selectedNumber,
+            { finding ->
+                number = ""
+                selectedReinspectionFinding = finding
+            },
+            {
+                number = ""
+                onOpenEditor()
+            },
+        )
     }
-    val addNewNumber: (String) -> Unit = { selectedNumber ->
-        onPrepareNewNumber(selectedNumber) {
-            number = ""
-            onOpenEditor()
-        }
-    }
+    val openExistingNumber: (String) -> Unit = prepareNumber
+    val addNewNumber: (String) -> Unit = prepareNumber
     val openFinding: (InventoryFindingDto) -> Unit = { finding ->
-        onSupplementInspection(finding, onOpenEditor)
+        if (finding.requiresInventoryReinspectionChoice()) {
+            selectedReinspectionFinding = finding
+        } else {
+            onOpenInventoryFinding(finding, InventoryReinspectionMode.SUPPLEMENT, onOpenEditor)
+        }
     }
     val filteredFindings = remember(uiState.inventoryFindings, filters) {
         uiState.inventoryFindings.filter(filters::matches)
@@ -265,7 +290,35 @@ fun InventoryDashboardScreen(
             },
             onSupplementInspection = {
                 selectedConflictFindingId = null
-                openFinding(selectedConflict)
+                onOpenInventoryFinding(
+                    selectedConflict,
+                    InventoryReinspectionMode.SUPPLEMENT,
+                    onOpenEditor,
+                )
+            },
+        )
+    }
+
+    selectedReinspectionFinding?.let { finding ->
+        InventoryReinspectionDialog(
+            finding = finding,
+            busy = uiState.busy,
+            onDismiss = { selectedReinspectionFinding = null },
+            onSupplement = {
+                selectedReinspectionFinding = null
+                onOpenInventoryFinding(
+                    finding,
+                    InventoryReinspectionMode.SUPPLEMENT,
+                    onOpenEditor,
+                )
+            },
+            onReplace = {
+                selectedReinspectionFinding = null
+                onOpenInventoryFinding(
+                    finding,
+                    InventoryReinspectionMode.REPLACE,
+                    onOpenEditor,
+                )
             },
         )
     }
@@ -559,6 +612,7 @@ private fun InventoryFindingCard(
             modifier = Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            StatusPill(label = inventoryInspectionLabel(finding.inspection))
             StatusPill(
                 label = if (hasConflict) "Конфликт" else "Без конфликта",
                 emphasis = if (hasConflict) {
@@ -634,7 +688,7 @@ private fun InventoryFindingCard(
                 ButtonDefaults.buttonColors()
             },
         ) {
-            Text(if (checked) "Проверено" else "Просмотреть")
+            Text(if (checked) "Открыть осмотр" else "Просмотреть")
         }
         if (onOpenConflict != null) {
             OutlinedButton(
@@ -706,6 +760,63 @@ private fun InventoryPassportFact(
             style = MaterialTheme.typography.bodyMedium,
         )
     }
+}
+
+@Composable
+private fun InventoryReinspectionDialog(
+    finding: InventoryFindingDto,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    onSupplement: () -> Unit,
+    onReplace: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(INVENTORY_REINSPECTION_DIALOG_TITLE) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("${finding.displayCanonicalNumber} уже имеет сохранённый осмотр.")
+                Text(
+                    "Дополнить сохранит прежние фото, мебель, работы, материалы и комментарий, " +
+                        "чтобы их можно было уточнить.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Перезаписать начнёт новый осмотр: прежние данные этой проверки не попадут " +
+                        "в новую ревизию. Потребуется заново добавить фотографию и подтвердить мебель.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(
+                    onClick = onSupplement,
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(INVENTORY_REINSPECTION_SUPPLEMENT_LABEL)
+                }
+                OutlinedButton(
+                    onClick = onReplace,
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(INVENTORY_REINSPECTION_REPLACE_LABEL)
+                }
+                TextButton(
+                    onClick = onDismiss,
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Отмена")
+                }
+            }
+        },
+    )
 }
 
 @Composable
@@ -1339,6 +1450,11 @@ fun InventoryPhotosScreen(
     var galleryPhotoUri by remember(editor.findingId) { mutableStateOf<String?>(null) }
     val photoError = editor.inventoryPhotoValidationError()
     val persistedPhotoCount = editor.persistedInventoryMediaReferences().size
+    val unavailablePersistedPhotoCount = (
+        persistedPhotoCount - editor.persistedPhotoMedia.values
+            .distinctBy { reference -> reference.mediaId }
+            .size
+        ).coerceAtLeast(0)
 
     // Inventory uses the same photo step as estimates and repairs.  It is deliberately not
     // labelled as a separate "photo inventory" mode: a tap chooses the cover and a hold opens
@@ -1354,8 +1470,15 @@ fun InventoryPhotosScreen(
                     Text("Фото состояния", style = MaterialTheme.typography.titleMedium)
                     Text(
                         if (persistedPhotoCount > 0) {
-                            "Сохранённые фотографии: $persistedPhotoCount. " +
-                                "Они останутся в проверке; новые фото можно добавить при необходимости."
+                            if (unavailablePersistedPhotoCount > 0) {
+                                "Сохранённые фотографии: $persistedPhotoCount. Сейчас не загрузились: " +
+                                    "$unavailablePersistedPhotoCount. Они останутся в осмотре; " +
+                                    "проверьте связь и откройте проверку снова."
+                            } else {
+                                "Сохранённые фотографии: $persistedPhotoCount. " +
+                                    "Их можно просмотреть, удалить, повернуть или выбрать титульной; " +
+                                    "новые фото можно добавить при необходимости."
+                            }
                         } else {
                             "Добавьте фото и выберите титульное."
                         },
@@ -1437,7 +1560,7 @@ fun InventoryPhotosScreen(
                                     ManagerPhotoPreview(
                                         photoUri = uri,
                                         modifier = Modifier.fillMaxSize(),
-                                        rotationDegrees = editor.photoRotationDegrees[uri] ?: 0,
+                                        rotationDegrees = editor.inventoryPhotoPreviewRotation(uri),
                                     )
                                 }
                                 TextButton(
@@ -1474,7 +1597,7 @@ fun InventoryPhotosScreen(
             photoUris = editor.photoUris,
             initialIndex = initialIndex,
             onRemovePhotoUri = onRemovePhoto,
-            photoRotationDegrees = { uri -> editor.photoRotationDegrees[uri] ?: 0 },
+            photoRotationDegrees = editor::inventoryPhotoPreviewRotation,
             onRotatePhotoUri = onRotatePhoto,
             onDismiss = { galleryPhotoUri = null },
         )
@@ -1740,7 +1863,7 @@ fun InventoryConfirmationScreen(
                 Text(
                     when (editor.equipmentObservationRequested) {
                         true -> "Комплектация мебели сохранится как доказательство осмотра"
-                        false -> "Мебель не проверялась"
+                        false -> "Мебель отсутствует"
                         null -> "Не выбран вариант мебели"
                     },
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1824,7 +1947,7 @@ private fun InventoryRepairDeliveryOptions(
             enabled = enabled,
         )
         Text(
-            "Передать бытовку в ремонт после общей сверки",
+            "Добавить перемещение на ремонт",
             modifier = Modifier.weight(1f),
         )
     }

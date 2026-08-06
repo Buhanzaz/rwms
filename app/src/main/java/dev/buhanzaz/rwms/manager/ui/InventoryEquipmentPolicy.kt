@@ -60,7 +60,7 @@ internal fun InventoryEditorState.inventoryEquipmentObservation(): ObservationIn
         throw IllegalArgumentException(error)
     }
     if (equipmentObservationRequested == false) {
-        return ObservationInput("ABSENT", null)
+        return ObservationInput("EXPLICIT_EMPTY", emptyList<Map<String, Any?>>())
     }
 
     val observed = equipmentCatalog.inventoryFurnitureCatalog().mapNotNull { equipment ->
@@ -107,10 +107,60 @@ internal fun InventoryEditorState.inventoryFurnitureDesiredContents():
  */
 internal fun InventoryFindingDto.inventoryFurnitureInitialQuantities(
     furnitureCatalog: List<EquipmentCatalogItemDto>,
+): Map<String, String> = inventoryFurnitureQuantities(
+    furnitureCatalog = furnitureCatalog,
+    contents = currentSnapshot?.contentsSnapshot.orEmpty(),
+)
+
+internal data class InventoryFurnitureReinspectionSeed(
+    val observationRequested: Boolean?,
+    val quantities: Map<String, String>,
+)
+
+/**
+ * Supplementing must retain the prior inventory observation, not silently replace it with the
+ * registry balance.  A full replacement starts from the registry and requires a new answer.
+ */
+internal fun InventoryFindingDto.inventoryFurnitureReinspectionSeed(
+    furnitureCatalog: List<EquipmentCatalogItemDto>,
+    mode: InventoryReinspectionMode,
+): InventoryFurnitureReinspectionSeed = when (mode) {
+    InventoryReinspectionMode.REPLACE -> InventoryFurnitureReinspectionSeed(
+        observationRequested = null,
+        quantities = inventoryFurnitureInitialQuantities(furnitureCatalog),
+    )
+
+    InventoryReinspectionMode.SUPPLEMENT -> when (equipmentObservation.presence) {
+        "PRESENT" -> InventoryFurnitureReinspectionSeed(
+            observationRequested = true,
+            quantities = inventoryFurnitureQuantities(
+                furnitureCatalog = furnitureCatalog,
+                contents = equipmentObservation.value as? List<*>
+                    ?: throw IllegalStateException("RWMS вернул некорректное наблюдение мебели"),
+            ),
+        )
+
+        "EXPLICIT_EMPTY" -> InventoryFurnitureReinspectionSeed(
+            observationRequested = false,
+            quantities = furnitureCatalog.associate { equipment -> equipment.id to "0" },
+        )
+
+        "ABSENT" -> InventoryFurnitureReinspectionSeed(
+            observationRequested = null,
+            quantities = inventoryFurnitureInitialQuantities(furnitureCatalog),
+        )
+
+        else -> throw IllegalStateException("RWMS вернул неизвестное состояние мебели")
+    }
+}
+
+private fun inventoryFurnitureQuantities(
+    furnitureCatalog: List<EquipmentCatalogItemDto>,
+    contents: Iterable<*>,
 ): Map<String, String> {
     val catalogIds = furnitureCatalog.mapTo(mutableSetOf(), EquipmentCatalogItemDto::id)
     val quantities = linkedMapOf<String, Long>()
-    currentSnapshot?.contentsSnapshot.orEmpty().forEach { raw ->
+    contents.forEach { raw ->
         val content = raw as? Map<*, *> ?: return@forEach
         val equipmentId = content["equipmentId"] as? String ?: return@forEach
         if (equipmentId !in catalogIds) return@forEach

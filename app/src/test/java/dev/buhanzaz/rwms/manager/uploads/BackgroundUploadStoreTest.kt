@@ -92,6 +92,27 @@ class BackgroundUploadStoreTest {
     }
 
     @Test
+    fun `cancelled operation stays removed when a running worker reports progress`() = runBlocking {
+        val store = BackgroundUploadStore.get(context)
+        store.initialize()
+        val directory = store.operationDirectory("operation-1")
+        directory.resolve("photo.jpg").writeBytes(byteArrayOf(9))
+        store.put(operation())
+
+        store.remove("operation-1")
+        val workerUpdate = store.update("operation-1") { current ->
+            current.copy(
+                status = BackgroundUploadStatus.RUNNING,
+                stage = "Загрузка фото 1 из 1",
+            )
+        }
+
+        assertThat(workerUpdate).isNull()
+        assertThat(store.operations.value).isEmpty()
+        assertThat(directory.exists()).isFalse()
+    }
+
+    @Test
     fun `concurrent initialization restores one durable queue`() = runBlocking {
         val persisted = BackgroundUploadStore.get(context)
         persisted.initialize()

@@ -183,7 +183,9 @@ data class SaveInspectionRequest(
 data class InventoryPlanLineInputDto(
     val aggregationKind: String,
     @param:ExplicitNull val catalogNodeId: String?,
-    @param:ExplicitNull val routingCatalogNodeId: String?,
+    @param:ExplicitNull
+    @property:ExplicitNull
+    val routingCatalogNodeId: String?,
     @param:ExplicitNull val description: String?,
     @param:ExplicitNull val type: String?,
     @param:ExplicitNull val unit: String?,

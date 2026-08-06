@@ -186,6 +186,11 @@ beforeEach(() => {
       { id: FINISHING_DVP_ID, name: "ДВП" },
       { id: FINISHING_LDSP_ID, name: "ЛДСП" },
     ],
+    categories: [
+      { id: "category-new", name: "Новая" },
+      { id: "category-used", name: "Обычная" },
+      { id: "category-engineer", name: "ИТР" },
+    ],
     characteristics: [
       { id: CHARACTERISTIC_WINDOW_ID, name: "Пластиковое окно" },
       { id: CHARACTERISTIC_DOOR_ID, name: "Металлическая дверь" },

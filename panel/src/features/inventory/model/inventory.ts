@@ -7,6 +7,7 @@ import type {
   RepairPriority,
 } from "@/features/repair-estimates/model/repair-estimate"
 import type { RentalItemStatus } from "@/features/rental-items/model/rental-item"
+import type { InventoryObservation } from "@/features/inventory/model/inventory-service"
 
 export type InventoryPermission = "VIEW" | "EDIT" | "MANAGE"
 export type InventorySessionStatus = "ACTIVE" | "COMPLETED" | "CANCELLED"
@@ -125,6 +126,10 @@ export type InventoryFindingDto = {
   conflictResolution: InventoryConflictResolutionDto | null
   conflicts: InventoryConflictDto[]
   comment: string
+  /** Evidence recorded during the inventory inspection; it does not mutate the asset passport. */
+  passportObservation: InventoryObservation
+  /** Furniture observed during the inspection; reconciled only after the cabin review is complete. */
+  equipmentObservation: InventoryObservation
   media: Array<{ mediaId: string; generation: number }>
   coverMediaId: string | null
   inspectionSource: "INVENTORY" | null

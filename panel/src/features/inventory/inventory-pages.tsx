@@ -77,6 +77,7 @@ import {
 } from "@/features/inventory/inventory-finding-filtering"
 import { InventoryFindingFilters } from "@/features/inventory/inventory-finding-filters"
 import { InventoryFindingsList } from "@/features/inventory/inventory-findings-list"
+import { InventoryFurnitureObservationDialog } from "@/features/inventory/inventory-inspection-details"
 import { InventoryFurnitureReview } from "@/features/inventory/inventory-furniture-review"
 import { InventoryFinalPlanEditor } from "@/features/inventory/inventory-final-plan"
 import {
@@ -107,6 +108,11 @@ import type {
   InventoryFurnitureReviewDto,
   InventorySessionDto,
 } from "@/features/inventory/model/inventory"
+import type { InventoryObservation } from "@/features/inventory/model/inventory-service"
+import {
+  getRentalItemCreationOptions,
+  rentalItemCreationOptionsQueryKey,
+} from "@/features/rental-items/api/asset-rental-items-api"
 import { RENTAL_ITEM_STATUS_LABEL } from "@/features/rental-items/model/rental-item"
 import type { ReadyMediaReference } from "@/features/media/media-service"
 import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/repair-estimate"
@@ -462,9 +468,21 @@ function FindingEditor({
   const { accessToken, currentUser } = useAuth()
   const queryClient = useQueryClient()
   const actor = getInventoryActor(currentUser, session.warehouseId)
+  const passportOptionsQuery = useQuery({
+    queryKey: rentalItemCreationOptionsQueryKey(session.warehouseId),
+    queryFn: () =>
+      getRentalItemCreationOptions(accessToken, session.warehouseId),
+    enabled: Boolean(accessToken && session.warehouseId),
+  })
   const [baseFindingVersion] = useState(finding.version)
   const [baseLinesJson] = useState(() => JSON.stringify(finding.lines))
   const [comment, setComment] = useState(finding.comment)
+  const [passportObservation, setPassportObservation] = useState(
+    finding.passportObservation
+  )
+  const [equipmentObservation, setEquipmentObservation] = useState(
+    finding.equipmentObservation
+  )
   const [lines, setLines] = useState<RepairEstimateLineDto[]>(finding.lines)
   const [media, setMedia] = useState<ReadyMediaReference[]>(finding.media)
   const [coverMediaId, setCoverMediaId] = useState<string | null>(
@@ -472,6 +490,12 @@ function FindingEditor({
   )
   const [mediaReady, setMediaReady] = useState(false)
   const [completionOpen, setCompletionOpen] = useState(false)
+  const [completionEquipmentObservation, setCompletionEquipmentObservation] =
+    useState<InventoryObservation | null>(null)
+  const [furnitureDialog, setFurnitureDialog] = useState<{
+    step: "decision" | "items"
+    saveAfterResolve: boolean
+  } | null>(null)
   const movementCapabilitiesQuery = useQuery({
     queryKey: warehouseQueueCapabilitiesQueryKey(session.warehouseId),
     queryFn: () =>
@@ -481,7 +505,13 @@ function FindingEditor({
   const movementRouteAvailable =
     (movementCapabilitiesQuery.data?.movementQueueDefinitions.length ?? 0) > 0
   const mutation = useMutation({
-    mutationFn: (completion: RepairWorkCompletionResult | null) => {
+    mutationFn: ({
+      completion,
+      equipmentObservation: equipmentObservationForSave,
+    }: {
+      completion: RepairWorkCompletionResult | null
+      equipmentObservation: InventoryObservation
+    }) => {
       if (!actor) throw new Error("Нет доступа")
       return saveInventoryFinding({
         inventoryId: session.id,
@@ -490,6 +520,8 @@ function FindingEditor({
         actor,
         findingId: finding.id,
         comment,
+        passportObservation,
+        equipmentObservation: equipmentObservationForSave,
         media,
         coverMediaId,
         lines,
@@ -520,6 +552,7 @@ function FindingEditor({
     },
     onSuccess: () => {
       setCompletionOpen(false)
+      setCompletionEquipmentObservation(null)
       void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
       void queryClient.invalidateQueries({
         queryKey: inventoryFurnitureReviewQueryKey(session.id),
@@ -533,12 +566,53 @@ function FindingEditor({
     },
   })
   const snapshot = finding.currentSnapshot ?? finding.expectedSnapshot
+  const inspectionSnapshot = finding.inspectionBaseline ?? snapshot
   const acceptsAfterRentWithoutEstimate =
     snapshot?.status === "AFTER_RENT" && lines.length === 0
   const missingRequiredAcceptancePhoto =
     acceptsAfterRentWithoutEstimate && media.length === 0
   const missingCoverPhoto = media.length > 0 && coverMediaId === null
   const frozenPlanUnchanged = JSON.stringify(lines) === baseLinesJson
+  const passportOptionsError = passportOptionsQuery.error
+    ? passportOptionsQuery.error instanceof Error
+      ? passportOptionsQuery.error.message
+      : "Не удалось загрузить настройки бытовок."
+    : null
+
+  function beginSave(nextEquipmentObservation: InventoryObservation) {
+    if (lines.length > 0) {
+      setCompletionEquipmentObservation(nextEquipmentObservation)
+      setCompletionOpen(true)
+      return
+    }
+    mutation.mutate({
+      completion: null,
+      equipmentObservation: nextEquipmentObservation,
+    })
+  }
+
+  function requestSave() {
+    if (equipmentObservation.presence === "ABSENT") {
+      setFurnitureDialog({ step: "decision", saveAfterResolve: true })
+      return
+    }
+    beginSave(equipmentObservation)
+  }
+
+  function editFurniture() {
+    setFurnitureDialog({
+      step: equipmentObservation.presence === "ABSENT" ? "decision" : "items",
+      saveAfterResolve: false,
+    })
+  }
+
+  function resolveFurniture(nextEquipmentObservation: InventoryObservation) {
+    const saveAfterResolve = furnitureDialog?.saveAfterResolve === true
+    setEquipmentObservation(nextEquipmentObservation)
+    setFurnitureDialog(null)
+    if (saveAfterResolve) beginSave(nextEquipmentObservation)
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
       <PageToolbar>
@@ -562,11 +636,7 @@ function FindingEditor({
                 missingRequiredAcceptancePhoto ||
                 missingCoverPhoto
               }
-              onClick={() =>
-                lines.length > 0
-                  ? setCompletionOpen(true)
-                  : mutation.mutate(null)
-              }
+              onClick={requestSave}
             >
               {mutation.isPending
                 ? "Сохраняем..."
@@ -591,6 +661,12 @@ function FindingEditor({
         tenant={snapshot?.tenant ?? null}
         businessDate={session.businessDate}
         comment={comment}
+        passportObservation={passportObservation}
+        passportSnapshot={inspectionSnapshot?.passportSnapshot ?? null}
+        passportOptions={passportOptionsQuery.data ?? null}
+        passportOptionsLoading={passportOptionsQuery.isLoading}
+        passportOptionsError={passportOptionsError}
+        equipmentObservation={equipmentObservation}
         lines={lines}
         media={media}
         repairCompletionMode={finding.repairCompletionMode}
@@ -603,6 +679,11 @@ function FindingEditor({
           null
         }
         onCommentChange={setComment}
+        onPassportObservationChange={setPassportObservation}
+        onEditFurniture={editFurniture}
+        onRetryPassportOptions={() => {
+          void passportOptionsQuery.refetch()
+        }}
         onLinesChange={setLines}
         onMediaChange={(nextMedia) => {
           setMedia(nextMedia)
@@ -618,6 +699,25 @@ function FindingEditor({
         onMediaReadyChange={setMediaReady}
         onCoverMediaIdChange={setCoverMediaId}
       />
+      {furnitureDialog ? (
+        <InventoryFurnitureObservationDialog
+          open
+          step={furnitureDialog.step}
+          accessToken={accessToken}
+          warehouseId={session.warehouseId}
+          observation={equipmentObservation}
+          contentsSnapshot={inspectionSnapshot?.contentsSnapshot ?? []}
+          onOpenChange={(open) => {
+            if (!open) setFurnitureDialog(null)
+          }}
+          onRequestItems={() =>
+            setFurnitureDialog((current) =>
+              current ? { ...current, step: "items" } : current
+            )
+          }
+          onResolved={resolveFurniture}
+        />
+      ) : null}
       <RepairWorkCompletionDialog
         open={completionOpen}
         accessToken={accessToken}
@@ -651,8 +751,17 @@ function FindingEditor({
             : undefined
         }
         movementRouteAvailable={movementRouteAvailable}
-        onOpenChange={setCompletionOpen}
-        onComplete={(completion) => mutation.mutate(completion)}
+        onOpenChange={(open) => {
+          setCompletionOpen(open)
+          if (!open) setCompletionEquipmentObservation(null)
+        }}
+        onComplete={(completion) =>
+          mutation.mutate({
+            completion,
+            equipmentObservation:
+              completionEquipmentObservation ?? equipmentObservation,
+          })
+        }
       />
     </div>
   )

@@ -112,6 +112,11 @@ const rawFinding = {
   publication: null,
 } satisfies InventoryFinding
 
+const inspectionObservations = {
+  passportObservation: rawFinding.passportObservation,
+  equipmentObservation: rawFinding.equipmentObservation,
+}
+
 const workLine = {
   id: "55555555-5555-4555-8555-555555555555",
   sourceLineKey: "inventory-work",
@@ -480,6 +485,7 @@ describe("inventory API", () => {
         actor,
         findingId: rawFinding.id,
         comment: "",
+        ...inspectionObservations,
         media: [],
         coverMediaId: null,
         lines: [workLine],
@@ -511,6 +517,11 @@ describe("inventory API", () => {
       actor,
       findingId: rawFinding.id,
       comment: "Черновик первого оператора",
+      passportObservation: {
+        presence: "PRESENT",
+        value: { rentalType: "БК-2" },
+      },
+      equipmentObservation: { presence: "EXPLICIT_EMPTY", value: [] },
       media: [],
       coverMediaId: null,
       lines: [],
@@ -524,6 +535,11 @@ describe("inventory API", () => {
       expect.objectContaining({
         expectedSessionRevision: 9,
         expectedFindingRevision: 4,
+        passportObservation: {
+          presence: "PRESENT",
+          value: { rentalType: "БК-2" },
+        },
+        equipmentObservation: { presence: "EXPLICIT_EMPTY", value: [] },
       })
     )
   })
@@ -547,6 +563,7 @@ describe("inventory API", () => {
       actor,
       findingId: rawFinding.id,
       comment: "",
+      ...inspectionObservations,
       media: [],
       coverMediaId: null,
       lines: [workLine],
@@ -586,6 +603,7 @@ describe("inventory API", () => {
       actor,
       findingId: rawFinding.id,
       comment: "",
+      ...inspectionObservations,
       media: [],
       coverMediaId: null,
       lines: [workLine],
