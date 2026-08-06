@@ -557,7 +557,7 @@ describe("RepairEstimateCatalogPicker", () => {
     ).toBeTruthy()
   })
 
-  it("returns to the catalog root after an added node", async () => {
+  it("continues through the next graph node after an operational work is added", async () => {
     const work = estimateNode(workId, "Основная работа", "WORK", true)
     const next = estimateNode(followUpId, "Следующая работа", "WORK")
     catalogApi.getOperationalRepairEstimateCatalog.mockResolvedValue(
@@ -596,11 +596,177 @@ describe("RepairEstimateCatalogPicker", () => {
 
     expect(onChange).toHaveBeenCalledTimes(1)
     expect(
-      await screen.findByRole("button", { name: "Выбрать: Основная работа" })
+      await screen.findByRole("button", {
+        name: "Выбрать: Следующая работа",
+      })
     ).toBeTruthy()
     expect(
-      screen.queryByRole("button", { name: "Выбрать: Следующая работа" })
+      screen.queryByRole("button", { name: "Выбрать: Основная работа" })
     ).toBeNull()
+  })
+
+  it("uses the selected location as the cursor for the next graph node", async () => {
+    const work = estimateNode(workId, "Монтаж двери", "WORK", true)
+    const material = estimateNode(materialId, "Дверь", "MATERIAL")
+    const location = createNode({
+      id: "77777777-7777-4777-8777-777777777701",
+      name: "Секция А",
+      nodeType: "LOCATION",
+      showInMainMenu: false,
+    })
+    const next = estimateNode(followUpId, "Проверка двери", "WORK")
+    catalogApi.getOperationalRepairEstimateCatalog.mockResolvedValue(
+      graphCatalog(
+        [work, material, location, next],
+        [
+          graphLink(
+            "77777777-7777-4777-8777-777777777702",
+            work.id,
+            material.id,
+            "DEPENDENCY"
+          ),
+          graphLink(
+            "77777777-7777-4777-8777-777777777703",
+            material.id,
+            location.id,
+            "FOLLOW_UP"
+          ),
+          graphLink(
+            "77777777-7777-4777-8777-777777777704",
+            location.id,
+            next.id,
+            "FOLLOW_UP"
+          ),
+        ]
+      )
+    )
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RepairEstimateCatalogPicker
+          lines={[]}
+          readOnly={false}
+          onChange={onChange}
+        />
+      </QueryClientProvider>
+    )
+
+    await user.click(
+      await screen.findByRole("button", { name: "Выбрать: Монтаж двери" })
+    )
+    await user.click(
+      await screen.findByRole("button", { name: "Выбрать: Дверь" })
+    )
+    await user.click(
+      await screen.findByRole("button", { name: "Выбрать: Секция А" })
+    )
+    await user.click(await screen.findByRole("button", { name: "Далее" }))
+
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(
+      await screen.findByRole("button", {
+        name: "Выбрать: Проверка двери",
+      })
+    ).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Выбрать: Дверь" })).toBeNull()
+  })
+
+  it("keeps the cursor stable when a graph link returns to an earlier node", async () => {
+    const first = estimateNode(workId, "Первая работа", "WORK", true)
+    const second = estimateNode(followUpId, "Вторая работа", "WORK")
+    const third = estimateNode(
+      "77777777-7777-4777-8777-777777777705",
+      "Третья работа",
+      "WORK"
+    )
+    const inactive = estimateNode(
+      "77777777-7777-4777-8777-777777777706",
+      "Неактивная работа",
+      "WORK",
+      false,
+      { active: false }
+    )
+    catalogApi.getOperationalRepairEstimateCatalog.mockResolvedValue(
+      graphCatalog(
+        [first, second, third, inactive],
+        [
+          graphLink(
+            "77777777-7777-4777-8777-777777777707",
+            first.id,
+            second.id,
+            "FOLLOW_UP"
+          ),
+          graphLink(
+            "77777777-7777-4777-8777-777777777708",
+            second.id,
+            first.id,
+            "FOLLOW_UP"
+          ),
+          graphLink(
+            "77777777-7777-4777-8777-777777777709",
+            second.id,
+            third.id,
+            "FOLLOW_UP"
+          ),
+          graphLink(
+            "77777777-7777-4777-8777-777777777710",
+            second.id,
+            inactive.id,
+            "FOLLOW_UP"
+          ),
+        ]
+      )
+    )
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RepairEstimateCatalogPicker
+          lines={[]}
+          readOnly={false}
+          onChange={onChange}
+        />
+      </QueryClientProvider>
+    )
+
+    await user.click(
+      await screen.findByRole("button", { name: "Выбрать: Первая работа" })
+    )
+    await user.click(await screen.findByRole("button", { name: "Далее" }))
+    await user.click(
+      await screen.findByRole("button", { name: "Выбрать: Вторая работа" })
+    )
+    await user.click(await screen.findByRole("button", { name: "Далее" }))
+
+    expect(
+      await screen.findByRole("button", { name: "Выбрать: Третья работа" })
+    ).toBeTruthy()
+    expect(
+      screen.getByRole("button", { name: "Выбрать: Первая работа" })
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole("button", { name: "Выбрать: Неактивная работа" })
+    ).toBeNull()
+
+    await user.click(
+      screen.getByRole("button", { name: "Выбрать: Первая работа" })
+    )
+    await user.click(await screen.findByRole("button", { name: "Далее" }))
+
+    expect(onChange).toHaveBeenCalledTimes(3)
+    expect(
+      screen.getByRole("button", { name: "Выбрать: Третья работа" })
+    ).toBeTruthy()
+    expect(screen.getByRole("button", { name: "К корню каталога" })).toBeTruthy()
   })
 
   it("persists the first work before attaching its photos without adding it twice", async () => {
@@ -878,7 +1044,7 @@ describe("RepairEstimateCatalogPicker", () => {
     ])
   })
 
-  it("returns to the root instead of continuing through later graph links", async () => {
+  it("continues from the terminal material through its outgoing graph links", async () => {
     const work = estimateNode(workId, "Замена двери", "WORK", true)
     const material = estimateNode(materialId, "Дверь", "MATERIAL")
     const followUp = estimateNode(followUpId, "Покраска двери", "WORK")
@@ -937,13 +1103,15 @@ describe("RepairEstimateCatalogPicker", () => {
     await user.click(await screen.findByRole("button", { name: "Далее" }))
 
     expect(
-      await screen.findByRole("button", { name: "Выбрать: Замена двери" })
+      await screen.findByRole("button", {
+        name: "Выбрать: Покраска двери",
+      })
     ).toBeTruthy()
     expect(
-      screen.queryByRole("button", { name: "Выбрать: Покраска двери" })
-    ).toBeNull()
+      screen.getByRole("button", { name: "Выбрать: Дверная ручка" })
+    ).toBeTruthy()
     expect(
-      screen.queryByRole("button", { name: "Выбрать: Дверная ручка" })
+      screen.queryByRole("button", { name: "Выбрать: Замена двери" })
     ).toBeNull()
   })
 })
