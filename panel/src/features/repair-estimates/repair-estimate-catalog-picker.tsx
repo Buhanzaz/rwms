@@ -57,6 +57,7 @@ type CatalogMode = "LINKED_SET" | "WORKS_ONLY" | "MATERIALS_ONLY"
 type AddContext = {
   nodes: RepairEstimateCatalogNodeDto[]
   quantityNode: RepairEstimateCatalogNodeDto
+  navigationNode: RepairEstimateCatalogNodeDto
   locationTitle: string | null
   targetWorkLineIdsByCatalogNodeId: Record<string, string | null>
 }
@@ -249,6 +250,24 @@ export function RepairEstimateCatalogPicker({
       ? (catalog.nodesById.get(currentNodeId) ?? null)
       : null
 
+  const isVisibleRegularNodeForMode = useCallback(
+    (node: RepairEstimateCatalogNodeDto) => {
+      if (mode === "WORKS_ONLY") {
+        return node.nodeType !== "MATERIAL"
+      }
+      if (mode === "MATERIALS_ONLY") {
+        return (
+          node.nodeType !== "WORK" ||
+          catalog
+            ?.getDependencyRelatedNodes(node.id)
+            .some((related) => related.nodeType === "MATERIAL") === true
+        )
+      }
+      return true
+    },
+    [catalog, mode]
+  )
+
   const visibleNodes = useMemo(() => {
     if (!catalog) {
       return []
@@ -291,24 +310,14 @@ export function RepairEstimateCatalogPicker({
         }
         return node.nodeType === "WORK" || node.nodeType === "MATERIAL"
       }
-      if (mode === "WORKS_ONLY") {
-        return node.nodeType !== "MATERIAL"
-      }
-      if (mode === "MATERIALS_ONLY") {
-        return (
-          node.nodeType !== "WORK" ||
-          catalog
-            .getDependencyRelatedNodes(node.id)
-            .some((related) => related.nodeType === "MATERIAL")
-        )
-      }
-      return true
+      return isVisibleRegularNodeForMode(node)
     })
   }, [
     catalog,
     commonOpen,
     currentNode,
     filterForUsage,
+    isVisibleRegularNodeForMode,
     mode,
     pendingMaterial,
     pendingWork,
@@ -402,10 +411,11 @@ export function RepairEstimateCatalogPicker({
   function openAdd(
     nodes: RepairEstimateCatalogNodeDto[],
     quantityNode: RepairEstimateCatalogNodeDto,
-    locationTitle: string | null = null
+    locationTitle: string | null = null,
+    navigationNode: RepairEstimateCatalogNodeDto = quantityNode
   ) {
     setProvisionalBaseLines(null)
-    const addContext = { nodes, quantityNode, locationTitle }
+    const addContext = { nodes, quantityNode, navigationNode, locationTitle }
     const choices = uniqueNodes(
       nodes.filter((node) => node.nodeType === "WORK")
     )
@@ -476,6 +486,33 @@ export function RepairEstimateCatalogPicker({
     setPage(0)
   }
 
+  function continueAfterAdd(node: RepairEstimateCatalogNodeDto) {
+    if (!catalog || path.includes(node.id)) {
+      return
+    }
+
+    const hasNextNode = filterForUsage(
+      catalogNavigationNodes(catalog, node)
+    ).some(
+      (candidate) =>
+        candidate.active &&
+        !candidate.commonItem &&
+        !isCommonCatalogSection(candidate) &&
+        candidate.id !== node.id &&
+        !path.includes(candidate.id) &&
+        isVisibleRegularNodeForMode(candidate)
+    )
+
+    if (!hasNextNode) {
+      return
+    }
+
+    setPath((current) =>
+      current.includes(node.id) ? current : [...current, node.id]
+    )
+    setCommonOpen(false)
+  }
+
   function navigateToBreadcrumb(pathLength: number) {
     setPath((current) => current.slice(0, pathLength))
     setCommonOpen(false)
@@ -538,7 +575,7 @@ export function RepairEstimateCatalogPicker({
         setMessage("Расположение выбирается после связанного материала")
         return
       }
-      openAdd([pendingWork, pendingMaterial], pendingMaterial, node.name)
+      openAdd([pendingWork, pendingMaterial], pendingMaterial, node.name, node)
       return
     }
 
@@ -614,6 +651,7 @@ export function RepairEstimateCatalogPicker({
       return
     }
 
+    const navigationNode = addContext.navigationNode
     onChange(
       applyCatalogNodesToEstimateLines({
         lines: provisionalBaseLines ?? lines,
@@ -634,8 +672,7 @@ export function RepairEstimateCatalogPicker({
     setProvisionalBaseLines(null)
     setPendingWork(null)
     setPendingMaterial(null)
-    setPath([])
-    setCommonOpen(false)
+    continueAfterAdd(navigationNode)
     setMessage("Позиция добавлена в смету")
     setPage(0)
   }
