@@ -4,6 +4,7 @@ export type RentalItemStatus =
   | "REPAIR"
   | "WAITING_REPAIR_CHECK"
   | "WRITTEN_OFF"
+  | "LOST"
   | "CAPITAL_REPAIR"
   | "AFTER_RENT"
   | "WAITING_ESTIMATE_CONFIRMATION"
@@ -26,6 +27,7 @@ export const RENTAL_ITEM_STATUS_LABEL: Record<RentalItemStatus, string> = {
   REPAIR: "В ремонте",
   WAITING_REPAIR_CHECK: "В ремонте",
   WRITTEN_OFF: "Списана",
+  LOST: "Утеряна",
   CAPITAL_REPAIR: "Капремонт",
   AFTER_RENT: "Ожидает осмотра",
   WAITING_ESTIMATE_CONFIRMATION: "Ожидает подтверждения сметы",

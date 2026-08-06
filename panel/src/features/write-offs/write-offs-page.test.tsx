@@ -180,17 +180,13 @@ describe("maintenance property disposition views", () => {
   it("excludes rental managers from initiation even with MANAGE access", async () => {
     renderPage({ role: "RENTAL_MANAGER" })
     await screen.findAllByText("БЫТ-101")
-    expect(
-      screen.queryByRole("button", { name: "Добавить списание" })
-    ).toBeNull()
+    expect(screen.queryByRole("button", { name: "Списать бытовку" })).toBeNull()
   })
 
   it("lets a warehouse manager initiate but only an administrator approve", async () => {
     const manager = renderPage()
     await screen.findAllByText("БЫТ-101")
-    expect(
-      screen.getByRole("button", { name: "Добавить списание" })
-    ).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Списать бытовку" })).toBeTruthy()
     expect(screen.queryByRole("button", { name: "Принять" })).toBeNull()
     manager.unmount()
 
@@ -198,6 +194,9 @@ describe("maintenance property disposition views", () => {
     api.approve.mockResolvedValue(updated)
     const operator = userEvent.setup()
     renderPage({ role: "WMS_ADMIN" })
+    expect(
+      await screen.findByRole("button", { name: "Списать бытовку" })
+    ).toBeTruthy()
     await screen.findAllByRole("button", { name: "Принять" })
     await operator.click(screen.getAllByRole("button", { name: "Принять" })[0]!)
     await operator.click(

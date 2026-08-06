@@ -22,6 +22,7 @@ const statusClassName: Record<RentalItemStatus, string> = {
     "bg-[var(--status-waiting-repair-check-bg)] text-[var(--status-waiting-repair-check-fg)]",
   WRITTEN_OFF:
     "bg-[var(--status-written-off-bg)] text-[var(--status-written-off-fg)]",
+  LOST: "bg-destructive/15 text-destructive",
   CAPITAL_REPAIR:
     "bg-[var(--status-capital-repair-bg)] text-[var(--status-capital-repair-fg)]",
   SALE: "bg-[var(--status-sale-bg)] text-[var(--status-sale-fg)]",

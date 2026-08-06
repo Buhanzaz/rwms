@@ -43,6 +43,7 @@ const MANUAL_NOTE_ID = "73eaad90-e67d-4b59-b34e-0af48ce4f731"
 const RENTAL_TYPE_ID = "83eaad90-e67d-4b59-b34e-0af48ce4f731"
 const DIMENSION_ID = "93eaad90-e67d-4b59-b34e-0af48ce4f731"
 const FINISHING_ID = "a3eaad90-e67d-4b59-b34e-0af48ce4f731"
+const CATEGORY_ID = "a4eaad90-e67d-4b59-b34e-0af48ce4f731"
 const CHARACTERISTIC_ID = "b3eaad90-e67d-4b59-b34e-0af48ce4f731"
 
 function rentalItemResponse(overrides: Record<string, unknown> = {}) {
@@ -645,6 +646,7 @@ describe("asset rental-items HTTP adapter", () => {
           rentalTypes: [{ id: RENTAL_TYPE_ID, name: "БК-2" }],
           dimensions: [{ id: DIMENSION_ID, name: "2.4x6" }],
           finishings: [{ id: FINISHING_ID, name: "ЛДСП" }],
+          categories: [{ id: CATEGORY_ID, name: "Обычная" }],
           characteristics: [{ id: CHARACTERISTIC_ID, name: "Окно" }],
           typeDimensions: [
             {
@@ -674,6 +676,7 @@ describe("asset rental-items HTTP adapter", () => {
       getRentalItemCreationOptions("access-token", WAREHOUSE_ID)
     ).resolves.toMatchObject({
       rentalTypes: [{ id: RENTAL_TYPE_ID, name: "БК-2" }],
+      categories: [{ id: CATEGORY_ID, name: "Обычная" }],
       typeDimensions: [{ typeId: RENTAL_TYPE_ID, dimensionId: DIMENSION_ID }],
     })
     await expect(getCabinSettings("access-token")).resolves.toMatchObject({
@@ -845,9 +848,39 @@ describe("asset rental-items HTTP adapter", () => {
           status: "WRITTEN_OFF" as never,
         },
       })
-    ).rejects.toThrow("не поддерживает IN_TRANSFER и WRITTEN_OFF")
+    ).rejects.toThrow("не поддерживает IN_TRANSFER, WRITTEN_OFF и LOST")
+
+    await expect(
+      updateAssetRentalItemStatus({
+        accessToken: "access-token",
+        input: {
+          id: RENTAL_ITEM_ID,
+          expectedVersion: 4,
+          status: "LOST" as never,
+        },
+      })
+    ).rejects.toThrow("не поддерживает IN_TRANSFER, WRITTEN_OFF и LOST")
 
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("accepts a terminal loss status from asset-service", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        content: [rentalItemResponse({ status: "LOST" })],
+        page: 0,
+        size: 200,
+        totalElements: 1,
+        totalPages: 1,
+      })
+    )
+
+    const page = await listAssetRentalItems({
+      accessToken: "access-token",
+      warehouseId: WAREHOUSE_ID,
+    })
+
+    expect(page.content[0]?.status).toBe("LOST")
   })
 
   it("uses the durable HTML-import API with multipart source and exact plan decisions", async () => {

@@ -504,7 +504,9 @@ export function WriteOffsPage({
           {canInitiate ? (
             <Button type="button" onClick={() => setCreateOpen(true)}>
               <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-              Добавить {disposition === "WRITE_OFF" ? "списание" : "утрату"}
+              {disposition === "WRITE_OFF"
+                ? "Списать бытовку"
+                : "Добавить утрату"}
             </Button>
           ) : null}
         </PageToolbarActions>
