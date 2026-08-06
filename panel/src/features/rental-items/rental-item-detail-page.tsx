@@ -279,6 +279,7 @@ function DossierActions({
     "BOOKED",
     "RENTED",
     "WRITTEN_OFF",
+    "LOST",
     "REPAIR",
     "WAITING_REPAIR_CHECK",
     "CAPITAL_REPAIR",
@@ -315,7 +316,12 @@ function DossierActions({
     return null
   }
 
-  const repairAllowed = !["RENTED", "AFTER_RENT"].includes(rentalItem.status)
+  const repairAllowed = ![
+    "RENTED",
+    "AFTER_RENT",
+    "WRITTEN_OFF",
+    "LOST",
+  ].includes(rentalItem.status)
 
   function createRepair() {
     navigate("/repairs?create=1", {

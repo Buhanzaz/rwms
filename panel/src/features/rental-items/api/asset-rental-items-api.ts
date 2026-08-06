@@ -24,6 +24,7 @@ const RENTAL_ITEM_STATUSES = new Set<RentalItemStatus>([
   "REPAIR",
   "WAITING_REPAIR_CHECK",
   "WRITTEN_OFF",
+  "LOST",
   "CAPITAL_REPAIR",
   "AFTER_RENT",
   "WAITING_ESTIMATE_CONFIRMATION",
@@ -123,6 +124,7 @@ export type RentalItemCreationOptions = {
   rentalTypes: CabinCatalogValue[]
   dimensions: CabinCatalogValue[]
   finishings: CabinCatalogValue[]
+  categories: CabinCatalogValue[]
   characteristics: CabinCatalogValue[]
   typeDimensions: CabinTypeDimension[]
 }
@@ -138,7 +140,10 @@ export type CabinSettings = {
 export type UpdateAssetRentalItemStatusInput = {
   id: string
   expectedVersion: number
-  status: Exclude<RentalItemStatus, "IN_TRANSFER" | "WRITTEN_OFF">
+  status: Exclude<
+    RentalItemStatus,
+    "IN_TRANSFER" | "WRITTEN_OFF" | "LOST"
+  >
 }
 
 export type UpdateAssetRentalItemGeneralCommentInput = {
@@ -163,10 +168,17 @@ export class AssetRentalItemConflictError extends Error {
 
 function assertPublicStatus(
   status: RentalItemStatus
-): asserts status is Exclude<RentalItemStatus, "IN_TRANSFER" | "WRITTEN_OFF"> {
-  if (status === "IN_TRANSFER" || status === "WRITTEN_OFF") {
+): asserts status is Exclude<
+  RentalItemStatus,
+  "IN_TRANSFER" | "WRITTEN_OFF" | "LOST"
+> {
+  if (
+    status === "IN_TRANSFER" ||
+    status === "WRITTEN_OFF" ||
+    status === "LOST"
+  ) {
     throw new Error(
-      "Публичная смена статуса не поддерживает IN_TRANSFER и WRITTEN_OFF."
+      "Публичная смена статуса не поддерживает IN_TRANSFER, WRITTEN_OFF и LOST."
     )
   }
 }
@@ -530,6 +542,7 @@ function parseRentalItemCreationOptions(
     rentalTypes,
     dimensions,
     finishings,
+    categories,
     characteristics,
     typeDimensions,
   } = value
@@ -539,6 +552,7 @@ function parseRentalItemCreationOptions(
     !Array.isArray(rentalTypes) ||
     !Array.isArray(dimensions) ||
     !Array.isArray(finishings) ||
+    !Array.isArray(categories) ||
     !Array.isArray(characteristics) ||
     !Array.isArray(typeDimensions)
   ) {
@@ -551,6 +565,7 @@ function parseRentalItemCreationOptions(
     rentalTypes: rentalTypes.map(parseCabinCatalogValue),
     dimensions: dimensions.map(parseCabinCatalogValue),
     finishings: finishings.map(parseCabinCatalogValue),
+    categories: categories.map(parseCabinCatalogValue),
     characteristics: characteristics.map(parseCabinCatalogValue),
     typeDimensions: typeDimensions.map(parseCabinTypeDimension),
   }
@@ -953,7 +968,7 @@ export type HtmlImportFieldChoice = "SOURCE" | "TARGET"
 
 export type HtmlImportMappedStatus = Exclude<
   RentalItemStatus,
-  "IN_TRANSFER" | "WRITTEN_OFF"
+  "IN_TRANSFER" | "WRITTEN_OFF" | "LOST"
 >
 
 export type HtmlImportState =
@@ -1253,7 +1268,8 @@ function parseHtmlImportMappedStatus(
     typeof value !== "string" ||
     !RENTAL_ITEM_STATUSES.has(value as RentalItemStatus) ||
     value === "IN_TRANSFER" ||
-    value === "WRITTEN_OFF"
+    value === "WRITTEN_OFF" ||
+    value === "LOST"
   ) {
     return null
   }

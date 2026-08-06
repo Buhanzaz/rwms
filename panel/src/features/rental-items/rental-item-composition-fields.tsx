@@ -66,7 +66,10 @@ export function compositionCategoryOptions(
       ? [options.newCategory]
       : mode === "USED"
         ? options.usedCategories
-        : [currentCategory, options.newCategory, ...options.usedCategories]
+        : [
+            currentCategory,
+            ...options.categories.map((category) => category.name),
+          ]
 
   return Array.from(
     new Set(values.filter((value) => value.trim() !== ""))

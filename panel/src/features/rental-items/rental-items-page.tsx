@@ -9,7 +9,7 @@ import {
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query"
 import type { CabinCoverProjection } from "@/features/media/media-service"
 import type { SortingState } from "@tanstack/react-table"
-import { Filter, Grid2X2, List, Plus, Settings2 } from "lucide-react"
+import { Filter, Grid2X2, List, Plus, Settings2, Trash2 } from "lucide-react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 
 import { listAssetRentalItems } from "@/features/rental-items/api/asset-rental-items-api"
@@ -23,6 +23,8 @@ import {
 } from "@/components/page-toolbar"
 import { RentalItemCreateDialog } from "@/features/rental-items/rental-item-create-dialog"
 import { RentalItemPhotoDialog } from "@/features/rental-items/rental-item-photo-dialog"
+import { PropertyDispositionCreateDialog } from "@/features/write-offs/property-disposition-create-dialog"
+import { canInitiatePropertyDisposition } from "@/features/write-offs/property-disposition-presentation"
 import { RentalItemsColumnSettingsDialog } from "@/features/rental-items/rental-items-column-settings-dialog"
 import {
   buildRentalItemsFilterOptions,
@@ -242,6 +244,10 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
     warehouseId,
     "MANAGE"
   )
+  const canInitiateDisposition = canInitiatePropertyDisposition(
+    currentUser,
+    warehouseId
+  )
 
   const [search, setSearch] = useState(() => getInitialSearch(warehouseId))
   const [filters, setFilters] = useState<RentalItemsFiltersState>(() =>
@@ -266,6 +272,7 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
   const [columnsDialogOpen, setColumnsDialogOpen] = useState(false)
   const [gridSettingsDialogOpen, setGridSettingsDialogOpen] = useState(false)
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
+  const [writeOffDialogOpen, setWriteOffDialogOpen] = useState(false)
 
   useEffect(() => {
     writeLocalStorage(getStorageKey(warehouseId, "search"), search)
@@ -605,6 +612,22 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
                   </Button>
                 )}
 
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="min-w-0 flex-1 justify-center px-2 text-xs lg:flex-none lg:px-3 lg:text-sm"
+                  disabled={
+                    !canInitiateDisposition ||
+                    status !== "authenticated" ||
+                    !accessToken
+                  }
+                  onClick={() => setWriteOffDialogOpen(true)}
+                >
+                  <Trash2 data-icon="inline-start" />
+                  <span className="truncate">Списать бытовку</span>
+                </Button>
+
                 {canEditRentalItems ? (
                   <Button
                     size="sm"
@@ -618,6 +641,13 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
                 ) : null}
               </PageToolbarActions>
             </PageToolbar>
+
+            {status === "authenticated" && !canInitiateDisposition ? (
+              <p className="text-xs text-muted-foreground">
+                Заявку на списание может создать управляющий склада или
+                администратор с доступом MANAGE.
+              </p>
+            ) : null}
 
             {filterOptions.length > 0 && (
               <>
@@ -776,6 +806,18 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
           open={createDialogOpen}
           warehouseId={warehouseId}
           onOpenChange={setCreateDialogOpen}
+        />
+      ) : null}
+
+      {canInitiateDisposition ? (
+        <PropertyDispositionCreateDialog
+          key={`${warehouseId}:WRITE_OFF:${writeOffDialogOpen}`}
+          accessToken={accessToken}
+          warehouseId={warehouseId}
+          disposition="WRITE_OFF"
+          open={writeOffDialogOpen}
+          onOpenChange={setWriteOffDialogOpen}
+          onSaved={() => undefined}
         />
       ) : null}
     </div>

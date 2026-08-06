@@ -55,6 +55,7 @@ const EXCLUDED_CABIN_STATUSES: RentalItemStatus[] = [
   "RESERVED",
   "IN_TRANSFER",
   "WRITTEN_OFF",
+  "LOST",
 ]
 
 function stockBalance(item: EquipmentItemDto) {
@@ -124,7 +125,9 @@ export function PropertyDispositionCreateDialog({
     enabled: open && Boolean(accessToken),
   })
 
-  const cabins = cabinsQuery.data?.content ?? []
+  const cabins = (cabinsQuery.data?.content ?? []).filter(
+    (item) => !EXCLUDED_CABIN_STATUSES.includes(item.status)
+  )
   const equipment = useMemo(
     () => (equipmentQuery.data ?? []).filter(stockBalance),
     [equipmentQuery.data]
@@ -135,6 +138,10 @@ export function PropertyDispositionCreateDialog({
   const selectedStock = selectedEquipment
     ? stockBalance(selectedEquipment)
     : null
+  const noAvailableAssets =
+    assetKind === "CABIN"
+      ? cabinsQuery.isSuccess && cabins.length === 0
+      : equipmentQuery.isSuccess && equipment.length === 0
   const cabinContents = useMemo(() => {
     if (!selectedCabin) return []
     return cabinDispositionContents(selectedCabin.id, equipmentQuery.data ?? [])
@@ -346,7 +353,8 @@ export function PropertyDispositionCreateDialog({
                 disabled={
                   mutation.isPending ||
                   cabinsQuery.isLoading ||
-                  equipmentQuery.isLoading
+                  equipmentQuery.isLoading ||
+                  noAvailableAssets
                 }
                 onValueChange={(value) => {
                   setAssetId(value)
@@ -385,6 +393,21 @@ export function PropertyDispositionCreateDialog({
                 <FieldError>
                   Не удалось загрузить актуальные складские остатки.
                 </FieldError>
+              ) : null}
+              {assetKind === "EQUIPMENT" &&
+              equipmentQuery.isSuccess &&
+              equipment.length === 0 ? (
+                <FieldDescription>
+                  На складе нет свободного оборудования для списания. Сначала
+                  переместите мебель из бытовки на склад.
+                </FieldDescription>
+              ) : null}
+              {assetKind === "CABIN" &&
+              cabinsQuery.isSuccess &&
+              cabins.length === 0 ? (
+                <FieldDescription>
+                  На этом складе нет бытовок, доступных для списания.
+                </FieldDescription>
               ) : null}
             </Field>
 
@@ -512,6 +535,7 @@ export function PropertyDispositionCreateDialog({
               disabled={
                 mutation.isPending ||
                 !accessToken ||
+                noAvailableAssets ||
                 (assetKind === "CABIN" &&
                   Boolean(selectedCabin) &&
                   !cabinSnapshotComplete)
