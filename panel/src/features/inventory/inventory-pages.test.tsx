@@ -54,6 +54,7 @@ const auth = vi.hoisted(() => ({ useAuth: vi.fn() }))
 const warehouse = vi.hoisted(() => ({ useWarehouse: vi.fn() }))
 const viewport = vi.hoisted(() => ({ isMobile: false }))
 const queueCapabilities = vi.hoisted(() => ({ get: vi.fn() }))
+const assetApi = vi.hoisted(() => ({ getRentalItemCreationOptions: vi.fn() }))
 
 vi.mock("sonner", () => ({ toast }))
 vi.mock("@/features/auth/use-auth", () => ({ useAuth: auth.useAuth }))
@@ -98,6 +99,16 @@ vi.mock("@/features/repair-estimates/api/warehouse-queue-capabilities", () => ({
   ],
   getWarehouseQueueCapabilities: queueCapabilities.get,
 }))
+vi.mock("@/features/rental-items/api/asset-rental-items-api", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/features/rental-items/api/asset-rental-items-api")
+  >("@/features/rental-items/api/asset-rental-items-api")
+
+  return {
+    ...actual,
+    getRentalItemCreationOptions: assetApi.getRentalItemCreationOptions,
+  }
+})
 vi.mock("@/features/inventory/inventory-inspection-workspace", () => ({
   InventoryInspectionWorkspace: ({
     comment,
@@ -291,6 +302,8 @@ function finding(
     conflictResolution: null,
     conflicts: [],
     comment: "",
+    passportObservation: { presence: "ABSENT", value: null },
+    equipmentObservation: { presence: "EXPLICIT_EMPTY", value: [] },
     media: [],
     coverMediaId: null,
     inspectionSource: null,
@@ -502,6 +515,18 @@ beforeEach(() => {
     warehouseId: WAREHOUSE_ID,
     movementQueueDefinitions: [],
   })
+  assetApi.getRentalItemCreationOptions.mockResolvedValue({
+    newCategory: "Новая",
+    usedCategories: ["Обычная"],
+    rentalTypes: [{ id: "type-1", name: "БК-1" }],
+    dimensions: [{ id: "dimension-1", name: "2.4×6" }],
+    finishings: [{ id: "finishing-1", name: "ДВП" }],
+    categories: [{ id: "category-1", name: "Новая" }],
+    characteristics: [],
+    typeDimensions: [
+      { typeId: "type-1", dimensionId: "dimension-1", sortOrder: 0 },
+    ],
+  })
 })
 
 afterEach(() => {
@@ -680,6 +705,39 @@ describe("InventorySessionPage inspection", () => {
           movementToRepair: false,
           logisticsPlanningMode: undefined,
           logisticsScheduledDate: null,
+        })
+      )
+    )
+  })
+
+  it("asks about furniture before saving an inspection without a furniture observation", async () => {
+    const user = userEvent.setup()
+    inventoryApi.getInventory.mockResolvedValue(
+      activeSession(
+        finding("FREE", {
+          equipmentObservation: { presence: "ABSENT", value: null },
+        })
+      )
+    )
+
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Обновить готовые фото" })
+    )
+    await user.click(screen.getByRole("button", { name: "Сохранить осмотр" }))
+
+    expect(
+      await screen.findByRole("dialog", { name: "Мебель в бытовке" })
+    ).toBeTruthy()
+    expect(inventoryApi.saveInventoryFinding).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole("button", { name: "Мебели нет" }))
+
+    await waitFor(() =>
+      expect(inventoryApi.saveInventoryFinding).toHaveBeenCalledWith(
+        expect.objectContaining({
+          equipmentObservation: { presence: "EXPLICIT_EMPTY", value: [] },
         })
       )
     )
@@ -1079,9 +1137,9 @@ describe("InventoryFinishPage conflict resolution", () => {
     renderPage(`/inventory/${INVENTORY_ID}/finish`)
 
     await waitFor(() =>
-      expect(inventoryApi.getInventoryPreliminaryStatistics).toHaveBeenCalledTimes(
-        1
-      )
+      expect(
+        inventoryApi.getInventoryPreliminaryStatistics
+      ).toHaveBeenCalledTimes(1)
     )
     await user.click(
       await screen.findByRole("button", {
@@ -1093,9 +1151,9 @@ describe("InventoryFinishPage conflict resolution", () => {
       expect(inventoryApi.getInventory).toHaveBeenCalledTimes(2)
     )
     expect(await screen.findByText("Сверка мебели")).toBeTruthy()
-    expect(inventoryApi.getInventoryPreliminaryStatistics).toHaveBeenCalledTimes(
-      1
-    )
+    expect(
+      inventoryApi.getInventoryPreliminaryStatistics
+    ).toHaveBeenCalledTimes(1)
   })
 
   it("opens a stale-data dialog and moves to the refreshed conflict resolution section", async () => {
@@ -1397,7 +1455,10 @@ describe("InventoryFinishPage conflict resolution", () => {
     inventoryApi.previewInventoryCompletion
       .mockResolvedValueOnce(completionReview(staged))
       .mockRejectedValue(
-        new ApiError("Завершённую инвентаризацию нельзя проверять повторно", 409)
+        new ApiError(
+          "Завершённую инвентаризацию нельзя проверять повторно",
+          409
+        )
       )
     inventoryApi.completeInventory.mockResolvedValue(completed)
 

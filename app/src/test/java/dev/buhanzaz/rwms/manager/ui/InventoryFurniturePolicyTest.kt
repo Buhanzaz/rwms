@@ -24,6 +24,58 @@ class InventoryFurniturePolicyTest {
     }
 
     @Test
+    fun `supplement keeps the previous furniture observation instead of registry contents`() {
+        val chair = equipment("chair", "Стул")
+        val table = equipment("table", "Стол")
+        val seed = finding(
+            contents = listOf(mapOf("equipmentId" to chair.id, "quantity" to 1)),
+            equipmentObservation = ObservationDto(
+                "PRESENT",
+                listOf(mapOf("equipmentId" to chair.id, "quantity" to 4L)),
+            ),
+        ).inventoryFurnitureReinspectionSeed(
+            furnitureCatalog = listOf(chair, table),
+            mode = InventoryReinspectionMode.SUPPLEMENT,
+        )
+
+        assertThat(seed.observationRequested).isTrue()
+        assertThat(seed.quantities).containsExactly("chair", "4", "table", "0")
+    }
+
+    @Test
+    fun `replace resets furniture confirmation and starts from registry contents`() {
+        val chair = equipment("chair", "Стул")
+        val seed = finding(
+            contents = listOf(mapOf("equipmentId" to chair.id, "quantity" to 1)),
+            equipmentObservation = ObservationDto(
+                "PRESENT",
+                listOf(mapOf("equipmentId" to chair.id, "quantity" to 4L)),
+            ),
+        ).inventoryFurnitureReinspectionSeed(
+            furnitureCatalog = listOf(chair),
+            mode = InventoryReinspectionMode.REPLACE,
+        )
+
+        assertThat(seed.observationRequested).isNull()
+        assertThat(seed.quantities).containsExactly("chair", "1")
+    }
+
+    @Test
+    fun `supplement preserves the explicit no furniture answer`() {
+        val chair = equipment("chair", "Стул")
+        val seed = finding(
+            contents = listOf(mapOf("equipmentId" to chair.id, "quantity" to 3)),
+            equipmentObservation = ObservationDto("EXPLICIT_EMPTY", emptyList<Any?>()),
+        ).inventoryFurnitureReinspectionSeed(
+            furnitureCatalog = listOf(chair),
+            mode = InventoryReinspectionMode.SUPPLEMENT,
+        )
+
+        assertThat(seed.observationRequested).isFalse()
+        assertThat(seed.quantities).containsExactly("chair", "0")
+    }
+
+    @Test
     fun `observed furniture is saved as inspection evidence`() {
         val chair = equipment("chair", "Стул")
         val table = equipment("table", "Стол")
@@ -89,7 +141,10 @@ class InventoryFurniturePolicyTest {
         active = true,
     )
 
-    private fun finding(contents: List<Any?>) = InventoryFindingDto(
+    private fun finding(
+        contents: List<Any?>,
+        equipmentObservation: ObservationDto = ObservationDto("ABSENT"),
+    ) = InventoryFindingDto(
         id = "finding-1",
         inventoryId = "inventory-1",
         findingRevision = 1,
@@ -101,7 +156,7 @@ class InventoryFurniturePolicyTest {
         displayCanonicalNumber = "БЫТ-001",
         identityMatchKey = "БЫТ-001",
         passportObservation = ObservationDto("ABSENT"),
-        equipmentObservation = ObservationDto("ABSENT"),
+        equipmentObservation = equipmentObservation,
         mutationState = "IDLE",
         comment = "",
         currentSnapshot = InventoryCurrentSnapshotDto(

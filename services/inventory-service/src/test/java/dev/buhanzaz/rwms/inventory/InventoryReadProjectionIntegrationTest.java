@@ -263,6 +263,16 @@ class InventoryReadProjectionIntegrationTest {
     assertThat(expected.frozenPlan().lines().getFirst().quantity()).isEqualTo("1.25");
     assertThat(expected.frozenPlan().lines().getFirst().unitPriceMinor()).isEqualTo(1234);
     assertThat(expected.frozenPlan().lines().getFirst().normativeMinutes()).isEqualTo("2.5");
+    assertThat(expected.frozenPlan().lines().getFirst().mediaReferences())
+        .singleElement()
+        .satisfies(
+            reference -> {
+              assertThat(reference.mediaId())
+                  .isEqualTo(UUID.fromString("00000000-0000-0000-0000-000000000801"));
+              assertThat(reference.generation()).isEqualTo(4);
+            });
+    assertThat(expected.frozenPlan().lines().get(1).mediaReferences()).isEmpty();
+    assertThat(expected.media()).isEmpty();
     assertThat(expected.frozenPlan().stages())
         .extracting(stage -> stage.order())
         .containsExactly(0);
@@ -280,6 +290,16 @@ class InventoryReadProjectionIntegrationTest {
     assertThat(exact.required("expectedSnapshot").required("passportSnapshot").isObject()).isTrue();
     assertThat(exact.required("frozenPlan").required("lines").get(0).required("quantity").asText())
         .isEqualTo("1.25");
+    assertThat(
+            exact
+                .required("frozenPlan")
+                .required("lines")
+                .get(0)
+                .required("mediaReferences")
+                .get(0)
+                .required("generation")
+                .asLong())
+        .isEqualTo(4);
     assertThat(exact.toString())
         .doesNotContain("sourceSnapshot", "safeSnapshot", "actor", "company");
 
@@ -1362,6 +1382,74 @@ class InventoryReadProjectionIntegrationTest {
   }
 
   @Test
+  void liveInventoryExcludesWrittenOffAndLostCabins() {
+    for (String terminalStatus : List.of("WRITTEN_OFF", "LOST")) {
+      UUID warehouseId = UUID.randomUUID();
+      UUID inventoryId = UUID.randomUUID();
+      UUID assetId = UUID.randomUUID();
+      OffsetDateTime arrivedAt = OffsetDateTime.parse("2026-08-05T09:00:00Z");
+      seedSession(inventoryId, warehouseId);
+
+      when(dependencies.currentAsset(assetId))
+          .thenReturn(
+              Optional.of(
+                  new InventoryDependencyGateway.LiveAssetSnapshot(
+                      assetId,
+                      1,
+                      warehouseId,
+                      "WAREHOUSE",
+                      "БЫТ-201",
+                      "БЫТ201",
+                      null,
+                      mapper.createObjectNode(),
+                      mapper.createArrayNode())));
+      service.reconcileAssetMembership(
+          assetId,
+          new OpaqueActorReference(jwt().getSubject(), "USER", null),
+          UUID.randomUUID(),
+          UUID.randomUUID(),
+          arrivedAt);
+
+      when(dependencies.currentAsset(assetId))
+          .thenReturn(
+              Optional.of(
+                  new InventoryDependencyGateway.LiveAssetSnapshot(
+                      assetId,
+                      2,
+                      warehouseId,
+                      terminalStatus,
+                      "БЫТ-201",
+                      "БЫТ201",
+                      null,
+                      mapper.createObjectNode(),
+                      mapper.createArrayNode())));
+      service.reconcileAssetMembership(
+          assetId,
+          new OpaqueActorReference(jwt().getSubject(), "USER", null),
+          UUID.randomUUID(),
+          UUID.randomUUID(),
+          arrivedAt.plusMinutes(1));
+
+      SessionView session = service.session(jwtForWarehouse(warehouseId), inventoryId);
+      assertThat(
+              service
+                  .findings(
+                      jwtForWarehouse(warehouseId), inventoryId, 0, 20, "createdAt,asc")
+                  .content())
+          .as(terminalStatus)
+          .isEmpty();
+      assertThat(session.expectedCount()).as(terminalStatus).isZero();
+      assertThat(session.findingCount()).as(terminalStatus).isZero();
+      assertThat(session.membershipMovements())
+          .as(terminalStatus)
+          .extracting(movement -> movement.type())
+          .containsExactly(
+              InventoryMembershipMovementType.ARRIVED,
+              InventoryMembershipMovementType.DEPARTED);
+    }
+  }
+
+  @Test
   void expectedUninspectedCabinThatLeftWarehouseRemainsWithoutConflict() {
     UUID warehouseId = UUID.randomUUID();
     UUID inventoryId = UUID.randomUUID();
@@ -2308,7 +2396,10 @@ class InventoryReadProjectionIntegrationTest {
             FINGERPRINT,
             "{\"priority\":3,\"movementToRepair\":true,"
                 + "\"logisticsPlanningMode\":\"FIXED_DATE\","
-                + "\"logisticsScheduledDate\":\"2026-08-12\",\"stages\":["
+                + "\"logisticsScheduledDate\":\"2026-08-12\",\"lines\":["
+                + "{\"groupComment\":null,\"mediaReferences\":[{\"mediaId\":"
+                + "\"00000000-0000-0000-0000-000000000801\",\"generation\":4}]},"
+                + "{\"groupComment\":\"material note\",\"mediaReferences\":[]}],\"stages\":["
                 + "{\"id\":\"00000000-0000-0000-0000-000000000811\","
                 + "\"kind\":\"REPAIR_WORK\",\"order\":0,"
                 + "\"catalogNodeId\":\"00000000-0000-0000-0000-000000000812\","

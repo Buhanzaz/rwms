@@ -140,6 +140,7 @@ public class InventoryApplicationService {
           "REPAIR",
           "WAITING_REPAIR_CHECK",
           "WRITTEN_OFF",
+          "LOST",
           "CAPITAL_REPAIR",
           "AFTER_RENT",
           "WAITING_ESTIMATE_CONFIRMATION",
@@ -865,7 +866,7 @@ public class InventoryApplicationService {
     if (!session.getWarehouseId().equals(asset.warehouseId())) {
       outcome = "CROSS_WAREHOUSE_CONFLICT";
       reconciliation = ReconciliationState.MISSING;
-    } else if ("WRITTEN_OFF".equals(asset.status())) {
+    } else if (isTerminalDispositionStatus(asset.status())) {
       outcome = "EXCLUDED_STATUS_CONFLICT";
       reconciliation = ReconciliationState.MISSING;
     } else {
@@ -4807,13 +4808,17 @@ public class InventoryApplicationService {
         conflictViews(finding, session.getWarehouseId(), current));
   }
 
+  private static boolean isTerminalDispositionStatus(String status) {
+    return "WRITTEN_OFF".equals(status) || "LOST".equals(status);
+  }
+
   private String numberResolutionOutcome(
       UUID inventoryWarehouseId, CurrentItemSnapshot current, boolean existingFinding) {
     if (current == null) return existingFinding ? "MISSING_CONFLICT" : "NOT_FOUND";
     if (!inventoryWarehouseId.equals(current.warehouseId())) {
       return "CROSS_WAREHOUSE_CONFLICT";
     }
-    if ("WRITTEN_OFF".equals(current.status())) return "EXCLUDED_STATUS_CONFLICT";
+    if (isTerminalDispositionStatus(current.status())) return "EXCLUDED_STATUS_CONFLICT";
     return "MATCHED";
   }
 
@@ -4858,7 +4863,7 @@ public class InventoryApplicationService {
     }
     if (!baseline.status().equals(current.status())) {
       String code =
-          "WRITTEN_OFF".equals(current.status())
+          isTerminalDispositionStatus(current.status())
               ? "WRITTEN_OFF"
               : "RENTED".equals(current.status()) ? "RENTED" : "STATUS_CHANGED";
       conflicts.add(
@@ -4978,9 +4983,12 @@ public class InventoryApplicationService {
           inventoryWarehouseId.toString(),
           current.warehouseId().toString());
     }
-    if ("WRITTEN_OFF".equals(current.status())) {
+    if (isTerminalDispositionStatus(current.status())) {
       return new ConflictView(
-          "WRITTEN_OFF", "Бытовка списана", null, current.status());
+          "WRITTEN_OFF",
+          "LOST".equals(current.status()) ? "Бытовка утеряна" : "Бытовка списана",
+          null,
+          current.status());
     }
     return null;
   }
@@ -6241,7 +6249,8 @@ public class InventoryApplicationService {
                         exactDecimal(line.getQuantity()),
                         line.getUnitPriceMinor(),
                         exactDecimal(line.getNormativeMinutes()),
-                        nullableText(sourceLine.get("groupComment")));
+                        nullableText(sourceLine.get("groupComment")),
+                        frozenPlanLineMediaReferences(sourceLine));
                 })
             .toList();
     List<FrozenPlanStageView> stageViews =
@@ -6274,6 +6283,32 @@ public class InventoryApplicationService {
         snapshot.getLogisticsScheduledDate(),
         lineViews,
         stageViews);
+  }
+
+  private List<MediaReference> frozenPlanLineMediaReferences(JsonNode sourceLine) {
+    if (sourceLine.isMissingNode() || sourceLine.isNull()) return List.of();
+    if (!sourceLine.isObject()) {
+      throw new IllegalStateException("Persisted frozen plan line is invalid");
+    }
+    JsonNode references = sourceLine.path("mediaReferences");
+    if (references.isMissingNode() || references.isNull()) return List.of();
+    if (!references.isArray() || references.size() > 100) {
+      throw new IllegalStateException("Persisted frozen plan line media is invalid");
+    }
+    List<MediaReference> result = new ArrayList<>();
+    Set<UUID> seenMediaIds = new HashSet<>();
+    for (JsonNode reference : references) {
+      if (!reference.isObject()) {
+        throw new IllegalStateException("Persisted frozen plan line media is invalid");
+      }
+      UUID mediaId = requiredUuid(reference, "mediaId", "frozen plan line media id");
+      long generation = reference.path("generation").asLong(-1);
+      if (generation < 0 || !seenMediaIds.add(mediaId)) {
+        throw new IllegalStateException("Persisted frozen plan line media is invalid");
+      }
+      result.add(new MediaReference(mediaId, generation));
+    }
+    return List.copyOf(result);
   }
 
   private UUID requiredUuid(JsonNode value, String field, String name) {

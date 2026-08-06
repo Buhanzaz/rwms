@@ -7,6 +7,7 @@ import type {
   InventoryFinding,
   InventoryFindingPage,
   InventoryMediaReference,
+  InventoryObservation,
   InventoryNumberResolution,
   InventoryPlanSelection,
   InventoryPublicationBatch,
@@ -245,6 +246,8 @@ export function saveInventoryInspection(input: {
   expectedFindingRevision: number
   inspection: "READY" | "WORK_STAGED"
   comment: string
+  passportObservation: InventoryObservation
+  equipmentObservation: InventoryObservation
   media: InventoryMediaReference[]
   coverMediaId: string | null
   planSelection: InventoryPlanSelection
@@ -261,8 +264,8 @@ export function saveInventoryInspection(input: {
         expectedFindingRevision: input.expectedFindingRevision,
         inspection: input.inspection,
         comment: input.comment,
-        passportObservation: { presence: "ABSENT", value: null },
-        equipmentObservation: { presence: "ABSENT", value: null },
+        passportObservation: input.passportObservation,
+        equipmentObservation: input.equipmentObservation,
         media: input.media,
         coverMediaId: input.coverMediaId,
         planSelection:

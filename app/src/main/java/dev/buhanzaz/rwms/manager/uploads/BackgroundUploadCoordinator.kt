@@ -114,6 +114,19 @@ class BackgroundUploadCoordinator(
         schedule(updated.id, ExistingWorkPolicy.REPLACE, photoId)
     }
 
+    /**
+     * Stops only this device's durable upload outbox entry. This never calls RWMS, so media or
+     * a final command already accepted by the server remain there. Waiting for WorkManager's
+     * cancellation operation before deleting the local originals prevents a queued worker from
+     * being started after its outbox entry has been removed.
+     */
+    suspend fun cancel(operationId: String) = withContext(Dispatchers.IO) {
+        store.initialize()
+        if (store.operation(operationId) == null) return@withContext
+        workManager.cancelUniqueWork(workName(operationId)).result.get()
+        store.remove(operationId)
+    }
+
     private fun schedule(
         operationId: String,
         policy: ExistingWorkPolicy,

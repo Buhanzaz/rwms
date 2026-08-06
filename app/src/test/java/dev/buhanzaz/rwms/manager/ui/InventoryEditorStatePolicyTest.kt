@@ -318,6 +318,16 @@ class InventoryEditorStatePolicyTest {
     }
 
     @Test
+    fun `no furniture answer sends an explicit empty snapshot`() {
+        val observation = creationEditor()
+            .copy(equipmentObservationRequested = false)
+            .inventoryEquipmentObservation()
+
+        assertThat(observation.presence).isEqualTo("EXPLICIT_EMPTY")
+        assertThat(observation.value).isEqualTo(emptyList<Map<String, Any?>>())
+    }
+
+    @Test
     fun `furniture snapshot rejects quantities outside current catalog`() {
         val editor = creationEditor().copy(
             equipmentCatalog = equipmentCatalog(),

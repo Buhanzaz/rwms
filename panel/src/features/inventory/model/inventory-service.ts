@@ -196,6 +196,7 @@ export type InventoryFrozenPlanLine = {
   unitPriceMinor: number
   normativeMinutes: string
   groupComment: string | null
+  mediaReferences: InventoryMediaReference[]
 }
 
 export type InventoryFrozenPlanStage = {

@@ -289,6 +289,17 @@ describe("http inventory adapter", () => {
       expectedFindingRevision: 8,
       inspection: "WORK_STAGED",
       comment: "Осмотрено",
+      passportObservation: {
+        presence: "PRESENT",
+        value: {
+          cabinType: "БК-1",
+          finishing: "ДВП",
+        },
+      },
+      equipmentObservation: {
+        presence: "EXPLICIT_EMPTY",
+        value: [],
+      },
       media: [
         {
           mediaId: "00000000-0000-4000-8000-000000000131",
@@ -331,6 +342,17 @@ describe("http inventory adapter", () => {
       expectedSessionRevision: 3,
       expectedFindingRevision: 8,
       inspection: "WORK_STAGED",
+      passportObservation: {
+        presence: "PRESENT",
+        value: {
+          cabinType: "БК-1",
+          finishing: "ДВП",
+        },
+      },
+      equipmentObservation: {
+        presence: "EXPLICIT_EMPTY",
+        value: [],
+      },
       media: [
         {
           mediaId: "00000000-0000-4000-8000-000000000131",
