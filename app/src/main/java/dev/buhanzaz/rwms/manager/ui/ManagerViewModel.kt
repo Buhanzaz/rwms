@@ -35,6 +35,7 @@ import dev.buhanzaz.rwms.manager.network.InventoryPlanLineInputDto
 import dev.buhanzaz.rwms.manager.network.InventoryPlanSelectionDto
 import dev.buhanzaz.rwms.manager.network.InventoryPlanStageSelectionDto
 import dev.buhanzaz.rwms.manager.network.LogisticsDocumentDto
+import dev.buhanzaz.rwms.manager.network.MediaAssetDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.network.MoveTaskBoardEntryRequest
 import dev.buhanzaz.rwms.manager.network.ObservationInput
@@ -67,6 +68,7 @@ import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadArea
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadCoordinator
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadDraft
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadOperation
+import dev.buhanzaz.rwms.manager.uploads.InventoryExistingMediaRotation
 import dev.buhanzaz.rwms.manager.uploads.InventoryUploadCommand
 import dev.buhanzaz.rwms.manager.uploads.MaintenanceReplaceKind
 import dev.buhanzaz.rwms.manager.uploads.MaintenanceUploadCommand
@@ -297,6 +299,17 @@ data class InventoryEditorState(
     val comment: String = "",
     val photoUris: List<String> = emptyList(),
     val coverPhotoUri: String? = null,
+    /**
+     * Previously saved inventory media that was downloaded into the app cache for this editor.
+     * A reference missing from this map was not necessarily removed: it can simply be unavailable
+     * offline, so [finding] remains the authoritative complete source until the user removes a
+     * photo that is actually visible in this editor.
+     */
+    val persistedPhotoMedia: Map<String, MediaReferenceDto> = emptyMap(),
+    /** Canonical server orientation for a cached previous photo, by local URI. */
+    val persistedPhotoRotationDegrees: Map<String, Int> = emptyMap(),
+    /** Previous inventory media explicitly removed by the operator. */
+    val removedPersistedMediaIds: Set<String> = emptySet(),
     val uploadedPhotoMedia: Map<String, MediaReferenceDto> = emptyMap(),
     /** Absolute orientation requested for the same server-side media asset, by local URI. */
     val photoRotationDegrees: Map<String, Int> = emptyMap(),
@@ -416,6 +429,18 @@ class ManagerViewModel(
         }
     }
 
+    fun cancelBackgroundUpload(operationId: String) {
+        viewModelScope.launch {
+            try {
+                backgroundUploads.await().cancel(operationId)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                handleFailure(failure)
+            }
+        }
+    }
+
     private fun resumePendingBackgroundUploads() {
         backgroundUploadsLifecycleJob?.cancel()
         backgroundUploadsLifecycleJob = viewModelScope.launch {
@@ -504,7 +529,11 @@ class ManagerViewModel(
         refreshInventory()
     }
 
-    fun resolveInventoryNumber(number: String, onReady: () -> Unit) = command {
+    fun resolveInventoryNumber(
+        number: String,
+        onInspectionChoiceRequired: (InventoryFindingDto) -> Unit,
+        onReady: () -> Unit,
+    ) = command {
         val session = mutableState.value.inventorySession
             ?: throw IllegalStateException("Сначала начните инвентаризацию")
         val normalizedNumber = number.trim()
@@ -521,6 +550,14 @@ class ManagerViewModel(
             ),
         )
         val finding = resolution.finding
+        if (finding?.requiresInventoryReinspectionChoice() == true) {
+            // Never seed an editor with an implicit mode.  The operator must explicitly choose
+            // whether the prior review is kept as a draft or fully replaced.
+            mutableState.update { current -> current.copy(inventoryEditor = null) }
+            commandKeys.complete(signature)
+            onInspectionChoiceRequired(finding)
+            return@command
+        }
         val passport = finding?.inspectionPassport().orEmpty()
         val creationOptions = if (
             resolution.outcome == "MATCHED" || resolution.outcome == "NOT_FOUND"
@@ -586,26 +623,68 @@ class ManagerViewModel(
     }
 
     /** Opens the inspection flow for either a registered or a new rental-item number. */
-    fun prepareNewInventoryNumber(number: String, onReady: () -> Unit) =
-        resolveInventoryNumber(number, onReady)
+    fun prepareNewInventoryNumber(
+        number: String,
+        onInspectionChoiceRequired: (InventoryFindingDto) -> Unit,
+        onReady: () -> Unit,
+    ) = resolveInventoryNumber(number, onInspectionChoiceRequired, onReady)
 
-    fun openInventoryFindingForSupplement(
+    fun openInventoryFinding(
         finding: InventoryFindingDto,
+        mode: InventoryReinspectionMode,
         onReady: () -> Unit,
     ) = command {
-        ensureMaintenanceCatalog(requireWarehouseId())
-        val latest = mutableState.value.inventoryFindings
-            .firstOrNull { it.id == finding.id }
-            ?: finding
-        val passport = latest.inspectionPassport()
-        val creationOptions = backend.api.rentalItemCreationOptions(requireWarehouseId())
-        val equipmentCatalog = backend.api.equipment(requireWarehouseId())
+        val warehouseId = requireWarehouseId()
+        val latest = if (finding.requiresInventoryReinspectionChoice()) {
+            // A stale revision is not a safe starting point for a repeat inspection. In
+            // particular, an old background upload must never overwrite a newer inspection.
+            // When offline, force=true deliberately fails instead of opening cached data as an
+            // editable reinspection. A first, not-yet-saved inspection keeps its existing
+            // offline-capable flow.
+            refreshInventory(force = true)
+            mutableState.value.inventoryFindings
+                .firstOrNull { it.id == finding.id }
+                ?: throw IllegalStateException(
+                    "Проверка больше недоступна. Обновите инвентаризацию и выберите бытовку снова",
+                )
+        } else {
+            mutableState.value.inventoryFindings
+                .firstOrNull { it.id == finding.id }
+                ?: finding
+        }
+        if (mode == InventoryReinspectionMode.REPLACE &&
+            !latest.requiresInventoryReinspectionChoice()
+        ) {
+            throw IllegalStateException("Бытовка ещё не проверена: перезаписывать нечего")
+        }
+        ensureMaintenanceCatalog(warehouseId)
+        val seed = latest.inventoryReinspectionSeed(mode)
+        val passport = seed.passport
+        val creationOptions = backend.api.rentalItemCreationOptions(warehouseId)
+        val equipmentCatalog = backend.api.equipment(warehouseId)
             .map { it.equipment }
             .inventoryFurnitureCatalog()
+        val furnitureSeed = latest.inventoryFurnitureReinspectionSeed(equipmentCatalog, mode)
+        val persistedPhotos = if (seed.retainPreviousInspection) {
+            loadInventoryPhotoUris(latest, warehouseId)
+        } else {
+            emptyList()
+        }
+        val persistedPhotoMedia = persistedPhotos.associate { photo ->
+            photo.uri to photo.reference
+        }
+        val persistedPhotoRotationDegrees = persistedPhotos.associate { photo ->
+            photo.uri to photo.rotationDegrees
+        }
         val parsedCharacteristics = parseInventoryCharacteristics(
             passport["characteristics"],
         )
-        val planContent = latest.inventoryPlanEditorContent()
+        val planContent = if (seed.retainPreviousInspection) {
+            latest.inventoryPlanEditorContent()
+        } else {
+            RepairEditorContent(emptyList(), emptyList())
+        }
+        val previousPlan = latest.frozenPlan.takeIf { seed.retainPreviousInspection }
         mutableState.update {
             it.copy(
                 inventoryEditor = InventoryEditorState(
@@ -623,14 +702,22 @@ class ManagerViewModel(
                     sanitarySinks = parsedCharacteristics.sinks,
                     sanitaryShowers = parsedCharacteristics.showers,
                     linoleum = passport["linoleum"] as? Boolean,
-                    comment = latest.comment,
+                    comment = seed.comment,
+                    photoUris = persistedPhotos.map(ScopedMediaResult::uri),
+                    coverPhotoUri = persistedPhotos
+                        .firstOrNull { photo -> photo.reference.mediaId == latest.coverMediaId }
+                        ?.uri,
+                    persistedPhotoMedia = persistedPhotoMedia,
+                    persistedPhotoRotationDegrees = persistedPhotoRotationDegrees,
+                    removedPersistedMediaIds = latest.inventoryReinspectionRemovedMediaIds(mode),
                     equipmentCatalog = equipmentCatalog,
-                    equipmentQuantities = latest.inventoryFurnitureInitialQuantities(equipmentCatalog),
+                    equipmentObservationRequested = furnitureSeed.observationRequested,
+                    equipmentQuantities = furnitureSeed.quantities,
                     planLines = planContent.lines,
                     planStages = planContent.stages,
-                    planPriority = latest.frozenPlan?.priority ?: DEFAULT_MAINTENANCE_PRIORITY,
-                    planMovementToRepair = latest.frozenPlan?.movementToRepair ?: false,
-                    planLogisticsPlanningMode = if (latest.frozenPlan?.movementToRepair == true) {
+                    planPriority = previousPlan?.priority ?: DEFAULT_MAINTENANCE_PRIORITY,
+                    planMovementToRepair = previousPlan?.movementToRepair ?: false,
+                    planLogisticsPlanningMode = if (previousPlan?.movementToRepair == true) {
                         LOGISTICS_PLANNING_MODE_AUTO
                     } else {
                         null
@@ -796,14 +883,7 @@ class ManagerViewModel(
     }
 
     fun removeInventoryPhoto(uri: String) {
-        editInventory {
-            it.copy(
-                photoUris = it.photoUris - uri,
-                coverPhotoUri = it.coverPhotoUri.takeUnless { selected -> selected == uri },
-                uploadedPhotoMedia = it.uploadedPhotoMedia - uri,
-                photoRotationDegrees = it.photoRotationDegrees - uri,
-            )
-        }
+        editInventory { editor -> editor.removeInventoryPhoto(uri) }
     }
 
     fun selectInventoryCoverPhoto(uri: String) {
@@ -876,7 +956,7 @@ class ManagerViewModel(
         }
         val attached = requireNotNull(finding) { "Сервис не вернул найденную бытовку" }
         val orderedPhotoUris = editor.inventoryPhotoUrisForUpload()
-        val pendingPhotoUris = orderedPhotoUris.filterNot(editor.uploadedPhotoMedia::containsKey)
+        val pendingPhotoUris = editor.pendingInventoryPhotoUris()
         val photoSortOrderByUri = orderedPhotoUris.withIndex().associate { (index, uri) ->
             uri to index
         }
@@ -886,7 +966,8 @@ class ManagerViewModel(
             warehouseId = session.warehouseId,
             context = "INSPECTION",
         )
-        val readyPersistedMedia = attached.media.takeIf { it.isNotEmpty() }
+        val persistedMedia = editor.persistedInventoryMediaReferences()
+        val readyPersistedMedia = persistedMedia.takeIf { it.isNotEmpty() }
             ?.let { persisted ->
                 val readyReferences = retryMediaReadAfterOwnerProof {
                     backend.api.ownerMedia(
@@ -903,6 +984,9 @@ class ManagerViewModel(
                 inventoryReadyPersistedMediaReferences(persisted, readyReferences)
             }
             .orEmpty()
+        require(readyPersistedMedia.size == persistedMedia.size) {
+            "Не все сохранённые фотографии готовы. Проверьте связь и повторите сохранение."
+        }
         val existingMedia = inventoryExistingMediaReferences(
             persisted = readyPersistedMedia,
             uploadedByUri = editor.uploadedPhotoMedia,
@@ -911,7 +995,9 @@ class ManagerViewModel(
             throw IllegalArgumentException("Добавьте хотя бы одну фотографию")
         }
         val existingCoverMediaId = editor.coverPhotoUri
-            ?.let(editor.uploadedPhotoMedia::get)
+            ?.let { uri ->
+                editor.persistedPhotoMedia[uri] ?: editor.uploadedPhotoMedia[uri]
+            }
             ?.mediaId
             ?: attached.coverMediaId?.takeIf { mediaId ->
                 existingMedia.any { reference -> reference.mediaId == mediaId }
@@ -961,6 +1047,10 @@ class ManagerViewModel(
                     },
                     equipmentObservation = equipmentObservation,
                     existingMedia = existingMedia,
+                    existingMediaRotations = editor.persistedInventoryPhotoRotations()
+                        .filter { rotation ->
+                            existingMedia.any { media -> media == rotation.reference }
+                        },
                     existingCoverMediaId = existingCoverMediaId,
                     planSelection = planSelection,
                     planLineIds = editor.planLines.map(MaintenanceLineEditorState::id),
@@ -2032,6 +2122,33 @@ class ManagerViewModel(
     private data class ScopedMediaResult(
         val reference: MediaReferenceDto,
         val uri: String,
+        val rotationDegrees: Int,
+    )
+
+    private data class ScopedDownloadedPhoto(
+        val uri: String,
+        val rotationDegrees: Int,
+    )
+
+    private suspend fun loadInventoryPhotoUris(
+        finding: InventoryFindingDto,
+        warehouseId: String,
+    ): List<ScopedMediaResult> = loadScopedPhotoUris(
+        requests = finding.media
+            .distinctBy(MediaReferenceDto::mediaId)
+            .map { reference ->
+                ScopedMediaDownload(
+                    reference = reference,
+                    scopes = listOf(
+                        MaintenanceMediaScope(
+                            ownerType = "INVENTORY_FINDING",
+                            ownerId = finding.id,
+                            context = "INSPECTION",
+                        ),
+                    ),
+                )
+            },
+        warehouseId = warehouseId,
     )
 
     private suspend fun loadMaintenancePhotoUris(
@@ -2070,12 +2187,16 @@ class ManagerViewModel(
         return coroutineScope {
             requests.map { request ->
                 async {
-                    val uri = downloadScopedPhoto(
+                    val downloaded = downloadScopedPhoto(
                         request = request,
                         assetsByScope = assetsByScope,
                         warehouseId = warehouseId,
                     ) ?: return@async null
-                    ScopedMediaResult(reference = request.reference, uri = uri)
+                    ScopedMediaResult(
+                        reference = request.reference,
+                        uri = downloaded.uri,
+                        rotationDegrees = downloaded.rotationDegrees,
+                    )
                 }
             }.mapNotNull { download -> download.await() }
         }
@@ -2083,9 +2204,9 @@ class ManagerViewModel(
 
     private suspend fun downloadScopedPhoto(
         request: ScopedMediaDownload,
-        assetsByScope: Map<MaintenanceMediaScope, List<dev.buhanzaz.rwms.manager.network.MediaAssetDto>?>,
+        assetsByScope: Map<MaintenanceMediaScope, List<MediaAssetDto>?>,
         warehouseId: String,
-    ): String? {
+    ): ScopedDownloadedPhoto? {
         request.scopes.distinct().forEach { scope ->
             val asset = assetsByScope[scope]
                 ?.firstOrNull { candidate ->
@@ -2109,7 +2230,9 @@ class ManagerViewModel(
                         generation = request.reference.generation,
                         contentPath = preview.contentPath,
                     )
-                }.getOrNull()?.let { return it }
+                }.getOrNull()?.let { uri ->
+                    return ScopedDownloadedPhoto(uri, asset.rotationDegrees)
+                }
             }
             runCatching {
                 mediaDownloader.downloadOriginal(
@@ -2120,7 +2243,9 @@ class ManagerViewModel(
                     warehouseId = warehouseId,
                     context = scope.context,
                 )
-            }.getOrNull()?.let { return it }
+            }.getOrNull()?.let { uri ->
+                return ScopedDownloadedPhoto(uri, asset?.rotationDegrees ?: 0)
+            }
         }
         return null
     }
@@ -4601,7 +4726,7 @@ class ManagerViewModel(
                     }
                 }
             } catch (failure: Throwable) {
-                if (cached != null && canUseCachedReadAfter(failure)) {
+                if (!force && cached != null && canUseCachedReadAfter(failure)) {
                     applyInventoryRead(warehouseId, cached)
                     return@withLock
                 }
@@ -5191,7 +5316,30 @@ internal fun InventoryEditorState.inventoryPhotoUrisForUpload(): List<String> {
 }
 
 internal fun InventoryEditorState.pendingInventoryPhotoUris(): List<String> =
-    inventoryPhotoUrisForUpload().filterNot(uploadedPhotoMedia::containsKey)
+    inventoryPhotoUrisForUpload().filterNot { uri ->
+        uri in uploadedPhotoMedia || uri in persistedPhotoMedia
+    }
+
+/**
+ * Removes a visible cached server photo from the next inventory save without deleting the media
+ * asset itself. Unavailable old references are deliberately retained, because a download failure
+ * must never be interpreted as an operator decision to remove evidence.
+ */
+internal fun InventoryEditorState.removeInventoryPhoto(uri: String): InventoryEditorState {
+    if (uri !in photoUris) return this
+    val removedReference = persistedPhotoMedia[uri]
+    return copy(
+        photoUris = photoUris - uri,
+        coverPhotoUri = coverPhotoUri.takeUnless { selected -> selected == uri },
+        persistedPhotoMedia = persistedPhotoMedia - uri,
+        persistedPhotoRotationDegrees = persistedPhotoRotationDegrees - uri,
+        removedPersistedMediaIds = removedReference?.mediaId?.let { mediaId ->
+            removedPersistedMediaIds + mediaId
+        } ?: removedPersistedMediaIds,
+        uploadedPhotoMedia = uploadedPhotoMedia - uri,
+        photoRotationDegrees = photoRotationDegrees - uri,
+    )
+}
 
 /** Retains one server-confirmed original without changing the user-selected URI order. */
 internal fun InventoryEditorState.retainUploadedInventoryPhoto(
@@ -5209,14 +5357,22 @@ internal fun InventoryEditorState.retainUploadedInventoryPhoto(
  */
 internal fun InventoryEditorState.rotateInventoryPhoto(uri: String): InventoryEditorState {
     if (uri !in photoUris) return this
-    val nextRotation = ((photoRotationDegrees[uri] ?: 0) + 90) % 360
+    val persistedRotation = persistedPhotoRotationDegrees[uri] ?: 0
+    val nextRotation = ((photoRotationDegrees[uri] ?: persistedRotation) + 90) % 360
     return copy(
-        photoRotationDegrees = if (nextRotation == 0) {
+        photoRotationDegrees = if (nextRotation == persistedRotation) {
             photoRotationDegrees - uri
         } else {
             photoRotationDegrees + (uri to nextRotation)
         },
     )
+}
+
+/** The local preview only needs the delta from the canonical server image already downloaded. */
+internal fun InventoryEditorState.inventoryPhotoPreviewRotation(uri: String): Int {
+    val requestedRotation = photoRotationDegrees[uri] ?: return 0
+    val persistedRotation = persistedPhotoRotationDegrees[uri] ?: 0
+    return (requestedRotation - persistedRotation + 360) % 360
 }
 
 internal fun inventoryMediaReferencesForEditor(
@@ -5227,7 +5383,7 @@ internal fun inventoryMediaReferencesForEditor(
     buildList {
         editor.inventoryPhotoUrisForUpload()
             .map { uri ->
-                requireNotNull(uploadedByUri[uri]) {
+                editor.persistedPhotoMedia[uri] ?: requireNotNull(uploadedByUri[uri]) {
                     "Выбранная фотография ещё не готова к сохранению"
                 }
             }
@@ -5243,7 +5399,16 @@ internal fun inventoryReadyPersistedMediaReferences(
     persisted.filter(readyOwnerReferences::contains)
 
 internal fun InventoryEditorState.persistedInventoryMediaReferences(): List<MediaReferenceDto> =
-    finding?.media.orEmpty().distinctBy(MediaReferenceDto::mediaId)
+    finding?.media.orEmpty()
+        .filterNot { reference -> reference.mediaId in removedPersistedMediaIds }
+        .distinctBy(MediaReferenceDto::mediaId)
+
+internal fun InventoryEditorState.persistedInventoryPhotoRotations(): List<InventoryExistingMediaRotation> =
+    photoUris.mapNotNull { uri ->
+        val reference = persistedPhotoMedia[uri] ?: return@mapNotNull null
+        val rotationDegrees = photoRotationDegrees[uri] ?: return@mapNotNull null
+        InventoryExistingMediaRotation(reference = reference, rotationDegrees = rotationDegrees)
+    }
 
 internal fun inventoryExistingMediaReferences(
     persisted: List<MediaReferenceDto>,

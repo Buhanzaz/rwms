@@ -187,6 +187,7 @@ private fun AuthenticatedManagerNavGraph(
                 onBack = navController::popManagerBackStack,
                 onRetryOperation = viewModel::retryBackgroundUpload,
                 onRetryPhoto = viewModel::retryBackgroundPhoto,
+                onCancelOperation = viewModel::cancelBackgroundUpload,
             )
         }
         composable(ManagerRoute.Logistics.route) {
@@ -324,7 +325,7 @@ private fun AuthenticatedManagerNavGraph(
                 onPrepareNewNumber = viewModel::prepareNewInventoryNumber,
                 onOpenEditor = { navController.navigate(ManagerRoute.InventoryEditor.route) },
                 onResolveConflict = viewModel::resolveInventoryConflict,
-                onSupplementInspection = viewModel::openInventoryFindingForSupplement,
+                onOpenInventoryFinding = viewModel::openInventoryFinding,
             )
         }
         composable(ManagerRoute.InventoryEditor.route) {
@@ -367,7 +368,7 @@ private fun AuthenticatedManagerNavGraph(
                 onFurnitureAbsent = {
                     viewModel.editInventory { current ->
                         current.copy(
-                            equipmentObservationRequested = true,
+                            equipmentObservationRequested = false,
                             equipmentQuantities = current.equipmentCatalog
                                 .inventoryFurnitureCatalog()
                                 .associate { equipment ->

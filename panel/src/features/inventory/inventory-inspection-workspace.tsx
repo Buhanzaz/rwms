@@ -5,10 +5,8 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
-import { Textarea } from "@/components/ui/textarea"
+import { InventoryInspectionDetails } from "@/features/inventory/inventory-inspection-details"
 import {
   inventoryFindingMediaOwner,
   type ReadyMediaReference,
@@ -22,6 +20,8 @@ import { RepairEstimateLinesEditor } from "@/features/repair-estimates/repair-es
 import { RepairEstimateLinesSnapshot } from "@/features/repair-estimates/repair-estimate-lines-snapshot"
 import { RepairEstimateWorkspaceLayout } from "@/features/repair-estimates/repair-estimate-workspace-layout"
 import type { InventoryRepairPlanSnapshotDto } from "@/features/inventory/model/inventory"
+import type { InventoryObservation } from "@/features/inventory/model/inventory-service"
+import type { RentalItemCreationOptions } from "@/features/rental-items/api/asset-rental-items-api"
 import type {
   RepairEstimateCompletionMode,
   RepairEstimateLineDto,
@@ -113,6 +113,12 @@ type InventoryInspectionWorkspaceProps = {
   tenant: string | null
   businessDate: string
   comment: string
+  passportObservation: InventoryObservation
+  passportSnapshot: Record<string, unknown> | null
+  passportOptions: RentalItemCreationOptions | null
+  passportOptionsLoading: boolean
+  passportOptionsError: string | null
+  equipmentObservation: InventoryObservation
   lines: RepairEstimateLineDto[]
   media: ReadyMediaReference[]
   repairCompletionMode: RepairEstimateCompletionMode | null
@@ -122,6 +128,9 @@ type InventoryInspectionWorkspaceProps = {
   coverMediaId: string | null
   message?: string | null
   onCommentChange: (value: string) => void
+  onPassportObservationChange: (value: InventoryObservation) => void
+  onEditFurniture: () => void
+  onRetryPassportOptions: () => void
   onLinesChange: (lines: RepairEstimateLineDto[]) => void
   onMediaChange: (media: ReadyMediaReference[]) => void
   onMediaReadyChange: (ready: boolean) => void
@@ -137,6 +146,12 @@ export function InventoryInspectionWorkspace({
   tenant,
   businessDate,
   comment,
+  passportObservation,
+  passportSnapshot,
+  passportOptions,
+  passportOptionsLoading,
+  passportOptionsError,
+  equipmentObservation,
   lines,
   media,
   repairCompletionMode,
@@ -146,6 +161,9 @@ export function InventoryInspectionWorkspace({
   coverMediaId,
   message,
   onCommentChange,
+  onPassportObservationChange,
+  onEditFurniture,
+  onRetryPassportOptions,
   onLinesChange,
   onMediaChange,
   onMediaReadyChange,
@@ -164,7 +182,7 @@ export function InventoryInspectionWorkspace({
   return (
     <RepairEstimateWorkspaceLayout
       ariaLabel="Осмотр бытовки при инвентаризации"
-      informationDescription="Паспортные данные и причина зафиксированы; комментарий можно дополнить."
+      informationDescription="Проверьте результат осмотра и паспорт бытовки."
       catalogDescription="Добавьте работы и материалы, которые нужно передать в ремонт."
       message={
         message || catalogMessage ? (
@@ -178,6 +196,7 @@ export function InventoryInspectionWorkspace({
           accessToken={accessToken}
           owner={inventoryFindingMediaOwner(findingId, warehouseId)}
           readOnly={readOnly}
+          title="Фотографии осмотра"
           maxItems={20}
           authoritativeReadyReferences={media}
           coverMediaId={coverMediaId}
@@ -188,71 +207,24 @@ export function InventoryInspectionWorkspace({
         />
       }
       information={
-        <FieldGroup className="gap-3">
-          <Field orientation="horizontal">
-            <FieldLabel htmlFor="inventory-inspection-number" className="w-32">
-              Бытовка
-            </FieldLabel>
-            <Input
-              id="inventory-inspection-number"
-              value={cabinNumber}
-              readOnly
-            />
-          </Field>
-          <Field orientation="horizontal">
-            <FieldLabel htmlFor="inventory-inspection-reason" className="w-32">
-              Причина
-            </FieldLabel>
-            <Input
-              id="inventory-inspection-reason"
-              value="Инвентаризация"
-              readOnly
-            />
-          </Field>
-          <Field orientation="horizontal">
-            <FieldLabel htmlFor="inventory-inspection-date" className="w-32">
-              Дата
-            </FieldLabel>
-            <Input
-              id="inventory-inspection-date"
-              type="date"
-              value={businessDate}
-              readOnly
-            />
-          </Field>
-          <Field orientation="horizontal">
-            <FieldLabel htmlFor="inventory-inspection-status" className="w-32">
-              Статус
-            </FieldLabel>
-            <Input
-              id="inventory-inspection-status"
-              value={statusLabel || "—"}
-              readOnly
-            />
-          </Field>
-          <Field orientation="horizontal">
-            <FieldLabel htmlFor="inventory-inspection-tenant" className="w-32">
-              Арендатор
-            </FieldLabel>
-            <Input
-              id="inventory-inspection-tenant"
-              value={tenant?.trim() || "—"}
-              readOnly
-            />
-          </Field>
-          <Field data-disabled={readOnly}>
-            <FieldLabel htmlFor="inventory-inspection-comment">
-              Комментарий
-            </FieldLabel>
-            <Textarea
-              id="inventory-inspection-comment"
-              className="field-sizing-fixed h-28 min-h-28 resize-none"
-              disabled={readOnly}
-              value={comment}
-              onChange={(event) => onCommentChange(event.target.value)}
-            />
-          </Field>
-        </FieldGroup>
+        <InventoryInspectionDetails
+          cabinNumber={cabinNumber}
+          statusLabel={statusLabel}
+          tenant={tenant}
+          businessDate={businessDate}
+          comment={comment}
+          passportObservation={passportObservation}
+          passportSnapshot={passportSnapshot}
+          passportOptions={passportOptions}
+          passportOptionsLoading={passportOptionsLoading}
+          passportOptionsError={passportOptionsError}
+          equipmentObservation={equipmentObservation}
+          readOnly={readOnly}
+          onCommentChange={onCommentChange}
+          onPassportObservationChange={onPassportObservationChange}
+          onEditFurniture={onEditFurniture}
+          onRetryPassportOptions={onRetryPassportOptions}
+        />
       }
       estimate={
         readOnly ? (

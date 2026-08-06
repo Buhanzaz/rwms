@@ -288,30 +288,31 @@ class BackgroundUploadWorker(
         operation: BackgroundUploadOperation,
         command: InventoryUploadCommand,
     ) {
-        val media = operation.aggregateReferences(command.existingMedia)
-        val coverMediaId = operation.coverMediaId() ?: command.existingCoverMediaId
-        if (!command.inspectionSaved) {
+        val preparedCommand = prepareInventoryExistingMediaRotations(operation, command)
+        val media = operation.aggregateReferences(preparedCommand.existingMedia)
+        val coverMediaId = operation.coverMediaId() ?: preparedCommand.existingCoverMediaId
+        if (!preparedCommand.inspectionSaved) {
             updateStage(operation.id, "Сохранение инвентаризации")
             try {
                 retryInventoryCommitAfterMediaReady {
-                    val currentSession = backend.api.inventory(command.inventoryId)
+                    val currentSession = backend.api.inventory(preparedCommand.inventoryId)
                     backend.api.saveInventoryInspection(
-                        inventoryId = command.inventoryId,
-                        findingId = command.findingId,
+                        inventoryId = preparedCommand.inventoryId,
+                        findingId = preparedCommand.findingId,
                         request = SaveInspectionRequest(
                             expectedSessionRevision = currentSession.sessionRevision,
-                            expectedFindingRevision = command.expectedFindingRevision,
-                            inspection = command.inspection,
-                            comment = command.comment,
-                            passportObservation = command.passportObservation,
-                            equipmentObservation = command.equipmentObservation,
+                            expectedFindingRevision = preparedCommand.expectedFindingRevision,
+                            inspection = preparedCommand.inspection,
+                            comment = preparedCommand.comment,
+                            passportObservation = preparedCommand.passportObservation,
+                            equipmentObservation = preparedCommand.equipmentObservation,
                             media = media,
                             coverMediaId = coverMediaId,
-                            planSelection = command.planSelection?.withUploadedMedia(
+                            planSelection = preparedCommand.planSelection?.withUploadedMedia(
                                 coverMediaId,
                                 operation.lineReferences(),
-                                command.planLineIds,
-                                command.planWorkLineIds.toSet(),
+                                preparedCommand.planLineIds,
+                                preparedCommand.planWorkLineIds.toSet(),
                             ),
                         ),
                     )
@@ -319,7 +320,7 @@ class BackgroundUploadWorker(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Throwable) {
-                if (!inventoryInspectionAlreadySaved(command, media, coverMediaId)) throw failure
+                if (!inventoryInspectionAlreadySaved(preparedCommand, media, coverMediaId)) throw failure
             }
             store.update(operation.id) { current ->
                 current.copy(
@@ -328,7 +329,7 @@ class BackgroundUploadWorker(
                 )
             }
         }
-        command.furnitureMove?.let { furniture ->
+        preparedCommand.furnitureMove?.let { furniture ->
             updateStage(operation.id, "Создание задания по мебели")
             backend.api.createCabinFurnitureTask(
                 rentalItemId = furniture.rentalItemId,
@@ -340,6 +341,69 @@ class BackgroundUploadWorker(
                 ),
             )
         }
+    }
+
+    /**
+     * A previous photo keeps its media id, while media-service advances its generation after a
+     * rotation. Persist that new generation in the durable outbox before saving the finding so a
+     * process restart cannot re-upload the image or reintroduce a stale media reference.
+     */
+    private suspend fun prepareInventoryExistingMediaRotations(
+        operation: BackgroundUploadOperation,
+        command: InventoryUploadCommand,
+    ): InventoryUploadCommand {
+        if (command.inspectionSaved || command.existingMediaRotations.isEmpty()) return command
+        updateStage(operation.id, "Обновление сохранённых фотографий")
+        val rotatedMedia = rotateInventoryExistingMedia(command)
+        val prepared = command.copy(
+            existingMedia = rotatedMedia,
+            existingMediaRotations = emptyList(),
+        )
+        store.update(operation.id) { current ->
+            current.copy(
+                updatedAtEpochMillis = System.currentTimeMillis(),
+                inventory = current.inventory?.copy(
+                    existingMedia = rotatedMedia,
+                    existingMediaRotations = emptyList(),
+                ),
+            )
+        }
+        return prepared
+    }
+
+    private suspend fun rotateInventoryExistingMedia(
+        command: InventoryUploadCommand,
+    ): List<MediaReferenceDto> {
+        val requestedRotations = command.existingMediaRotations
+        require(requestedRotations.map { request -> request.reference.mediaId }.distinct().size ==
+            requestedRotations.size) {
+            "Для одной фотографии инвентаризации задано несколько поворотов"
+        }
+        val requestedByMediaId = requestedRotations.associateBy { request -> request.reference.mediaId }
+        val existingByMediaId = command.existingMedia.associateBy(MediaReferenceDto::mediaId)
+        require(requestedByMediaId.keys.all(existingByMediaId::containsKey)) {
+            "Поворот запрошен для фотографии, которой нет в проверке"
+        }
+        val session = backend.api.inventory(command.inventoryId)
+        val owner = MediaOwner(
+            ownerType = "INVENTORY_FINDING",
+            ownerId = command.findingId,
+            warehouseId = session.warehouseId,
+            context = "INSPECTION",
+        )
+        val assetsByMediaId = backend.api.ownerMedia(
+            ownerType = owner.ownerType,
+            ownerId = owner.ownerId,
+            warehouseId = owner.warehouseId,
+            context = owner.context,
+        ).items.associateBy(MediaAssetDto::id)
+        return command.existingMedia.map { reference ->
+            val requested = requestedByMediaId[reference.mediaId] ?: return@map reference
+            val asset = requireNotNull(assetsByMediaId[reference.mediaId]) {
+                "Не удалось найти сохранённую фотографию для поворота"
+            }
+            uploader.rotate(owner, asset, requested.rotationDegrees)
+        }.distinctBy(MediaReferenceDto::mediaId)
     }
 
     private suspend fun finalizeMaintenance(

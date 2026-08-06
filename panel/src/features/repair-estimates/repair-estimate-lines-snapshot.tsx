@@ -54,6 +54,12 @@ export function RepairEstimateLinesSnapshot({
                       : "Добавлено в доработке"}
                   </Badge>
                 ) : null}
+                {line.lineType === "WORK" &&
+                (line.maintenanceMediaReferences?.length ?? 0) > 0 ? (
+                  <Badge variant="outline">
+                    Фото: {line.maintenanceMediaReferences!.length}
+                  </Badge>
+                ) : null}
               </CardTitle>
             </CardHeader>
             <CardContent>

@@ -32,8 +32,8 @@ android {
         applicationId = "dev.buhanzaz.rwms.manager"
         minSdk = 23
         targetSdk = 36
-        versionCode = 36
-        versionName = "0.3.33"
+        versionCode = 39
+        versionName = "0.3.36"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["appAuthRedirectScheme"] = "rwms-manager-auth"

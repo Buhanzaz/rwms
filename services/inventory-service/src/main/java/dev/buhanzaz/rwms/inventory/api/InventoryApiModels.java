@@ -393,7 +393,8 @@ public final class InventoryApiModels {
       String quantity,
       long unitPriceMinor,
       String normativeMinutes,
-      String groupComment) {}
+      String groupComment,
+      List<MediaReference> mediaReferences) {}
 
   public record FrozenPlanStageView(
       UUID id,

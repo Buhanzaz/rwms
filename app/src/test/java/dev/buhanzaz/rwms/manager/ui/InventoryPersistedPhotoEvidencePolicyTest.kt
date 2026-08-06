@@ -40,6 +40,80 @@ class InventoryPersistedPhotoEvidencePolicyTest {
     }
 
     @Test
+    fun `cached saved photo can be selected as title without being uploaded again`() {
+        val persisted = MediaReferenceDto("persisted-media", 3)
+        val cachedUri = "file://cache/inventory/persisted-media.jpg"
+        val editor = supplementEditor(media = listOf(persisted)).copy(
+            photoUris = listOf(cachedUri),
+            coverPhotoUri = cachedUri,
+            persistedPhotoMedia = mapOf(cachedUri to persisted),
+        )
+
+        assertThat(editor.inventoryPhotoValidationError()).isNull()
+        assertThat(editor.inventoryPhotoUrisForUpload()).containsExactly(cachedUri)
+        assertThat(editor.pendingInventoryPhotoUris()).isEmpty()
+        assertThat(editor.coverPhotoUri?.let(editor.persistedPhotoMedia::get)).isEqualTo(persisted)
+    }
+
+    @Test
+    fun `only new photo is queued when a saved cached photo is kept`() {
+        val persisted = MediaReferenceDto("persisted-media", 3)
+        val cachedUri = "file://cache/inventory/persisted-media.jpg"
+        val newUri = "content://camera/new-photo"
+        val editor = supplementEditor(media = listOf(persisted)).copy(
+            photoUris = listOf(cachedUri, newUri),
+            coverPhotoUri = cachedUri,
+            persistedPhotoMedia = mapOf(cachedUri to persisted),
+        )
+
+        assertThat(editor.pendingInventoryPhotoUris()).containsExactly(newUri)
+    }
+
+    @Test
+    fun `removing visible saved photo excludes only that reference and keeps unavailable evidence`() {
+        val visible = MediaReferenceDto("visible-media", 3)
+        val unavailable = MediaReferenceDto("unavailable-media", 4)
+        val cachedUri = "file://cache/inventory/visible-media.jpg"
+        val editor = supplementEditor(media = listOf(visible, unavailable)).copy(
+            photoUris = listOf(cachedUri),
+            coverPhotoUri = cachedUri,
+            persistedPhotoMedia = mapOf(cachedUri to visible),
+        )
+
+        val afterRemoval = editor.removeInventoryPhoto(cachedUri)
+
+        assertThat(afterRemoval.photoUris).isEmpty()
+        assertThat(afterRemoval.coverPhotoUri).isNull()
+        assertThat(afterRemoval.removedPersistedMediaIds).containsExactly(visible.mediaId)
+        assertThat(afterRemoval.persistedInventoryMediaReferences()).containsExactly(unavailable)
+        assertThat(
+            inventoryExistingMediaReferences(
+                persisted = afterRemoval.persistedInventoryMediaReferences(),
+                uploadedByUri = afterRemoval.uploadedPhotoMedia,
+            ),
+        ).containsExactly(unavailable)
+    }
+
+    @Test
+    fun `rotating cached saved photo preserves its reference and previews only the local delta`() {
+        val persisted = MediaReferenceDto("persisted-media", 3)
+        val cachedUri = "file://cache/inventory/persisted-media.jpg"
+        val editor = supplementEditor(media = listOf(persisted)).copy(
+            photoUris = listOf(cachedUri),
+            coverPhotoUri = cachedUri,
+            persistedPhotoMedia = mapOf(cachedUri to persisted),
+            persistedPhotoRotationDegrees = mapOf(cachedUri to 90),
+        )
+
+        val rotated = editor.rotateInventoryPhoto(cachedUri)
+        val rotation = rotated.persistedInventoryPhotoRotations().single()
+
+        assertThat(rotation.reference).isEqualTo(persisted)
+        assertThat(rotation.rotationDegrees).isEqualTo(180)
+        assertThat(rotated.inventoryPhotoPreviewRotation(cachedUri)).isEqualTo(90)
+    }
+
+    @Test
     fun `persisted and already uploaded media are retained once by media id`() {
         val persisted = MediaReferenceDto("persisted-media", 3)
         val duplicateUpload = MediaReferenceDto("persisted-media", 4)

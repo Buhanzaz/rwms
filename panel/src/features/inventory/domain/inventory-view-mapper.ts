@@ -5,6 +5,7 @@ import type {
   InventoryFrozenPlanLine,
   InventoryFrozenStatistics,
   InventoryMembershipMovement,
+  InventoryObservation,
   InventoryRegistryReview,
   InventorySessionDetail,
   InventorySessionSummary,
@@ -31,6 +32,7 @@ const rentalItemStatuses = new Set<RentalItemStatus>([
   "REPAIR",
   "WAITING_REPAIR_CHECK",
   "WRITTEN_OFF",
+  "LOST",
   "CAPITAL_REPAIR",
   "AFTER_RENT",
   "WAITING_ESTIMATE_CONFIRMATION",
@@ -115,7 +117,27 @@ function viewLine(line: InventoryFrozenPlanLine): RepairEstimateLineDto {
           characteristic: null,
         }
       : null,
+    maintenanceMediaReferences:
+      line.lineType === "WORK"
+        ? line.mediaReferences.map((reference) => ({ ...reference }))
+        : [],
   }
+}
+
+function viewObservation(
+  observation: InventoryObservation
+): InventoryObservation {
+  if (observation.presence === "ABSENT") {
+    return { presence: "ABSENT", value: null }
+  }
+  if (observation.presence === "EXPLICIT_EMPTY") {
+    return Array.isArray(observation.value)
+      ? { presence: "EXPLICIT_EMPTY", value: [] }
+      : { presence: "EXPLICIT_EMPTY", value: {} }
+  }
+  return Array.isArray(observation.value)
+    ? { presence: "PRESENT", value: [...observation.value] }
+    : { presence: "PRESENT", value: { ...observation.value } }
 }
 
 function viewPlans(
@@ -218,6 +240,8 @@ export function toInventoryFindingView(
         ? []
         : finding.conflicts.map((conflict) => ({ ...conflict })),
     comment: finding.comment,
+    passportObservation: viewObservation(finding.passportObservation),
+    equipmentObservation: viewObservation(finding.equipmentObservation),
     media: finding.media.map((reference) => ({ ...reference })),
     coverMediaId:
       finding.coverMediaId ?? finding.frozenPlan?.coverMediaId ?? null,

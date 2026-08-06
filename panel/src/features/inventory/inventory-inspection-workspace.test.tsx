@@ -77,6 +77,12 @@ function renderWorkspace(
       tenant={null}
       businessDate="2026-07-29"
       comment=""
+      passportObservation={{ presence: "ABSENT", value: null }}
+      passportSnapshot={null}
+      passportOptions={null}
+      passportOptionsLoading={false}
+      passportOptionsError={null}
+      equipmentObservation={{ presence: "ABSENT", value: null }}
       lines={[]}
       media={media}
       repairCompletionMode={null}
@@ -85,6 +91,9 @@ function renderWorkspace(
       readOnly={readOnly}
       coverMediaId={null}
       onCommentChange={vi.fn()}
+      onPassportObservationChange={vi.fn()}
+      onEditFurniture={vi.fn()}
+      onRetryPassportOptions={vi.fn()}
       onLinesChange={vi.fn()}
       onMediaChange={vi.fn()}
       onMediaReadyChange={vi.fn()}
