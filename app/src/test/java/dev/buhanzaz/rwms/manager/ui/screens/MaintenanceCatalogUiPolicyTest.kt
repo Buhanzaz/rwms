@@ -190,6 +190,116 @@ class MaintenanceCatalogUiPolicyTest {
     }
 
     @Test
+    fun `adding a work continues through its active follow-up without losing the branch`() {
+        val windows = node(id = "windows", type = "CATEGORY", mainMenu = true)
+        val pvcWindows = node(id = "pvc-windows", type = "SUBCATEGORY", parentId = windows.id)
+        val dismantling = node(id = "dismantling", type = "WORK", parentId = pvcWindows.id)
+        val installation = node(id = "installation", type = "WORK", parentId = pvcWindows.id)
+        val sealant = node(id = "sealant", type = "MATERIAL", parentId = pvcWindows.id)
+        val archivedInstallation = node(
+            id = "archived-installation",
+            type = "WORK",
+            parentId = pvcWindows.id,
+            active = false,
+        )
+        val catalog = maintenanceCatalogIndex(
+            listOf(windows, pvcWindows, dismantling, installation, sealant, archivedInstallation),
+            listOf(
+                link("dismantling-installation", dismantling.id, installation.id, "FOLLOW_UP"),
+                link("dismantling-sealant", dismantling.id, sealant.id, "FOLLOW_UP"),
+                link(
+                    "dismantling-archived-installation",
+                    dismantling.id,
+                    archivedInstallation.id,
+                    "FOLLOW_UP",
+                ),
+            ),
+        )
+
+        val continuedPath = maintenanceCatalogPathAfterAdd(
+            catalog = catalog,
+            mode = MaintenanceCatalogMode.LINKED_SET,
+            path = listOf(windows.id, pvcWindows.id),
+            addedNodeId = dismantling.id,
+        )
+
+        assertThat(continuedPath).containsExactly(windows.id, pvcWindows.id, dismantling.id).inOrder()
+        assertThat(
+            maintenanceCatalogVisibleNodes(
+                catalog = catalog,
+                mode = MaintenanceCatalogMode.LINKED_SET,
+                path = continuedPath,
+            ).map(CatalogNodeDto::id),
+        ).containsExactly(installation.id, sealant.id).inOrder()
+    }
+
+    @Test
+    fun `adding a material follows an active next material but ignores inactive nodes`() {
+        val root = node(id = "root", type = "CATEGORY", mainMenu = true)
+        val foam = node(id = "foam", type = "MATERIAL", parentId = root.id)
+        val sealant = node(id = "sealant", type = "MATERIAL", parentId = root.id)
+        val archivedSealant = node(
+            id = "archived-sealant",
+            type = "MATERIAL",
+            parentId = root.id,
+            active = false,
+        )
+        val catalog = maintenanceCatalogIndex(
+            listOf(root, foam, sealant, archivedSealant),
+            listOf(
+                link("foam-sealant", foam.id, sealant.id, "FOLLOW_UP"),
+                link("foam-archived", foam.id, archivedSealant.id, "FOLLOW_UP"),
+            ),
+        )
+
+        val continuedPath = maintenanceCatalogPathAfterAdd(
+            catalog = catalog,
+            mode = MaintenanceCatalogMode.MATERIALS_ONLY,
+            path = listOf(root.id),
+            addedNodeId = foam.id,
+        )
+
+        assertThat(continuedPath).containsExactly(root.id, foam.id).inOrder()
+        assertThat(
+            maintenanceCatalogVisibleNodes(
+                catalog = catalog,
+                mode = MaintenanceCatalogMode.MATERIALS_ONLY,
+                path = continuedPath,
+            ).map(CatalogNodeDto::id),
+        ).containsExactly(sealant.id)
+    }
+
+    @Test
+    fun `catalog cycle does not add duplicate navigation nodes after an add`() {
+        val root = node(id = "root", type = "CATEGORY", mainMenu = true)
+        val dismantling = node(id = "dismantling", type = "WORK", parentId = root.id)
+        val installation = node(id = "installation", type = "WORK", parentId = root.id)
+        val catalog = maintenanceCatalogIndex(
+            listOf(root, dismantling, installation),
+            listOf(
+                link("dismantling-installation", dismantling.id, installation.id, "FOLLOW_UP"),
+                link("installation-dismantling", installation.id, dismantling.id, "FOLLOW_UP"),
+            ),
+        )
+        val afterDismantling = maintenanceCatalogPathAfterAdd(
+            catalog = catalog,
+            mode = MaintenanceCatalogMode.LINKED_SET,
+            path = listOf(root.id),
+            addedNodeId = dismantling.id,
+        )
+
+        val afterInstallation = maintenanceCatalogPathAfterAdd(
+            catalog = catalog,
+            mode = MaintenanceCatalogMode.LINKED_SET,
+            path = afterDismantling,
+            addedNodeId = installation.id,
+        )
+
+        assertThat(afterDismantling).containsExactly(root.id, dismantling.id).inOrder()
+        assertThat(afterInstallation).containsExactly(root.id, dismantling.id).inOrder()
+    }
+
+    @Test
     fun `active root category remains visible when only its child positions enter estimates`() {
         val category = node(
             id = "standard-options",
@@ -225,12 +335,13 @@ class MaintenanceCatalogUiPolicyTest {
         mainMenu: Boolean = false,
         furnitureCategory: Boolean = false,
         furnitureEquipment: FurnitureEquipmentReferenceDto? = null,
+        active: Boolean = true,
     ) = CatalogNodeDto(
         id = id,
         catalogVersionId = "catalog-1",
         nodeType = type,
         name = id,
-        active = true,
+        active = active,
         parentNodeId = parentId,
         furnitureCategory = furnitureCategory,
         furnitureEquipment = furnitureEquipment,

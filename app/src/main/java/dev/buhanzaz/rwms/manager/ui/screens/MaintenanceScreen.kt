@@ -954,6 +954,7 @@ internal fun MaintenanceCatalogStep(
     fun openAdd(
         nodes: List<CatalogNodeDto>,
         quantityNode: CatalogNodeDto,
+        navigationNode: CatalogNodeDto = quantityNode,
     ) {
         if (nodes.none(CatalogNodeDto::isOperationalMaintenanceCatalogNode)) {
             catalogMessage = "Эта позиция не настроена для добавления в смету или ремонт."
@@ -962,6 +963,7 @@ internal fun MaintenanceCatalogStep(
         addContext = MaintenanceCatalogAddContext(
             nodes = nodes.distinctBy(CatalogNodeDto::id),
             quantityNode = quantityNode,
+            navigationNodeId = navigationNode.id,
         )
     }
 
@@ -984,7 +986,16 @@ internal fun MaintenanceCatalogStep(
         ) return
         addContext = null
         existingWorkContext = null
-        resetNavigation()
+        path = maintenanceCatalogPathAfterAdd(
+            catalog = catalog,
+            mode = mode,
+            path = path,
+            addedNodeId = context.navigationNodeId,
+            excludeFurniture = excludeFurniture,
+        )
+        pendingWorkId = null
+        pendingMaterialId = null
+        page = 0
         catalogMessage = "Позиция добавлена в выбранные строки."
     }
 
@@ -1034,6 +1045,7 @@ internal fun MaintenanceCatalogStep(
                     openAdd(
                         nodes = listOf(pendingWork, pendingMaterial),
                         quantityNode = pendingMaterial,
+                        navigationNode = node,
                     )
                 }
             }
@@ -1790,6 +1802,7 @@ private fun MaintenanceCatalogBreadcrumbs(
 private data class MaintenanceCatalogAddContext(
     val nodes: List<CatalogNodeDto>,
     val quantityNode: CatalogNodeDto,
+    val navigationNodeId: String,
 )
 
 private data class MaintenanceCatalogExistingWorkContext(
@@ -2226,6 +2239,30 @@ internal fun maintenanceCatalogVisibleNodes(
         }
         .distinctBy(CatalogNodeDto::id)
         .sortedWith(catalogNodeOrder)
+}
+
+/**
+ * Adding a catalog line is not a navigation action. The current branch stays open and, when the
+ * added node has another visible step, the catalog continues from that step. A path never gains a
+ * duplicate node: a cycle therefore leaves the current context intact instead of growing forever.
+ */
+internal fun maintenanceCatalogPathAfterAdd(
+    catalog: MaintenanceCatalogIndex,
+    mode: MaintenanceCatalogMode,
+    path: List<String>,
+    addedNodeId: String,
+    excludeFurniture: Boolean = false,
+): List<String> {
+    if (addedNodeId !in catalog.nodesById || addedNodeId in path) return path
+
+    val continuedPath = path + addedNodeId
+    val hasNewVisibleStep = maintenanceCatalogVisibleNodes(
+        catalog = catalog,
+        mode = mode,
+        path = continuedPath,
+        excludeFurniture = excludeFurniture,
+    ).any { node -> node.id !in continuedPath }
+    return if (hasNewVisibleStep) continuedPath else path
 }
 
 /**
