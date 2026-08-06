@@ -182,6 +182,63 @@ afterEach(() => {
 })
 
 describe("manual property disposition", () => {
+  it("explains that cabin furniture cannot be written off before it reaches stock", async () => {
+    const user = userEvent.setup()
+    api.listCabins.mockResolvedValue({ content: [] })
+    api.getEquipment.mockResolvedValue([cabinEquipment()])
+    renderDialog()
+
+    await user.click(screen.getByText("Мебель"))
+
+    expect(
+      await screen.findByText(
+        "На складе нет свободного оборудования для списания. Сначала переместите мебель из бытовки на склад."
+      )
+    ).toBeTruthy()
+    expect(
+      (
+        screen.getByRole("combobox", {
+          name: "Имущество со склада",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true)
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Отправить администратору",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true)
+  })
+
+  it("does not offer a lost cabin for another disposition", async () => {
+    const user = userEvent.setup()
+    api.getEquipment.mockResolvedValue([])
+    api.listCabins.mockResolvedValue({
+      content: [
+        cabin([]),
+        {
+          ...cabin([]),
+          id: "55555555-5555-4555-8555-555555555555",
+          number: "БЫТ-2",
+          status: "LOST",
+        },
+      ],
+    })
+    renderDialog()
+
+    await user.click(
+      await screen.findByRole("combobox", { name: "Имущество со склада" })
+    )
+
+    expect(
+      await screen.findByRole("option", { name: "БЫТ-1 — Стандарт" })
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole("option", { name: "БЫТ-2 — Стандарт" })
+    ).toBeNull()
+  })
+
   it("sends null contentsPlan and no choice UI for an empty cabin", async () => {
     const user = userEvent.setup()
     api.getEquipment.mockResolvedValue([])

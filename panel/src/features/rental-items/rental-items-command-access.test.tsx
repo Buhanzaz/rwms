@@ -45,6 +45,10 @@ const mediaApi = vi.hoisted(() => ({
   rotate: vi.fn(),
 }))
 
+const propertyDispositionDialog = vi.hoisted(() => ({
+  render: vi.fn(),
+}))
+
 vi.mock("@/features/auth/use-auth", () => ({
   useAuth: () => ({
     status: "authenticated",
@@ -110,6 +114,22 @@ vi.mock("@/features/media/media-service", () => ({
     context: "WAREHOUSE",
   }),
   createHttpMediaClient: () => mediaApi,
+}))
+
+vi.mock("@/features/write-offs/property-disposition-create-dialog", () => ({
+  PropertyDispositionCreateDialog: (props: {
+    accessToken: string | null
+    warehouseId: string
+    disposition: string
+    open: boolean
+  }) => {
+    propertyDispositionDialog.render(props)
+    return props.open ? (
+      <div role="dialog" aria-label="Заявка на списание бытовки">
+        {props.disposition}:{props.warehouseId}
+      </div>
+    ) : null
+  },
 }))
 
 import { RentalItemDetailPage } from "@/features/rental-items/rental-item-detail-page"
@@ -233,6 +253,11 @@ beforeEach(() => {
       { id: "finishing-dvp", name: "ДВП" },
       { id: "finishing-pvh", name: "ПВХ" },
     ],
+    categories: [
+      { id: "category-new", name: "Новая" },
+      { id: "category-used", name: "Обычная" },
+      { id: "category-engineer", name: "ИТР" },
+    ],
     characteristics: [
       { id: "characteristic-window", name: "Пластиковое окно" },
     ],
@@ -274,6 +299,7 @@ beforeEach(() => {
     uploadedObject: {},
     asset: {},
   })
+  propertyDispositionDialog.render.mockClear()
 })
 
 afterEach(() => {
@@ -305,7 +331,7 @@ describe("rental item command access", () => {
     expect(container.querySelector("[data-grid-format]")).toBeNull()
   })
 
-  it("keeps the registry readable but hides create from VIEW access", async () => {
+  it("keeps the cabin write-off action visible but disabled from VIEW access", async () => {
     renderWithQuery(<RentalItemsPage />)
 
     await waitFor(() =>
@@ -314,7 +340,43 @@ describe("rental item command access", () => {
     expect(
       screen.queryByRole("button", { name: "Добавить новую бытовку" })
     ).toBeNull()
+    expect(
+      screen
+        .getByRole("button", { name: "Списать бытовку" })
+        .hasAttribute("disabled")
+    ).toBe(true)
+    expect(
+      screen.getByText(
+        "Заявку на списание может создать управляющий склада или администратор с доступом MANAGE."
+      )
+    ).toBeTruthy()
     expect(assetApi.createAssetRentalItem).not.toHaveBeenCalled()
+  })
+
+  it("opens the cabin write-off proposal for a warehouse manager", async () => {
+    authState.level = "MANAGE"
+    const user = userEvent.setup()
+    renderWithQuery(<RentalItemsPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Списать бытовку" })
+    )
+
+    expect(
+      (
+        await screen.findByRole("dialog", {
+          name: "Заявка на списание бытовки",
+        })
+      ).textContent
+    ).toBe(`WRITE_OFF:${WAREHOUSE_ID}`)
+    expect(propertyDispositionDialog.render).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accessToken: "asset-token",
+        warehouseId: WAREHOUSE_ID,
+        disposition: "WRITE_OFF",
+        open: true,
+      })
+    )
   })
 
   it("removes the warehouse pagination footer when the registry is fully loaded", async () => {

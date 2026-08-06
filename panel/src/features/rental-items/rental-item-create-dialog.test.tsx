@@ -95,6 +95,7 @@ beforeEach(() => {
     rentalTypes: [{ id: TYPE_ID, name: "БК-1" }],
     dimensions: [{ id: DIMENSION_ID, name: "2.4x6" }],
     finishings: [{ id: FINISHING_ID, name: "ДВП" }],
+    categories: [{ id: "category-new", name: "Новая" }],
     characteristics: [{ id: CHARACTERISTIC_ID, name: "Пластиковое окно" }],
     typeDimensions: [
       { typeId: TYPE_ID, dimensionId: DIMENSION_ID, sortOrder: 0 },

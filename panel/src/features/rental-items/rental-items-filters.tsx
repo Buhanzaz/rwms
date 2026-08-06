@@ -31,6 +31,7 @@ const statusOptionClassName: Record<string, string> = {
   "В ремонте": "bg-[var(--status-repair-bg)] text-[var(--status-repair-fg)]",
   Списана:
     "bg-[var(--status-written-off-bg)] text-[var(--status-written-off-fg)]",
+  Утеряна: "bg-destructive/15 text-destructive",
   Капремонт:
     "bg-[var(--status-capital-repair-bg)] text-[var(--status-capital-repair-fg)]",
   "Продажа Б/У": "bg-[var(--status-sale-bg)] text-[var(--status-sale-fg)]",
