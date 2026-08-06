@@ -121,12 +121,21 @@ from logistics, replays task/lease/status effects with stable derived keys and
 original expected versions after a lost local commit, and revalidates the full
 transfer-line repair chain before finalization.
 
+The repair catalog is a directed navigation graph, not a one-shot picker.
+After an estimator adds a work, material or location, both clients continue
+from that selected terminal node only when it has an active, usable outgoing
+catalog step. Without such a step they retain the current branch. A reverse
+edge is never followed automatically, so a cyclic catalog cannot reset the
+user to the root or grow navigation indefinitely.
+
 Evidence: [`services/maintenance-service/`](../../services/maintenance-service/),
 [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml),
 [`PropertyDispositionApplicationService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/disposition/application/PropertyDispositionApplicationService.java),
 [`FurnitureEquipmentLinkStore.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/FurnitureEquipmentLinkStore.java),
 [`MaintenanceApplicationService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceApplicationService.java),
-[`V38__durable_furniture_equipment_links.sql`](../../services/maintenance-service/src/main/resources/db/migration/V38__durable_furniture_equipment_links.sql).
+[`V38__durable_furniture_equipment_links.sql`](../../services/maintenance-service/src/main/resources/db/migration/V38__durable_furniture_equipment_links.sql),
+[`repair-estimate-catalog-picker.tsx`](../../panel/src/features/repair-estimates/repair-estimate-catalog-picker.tsx),
+[`MaintenanceScreen.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/screens/MaintenanceScreen.kt).
 
 ### Inventory
 
@@ -148,8 +157,10 @@ session and does not publish operational tasks.
 
 Membership is live while a session is active. An arrival at the inventoried
 warehouse becomes an expected uninspected item; a departure is excluded even
-if it had already been inspected. A later return requires a new inspection,
-while the prior evidence remains historical.
+if it had already been inspected. A terminal asset fact for either
+`WRITTEN_OFF` or `LOST` is a departure, so the cabin leaves the active
+population while prior evidence remains historical. A later return requires a
+new inspection.
 
 Inspection saves evidence and a frozen proposal only. Repair, movement and
 task-board effects are not created before inventory completion. Completion is
@@ -158,6 +169,26 @@ Existing future work is explicitly replaced or manually merged; work already
 started is preserved and overlapping works and materials are subtracted before
 the remaining successor is queued. A cabin that is `AFTER_RENT` and awaiting
 inspection produces a draft estimate for its remarks, not a repair task.
+
+Inspection evidence keeps general photographs separate from photographs of a
+specific work line: work-line references belong to the frozen plan and are not
+copied into the finding's cover-photo collection. Passport facts and furniture
+are inspection observations, not direct panel mutations of asset-service. The
+first save explicitly records either that furniture is absent or the observed
+catalog quantities; only the post-cabin furniture reconciliation applies those
+facts to the inventory result.
+
+When an Android manager reopens an already saved finding, they explicitly
+choose whether to supplement it or replace it. Supplement starts from the
+previous inspection's passport, furniture observation, photos, comment and
+frozen plan. Replacement starts a new active revision: it does not carry prior
+comment, photos, work/material lines or furniture observation, requires a new
+photo and furniture answer, and uses the current registry passport and contents
+only as neutral input values. Before a repeat mode becomes editable, Android
+requires a fresh inventory read; a cached/offline snapshot is not allowed to
+produce a version-fenced repeat command. A first, not-yet-saved inspection
+retains its normal offline-capable flow. Older revisions stay historical rather
+than being destructively deleted.
 
 The operational planning date is never earlier than both the session business
 date and the current date in the warehouse timezone. Automatic movement and
@@ -177,10 +208,15 @@ Evidence: [`services/inventory-service/`](../../services/inventory-service/),
 [`inventory-service.yaml`](../../contracts/openapi/inventory-service.yaml),
 [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml),
 [`InventoryApplicationService.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryApplicationService.java),
+[`InventoryReadProjectionIntegrationTest.java`](../../services/inventory-service/src/test/java/dev/buhanzaz/rwms/inventory/InventoryReadProjectionIntegrationTest.java),
 [`MaintenanceApplicationService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceApplicationService.java),
 [`InventoryAssetInboxProcessor.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/eventing/InventoryAssetInboxProcessor.java),
 [`InventoryScreens.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/screens/InventoryScreens.kt),
-[`inventory-pages.tsx`](../../panel/src/features/inventory/inventory-pages.tsx).
+[`InventoryEquipmentPolicy.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/InventoryEquipmentPolicy.kt),
+[`InventoryReinspectionPolicy.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/InventoryReinspectionPolicy.kt),
+[`inventory-pages.tsx`](../../panel/src/features/inventory/inventory-pages.tsx),
+[`inventory-view-mapper.ts`](../../panel/src/features/inventory/domain/inventory-view-mapper.ts),
+[`inventory-inspection-details.tsx`](../../panel/src/features/inventory/inventory-inspection-details.tsx).
 
 ### Logistics And Rental
 
