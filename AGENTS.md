@@ -390,6 +390,31 @@ OpenAPI family, Flyway directory, JPA aggregate and other high-conflict files.
 Every agent preserves concurrent changes, does not commit unless assigned and
 reports changed files, checks and remaining risks.
 
+### Shared-Worktree Handoff Protocol
+
+The shared worktree is not a scratch space. Every modified, deleted or
+untracked file that predates an agent's first write is protected work owned by
+the user or another task, even when its author is unknown.
+
+- Before assigning a coding lane or editing a file, the primary agent records
+  `git status --short` and identifies every dirty or untracked target in the
+  task plan/commentary. It must name the active owner of each touched file.
+- A child agent may not touch a protected file unless the primary explicitly
+  assigns that exact file and confirms its pre-existing changes are part of
+  the frozen input. Two agents may never edit the same file concurrently.
+- Before the first write to a protected file, save a local, task-scoped
+  pre-edit diff/content snapshot outside the repository. At handoff, compare
+  the final diff with that snapshot. A pre-existing hunk or untracked file
+  must not disappear, be reverted, be reformatted wholesale or be replaced
+  from `HEAD` unless the user explicitly authorized that exact loss.
+- If a requested edit overlaps an unknown protected hunk, stop and report the
+  conflict. Do not "resolve" it by regenerating the file, applying a broad
+  rewrite, choosing the current branch version, or silently dropping either
+  change.
+- A handoff report must distinguish files changed by that agent from files
+  that were already dirty, and must state whether the protected-diff check
+  passed. The primary performs this check before declaring the task complete.
+
 ## Local Runtime And VPS
 
 `compose.yaml` is for isolated local development and test dependencies. Do not
@@ -400,6 +425,29 @@ After a runtime code task, update only the affected running test services on
 the VPS when the environment is available, then inspect their status and logs.
 Documentation-only tasks require no service restart.
 
+### Publication Guard For Uncommitted Work
+
+Never treat a successful build, a new file timestamp, or an HTTP 200 as proof
+that the intended product change was published. A deployment can otherwise
+replace a working WIP screen with the older `HEAD` version.
+
+- Do not build or publish a panel bundle, APK, service image or other runtime
+  artifact from a clean checkout, another worktree, `HEAD`, or a generated
+  directory when the requested source change exists only as protected
+  uncommitted work in the shared worktree.
+- Before publishing, state the exact source revision and dirty-file scope that
+  the artifact must contain. If the worktree also contains unrelated WIP, stop
+  and ask whether to create an isolated, reviewed release scope; never publish
+  the entire mixed worktree by accident.
+- After publishing, verify the running artifact itself contains the requested
+  behavior (a focused UI/API check or an unambiguous release marker), not just
+  that the deploy command succeeded. For a panel, inspect the served bundle or
+  run the affected UI flow; for an APK, inspect its version/hash and install
+  the exact file tested.
+- If this verification fails, do not describe the change as deployed. Preserve
+  the source WIP, report the mismatch between source and runtime, and request
+  the smallest release decision needed to correct it.
+
 Never expose PostgreSQL, Kafka, MinIO administration, internal service ports or
 management endpoints publicly. Do not commit runtime credentials, private
 keys, generated keystores, logs or secrets.
@@ -408,7 +456,15 @@ keys, generated keystores, logs or secrets.
 
 - Preserve all user and concurrent changes; stage only intended files or
   hunks.
-- Never use destructive reset or checkout to clean the worktree.
+- Never use `git reset`, `git checkout`, `git restore`, `git clean`, `git
+  stash`, forced branch switching, broad code formatters or bulk rewrites to
+  clean, hide or reconcile a shared worktree. This includes commands limited
+  to one path: a dirty path is protected until the user explicitly identifies
+  the exact change to discard.
+- Never delete, rename, overwrite or recreate a dirty/untracked file merely
+  because it is unrelated, old, incomplete or conflicts with the task. The
+  user is the only default authority to discard another task's uncommitted
+  work.
 - Do not commit generated binaries, build output, browser artifacts, IDE state
   or secrets.
 - Do not commit, push or open a pull request unless the user asks.
