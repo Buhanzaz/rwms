@@ -9,6 +9,7 @@ import {
   createMaintenanceRework,
   getMaintenanceEstimate,
   getMaintenanceRepair,
+  listMaintenanceReturnEstimateSources,
   listMaintenanceAcceptance,
   listMaintenanceEstimates,
   listMaintenanceRepairs,
@@ -90,6 +91,7 @@ describe("maintenance lifecycle HTTP client", () => {
     vi.stubGlobal("fetch", fetchMock)
 
     await listMaintenanceEstimates("token", warehouseId, "DRAFT", rentalItemId)
+    await listMaintenanceReturnEstimateSources("token", warehouseId, repairId)
     await getMaintenanceEstimate("token", warehouseId, estimateId)
     await listMaintenanceRepairs("token", warehouseId, {
       executionState: "QUEUED",
@@ -114,10 +116,16 @@ describe("maintenance lifecycle HTTP client", () => {
     expect(String(fetchMock.mock.calls[0]![0])).toContain(
       `rentalItemId=${rentalItemId}`
     )
-    expect(String(fetchMock.mock.calls[2]![0])).toContain(
+    expect(String(fetchMock.mock.calls[1]![0])).toContain(
+      "/v1/estimates/return-sources"
+    )
+    expect(String(fetchMock.mock.calls[1]![0])).toContain(
+      `returnId=${repairId}`
+    )
+    expect(String(fetchMock.mock.calls[3]![0])).toContain(
       "executionState=QUEUED"
     )
-    expect(String(fetchMock.mock.calls[4]![0])).toContain("state=PENDING")
+    expect(String(fetchMock.mock.calls[5]![0])).toContain("state=PENDING")
   })
 
   it("preserves projected worker evidence in a repair stage", async () => {
@@ -225,6 +233,7 @@ describe("maintenance lifecycle HTTP client", () => {
       expectedVersion: 4,
       priority: 1,
       movementToRepair: true,
+      allowUnaccountedFurniture: false,
       logisticsPlanningMode: "FIXED_DATE",
       logisticsScheduledDate: "2026-08-12",
     })

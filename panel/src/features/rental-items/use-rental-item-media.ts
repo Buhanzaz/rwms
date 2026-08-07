@@ -170,7 +170,6 @@ export function useRentalItemMedia({
     [rentalItemId, warehouseId]
   )
   const queryKey = rentalItemMediaQueryKey(warehouseId, rentalItemId)
-  const rotateKeys = useRef(new Map<string, string>())
   const objectUrls = useRef(new Map<string, DisposableMediaObjectUrl>())
   const inFlight = useRef(new Map<string, Promise<void>>())
   const validAssetSignatures = useRef(new Map<string, string>())
@@ -468,42 +467,6 @@ export function useRentalItemMedia({
       })
     },
   })
-  const rotateMutation = useMutation({
-    mutationFn: async (asset: MediaAsset) => {
-      if (!accessToken) throw new Error("Для поворота требуется авторизация")
-      const rotationDegrees = ((asset.rotationDegrees + 90) % 360) as
-        0 | 90 | 180 | 270
-      const rotationSignature = `${asset.id}:${asset.version}:${rotationDegrees}`
-      const idempotencyKey =
-        rotateKeys.current.get(rotationSignature) ?? crypto.randomUUID()
-      rotateKeys.current.set(rotationSignature, idempotencyKey)
-      return retryOwnerProofOperation(() =>
-        mediaClient.rotate(
-          accessToken,
-          owner,
-          asset.id,
-          rotationDegrees,
-          asset.version,
-          idempotencyKey
-        )
-      )
-    },
-    onSuccess: async (_, asset) => {
-      rotateKeys.current.delete(
-        `${asset.id}:${asset.version}:${(asset.rotationDegrees + 90) % 360}`
-      )
-      await queryClient.invalidateQueries({ queryKey })
-      await queryClient.invalidateQueries({
-        queryKey: RENTAL_ITEM_DOSSIER_QUERY_KEY,
-      })
-      await queryClient.invalidateQueries({
-        queryKey: RENTAL_ITEM_COVERS_QUERY_KEY,
-      })
-      toast.success("Фотография повёрнута")
-    },
-    onError: (error) => toast.error(errorMessage(error)),
-  })
-
   const initialVariantsLoaded = readyImages.every((asset) =>
     initialVariants.every((requested) => {
       const variant = nearestVariant(asset, requested)
@@ -523,7 +486,6 @@ export function useRentalItemMedia({
     error: query.error,
     isLoading: query.isLoading || !initialVariantsLoaded,
     isUploading: uploadMutation.isPending,
-    isRotating: rotateMutation.isPending,
     photos,
     photoFolders,
     requestFolderPreview,
@@ -549,6 +511,5 @@ export function useRentalItemMedia({
         }))
       )
     },
-    rotate: (asset: MediaAsset) => rotateMutation.mutate(asset),
   }
 }

@@ -139,6 +139,7 @@ describe("panel estimate rental-items client", () => {
         "REPAIR",
         "WAITING_REPAIR_CHECK",
         "WRITTEN_OFF",
+        "LOST",
         "CAPITAL_REPAIR",
         "WAITING_ESTIMATE_CONFIRMATION",
         "SALE",

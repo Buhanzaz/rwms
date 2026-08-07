@@ -7,10 +7,11 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.graphics.ImageFormat
 import android.media.MediaActionSound
 import android.net.Uri
 import android.provider.Settings
-import android.view.Surface
+import android.view.OrientationEventListener
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.Camera
@@ -18,6 +19,7 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
@@ -71,7 +73,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
@@ -90,12 +91,14 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.exifinterface.media.ExifInterface
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.io.File
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
@@ -187,7 +190,8 @@ private fun WorkerCameraExperience(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val executor = remember(context) { ContextCompat.getMainExecutor(context) }
+    val mainExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
+    val photoFileExecutor = remember { Executors.newSingleThreadExecutor() }
     val previewView = remember(context) {
         PreviewView(context).apply {
             scaleType = PreviewView.ScaleType.FILL_CENTER
@@ -202,22 +206,40 @@ private fun WorkerCameraExperience(
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     var captureInProgress by remember { mutableStateOf(false) }
     var pendingFile by remember { mutableStateOf<File?>(null) }
-    var rotation by remember { mutableIntStateOf(0) }
     var settingsOpen by remember { mutableStateOf(false) }
     var lightMode by remember { mutableStateOf(WorkerCameraLightMode.Off) }
     var message by remember { mutableStateOf<String?>(null) }
     var focusPoint by remember { mutableStateOf<Offset?>(null) }
     var selectedZoom by remember { mutableFloatStateOf(1f) }
-    var ultraHdrAvailable by remember { mutableStateOf(false) }
+    var captureTargetRotation by remember {
+        mutableIntStateOf(workerCaptureTargetRotation(previewView.display?.rotation))
+    }
     var nightExtensionActive by remember { mutableStateOf(false) }
     val pendingForDisposal by rememberUpdatedState(pendingFile)
     val shutterSound = remember { MediaActionSound().apply { load(MediaActionSound.SHUTTER_CLICK) } }
 
-    DisposableEffect(shutterSound) {
+    DisposableEffect(shutterSound, photoFileExecutor) {
         onDispose {
             shutterSound.release()
+            photoFileExecutor.shutdown()
             pendingForDisposal?.delete()
         }
+    }
+    DisposableEffect(context, previewView) {
+        val listener = object : OrientationEventListener(context.applicationContext) {
+            override fun onOrientationChanged(orientation: Int) {
+                if (orientation == ORIENTATION_UNKNOWN) return
+                captureTargetRotation = workerCaptureTargetRotationForOrientation(
+                    orientationDegrees = orientation,
+                    fallbackRotation = previewView.display?.rotation ?: captureTargetRotation,
+                )
+            }
+        }
+        if (listener.canDetectOrientation()) listener.enable()
+        onDispose { listener.disable() }
+    }
+    LaunchedEffect(captureTargetRotation, imageCapture) {
+        imageCapture?.targetRotation = captureTargetRotation
     }
     LaunchedEffect(cameraSettings) { preferences.save(cameraSettings) }
     LaunchedEffect(message) {
@@ -239,7 +261,6 @@ private fun WorkerCameraExperience(
         lensFacing,
         cameraMode,
         cameraSettings.aspectRatio,
-        cameraSettings.ultraHdrEnabled,
         cameraSettings.motionCaptureEnabled,
     ) {
         val providerFuture = ProcessCameraProvider.getInstance(context)
@@ -269,12 +290,8 @@ private fun WorkerCameraExperience(
 
             fun bind(selector: CameraSelector, nightActive: Boolean) {
                 if (disposed) return
-                val rotationValue = previewView.display?.rotation ?: Surface.ROTATION_0
-                val cameraInfo = runCatching { provider.getCameraInfo(baseSelector) }.getOrNull()
-                val formats = cameraInfo?.let { ImageCapture.getImageCaptureCapabilities(it).supportedOutputFormats }
-                    .orEmpty()
-                ultraHdrAvailable = ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR in formats
-                val preview = Preview.Builder().setTargetRotation(rotationValue).build()
+                val previewRotation = workerCaptureTargetRotation(previewView.display?.rotation)
+                val preview = Preview.Builder().setTargetRotation(previewRotation).build()
                     .also { it.setSurfaceProvider(previewView.surfaceProvider) }
                 val ratio = when (cameraSettings.aspectRatio) {
                     WorkerCameraAspectRatio.FourThree -> AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY
@@ -288,20 +305,16 @@ private fun WorkerCameraExperience(
                             ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
                         },
                     )
-                    .setTargetRotation(rotationValue)
+                    .setTargetRotation(captureTargetRotation)
                     .setResolutionSelector(
                         ResolutionSelector.Builder()
                             .setAspectRatioStrategy(ratio)
                             .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
                             .build(),
                     )
-                captureBuilder.setOutputFormat(
-                    if (cameraSettings.ultraHdrEnabled && ultraHdrAvailable && !nightActive) {
-                        ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR
-                    } else {
-                        ImageCapture.OUTPUT_FORMAT_JPEG
-                    },
-                )
+                // Ultra HDR's gain map cannot survive the mandatory pixel rewrite below. Worker
+                // evidence is deliberately one ordinary JPEG with Orientation=1.
+                captureBuilder.setOutputFormat(ImageCapture.OUTPUT_FORMAT_JPEG)
                 val capture = captureBuilder.build()
                 val bound = runCatching {
                     provider.unbindAll()
@@ -318,10 +331,10 @@ private fun WorkerCameraExperience(
                 imageCapture = capture
                 nightExtensionActive = nightActive
                 val zoomState = bound.cameraInfo.zoomState.value
-                selectedZoom = workerCoerceZoom(
-                    selectedZoom,
-                    zoomState?.minZoomRatio ?: 1f,
-                    zoomState?.maxZoomRatio ?: 1f,
+                selectedZoom = workerCoerceCaptureZoom(
+                    requested = selectedZoom,
+                    hardwareMinimum = zoomState?.minZoomRatio,
+                    hardwareMaximum = zoomState?.maxZoomRatio,
                 )
                 bound.cameraControl.setZoomRatio(selectedZoom)
             }
@@ -338,11 +351,11 @@ private fun WorkerCameraExperience(
                         }.getOrNull()
                     } else null
                     bind(selector ?: baseSelector, selector != null)
-                }, executor)
+                }, mainExecutor)
             } else {
                 bind(baseSelector, false)
             }
-        }, executor)
+        }, mainExecutor)
         onDispose {
             disposed = true
             runCatching {
@@ -379,10 +392,10 @@ private fun WorkerCameraExperience(
 
     val zoomState = rememberTransformableState { _, zoomChange, _, _ ->
         val current = camera?.cameraInfo?.zoomState?.value ?: return@rememberTransformableState
-        selectedZoom = workerCoerceZoom(
-            selectedZoom * zoomChange,
-            current.minZoomRatio,
-            current.maxZoomRatio,
+        selectedZoom = workerCoerceCaptureZoom(
+            requested = selectedZoom * zoomChange,
+            hardwareMinimum = current.minZoomRatio,
+            hardwareMaximum = current.maxZoomRatio,
         )
         camera?.cameraControl?.setZoomRatio(selectedZoom)
     }
@@ -404,29 +417,36 @@ private fun WorkerCameraExperience(
         }
         shutterSound.play(MediaActionSound.SHUTTER_CLICK)
         val target = File(context.cacheDir, "rwms-capture-${System.nanoTime()}.jpg")
-        capture.targetRotation = previewView.display?.rotation ?: Surface.ROTATION_0
+        capture.targetRotation = captureTargetRotation
         capture.takePicture(
-            ImageCapture.OutputFileOptions.Builder(target).build(),
-            executor,
-            object : ImageCapture.OnImageSavedCallback {
-                override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                    captureInProgress = false
-                    when (val result = validateCameraXSave(target)) {
-                        is CameraXSaveResult.Saved -> {
-                            pendingFile = result.file
-                            rotation = 0
-                        }
-                        is CameraXSaveResult.Failed -> {
+            photoFileExecutor,
+            object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureSuccess(image: ImageProxy) {
+                    val normalized = persistWorkerCameraImageProxy(image, target)
+                    mainExecutor.execute {
+                        captureInProgress = false
+                        if (normalized == null) {
                             target.delete()
-                            message = result.message
+                            message = "Не удалось подготовить фотографию"
+                            return@execute
+                        }
+                        if (normalized != target) target.delete()
+                        when (val result = validateCameraXSave(normalized)) {
+                            is CameraXSaveResult.Saved -> pendingFile = result.file
+                            is CameraXSaveResult.Failed -> {
+                                normalized.delete()
+                                message = result.message
+                            }
                         }
                     }
                 }
 
                 override fun onError(exception: ImageCaptureException) {
-                    captureInProgress = false
                     target.delete()
-                    message = "Не удалось сохранить фотографию"
+                    mainExecutor.execute {
+                        captureInProgress = false
+                        message = "Не удалось сохранить фотографию"
+                    }
                 }
             },
         )
@@ -442,10 +462,8 @@ private fun WorkerCameraExperience(
     if (pendingFile != null) {
         CaptureConfirmation(
             file = requireNotNull(pendingFile),
-            rotation = rotation,
             saving = saving,
             error = saveError,
-            onRotate = { rotation = (rotation + 90) % 360 },
             onRetake = {
                 pendingFile?.delete()
                 pendingFile = null
@@ -534,7 +552,6 @@ private fun WorkerCameraExperience(
         if (settingsOpen) {
             CameraSettingsPanel(
                 settings = cameraSettings,
-                ultraHdrAvailable = ultraHdrAvailable,
                 onSettings = { cameraSettings = normalizeWorkerCameraSettings(it) },
                 modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp, 12.dp, 12.dp, 188.dp),
             )
@@ -646,16 +663,12 @@ private fun CameraBottomControls(
 @Composable
 private fun CameraSettingsPanel(
     settings: WorkerCameraSettings,
-    ultraHdrAvailable: Boolean,
     onSettings: (WorkerCameraSettings) -> Unit,
     modifier: Modifier,
 ) {
     Surface(color = WorkerCameraPanel, shape = RoundedCornerShape(24.dp), modifier = modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                CameraSetting("HDR", if (settings.ultraHdrEnabled && ultraHdrAvailable) "Авто" else "JPEG") {
-                    if (ultraHdrAvailable) onSettings(settings.copy(ultraHdrEnabled = !settings.ultraHdrEnabled))
-                }
                 CameraSetting("Движение", if (settings.motionCaptureEnabled) "Вкл" else "Выкл") {
                     onSettings(settings.copy(motionCaptureEnabled = !settings.motionCaptureEnabled))
                 }
@@ -690,7 +703,9 @@ private fun CameraSetting(title: String, value: String, onClick: () -> Unit) {
 @Composable
 private fun CameraZoomStops(camera: Camera?, selectedZoom: Float, onZoom: (Float) -> Unit, modifier: Modifier) {
     val zoom = camera?.cameraInfo?.zoomState?.value
-    val stops = workerSupportedZoomStops(zoom?.minZoomRatio ?: 1f, zoom?.maxZoomRatio ?: 1f)
+    val minimum = workerCaptureMinimumZoom(zoom?.minZoomRatio, zoom?.maxZoomRatio)
+    val maximum = workerCaptureMaximumZoom(zoom?.minZoomRatio, zoom?.maxZoomRatio)
+    val stops = workerSupportedZoomStops(minimum, maximum)
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         stops.forEach { stop ->
             Surface(
@@ -724,10 +739,8 @@ private fun FocusIndicator(point: Offset) {
 @Composable
 private fun CaptureConfirmation(
     file: File,
-    rotation: Int,
     saving: Boolean,
     error: String?,
-    onRotate: () -> Unit,
     onRetake: () -> Unit,
     onConfirm: () -> Unit,
 ) {
@@ -743,7 +756,7 @@ private fun CaptureConfirmation(
             Image(
                 bitmap = it.asImageBitmap(),
                 contentDescription = "Предпросмотр фотографии",
-                modifier = Modifier.weight(1f).fillMaxWidth().rotate(rotation.toFloat()),
+                modifier = Modifier.weight(1f).fillMaxWidth(),
             )
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -751,11 +764,6 @@ private fun CaptureConfirmation(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            OutlinedButton(
-                onClick = onRotate,
-                enabled = !saving,
-                modifier = Modifier.weight(1f),
-            ) { Text("Повернуть", maxLines = 1) }
             OutlinedButton(
                 onClick = onRetake,
                 enabled = !saving,
@@ -802,6 +810,69 @@ private enum class WorkerCameraLightMode(val symbol: String) {
         Flash -> Torch
         Torch -> Off
     }
+}
+
+/**
+ * Writes the in-memory CameraX capture as an ordinary JPEG with pixels already in their display
+ * orientation. `ImageProxy.imageInfo.rotationDegrees` is authoritative here: some camera HALs
+ * return raw sideways pixels while incorrectly marking their file-output JPEG as Orientation=1.
+ */
+internal fun persistWorkerCameraImageProxy(image: ImageProxy, target: File): File? = try {
+    val rotationDegrees = image.imageInfo.rotationDegrees
+    val jpegBytes = workerCameraJpegBytes(image) ?: return null
+    persistWorkerCameraJpeg(
+        jpegBytes = jpegBytes,
+        rotationDegrees = rotationDegrees,
+        target = target,
+    )
+} catch (_: Exception) {
+    null
+} finally {
+    image.close()
+}
+
+private fun workerCameraJpegBytes(image: ImageProxy): ByteArray? {
+    if (image.format != ImageFormat.JPEG) return null
+    val plane = image.planes.singleOrNull() ?: return null
+    val buffer = plane.buffer.duplicate()
+    val bytes = ByteArray(buffer.remaining())
+    buffer.get(bytes)
+    return bytes.takeIf { it.isWorkerCameraJpeg() }
+}
+
+private fun ByteArray.isWorkerCameraJpeg(): Boolean =
+    size >= 4 &&
+        this[0] == 0xFF.toByte() &&
+        this[1] == 0xD8.toByte() &&
+        this[size - 2] == 0xFF.toByte() &&
+        this[size - 1] == 0xD9.toByte()
+
+private fun persistWorkerCameraJpeg(
+    jpegBytes: ByteArray,
+    rotationDegrees: Int,
+    target: File,
+): File? = try {
+    target.outputStream().buffered().use { output -> output.write(jpegBytes) }
+
+    // Ignore any orientation embedded by the vendor. We deliberately seed the shared normalizer
+    // with the physical transform reported by CameraX, then it writes final pixels with EXIF=1.
+    val physicalOrientation = workerExifOrientationForRotationDegrees(rotationDegrees)
+    ExifInterface(target).run {
+        setAttribute(ExifInterface.TAG_ORIENTATION, physicalOrientation.toString())
+        saveAttributes()
+    }
+    check(
+        ExifInterface(target).getAttributeInt(
+            ExifInterface.TAG_ORIENTATION,
+            ExifInterface.ORIENTATION_UNDEFINED,
+        ) == physicalOrientation,
+    ) { "Unable to persist CameraX image rotation" }
+    normalizeWorkerCameraJpegOrientation(
+        source = target,
+        fallbackOrientation = physicalOrientation,
+    )
+} catch (_: Exception) {
+    null
 }
 
 private fun Context.hasCameraPermission(): Boolean =

@@ -10,8 +10,8 @@ import type {
   ReturnAcceptUndamagedCommand,
   ReturnClient,
   ReturnCreateCommand,
-  ReturnEstimateCommand,
   ReturnPickupCommand,
+  StartReturnEstimatesCommand,
 } from "@/features/logistics/returns/ports/return-client"
 import { bearerRequest } from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
@@ -209,11 +209,11 @@ export class HttpReturnClient implements ReturnClient {
     )
   }
 
-  requestEstimate(input: ReturnEstimateCommand) {
+  startEstimates(input: StartReturnEstimatesCommand) {
     return parsedRequest(
       input.accessToken,
       returnsEndpoint(
-        `/${encodeURIComponent(input.documentId)}/request-estimate?expectedVersion=${input.expectedVersion}`
+        `/${encodeURIComponent(input.documentId)}/start-estimates?expectedVersion=${input.expectedVersion}`
       ),
       {
         method: "POST",

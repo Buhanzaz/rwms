@@ -31,7 +31,7 @@ func (processor Processor) Process(ctx context.Context, job persistence.WorkerJo
 	case media.KindImage:
 		result, err := processor.Image.Process(ctx, media.ImageProcessRequest{
 			MediaID: job.MediaID.String(), SourceObjectKey: job.SourceObjectKey,
-			SourceVersionID: job.SourceVersionID, Generation: job.Generation, Rotation: job.Rotation,
+			SourceVersionID: job.SourceVersionID, Generation: job.Generation,
 		})
 		if err != nil {
 			return nil, err
@@ -41,7 +41,7 @@ func (processor Processor) Process(ctx context.Context, job persistence.WorkerJo
 		result, err := processor.Video.Process(ctx, media.VideoProcessRequest{
 			MediaID: job.MediaID.String(), SourceObjectKey: job.SourceObjectKey,
 			SourceVersionID: job.SourceVersionID, ContentType: job.ContentType,
-			Generation: job.Generation, Rotation: job.Rotation,
+			Generation: job.Generation,
 		})
 		if err != nil {
 			return nil, err
@@ -330,11 +330,11 @@ func parseProcessingRequest(record *kgo.Record) (persistence.ProcessingMessage, 
 	if envelope.Payload.Kind != media.KindImage && envelope.Payload.Kind != media.KindVideo {
 		return persistence.ProcessingMessage{}, errors.New("invalid media kind")
 	}
-	if envelope.Payload.ProcessingKind != media.ProcessingInitial && envelope.Payload.ProcessingKind != media.ProcessingRotation {
+	if envelope.Payload.ProcessingKind != media.ProcessingInitial {
 		return persistence.ProcessingMessage{}, errors.New("invalid processing kind")
 	}
-	if _, err := media.ParseRotation(int16(envelope.Payload.Rotation)); err != nil {
-		return persistence.ProcessingMessage{}, err
+	if envelope.Payload.Rotation != media.Rotation0 {
+		return persistence.ProcessingMessage{}, errors.New("invalid processing rotation")
 	}
 	sum := sha256.Sum256(record.Value)
 	return persistence.ProcessingMessage{

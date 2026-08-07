@@ -20,7 +20,7 @@ public class LogisticsReturnShortageId implements Serializable {
 
   public LogisticsReturnShortageId(UUID returnId, UUID lineId) {
     if (returnId == null || lineId == null) {
-      throw new IllegalArgumentException("Logistics return shortage identity is incomplete");
+      throw new IllegalArgumentException("Logistics return estimate source identity is incomplete");
     }
     this.returnId = returnId;
     this.lineId = lineId;

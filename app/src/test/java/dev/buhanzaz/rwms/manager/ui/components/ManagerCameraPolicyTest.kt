@@ -31,6 +31,39 @@ class ManagerCameraPolicyTest {
     }
 
     @Test
+    fun `logical camera exposes 0 point 6 wide stop only when hardware supports it`() {
+        assertThat(
+            managerCaptureMinimumZoom(
+                hardwareMinimum = 0.5f,
+                hardwareMaximum = 8f,
+                selectedLensIsPhysical = false,
+            ),
+        ).isEqualTo(0.6f)
+        assertThat(
+            managerCaptureMinimumZoom(
+                hardwareMinimum = 0.7f,
+                hardwareMaximum = 8f,
+                selectedLensIsPhysical = false,
+            ),
+        ).isEqualTo(0.7f)
+        assertThat(
+            managerCaptureMinimumZoom(
+                hardwareMinimum = 0.4f,
+                hardwareMaximum = 0.55f,
+                selectedLensIsPhysical = false,
+            ),
+        ).isEqualTo(0.4f)
+        assertThat(
+            managerCaptureMinimumZoom(
+                hardwareMinimum = 0.5f,
+                hardwareMaximum = 8f,
+                selectedLensIsPhysical = true,
+            ),
+        ).isEqualTo(1f)
+        assertThat(managerCaptureMaximumZoom(0.5f, 8f)).isEqualTo(8f)
+    }
+
+    @Test
     fun `optical lens ratio is presented as a stable camera stop`() {
         assertThat(managerNormalizedLensZoomRatio(0.58f)).isEqualTo(0.6f)
         assertThat(managerNormalizedLensZoomRatio(1.97f)).isEqualTo(2f)
@@ -70,16 +103,6 @@ class ManagerCameraPolicyTest {
                 logicalCameraOutputs = listOf(13, 8, 5),
             ),
         ).containsExactly(50, 13).inOrder()
-    }
-
-    @Test
-    fun `photo hdr is available through either hdr extension or ultra hdr output`() {
-        assertThat(managerPhotoHdrAvailable(hdrExtensionAvailable = true, ultraHdrAvailable = false))
-            .isTrue()
-        assertThat(managerPhotoHdrAvailable(hdrExtensionAvailable = false, ultraHdrAvailable = true))
-            .isTrue()
-        assertThat(managerPhotoHdrAvailable(hdrExtensionAvailable = false, ultraHdrAvailable = false))
-            .isFalse()
     }
 
     @Test

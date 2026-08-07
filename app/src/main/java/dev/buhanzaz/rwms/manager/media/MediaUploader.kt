@@ -6,7 +6,6 @@ import dev.buhanzaz.rwms.manager.network.CreateUploadSessionRequest
 import dev.buhanzaz.rwms.manager.network.FinalizeUploadRequest
 import dev.buhanzaz.rwms.manager.network.MediaAssetDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
-import dev.buhanzaz.rwms.manager.network.RotateMediaRequest
 import dev.buhanzaz.rwms.manager.network.RwmsApi
 import java.io.File
 import java.io.IOException
@@ -119,11 +118,8 @@ class PhotoPayloadReader(
             ?: "rwms-media-${stableMediaUploadUuid("file-name", uriText)}" +
                 mediaFileExtension(contentType)
 
-        /*
-         * This is deliberately an exact byte read. CameraX writes image orientation as
-         * JPEG/EXIF metadata when needed; decoding, recompressing, or rewrapping a video
-         * here would change the immutable original before media-service processes it.
-         */
+        // Camera/gallery intake has already normalized still-photo pixels upright. Keep this
+        // exact byte read so the durable outbox uploads precisely that app-owned original.
         return PhotoPayload(
             fileName = fileName,
             contentType = contentType,
@@ -185,78 +181,6 @@ class MediaUploader private constructor(
                 onReady(uri, reference)
             },
         )
-    }
-
-    /**
-     * Rebuilds the canonical original for the same media ID in media-service.  It never creates
-     * a second attachment or re-encodes a phone-side replacement file: media-service allocates a
-     * new immutable generation of this asset and returns that generation once it is READY.
-     */
-    suspend fun rotate(
-        owner: MediaOwner,
-        asset: MediaAssetDto,
-        rotationDegrees: Int,
-    ): MediaReferenceDto {
-        require(rotationDegrees in setOf(0, 90, 180, 270)) {
-            "Недопустимый поворот фотографии"
-        }
-        if (asset.status == "FAILED" || asset.status == "DELETED") {
-            throw IllegalStateException(MEDIA_PROCESSING_FAILED_MESSAGE)
-        }
-        val current = if (asset.status == "READY") {
-            asset
-        } else {
-            awaitReadyMediaAsset(asset.id) {
-                api.ownerMedia(
-                    ownerType = owner.ownerType,
-                    ownerId = owner.ownerId,
-                    documentId = owner.documentId,
-                    lineId = owner.lineId,
-                    warehouseId = owner.warehouseId,
-                    context = owner.context,
-                ).items.firstOrNull { it.id == asset.id }
-            }
-        }
-        if (current.rotationDegrees == rotationDegrees) {
-            return MediaReferenceDto(current.id, current.generation)
-        }
-        require(current.generation > 0 && current.version > 0) {
-            "Фотография ещё не готова к повороту"
-        }
-        val idempotencyKey = UUID.randomUUID().toString()
-        val queued = retryMediaCommandAfterOwnerProof {
-            api.rotateMedia(
-                mediaId = current.id,
-                idempotencyKey = idempotencyKey,
-                ownerType = owner.ownerType,
-                ownerId = owner.ownerId,
-                documentId = owner.documentId,
-                lineId = owner.lineId,
-                warehouseId = owner.warehouseId,
-                context = owner.context,
-                request = RotateMediaRequest(
-                    rotationDegrees = rotationDegrees,
-                    expectedVersion = current.version,
-                ),
-            )
-        }
-        if (queued.id != current.id || queued.status == "FAILED" || queued.status == "DELETED") {
-            throw IllegalStateException(MEDIA_PROCESSING_FAILED_MESSAGE)
-        }
-        val ready = awaitReadyMediaAsset(current.id) {
-            api.ownerMedia(
-                ownerType = owner.ownerType,
-                ownerId = owner.ownerId,
-                documentId = owner.documentId,
-                lineId = owner.lineId,
-                warehouseId = owner.warehouseId,
-                context = owner.context,
-            ).items.firstOrNull { it.id == current.id }
-        }
-        if (ready.rotationDegrees != rotationDegrees) {
-            throw IllegalStateException("Сервис не сохранил поворот фотографии")
-        }
-        return MediaReferenceDto(ready.id, ready.generation)
     }
 
     private suspend fun uploadOne(
@@ -432,6 +356,10 @@ internal suspend fun awaitReadyMediaAsset(
         delay(mediaReadyPollDelayMillis(attempt))
         val media = try {
             loadOwnerMedia()
+        } catch (_: IOException) {
+            // A temporary disconnect while media-service projects an accepted upload is not a
+            // terminal image-processing failure. Keep polling within the bounded window.
+            null
         } catch (error: HttpException) {
             if (!isRetryableMediaOwnerFailure(error)) throw error
             null
@@ -494,6 +422,11 @@ private suspend fun <T> retryMediaOperationAfterOwnerProof(
     for (failureCount in 0..OWNER_PROOF_MAX_RETRIES) {
         try {
             return operation()
+        } catch (error: IOException) {
+            if (failureCount >= OWNER_PROOF_MAX_RETRIES) {
+                throw IllegalStateException(exhaustedMessage, error)
+            }
+            delay(ownerProofRetryDelayMillis(failureCount))
         } catch (error: HttpException) {
             if (!isRetryableMediaOwnerFailure(error)) {
                 throw error
@@ -517,7 +450,9 @@ internal fun mediaReadyPollDelayMillis(failureCount: Int): Long =
 
 internal fun isRetryableMediaOwnerFailure(error: HttpException): Boolean =
     when (error.code()) {
-        409, 503 -> true
+        // Requests in these helpers are either reads or idempotent upload commands. A short,
+        // bounded retry is safe for temporary gateway/service failures and owner-projection lag.
+        408, 409, 425, 429, 500, 502, 503, 504 -> true
         403 -> error.problemCode() == "MEDIA_OWNER_PROOF_REQUIRED"
         else -> false
     }

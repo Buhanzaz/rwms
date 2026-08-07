@@ -64,6 +64,10 @@ public class MaintenanceRepair {
   @Column(name = "acceptance_state", nullable = false, length = 24)
   private RepairAcceptanceState acceptanceState;
 
+  @Enumerated(EnumType.STRING)
+  @Column(name = "furniture_accounting_mode", nullable = false, length = 32)
+  private FurnitureAccountingMode furnitureAccountingMode;
+
   @Column(name = "dispatch_date", nullable = false)
   private LocalDate dispatchDate;
 
@@ -236,6 +240,7 @@ public class MaintenanceRepair {
     value.sourceRepairId = sourceRepairId;
     value.executionState = RepairExecutionState.DRAFT;
     value.acceptanceState = RepairAcceptanceState.NOT_READY;
+    value.furnitureAccountingMode = FurnitureAccountingMode.TRACKED_CABIN_CONTENTS;
     value.dispatchDate = dispatchDate;
     value.sourceParty = normalize(sourceParty, 512);
     value.reworkReason = normalize(reworkReason, 2000);
@@ -268,6 +273,23 @@ public class MaintenanceRepair {
     leaseReconciliationState = "ACTIVE";
     deliveryState = "RETRY_PENDING";
     deliveryUpdatedAt = MaintenanceTime.now();
+  }
+
+  /**
+   * Records the explicit legacy-cabin confirmation made while completing an estimate.
+   *
+   * <p>No inventory balance can be inferred in this mode; selected furniture is instead proposed
+   * as a separately approved loss after repair completion.
+   */
+  public void useUnaccountedFurnitureAccounting() {
+    if (origin != RepairOrigin.ESTIMATE
+        || kind != RepairKind.PRIMARY
+        || executionState != RepairExecutionState.DRAFT
+        || acceptanceState != RepairAcceptanceState.NOT_READY) {
+      throw new IllegalStateException(
+          "Unaccounted furniture accounting can be selected only for a new estimate repair");
+    }
+    furnitureAccountingMode = FurnitureAccountingMode.UNACCOUNTED_CABIN_CONTENTS;
   }
 
   public void queueUnderExistingRepair() {
@@ -822,6 +844,7 @@ public class MaintenanceRepair {
   public RepairKind getKind() { return kind; }
   public RepairExecutionState getExecutionState() { return executionState; }
   public RepairAcceptanceState getAcceptanceState() { return acceptanceState; }
+  public FurnitureAccountingMode getFurnitureAccountingMode() { return furnitureAccountingMode; }
   public LocalDate getDispatchDate() { return dispatchDate; }
   public int getPriority() { return priority; }
   public String getSourceParty() { return sourceParty; }

@@ -98,7 +98,7 @@ public interface LogisticsDependencyGateway {
       long fencingToken,
       UUID documentId,
       UUID lineId,
-      boolean shortage);
+      boolean estimate);
 
   default ReturnEquipmentReceipt receiveReturnEquipment(
       UUID idempotencyKey,
@@ -205,15 +205,14 @@ public interface LogisticsDependencyGateway {
       UUID proofEventId,
       boolean active);
 
-  ReturnShortageSource upsertReturnShortage(
+  ReturnEstimateSource upsertReturnEstimateSource(
       UUID returnId,
       UUID lineId,
       UUID warehouseId,
       UUID rentalItemId,
       long rentalItemVersion,
       LocalDate dispatchDate,
-      List<MediaReference> mediaReferences,
-      List<EquipmentShortage> shortages);
+      List<MediaReference> mediaReferences);
 
   EquipmentHold acquireEquipmentHold(
       UUID idempotencyKey,
@@ -679,9 +678,7 @@ public interface LogisticsDependencyGateway {
       UUID proofEventId,
       boolean active) {}
 
-  record EquipmentShortage(UUID equipmentId, long missingQuantity) {}
-
-  record ReturnShortageSource(
+  record ReturnEstimateSource(
       UUID returnId,
       UUID lineId,
       long sourceVersion,
@@ -689,7 +686,6 @@ public interface LogisticsDependencyGateway {
       UUID rentalItemId,
       long rentalItemVersion,
       UUID estimateId,
-      List<EquipmentShortage> shortages,
       String snapshotSha256,
       OffsetDateTime receivedAt) {}
 

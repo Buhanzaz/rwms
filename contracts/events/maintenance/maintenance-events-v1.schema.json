@@ -379,7 +379,7 @@
         "assetKind": {"enum": ["CABIN", "EQUIPMENT"]},
         "assetId": {"type": "string", "format": "uuid"},
         "dispositionKind": {"enum": ["WRITE_OFF", "LOSS"]},
-        "source": {"enum": ["MANUAL", "REPAIR", "ESTIMATE", "INVENTORY"]},
+        "source": {"enum": ["MANUAL", "REPAIR", "ESTIMATE", "UNACCOUNTED", "INVENTORY"]},
         "state": {
           "enum": [
             "PENDING_APPROVAL",
@@ -391,7 +391,7 @@
             "QUARANTINED"
           ]
         },
-        "assetEffectState": {"enum": ["NOT_STARTED", "PENDING", "APPLIED", "QUARANTINED"]},
+        "assetEffectState": {"enum": ["NOT_REQUIRED", "NOT_STARTED", "PENDING", "APPLIED", "QUARANTINED"]},
         "rootRepairId": {"$ref": "#/$defs/nullableUuid"},
         "sourceRepairId": {"$ref": "#/$defs/nullableUuid"},
         "inventoryId": {"$ref": "#/$defs/nullableUuid"},

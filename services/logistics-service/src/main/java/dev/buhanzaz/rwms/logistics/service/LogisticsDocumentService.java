@@ -7,7 +7,7 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.AcceptReturnRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ArriveTransferLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.LogisticsDocumentSummary;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.LogisticsDocumentView;
-import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.RequestReturnEstimateRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.StartReturnEstimatesRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReconcileRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnPickupRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentPlanRequest;
@@ -87,7 +87,7 @@ public class LogisticsDocumentService {
   private static final String CREATE_TRANSFER = "CREATE_TRANSFER";
   private static final String REGISTER_RETURN = "REGISTER_RETURN";
   private static final String ACCEPT_RETURN = "ACCEPT_RETURN";
-  private static final String REQUEST_RETURN_ESTIMATE = "REQUEST_RETURN_ESTIMATE";
+  private static final String START_RETURN_ESTIMATES = "START_RETURN_ESTIMATES";
   private static final String PLAN_SHIPMENT = "PLAN_SHIPMENT";
   private static final String CONFIRM_SHIPMENT = "CONFIRM_SHIPMENT";
   private static final String CANCEL_SHIPMENT = "CANCEL_SHIPMENT";
@@ -99,10 +99,11 @@ public class LogisticsDocumentService {
   static final String RETURN_MEDIA_OWNER_PROOF_REGISTER = "RETURN_MEDIA_OWNER_PROOF_REGISTER";
   static final String RETURN_MEDIA_VALIDATE = "RETURN_MEDIA_VALIDATE";
   static final String RETURN_ASSET_SETTLE_FREE = "RETURN_ASSET_SETTLE_FREE";
-  static final String RETURN_ASSET_SETTLE_SHORTAGE = "RETURN_ASSET_SETTLE_SHORTAGE";
+  static final String RETURN_ASSET_SETTLE_ESTIMATE = "RETURN_ASSET_SETTLE_ESTIMATE";
   static final String RETURN_ASSET_ADDITIONAL_EQUIPMENT_RECEIVE =
       "RETURN_ASSET_ADDITIONAL_EQUIPMENT_RECEIVE";
-  static final String RETURN_MAINTENANCE_SHORTAGE_UPSERT = "RETURN_MAINTENANCE_SHORTAGE_UPSERT";
+  static final String RETURN_MAINTENANCE_ESTIMATE_SOURCE_UPSERT =
+      "RETURN_MAINTENANCE_ESTIMATE_SOURCE_UPSERT";
   static final String RETURN_ASSET_LEASE_RELEASE = "RETURN_ASSET_LEASE_RELEASE";
   static final String SHIPMENT_ASSET_SNAPSHOT = "SHIPMENT_ASSET_SNAPSHOT";
   static final String SHIPMENT_ASSET_LEASE_ACQUIRE = "SHIPMENT_ASSET_LEASE_ACQUIRE";
@@ -974,37 +975,32 @@ public class LogisticsDocumentService {
     return new CreateResult(toView(document), false);
   }
 
-  /**
-   * Starts a shortage settlement saga after freezing and proving the exact
-   * per-line inspection photos. The shortage vectors are immutable logistics
-   * evidence; maintenance remains the owner of every estimate and repair
-   * decision.
-   */
+  /** Starts one maintenance-owned draft estimate per return line after proving inspection photos. */
   @Transactional
-  public CreateResult requestReturnEstimate(
+  public CreateResult startReturnEstimates(
       UUID subjectId,
       UUID idempotencyKey,
       UUID correlationId,
       UUID documentId,
       long expectedDocumentVersion,
-      RequestReturnEstimateRequest request) {
+      StartReturnEstimatesRequest request) {
     requireReturnCommand(documentId, correlationId, expectedDocumentVersion, request);
     String checksum =
         LogisticsCommandChecksum.sha256(
-            REQUEST_RETURN_ESTIMATE,
+            START_RETURN_ESTIMATES,
             estimateFingerprintValues(documentId, expectedDocumentVersion, request));
-    acquireIdempotencyLock(subjectId, REQUEST_RETURN_ESTIMATE, idempotencyKey);
-    CreateResult replay = replay(subjectId, idempotencyKey, REQUEST_RETURN_ESTIMATE, checksum);
+    acquireIdempotencyLock(subjectId, START_RETURN_ESTIMATES, idempotencyKey);
+    CreateResult replay = replay(subjectId, idempotencyKey, START_RETURN_ESTIMATES, checksum);
     if (replay != null) return replay;
 
     LogisticsDocument document = document(documentId, LogisticsDocumentType.RETURN);
     requireExpectedVersion(document, expectedDocumentVersion, "Return document version changed concurrently");
     if (document.getState() != LogisticsDocumentState.INSPECTION_REQUIRED) {
-      throw new LogisticsConflictException("Return estimate cannot be requested in its current lifecycle state");
+      throw new LogisticsConflictException("Return estimates cannot be started in its current lifecycle state");
     }
     List<LogisticsDocumentLine> lines = linesRequired(documentId);
     Map<UUID, LogisticsDocumentLine> byId = linesById(lines);
-    validateEstimateLines(request, byId.keySet());
+    validateReturnEstimateLines(request, byId.keySet());
 
     OffsetDateTime now = now();
     List<LogisticsReturnShortageSnapshot> snapshots = new ArrayList<>();
@@ -1012,7 +1008,7 @@ public class LogisticsDocumentService {
     for (var input : request.lines()) {
       LogisticsDocumentLine line = byId.get(input.lineId());
       LogisticsGuard guard = activeGuard(line);
-      ObjectNode shortages = shortagesSnapshot(input);
+      ObjectNode sourceSnapshot = returnEstimateSourceSnapshot();
       snapshots.add(
           LogisticsReturnShortageSnapshot.create(
               document,
@@ -1020,8 +1016,8 @@ public class LogisticsDocumentService {
               document.getWarehouseId(),
               line.getAssetId(),
               guard.getObservedAssetVersion(),
-              shortages,
-              shortageSnapshotDigest(document, line, guard, input),
+              sourceSnapshot,
+              returnEstimateSourceSnapshotDigest(document, line, guard, input),
               now));
       for (var reference : input.references()) {
         references.add(
@@ -1057,7 +1053,7 @@ public class LogisticsDocumentService {
         subjectId,
         LogisticsEventType.RETURN_ESTIMATE_STARTED,
         "INSPECTION_MEDIA_SUBMITTED");
-    remember(subjectId, idempotencyKey, REQUEST_RETURN_ESTIMATE, checksum, document);
+    remember(subjectId, idempotencyKey, START_RETURN_ESTIMATES, checksum, document);
     return new CreateResult(toView(document), false);
   }
 
@@ -1965,11 +1961,11 @@ public class LogisticsDocumentService {
     }
   }
 
-  private static void validateEstimateLines(
-      RequestReturnEstimateRequest request, Set<UUID> requiredLineIds) {
+  private static void validateReturnEstimateLines(
+      StartReturnEstimatesRequest request, Set<UUID> requiredLineIds) {
     if (request.lines() == null || request.lines().size() != requiredLineIds.size()) {
       throw new LogisticsConflictException(
-          "Return estimate must contain photos and shortages for every return line");
+          "Return estimates must contain photos for every return line");
     }
     HashSet<UUID> lineIds = new HashSet<>();
     HashSet<UUID> mediaIds = new HashSet<>();
@@ -1979,9 +1975,6 @@ public class LogisticsDocumentService {
           || input.references() == null
           || input.references().isEmpty()
           || input.references().size() > 20
-          || input.shortages() == null
-          || input.shortages().isEmpty()
-          || input.shortages().size() > 100
           || !lineIds.add(input.lineId())
           || !requiredLineIds.contains(input.lineId())) {
         throw new LogisticsConflictException("Return estimate lines are invalid");
@@ -1994,15 +1987,6 @@ public class LogisticsDocumentService {
             || !lineMediaIds.add(reference.mediaId())
             || !mediaIds.add(reference.mediaId())) {
           throw new LogisticsConflictException("Return estimate media references are invalid");
-        }
-      }
-      HashSet<UUID> equipmentIds = new HashSet<>();
-      for (var shortage : input.shortages()) {
-        if (shortage == null
-            || shortage.equipmentId() == null
-            || shortage.missingQuantity() < 1
-            || !equipmentIds.add(shortage.equipmentId())) {
-          throw new LogisticsConflictException("Return shortage values are invalid");
         }
       }
     }
@@ -2254,19 +2238,8 @@ public class LogisticsDocumentService {
             Boolean.toString(active)));
   }
 
-  private static ObjectNode shortagesSnapshot(
-      dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnShortageLineRequest input) {
-    ObjectNode root = JsonNodeFactory.instance.objectNode();
-    ArrayNode values = root.putArray("shortages");
-    input.shortages().stream()
-        .sorted(Comparator.comparing(value -> value.equipmentId().toString()))
-        .forEach(
-            value -> {
-              ObjectNode shortage = values.addObject();
-              shortage.put("equipmentId", value.equipmentId().toString());
-              shortage.put("missingQuantity", value.missingQuantity());
-            });
-    return root;
+  private static ObjectNode returnEstimateSourceSnapshot() {
+    return JsonNodeFactory.instance.objectNode();
   }
 
   private static ObjectNode additionalContentsSnapshot(
@@ -2287,25 +2260,25 @@ public class LogisticsDocumentService {
     return root;
   }
 
-  private static String shortageSnapshotDigest(
+  private static String returnEstimateSourceSnapshotDigest(
       LogisticsDocument document,
       LogisticsDocumentLine line,
       LogisticsGuard guard,
-      dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnShortageLineRequest input) {
+      dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnEstimateLineRequest input) {
     List<String> values = new ArrayList<>();
     values.add(document.getId().toString());
     values.add(line.getId().toString());
     values.add(document.getWarehouseId().toString());
     values.add(line.getAssetId().toString());
     values.add(Long.toString(guard.getObservedAssetVersion()));
-    input.shortages().stream()
-        .sorted(Comparator.comparing(value -> value.equipmentId().toString()))
+    input.references().stream()
+        .sorted(Comparator.comparing(value -> value.mediaId().toString()))
         .forEach(
             value -> {
-              values.add(value.equipmentId().toString());
-              values.add(Long.toString(value.missingQuantity()));
+              values.add(value.mediaId().toString());
+              values.add(Long.toString(value.generation()));
             });
-    return LogisticsCommandChecksum.sha256("RETURN_SHORTAGE_SNAPSHOT", values);
+    return LogisticsCommandChecksum.sha256("RETURN_ESTIMATE_SOURCE_SNAPSHOT", values);
   }
 
   private static List<String> shipmentPlanFingerprintValues(
@@ -2359,7 +2332,7 @@ public class LogisticsDocumentService {
   }
 
   private static List<String> estimateFingerprintValues(
-      UUID documentId, long expectedVersion, RequestReturnEstimateRequest request) {
+      UUID documentId, long expectedVersion, StartReturnEstimatesRequest request) {
     List<String> values = new ArrayList<>();
     values.add(documentId.toString());
     values.add(Long.toString(expectedVersion));
@@ -2374,13 +2347,6 @@ public class LogisticsDocumentService {
                       reference -> {
                         values.add(reference.mediaId().toString());
                         values.add(Long.toString(reference.generation()));
-                      });
-              line.shortages().stream()
-                  .sorted(Comparator.comparing(value -> value.equipmentId().toString()))
-                  .forEach(
-                      shortage -> {
-                        values.add(shortage.equipmentId().toString());
-                        values.add(Long.toString(shortage.missingQuantity()));
                       });
             });
     return values;

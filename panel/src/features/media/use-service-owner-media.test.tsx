@@ -15,7 +15,6 @@ const mediaClient = vi.hoisted(() => ({
   listOwnerMedia: vi.fn(),
   createVariantObjectUrl: vi.fn(),
   uploadFile: vi.fn(),
-  rotate: vi.fn(),
   deleteAsset: vi.fn(),
 }))
 
@@ -120,14 +119,6 @@ function MediaHarness({
         }
       >
         Upload
-      </button>
-      <button
-        type="button"
-        onClick={() =>
-          void media.rotate({ asset: readyAsset, direction: "RIGHT" })
-        }
-      >
-        Rotate
       </button>
       <button type="button" onClick={() => void media.remove(readyAsset)}>
         Delete
@@ -246,37 +237,6 @@ describe("useServiceOwnerMedia", () => {
     )
     fireEvent.click(screen.getByRole("button", { name: "Upload" }))
     await waitFor(() => expect(onUpload).toHaveBeenCalledWith([readyAsset]))
-  })
-
-  it("retries rotation with the same command key while owner proof propagates", async () => {
-    mediaClient.listOwnerMedia.mockResolvedValue({
-      items: [readyAsset],
-      next: null,
-    })
-    mediaClient.createVariantObjectUrl.mockResolvedValue({
-      url: "blob:preview",
-      dispose: vi.fn(),
-    })
-    mediaClient.rotate
-      .mockRejectedValueOnce(
-        new ApiError(
-          "Owner proof is catching up",
-          403,
-          "MEDIA_OWNER_PROOF_REQUIRED"
-        )
-      )
-      .mockResolvedValueOnce({})
-
-    renderMediaHarness()
-
-    await waitFor(() =>
-      expect(mediaClient.listOwnerMedia).toHaveBeenCalledOnce()
-    )
-    fireEvent.click(screen.getByRole("button", { name: "Rotate" }))
-    await waitFor(() => expect(mediaClient.rotate).toHaveBeenCalledTimes(2))
-    expect(mediaClient.rotate.mock.calls[1]?.[5]).toBe(
-      mediaClient.rotate.mock.calls[0]?.[5]
-    )
   })
 
   it("retries deletion with the same command key while owner proof propagates", async () => {

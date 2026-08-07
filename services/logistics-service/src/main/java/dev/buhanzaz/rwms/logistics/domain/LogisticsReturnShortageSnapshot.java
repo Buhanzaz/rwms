@@ -21,7 +21,12 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 import tools.jackson.databind.JsonNode;
 
-/** Immutable logistics evidence sent to the maintenance-owned shortage source. */
+/**
+ * Immutable per-return-line estimate-source evidence.
+ *
+ * <p>The physical table and JSON column retain their historical names so existing source rows
+ * remain readable across the deployed workflow replacement.
+ */
 @Entity
 @Table(
     name = "logistics_return_shortage_snapshot",
@@ -62,7 +67,7 @@ public class LogisticsReturnShortageSnapshot {
 
   @JdbcTypeCode(SqlTypes.JSON)
   @Column(name = "shortages", nullable = false, columnDefinition = "jsonb")
-  private JsonNode shortages;
+  private JsonNode estimateSourceSnapshot;
 
   @JdbcTypeCode(Types.CHAR)
   @Column(name = "snapshot_sha256", nullable = false, length = 64)
@@ -77,7 +82,7 @@ public class LogisticsReturnShortageSnapshot {
       UUID warehouseId,
       UUID rentalItemId,
       long rentalItemVersion,
-      JsonNode shortages,
+      JsonNode estimateSourceSnapshot,
       String snapshotSha256,
       OffsetDateTime createdAt) {
     if (document == null
@@ -85,14 +90,14 @@ public class LogisticsReturnShortageSnapshot {
         || warehouseId == null
         || rentalItemId == null
         || createdAt == null) {
-      throw new IllegalArgumentException("Shortage snapshot ownership and timing are required");
+      throw new IllegalArgumentException("Estimate source snapshot ownership and timing are required");
     }
     if (rentalItemVersion < 0) throw new IllegalArgumentException("Rental-item version is invalid");
-    if (shortages == null || !shortages.isObject()) {
-      throw new IllegalArgumentException("Shortages must be a JSON object");
+    if (estimateSourceSnapshot == null || !estimateSourceSnapshot.isObject()) {
+      throw new IllegalArgumentException("Estimate source snapshot must be a JSON object");
     }
     if (snapshotSha256 == null || !snapshotSha256.matches("[0-9a-f]{64}")) {
-      throw new IllegalArgumentException("Shortage snapshot digest is invalid");
+      throw new IllegalArgumentException("Estimate source snapshot digest is invalid");
     }
     LogisticsReturnShortageSnapshot snapshot = new LogisticsReturnShortageSnapshot();
     snapshot.document = document;
@@ -100,7 +105,7 @@ public class LogisticsReturnShortageSnapshot {
     snapshot.warehouseId = warehouseId;
     snapshot.rentalItemId = rentalItemId;
     snapshot.rentalItemVersion = rentalItemVersion;
-    snapshot.shortages = shortages.deepCopy();
+    snapshot.estimateSourceSnapshot = estimateSourceSnapshot.deepCopy();
     snapshot.snapshotSha256 = snapshotSha256;
     snapshot.createdAt = createdAt;
     return snapshot;

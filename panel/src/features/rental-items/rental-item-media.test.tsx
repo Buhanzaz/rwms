@@ -11,7 +11,6 @@ const media = vi.hoisted(() => ({
   createVariantObjectUrl: vi.fn(),
   createOriginalObjectUrl: vi.fn(),
   uploadFile: vi.fn(),
-  rotate: vi.fn(),
 }))
 
 vi.mock("@/features/media/media-service", () => ({
@@ -612,9 +611,7 @@ describe("rental item media", () => {
         loading={false}
         error={null}
         canEdit={false}
-        rotating={false}
         onAdd={vi.fn()}
-        onRotate={vi.fn()}
         onOpenFolder={onOpenFolder}
         onRequestFullscreen={vi.fn()}
       />
@@ -639,6 +636,7 @@ describe("rental item media", () => {
     ).toBeTruthy()
     expect(screen.getByText("front.jpg")).toBeTruthy()
     expect(screen.getByTestId("folder-carousel").textContent).toBe("photo-1")
+    expect(screen.queryByRole("button", { name: "Повернуть" })).toBeNull()
 
     await user.click(screen.getByRole("button", { name: "Назад к фотоархиву" }))
     expect(screen.getByTestId("photo-folder-grid")).toBeTruthy()
@@ -653,9 +651,7 @@ describe("rental item media", () => {
         loading={false}
         error={new Error("Invalid cabin cover request")}
         canEdit={false}
-        rotating={false}
         onAdd={vi.fn()}
-        onRotate={vi.fn()}
         onOpenFolder={vi.fn(async () => undefined)}
         onRequestFullscreen={vi.fn()}
       />

@@ -40,14 +40,100 @@ function formatDuration(seconds: number) {
   return hours > 0 ? `${hours} ч ${minutes} мин` : `${minutes} мин`
 }
 
+function AggregatePositionsTable({
+  title,
+  description,
+  emptyMessage,
+  aggregates,
+  total,
+  catalogDescriptions,
+}: {
+  title: string
+  description: string
+  emptyMessage: string
+  aggregates: InventoryStatisticsDto["aggregates"]
+  total: InventoryStatisticsDto["workTotal"]
+  catalogDescriptions: Map<string, string>
+}) {
+  return (
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+        <CardDescription>{description}</CardDescription>
+      </CardHeader>
+      <CardContent className="overflow-x-auto">
+        <Table aria-label={title} className="min-w-[32rem]">
+          <TableHeader>
+            <TableRow>
+              <TableHead>Позиция</TableHead>
+              <TableHead>Кол-во</TableHead>
+              <TableHead>Цена</TableHead>
+              <TableHead>Сумма</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {aggregates.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={4}
+                  className="py-6 text-center text-muted-foreground"
+                >
+                  {emptyMessage}
+                </TableCell>
+              </TableRow>
+            ) : (
+              aggregates.map((aggregate) => {
+                const aggregateDescription =
+                  aggregate.description !== "Позиция без наименования" ||
+                  !aggregate.catalogNodeId
+                    ? aggregate.description
+                    : (catalogDescriptions.get(
+                        `${aggregate.lineType}:${aggregate.catalogNodeId}`
+                      ) ?? aggregate.description)
+
+                return (
+                  <TableRow key={aggregate.key}>
+                    <TableCell>{aggregateDescription}</TableCell>
+                    <TableCell>
+                      {aggregate.quantity} {aggregate.unit}
+                    </TableCell>
+                    <TableCell>
+                      {formatMoneyDecimal(aggregate.unitPrice)} ₽
+                    </TableCell>
+                    <TableCell>
+                      {formatMoneyDecimal(aggregate.total)} ₽
+                    </TableCell>
+                  </TableRow>
+                )
+              })
+            )}
+          </TableBody>
+          <TableFooter>
+            <TableRow>
+              <TableCell colSpan={3} className="text-right font-semibold">
+                Итого
+              </TableCell>
+              <TableCell className="font-semibold">
+                {formatMoneyDecimal(total)} ₽
+              </TableCell>
+            </TableRow>
+          </TableFooter>
+        </Table>
+      </CardContent>
+    </Card>
+  )
+}
+
 export function InventoryStatistics({
   statistics,
   findings = [],
   showCounters = true,
+  separateAggregateTables = false,
 }: {
   statistics: InventoryStatisticsDto
   findings?: InventoryFindingDto[]
   showCounters?: boolean
+  separateAggregateTables?: boolean
 }) {
   const [lineType, setLineType] = useState<"ALL" | "WORK" | "MATERIAL">("ALL")
   const repairMovementCount = inventoryRepairMovementCount(findings)
@@ -77,6 +163,20 @@ export function InventoryStatistics({
 
     return descriptions
   }, [findings])
+  const workAggregates = useMemo(
+    () =>
+      statistics.aggregates.filter(
+        (aggregate) => aggregate.lineType === "WORK"
+      ),
+    [statistics.aggregates]
+  )
+  const materialAggregates = useMemo(
+    () =>
+      statistics.aggregates.filter(
+        (aggregate) => aggregate.lineType === "MATERIAL"
+      ),
+    [statistics.aggregates]
+  )
 
   return (
     <section
@@ -239,7 +339,26 @@ export function InventoryStatistics({
         </Dialog>
       ) : null}
 
-      {statistics.aggregates.length > 0 ? (
+      {separateAggregateTables ? (
+        <div className="grid gap-4 2xl:grid-cols-2">
+          <AggregatePositionsTable
+            title="Итоги работ"
+            description="Количество, цена и сумма по каждой работе."
+            emptyMessage="Работы в итогах отсутствуют."
+            aggregates={workAggregates}
+            total={statistics.workTotal}
+            catalogDescriptions={catalogDescriptions}
+          />
+          <AggregatePositionsTable
+            title="Итоги материалов"
+            description="Количество, цена и сумма по каждому материалу."
+            emptyMessage="Материалы в итогах отсутствуют."
+            aggregates={materialAggregates}
+            total={statistics.materialTotal}
+            catalogDescriptions={catalogDescriptions}
+          />
+        </div>
+      ) : statistics.aggregates.length > 0 ? (
         <Card size="sm">
           <CardHeader>
             <CardTitle>Итоговые позиции</CardTitle>

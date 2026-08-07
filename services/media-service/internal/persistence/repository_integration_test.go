@@ -266,51 +266,6 @@ func TestRepositoryConcurrencyOwnerProofCursorAndOutboxIntegration(t *testing.T)
 	if err := repository.MarkOutboxPublished(ctx, *readyClaim); err != nil {
 		t.Fatalf("MarkOutboxPublished(ready): %v", err)
 	}
-	readyAsset, err := repository.GetAssetScoped(ctx, command.MediaID, OwnerTypeInventoryFinding, ownerID.String(), warehouseID)
-	if err != nil {
-		t.Fatalf("GetAssetScoped(ready): %v", err)
-	}
-	rotation := RotateCommand{
-		MediaID: command.MediaID, SubjectID: command.SubjectID, IdempotencyKey: uuid.New(),
-		RequestSHA256: hex64('c'), ExpectedVersion: readyAsset.Version,
-		Rotation: media.Rotation90, CorrelationID: uuid.New(),
-	}
-	if _, replay, err := repository.Rotate(ctx, rotation); err != nil || replay {
-		t.Fatalf("Rotate() = %v, %v; want new rotation", replay, err)
-	}
-	assertReplayParity(t, ctx, repository, command.MediaID)
-	rotationRequest, err := repository.ClaimOutbox(ctx, "integration-relay", time.Minute)
-	if err != nil || rotationRequest == nil || rotationRequest.Topic != ProcessingTopic {
-		t.Fatalf("rotation request claim = %#v, %v", rotationRequest, err)
-	}
-	if err := repository.MarkOutboxPublished(ctx, *rotationRequest); err != nil {
-		t.Fatalf("publish rotation request: %v", err)
-	}
-	rotationMessage := ProcessingMessage{
-		EventID: rotationRequest.EventID, BodySHA256: rotationRequest.BodySHA256,
-		Topic: ProcessingTopic, EventType: "media.processing.request.v1",
-		AggregateType: "PROCESSING_JOB", AggregateID: rotationRequest.RecordKey,
-		AggregateVersion: 1, RecordKey: rotationRequest.RecordKey,
-		CorrelationID: rotation.CorrelationID, ExpectedMediaID: command.MediaID,
-		ExpectedWarehouseID: warehouseID, ExpectedKind: media.KindImage,
-		ExpectedProcessingKind: media.ProcessingRotation, ExpectedGeneration: readyAsset.Generation + 1,
-		ExpectedRotation: media.Rotation90, ExpectedSourceVersionID: finalize.ObjectVersionID,
-	}
-	rotationJob, err := repository.ClaimProcessingJob(ctx, rotationMessage, "rotation-worker", time.Minute)
-	if err != nil || rotationJob.Duplicate {
-		t.Fatalf("rotation processing claim = %#v, %v", rotationJob, err)
-	}
-	if err := repository.CompleteProcessingJob(ctx, rotationJob.Job, processedImageVariants(command.MediaID, readyAsset.Generation+1)); err != nil {
-		t.Fatalf("complete rotation: %v", err)
-	}
-	assertReplayParity(t, ctx, repository, command.MediaID)
-	rotatedFact, err := repository.ClaimOutbox(ctx, "integration-relay", time.Minute)
-	if err != nil || rotatedFact == nil || rotatedFact.Topic != MediaTopic {
-		t.Fatalf("rotated fact claim = %#v, %v", rotatedFact, err)
-	}
-	if err := repository.MarkOutboxPublished(ctx, *rotatedFact); err != nil {
-		t.Fatalf("publish rotated fact: %v", err)
-	}
 	if remaining, err := repository.ClaimOutbox(ctx, "integration-relay", time.Minute); err != nil || remaining != nil {
 		t.Fatalf("remaining outbox claim = %#v, %v; want nil", remaining, err)
 	}

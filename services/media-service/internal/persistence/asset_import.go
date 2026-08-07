@@ -583,8 +583,7 @@ func (repository *Repository) ImportAsset(ctx context.Context, command assetimpo
 		command.CorrelationID, now, 1, media.Rotation0, nil); err != nil {
 		return assetimport.ImportAssetResult{}, err
 	}
-	if err := insertProcessingRequestOutbox(ctx, tx, jobID, asset, 1, media.ProcessingInitial, media.Rotation0,
-		command.CorrelationID, now, &uploadedID); err != nil {
+	if err := insertProcessingRequestOutbox(ctx, tx, jobID, asset, 1, command.CorrelationID, now, &uploadedID); err != nil {
 		return assetimport.ImportAssetResult{}, err
 	}
 	_, err = tx.Exec(ctx, `update media_asset_import_entry set entry_status='IMPORTED',media_id=$3,warning_code=null,

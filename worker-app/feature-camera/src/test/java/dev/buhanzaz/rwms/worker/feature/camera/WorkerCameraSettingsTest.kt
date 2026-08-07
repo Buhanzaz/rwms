@@ -2,7 +2,10 @@ package dev.buhanzaz.rwms.worker.feature.camera
 
 import com.google.common.truth.Truth.assertThat
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.junit.runners.JUnit4
 
+@RunWith(JUnit4::class)
 class WorkerCameraSettingsTest {
     @Test
     fun `photo controls match manager 0_3_29 zoom and setting normalization`() {

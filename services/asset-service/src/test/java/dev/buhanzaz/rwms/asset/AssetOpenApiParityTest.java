@@ -115,9 +115,20 @@ class AssetOpenApiParityTest {
     Map<String, Object> inventorySourceAsset =
         child(schemas, "InventorySourceAssetRequest");
     assertThat(list(inventorySourceAsset.get("required")))
-        .contains("inventoryId", "findingId", "warehouseId", "number", "linoleum");
+        .containsExactly("inventoryId", "findingId", "warehouseId", "number", "linoleum");
     assertThat(child(child(inventorySourceAsset, "properties"), "linoleum"))
         .containsEntry("type", "boolean");
+    assertThat(child(inventorySourceAsset, "properties").keySet())
+        .contains(
+            "rentalTypeId",
+            "dimensionId",
+            "finishingId",
+            "characteristicIds",
+            "rentalType",
+            "dimensions",
+            "finishing",
+            "characteristics");
+    assertThat(list(inventorySourceAsset.get("oneOf"))).hasSize(2);
     assertThat(list(child(schemas, "RentalItem").get("required")))
         .contains(
             "id",

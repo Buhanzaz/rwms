@@ -5,7 +5,6 @@ import com.squareup.moshi.JsonDataException
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import dev.buhanzaz.rwms.manager.network.ExplicitNullJsonAdapterFactory
-import dev.buhanzaz.rwms.manager.network.MediaAssetDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.network.RwmsApi
 import java.util.concurrent.TimeUnit
@@ -221,57 +220,6 @@ class MediaUploaderHttpContractTest {
             }
         }
 
-    @Test
-    fun `rotation keeps one media id and waits for its new canonical generation`() = runTest {
-        val mediaId = "11111111-1111-1111-1111-111111111111"
-        val readyBeforeRotation = assetJson(
-            mediaId = mediaId,
-            status = "READY",
-            generation = 1,
-            version = 7,
-            rotationDegrees = 0,
-        )
-        val processing = assetJson(
-            mediaId = mediaId,
-            status = "PROCESSING",
-            generation = 1,
-            version = 8,
-            rotationDegrees = 0,
-        )
-        val readyAfterRotation = assetJson(
-            mediaId = mediaId,
-            status = "READY",
-            generation = 2,
-            version = 9,
-            rotationDegrees = 90,
-        )
-        server.enqueue(json(processing, 202))
-        server.enqueue(json("""{"items":[$processing],"next":null}"""))
-        server.enqueue(json("""{"items":[$readyAfterRotation],"next":null}"""))
-
-        val reference = uploader().rotate(
-            owner = owner(),
-            asset = mediaAsset(readyBeforeRotation),
-            rotationDegrees = 90,
-        )
-
-        assertThat(reference).isEqualTo(MediaReferenceDto(mediaId, 2))
-        val rotation = checkNotNull(server.takeRequest(5, TimeUnit.SECONDS))
-        assertThat(rotation.method).isEqualTo("POST")
-        assertThat(rotation.path).isEqualTo(
-            "/api/media/v1/assets/$mediaId/rotation?ownerType=INVENTORY_FINDING" +
-                "&ownerId=${owner().ownerId}&warehouseId=${owner().warehouseId}&context=INSPECTION",
-        )
-        assertThat(rotation.getHeader("Idempotency-Key")).isNotEmpty()
-        assertThat(rotation.body.readUtf8())
-            .isEqualTo("""{"rotationDegrees":90,"expectedVersion":7}""")
-        repeat(2) {
-            val ownerRead = checkNotNull(server.takeRequest(5, TimeUnit.SECONDS))
-            assertThat(ownerRead.method).isEqualTo("GET")
-            assertThat(ownerRead.path).contains("/api/media/v1/assets?")
-        }
-    }
-
     private fun uploader(): MediaUploader =
         MediaUploader(
             api = api,
@@ -321,11 +269,4 @@ class MediaUploaderHttpContractTest {
     ): String =
         """{"id":"$mediaId","folderId":"55555555-5555-5555-5555-555555555555","clientReferenceId":null,"fileName":"photo.jpg","contentType":"image/jpeg","kind":"IMAGE","status":"$status","version":$version,"generation":$generation,"rotationDegrees":$rotationDegrees,"sortOrder":0,"sizeBytes":4,"createdAt":"2026-07-28T00:00:00Z","variants":[]}"""
 
-    private fun mediaAsset(json: String): MediaAssetDto =
-        Moshi.Builder()
-            .add(ExplicitNullJsonAdapterFactory)
-            .addLast(KotlinJsonAdapterFactory())
-            .build()
-            .adapter(MediaAssetDto::class.java)
-            .fromJson(json)!!
 }

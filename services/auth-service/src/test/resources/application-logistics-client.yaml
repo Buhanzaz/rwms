@@ -5,7 +5,7 @@ rwms:
         - client-id: logistics-service
           client-name: Logistics Service Downstream Client
           enabled: ${LOGISTICS_CLIENT_ENABLED:false}
-          revision: 2
+          revision: 6
           authentication-methods: [client_secret_basic]
           grant-types: [client_credentials]
           scopes: [warehouse.logistics, warehouse.timezone.read, warehouse.operation.mark, warehouse.lifecycle.read, warehouse.lifecycle.confirm, asset.logistics, task-board.logistics, maintenance.logistics, media.logistics]

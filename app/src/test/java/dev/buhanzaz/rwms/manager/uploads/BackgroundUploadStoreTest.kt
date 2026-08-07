@@ -130,6 +130,107 @@ class BackgroundUploadStoreTest {
         assertThat(restored.operation("operation-1")).isEqualTo(operation())
     }
 
+    @Test
+    fun `legacy rotation fields do not prevent durable inventory recovery after app update`() {
+        runBlocking {
+            val root = context.filesDir.resolve("background-uploads").apply { mkdirs() }
+            root.resolve("queue.json").writeText(
+                """
+                {
+                  "schemaVersion": 1,
+                  "operations": [{
+                    "id": "operation-legacy",
+                    "area": "INVENTORY",
+                    "title": "Проверка бытовки БЫТ-001",
+                    "createdAtEpochMillis": 100,
+                    "updatedAtEpochMillis": 100,
+                    "photos": [{
+                      "id": "photo-legacy",
+                      "sourceName": "door.jpg",
+                      "durableUri": "file:///legacy/door.jpg",
+                      "owner": {
+                        "ownerType": "INVENTORY_FINDING",
+                        "warehouseId": "warehouse-1",
+                        "context": "INSPECTION",
+                        "ownerId": "finding-1"
+                      },
+                      "sortOrder": 0,
+                      "rotationDegrees": 90,
+                      "status": "READY",
+                      "reference": { "mediaId": "media-1", "generation": 2 }
+                    }],
+                    "inventory": {
+                      "inventoryId": "inventory-1",
+                      "findingId": "finding-1",
+                      "expectedFindingRevision": 1,
+                      "inspection": "READY",
+                      "comment": "",
+                      "passportObservation": { "presence": "ABSENT", "value": null },
+                      "equipmentObservation": { "presence": "ABSENT", "value": null },
+                      "existingMedia": [{ "mediaId": "media-1", "generation": 2 }],
+                      "existingMediaRotations": [{
+                        "reference": { "mediaId": "media-1", "generation": 2 },
+                        "rotationDegrees": 90
+                      }]
+                    }
+                  }]
+                }
+                """.trimIndent(),
+            )
+
+            val store = BackgroundUploadStore.get(context)
+            store.initialize()
+            val restored = requireNotNull(store.operation("operation-legacy"))
+
+            assertThat(restored.photos.single().reference)
+                .isEqualTo(MediaReferenceDto("media-1", 2))
+            assertThat(restored.inventory?.existingMedia)
+                .containsExactly(MediaReferenceDto("media-1", 2))
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    @Test
+    fun `legacy return estimate upload survives removal of shortage fields`() {
+        runBlocking {
+            val root = context.filesDir.resolve("background-uploads").apply { mkdirs() }
+            root.resolve("queue.json").writeText(
+                """
+                {
+                  "schemaVersion": 1,
+                  "operations": [{
+                    "id": "operation-return",
+                    "area": "LOGISTICS",
+                    "title": "Возврат со сметой",
+                    "createdAtEpochMillis": 100,
+                    "updatedAtEpochMillis": 100,
+                    "returnAction": {
+                      "documentId": "return-1",
+                      "warehouseId": "warehouse-1",
+                      "expectedVersion": 2,
+                      "action": "REQUEST_ESTIMATE",
+                      "lines": [{
+                        "lineId": "line-1",
+                        "shortages": [{ "equipmentId": "chair-1", "missingQuantity": 2 }],
+                        "existingMedia": [{ "mediaId": "photo-1", "generation": 3 }]
+                      }],
+                      "idempotencyKey": "return-estimate-1"
+                    }
+                  }]
+                }
+                """.trimIndent(),
+            )
+
+            val store = BackgroundUploadStore.get(context)
+            store.initialize()
+            val restored = requireNotNull(store.operation("operation-return")).returnAction
+
+            assertThat(restored?.action).isEqualTo(ReturnUploadAction.REQUEST_ESTIMATE)
+            assertThat(restored?.lines?.single()?.existingMedia)
+                .containsExactly(MediaReferenceDto("photo-1", 3))
+        }
+    }
+
     private fun operation(
         photo: BackgroundUploadPhoto? = null,
     ) = BackgroundUploadOperation(

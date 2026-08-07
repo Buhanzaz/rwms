@@ -7,6 +7,14 @@ import {
   PageToolbarContent,
 } from "@/components/page-toolbar"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ArrowLeft01Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons"
@@ -17,6 +25,10 @@ import {
   saveRepairEstimateDraft,
 } from "@/features/repair-estimates/api/repair-estimates-api"
 import {
+  requiresUnaccountedFurnitureConfirmation,
+  UnaccountedFurnitureConfirmationRequiredError,
+} from "@/features/repair-estimates/api/unaccounted-furniture-confirmation"
+import {
   applyEstimateRentalItemSelection,
   assertEstimateLinesValid,
   calculateEstimateTotal,
@@ -24,13 +36,10 @@ import {
   toEstimateEditorDraft,
 } from "@/features/repair-estimates/domain/repair-estimate-domain"
 import type {
-  LogisticsPlanningMode,
-  RepairEstimateCompletionMode,
+  CompleteRepairEstimateInput,
   RepairEstimateDto,
   RepairEstimateEditorDraft,
   RepairEstimateLineDto,
-  RepairPriority,
-  RepairEstimateTaskPlanDto,
 } from "@/features/repair-estimates/model/repair-estimate"
 import {
   RepairEstimateCatalogPicker,
@@ -61,6 +70,11 @@ export type RepairEstimateEditorWorkspaceProps = {
   initialRentalItemId?: string
   authorDisplayName?: string
 }
+
+type RepairEstimateCompletionParameters = Omit<
+  CompleteRepairEstimateInput,
+  "draft" | "warehouseId"
+>
 
 function RepairEstimateEditorToolbar({
   onClose,
@@ -163,6 +177,10 @@ function RepairEstimateEditorContent({
   const [catalogPager, setCatalogPager] =
     useState<RepairEstimateCatalogPager | null>(null)
   const [completionOpen, setCompletionOpen] = useState(false)
+  const [
+    unaccountedFurnitureConfirmation,
+    setUnaccountedFurnitureConfirmation,
+  ] = useState<RepairEstimateCompletionParameters | null>(null)
   const [showBeforePhotos, setShowBeforePhotos] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const mediaOwner = draft.estimateId
@@ -256,14 +274,7 @@ function RepairEstimateEditorContent({
   })
 
   const completeMutation = useMutation({
-    mutationFn: async (params: {
-      completionMode: RepairEstimateCompletionMode
-      movementToRepair: boolean
-      logisticsPlanningMode: LogisticsPlanningMode
-      logisticsScheduledDate: string | null
-      taskPlans: RepairEstimateTaskPlanDto[]
-      priority: RepairPriority
-    }) => {
+    mutationFn: async (params: RepairEstimateCompletionParameters) => {
       if (readOnly) {
         throw new Error("Для завершения сметы нужен доступ EDIT")
       }
@@ -276,6 +287,7 @@ function RepairEstimateEditorContent({
     },
     onSuccess: async (saved) => {
       setCompletionOpen(false)
+      setUnaccountedFurnitureConfirmation(null)
       queryClient.setQueryData(
         repairEstimateDetailQueryKey(warehouseId, saved.id),
         saved
@@ -300,12 +312,31 @@ function RepairEstimateEditorContent({
       })
       void queryClient.invalidateQueries({ queryKey: ["rental-item"] })
     },
-    onError: (unknownError) =>
+    onError: (unknownError, params) => {
+      if (
+        requiresUnaccountedFurnitureConfirmation(unknownError) &&
+        !params.allowUnaccountedFurniture
+      ) {
+        if (
+          unknownError instanceof UnaccountedFurnitureConfirmationRequiredError
+        ) {
+          setDraft((current) => ({
+            ...current,
+            estimateId: unknownError.savedEstimateId,
+            expectedVersion: unknownError.savedEstimateVersion,
+          }))
+        }
+        setCompletionOpen(false)
+        setUnaccountedFurnitureConfirmation(params)
+        setError(null)
+        return
+      }
       setError(
         unknownError instanceof Error
           ? unknownError.message
           : "Не удалось завершить смету"
-      ),
+      )
+    },
   })
 
   const totalAmount = useMemo(() => {
@@ -344,6 +375,15 @@ function RepairEstimateEditorContent({
 
   function closeEditor() {
     onClose()
+  }
+
+  function confirmUnaccountedFurnitureCompletion() {
+    if (!unaccountedFurnitureConfirmation || completeMutation.isPending) return
+    setError(null)
+    completeMutation.mutate({
+      ...unaccountedFurnitureConfirmation,
+      allowUnaccountedFurniture: true,
+    })
   }
 
   const mutationPending = saveMutation.isPending || completeMutation.isPending
@@ -593,10 +633,68 @@ function RepairEstimateEditorContent({
         onComplete={(params) => {
           if (!readOnly) {
             setError(null)
-            completeMutation.mutate(params)
+            completeMutation.mutate({
+              ...params,
+              allowUnaccountedFurniture: false,
+            })
           }
         }}
       />
+      <UnaccountedFurnitureConfirmationDialog
+        open={unaccountedFurnitureConfirmation !== null}
+        pending={completeMutation.isPending}
+        onOpenChange={(open) => {
+          if (!open && !completeMutation.isPending) {
+            setUnaccountedFurnitureConfirmation(null)
+          }
+        }}
+        onConfirm={confirmUnaccountedFurnitureCompletion}
+      />
     </>
+  )
+}
+
+function UnaccountedFurnitureConfirmationDialog({
+  open,
+  pending,
+  onOpenChange,
+  onConfirm,
+}: {
+  open: boolean
+  pending: boolean
+  onOpenChange: (open: boolean) => void
+  onConfirm: () => void
+}) {
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!pending) onOpenChange(nextOpen)
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Выполнить без учёта допоборудования?</DialogTitle>
+          <DialogDescription>
+            В наполнении бытовки нет учтённой мебели. Мебель из сметы попадёт в
+            отдельное утверждение как утрата, но остаток дополнительного
+            оборудования на складе не изменится.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending}
+            onClick={() => onOpenChange(false)}
+          >
+            Вернуться к смете
+          </Button>
+          <Button type="button" disabled={pending} onClick={onConfirm}>
+            {pending ? "Выполняем…" : "Выполнить без учёта склада"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

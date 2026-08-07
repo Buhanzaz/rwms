@@ -379,11 +379,7 @@ public class InventoryAssetService {
       InventorySourceAssetRequest request) {
     String passportJson = write(request.passport() == null ? Map.of() : request.passport());
     String tagsJson = write(request.tags() == null ? List.of() : request.tags());
-    CabinCompositionService.CabinSelection selection = cabinComposition.requireSelection(
-        request.rentalTypeId(),
-        request.dimensionId(),
-        request.finishingId(),
-        request.characteristicIds());
+    CabinCompositionService.CabinSelection selection = sourceSelection(request);
     CabinCompositionService.CategorySelection category =
         cabinComposition.requireCategory(request.category());
     RentalItem candidate = RentalItem.createFromInventory(
@@ -397,7 +393,7 @@ public class InventoryAssetService {
         request.linoleum(),
         passportJson,
         tagsJson);
-    String fingerprint = canonicalHash(sourceFingerprint(request, candidate));
+    String fingerprint = canonicalHash(sourceFingerprint(request, candidate, selection));
     warehouses.requireIncoming(request.warehouseId());
 
     InventoryAssetSourceId sourceId =
@@ -1092,7 +1088,58 @@ public class InventoryAssetService {
         tenant);
   }
 
-  private Map<String, ?> sourceFingerprint(InventorySourceAssetRequest request, RentalItem item) {
+  /**
+   * A source asset accepts exactly one passport representation.  UUIDs are canonical for every
+   * new caller; the names branch is the supported manager compatibility format and is resolved by
+   * the asset-owned catalog before the permanent source identity is registered.
+   */
+  private CabinCompositionService.CabinSelection sourceSelection(
+      InventorySourceAssetRequest request) {
+    boolean hasCanonicalValues = request.rentalTypeId() != null
+        || request.dimensionId() != null
+        || request.finishingId() != null
+        || request.characteristicIds() != null;
+    boolean hasLegacyValues = request.rentalType() != null
+        || request.dimensions() != null
+        || request.finishing() != null
+        || request.characteristics() != null;
+    if (hasCanonicalValues && hasLegacyValues) {
+      throw new IllegalArgumentException(
+          "Inventory source asset must use either catalog UUIDs or legacy passport names, not both");
+    }
+    if (hasCanonicalValues) {
+      if (request.rentalTypeId() == null
+          || request.dimensionId() == null
+          || request.finishingId() == null
+          || request.characteristicIds() == null) {
+        throw new IllegalArgumentException("Canonical inventory source passport is incomplete");
+      }
+      return cabinComposition.requireSelection(
+          request.rentalTypeId(),
+          request.dimensionId(),
+          request.finishingId(),
+          request.characteristicIds());
+    }
+    if (!hasLegacyValues
+        || request.rentalType() == null
+        || request.rentalType().isBlank()
+        || request.dimensions() == null
+        || request.dimensions().isBlank()
+        || request.finishing() == null
+        || request.finishing().isBlank()) {
+      throw new IllegalArgumentException("Legacy inventory source passport is incomplete");
+    }
+    return cabinComposition.requireLegacyInventorySelection(
+        request.rentalType(),
+        request.dimensions(),
+        request.finishing(),
+        request.characteristics());
+  }
+
+  private Map<String, ?> sourceFingerprint(
+      InventorySourceAssetRequest request,
+      RentalItem item,
+      CabinCompositionService.CabinSelection selection) {
     Map<String, Object> value = new LinkedHashMap<>();
     value.put("inventoryId", request.inventoryId());
     value.put("findingId", request.findingId());
@@ -1103,7 +1150,7 @@ public class InventoryAssetService {
     value.put("dimensionId", item.getDimensionId());
     value.put("finishingId", item.getFinishingId());
     value.put("category", item.getCategory());
-    value.put("characteristicIds", request.characteristicIds());
+    value.put("characteristicIds", selection.characteristicIds());
     value.put("linoleum", item.getLinoleum());
     value.put("passport", request.passport() == null ? Map.of() : request.passport());
     value.put("tags", request.tags() == null ? List.of() : request.tags());

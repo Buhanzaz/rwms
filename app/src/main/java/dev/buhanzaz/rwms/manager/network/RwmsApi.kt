@@ -110,12 +110,12 @@ interface RwmsApi {
         @Body request: AcceptReturnRequest,
     ): LogisticsDocumentDto
 
-    @POST("api/logistics/v1/returns/{documentId}/request-estimate")
-    suspend fun requestReturnEstimate(
+    @POST("api/logistics/v1/returns/{documentId}/start-estimates")
+    suspend fun startReturnEstimates(
         @Path("documentId") documentId: String,
         @Query("expectedVersion") expectedVersion: Long,
         @Header("Idempotency-Key") idempotencyKey: String,
-        @Body request: RequestReturnEstimateRequest,
+        @Body request: StartReturnEstimatesRequest,
     ): LogisticsDocumentDto
 
     @GET("api/logistics/v1/shipments")
@@ -240,6 +240,12 @@ interface RwmsApi {
         @Header("If-None-Match") ifNoneMatch: String? = null,
     ): Response<EstimatePageDto>
 
+    @GET("api/maintenance/v1/estimates/return-sources")
+    suspend fun returnEstimateSources(
+        @Query("warehouseId") warehouseId: String,
+        @Query("returnId") returnId: String,
+    ): List<ReturnEstimateSourceDto>
+
     @POST("api/maintenance/v1/estimates")
     suspend fun createEstimate(
         @Header("Idempotency-Key") idempotencyKey: String,
@@ -272,7 +278,7 @@ interface RwmsApi {
         @Path("estimateId") estimateId: String,
         @Query("warehouseId") warehouseId: String,
         @Header("Idempotency-Key") idempotencyKey: String,
-        @Body request: PriorityVersionRequest,
+        @Body request: CompleteEstimateRequest,
     ): EstimateCommandResultDto
 
     @GET("api/maintenance/v1/repairs")
@@ -403,19 +409,6 @@ interface RwmsApi {
         @Path("uploadSessionId") uploadSessionId: String,
         @Header("Idempotency-Key") idempotencyKey: String,
         @Body request: FinalizeUploadRequest,
-    ): MediaAssetDto
-
-    @POST("api/media/v1/assets/{mediaId}/rotation")
-    suspend fun rotateMedia(
-        @Path("mediaId") mediaId: String,
-        @Header("Idempotency-Key") idempotencyKey: String,
-        @Query("ownerType") ownerType: String,
-        @Query("ownerId") ownerId: String? = null,
-        @Query("documentId") documentId: String? = null,
-        @Query("lineId") lineId: String? = null,
-        @Query("warehouseId") warehouseId: String,
-        @Query("context") context: String,
-        @Body request: RotateMediaRequest,
     ): MediaAssetDto
 
     @GET("api/media/v1/assets")

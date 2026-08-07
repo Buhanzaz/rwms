@@ -12,7 +12,7 @@ import (
 	"github.com/h2non/bimg"
 )
 
-func TestImageProcessorRotatesCanonicalOriginalAndCreatesWebPVariants(t *testing.T) {
+func TestImageProcessorKeepsUploadedPixelOrientationAndCreatesWebPVariants(t *testing.T) {
 	store := newMemoryObjectStore(map[string][]byte{
 		"media/m-1/source/upload.jpg": testJPEG(t, 64, 32),
 	})
@@ -22,7 +22,6 @@ func TestImageProcessorRotatesCanonicalOriginalAndCreatesWebPVariants(t *testing
 		SourceObjectKey: "media/m-1/source/upload.jpg",
 		SourceVersionID: "version-1",
 		Generation:      2,
-		Rotation:        Rotation90,
 		Variants: VariantConfiguration{
 			SmallLongEdge:  16,
 			MediumLongEdge: 32,
@@ -39,17 +38,17 @@ func TestImageProcessorRotatesCanonicalOriginalAndCreatesWebPVariants(t *testing
 	if got, want := result.Original.ContentType, "image/jpeg"; got != want {
 		t.Fatalf("original content type = %q, want %q", got, want)
 	}
-	if got, want := [2]int{result.Original.Width, result.Original.Height}, [2]int{32, 64}; got != want {
-		t.Fatalf("rotated original dimensions = %v, want %v", got, want)
+	if got, want := [2]int{result.Original.Width, result.Original.Height}, [2]int{64, 32}; got != want {
+		t.Fatalf("original dimensions = %v, want %v", got, want)
 	}
 	if len(result.Variants) != 3 {
 		t.Fatalf("variant count = %d, want 3", len(result.Variants))
 	}
 
 	wantDimensions := map[Variant][2]int{
-		VariantSmall:  {8, 16},
-		VariantMedium: {16, 32},
-		VariantLarge:  {24, 48},
+		VariantSmall:  {16, 8},
+		VariantMedium: {32, 16},
+		VariantLarge:  {48, 24},
 	}
 	for _, variant := range result.Variants {
 		if got, want := variant.ContentType, "image/webp"; got != want {
@@ -64,126 +63,54 @@ func TestImageProcessorRotatesCanonicalOriginalAndCreatesWebPVariants(t *testing
 	}
 }
 
-func TestImageProcessorAutoRotatesEXIFJPEGBeforeGeneratingVariants(t *testing.T) {
+func TestImageProcessorDoesNotApplyEXIFOrientation(t *testing.T) {
 	const (
 		sourceWidth  = 80
 		sourceHeight = 40
 	)
-	source := testJPEGWithEXIFOrientation(t, sourceWidth, sourceHeight, 6)
-	metadata, err := bimg.NewImage(source).Metadata()
-	if err != nil {
-		t.Fatalf("read EXIF orientation: %v", err)
-	}
-	if got, want := metadata.Orientation, 6; got != want {
-		t.Fatalf("source EXIF orientation = %d, want %d", got, want)
-	}
+	for _, test := range []struct {
+		name   string
+		source []byte
+	}{
+		{name: "short EXIF orientation", source: testJPEGWithEXIFOrientation(t, sourceWidth, sourceHeight, 6)},
+		{name: "Android long EXIF orientation", source: testJPEGWithLongEXIFOrientation(t, sourceWidth, sourceHeight, 6)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			metadata, err := bimg.NewImage(test.source).Metadata()
+			if err != nil {
+				t.Fatalf("read source EXIF orientation: %v", err)
+			}
+			if got, want := metadata.Orientation, 6; got != want {
+				t.Fatalf("source EXIF orientation = %d, want %d", got, want)
+			}
 
-	store := newMemoryObjectStore(map[string][]byte{
-		"media/m-1/source/upload.jpg": source,
-	})
-	result, err := (ImageProcessor{Store: store, Limits: testProcessingLimits()}).Process(context.Background(), ImageProcessRequest{
-		MediaID:         "m-1",
-		SourceObjectKey: "media/m-1/source/upload.jpg",
-		SourceVersionID: "version-1",
-		Generation:      1,
-		Rotation:        Rotation0,
-		Variants: VariantConfiguration{
-			SmallLongEdge:  80,
-			MediumLongEdge: 80,
-			LargeLongEdge:  80,
-		},
-	})
-	if err != nil {
-		t.Fatalf("Process() error = %v", err)
-	}
+			store := newMemoryObjectStore(map[string][]byte{"media/m-1/source/upload.jpg": test.source})
+			result, err := (ImageProcessor{Store: store, Limits: testProcessingLimits()}).Process(context.Background(), ImageProcessRequest{
+				MediaID:         "m-1",
+				SourceObjectKey: "media/m-1/source/upload.jpg",
+				SourceVersionID: "version-1",
+				Generation:      1,
+				Variants: VariantConfiguration{
+					SmallLongEdge:  80,
+					MediumLongEdge: 80,
+					LargeLongEdge:  80,
+				},
+			})
+			if err != nil {
+				t.Fatalf("Process() error = %v", err)
+			}
+			if got, want := [2]int{result.Original.Width, result.Original.Height}, [2]int{sourceWidth, sourceHeight}; got != want {
+				t.Fatalf("canonical dimensions = %v, want uploaded pixels %v", got, want)
+			}
+			assertRawOrientation(t, decodeJPEG(t, store.objects[result.Original.ObjectKey]))
 
-	if got, want := [2]int{result.Original.Width, result.Original.Height}, [2]int{sourceHeight, sourceWidth}; got != want {
-		t.Fatalf("canonical dimensions = %v, want %v after EXIF rotation", got, want)
+			large := processedVariant(t, result.Variants, VariantLarge)
+			if got, want := [2]int{large.Width, large.Height}, [2]int{sourceWidth, sourceHeight}; got != want {
+				t.Fatalf("large dimensions = %v, want uploaded pixels %v", got, want)
+			}
+			assertRawOrientation(t, decodeWebP(t, store.objects[large.ObjectKey]))
+		})
 	}
-	assertEXIFOrientationSix(t, decodeJPEG(t, store.objects[result.Original.ObjectKey]))
-
-	large := processedVariant(t, result.Variants, VariantLarge)
-	if got, want := [2]int{large.Width, large.Height}, [2]int{sourceHeight, sourceWidth}; got != want {
-		t.Fatalf("large derivative dimensions = %v, want %v after EXIF rotation", got, want)
-	}
-	assertEXIFOrientationSix(t, decodeWebP(t, store.objects[large.ObjectKey]))
-}
-
-func TestImageProcessorAutoRotatesAndroidLongEXIFOrientation(t *testing.T) {
-	const (
-		sourceWidth  = 80
-		sourceHeight = 40
-	)
-	source := testJPEGWithLongEXIFOrientation(t, sourceWidth, sourceHeight, 6)
-	metadata, err := bimg.NewImage(source).Metadata()
-	if err != nil {
-		t.Fatalf("read Android EXIF orientation: %v", err)
-	}
-	if got, want := metadata.Orientation, 6; got != want {
-		t.Fatalf("source Android EXIF orientation = %d, want %d", got, want)
-	}
-
-	store := newMemoryObjectStore(map[string][]byte{
-		"media/m-android/source/upload.jpg": source,
-	})
-	result, err := (ImageProcessor{Store: store, Limits: testProcessingLimits()}).Process(
-		context.Background(),
-		ImageProcessRequest{
-			MediaID:         "m-android",
-			SourceObjectKey: "media/m-android/source/upload.jpg",
-			SourceVersionID: "version-android",
-			Generation:      1,
-			Rotation:        Rotation0,
-			Variants: VariantConfiguration{
-				SmallLongEdge:  80,
-				MediumLongEdge: 80,
-				LargeLongEdge:  80,
-			},
-		},
-	)
-	if err != nil {
-		t.Fatalf("Process() error = %v", err)
-	}
-	if got, want := [2]int{result.Original.Width, result.Original.Height}, [2]int{sourceHeight, sourceWidth}; got != want {
-		t.Fatalf("canonical dimensions = %v, want %v after Android EXIF rotation", got, want)
-	}
-	assertEXIFOrientationSix(t, decodeJPEG(t, store.objects[result.Original.ObjectKey]))
-}
-
-func TestImageProcessorAppliesExplicitRotationAfterEXIFOrientation(t *testing.T) {
-	const (
-		sourceWidth  = 80
-		sourceHeight = 40
-	)
-	store := newMemoryObjectStore(map[string][]byte{
-		"media/m-1/source/upload.jpg": testJPEGWithEXIFOrientation(t, sourceWidth, sourceHeight, 6),
-	})
-	result, err := (ImageProcessor{Store: store, Limits: testProcessingLimits()}).Process(context.Background(), ImageProcessRequest{
-		MediaID:         "m-1",
-		SourceObjectKey: "media/m-1/source/upload.jpg",
-		SourceVersionID: "version-1",
-		Generation:      1,
-		Rotation:        Rotation90,
-		Variants: VariantConfiguration{
-			SmallLongEdge:  80,
-			MediumLongEdge: 80,
-			LargeLongEdge:  80,
-		},
-	})
-	if err != nil {
-		t.Fatalf("Process() error = %v", err)
-	}
-
-	// Orientation 6 makes the raw 80x40 frame upright as 40x80.  The
-	// explicit 90 degree action is then applied to that upright frame, not to
-	// the original sideways pixels.
-	if got, want := [2]int{result.Original.Width, result.Original.Height}, [2]int{sourceWidth, sourceHeight}; got != want {
-		t.Fatalf("canonical dimensions = %v, want %v after EXIF and explicit rotation", got, want)
-	}
-	assertQuadrants(t, decodeJPEG(t, store.objects[result.Original.ObjectKey]), []string{
-		"yellow", "blue",
-		"green", "red",
-	})
 }
 
 func processedVariant(t *testing.T, variants []ProcessedVariant, wanted Variant) ProcessedVariant {
@@ -219,15 +146,15 @@ func decodeWebP(t *testing.T, source []byte) image.Image {
 	return decoded
 }
 
-func assertEXIFOrientationSix(t *testing.T, decoded image.Image) {
+func assertRawOrientation(t *testing.T, decoded image.Image) {
 	t.Helper()
 	bounds := decoded.Bounds()
-	if got, want := [2]int{bounds.Dx(), bounds.Dy()}, [2]int{40, 80}; got != want {
+	if got, want := [2]int{bounds.Dx(), bounds.Dy()}, [2]int{80, 40}; got != want {
 		t.Fatalf("decoded dimensions = %v, want %v", got, want)
 	}
 	assertQuadrants(t, decoded, []string{
-		"blue", "red",
-		"yellow", "green",
+		"red", "green",
+		"blue", "yellow",
 	})
 }
 

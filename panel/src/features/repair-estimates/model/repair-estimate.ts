@@ -197,6 +197,8 @@ export type CompleteRepairEstimateCommand = RepairEstimateDraftCommand & {
   logisticsScheduledDate: string | null
   taskPlans: RepairEstimateTaskPlanCommandDto[]
   priority: RepairPriority
+  /** Explicitly confirms that a legacy cabin has no recorded furniture contents. */
+  allowUnaccountedFurniture?: boolean
 }
 
 export type AmendCompletedRepairEstimateCommand = Omit<
@@ -269,6 +271,7 @@ export type CompleteRepairEstimateInput = {
   logisticsScheduledDate: string | null
   taskPlans: RepairEstimateTaskPlanDto[]
   priority: RepairPriority
+  allowUnaccountedFurniture?: boolean
 }
 
 export type AmendCompletedRepairEstimateInput = Omit<

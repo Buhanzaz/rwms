@@ -13,7 +13,6 @@ import {
   Camera01Icon,
   Cancel01Icon,
   Home01Icon,
-  RotateLeft01Icon,
   ZoomInAreaIcon,
   ZoomOutAreaIcon,
 } from "@hugeicons/core-free-icons"
@@ -52,7 +51,6 @@ export type PhotoCarouselPhoto = {
 }
 
 type PhotoSource = string | PhotoCarouselPhoto
-type Orientation = 0 | 90 | 180 | 270
 
 type PhotoCarouselProps = {
   photos: PhotoSource[]
@@ -508,9 +506,6 @@ function PhotoFullscreenViewer({
   onOpenChange,
 }: PhotoFullscreenViewerProps) {
   const [api, setApi] = useState<CarouselApi>()
-  const [orientationById, setOrientationById] = useState<
-    Record<string, Orientation>
-  >({})
   const [zoomedPhotoId, setZoomedPhotoId] = useState<string | null>(null)
   const safeIndex =
     activeIndex >= 0 && activeIndex < photos.length ? activeIndex : 0
@@ -555,18 +550,6 @@ function PhotoFullscreenViewer({
     },
     [onOpenChange]
   )
-
-  function rotateCurrentPhoto() {
-    const photo = photos[safeIndex]
-    if (!photo) return
-    setOrientationById((current) => {
-      const orientation = current[photo.id] ?? 0
-      return {
-        ...current,
-        [photo.id]: ((orientation + 270) % 360) as Orientation,
-      }
-    })
-  }
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -641,7 +624,7 @@ function PhotoFullscreenViewer({
                       draggable={false}
                       className="max-h-full max-w-full object-contain transition-transform duration-200 select-none"
                       style={{
-                        transform: `rotate(${orientationById[photo.id] ?? 0}deg) scale(${zoomed ? 2 : 1})`,
+                        transform: `scale(${zoomed ? 2 : 1})`,
                         transformOrigin: "center center",
                       }}
                     />
@@ -724,16 +707,6 @@ function PhotoFullscreenViewer({
                 }}
               >
                 <HugeiconsIcon icon={ArrowRight01Icon} />
-              </Button>
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                aria-label="Повернуть фото"
-                className="rounded-full text-white hover:bg-white/20 hover:text-white"
-                onClick={rotateCurrentPhoto}
-              >
-                <HugeiconsIcon icon={RotateLeft01Icon} />
               </Button>
               <Button
                 type="button"

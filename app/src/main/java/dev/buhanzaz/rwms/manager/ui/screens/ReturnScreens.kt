@@ -1,7 +1,6 @@
 package dev.buhanzaz.rwms.manager.ui.screens
 
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -14,14 +13,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuAnchorType
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -32,13 +25,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import dev.buhanzaz.rwms.manager.network.EquipmentCatalogItemDto
 import dev.buhanzaz.rwms.manager.network.LogisticsDocumentDto
 import dev.buhanzaz.rwms.manager.network.LogisticsLineDto
+import dev.buhanzaz.rwms.manager.network.ReturnEstimateSourceDto
 import dev.buhanzaz.rwms.manager.ui.ManagerUiState
-import dev.buhanzaz.rwms.manager.ui.ReturnEquipmentCatalogStatus
 import dev.buhanzaz.rwms.manager.ui.returnInspectionActionError
 import dev.buhanzaz.rwms.manager.ui.components.EmptyState
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPanel
@@ -120,9 +111,12 @@ fun ReturnInspectionScreen(
     onBack: () -> Unit,
     onOpenPhotos: (String) -> Unit,
     onConfirmEquipment: (lineId: String, confirmed: Boolean) -> Unit,
-    onUpdateShortage: (lineId: String, equipmentId: String, quantity: String) -> Unit,
     onAccept: (() -> Unit) -> Unit,
-    onCreateEstimate: (() -> Unit) -> Unit,
+    onStartEstimates: (
+        onSourcesReady: (List<ReturnEstimateSourceDto>) -> Unit,
+        onQueued: () -> Unit,
+    ) -> Unit,
+    onEstimatesReady: (List<ReturnEstimateSourceDto>) -> Unit,
 ) {
     val document = uiState.selectedReturn
     if (document == null) {
@@ -138,9 +132,7 @@ fun ReturnInspectionScreen(
     var pendingAction by remember(document.id) { mutableStateOf<ReturnAction?>(null) }
     val inspectionActionError = document.returnInspectionActionError()
     val inspectionAvailable = inspectionActionError == null
-    val estimateAvailable = inspectionAvailable &&
-        !uiState.busy &&
-        uiState.returnEquipmentCatalogStatus == ReturnEquipmentCatalogStatus.AVAILABLE
+    val estimateAvailable = inspectionAvailable && !uiState.busy
 
     ManagerScreenScaffold(title = "Осмотр возврата", onBack = onBack) { padding ->
         LazyColumn(
@@ -163,15 +155,8 @@ fun ReturnInspectionScreen(
                     localPhotoUris = uiState.returnPhotoUris[line.id].orEmpty(),
                     readyPhotoCount = uiState.returnReadyMedia[line.id].orEmpty().size,
                     equipmentConfirmed = line.id in uiState.returnEquipmentConfirmed,
-                    equipmentCatalog = uiState.returnEquipmentCatalog,
-                    equipmentCatalogStatus = uiState.returnEquipmentCatalogStatus,
-                    shortageEquipment = uiState.returnShortageEquipment[line.id].orEmpty(),
-                    shortageQuantity = uiState.returnShortageQuantity[line.id].orEmpty(),
                     onOpenPhotos = { onOpenPhotos(line.id) },
                     onConfirmEquipment = { onConfirmEquipment(line.id, it) },
-                    onShortageChanged = { equipmentId, quantity ->
-                        onUpdateShortage(line.id, equipmentId, quantity)
-                    },
                     enabled = inspectionAvailable && !uiState.busy,
                 )
             }
@@ -179,7 +164,8 @@ fun ReturnInspectionScreen(
                 ManagerPanel {
                     Text("Завершение осмотра", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Для любого действия нужна минимум одна фотография у каждой строки. Для принятия без сметы подтвердите комплектность мебели по всем строкам.",
+                        "Для любого действия нужна минимум одна фотография у каждой строки. " +
+                            "Для принятия без сметы подтвердите комплектность мебели по всем строкам.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -201,7 +187,8 @@ fun ReturnInspectionScreen(
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("Создать смету") }
                     Text(
-                        "Для сметы выберите недостающее оборудование из справочника и укажите количество для каждой строки.",
+                        "Будет создан отдельный черновик сметы для каждой бытовки. Общая смета " +
+                            "для нескольких бытовок не создаётся.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -220,14 +207,19 @@ fun ReturnInspectionScreen(
                     if (action == ReturnAction.Accept) {
                         "Документ будет принят без сметы после проверки комплектности и обязательных фотографий."
                     } else {
-                        "Будет создан запрос на смету по указанным недостачам и фотографиям."
+                        "Для каждой бытовки будет создан отдельный черновик сметы по фотографиям " +
+                            "осмотра."
                     },
                 )
             },
             confirmButton = {
                 Button(onClick = {
                     pendingAction = null
-                    if (action == ReturnAction.Accept) onAccept(onBack) else onCreateEstimate(onBack)
+                    if (action == ReturnAction.Accept) {
+                        onAccept(onBack)
+                    } else {
+                        onStartEstimates(onEstimatesReady, onBack)
+                    }
                 }) { Text("Подтвердить") }
             },
             dismissButton = { TextButton(onClick = { pendingAction = null }) { Text("Отмена") } },
@@ -254,13 +246,8 @@ private fun ReturnLineInspectionCard(
     localPhotoUris: List<String>,
     readyPhotoCount: Int,
     equipmentConfirmed: Boolean,
-    equipmentCatalog: List<EquipmentCatalogItemDto>,
-    equipmentCatalogStatus: ReturnEquipmentCatalogStatus,
-    shortageEquipment: String,
-    shortageQuantity: String,
     onOpenPhotos: () -> Unit,
     onConfirmEquipment: (Boolean) -> Unit,
-    onShortageChanged: (equipmentId: String, quantity: String) -> Unit,
     enabled: Boolean,
 ) {
     ManagerPanel {
@@ -306,110 +293,8 @@ private fun ReturnLineInspectionCard(
                 )
             }
         }
-        Text("Недостача для сметы", style = MaterialTheme.typography.labelLarge)
-        if (equipmentCatalogStatus == ReturnEquipmentCatalogStatus.AVAILABLE) {
-            ReturnShortageEquipmentSelector(
-                equipmentCatalog = equipmentCatalog,
-                selectedEquipmentId = shortageEquipment,
-                enabled = enabled,
-                onSelected = { equipmentId ->
-                    onShortageChanged(equipmentId, shortageQuantity)
-                },
-            )
-            OutlinedTextField(
-                value = shortageQuantity,
-                onValueChange = { onShortageChanged(shortageEquipment, it) },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Количество") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                enabled = enabled,
-            )
-        } else {
-            Text(
-                returnEquipmentCatalogStatusMessage(equipmentCatalogStatus),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
     }
 }
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ReturnShortageEquipmentSelector(
-    equipmentCatalog: List<EquipmentCatalogItemDto>,
-    selectedEquipmentId: String,
-    enabled: Boolean,
-    onSelected: (String) -> Unit,
-) {
-    var expanded by remember(selectedEquipmentId, equipmentCatalog) { mutableStateOf(false) }
-    val selectedEquipment = equipmentCatalog.firstOrNull { it.id == selectedEquipmentId }
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { nextExpanded -> if (enabled) expanded = nextExpanded },
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        OutlinedTextField(
-            value = selectedEquipment?.name.orEmpty(),
-            onValueChange = {},
-            modifier = Modifier
-                .fillMaxWidth()
-                .menuAnchor(
-                    type = ExposedDropdownMenuAnchorType.PrimaryNotEditable,
-                    enabled = enabled,
-                ),
-            label = { Text("Оборудование") },
-            placeholder = { Text("Выберите оборудование") },
-            supportingText = {
-                selectedEquipment?.category?.takeIf(String::isNotBlank)?.let { category ->
-                    Text(category)
-                }
-            },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            readOnly = true,
-            enabled = enabled,
-            singleLine = true,
-        )
-        ExposedDropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-        ) {
-            equipmentCatalog.forEach { equipment ->
-                DropdownMenuItem(
-                    text = {
-                        Column {
-                            Text(equipment.name)
-                            equipment.category.takeIf(String::isNotBlank)?.let { category ->
-                                Text(
-                                    category,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    },
-                    onClick = {
-                        onSelected(equipment.id)
-                        expanded = false
-                    },
-                )
-            }
-        }
-    }
-}
-
-private fun returnEquipmentCatalogStatusMessage(status: ReturnEquipmentCatalogStatus): String =
-    when (status) {
-        ReturnEquipmentCatalogStatus.NOT_LOADED,
-        ReturnEquipmentCatalogStatus.LOADING ->
-            "Загружаем справочник оборудования. Выбор для сметы станет доступен после загрузки."
-        ReturnEquipmentCatalogStatus.EMPTY ->
-            "В справочнике выбранного склада нет активного оборудования. Смету по недостаче создать нельзя."
-        ReturnEquipmentCatalogStatus.UNAVAILABLE ->
-            "Справочник оборудования недоступен. Повторно откройте возврат после восстановления связи."
-        ReturnEquipmentCatalogStatus.AVAILABLE -> ""
-    }
 
 private enum class ReturnAction { Accept, Estimate }
 

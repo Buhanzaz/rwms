@@ -118,6 +118,26 @@ class PropertyDispositionDecisionTest {
   }
 
   @Test
+  void unaccountedFurnitureStaysAwaitingApprovalThenBecomesEffectiveWithoutAStockEffect() {
+    PropertyDispositionDecision decision = unaccountedEquipmentDraft();
+
+    assertThat(decision.getState()).isEqualTo(PropertyDispositionState.PENDING_APPROVAL);
+    assertThat(decision.getAssetEffectState())
+        .isEqualTo(PropertyDispositionAssetEffectState.NOT_REQUIRED);
+    assertThat(decision.requiresAssetEffect()).isFalse();
+
+    decision.approve(0, ACTOR, "Confirm the legacy cabin loss");
+
+    assertThatThrownBy(() -> decision.startAssetEffect(0))
+        .isInstanceOf(PropertyDispositionConflictException.class);
+    assertThat(decision.markEffectiveWithoutAssetEffect(0)).isTrue();
+    assertThat(decision.getState()).isEqualTo(PropertyDispositionState.EFFECTIVE);
+    assertThat(decision.getAssetEffectState())
+        .isEqualTo(PropertyDispositionAssetEffectState.NOT_REQUIRED);
+    assertThat(decision.getEffectId()).isNull();
+  }
+
+  @Test
   void selectedContentsMustCompleteLogisticsBeforeAssetEffectThenBecomeEffective() {
     PropertyDispositionDecision decision =
         PropertyDispositionDecision.initiate(
@@ -263,6 +283,34 @@ class PropertyDispositionDecisionTest {
 
   private static PropertyDispositionDecision equipmentDraft() {
     return manualEquipmentDraft(UUID.randomUUID(), UUID.randomUUID(), HASH);
+  }
+
+  private static PropertyDispositionDecision unaccountedEquipmentDraft() {
+    return PropertyDispositionDecision.initiate(
+        new PropertyDispositionDecisionDraft(
+            UUID.randomUUID(),
+            PropertyDispositionAssetKind.EQUIPMENT,
+            UUID.randomUUID(),
+            "Legacy cabin chair",
+            PropertyDispositionKind.WRITE_OFF,
+            PropertyDispositionSource.UNACCOUNTED,
+            null,
+            null,
+            2L,
+            null,
+            null,
+            "Furniture from a cabin without recorded contents",
+            null,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            null,
+            null,
+            null,
+            null,
+            HASH,
+            ACTOR,
+            null,
+            List.of()));
   }
 
   private static PropertyDispositionDecision manualEquipmentDraft(

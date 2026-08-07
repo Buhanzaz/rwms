@@ -11,7 +11,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 const media = vi.hoisted(() => ({
   useServiceOwnerMedia: vi.fn(),
   upload: vi.fn(),
-  rotate: vi.fn(),
 }))
 
 vi.mock("@/features/media/use-service-owner-media", () => ({
@@ -55,8 +54,6 @@ function reference(mediaId: string): ReadyMediaReference {
 
 beforeEach(() => {
   media.upload.mockReset()
-  media.rotate.mockReset()
-  media.rotate.mockResolvedValue(undefined)
   media.useServiceOwnerMedia.mockReturnValue({
     assets: [
       asset(currentMediaId, "current.jpg"),
@@ -74,7 +71,6 @@ beforeEach(() => {
     ],
     logicalPhotoCount: 3,
     upload: media.upload,
-    rotate: media.rotate,
     query: { isLoading: false },
     pending: false,
     error: null,
@@ -154,7 +150,7 @@ describe("WorkLinePhotoControls", () => {
     )
   })
 
-  it("manages only the selected work photos with preview, rotation, reuse and removal", async () => {
+  it("manages only the selected work photos with preview, reuse and removal", async () => {
     const user = userEvent.setup()
     const onChange = vi.fn()
     const onOpenChange = vi.fn()
@@ -179,15 +175,9 @@ describe("WorkLinePhotoControls", () => {
     ).toBeTruthy()
     expect(within(manager).queryByText("other-work.jpg")).toBeNull()
 
-    await user.click(
-      within(manager).getByRole("button", {
-        name: "Повернуть current.jpg влево",
-      })
-    )
-    expect(media.rotate).toHaveBeenCalledWith({
-      asset: asset(currentMediaId, "current.jpg"),
-      direction: "LEFT",
-    })
+    expect(
+      within(manager).queryByRole("button", { name: /Повернуть/ })
+    ).toBeNull()
 
     await user.click(
       within(manager).getByRole("button", {

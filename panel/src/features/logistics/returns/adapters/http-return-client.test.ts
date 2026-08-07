@@ -195,13 +195,13 @@ describe("HttpReturnClient", () => {
     })
   })
 
-  it("requests an estimate with canonical equipment shortages", async () => {
+  it("starts separate estimates with proven return-line photos", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(json({ ...document, state: "ESTIMATE_PENDING" }, 202))
     vi.stubGlobal("fetch", fetchMock)
 
-    await new HttpReturnClient().requestEstimate({
+    await new HttpReturnClient().startEstimates({
       accessToken: "return-token",
       documentId: DOCUMENT_ID,
       expectedVersion: 4,
@@ -210,7 +210,6 @@ describe("HttpReturnClient", () => {
         {
           lineId: LINE_ID,
           references: [{ mediaId: MEDIA_ID, generation: 3 }],
-          shortages: [{ equipmentId: EQUIPMENT_ID, missingQuantity: 2 }],
         },
       ],
     })
@@ -218,7 +217,7 @@ describe("HttpReturnClient", () => {
     const [rawUrl, init] = fetchMock.mock.calls[0]
     const url = new URL(rawUrl)
     expect(url.pathname).toBe(
-      `/api/logistics/v1/returns/${DOCUMENT_ID}/request-estimate`
+      `/api/logistics/v1/returns/${DOCUMENT_ID}/start-estimates`
     )
     expect(url.searchParams.get("expectedVersion")).toBe("4")
     expect(new Headers(init.headers).get("Idempotency-Key")).toBe(
@@ -229,7 +228,6 @@ describe("HttpReturnClient", () => {
         {
           lineId: LINE_ID,
           references: [{ mediaId: MEDIA_ID, generation: 3 }],
-          shortages: [{ equipmentId: EQUIPMENT_ID, missingQuantity: 2 }],
         },
       ],
     })

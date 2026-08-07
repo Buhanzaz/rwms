@@ -94,6 +94,10 @@ vi.mock("@/features/repair-estimates/api/repair-estimates-api", () => ({
     warehouseId,
     status ?? "all",
   ],
+  returnEstimateSourcesQueryKey: (
+    warehouseId: string,
+    returnId: string | null
+  ) => ["repair-estimates", "return-sources", warehouseId, returnId],
   saveRepairEstimateDraft: api.saveRepairEstimateDraft,
 }))
 

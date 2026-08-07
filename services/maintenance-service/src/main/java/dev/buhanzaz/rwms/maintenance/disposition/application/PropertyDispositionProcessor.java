@@ -80,6 +80,11 @@ public class PropertyDispositionProcessor {
   private void processApproved(
       PropertyDispositionProcessingStore.Claim claim, ProcessingView view) {
     String phase = "PREPARE";
+    if (!view.requiresAssetEffect()) {
+      dispositions.markEffectiveWithoutAssetEffect(view.decisionId());
+      processing.retrySoon(claim, phase);
+      return;
+    }
     MaintenanceDependencyGateway.PropertyDispositionFence fence = dependencies.preparePropertyDisposition(
         key(view.decisionId(), phase), view.decisionId(), view.preparation());
     if (!matchesPreparedFence(view, fence)) {

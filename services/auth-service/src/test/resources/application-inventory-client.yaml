@@ -5,7 +5,7 @@ rwms:
         - client-id: inventory-service
           client-name: Inventory Service Downstream Client
           enabled: ${INVENTORY_CLIENT_ENABLED:false}
-          revision: 2
+          revision: 4
           authentication-methods: [client_secret_basic]
           grant-types: [client_credentials]
           scopes: [warehouse.timezone.read, warehouse.operation.mark, warehouse.lifecycle.read, warehouse.lifecycle.confirm, asset.inventory, maintenance.inventory]

@@ -56,10 +56,12 @@ fun BackgroundUploadsScreen(
     onBack: () -> Unit,
     onRetryOperation: (String) -> Unit,
     onRetryPhoto: (String, String) -> Unit,
+    onConfirmUnaccountedFurniture: (String) -> Unit,
     onCancelOperation: (String) -> Unit,
 ) {
     val groupedOperations = operations.groupBy(BackgroundUploadOperation::area)
     var pendingCancellationOperationId by remember { mutableStateOf<String?>(null) }
+    var pendingUnaccountedFurnitureOperationId by remember { mutableStateOf<String?>(null) }
 
     ManagerScreenScaffold(title = "Загрузки", onBack = onBack) { padding ->
         if (operations.isEmpty()) {
@@ -106,6 +108,9 @@ fun BackgroundUploadsScreen(
                                 operation = operation,
                                 onRetryOperation = onRetryOperation,
                                 onRetryPhoto = onRetryPhoto,
+                                onConfirmUnaccountedFurniture = {
+                                    pendingUnaccountedFurnitureOperationId = it
+                                },
                                 onCancelOperation = { pendingCancellationOperationId = it },
                             )
                         }
@@ -141,6 +146,33 @@ fun BackgroundUploadsScreen(
             },
         )
     }
+    pendingUnaccountedFurnitureOperationId?.let { operationId ->
+        AlertDialog(
+            onDismissRequest = { pendingUnaccountedFurnitureOperationId = null },
+            title = { Text("Провести без учёта склада?") },
+            text = {
+                Text(
+                    "В карточке бытовки нет заведённого наполнения. Продолжить списание " +
+                        "мебели без уменьшения остатка дополнительного оборудования склада?\n\n" +
+                        "Мебель будет отражена в утрате, а её дальнейшая судьба решается " +
+                        "отдельным утверждением.",
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    pendingUnaccountedFurnitureOperationId = null
+                    onConfirmUnaccountedFurniture(operationId)
+                }) {
+                    Text("Провести без учёта")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingUnaccountedFurnitureOperationId = null }) {
+                    Text("Отмена")
+                }
+            },
+        )
+    }
 }
 
 @Composable
@@ -148,6 +180,7 @@ private fun BackgroundUploadOperationPanel(
     operation: BackgroundUploadOperation,
     onRetryOperation: (String) -> Unit,
     onRetryPhoto: (String, String) -> Unit,
+    onConfirmUnaccountedFurniture: (String) -> Unit,
     onCancelOperation: (String) -> Unit,
 ) {
     ManagerPanel {
@@ -213,11 +246,20 @@ private fun BackgroundUploadOperationPanel(
         }
 
         if (operation.status == BackgroundUploadStatus.FAILED) {
-            OutlinedButton(
-                onClick = { onRetryOperation(operation.id) },
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("Повторить")
+            if (operation.requiresUnaccountedFurnitureConfirmation) {
+                Button(
+                    onClick = { onConfirmUnaccountedFurniture(operation.id) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Подтвердить без учёта склада")
+                }
+            } else {
+                OutlinedButton(
+                    onClick = { onRetryOperation(operation.id) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Повторить")
+                }
             }
         }
         OutlinedButton(
@@ -280,6 +322,9 @@ private fun BackgroundUploadPhotoRow(
         }
     }
 }
+
+private val BackgroundUploadOperation.requiresUnaccountedFurnitureConfirmation: Boolean
+    get() = maintenance?.requiresUnaccountedFurnitureConfirmation == true
 
 private val BackgroundUploadOperation.photoCountLabel: String
     get() = if (photos.isEmpty()) {

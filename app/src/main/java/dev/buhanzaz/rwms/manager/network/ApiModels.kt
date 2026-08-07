@@ -449,19 +449,21 @@ data class AdditionalEquipmentRequest(
     val quantity: Long,
 )
 
-data class RequestReturnEstimateRequest(
-    val lines: List<RequestReturnEstimateLine>,
+data class StartReturnEstimatesRequest(
+    val lines: List<StartReturnEstimateLine>,
 )
 
-data class RequestReturnEstimateLine(
+data class StartReturnEstimateLine(
     val lineId: String,
-    val shortages: List<EquipmentShortageRequest>,
     val references: List<MediaReferenceDto>,
 )
 
-data class EquipmentShortageRequest(
-    val equipmentId: String,
-    val missingQuantity: Long,
+data class ReturnEstimateSourceDto(
+    val returnId: String,
+    val lineId: String,
+    val warehouseId: String,
+    val rentalItemId: String,
+    val estimateId: String,
 )
 
 data class ShipmentEquipmentAllocationRequest(
@@ -797,6 +799,15 @@ data class PriorityVersionRequest(
     @param:ExplicitNull val logisticsScheduledDate: String?,
 )
 
+data class CompleteEstimateRequest(
+    val expectedVersion: Long,
+    val priority: Int,
+    val movementToRepair: Boolean,
+    @param:ExplicitNull val logisticsPlanningMode: String?,
+    @param:ExplicitNull val logisticsScheduledDate: String?,
+    val allowUnaccountedFurniture: Boolean = false,
+)
+
 data class DeliverySnapshotDto(
     val state: String,
     val attempts: Int,
@@ -1093,12 +1104,6 @@ data class FinalizeUploadRequest(
     val objectVersionId: String,
     val etag: String,
     val checksumSha256: String,
-)
-
-/** Requests an absolute canonical orientation for the same media asset. */
-data class RotateMediaRequest(
-    val rotationDegrees: Int,
-    val expectedVersion: Long,
 )
 
 data class MediaAssetDto(

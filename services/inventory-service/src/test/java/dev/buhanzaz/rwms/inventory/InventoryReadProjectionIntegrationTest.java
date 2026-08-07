@@ -14,10 +14,12 @@ import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.FurnitureReview
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.FinalPlanEntryUpdate;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.FinalPlanReconciliationDecision;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.FinalPlanUpdateRequest;
+import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.MediaReference;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.PageResponse;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.Observation;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.PlanLineInput;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.PlanSelection;
+import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.PlanStageSelection;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.PrepareFinalPlanRequest;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.PublishFindingsRequest;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.ResolveConflictRequest;
@@ -53,6 +55,7 @@ import dev.buhanzaz.rwms.inventory.domain.InventoryFinalPlanEntry;
 import dev.buhanzaz.rwms.inventory.domain.LogisticsPlanningMode;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinding;
 import dev.buhanzaz.rwms.inventory.domain.InventoryMembershipMovementType;
+import dev.buhanzaz.rwms.inventory.domain.InventoryMediaFactProjection;
 import dev.buhanzaz.rwms.inventory.domain.InventoryPublicationIntent;
 import dev.buhanzaz.rwms.inventory.domain.InventoryReviewStage;
 import dev.buhanzaz.rwms.inventory.domain.ObservationPresence;
@@ -65,6 +68,7 @@ import dev.buhanzaz.rwms.inventory.repository.FindingPlanStageRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryExpectedItemRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryFinalPlanEntryRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryFindingRepository;
+import dev.buhanzaz.rwms.inventory.repository.InventoryMediaFactProjectionRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryPublicationIntentRepository;
 import dev.buhanzaz.rwms.inventory.integration.InventoryDependencyGateway;
 import dev.buhanzaz.rwms.inventory.service.InventoryApplicationService;
@@ -131,6 +135,7 @@ class InventoryReadProjectionIntegrationTest {
 
   @Autowired InventoryApplicationService service;
   @Autowired InventoryFindingRepository findings;
+  @Autowired InventoryMediaFactProjectionRepository mediaFacts;
   @Autowired InventoryExpectedItemRepository expectedItems;
   @Autowired InventoryFinalPlanEntryRepository finalPlanEntries;
   @Autowired FindingPlanSnapshotRepository planSnapshots;
@@ -784,6 +789,240 @@ class InventoryReadProjectionIntegrationTest {
                             .path("outcome")
                             .asText())
                     .isEqualTo("MATCHED"));
+  }
+
+  @Test
+  void supplementsWithCurrentGenerationForRetainedWorkMediaWithoutRewritingHistory() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID inventoryId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    UUID mediaId = UUID.randomUUID();
+    UUID catalogVersionId = UUID.randomUUID();
+    UUID workNodeId = UUID.randomUUID();
+    UUID queueId = UUID.randomUUID();
+    seedSession(inventoryId, warehouseId);
+    events.initialize(
+        "SESSION",
+        inventoryId,
+        "inventory.session.started.v1",
+        "rwms.inventory.session.v1",
+        mapper.createObjectNode().put("inventoryId", inventoryId.toString()),
+        UUID.randomUUID(),
+        null,
+        null);
+
+    InventoryFinding finding =
+        findings.saveAndFlush(
+            InventoryFinding.unexpected(
+                inventoryId,
+                FindingOrigin.UNEXPECTED_EXISTING,
+                assetId,
+                1L,
+                warehouseId,
+                "WAREHOUSE",
+                null,
+                "БЫТ-MEDIA-REVISION",
+                "БЫТMEDIAREVISION",
+                ReconciliationState.MATCHED,
+                ACTOR));
+    events.initialize(
+        "FINDING",
+        finding.getId(),
+        "inventory.finding.added.v1",
+        "rwms.inventory.session.v1",
+        mapper.createObjectNode().put("origin", "UNEXPECTED_EXISTING"),
+        UUID.randomUUID(),
+        null,
+        null);
+
+    InventoryDependencyGateway.ValidationItem currentAsset =
+        new InventoryDependencyGateway.ValidationItem(
+            assetId,
+            true,
+            1L,
+            warehouseId,
+            "WAREHOUSE",
+            "БЫТ-MEDIA-REVISION",
+            "БЫТMEDIAREVISION",
+            null,
+            mapper.createObjectNode(),
+            mapper.createArrayNode());
+    when(dependencies.validateAssets(List.of(assetId)))
+        .thenReturn(
+            new InventoryDependencyGateway.Validation(
+                OffsetDateTime.now(ZoneOffset.UTC),
+                canonicalJson.sha256(List.of(currentAsset)),
+                List.of(currentAsset)));
+    when(dependencies.repairSnapshots(List.of(assetId)))
+        .thenReturn(
+            new InventoryDependencyGateway.RepairSnapshots(
+                List.of(
+                    new InventoryDependencyGateway.RepairAssetSnapshot(assetId, List.of()))));
+
+    mediaFacts.saveAndFlush(
+        InventoryMediaFactProjection.create(
+            mediaId, 1, 3, finding.getId(), warehouseId, "IMAGE", "READY", 0));
+    mediaFacts.saveAndFlush(
+        InventoryMediaFactProjection.create(
+            mediaId, 3, 7, finding.getId(), warehouseId, "IMAGE", "READY", 180));
+
+    ObjectNode historicalSnapshot = mapper.createObjectNode();
+    historicalSnapshot.put("catalogVersionId", catalogVersionId.toString());
+    historicalSnapshot.put("mode", "AUTO");
+    historicalSnapshot.put("priority", 3);
+    historicalSnapshot.putNull("coverMediaId");
+    historicalSnapshot.put("movementToRepair", false);
+    historicalSnapshot.putNull("logisticsPlanningMode");
+    historicalSnapshot.putNull("logisticsScheduledDate");
+    ObjectNode historicalLine = historicalSnapshot.putArray("lines").addObject();
+    historicalLine.put("aggregationKind", "CATALOG");
+    historicalLine.put("catalogVersionId", catalogVersionId.toString());
+    historicalLine.put("catalogNodeId", workNodeId.toString());
+    historicalLine.put("catalogNodeName", "Ремонт окна");
+    historicalLine.put("type", "WORK");
+    historicalLine.put("description", "Ремонт окна");
+    historicalLine.putNull("normalizedDescription");
+    historicalLine.put("unit", "PCS");
+    historicalLine.put("quantity", "1");
+    historicalLine.put("unitPriceMinor", 1000);
+    historicalLine.put("normativeMinutes", "30");
+    historicalLine.putNull("groupComment");
+    historicalLine
+        .putArray("mediaReferences")
+        .addObject()
+        .put("mediaId", mediaId.toString())
+        .put("generation", 1);
+    ObjectNode historicalStage = historicalSnapshot.putArray("stages").addObject();
+    historicalStage.put("id", UUID.randomUUID().toString());
+    historicalStage.put("catalogNodeId", workNodeId.toString());
+    historicalStage.put("catalogNodeName", "Ремонт окна");
+    historicalStage.put("kind", "REPAIR_WORK");
+    historicalStage.put("order", 0);
+    historicalStage
+        .putObject("routing")
+        .put("queueId", queueId.toString())
+        .put("queueName", "Окна")
+        .put("queueType", "REPAIR");
+    historicalStage.put("normativeDurationMinutes", 30);
+    historicalSnapshot.putArray("mediaReferences");
+    String historicalFingerprint = frozenPlanFingerprint.sha256(historicalSnapshot);
+
+    finding.saveInspection(
+        InspectionState.WORK_STAGED,
+        ReconciliationState.MATCHED,
+        ObservationPresence.ABSENT,
+        null,
+        ObservationPresence.ABSENT,
+        null,
+        historicalFingerprint,
+        "Первый осмотр",
+        ACTOR);
+    finding = findings.saveAndFlush(finding);
+    assertThat(finding.getRevision()).isOne();
+    planSnapshots.saveAndFlush(
+        new FindingPlanSnapshot(
+            finding.getId(),
+            1,
+            inventoryId,
+            "AUTO",
+            false,
+            null,
+            null,
+            catalogVersionId,
+            historicalFingerprint,
+            historicalSnapshot.toString(),
+            2));
+
+    ObjectNode currentSnapshot = historicalSnapshot.deepCopy();
+    ((ObjectNode)
+            currentSnapshot
+                .required("lines")
+                .get(0)
+                .required("mediaReferences")
+                .get(0))
+        .put("generation", 3);
+    String currentFingerprint = frozenPlanFingerprint.sha256(currentSnapshot);
+    AtomicReference<JsonNode> freezeRequest = new AtomicReference<>();
+    UUID findingId = finding.getId();
+    when(dependencies.freezePlan(any(), any()))
+        .thenAnswer(
+            invocation -> {
+              freezeRequest.set(invocation.getArgument(1));
+              return new InventoryDependencyGateway.FrozenPlan(
+                  warehouseId,
+                  inventoryId,
+                  findingId,
+                  2,
+                  currentSnapshot,
+                  currentFingerprint);
+            });
+
+    FindingView supplemented =
+        service.saveInspection(
+            jwt(),
+            inventoryId,
+            findingId,
+            new SaveInspectionRequest(
+                0,
+                1,
+                InspectionState.WORK_STAGED,
+                "Дополненный осмотр",
+                new Observation(ObservationPresence.ABSENT, null),
+                new Observation(ObservationPresence.ABSENT, null),
+                List.of(),
+                null,
+                new PlanSelection(
+                    "AUTO",
+                    3,
+                    null,
+                    false,
+                    null,
+                    null,
+                    List.of(
+                        new PlanLineInput(
+                            "CATALOG",
+                            workNodeId,
+                            null,
+                            null,
+                            null,
+                            null,
+                            "1",
+                            null,
+                            null,
+                            null,
+                            List.of(new MediaReference(mediaId, 1)))),
+                    List.of(new PlanStageSelection(workNodeId, "REPAIR_WORK", 0)))));
+
+    assertThat(supplemented.findingRevision()).isEqualTo(2);
+    assertThat(
+            freezeRequest
+                .get()
+                .required("lines")
+                .get(0)
+                .required("mediaReferences")
+                .get(0)
+                .required("generation")
+                .asLong())
+        .isEqualTo(3);
+    assertThat(freezeRequest.get().required("sourceRevision").asLong()).isEqualTo(2);
+    assertThat(
+            jdbc.queryForObject(
+                "select source_snapshot #>> '{lines,0,mediaReferences,0,generation}' from finding_plan_snapshot where finding_id=? and finding_revision=1",
+                String.class,
+                findingId))
+        .isEqualTo("1");
+    assertThat(
+            jdbc.queryForObject(
+                "select source_snapshot #>> '{lines,0,mediaReferences,0,generation}' from finding_plan_snapshot where finding_id=? and finding_revision=2",
+                String.class,
+                findingId))
+        .isEqualTo("3");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from finding_plan_snapshot where finding_id=?",
+                Integer.class,
+                findingId))
+        .isEqualTo(2);
   }
 
   @Test

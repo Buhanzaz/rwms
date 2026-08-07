@@ -11,14 +11,13 @@ import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.AcceptReturnRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateReturnRequest;
-import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.EquipmentShortageRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.MediaReferenceInput;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnAdditionalEquipmentRequest;
-import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.RequestReturnEstimateRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnEstimateLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnMediaLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnPickupRequest;
-import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnShortageLineRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.StartReturnEstimatesRequest;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
@@ -256,18 +255,14 @@ class ReturnCompletionSagaIntegrationTest {
   }
 
   @Test
-  void persistsAnImmutableShortageSourceBeforeRequestingMaintenanceEstimate() {
+  void persistsAnImmutableEstimateSourceBeforeRequestingMaintenanceEstimates() {
     RegisteredReturn registered = registeredReturn();
-    UUID equipmentId = UUID.randomUUID();
     UUID mediaId = UUID.randomUUID();
     UUID estimateId = UUID.randomUUID();
-    RequestReturnEstimateRequest request =
-        new RequestReturnEstimateRequest(
-            List.of(
-                new ReturnShortageLineRequest(
-                    registered.lineId(),
-                    List.of(new MediaReferenceInput(mediaId, 4)),
-                    List.of(new EquipmentShortageRequest(equipmentId, 3)))));
+    StartReturnEstimatesRequest request =
+        new StartReturnEstimatesRequest(
+            List.of(new ReturnEstimateLineRequest(
+                registered.lineId(), List.of(new MediaReferenceInput(mediaId, 4)))));
     when(dependencies.validateMediaReferences(
             eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_RETURN),
             eq(registered.documentId()),
@@ -284,17 +279,16 @@ class ReturnCompletionSagaIntegrationTest {
     when(dependencies.settleReturn(
             any(), any(), anyLong(), any(), anyLong(), any(), any(), anyBoolean()))
         .thenReturn(snapshot(9, "WAITING_ESTIMATE_CONFIRMATION"));
-    when(dependencies.upsertReturnShortage(
+    when(dependencies.upsertReturnEstimateSource(
             eq(registered.documentId()),
             eq(registered.lineId()),
             eq(WAREHOUSE),
             eq(ASSET),
             eq(8L),
             eq(LocalDate.parse("2026-07-01")),
-            eq(List.of(new LogisticsDependencyGateway.MediaReference(mediaId, 4))),
-            any()))
+            eq(List.of(new LogisticsDependencyGateway.MediaReference(mediaId, 4)))))
         .thenReturn(
-            new LogisticsDependencyGateway.ReturnShortageSource(
+            new LogisticsDependencyGateway.ReturnEstimateSource(
                 registered.documentId(),
                 registered.lineId(),
                 0,
@@ -302,7 +296,6 @@ class ReturnCompletionSagaIntegrationTest {
                 ASSET,
                 8,
                 estimateId,
-                List.of(new LogisticsDependencyGateway.EquipmentShortage(equipmentId, 3)),
                 "a".repeat(64),
                 OffsetDateTime.now(ZoneOffset.UTC)));
     when(dependencies.releaseOperationLease(
@@ -316,7 +309,7 @@ class ReturnCompletionSagaIntegrationTest {
         .thenReturn(releasedLease(registered.leaseId()));
 
     LogisticsDocumentService.CreateResult started =
-        documents.requestReturnEstimate(
+        documents.startReturnEstimates(
             SUBJECT,
             UUID.randomUUID(),
             CORRELATION,
@@ -338,8 +331,8 @@ class ReturnCompletionSagaIntegrationTest {
                 String.class))
         .contains(
             "RETURN_MEDIA_VALIDATE:CONFIRMED",
-            "RETURN_ASSET_SETTLE_SHORTAGE:CONFIRMED",
-            "RETURN_MAINTENANCE_SHORTAGE_UPSERT:CONFIRMED",
+            "RETURN_ASSET_SETTLE_ESTIMATE:CONFIRMED",
+            "RETURN_MAINTENANCE_ESTIMATE_SOURCE_UPSERT:CONFIRMED",
             "RETURN_ASSET_LEASE_RELEASE:CONFIRMED");
     assertThat(documents.get(registered.documentId(), LogisticsDocumentType.RETURN).state())
         .isEqualTo(LogisticsDocumentState.ESTIMATE_REQUESTED);
@@ -382,15 +375,14 @@ class ReturnCompletionSagaIntegrationTest {
             eq(registered.lineId()),
             eq(true));
     verify(dependencies)
-        .upsertReturnShortage(
+        .upsertReturnEstimateSource(
             eq(registered.documentId()),
             eq(registered.lineId()),
             eq(WAREHOUSE),
             eq(ASSET),
             eq(8L),
             eq(LocalDate.parse("2026-07-01")),
-            eq(List.of(new LogisticsDependencyGateway.MediaReference(mediaId, 4))),
-            eq(List.of(new LogisticsDependencyGateway.EquipmentShortage(equipmentId, 3))));
+            eq(List.of(new LogisticsDependencyGateway.MediaReference(mediaId, 4))));
   }
 
   @Test
@@ -422,19 +414,17 @@ class ReturnCompletionSagaIntegrationTest {
 
     assertThatThrownBy(
             () ->
-                documents.requestReturnEstimate(
+                documents.startReturnEstimates(
                     SUBJECT,
                     UUID.randomUUID(),
                     CORRELATION,
                     registered.documentId(),
                     registered.version(),
-                    new RequestReturnEstimateRequest(
+                    new StartReturnEstimatesRequest(
                         List.of(
-                            new ReturnShortageLineRequest(
+                            new ReturnEstimateLineRequest(
                                 registered.lineId(),
-                                List.of(),
-                                List.of(
-                                    new EquipmentShortageRequest(UUID.randomUUID(), 1)))))))
+                                List.of())))))
         .isInstanceOf(LogisticsConflictException.class)
         .hasMessage("Return estimate lines are invalid");
   }

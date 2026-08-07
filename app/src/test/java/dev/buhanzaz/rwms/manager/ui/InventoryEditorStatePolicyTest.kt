@@ -7,6 +7,7 @@ import dev.buhanzaz.rwms.manager.network.EquipmentCatalogItemDto
 import dev.buhanzaz.rwms.manager.network.RentalItemCreationOptionsDto
 import dev.buhanzaz.rwms.manager.network.RentalItemDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
+import dev.buhanzaz.rwms.manager.uploads.rebaseRetainedInventoryMediaReferences
 import org.junit.Test
 
 class InventoryEditorStatePolicyTest {
@@ -174,19 +175,19 @@ class InventoryEditorStatePolicyTest {
     }
 
     @Test
-    fun `selected ready title retains only ready historical media`() {
+    fun `selected title uses current generation for historical media`() {
         val title = MediaReferenceDto("title", 3)
         val secondNew = MediaReferenceDto("second", 1)
-        val readyHistorical = MediaReferenceDto("historical-ready", 7)
-        val staleHistorical = MediaReferenceDto("historical-stale", 4)
+        val historical = MediaReferenceDto("historical-ready", 1)
+        val currentHistorical = MediaReferenceDto("historical-ready", 7)
         val editor = creationEditor().copy(
             outcome = "MATCHED",
             photoUris = listOf("content://second", "content://title"),
             coverPhotoUri = "content://title",
         )
-        val persisted = inventoryReadyPersistedMediaReferences(
-            persisted = listOf(readyHistorical, staleHistorical),
-            readyOwnerReferences = setOf(readyHistorical),
+        val persisted = rebaseRetainedInventoryMediaReferences(
+            references = listOf(historical),
+            currentReadyByMediaId = mapOf(currentHistorical.mediaId to currentHistorical),
         )
 
         assertThat(
@@ -198,7 +199,7 @@ class InventoryEditorStatePolicyTest {
                 ),
                 persisted = persisted,
             ),
-        ).containsExactly(title, secondNew, readyHistorical).inOrder()
+        ).containsExactly(title, secondNew, currentHistorical).inOrder()
     }
 
     @Test
@@ -260,22 +261,6 @@ class InventoryEditorStatePolicyTest {
 
         assertThat(afterTitle.uploadedPhotoMedia).containsExactly(title, titleReference)
         assertThat(afterTitle.pendingInventoryPhotoUris()).containsExactly(remaining)
-    }
-
-    @Test
-    fun `photo rotation keeps its original uri and records an absolute media orientation`() {
-        val uri = "content://original"
-        val editor = creationEditor().copy(photoUris = listOf(uri), coverPhotoUri = uri)
-
-        val once = editor.rotateInventoryPhoto(uri)
-        val twice = once.rotateInventoryPhoto(uri)
-        val fullTurn = twice.rotateInventoryPhoto(uri).rotateInventoryPhoto(uri)
-
-        assertThat(once.photoUris).containsExactly(uri)
-        assertThat(once.coverPhotoUri).isEqualTo(uri)
-        assertThat(once.photoRotationDegrees).containsExactly(uri, 90)
-        assertThat(twice.photoRotationDegrees).containsExactly(uri, 180)
-        assertThat(fullTurn.photoRotationDegrees).isEmpty()
     }
 
     @Test

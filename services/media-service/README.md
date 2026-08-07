@@ -15,8 +15,9 @@ live projection. Sanitized Kafka facts are a separate representation and are
 never used as replay authority.
 
 Images produce `SMALL`, `MEDIUM`, `LARGE` WebP variants and an authorized
-`ORIGINAL`. Videos are original-only and use FFmpeg/FFprobe only for an explicit
-rotation. An unproved video dimension remains SQL `NULL`.
+`ORIGINAL` without changing the uploaded pixel orientation. Videos are
+original-only and validated with FFprobe. An unproved video dimension remains
+SQL `NULL`.
 
 ## Schema startup gate
 
@@ -70,7 +71,6 @@ absent.
 | `MEDIA_MAX_UPLOAD_BYTES` | Maximum immutable source size |
 | `MEDIA_MAX_DECODED_PIXELS` | Maximum decoded image pixels |
 | `MEDIA_MAX_IMAGE_OUTPUT_BYTES` | Maximum encoded image output |
-| `MEDIA_MAX_VIDEO_OUTPUT_BYTES` | Maximum encoded video output |
 | `MEDIA_ALLOWED_MIME_TYPES` | Comma-separated allowlist: JPEG, PNG, WebP, MP4 or WebM |
 | `MEDIA_UPLOAD_EXPIRY` | Constrained upload capability lifetime, for example `5m` |
 | `MEDIA_PROCESSING_TIMEOUT` | Per-job processor timeout |

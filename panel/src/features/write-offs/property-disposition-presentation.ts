@@ -46,7 +46,10 @@ export function propertyDispositionStatusLabel(
     case "EFFECT_PENDING":
       return "Эффект выполняется"
     case "EFFECTIVE":
-      if (decision.assetEffectState !== "APPLIED")
+      if (
+        decision.assetEffectState !== "APPLIED" &&
+        decision.assetEffectState !== "NOT_REQUIRED"
+      )
         return "Подтверждение эффекта"
       return decision.disposition === "WRITE_OFF" ? "Списано" : "Утеряно"
     case "REJECTED":
@@ -66,6 +69,8 @@ export function propertyDispositionEffectLabel(
       return "Выполняется"
     case "APPLIED":
       return "Применён"
+    case "NOT_REQUIRED":
+      return "Без складского эффекта"
     case "QUARANTINED":
       return "Карантин"
   }
@@ -76,6 +81,7 @@ const SOURCE_LABELS: Record<PropertyDispositionSource, string> = {
   REPAIR: "Ремонт",
   ESTIMATE: "Смета",
   INVENTORY: "Инвентаризация",
+  UNACCOUNTED: "Неучтённое наполнение",
 }
 
 export function propertyDispositionSourceLabel(

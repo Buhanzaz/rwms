@@ -53,7 +53,7 @@ class AuthFlywayConfigurationTest {
         assertThat(source.getProperty("rwms.auth.oauth.clients[6].enabled"))
                 .isEqualTo("${MAINTENANCE_CLIENT_ENABLED:false}");
         assertThat(source.getProperty("rwms.auth.oauth.clients[6].revision"))
-                .isEqualTo("${MAINTENANCE_CLIENT_REVISION:3}");
+                .isEqualTo("${MAINTENANCE_CLIENT_REVISION:5}");
         assertThat(source.getProperty("rwms.auth.oauth.clients[6].authentication-methods[0]"))
                 .isEqualTo("client_secret_basic");
         assertThat(source.getProperty("rwms.auth.oauth.clients[6].grant-types[0]"))
@@ -96,32 +96,32 @@ class AuthFlywayConfigurationTest {
                 load("application.yaml"),
                 5,
                 "${ASSET_WAREHOUSE_CLIENT_ENABLED:false}",
-                "${ASSET_WAREHOUSE_CLIENT_REVISION:3}");
+                "${ASSET_WAREHOUSE_CLIENT_REVISION:4}");
         assertAssetClient(
                 load("application-dev.yaml"),
                 5,
                 "${ASSET_WAREHOUSE_CLIENT_ENABLED:false}",
-                "${ASSET_WAREHOUSE_CLIENT_REVISION:3}");
-        assertAssetClient(load("application-test.yaml"), 5, false, 3);
+                "${ASSET_WAREHOUSE_CLIENT_REVISION:4}");
+        assertAssetClient(load("application-test.yaml"), 5, false, 4);
         assertAssetClient(
                 load("application-asset-client.yaml"),
                 0,
                 "${ASSET_WAREHOUSE_CLIENT_ENABLED:false}",
-                "${ASSET_WAREHOUSE_CLIENT_REVISION:3}");
+                "${ASSET_WAREHOUSE_CLIENT_REVISION:4}");
     }
 
     @Test
     void inventoryClientIsDisabledAndExactInBaseDevelopmentAndFocusedTestProfiles() throws IOException {
-        assertInventoryClient(load("application.yaml"), 7);
-        assertInventoryClient(load("application-dev.yaml"), 7);
-        assertInventoryClient(load("application-inventory-client.yaml"), 0);
+        assertInventoryClient(load("application.yaml"), 7, "${INVENTORY_CLIENT_REVISION:4}");
+        assertInventoryClient(load("application-dev.yaml"), 7, "${INVENTORY_CLIENT_REVISION:4}");
+        assertInventoryClient(load("application-inventory-client.yaml"), 0, 4);
     }
 
     @Test
     void logisticsClientIsDisabledAndExactInBaseDevelopmentAndFocusedTestProfiles() throws IOException {
-        assertLogisticsClient(load("application.yaml"), 8);
-        assertLogisticsClient(load("application-dev.yaml"), 8);
-        assertLogisticsClient(load("application-logistics-client.yaml"), 0);
+        assertLogisticsClient(load("application.yaml"), 8, "${LOGISTICS_CLIENT_REVISION:6}");
+        assertLogisticsClient(load("application-dev.yaml"), 8, "${LOGISTICS_CLIENT_REVISION:6}");
+        assertLogisticsClient(load("application-logistics-client.yaml"), 0, 6);
     }
 
     private void assertAssetClient(
@@ -172,10 +172,11 @@ class AuthFlywayConfigurationTest {
         assertThat(source.getProperty(prefix + ".audiences[0]")).isEqualTo("rwms-services");
     }
 
-    private void assertInventoryClient(PropertySource<?> source, int index) {
+    private void assertInventoryClient(PropertySource<?> source, int index, Object expectedRevision) {
         String prefix = "rwms.auth.oauth.clients[" + index + "]";
         assertThat(source.getProperty(prefix + ".client-id")).isEqualTo("inventory-service");
         assertThat(source.getProperty(prefix + ".enabled")).isEqualTo("${INVENTORY_CLIENT_ENABLED:false}");
+        assertThat(source.getProperty(prefix + ".revision")).isEqualTo(expectedRevision);
         assertThat(source.getProperty(prefix + ".authentication-methods[0]")).isEqualTo("client_secret_basic");
         assertThat(source.getProperty(prefix + ".authentication-methods[1]")).isNull();
         assertThat(source.getProperty(prefix + ".grant-types[0]")).isEqualTo("client_credentials");
@@ -197,10 +198,11 @@ class AuthFlywayConfigurationTest {
         assertThat(source.getProperty(prefix + ".allowed-origins[0]")).isNull();
     }
 
-    private void assertLogisticsClient(PropertySource<?> source, int index) {
+    private void assertLogisticsClient(PropertySource<?> source, int index, Object expectedRevision) {
         String prefix = "rwms.auth.oauth.clients[" + index + "]";
         assertThat(source.getProperty(prefix + ".client-id")).isEqualTo("logistics-service");
         assertThat(source.getProperty(prefix + ".enabled")).isEqualTo("${LOGISTICS_CLIENT_ENABLED:false}");
+        assertThat(source.getProperty(prefix + ".revision")).isEqualTo(expectedRevision);
         assertThat(source.getProperty(prefix + ".authentication-methods[0]")).isEqualTo("client_secret_basic");
         assertThat(source.getProperty(prefix + ".authentication-methods[1]")).isNull();
         assertThat(source.getProperty(prefix + ".grant-types[0]")).isEqualTo("client_credentials");

@@ -1122,21 +1122,28 @@ public class InventoryApplicationService {
     validateObservation(request.passportObservation(), false);
     validateObservation(request.equipmentObservation(), true);
     validatePlanSelection(request.inspection(), request.planSelection());
-    validateCoverMedia(request);
+    SaveInspectionRequest canonicalRequest =
+        currentMediaRequest(session, finding, request);
+    validateCoverMedia(canonicalRequest);
     if (request.inspection() == InspectionState.READY
         && currentTruth.currentSnapshot() != null
         && "AFTER_RENT".equals(currentTruth.currentSnapshot().status())
-        && request.media().isEmpty()) {
+        && canonicalRequest.media().isEmpty()) {
       throw new InventoryException(
           HttpStatus.UNPROCESSABLE_ENTITY,
           "INVENTORY_VALIDATION_FAILED",
           "Для приёмки бытовки после аренды загрузите хотя бы одну фотографию");
     }
     validateReadyMedia(
-        findingId, session.getWarehouseId(), request.media(), request.coverMediaId());
+        findingId,
+        session.getWarehouseId(),
+        canonicalRequest.media(),
+        canonicalRequest.coverMediaId());
     InventoryDependencyGateway.FrozenPlan plan = null;
     if (request.inspection() == InspectionState.WORK_STAGED) {
-      plan = dependencies.freezePlan(UUID.randomUUID(), freezeRequest(session, finding, request));
+      plan =
+          dependencies.freezePlan(
+              UUID.randomUUID(), freezeRequest(session, finding, canonicalRequest));
     } else if (request.inspection() != InspectionState.READY) {
       throw new IllegalArgumentException("Inspection must be READY or WORK_STAGED");
     }
@@ -1177,11 +1184,13 @@ public class InventoryApplicationService {
                   json(request.equipmentObservation().value()),
                   frozenPlan == null ? null : frozenPlan.fingerprint(),
                   request.comment(),
-                  request.coverMediaId(),
+                  canonicalRequest.coverMediaId(),
                   actorJson(jwt));
               InventoryFinding result = findings.saveAndFlush(lockedFinding);
-              persistMedia(result, request.media());
-              if (frozenPlan != null) persistPlan(result, request.planSelection(), frozenPlan);
+              persistMedia(result, canonicalRequest.media());
+              if (frozenPlan != null) {
+                persistPlan(result, canonicalRequest.planSelection(), frozenPlan);
+              }
               invalidateFurnitureReviewAfterCabinChange(lockedSession);
               invalidateFinalPlan(lockedSession);
               appendFindingFacts(
@@ -3387,6 +3396,159 @@ public class InventoryApplicationService {
         throw new IllegalArgumentException("Plan stage order must be contiguous");
       }
     }
+  }
+
+  /**
+   * A repeat inspection starts from an immutable historical snapshot. Media rotation keeps the
+   * logical media ID but advances its READY generation, so a retained historical reference must
+   * be rebased before a new finding and maintenance-source revision is frozen. New references
+   * still have to name the exact current generation; only a reference proven to belong to the
+   * active previous revision may advance implicitly.
+   */
+  private SaveInspectionRequest currentMediaRequest(
+      InventorySession session, InventoryFinding finding, SaveInspectionRequest request) {
+    Map<UUID, Long> retained = retainedMediaGenerations(finding);
+    List<MediaReference> currentMedia =
+        currentReadyMediaReferences(
+            finding.getId(), session.getWarehouseId(), request.media(), retained);
+    PlanSelection selection = request.planSelection();
+    PlanSelection currentSelection = null;
+    if (selection != null) {
+      List<PlanLineInput> currentLines =
+          selection.lines().stream()
+              .map(
+                  line ->
+                      new PlanLineInput(
+                          line.aggregationKind(),
+                          line.catalogNodeId(),
+                          line.routingCatalogNodeId(),
+                          line.description(),
+                          line.type(),
+                          line.unit(),
+                          line.quantity(),
+                          line.unitPriceMinor(),
+                          line.normativeMinutes(),
+                          line.groupComment(),
+                          currentReadyMediaReferences(
+                              finding.getId(),
+                              session.getWarehouseId(),
+                              line.mediaReferences(),
+                              retained)))
+              .toList();
+      currentSelection =
+          new PlanSelection(
+              selection.mode(),
+              selection.priority(),
+              selection.coverMediaId(),
+              selection.movementToRepair(),
+              selection.logisticsPlanningMode(),
+              selection.logisticsScheduledDate(),
+              currentLines,
+              selection.stages());
+    }
+    return new SaveInspectionRequest(
+        request.expectedSessionRevision(),
+        request.expectedFindingRevision(),
+        request.inspection(),
+        request.comment(),
+        request.passportObservation(),
+        request.equipmentObservation(),
+        currentMedia,
+        request.coverMediaId(),
+        currentSelection);
+  }
+
+  private Map<UUID, Long> retainedMediaGenerations(InventoryFinding finding) {
+    Map<UUID, Long> retained = new LinkedHashMap<>();
+    for (FindingMediaReference reference :
+        mediaReferences.findAllByFindingIdAndFindingRevisionOrderByMediaIdAscGenerationAsc(
+            finding.getId(), finding.getRevision())) {
+      putRetainedMediaGeneration(
+          retained, reference.getMediaId(), reference.getGeneration());
+    }
+    planSnapshots
+        .findByFindingIdAndFindingRevision(finding.getId(), finding.getRevision())
+        .ifPresent(
+            plan -> {
+              JsonNode snapshot = read(plan.getSourceSnapshot());
+              collectRetainedMediaGenerations(
+                  snapshot.path("mediaReferences"), retained, "frozen plan media");
+              JsonNode lines = snapshot.path("lines");
+              if (!lines.isArray()) {
+                throw new IllegalStateException("Persisted frozen plan lines are invalid");
+              }
+              for (JsonNode line : lines) {
+                collectRetainedMediaGenerations(
+                    line.path("mediaReferences"), retained, "frozen plan line media");
+              }
+            });
+    return Map.copyOf(retained);
+  }
+
+  private void collectRetainedMediaGenerations(
+      JsonNode references, Map<UUID, Long> retained, String name) {
+    if (references.isMissingNode() || references.isNull()) return;
+    if (!references.isArray() || references.size() > 100) {
+      throw new IllegalStateException("Persisted " + name + " are invalid");
+    }
+    for (JsonNode reference : references) {
+      if (!reference.isObject()) {
+        throw new IllegalStateException("Persisted " + name + " are invalid");
+      }
+      UUID mediaId = requiredUuid(reference, "mediaId", name + " id");
+      long generation = reference.path("generation").asLong(-1);
+      if (generation < 0) {
+        throw new IllegalStateException("Persisted " + name + " are invalid");
+      }
+      putRetainedMediaGeneration(retained, mediaId, generation);
+    }
+  }
+
+  private void putRetainedMediaGeneration(
+      Map<UUID, Long> retained, UUID mediaId, long generation) {
+    Long previous = retained.putIfAbsent(mediaId, generation);
+    if (previous != null && previous != generation) {
+      throw new IllegalStateException(
+          "Persisted inspection references multiple generations of one media object");
+    }
+  }
+
+  private List<MediaReference> currentReadyMediaReferences(
+      UUID findingId,
+      UUID warehouseId,
+      List<MediaReference> requested,
+      Map<UUID, Long> retained) {
+    Set<UUID> unique = new HashSet<>();
+    List<MediaReference> current = new ArrayList<>(requested.size());
+    for (MediaReference reference : requested) {
+      if (!unique.add(reference.mediaId())) {
+        throw new IllegalArgumentException(
+            "Media references must contain only one generation per media object");
+      }
+      var fact =
+          mediaFacts
+              .findFirstByMediaIdAndOwnerTypeAndOwnerIdAndWarehouseIdOrderByAggregateVersionDesc(
+                  reference.mediaId(), "INVENTORY_FINDING", findingId, warehouseId)
+              .orElse(null);
+      if (fact == null || !"READY".equals(fact.getMediaStatus())) {
+        throw mediaNotReady();
+      }
+      if (reference.generation() != fact.getGeneration()) {
+        Long retainedGeneration = retained.get(reference.mediaId());
+        if (retainedGeneration == null || retainedGeneration != reference.generation()) {
+          throw mediaNotReady();
+        }
+      }
+      current.add(new MediaReference(reference.mediaId(), fact.getGeneration()));
+    }
+    return List.copyOf(current);
+  }
+
+  private InventoryException mediaNotReady() {
+    return new InventoryException(
+        HttpStatus.UNPROCESSABLE_ENTITY,
+        "INVENTORY_MEDIA_NOT_READY",
+        "Referenced media generation is not READY for this finding");
   }
 
   private void validateCoverMedia(SaveInspectionRequest request) {

@@ -5,5 +5,6 @@ public enum PropertyDispositionSource {
   MANUAL,
   REPAIR,
   ESTIMATE,
+  UNACCOUNTED,
   INVENTORY
 }

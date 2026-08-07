@@ -1087,9 +1087,7 @@ export function RentalItemDetailPage() {
             loading={media.isLoading}
             error={media.error}
             canEdit={canEditRentalItem}
-            rotating={media.isRotating}
             onAdd={() => setPhotoUploadOpen(true)}
-            onRotate={media.rotate}
             onOpenFolder={media.requestFolderPreview}
             onRequestFullscreen={media.requestFullscreen}
           />

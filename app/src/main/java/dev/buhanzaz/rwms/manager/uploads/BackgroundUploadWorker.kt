@@ -7,22 +7,24 @@ import dev.buhanzaz.rwms.manager.BuildConfig
 import dev.buhanzaz.rwms.manager.media.MediaOwner
 import dev.buhanzaz.rwms.manager.media.MediaUploader
 import dev.buhanzaz.rwms.manager.media.PhotoPayloadReader
+import dev.buhanzaz.rwms.manager.media.problemCode
 import dev.buhanzaz.rwms.manager.media.retryInventoryCommitAfterMediaReady
+import dev.buhanzaz.rwms.manager.media.retryMediaReadAfterOwnerProof
 import dev.buhanzaz.rwms.manager.network.AcceptReturnLineRequest
 import dev.buhanzaz.rwms.manager.network.AcceptReturnRequest
 import dev.buhanzaz.rwms.manager.network.AmendEstimateRequest
 import dev.buhanzaz.rwms.manager.network.ArriveTransferLineRequest
 import dev.buhanzaz.rwms.manager.network.CreateCabinFurnitureTaskRequest
+import dev.buhanzaz.rwms.manager.network.CompleteEstimateRequest
 import dev.buhanzaz.rwms.manager.network.EstimateLineInputDto
-import dev.buhanzaz.rwms.manager.network.MediaAssetDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.network.RepairDecisionRequest
 import dev.buhanzaz.rwms.manager.network.ReplaceEstimateRequest
 import dev.buhanzaz.rwms.manager.network.ReplaceRepairPlanRequest
-import dev.buhanzaz.rwms.manager.network.RequestReturnEstimateLine
-import dev.buhanzaz.rwms.manager.network.RequestReturnEstimateRequest
 import dev.buhanzaz.rwms.manager.network.RwmsBackend
 import dev.buhanzaz.rwms.manager.network.SaveInspectionRequest
+import dev.buhanzaz.rwms.manager.network.StartReturnEstimateLine
+import dev.buhanzaz.rwms.manager.network.StartReturnEstimatesRequest
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
@@ -93,13 +95,32 @@ class BackgroundUploadWorker(
             }
             throw cancelled
         } catch (failure: Throwable) {
+            val requiresUnaccountedFurnitureConfirmation =
+                failure is HttpException &&
+                    failure.problemCode() == UNACCOUNTED_FURNITURE_CONFIRMATION_REQUIRED &&
+                    operation.maintenance?.let { command ->
+                        command.mode == "ESTIMATE" &&
+                            command.submitRequest != null &&
+                            !command.allowUnaccountedFurniture
+                    } == true
             val message = failureMessage(failure)
             store.update(operation.id) { current ->
                 current.copy(
                     updatedAtEpochMillis = System.currentTimeMillis(),
                     status = BackgroundUploadStatus.FAILED,
-                    stage = "Ошибка отправки",
+                    stage = if (requiresUnaccountedFurnitureConfirmation) {
+                        "Требуется подтверждение учёта мебели"
+                    } else {
+                        "Ошибка отправки"
+                    },
                     error = message,
+                    maintenance = if (requiresUnaccountedFurnitureConfirmation) {
+                        current.maintenance?.copy(
+                            requiresUnaccountedFurnitureConfirmation = true,
+                        )
+                    } else {
+                        current.maintenance
+                    },
                     photos = current.photos.map { photo ->
                         if (photo.status == BackgroundPhotoStatus.UPLOADING) {
                             photo.copy(status = BackgroundPhotoStatus.FAILED, error = message)
@@ -214,34 +235,12 @@ class BackgroundUploadWorker(
         val uploaded = store.operation(operationId)?.photos
             ?.filter { it.id in selectedIds }
             .orEmpty()
-        val readyForProcessing = uploaded.filter { it.reference != null }
-        val rotations = readyForProcessing.filter { it.rotationDegrees != 0 }
-        val assetsById = if (rotations.isEmpty()) {
-            emptyMap()
-        } else {
-            backend.api.ownerMedia(
-                ownerType = owner.ownerType,
-                ownerId = owner.ownerId,
-                documentId = owner.documentId,
-                lineId = owner.lineId,
-                warehouseId = owner.warehouseId,
-                context = owner.context,
-            ).items.associateBy(MediaAssetDto::id)
-        }
-        readyForProcessing.forEach { photo ->
+        uploaded.filter { it.reference != null }.forEach { photo ->
             val reference = requireNotNull(photo.reference)
-            val readyReference = if (photo.rotationDegrees == 0) {
-                reference
-            } else {
-                val asset = requireNotNull(assetsById[reference.mediaId]) {
-                    "Не удалось найти ${photo.sourceName} для поворота"
-                }
-                uploader.rotate(owner, asset, photo.rotationDegrees)
-            }
             updatePhoto(operationId, photo.durableUri) { currentPhoto ->
                 currentPhoto.copy(
                     status = BackgroundPhotoStatus.READY,
-                    reference = readyReference,
+                    reference = reference,
                     error = null,
                 )
             }
@@ -288,9 +287,11 @@ class BackgroundUploadWorker(
         operation: BackgroundUploadOperation,
         command: InventoryUploadCommand,
     ) {
-        val preparedCommand = prepareInventoryExistingMediaRotations(operation, command)
-        val media = operation.aggregateReferences(preparedCommand.existingMedia)
-        val coverMediaId = operation.coverMediaId() ?: preparedCommand.existingCoverMediaId
+        val prepared = prepareInventoryRetainedMedia(operation, command)
+        val preparedOperation = prepared.operation
+        val preparedCommand = prepared.command
+        val media = preparedOperation.aggregateReferences(preparedCommand.existingMedia)
+        val coverMediaId = preparedOperation.coverMediaId() ?: preparedCommand.existingCoverMediaId
         if (!preparedCommand.inspectionSaved) {
             updateStage(operation.id, "Сохранение инвентаризации")
             try {
@@ -310,7 +311,7 @@ class BackgroundUploadWorker(
                             coverMediaId = coverMediaId,
                             planSelection = preparedCommand.planSelection?.withUploadedMedia(
                                 coverMediaId,
-                                operation.lineReferences(),
+                                preparedOperation.lineReferences(),
                                 preparedCommand.planLineIds,
                                 preparedCommand.planWorkLineIds.toSet(),
                             ),
@@ -343,67 +344,50 @@ class BackgroundUploadWorker(
         }
     }
 
+    private data class PreparedInventoryUpload(
+        val operation: BackgroundUploadOperation,
+        val command: InventoryUploadCommand,
+    )
+
     /**
-     * A previous photo keeps its media id, while media-service advances its generation after a
-     * rotation. Persist that new generation in the durable outbox before saving the finding so a
-     * process restart cannot re-upload the image or reintroduce a stale media reference.
+     * A durable operation can survive an app update while retained media is reprocessed. Rebase
+     * it immediately before every final inventory save, so retry uses the current owner
+     * generation for both aggregate evidence and the frozen work-line evidence.
      */
-    private suspend fun prepareInventoryExistingMediaRotations(
+    private suspend fun prepareInventoryRetainedMedia(
         operation: BackgroundUploadOperation,
         command: InventoryUploadCommand,
-    ): InventoryUploadCommand {
-        if (command.inspectionSaved || command.existingMediaRotations.isEmpty()) return command
-        updateStage(operation.id, "Обновление сохранённых фотографий")
-        val rotatedMedia = rotateInventoryExistingMedia(command)
-        val prepared = command.copy(
-            existingMedia = rotatedMedia,
-            existingMediaRotations = emptyList(),
-        )
-        store.update(operation.id) { current ->
-            current.copy(
-                updatedAtEpochMillis = System.currentTimeMillis(),
-                inventory = current.inventory?.copy(
-                    existingMedia = rotatedMedia,
-                    existingMediaRotations = emptyList(),
-                ),
+    ): PreparedInventoryUpload {
+        if (command.inspectionSaved || !operation.hasRetainedInventoryMedia(command)) {
+            return PreparedInventoryUpload(operation, command)
+        }
+        updateStage(operation.id, "Проверка сохранённых фотографий")
+        val session = backend.api.inventory(command.inventoryId)
+        val readyOwnerReferencesById = retryMediaReadAfterOwnerProof {
+            readyOwnerMediaReferencesById(
+                backend.api.ownerMedia(
+                    ownerType = "INVENTORY_FINDING",
+                    ownerId = command.findingId,
+                    warehouseId = session.warehouseId,
+                    context = "INSPECTION",
+                ).items,
             )
         }
-        return prepared
-    }
-
-    private suspend fun rotateInventoryExistingMedia(
-        command: InventoryUploadCommand,
-    ): List<MediaReferenceDto> {
-        val requestedRotations = command.existingMediaRotations
-        require(requestedRotations.map { request -> request.reference.mediaId }.distinct().size ==
-            requestedRotations.size) {
-            "Для одной фотографии инвентаризации задано несколько поворотов"
-        }
-        val requestedByMediaId = requestedRotations.associateBy { request -> request.reference.mediaId }
-        val existingByMediaId = command.existingMedia.associateBy(MediaReferenceDto::mediaId)
-        require(requestedByMediaId.keys.all(existingByMediaId::containsKey)) {
-            "Поворот запрошен для фотографии, которой нет в проверке"
-        }
-        val session = backend.api.inventory(command.inventoryId)
-        val owner = MediaOwner(
-            ownerType = "INVENTORY_FINDING",
-            ownerId = command.findingId,
-            warehouseId = session.warehouseId,
-            context = "INSPECTION",
+        val rebasedOperation = operation.rebaseRetainedInventoryMedia(
+            command = command,
+            currentReadyByMediaId = readyOwnerReferencesById,
         )
-        val assetsByMediaId = backend.api.ownerMedia(
-            ownerType = owner.ownerType,
-            ownerId = owner.ownerId,
-            warehouseId = owner.warehouseId,
-            context = owner.context,
-        ).items.associateBy(MediaAssetDto::id)
-        return command.existingMedia.map { reference ->
-            val requested = requestedByMediaId[reference.mediaId] ?: return@map reference
-            val asset = requireNotNull(assetsByMediaId[reference.mediaId]) {
-                "Не удалось найти сохранённую фотографию для поворота"
+        val rebasedCommand = requireNotNull(rebasedOperation.inventory)
+        if (rebasedOperation != operation) {
+            store.update(operation.id) { current ->
+                current.copy(
+                    updatedAtEpochMillis = System.currentTimeMillis(),
+                    photos = rebasedOperation.photos,
+                    inventory = rebasedCommand,
+                )
             }
-            uploader.rotate(owner, asset, requested.rotationDegrees)
-        }.distinctBy(MediaReferenceDto::mediaId)
+        }
+        return PreparedInventoryUpload(rebasedOperation, rebasedCommand)
     }
 
     private suspend fun finalizeMaintenance(
@@ -494,7 +478,14 @@ class BackgroundUploadWorker(
                     estimateId = command.entityId,
                     warehouseId = command.warehouseId,
                     idempotencyKey = idempotencyKey,
-                    request = request,
+                    request = CompleteEstimateRequest(
+                        expectedVersion = request.expectedVersion,
+                        priority = request.priority,
+                        movementToRepair = request.movementToRepair,
+                        logisticsPlanningMode = request.logisticsPlanningMode,
+                        logisticsScheduledDate = request.logisticsScheduledDate,
+                        allowUnaccountedFurniture = command.allowUnaccountedFurniture,
+                    ),
                 )
             } else {
                 backend.api.queueRepairPlan(
@@ -541,6 +532,7 @@ class BackgroundUploadWorker(
         )
     }
 
+    @Suppress("DEPRECATION")
     private suspend fun finalizeReturn(
         operation: BackgroundUploadOperation,
         command: ReturnUploadCommand,
@@ -569,15 +561,15 @@ class BackgroundUploadWorker(
                     },
                 ),
             )
-            ReturnUploadAction.REQUEST_ESTIMATE -> backend.api.requestReturnEstimate(
+            ReturnUploadAction.START_ESTIMATES,
+            ReturnUploadAction.REQUEST_ESTIMATE -> backend.api.startReturnEstimates(
                 documentId = command.documentId,
                 expectedVersion = command.expectedVersion,
                 idempotencyKey = command.idempotencyKey,
-                request = RequestReturnEstimateRequest(
+                request = StartReturnEstimatesRequest(
                     command.lines.map { line ->
-                        RequestReturnEstimateLine(
+                        StartReturnEstimateLine(
                             lineId = line.lineId,
-                            shortages = line.shortages,
                             references = referencesByLine.getValue(line.lineId),
                         )
                     },
@@ -646,6 +638,14 @@ class BackgroundUploadWorker(
         )
         .distinctBy(MediaReferenceDto::mediaId)
 
+    private fun BackgroundUploadOperation.hasRetainedInventoryMedia(
+        command: InventoryUploadCommand,
+    ): Boolean = command.existingMedia.isNotEmpty() ||
+        command.planSelection?.lines.orEmpty().any { line ->
+            line.mediaReferences.isNotEmpty()
+        } ||
+        photos.any { photo -> photo.reference != null }
+
     private fun BackgroundUploadOperation.lineReferences(): Map<String, List<MediaReferenceDto>> =
         photos
             .mapNotNull { photo ->
@@ -665,6 +665,8 @@ class BackgroundUploadWorker(
     }
 
     companion object {
+        private const val UNACCOUNTED_FURNITURE_CONFIRMATION_REQUIRED =
+            "MAINTENANCE_UNACCOUNTED_FURNITURE_CONFIRMATION_REQUIRED"
         private val operationPermit = Semaphore(1)
         const val INPUT_OPERATION_ID = "operation_id"
         const val INPUT_PHOTO_ID = "photo_id"

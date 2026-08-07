@@ -2,6 +2,10 @@ import {
   createRepairEstimateCatalogIndex,
   getOperationalRepairEstimateCatalog,
 } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
+import {
+  listMaintenanceReturnEstimateSources,
+  type MaintenanceReturnEstimateSource,
+} from "@/features/repair-estimates/api/http-maintenance-lifecycle-client"
 import { HttpMaintenanceRepairEstimatesAdapter } from "@/features/repair-estimates/adapters/http-maintenance-repair-estimates-adapter"
 import { panelEstimateRentalItemsClient } from "@/features/repair-estimates/adapters/panel-estimate-rental-items-client"
 import {
@@ -27,6 +31,12 @@ export const ESTIMATE_RENTAL_ITEMS_QUERY_KEY = [
   "repair-estimates",
   "rental-items",
 ] as const
+export const RETURN_ESTIMATE_SOURCES_QUERY_KEY = [
+  ...REPAIR_ESTIMATES_QUERY_KEY,
+  "return-sources",
+] as const
+
+export type ReturnEstimateSourceDto = MaintenanceReturnEstimateSource
 
 const repairEstimatesClient: RepairEstimatesClient =
   new HttpMaintenanceRepairEstimatesAdapter(panelEstimateRentalItemsClient)
@@ -57,6 +67,17 @@ export function repairEstimateDetailQueryKey(
   ] as const
 }
 
+export function returnEstimateSourcesQueryKey(
+  warehouseId: string,
+  returnId: string | null
+) {
+  return [
+    ...RETURN_ESTIMATE_SOURCES_QUERY_KEY,
+    warehouseId,
+    returnId ?? "none",
+  ] as const
+}
+
 export function estimateRentalItemsQueryKey(warehouseId: string) {
   return [...ESTIMATE_RENTAL_ITEMS_QUERY_KEY, warehouseId] as const
 }
@@ -70,6 +91,18 @@ export function listRepairEstimates(
 
 export function getRepairEstimate(estimateId: string, warehouseId: string) {
   return repairEstimatesClient.getById(estimateId, warehouseId)
+}
+
+export function listReturnEstimateSources(
+  accessToken: string,
+  warehouseId: string,
+  returnId: string
+) {
+  return listMaintenanceReturnEstimateSources(
+    accessToken,
+    warehouseId,
+    returnId
+  )
 }
 
 export async function listEstimateRentalItems(warehouseId: string) {
@@ -250,6 +283,7 @@ export async function completeRepairEstimate(
       input.draft.lines.length === 0 ? null : input.logisticsScheduledDate,
     taskPlans: taskPlans.map(toTaskPlanCommand),
     priority: input.priority,
+    allowUnaccountedFurniture: input.allowUnaccountedFurniture ?? false,
   })
 }
 

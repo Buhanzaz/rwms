@@ -67,6 +67,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
+import androidx.exifinterface.media.ExifInterface
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import java.io.File
@@ -191,7 +192,6 @@ private fun ManagerPhotoCamera(
 fun ManagerPhotoPreview(
     photoUri: String,
     modifier: Modifier = Modifier,
-    rotationDegrees: Int = 0,
 ) {
     if (isManagerVideoUri(photoUri)) {
         Box(
@@ -213,8 +213,7 @@ fun ManagerPhotoPreview(
         contentDescription = "Фотография",
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .graphicsLayer { rotationZ = rotationDegrees.toFloat() },
+            .background(MaterialTheme.colorScheme.surfaceVariant),
         contentScale = ContentScale.Crop,
     )
 }
@@ -239,7 +238,6 @@ private fun managerPhotoImageModel(
 @Composable
 private fun ManagerZoomablePhoto(
     photoUri: String,
-    rotationDegrees: Int,
     contentDescription: String,
     onZoomStateChanged: (Boolean) -> Unit,
 ) {
@@ -280,7 +278,6 @@ private fun ManagerZoomablePhoto(
                     scaleY = scale
                     translationX = translationX
                     translationY = translationY
-                    rotationZ = rotationDegrees.toFloat()
                 },
             contentScale = ContentScale.Fit,
         )
@@ -331,8 +328,6 @@ fun ManagerPhotoGalleryDialog(
     initialIndex: Int,
     title: String? = null,
     onRemovePhotoUri: ((String) -> Unit)? = null,
-    photoRotationDegrees: (String) -> Int = { 0 },
-    onRotatePhotoUri: ((String) -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
     if (photoUris.isEmpty()) return
@@ -389,7 +384,6 @@ fun ManagerPhotoGalleryDialog(
                         } else {
                             ManagerZoomablePhoto(
                                 photoUri = uri,
-                                rotationDegrees = photoRotationDegrees(uri),
                                 contentDescription = "Фотография ${logicalIndex + 1}",
                                 onZoomStateChanged = { zoomed ->
                                     if (logicalIndex == currentLogicalIndex) {
@@ -454,13 +448,6 @@ fun ManagerPhotoGalleryDialog(
                             },
                     )
                     val current = photoUris.getOrNull(currentLogicalIndex)
-                    if (current != null && !isManagerVideoUri(current) && onRotatePhotoUri != null) {
-                        TextButton(
-                            onClick = { onRotatePhotoUri(current) },
-                        ) {
-                            Text("Повернуть", color = Color.White)
-                        }
-                    }
                     if (current != null && onRemovePhotoUri != null) {
                         TextButton(onClick = { onRemovePhotoUri(current) }) {
                             Text("Удалить", color = Color(0xFFFFB4AB))
@@ -507,7 +494,11 @@ internal fun managerExifOrientationForRotationDegrees(rotationDegrees: Int): Int
 
 internal fun managerExifOrientationNeedsRepair(orientation: Int): Boolean = orientation !in 1..8
 
-/** Copies a gallery original to an app-owned cache path that MediaUploader can read later. */
+/**
+ * Copies a gallery original to app-owned storage and resolves EXIF rotation before it reaches
+ * the durable upload outbox. PNG/WebP bytes are retained unchanged unless their EXIF says that
+ * their pixels need a transform; then the normalized app-owned result is an upright JPEG.
+ */
 fun copyManagerPhotoToAppCache(context: Context, source: Uri): String? = runCatching {
     val extension = when (context.contentResolver.getType(source)?.lowercase()) {
         "image/png" -> "png"
@@ -519,9 +510,39 @@ fun copyManagerPhotoToAppCache(context: Context, source: Uri): String? = runCatc
     context.contentResolver.openInputStream(source)?.use { input ->
         target.outputStream().use { output -> input.copyTo(output) }
     } ?: return@runCatching null
-    // Byte-for-byte copy only: source EXIF remains available to media-service.
-    Uri.fromFile(target).toString()
+    val normalized = if (extension == "jpg" || managerPhotoNeedsPixelNormalization(target)) {
+        normalizeManagerCameraJpegOrientation(
+            source = target,
+            fallbackOrientation = ExifInterface.ORIENTATION_NORMAL,
+        ) ?: run {
+            target.delete()
+            return@runCatching null
+        }
+    } else {
+        target
+    }
+    if (normalized != target && !target.delete()) {
+        // The normalized file is the only URI handed to the upload outbox; this stale cache file
+        // has no reachable reference and Android can reclaim it with the rest of the cache.
+        android.util.Log.w("ManagerPhotos", "Unable to remove pre-normalized gallery image")
+    }
+    Uri.fromFile(normalized).toString()
 }.getOrNull()
+
+private fun managerPhotoNeedsPixelNormalization(file: File): Boolean = runCatching {
+    ExifInterface(file).getAttributeInt(
+        ExifInterface.TAG_ORIENTATION,
+        ExifInterface.ORIENTATION_NORMAL,
+    ) in setOf(
+        ExifInterface.ORIENTATION_FLIP_HORIZONTAL,
+        ExifInterface.ORIENTATION_ROTATE_180,
+        ExifInterface.ORIENTATION_FLIP_VERTICAL,
+        ExifInterface.ORIENTATION_TRANSPOSE,
+        ExifInterface.ORIENTATION_ROTATE_90,
+        ExifInterface.ORIENTATION_TRANSVERSE,
+        ExifInterface.ORIENTATION_ROTATE_270,
+    )
+}.getOrDefault(false)
 
 private fun createManagerMediaFile(cacheDir: File, prefix: String, extension: String = "jpg"): File? =
     runCatching {

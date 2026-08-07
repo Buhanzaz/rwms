@@ -93,7 +93,7 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
       long fencingToken,
       UUID documentId,
       UUID lineId,
-      boolean shortage) {
+      boolean estimate) {
     throw unavailable();
   }
 
@@ -148,15 +148,14 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
   }
 
   @Override
-  public ReturnShortageSource upsertReturnShortage(
+  public ReturnEstimateSource upsertReturnEstimateSource(
       UUID returnId,
       UUID lineId,
       UUID warehouseId,
       UUID rentalItemId,
       long rentalItemVersion,
       java.time.LocalDate dispatchDate,
-      java.util.List<MediaReference> mediaReferences,
-      java.util.List<EquipmentShortage> shortages) {
+      java.util.List<MediaReference> mediaReferences) {
     throw unavailable();
   }
 

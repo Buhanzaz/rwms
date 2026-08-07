@@ -283,8 +283,9 @@ paths:
         Private direct-service boundary. Requires principal_type=SERVICE,
         sub=client_id=inventory-service, audience rwms-services and exactly the
         maintenance.inventory scope. AUTO resolves against the active warehouse
-        catalog; MANUAL validates the submitted order. The permanent source key
-        replays its immutable historical result and never adopts a later catalog.
+        catalog; MANUAL validates the submitted order. The permanent source key is
+        inventoryId:findingId:sourceRevision: each inspection revision replays its
+        own immutable historical result and never adopts a later catalog.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/FreezeInventoryPlanRequest' } } } }
       responses:
         '200': { description: Immutable maintenance-issued inventory plan., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/FrozenInventoryPlan' } } } }
@@ -318,8 +319,9 @@ paths:
       operationId: upsertInventoryRepairSource
       description: >-
         Private exact maintenance.inventory SERVICE boundary. Binds the permanent
-        inventoryId:findingId source to one INVENTORY repair only when the exact
-        historical snapshot/fingerprint and current asset preconditions match.
+        inventoryId:findingId:sourceRevision source to one INVENTORY repair only
+        when the exact historical snapshot/fingerprint and current asset
+        preconditions match.
         Identical replay returns that repair. Maintenance alone acquires the asset
         lease/fence and synchronizes task-board through durable reconciliation.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpsertInventoryRepairRequest' } } } }
@@ -377,24 +379,24 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationFailure' }
         '503': { $ref: '#/components/responses/DependencyUnavailable' }
-  /api/internal/maintenance/v1/logistics/returns/{returnId}/lines/{lineId}/shortage:
+  /api/internal/maintenance/v1/logistics/returns/{returnId}/lines/{lineId}/estimate-source:
     parameters:
       - { name: returnId, in: path, required: true, schema: { type: string, format: uuid } }
       - { name: lineId, in: path, required: true, schema: { type: string, format: uuid } }
     put:
       tags: [Logistics Integration]
-      operationId: upsertLogisticsReturnShortage
+      operationId: upsertLogisticsReturnEstimateSource
       description: >-
         Private direct-service boundary. Requires principal_type=SERVICE,
         sub=client_id=logistics-service, audience rwms-services and exactly the
         maintenance.logistics scope. The permanent returnId:lineId source accepts
-        the immutable equipment-shortage, dispatch-date and return-inspection-photo
-        snapshot and atomically owns one empty DRAFT estimate in the active catalog.
+        the immutable dispatch-date and return-inspection-photo snapshot and atomically
+        owns one empty DRAFT estimate in the active catalog.
         Identical replay returns the same estimate. This boundary never creates a
         repair; normal estimate completion owns that transition.
-      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpsertLogisticsReturnShortageRequest' } } } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpsertLogisticsReturnEstimateSourceRequest' } } } }
       responses:
-        '200': { description: Recorded or replayed immutable logistics return shortage source and its sole DRAFT estimate., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsReturnShortage' } } } }
+        '200': { description: Recorded or replayed immutable logistics return source and its sole DRAFT estimate., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/ReturnEstimateSource' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -402,10 +404,10 @@ paths:
         '422': { $ref: '#/components/responses/ValidationFailure' }
     get:
       tags: [Logistics Integration]
-      operationId: getLogisticsReturnShortage
-      description: Returns the immutable logistics return shortage source and its sole estimate ID.
+      operationId: getLogisticsReturnEstimateSource
+      description: Returns the immutable logistics return source and its sole estimate ID.
       responses:
-        '200': { description: Immutable logistics return shortage source., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsReturnShortage' } } } }
+        '200': { description: Immutable logistics return estimate source., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/ReturnEstimateSource' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -609,6 +611,24 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationFailure' }
+  /api/maintenance/v1/estimates/return-sources:
+    get:
+      tags: [Estimates]
+      operationId: listReturnEstimateSources
+      description: >-
+        Returns the individual maintenance estimates created for one logistics return.
+        The source key is returnId:lineId, so a multi-cabin return never exposes a shared estimate.
+        Requires USER, rwms.read and warehouse VIEW access.
+      parameters:
+        - { $ref: '#/components/parameters/WarehouseIdQuery' }
+        - name: returnId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Individual return-line estimate sources., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/ReturnEstimateSource' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/maintenance/v1/estimates/{id}:
     parameters:
       - { $ref: '#/components/parameters/EstimateId' }
@@ -647,7 +667,7 @@ paths:
         Completes the DRAFT estimate using CAS. Empty completion creates no
         repair or task and fences the cabin to FREE. Non-empty completion
         atomically creates the ESTIMATE primary repair and publication intents.
-      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PriorityVersionRequest' } } } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CompleteEstimateRequest' } } } }
       responses:
         '200': { description: Locally committed completion and downstream delivery truth., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/EstimateCommandResult' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -1437,6 +1457,51 @@ components:
         logisticsScheduledDate:
           description: Required only for inbound FIXED_DATE and null without inbound movement.
           oneOf: [ { type: string, format: date }, { type: 'null' } ]
+    CompleteEstimateRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, priority, movementToRepair, logisticsPlanningMode, logisticsScheduledDate]
+      allOf:
+        - if:
+            properties:
+              movementToRepair: { const: true }
+            required: [movementToRepair]
+          then:
+            oneOf:
+              - properties:
+                  logisticsPlanningMode: { const: AUTO }
+                  logisticsScheduledDate: { type: 'null' }
+              - properties:
+                  logisticsPlanningMode: { const: FIXED_DATE }
+                  logisticsScheduledDate: { type: string, format: date }
+          else:
+            properties:
+              logisticsPlanningMode: { type: 'null' }
+              logisticsScheduledDate: { type: 'null' }
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        priority:
+          type: integer
+          minimum: 1
+          maximum: 5
+          description: 1 is the most urgent and 5 is the least urgent.
+        movementToRepair:
+          description: >-
+            Request driver delivery into the repair zone before worker tasks are visible and an
+            automatic movement from repair after the repair process is completed.
+          type: boolean
+        logisticsPlanningMode:
+          oneOf: [ { $ref: '#/components/schemas/RepairLogisticsPlanningMode' }, { type: 'null' } ]
+        logisticsScheduledDate:
+          description: Required only for inbound FIXED_DATE and null without inbound movement.
+          oneOf: [ { type: string, format: date }, { type: 'null' } ]
+        allowUnaccountedFurniture:
+          description: >-
+            Explicit confirmation allowed only when the cabin has no recorded contents.
+            The resulting furniture loss is recorded for a separate approval and never
+            decrements a warehouse equipment balance.
+          oneOf: [ { type: boolean }, { type: 'null' } ]
+          default: false
     RetryInboundDeliveryRequest:
       type: object
       additionalProperties: false
@@ -2927,17 +2992,10 @@ components:
           type: array
           maxItems: 5000
           items: { $ref: '#/components/schemas/InventoryRepairSnapshot' }
-    LogisticsEquipmentShortage:
+    UpsertLogisticsReturnEstimateSourceRequest:
       type: object
       additionalProperties: false
-      required: [equipmentId, missingQuantity]
-      properties:
-        equipmentId: { type: string, format: uuid }
-        missingQuantity: { type: integer, format: int64, minimum: 1 }
-    UpsertLogisticsReturnShortageRequest:
-      type: object
-      additionalProperties: false
-      required: [warehouseId, rentalItemId, rentalItemVersion, dispatchDate, mediaReferences, shortages]
+      required: [warehouseId, rentalItemId, rentalItemVersion, dispatchDate, mediaReferences]
       properties:
         warehouseId: { type: string, format: uuid }
         rentalItemId: { type: string, format: uuid }
@@ -2949,15 +3007,10 @@ components:
           maxItems: 20
           uniqueItems: true
           items: { $ref: '#/components/schemas/MediaReference' }
-        shortages:
-          type: array
-          minItems: 1
-          maxItems: 100
-          items: { $ref: '#/components/schemas/LogisticsEquipmentShortage' }
-    LogisticsReturnShortage:
+    ReturnEstimateSource:
       type: object
       additionalProperties: false
-      required: [returnId, lineId, sourceVersion, warehouseId, rentalItemId, rentalItemVersion, estimateId, shortages, snapshotSha256, receivedAt]
+      required: [returnId, lineId, sourceVersion, warehouseId, rentalItemId, rentalItemVersion, estimateId, snapshotSha256, receivedAt]
       properties:
         returnId: { type: string, format: uuid }
         lineId: { type: string, format: uuid }
@@ -2966,11 +3019,6 @@ components:
         rentalItemId: { type: string, format: uuid }
         rentalItemVersion: { type: integer, format: int64, minimum: 0 }
         estimateId: { type: string, format: uuid }
-        shortages:
-          type: array
-          minItems: 1
-          maxItems: 100
-          items: { $ref: '#/components/schemas/LogisticsEquipmentShortage' }
         snapshotSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
         receivedAt: { type: string, format: date-time }
     RepairPlan:
@@ -3256,7 +3304,7 @@ components:
       enum: [WRITE_OFF, LOSS]
     PropertyDispositionSource:
       type: string
-      enum: [MANUAL, REPAIR, ESTIMATE, INVENTORY]
+      enum: [MANUAL, REPAIR, ESTIMATE, UNACCOUNTED, INVENTORY]
     PropertyDispositionState:
       type: string
       description: >-
@@ -3266,7 +3314,7 @@ components:
       enum: [PENDING_APPROVAL, APPROVED, MOVEMENT_PENDING, EFFECT_PENDING, EFFECTIVE, REJECTED, QUARANTINED]
     PropertyDispositionAssetEffectState:
       type: string
-      enum: [NOT_STARTED, PENDING, APPLIED, QUARANTINED]
+      enum: [NOT_REQUIRED, NOT_STARTED, PENDING, APPLIED, QUARANTINED]
     CabinContentsDispositionMode:
       type: string
       enum: [MOVE_SELECTED_TO_STOCK, DISPOSE_WITH_CABIN]

@@ -20,6 +20,10 @@ import {
   type MaintenanceRoutingSnapshot,
 } from "@/features/repair-estimates/api/http-maintenance-lifecycle-client"
 import {
+  MAINTENANCE_UNACCOUNTED_FURNITURE_CONFIRMATION_REQUIRED,
+  UnaccountedFurnitureConfirmationRequiredError,
+} from "@/features/repair-estimates/api/unaccounted-furniture-confirmation"
+import {
   currentMaintenanceAccessToken,
   type MaintenanceAccessTokenProvider,
 } from "@/features/repair-estimates/api/maintenance-auth"
@@ -538,7 +542,8 @@ export class HttpMaintenanceRepairEstimatesAdapter implements RepairEstimatesCli
         createMaintenanceIdempotencyKey(),
         command.movementToRepair,
         command.logisticsPlanningMode,
-        command.logisticsScheduledDate
+        command.logisticsScheduledDate,
+        command.allowUnaccountedFurniture ?? false
       )
       if (!result.repair) {
         throw new Error("Сервис не вернул созданный ремонт")
@@ -550,6 +555,16 @@ export class HttpMaintenanceRepairEstimatesAdapter implements RepairEstimatesCli
         result.repair.movementToRepair
       )
     } catch (error) {
+      if (
+        error instanceof ApiError &&
+        error.code === MAINTENANCE_UNACCOUNTED_FURNITURE_CONFIRMATION_REQUIRED
+      ) {
+        throw new UnaccountedFurnitureConfirmationRequiredError(
+          error,
+          draft.id,
+          draft.version
+        )
+      }
       throw new Error(
         `Черновик ${draft.id} сохранён, но завершение не выполнено: ${error instanceof Error ? error.message : "неизвестная ошибка"}`,
         { cause: error }

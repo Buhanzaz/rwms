@@ -133,11 +133,11 @@ func run(logger *slog.Logger) error {
 	limits := media.ProcessingLimits{
 		MaxImageBytes: configuration.MaxUploadBytes, MaxImageOutputBytes: configuration.MaxImageOutputBytes,
 		MaxDecodedPixels: configuration.MaxDecodedPixels, MaxVideoBytes: configuration.MaxUploadBytes,
-		MaxVideoOutputBytes: configuration.MaxVideoOutputBytes, Timeout: configuration.ProcessingTimeout,
+		Timeout: configuration.ProcessingTimeout,
 	}
 	processingConsumer := worker.NewConsumer(repository, consumerClient, worker.Processor{
 		Image: media.ImageProcessor{Store: objectStore, Limits: limits},
-		Video: media.VideoProcessor{Store: objectStore, Runner: media.ExecCommandRunner{}, Probe: media.FFprobe{},
+		Video: media.VideoProcessor{Store: objectStore, Probe: media.FFprobe{},
 			AllowedCodecs: configuration.AllowedVideoCodecs, MaxDuration: configuration.MaxVideoDuration, Limits: limits},
 	}, configuration.InstanceID+":worker", configuration.ProcessingTimeout, logger)
 	ownerConsumer := worker.NewInventoryOwnerConsumer(repository, ownerConsumerClient, logger)

@@ -10,7 +10,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
-/** Uses the source primary key as the concurrent first-write arbiter. */
+/** Uses the estimate-source primary key as the concurrent first-write arbiter. */
 @Service
 public class LogisticsReturnShortageRegistrar {
   private final LogisticsReturnShortageRepository sources;
@@ -48,7 +48,7 @@ public class LogisticsReturnShortageRegistrar {
         transactions.execute(
             status -> registerAfterAdmission(candidate, dispatchDate, mediaReferences));
     if (registered == null) {
-      throw new IllegalStateException("Logistics return shortage transaction was empty");
+      throw new IllegalStateException("Logistics return estimate-source transaction was empty");
     }
     return registered;
   }
@@ -74,7 +74,7 @@ public class LogisticsReturnShortageRegistrar {
   private static void requireNoCallerTransaction() {
     if (TransactionSynchronizationManager.isActualTransactionActive()) {
       throw new IllegalStateException(
-          "Logistics return shortage registration cannot run inside a caller transaction");
+          "Logistics return estimate-source registration cannot run inside a caller transaction");
     }
   }
 }

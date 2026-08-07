@@ -25,7 +25,6 @@ internal enum class WorkerCameraAspectRatio(val label: String) {
 internal data class WorkerCameraSettings(
     val gridEnabled: Boolean = false,
     val aspectRatio: WorkerCameraAspectRatio = WorkerCameraAspectRatio.FourThree,
-    val ultraHdrEnabled: Boolean = true,
     val motionCaptureEnabled: Boolean = false,
     val exposureEvTenths: Int = 0,
 )
@@ -42,7 +41,6 @@ internal class WorkerCameraPreferences(context: Context) {
             aspectRatio = preferences.getString("aspect-ratio", null)
                 ?.let { value -> WorkerCameraAspectRatio.entries.firstOrNull { it.name == value } }
                 ?: WorkerCameraAspectRatio.FourThree,
-            ultraHdrEnabled = preferences.getBoolean("ultra-hdr", true),
             motionCaptureEnabled = preferences.getBoolean("motion", false),
             exposureEvTenths = preferences.getInt("exposure-ev-tenths", 0),
         ),
@@ -53,7 +51,6 @@ internal class WorkerCameraPreferences(context: Context) {
         preferences.edit {
             putBoolean("grid", normalized.gridEnabled)
             putString("aspect-ratio", normalized.aspectRatio.name)
-            putBoolean("ultra-hdr", normalized.ultraHdrEnabled)
             putBoolean("motion", normalized.motionCaptureEnabled)
             putInt("exposure-ev-tenths", normalized.exposureEvTenths)
         }
@@ -62,6 +59,49 @@ internal class WorkerCameraPreferences(context: Context) {
 
 internal fun normalizeWorkerCameraSettings(settings: WorkerCameraSettings): WorkerCameraSettings =
     settings.copy(exposureEvTenths = settings.exposureEvTenths.coerceIn(-20, 20))
+
+private const val WORKER_WIDE_ZOOM_TARGET = 0.6f
+
+/**
+ * Expose a common 0.6× floor only when the currently bound camera really supports it. Some
+ * front/physical cameras start at 1× (or another value); inventing a ratio there crashes or
+ * silently ignores the request on several OEM devices.
+ */
+internal fun workerCaptureMinimumZoom(hardwareMinimum: Float?, hardwareMaximum: Float?): Float {
+    val minimum = workerSupportedMinimumZoom(hardwareMinimum, hardwareMaximum)
+    val maximum = workerCaptureMaximumZoom(hardwareMinimum, hardwareMaximum)
+    return WORKER_WIDE_ZOOM_TARGET.takeIf { it in minimum..maximum } ?: minimum
+}
+
+internal fun workerCaptureMaximumZoom(hardwareMinimum: Float?, hardwareMaximum: Float?): Float {
+    val minimum = workerSupportedMinimumZoom(hardwareMinimum, hardwareMaximum)
+    return hardwareMaximum
+        ?.takeIf { zoom -> zoom.isFinite() && zoom >= minimum }
+        ?: minimum
+}
+
+internal fun workerCoerceCaptureZoom(
+    requested: Float,
+    hardwareMinimum: Float?,
+    hardwareMaximum: Float?,
+): Float = workerCoerceZoom(
+    requested = requested,
+    minZoom = workerCaptureMinimumZoom(hardwareMinimum, hardwareMaximum),
+    maxZoom = workerCaptureMaximumZoom(hardwareMinimum, hardwareMaximum),
+)
+
+private fun workerSupportedMinimumZoom(hardwareMinimum: Float?, hardwareMaximum: Float?): Float {
+    val reportedMinimum = hardwareMinimum?.takeIf { zoom -> zoom.isFinite() && zoom > 0f }
+    val reportedMaximum = hardwareMaximum?.takeIf { zoom -> zoom.isFinite() && zoom > 0f }
+    return when {
+        reportedMinimum != null && reportedMaximum != null && reportedMaximum >= reportedMinimum ->
+            reportedMinimum
+        reportedMinimum != null -> reportedMinimum
+        // If the HAL gives us only one usable maximum, it is the only known-safe request.
+        reportedMaximum != null -> reportedMaximum
+        else -> 1f
+    }
+}
 
 internal fun workerSupportedZoomStops(minZoom: Float, maxZoom: Float): List<Float> {
     val minimum = minZoom.takeIf { it.isFinite() && it > 0f } ?: 1f
