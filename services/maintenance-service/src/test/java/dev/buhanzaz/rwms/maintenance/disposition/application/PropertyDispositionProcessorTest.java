@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.maintenance.disposition.application.PropertyDispositionApplicationService.ProcessingView;
@@ -52,6 +53,7 @@ class PropertyDispositionProcessorTest {
         PropertyDispositionState.APPROVED,
         null,
         false,
+        true,
         preparation,
         null,
         null);
@@ -113,6 +115,7 @@ class PropertyDispositionProcessorTest {
         PropertyDispositionState.MOVEMENT_PENDING,
         taskId,
         true,
+        true,
         preparation,
         null,
         null);
@@ -169,6 +172,7 @@ class PropertyDispositionProcessorTest {
         PropertyDispositionState.APPROVED,
         null,
         false,
+        true,
         preparation,
         null,
         null);
@@ -214,6 +218,7 @@ class PropertyDispositionProcessorTest {
         PropertyDispositionState.EFFECTIVE,
         null,
         false,
+        true,
         preparation,
         null,
         release);
@@ -235,6 +240,33 @@ class PropertyDispositionProcessorTest {
     verify(dispositions, never()).quarantine(any(), any(), any());
     verify(processing).quarantined(claim, "RELEASE_LEASE", "DEPENDENCY_503", "offline");
     verify(processing, never()).retryableFailure(any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void approvedUnaccountedFurnitureBecomesEffectiveWithoutAnAssetServiceEffect() {
+    UUID decisionId = UUID.randomUUID();
+    PropertyDispositionProcessingStore.Claim claim =
+        new PropertyDispositionProcessingStore.Claim(decisionId, UUID.randomUUID());
+    ProcessingView view = new ProcessingView(
+        decisionId,
+        UUID.randomUUID(),
+        PropertyDispositionState.APPROVED,
+        null,
+        false,
+        false,
+        null,
+        null,
+        null);
+    when(processing.claimOne(any(), any())).thenReturn(Optional.of(claim));
+    when(dispositions.processingView(decisionId)).thenReturn(view);
+
+    processor.processOne();
+
+    verify(dispositions).markEffectiveWithoutAssetEffect(decisionId);
+    verify(processing).retrySoon(claim, "PREPARE");
+    verifyNoInteractions(dependencies);
+    verify(dispositions, never()).startAssetEffect(any());
+    verify(dispositions, never()).startMovement(any(), any());
   }
 
   @Test

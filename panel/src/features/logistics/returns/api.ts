@@ -2,8 +2,8 @@ import { HttpReturnClient } from "@/features/logistics/returns/adapters/http-ret
 import type {
   ReturnAcceptUndamagedCommand,
   ReturnCreateCommand,
-  ReturnEstimateCommand,
   ReturnPickupCommand,
+  StartReturnEstimatesCommand,
 } from "@/features/logistics/returns/ports/return-client"
 
 export const RETURNS_QUERY_KEY = ["logistics", "returns"] as const
@@ -25,5 +25,5 @@ export const registerReturn = (input: ReturnPickupCommand) =>
 export const acceptUndamagedReturn = (input: ReturnAcceptUndamagedCommand) =>
   returnClient.acceptUndamaged(input)
 
-export const requestReturnEstimate = (input: ReturnEstimateCommand) =>
-  returnClient.requestEstimate(input)
+export const startReturnEstimates = (input: StartReturnEstimatesCommand) =>
+  returnClient.startEstimates(input)

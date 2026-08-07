@@ -27,6 +27,7 @@ dependencies {
     implementation(libs.bundles.compose)
     implementation(libs.compose.material.icons)
     implementation(libs.bundles.camera)
+    implementation("androidx.exifinterface:exifinterface:1.4.2")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -40,4 +41,5 @@ dependencies {
     coreLibraryDesugaring(libs.desugar.jdk.libs)
     testImplementation(libs.junit)
     testImplementation(libs.truth)
+    testImplementation(libs.robolectric)
 }

@@ -1,7 +1,7 @@
 package dev.buhanzaz.rwms.maintenance.api;
 
-import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.LogisticsReturnShortageResponse;
-import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.UpsertLogisticsReturnShortageRequest;
+import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.ReturnEstimateSource;
+import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.UpsertLogisticsReturnEstimateSourceRequest;
 
 import dev.buhanzaz.rwms.maintenance.security.MaintenanceAuthorizer;
 import dev.buhanzaz.rwms.maintenance.service.LogisticsReturnShortageService;
@@ -19,21 +19,22 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/** Private receiver for one immutable return-line shortage and its maintenance estimate. */
+/** Private receiver for one immutable return-line estimate source and its maintenance estimate. */
 @RestController
 @Validated
-@RequestMapping("/api/internal/maintenance/v1/logistics/returns/{returnId}/lines/{lineId}/shortage")
+@RequestMapping(
+    "/api/internal/maintenance/v1/logistics/returns/{returnId}/lines/{lineId}/estimate-source")
 @RequiredArgsConstructor
 public class MaintenanceLogisticsController {
   private final LogisticsReturnShortageService logistics;
   private final MaintenanceAuthorizer access;
 
   @PutMapping
-  public ResponseEntity<LogisticsReturnShortageResponse> upsert(
+  public ResponseEntity<ReturnEstimateSource> upsert(
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID returnId,
       @PathVariable UUID lineId,
-      @Valid @RequestBody UpsertLogisticsReturnShortageRequest request) {
+      @Valid @RequestBody UpsertLogisticsReturnEstimateSourceRequest request) {
     access.requireLogisticsService(jwt);
     LogisticsReturnShortageService.UpsertResult result =
         logistics.upsert(returnId, lineId, request);
@@ -45,7 +46,7 @@ public class MaintenanceLogisticsController {
   }
 
   @GetMapping
-  public LogisticsReturnShortageResponse get(
+  public ReturnEstimateSource get(
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID returnId,
       @PathVariable UUID lineId) {

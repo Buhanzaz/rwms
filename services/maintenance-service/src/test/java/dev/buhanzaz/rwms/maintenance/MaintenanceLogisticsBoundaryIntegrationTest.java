@@ -1,8 +1,7 @@
 package dev.buhanzaz.rwms.maintenance;
 
-import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.LogisticsEquipmentShortage;
 import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.MediaReferenceInput;
-import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.UpsertLogisticsReturnShortageRequest;
+import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.UpsertLogisticsReturnEstimateSourceRequest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -81,28 +80,23 @@ class MaintenanceLogisticsBoundaryIntegrationTest {
   }
 
   @Test
-  void storesOneImmutableReturnLineSourceAndReplaysOnlyTheCanonicalSnapshot() {
+  void storesOneImmutableReturnLineEstimateSourceAndReplaysOnlyTheCanonicalSnapshot() {
     UUID returnId = UUID.randomUUID();
     UUID lineId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
     UUID rentalItemId = UUID.randomUUID();
-    UUID firstEquipment = UUID.randomUUID();
-    UUID secondEquipment = UUID.randomUUID();
     UUID firstMedia = UUID.randomUUID();
     UUID secondMedia = UUID.randomUUID();
     LocalDate dispatchDate = LocalDate.of(2026, 7, 27);
-    UpsertLogisticsReturnShortageRequest request =
-        new UpsertLogisticsReturnShortageRequest(
+    UpsertLogisticsReturnEstimateSourceRequest request =
+        new UpsertLogisticsReturnEstimateSourceRequest(
             warehouseId,
             rentalItemId,
             7L,
             dispatchDate,
             List.of(
                 new MediaReferenceInput(secondMedia, 3L),
-                new MediaReferenceInput(firstMedia, 1L)),
-            List.of(
-                new LogisticsEquipmentShortage(secondEquipment, 2L),
-                new LogisticsEquipmentShortage(firstEquipment, 1L)));
+                new MediaReferenceInput(firstMedia, 1L)));
 
     LogisticsReturnShortageService.UpsertResult first =
         logistics.upsert(returnId, lineId, request);
@@ -110,27 +104,23 @@ class MaintenanceLogisticsBoundaryIntegrationTest {
         logistics.upsert(
             returnId,
             lineId,
-            new UpsertLogisticsReturnShortageRequest(
+            new UpsertLogisticsReturnEstimateSourceRequest(
                 warehouseId,
                 rentalItemId,
                 7L,
                 dispatchDate,
                 List.of(
                     new MediaReferenceInput(firstMedia, 1L),
-                    new MediaReferenceInput(secondMedia, 3L)),
-                List.of(
-                    new LogisticsEquipmentShortage(firstEquipment, 1L),
-                    new LogisticsEquipmentShortage(secondEquipment, 2L))));
+                    new MediaReferenceInput(secondMedia, 3L))));
 
     assertThat(first.replayed()).isFalse();
     assertThat(replay.replayed()).isTrue();
     assertThat(replay.response()).isEqualTo(first.response());
-    assertThat(first.response().shortages())
-        .extracting(LogisticsEquipmentShortage::equipmentId)
-        .containsExactlyElementsOf(
-            List.of(firstEquipment, secondEquipment).stream()
-                .sorted(java.util.Comparator.comparing(UUID::toString))
-                .toList());
+    assertThat(first.response().returnId()).isEqualTo(returnId);
+    assertThat(first.response().lineId()).isEqualTo(lineId);
+    assertThat(first.response().warehouseId()).isEqualTo(warehouseId);
+    assertThat(first.response().rentalItemId()).isEqualTo(rentalItemId);
+    assertThat(first.response().rentalItemVersion()).isEqualTo(7L);
     assertThat(first.response().snapshotSha256()).matches("[0-9a-f]{64}");
     assertThat(first.response().estimateId()).isNotNull();
     assertThat(jdbc.queryForObject(
@@ -189,37 +179,37 @@ class MaintenanceLogisticsBoundaryIntegrationTest {
         first.response().estimateId()))
         .isOne();
     assertThat(logistics.get(returnId, lineId)).isEqualTo(first.response());
+    assertThat(logistics.list(warehouseId, returnId)).containsExactly(first.response());
+    assertThat(logistics.list(UUID.randomUUID(), returnId)).isEmpty();
 
     assertThatThrownBy(
             () ->
                 logistics.upsert(
                     returnId,
                     lineId,
-                    new UpsertLogisticsReturnShortageRequest(
+                    new UpsertLogisticsReturnEstimateSourceRequest(
                         warehouseId,
                         rentalItemId,
-                        7L,
+                        8L,
                         dispatchDate,
                         List.of(
                             new MediaReferenceInput(firstMedia, 1L),
-                            new MediaReferenceInput(secondMedia, 3L)),
-                        List.of(new LogisticsEquipmentShortage(firstEquipment, 2L)))))
+                            new MediaReferenceInput(secondMedia, 3L)))))
         .isInstanceOf(MaintenanceConflictException.class)
-        .hasMessageContaining("different immutable shortage snapshot");
+        .hasMessageContaining("different immutable estimate source");
   }
 
   @Test
   void concurrentFirstUseCreatesOneSourceAndAChangedPayloadIsRejected() throws Exception {
     UUID returnId = UUID.randomUUID();
     UUID lineId = UUID.randomUUID();
-    UpsertLogisticsReturnShortageRequest request =
-        new UpsertLogisticsReturnShortageRequest(
+    UpsertLogisticsReturnEstimateSourceRequest request =
+        new UpsertLogisticsReturnEstimateSourceRequest(
             UUID.randomUUID(),
             UUID.randomUUID(),
             0L,
             LocalDate.of(2026, 7, 27),
-            List.of(new MediaReferenceInput(UUID.randomUUID(), 1L)),
-            List.of(new LogisticsEquipmentShortage(UUID.randomUUID(), 1L)));
+            List.of(new MediaReferenceInput(UUID.randomUUID(), 1L)));
     CountDownLatch start = new CountDownLatch(1);
     var executor = Executors.newFixedThreadPool(2);
     try {
@@ -249,40 +239,20 @@ class MaintenanceLogisticsBoundaryIntegrationTest {
       executor.shutdownNow();
     }
 
-    UUID duplicateEquipment = UUID.randomUUID();
-    assertThatThrownBy(
-            () ->
-                logistics.upsert(
-                    UUID.randomUUID(),
-                    UUID.randomUUID(),
-                    new UpsertLogisticsReturnShortageRequest(
-                        UUID.randomUUID(),
-                        UUID.randomUUID(),
-                        0L,
-                        LocalDate.of(2026, 7, 27),
-                        List.of(new MediaReferenceInput(UUID.randomUUID(), 1L)),
-                        List.of(
-                            new LogisticsEquipmentShortage(duplicateEquipment, 1L),
-                            new LogisticsEquipmentShortage(duplicateEquipment, 2L)))))
-        .isInstanceOf(MaintenanceValidationException.class)
-        .hasMessageContaining("duplicate equipment ID");
-
     UUID duplicateMedia = UUID.randomUUID();
     assertThatThrownBy(
             () ->
                 logistics.upsert(
                     UUID.randomUUID(),
                     UUID.randomUUID(),
-                    new UpsertLogisticsReturnShortageRequest(
+                    new UpsertLogisticsReturnEstimateSourceRequest(
                         UUID.randomUUID(),
                         UUID.randomUUID(),
                         0L,
                         LocalDate.of(2026, 7, 27),
                         List.of(
                             new MediaReferenceInput(duplicateMedia, 1L),
-                            new MediaReferenceInput(duplicateMedia, 1L)),
-                        List.of(
-                            new LogisticsEquipmentShortage(UUID.randomUUID(), 1L)))))
+                            new MediaReferenceInput(duplicateMedia, 1L)))))
         .isInstanceOf(MaintenanceValidationException.class)
         .hasMessageContaining("duplicate media ID");
   }

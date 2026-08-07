@@ -839,6 +839,48 @@ class InventoryInspectionApiContractIntegrationTest {
         .isOne();
   }
 
+  @Test
+  void rejectsRetainedHistoricalGenerationWhenTheLogicalMediaIsNowDeleted()
+      throws Exception {
+    Fixture fixture = fixture("READY");
+    ObjectNode firstRequest =
+        requestBody(fixture, ObservationPresence.EXPLICIT_EMPTY, mapper.createArrayNode());
+    HttpResponse<String> first = request(inspectionPath(fixture), firstRequest.toString());
+    assertThat(first.statusCode()).withFailMessage(first.body()).isEqualTo(200);
+
+    mediaFacts.saveAndFlush(
+        InventoryMediaFactProjection.create(
+            fixture.mediaId(),
+            2,
+            4,
+            fixture.findingId(),
+            fixture.warehouseId(),
+            "IMAGE",
+            "DELETED",
+            0));
+    ObjectNode supplement =
+        requestBody(fixture, ObservationPresence.EXPLICIT_EMPTY, mapper.createArrayNode());
+    supplement.put("expectedFindingRevision", 1);
+
+    HttpResponse<String> response = request(inspectionPath(fixture), supplement.toString());
+
+    assertThat(response.statusCode()).isEqualTo(422);
+    assertThat(mapper.readTree(response.body()).required("code").asText())
+        .isEqualTo("INVENTORY_MEDIA_NOT_READY");
+    assertThat(
+            jdbc.queryForObject(
+                "select finding_revision from inventory_finding where id=?",
+                Long.class,
+                fixture.findingId()))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from finding_media_reference where finding_id=? and finding_revision=1 and generation=1",
+                Integer.class,
+                fixture.findingId()))
+        .isOne();
+  }
+
   private Fixture fixture(String mediaStatus) {
     return fixture(mediaStatus, true);
   }

@@ -10,6 +10,10 @@ public interface InventoryMediaFactProjectionRepository
   Optional<InventoryMediaFactProjection> findByMediaIdAndGeneration(UUID mediaId, long generation);
 
   Optional<InventoryMediaFactProjection>
+      findFirstByMediaIdAndOwnerTypeAndOwnerIdAndWarehouseIdOrderByAggregateVersionDesc(
+          UUID mediaId, String ownerType, UUID ownerId, UUID warehouseId);
+
+  Optional<InventoryMediaFactProjection>
       findByMediaIdAndGenerationAndOwnerTypeAndOwnerIdAndWarehouseIdAndMediaStatus(
           UUID mediaId,
           long generation,

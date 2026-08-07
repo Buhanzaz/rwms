@@ -9,7 +9,6 @@ type ProcessingLimits struct {
 	MaxImageOutputBytes int64
 	MaxDecodedPixels    int64
 	MaxVideoBytes       int64
-	MaxVideoOutputBytes int64
 	Timeout             time.Duration
 }
 
@@ -18,6 +17,5 @@ func (limits ProcessingLimits) Valid() bool {
 		limits.MaxImageOutputBytes > 0 &&
 		limits.MaxDecodedPixels > 0 &&
 		limits.MaxVideoBytes > 0 &&
-		limits.MaxVideoOutputBytes > 0 &&
 		limits.Timeout > 0
 }

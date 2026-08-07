@@ -52,6 +52,10 @@ class AuthLogisticsServiceClientDisabledIntegrationTest {
         assertThat(stored.getClientSecret()).isNull();
         assertThat(stored.getScopes()).containsExactlyInAnyOrder(
                 "warehouse.logistics",
+                "warehouse.timezone.read",
+                "warehouse.operation.mark",
+                "warehouse.lifecycle.read",
+                "warehouse.lifecycle.confirm",
                 "asset.logistics",
                 "task-board.logistics",
                 "maintenance.logistics",

@@ -301,6 +301,7 @@ class RwmsApiHttpContractTest {
     fun `return commands include public version paths and required evidence`() = runTest {
         val documentId = "44444444-4444-4444-4444-444444444444"
         val lineId = "55555555-5555-5555-5555-555555555555"
+        val warehouseId = "88888888-8888-8888-8888-888888888888"
         val mediaId = "66666666-6666-6666-6666-666666666666"
         val equipmentId = "77777777-7777-7777-7777-777777777777"
 
@@ -323,25 +324,25 @@ class RwmsApiHttpContractTest {
                 ),
             )
         }
-        val estimate = captureRequest {
-            api.requestReturnEstimate(
+        val estimates = captureRequest {
+            api.startReturnEstimates(
                 documentId = documentId,
                 expectedVersion = 10,
                 idempotencyKey = "return-estimate-1",
-                request = RequestReturnEstimateRequest(
+                request = StartReturnEstimatesRequest(
                     lines = listOf(
-                        RequestReturnEstimateLine(
+                        StartReturnEstimateLine(
                             lineId = lineId,
-                            shortages = listOf(
-                                EquipmentShortageRequest(
-                                    equipmentId = equipmentId,
-                                    missingQuantity = 2,
-                                ),
-                            ),
                             references = listOf(MediaReferenceDto(mediaId = mediaId, generation = 3)),
                         ),
                     ),
                 ),
+            )
+        }
+        val sources = captureRequest {
+            api.returnEstimateSources(
+                warehouseId = warehouseId,
+                returnId = documentId,
             )
         }
 
@@ -351,12 +352,16 @@ class RwmsApiHttpContractTest {
             idempotencyKey = "return-accept-1",
             body = """{"lines":[{"lineId":"$lineId","equipmentConfirmed":true,"references":[{"mediaId":"$mediaId","generation":2}],"additionalEquipment":[{"equipmentId":"$equipmentId","quantity":1}]}]}""",
         )
-        estimate.assertJsonCommand(
+        estimates.assertJsonCommand(
             method = "POST",
-            path = "/api/logistics/v1/returns/$documentId/request-estimate?expectedVersion=10",
+            path = "/api/logistics/v1/returns/$documentId/start-estimates?expectedVersion=10",
             idempotencyKey = "return-estimate-1",
-            body = """{"lines":[{"lineId":"$lineId","shortages":[{"equipmentId":"$equipmentId","missingQuantity":2}],"references":[{"mediaId":"$mediaId","generation":3}]}]}""",
+            body = """{"lines":[{"lineId":"$lineId","references":[{"mediaId":"$mediaId","generation":3}]}]}""",
         )
+        sources.assertPublicSameOriginPath(
+            "/api/maintenance/v1/estimates/return-sources?warehouseId=$warehouseId&returnId=$documentId",
+        )
+        assertThat(sources.method).isEqualTo("GET")
     }
 
     @Test
@@ -426,7 +431,7 @@ class RwmsApiHttpContractTest {
                 estimateId = estimateId,
                 warehouseId = warehouseId,
                 idempotencyKey = "estimate-complete-1",
-                request = PriorityVersionRequest(
+                request = CompleteEstimateRequest(
                     expectedVersion = 8,
                     priority = 2,
                     movementToRepair = false,
@@ -463,7 +468,7 @@ class RwmsApiHttpContractTest {
             method = "POST",
             path = "/api/maintenance/v1/estimates/$estimateId/complete?warehouseId=$warehouseId",
             idempotencyKey = "estimate-complete-1",
-            body = """{"expectedVersion":8,"priority":2,"movementToRepair":false,"logisticsPlanningMode":null,"logisticsScheduledDate":null}""",
+            body = """{"expectedVersion":8,"priority":2,"movementToRepair":false,"logisticsPlanningMode":null,"logisticsScheduledDate":null,"allowUnaccountedFurniture":false}""",
         )
         amendment.assertJsonCommand(
             method = "POST",
@@ -881,23 +886,6 @@ class RwmsApiHttpContractTest {
                 ),
             )
         }
-        val mediaId = "dddddddd-dddd-dddd-dddd-dddddddddddd"
-        val rotate = captureRequest {
-            api.rotateMedia(
-                mediaId = mediaId,
-                idempotencyKey = "media-rotate-1",
-                ownerType = "LOGISTICS_RETURN",
-                documentId = documentId,
-                lineId = lineId,
-                warehouseId = warehouseId,
-                context = "RETURN_INSPECTION",
-                request = RotateMediaRequest(
-                    rotationDegrees = 90,
-                    expectedVersion = 7,
-                ),
-            )
-        }
-
         session.assertJsonCommand(
             method = "POST",
             path = "/api/media/v1/upload-sessions",
@@ -917,14 +905,6 @@ class RwmsApiHttpContractTest {
             path = "/api/media/v1/upload-sessions/$uploadSessionId/complete",
             idempotencyKey = "media-upload-1",
             body = """{"objectVersionId":"version-1","etag":"etag-1","checksumSha256":"$checksum"}""",
-        )
-        rotate.assertJsonCommand(
-            method = "POST",
-            path = "/api/media/v1/assets/$mediaId/rotation?ownerType=LOGISTICS_RETURN" +
-                "&documentId=$documentId&lineId=$lineId&warehouseId=$warehouseId" +
-                "&context=RETURN_INSPECTION",
-            idempotencyKey = "media-rotate-1",
-            body = """{"rotationDegrees":90,"expectedVersion":7}""",
         )
     }
 

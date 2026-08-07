@@ -8,7 +8,7 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateCabinFurnitureTa
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.AcceptReturnRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ArriveTransferLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.LogisticsDocumentView;
-import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.RequestReturnEstimateRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.StartReturnEstimatesRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReconcileRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnPickupRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentPlanRequest;
@@ -139,18 +139,18 @@ public class LogisticsController {
     return accepted(result);
   }
 
-  @PostMapping("/returns/{documentId}/request-estimate")
-  public ResponseEntity<LogisticsDocumentView> requestReturnEstimate(
+  @PostMapping("/returns/{documentId}/start-estimates")
+  public ResponseEntity<LogisticsDocumentView> startReturnEstimates(
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID documentId,
       @RequestParam @Min(0) long expectedVersion,
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
-      @Valid @RequestBody RequestReturnEstimateRequest request,
+      @Valid @RequestBody StartReturnEstimatesRequest request,
       HttpServletRequest servletRequest) {
     LogisticsDocumentView current = service.get(documentId, LogisticsDocumentType.RETURN);
     access.requireEdit(jwt, current.warehouseId());
     LogisticsDocumentService.CreateResult result =
-        service.requestReturnEstimate(
+        service.startReturnEstimates(
             access.subjectId(jwt),
             idempotencyKey,
             correlationId(servletRequest),

@@ -38,7 +38,6 @@ const inventoryApi = vi.hoisted(() => ({
 const mediaApi = vi.hoisted(() => ({
   uploadFile: vi.fn(),
   listOwnerMedia: vi.fn(),
-  rotate: vi.fn(),
 }))
 
 const assetApi = vi.hoisted(() => ({

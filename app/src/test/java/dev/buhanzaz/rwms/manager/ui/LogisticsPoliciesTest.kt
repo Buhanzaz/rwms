@@ -1,7 +1,6 @@
 package dev.buhanzaz.rwms.manager.ui
 
 import com.google.common.truth.Truth.assertThat
-import dev.buhanzaz.rwms.manager.network.EquipmentCatalogItemDto
 import dev.buhanzaz.rwms.manager.network.LogisticsDocumentDto
 import dev.buhanzaz.rwms.manager.network.LogisticsLineDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
@@ -117,122 +116,6 @@ class LogisticsPoliciesTest {
         assertThat(ignored.returnReadyMedia).isEqualTo(existing)
         assertThat(applied.returnReadyMedia).isEqualTo(late)
     }
-
-    @Test
-    fun `return shortage catalog keeps active equipment sorted by name`() {
-        val returnDocument = document(
-            documentType = "RETURN",
-            state = "INSPECTION",
-            rentalOrderId = null,
-            lineState = "PENDING",
-        )
-        val loaded = ManagerUiState(selectedReturn = returnDocument)
-            .withLoadedReturnEquipmentCatalog(
-                returnDocument.id,
-                listOf(
-                    equipment(id = "table", name = "Стол", category = "Мебель"),
-                    equipment(id = "archived", name = "Архивный стол", active = false),
-                    equipment(id = "chair", name = "Стул", category = "Мебель"),
-                ),
-            )
-
-        assertThat(loaded.returnEquipmentCatalogStatus)
-            .isEqualTo(ReturnEquipmentCatalogStatus.AVAILABLE)
-        assertThat(loaded.returnEquipmentCatalog.map(EquipmentCatalogItemDto::name))
-            .containsExactly("Стол", "Стул")
-            .inOrder()
-        assertThat(
-            loaded.returnEquipmentCatalog.selectedReturnShortageEquipment("chair")?.name,
-        ).isEqualTo("Стул")
-        assertThat(
-            loaded.returnEquipmentCatalog.selectedReturnShortageEquipment("not-selected"),
-        ).isNull()
-    }
-
-    @Test
-    fun `empty return shortage catalog disables the estimate source honestly`() {
-        val returnDocument = document(
-            documentType = "RETURN",
-            state = "INSPECTION",
-            rentalOrderId = null,
-            lineState = "PENDING",
-        )
-
-        val loaded = ManagerUiState(selectedReturn = returnDocument)
-            .withLoadedReturnEquipmentCatalog(
-                returnDocument.id,
-                listOf(equipment(id = "archived", name = "Архивный стол", active = false)),
-            )
-
-        assertThat(loaded.returnEquipmentCatalog).isEmpty()
-        assertThat(loaded.returnEquipmentCatalogStatus)
-            .isEqualTo(ReturnEquipmentCatalogStatus.EMPTY)
-    }
-
-    @Test
-    fun `unavailable return shortage catalog clears prior choices`() {
-        val returnDocument = document(
-            documentType = "RETURN",
-            state = "INSPECTION",
-            rentalOrderId = null,
-            lineState = "PENDING",
-        )
-        val current = ManagerUiState(
-            selectedReturn = returnDocument,
-            returnEquipmentCatalog = listOf(equipment(id = "chair", name = "Стул")),
-            returnEquipmentCatalogStatus = ReturnEquipmentCatalogStatus.AVAILABLE,
-            returnShortageEquipment = mapOf("line-1" to "chair"),
-            returnShortageQuantity = mapOf("line-1" to "2"),
-        )
-
-        val unavailable = current.withUnavailableReturnEquipmentCatalog(returnDocument.id)
-
-        assertThat(unavailable.returnEquipmentCatalog).isEmpty()
-        assertThat(unavailable.returnEquipmentCatalogStatus)
-            .isEqualTo(ReturnEquipmentCatalogStatus.UNAVAILABLE)
-        assertThat(unavailable.returnShortageEquipment).isEmpty()
-        assertThat(unavailable.returnShortageQuantity).isEmpty()
-    }
-
-    @Test
-    fun `late return equipment catalog cannot overwrite another opened return`() {
-        val first = document(
-            documentType = "RETURN",
-            state = "INSPECTION",
-            rentalOrderId = null,
-            lineState = "PENDING",
-        ).copy(id = "return-a")
-        val second = first.copy(id = "return-b")
-        val existing = listOf(equipment(id = "chair", name = "Стул"))
-        val late = listOf(equipment(id = "table", name = "Стол"))
-        val current = ManagerUiState(
-            selectedReturn = second,
-            returnEquipmentCatalog = existing,
-            returnEquipmentCatalogStatus = ReturnEquipmentCatalogStatus.AVAILABLE,
-        )
-
-        val ignored = current.withLoadedReturnEquipmentCatalog(first.id, late)
-        val applied = current.copy(selectedReturn = first)
-            .withLoadedReturnEquipmentCatalog(first.id, late)
-
-        assertThat(ignored).isSameInstanceAs(current)
-        assertThat(ignored.returnEquipmentCatalog).isEqualTo(existing)
-        assertThat(applied.returnEquipmentCatalog.map(EquipmentCatalogItemDto::id))
-            .containsExactly("table")
-    }
-
-    private fun equipment(
-        id: String,
-        name: String,
-        category: String = "OTHER",
-        active: Boolean = true,
-    ) = EquipmentCatalogItemDto(
-        id = id,
-        version = 1,
-        name = name,
-        category = category,
-        active = active,
-    )
 
     private fun document(
         documentType: String,

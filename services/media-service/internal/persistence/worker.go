@@ -382,11 +382,9 @@ func validProcessingMessage(message ProcessingMessage) bool {
 		message.CorrelationID != uuid.Nil && message.ExpectedMediaID != uuid.Nil &&
 		message.ExpectedWarehouseID != uuid.Nil &&
 		(message.ExpectedKind == media.KindImage || message.ExpectedKind == media.KindVideo) &&
-		(message.ExpectedProcessingKind == media.ProcessingInitial ||
-			message.ExpectedProcessingKind == media.ProcessingRotation) &&
+		message.ExpectedProcessingKind == media.ProcessingInitial &&
 		message.ExpectedGeneration > 0 &&
-		(message.ExpectedRotation == media.Rotation0 || message.ExpectedRotation == media.Rotation90 ||
-			message.ExpectedRotation == media.Rotation180 || message.ExpectedRotation == media.Rotation270) &&
+		message.ExpectedRotation == media.Rotation0 &&
 		strings.TrimSpace(message.ExpectedSourceVersionID) != "" &&
 		len(message.ExpectedSourceVersionID) <= 255
 }
@@ -468,11 +466,11 @@ func (repository *Repository) CompleteProcessingJob(ctx context.Context, job Wor
 	}
 	var version int64
 	err = tx.QueryRow(ctx, `update media_asset as a set processing_status='READY',
-		current_generation=$2,rotation_degrees=$3,pending_generation=null,pending_rotation_degrees=null,
+		current_generation=$2,rotation_degrees=0,pending_generation=null,pending_rotation_degrees=null,
 		processing_error=null,version=version+1,updated_at=clock_timestamp()
-		where a.media_id=$1 and version=$4 and processing_status='PROCESSING' and pending_generation=$2
+		where a.media_id=$1 and version=$3 and processing_status='PROCESSING' and pending_generation=$2
 		  and media_asset_is_available(a.media_id)
-		returning version`, job.MediaID, job.Generation, job.Rotation, asset.Version).Scan(&version)
+		returning version`, job.MediaID, job.Generation, asset.Version).Scan(&version)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrLeaseLost
 	}
@@ -482,12 +480,8 @@ func (repository *Repository) CompleteProcessingJob(ctx context.Context, job Wor
 	asset.Version = version
 	asset.Status = media.StatusReady
 	asset.Generation = job.Generation
-	asset.Rotation = job.Rotation
-	eventType := "media.media.ready.v1"
-	if job.ProcessingKind == media.ProcessingRotation {
-		eventType = "media.media.rotated.v1"
-	}
-	if err := repository.appendSystemFact(ctx, tx, job, asset, eventType); err != nil {
+	asset.Rotation = media.Rotation0
+	if err := repository.appendSystemFact(ctx, tx, job, asset, "media.media.ready.v1"); err != nil {
 		return err
 	}
 	if err := repository.associateProcessedCabinImage(ctx, tx, asset, job.CorrelationID); err != nil {
@@ -504,6 +498,9 @@ func (repository *Repository) CompleteProcessingJob(ctx context.Context, job Wor
 }
 
 func validateProcessedVariants(job WorkerJob, variants []media.ProcessedVariant) error {
+	if job.ProcessingKind != media.ProcessingInitial || job.Rotation != media.Rotation0 {
+		return ErrConflict
+	}
 	wanted := map[media.Variant]string{}
 	switch job.MediaKind {
 	case media.KindImage:

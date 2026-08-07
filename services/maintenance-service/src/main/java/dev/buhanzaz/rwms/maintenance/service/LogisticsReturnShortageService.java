@@ -1,14 +1,11 @@
 package dev.buhanzaz.rwms.maintenance.service;
 
-import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.LogisticsEquipmentShortage;
-import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.LogisticsReturnShortageResponse;
 import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.MediaReferenceInput;
-import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.UpsertLogisticsReturnShortageRequest;
+import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.ReturnEstimateSource;
+import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.UpsertLogisticsReturnEstimateSourceRequest;
 
 import dev.buhanzaz.rwms.maintenance.domain.LogisticsReturnShortage;
 import dev.buhanzaz.rwms.maintenance.domain.LogisticsReturnShortageId;
-import dev.buhanzaz.rwms.maintenance.mapper.LogisticsReturnShortageResponseMapper;
-import dev.buhanzaz.rwms.maintenance.mapper.LogisticsReturnShortageResponseMapper.StoredSnapshot;
 import dev.buhanzaz.rwms.maintenance.repository.LogisticsReturnShortageRepository;
 import java.nio.charset.StandardCharsets;
 import java.util.Comparator;
@@ -21,7 +18,6 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
-import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -34,16 +30,14 @@ import tools.jackson.databind.ObjectMapper;
 public class LogisticsReturnShortageService {
   private final LogisticsReturnShortageRepository sources;
   private final LogisticsReturnShortageRegistrar registrar;
-  private final LogisticsReturnShortageResponseMapper responseMapper;
   private final ObjectMapper mapper;
 
   public UpsertResult upsert(
-      UUID returnId, UUID lineId, UpsertLogisticsReturnShortageRequest request) {
+      UUID returnId, UUID lineId, UpsertLogisticsReturnEstimateSourceRequest request) {
     LogisticsReturnShortageId id = new LogisticsReturnShortageId(returnId, lineId);
-    List<LogisticsEquipmentShortage> shortages = canonicalShortages(request.shortages());
     List<MediaReferenceInput> mediaReferences =
         canonicalMediaReferences(request.mediaReferences());
-    String snapshot = write(shortages);
+    String snapshot = write(mediaReferences);
     String snapshotSha256 = sha256(snapshot);
     String sourceSha256 =
         sha256(
@@ -55,8 +49,7 @@ public class LogisticsReturnShortageService {
                     request.rentalItemId(),
                     request.rentalItemVersion(),
                     request.dispatchDate(),
-                    mediaReferences,
-                    shortages)));
+                    mediaReferences)));
     LogisticsReturnShortage candidate =
         LogisticsReturnShortage.receive(
             id,
@@ -79,60 +72,43 @@ public class LogisticsReturnShortageService {
             .orElseThrow(
                 () ->
                     new MaintenanceConflictException(
-                        "LOGISTICS_RETURN_SHORTAGE_CONCURRENT_WRITE",
-                        "Logistics return shortage source was not persisted"));
+                        "LOGISTICS_RETURN_ESTIMATE_SOURCE_CONCURRENT_WRITE",
+                        "Logistics return estimate source was not persisted"));
     if (!sourceSha256.equals(source.getSourceSha256())) {
       throw new MaintenanceConflictException(
-          "LOGISTICS_RETURN_SHORTAGE_CONFLICT",
-          "Return-line source is already bound to a different immutable shortage snapshot");
+          "LOGISTICS_RETURN_ESTIMATE_SOURCE_CONFLICT",
+          "Return-line source is already bound to a different immutable estimate source");
     }
     return new UpsertResult(response(source), !registered);
   }
 
   @Transactional(readOnly = true)
-  public LogisticsReturnShortageResponse get(UUID returnId, UUID lineId) {
+  public ReturnEstimateSource get(UUID returnId, UUID lineId) {
     return response(
         sources
             .findById(new LogisticsReturnShortageId(returnId, lineId))
             .orElseThrow(
-                () -> new MaintenanceNotFoundException("Logistics return shortage source not found")));
+                () -> new MaintenanceNotFoundException("Logistics return estimate source not found")));
   }
 
-  private LogisticsReturnShortageResponse response(LogisticsReturnShortage source) {
-    StoredSnapshot stored = responseMapper.toStoredSnapshot(source);
-    return new LogisticsReturnShortageResponse(
-        stored.returnId(),
-        stored.lineId(),
-        stored.sourceVersion(),
-        stored.warehouseId(),
-        stored.rentalItemId(),
-        stored.rentalItemVersion(),
-        stored.estimateId(),
-        readShortages(stored.shortageSnapshot()),
-        stored.snapshotSha256(),
-        stored.receivedAt());
-  }
-
-  private static List<LogisticsEquipmentShortage> canonicalShortages(
-      List<LogisticsEquipmentShortage> values) {
-    if (values == null || values.isEmpty()) {
-      throw new MaintenanceValidationException(
-          "MAINTENANCE_VALIDATION_FAILED", "At least one equipment shortage is required");
-    }
-    Set<UUID> equipmentIds = new HashSet<>();
-    for (LogisticsEquipmentShortage value : values) {
-      if (value == null || value.equipmentId() == null || value.missingQuantity() < 1) {
-        throw new MaintenanceValidationException(
-            "MAINTENANCE_VALIDATION_FAILED", "Equipment shortage is invalid");
-      }
-      if (!equipmentIds.add(value.equipmentId())) {
-        throw new MaintenanceValidationException(
-            "MAINTENANCE_VALIDATION_FAILED", "Equipment shortage contains a duplicate equipment ID");
-      }
-    }
-    return values.stream()
-        .sorted(Comparator.comparing(value -> value.equipmentId().toString()))
+  @Transactional(readOnly = true)
+  public List<ReturnEstimateSource> list(UUID warehouseId, UUID returnId) {
+    return sources.findAllById_ReturnIdAndWarehouseIdOrderById_LineId(returnId, warehouseId).stream()
+        .map(this::response)
         .toList();
+  }
+
+  private ReturnEstimateSource response(LogisticsReturnShortage source) {
+    return new ReturnEstimateSource(
+        source.getId().getReturnId(),
+        source.getId().getLineId(),
+        source.getVersion(),
+        source.getWarehouseId(),
+        source.getRentalItemId(),
+        source.getRentalItemVersionSnapshot(),
+        source.getEstimateId(),
+        source.getSnapshotSha256(),
+        source.getCreatedAt());
   }
 
   private static List<MediaReferenceInput> canonicalMediaReferences(
@@ -162,19 +138,11 @@ public class LogisticsReturnShortageService {
         .toList();
   }
 
-  private List<LogisticsEquipmentShortage> readShortages(String value) {
-    try {
-      return mapper.readValue(value, new TypeReference<List<LogisticsEquipmentShortage>>() {});
-    } catch (JacksonException exception) {
-      throw new IllegalStateException("Stored logistics return shortage snapshot is invalid", exception);
-    }
-  }
-
   private String write(Object value) {
     try {
       return mapper.writeValueAsString(value);
     } catch (JacksonException exception) {
-      throw new IllegalArgumentException("Logistics return shortage snapshot is invalid", exception);
+      throw new IllegalArgumentException("Logistics return estimate source snapshot is invalid", exception);
     }
   }
 
@@ -182,7 +150,7 @@ public class LogisticsReturnShortageService {
     return MaintenanceChecksum.sha256(value.getBytes(StandardCharsets.UTF_8));
   }
 
-  public record UpsertResult(LogisticsReturnShortageResponse response, boolean replayed) {}
+  public record UpsertResult(ReturnEstimateSource response, boolean replayed) {}
 
   private record SourceFingerprint(
       UUID returnId,
@@ -191,6 +159,5 @@ public class LogisticsReturnShortageService {
       UUID rentalItemId,
       long rentalItemVersion,
       java.time.LocalDate dispatchDate,
-      List<MediaReferenceInput> mediaReferences,
-      List<LogisticsEquipmentShortage> shortages) {}
+      List<MediaReferenceInput> mediaReferences) {}
 }

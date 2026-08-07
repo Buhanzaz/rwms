@@ -152,7 +152,6 @@ func TestOpenAPIParsesAndExposesOnlyApprovedRuntimePaths(t *testing.T) {
 		"/api/media/v1/cabin-covers":                                                                       "post",
 		"/api/media/v1/assets/{mediaId}/original":                                                          "get",
 		"/api/media/v1/assets/{mediaId}/variants/{variant}/content":                                        "get",
-		"/api/media/v1/assets/{mediaId}/rotation":                                                          "post",
 		"/api/media/v1/assets/{mediaId}/deletion":                                                          "post",
 	}
 	if len(paths) != len(approved) {

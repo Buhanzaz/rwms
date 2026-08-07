@@ -5,7 +5,7 @@ import {
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query"
-import { Link, useSearchParams } from "react-router-dom"
+import { Link, useNavigate, useSearchParams } from "react-router-dom"
 
 import { OperationsListGrid } from "@/components/operations-list-grid"
 import {
@@ -65,7 +65,7 @@ import {
   type ReturnDocument,
   type ReturnDocumentState,
 } from "@/features/logistics/returns/model"
-import { RequestEstimateDialog } from "@/features/logistics/returns/request-estimate-dialog"
+import { StartReturnEstimatesDialog } from "@/features/logistics/returns/start-return-estimates-dialog"
 import type { RepairTaskWorkerSnapshotDto } from "@/features/repair-tasks/model/repair-task"
 import { useResponsiveFiltersOpen } from "@/hooks/use-responsive-filters-open"
 import { useWarehouse } from "@/hooks/use-warehouse"
@@ -161,6 +161,7 @@ export function LogisticsReturnsPage() {
   const { selectedWarehouseId } = useWarehouse()
   const { accessToken, currentUser } = useAuth()
   const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState("")
   const [filters, setFilters] = useState(EMPTY_FILTERS)
@@ -570,15 +571,20 @@ export function LogisticsReturnsPage() {
       {estimateTarget &&
       accessToken &&
       hasWarehouseAccess(currentUser, estimateTarget.warehouseId, "EDIT") ? (
-        <RequestEstimateDialog
+        <StartReturnEstimatesDialog
           accessToken={accessToken}
           document={estimateTarget}
           onOpenChange={(open) => !open && setEstimateTarget(null)}
           onSuccess={(result) => {
             storeServiceProjection(queryClient, result)
             void refresh(result.warehouseId)
+            const returnEstimateSearch = new URLSearchParams({
+              returnId: estimateTarget.id,
+              returnLineCount: String(estimateTarget.lines.length),
+            })
             setEstimateTarget(null)
             setCommandError(null)
+            navigate(`/estimates?${returnEstimateSearch.toString()}`)
           }}
           onConflict={(cause) => {
             void refresh(estimateTarget.warehouseId)

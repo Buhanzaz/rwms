@@ -42,7 +42,6 @@ const mediaApi = vi.hoisted(() => ({
   uploadFile: vi.fn(),
   createVariantObjectUrl: vi.fn(),
   createOriginalObjectUrl: vi.fn(),
-  rotate: vi.fn(),
 }))
 
 const propertyDispositionDialog = vi.hoisted(() => ({

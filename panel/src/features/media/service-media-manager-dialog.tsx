@@ -3,8 +3,6 @@ import {
   CheckmarkCircle02Icon,
   Delete02Icon,
   ImageUploadIcon,
-  RotateLeft01Icon,
-  RotateRight01Icon,
 } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 
@@ -34,7 +32,8 @@ export type ServiceMediaManagerItem = Readonly<{
   id: string
   fileName: string
   previewUrl: string | null
-  rotationDegrees: MediaRotationDegrees
+  /** Historic media can still need its persisted display orientation. */
+  rotationDegrees?: MediaRotationDegrees
   statusLabel: string
   pending: boolean
 }>
@@ -49,7 +48,6 @@ export function ServiceMediaManagerDialog({
   onOpenChange,
   onAddFiles,
   onRemove,
-  onRotate,
   onSelectCover,
   onConfirm,
 }: {
@@ -62,7 +60,6 @@ export function ServiceMediaManagerDialog({
   onOpenChange: (open: boolean) => void
   onAddFiles: (files: File[]) => void
   onRemove: (item: ServiceMediaManagerItem) => void
-  onRotate: (item: ServiceMediaManagerItem, direction: "LEFT" | "RIGHT") => void
   onSelectCover?: (item: ServiceMediaManagerItem) => void
   onConfirm?: () => void
 }) {
@@ -87,7 +84,7 @@ export function ServiceMediaManagerDialog({
         <DialogHeader className="min-w-0">
           <DialogTitle>Добавить фото</DialogTitle>
           <DialogDescription>
-            Выберите изображения, проверьте поворот и удалите лишние.
+            Выберите изображения и удалите лишние.
             {requireCover
               ? " Затем укажите титульную фотографию."
               : ""}
@@ -184,8 +181,9 @@ export function ServiceMediaManagerDialog({
         ) : (
           <div className="grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {items.map((item, index) => {
+              const rotationDegrees = item.rotationDegrees ?? 0
               const quarterTurn =
-                item.rotationDegrees === 90 || item.rotationDegrees === 270
+                rotationDegrees === 90 || rotationDegrees === 270
               return (
                 <Card
                   key={item.id}
@@ -207,7 +205,7 @@ export function ServiceMediaManagerDialog({
                           alt={`Предпросмотр ${item.fileName}`}
                           className="max-h-full max-w-full object-contain"
                           style={{
-                            transform: `rotate(${item.rotationDegrees}deg) scale(${quarterTurn ? 0.75 : 1})`,
+                            transform: `rotate(${rotationDegrees}deg) scale(${quarterTurn ? 0.75 : 1})`,
                             transformOrigin: "center",
                           }}
                         />
@@ -219,28 +217,6 @@ export function ServiceMediaManagerDialog({
                     </div>
                   </CardContent>
                   <CardFooter className="flex-wrap justify-between gap-2">
-                    <div className="flex gap-1">
-                      <Button
-                        type="button"
-                        size="icon-sm"
-                        variant="outline"
-                        aria-label={`Повернуть ${item.fileName} влево`}
-                        disabled={pending || item.pending}
-                        onClick={() => onRotate(item, "LEFT")}
-                      >
-                        <HugeiconsIcon icon={RotateLeft01Icon} />
-                      </Button>
-                      <Button
-                        type="button"
-                        size="icon-sm"
-                        variant="outline"
-                        aria-label={`Повернуть ${item.fileName} вправо`}
-                        disabled={pending || item.pending}
-                        onClick={() => onRotate(item, "RIGHT")}
-                      >
-                        <HugeiconsIcon icon={RotateRight01Icon} />
-                      </Button>
-                    </div>
                     {onSelectCover ? (
                       <Button
                         type="button"

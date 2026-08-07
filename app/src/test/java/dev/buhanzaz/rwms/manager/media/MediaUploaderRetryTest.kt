@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.manager.media
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.manager.network.MediaAssetDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
+import java.io.IOException
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -333,8 +334,8 @@ class MediaUploaderRetryTest {
     }
 
     @Test
-    fun `media command retries conflicts and service unavailability`() = runTest {
-        for (status in listOf(409, 503)) {
+    fun `media command retries bounded transient transport and service failures`() = runTest {
+        for (status in listOf(408, 409, 425, 429, 500, 502, 503, 504)) {
             var attempts = 0
             val result = retryMediaCommandAfterOwnerProof {
                 attempts += 1
@@ -348,11 +349,10 @@ class MediaUploaderRetryTest {
     }
 
     @Test
-    fun `media command does not retry unrelated forbidden or server errors`() = runTest {
+    fun `media command does not retry unrelated forbidden errors`() = runTest {
         for (failure in listOf(
             httpFailure(403, "FORBIDDEN"),
             httpFailure(403),
-            httpFailure(500),
         )) {
             var attempts = 0
             val result = runCatching {
@@ -388,6 +388,21 @@ class MediaUploaderRetryTest {
         }
 
     @Test
+    fun `owner media read retries a temporary connection interruption`() = runTest {
+        var attempts = 0
+
+        val result = retryMediaReadAfterOwnerProof {
+            attempts += 1
+            if (attempts == 1) throw IOException("connection reset")
+            "photo"
+        }
+
+        assertThat(result).isEqualTo("photo")
+        assertThat(attempts).isEqualTo(2)
+        assertThat(testScheduler.currentTime).isEqualTo(250L)
+    }
+
+    @Test
     fun `owner media read does not retry unrelated forbidden`() = runTest {
         var attempts = 0
 
@@ -404,7 +419,7 @@ class MediaUploaderRetryTest {
     }
 
     @Test
-    fun `retry policy recognizes only owner proof forbidden plus conflict and unavailable`() {
+    fun `retry policy recognizes owner proof lag and transient transport statuses`() {
         assertThat(
             isRetryableMediaOwnerFailure(
                 httpFailure(403, "MEDIA_OWNER_PROOF_REQUIRED"),
@@ -412,8 +427,10 @@ class MediaUploaderRetryTest {
         ).isTrue()
         assertThat(isRetryableMediaOwnerFailure(httpFailure(403, "FORBIDDEN"))).isFalse()
         assertThat(isRetryableMediaOwnerFailure(httpFailure(409))).isTrue()
+        assertThat(isRetryableMediaOwnerFailure(httpFailure(429))).isTrue()
+        assertThat(isRetryableMediaOwnerFailure(httpFailure(500))).isTrue()
         assertThat(isRetryableMediaOwnerFailure(httpFailure(503))).isTrue()
-        assertThat(isRetryableMediaOwnerFailure(httpFailure(500))).isFalse()
+        assertThat(isRetryableMediaOwnerFailure(httpFailure(400))).isFalse()
     }
 
     private fun httpFailure(status: Int, code: String? = null): HttpException {

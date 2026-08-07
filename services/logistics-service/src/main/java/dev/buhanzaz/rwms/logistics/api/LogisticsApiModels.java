@@ -208,15 +208,12 @@ public final class LogisticsApiModels {
   public record AcceptReturnRequest(
       @NotNull @Size(min = 1, max = 100) List<@Valid ReturnMediaLineRequest> lines) {}
 
-  public record EquipmentShortageRequest(@NotNull UUID equipmentId, @Min(1) long missingQuantity) {}
-
-  public record ReturnShortageLineRequest(
+  public record ReturnEstimateLineRequest(
       @NotNull UUID lineId,
-      @NotNull @Size(min = 1, max = 20) List<@Valid MediaReferenceInput> references,
-      @NotNull @Size(min = 1, max = 100) List<@Valid EquipmentShortageRequest> shortages) {}
+      @NotNull @Size(min = 1, max = 20) List<@Valid MediaReferenceInput> references) {}
 
-  public record RequestReturnEstimateRequest(
-      @NotNull @Size(min = 1, max = 100) List<@Valid ReturnShortageLineRequest> lines) {}
+  public record StartReturnEstimatesRequest(
+      @NotNull @Size(min = 1, max = 100) List<@Valid ReturnEstimateLineRequest> lines) {}
 
   public record ReconcileRequest(@NotBlank @Size(max = 500) String reason) {}
 

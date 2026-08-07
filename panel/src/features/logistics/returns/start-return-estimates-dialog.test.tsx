@@ -4,16 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { ReturnDocument } from "@/features/logistics/returns/model"
 
 const viewport = vi.hoisted(() => ({ isMobile: true }))
-const equipmentApi = vi.hoisted(() => ({ getEquipmentItems: vi.fn() }))
 
 vi.mock("@/hooks/use-mobile", () => ({
   useIsMobile: () => viewport.isMobile,
 }))
-vi.mock("@/api/equipment-api", () => ({
-  getEquipmentItems: equipmentApi.getEquipmentItems,
-}))
 
-import { RequestEstimateDialog } from "@/features/logistics/returns/request-estimate-dialog"
+import { StartReturnEstimatesDialog } from "@/features/logistics/returns/start-return-estimates-dialog"
 
 const document: ReturnDocument = {
   id: "22222222-2222-4222-8222-222222222222",
@@ -52,12 +48,12 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-describe("RequestEstimateDialog on mobile", () => {
-  it("replaces the editable estimate form with the mobile-app warning", () => {
+describe("StartReturnEstimatesDialog on mobile", () => {
+  it("replaces the panel form with the mobile-app warning", () => {
     const onOpenChange = vi.fn()
 
     render(
-      <RequestEstimateDialog
+      <StartReturnEstimatesDialog
         accessToken="return-token"
         document={document}
         onOpenChange={onOpenChange}
@@ -75,8 +71,7 @@ describe("RequestEstimateDialog on mobile", () => {
       screen.getByRole("link", { name: "Скачать приложение" })
     ).toBeTruthy()
     expect(screen.queryByText("Недостающее оборудование")).toBeNull()
-    expect(screen.queryByRole("button", { name: "Создать смету" })).toBeNull()
-    expect(equipmentApi.getEquipmentItems).not.toHaveBeenCalled()
+    expect(screen.queryByText("Оборудование")).toBeNull()
 
     fireEvent.click(screen.getByRole("button", { name: "Понятно" }))
 

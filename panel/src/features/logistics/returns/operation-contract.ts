@@ -4,7 +4,7 @@ export const RETURN_OPERATION_IDS = {
   createReceipt: "createReturn",
   registerReceipt: "registerReturn",
   acceptUndamaged: "acceptUndamagedReturn",
-  requestEstimate: "requestReturnEstimate",
+  startEstimates: "startReturnEstimates",
 } as const
 
 export const RETURN_CONTRACT_GAPS = [

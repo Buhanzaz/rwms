@@ -243,7 +243,8 @@ describe("maintenance repair estimates adapter", () => {
       expect.any(String),
       false,
       "AUTO",
-      null
+      null,
+      false
     )
     expect(lifecycle.create).toHaveBeenCalledWith(
       "token",

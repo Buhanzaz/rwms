@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.maintenance.api;
 import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.*;
 
 import dev.buhanzaz.rwms.maintenance.security.MaintenanceAuthorizer;
+import dev.buhanzaz.rwms.maintenance.service.LogisticsReturnShortageService;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
 import dev.buhanzaz.rwms.maintenance.domain.EstimateState;
 import jakarta.validation.Valid;
@@ -33,6 +34,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class MaintenanceEstimateController {
   private final MaintenanceApplicationService service;
+  private final LogisticsReturnShortageService returnEstimateSources;
   private final MaintenanceAuthorizer access;
 
   @GetMapping
@@ -67,6 +69,15 @@ public class MaintenanceEstimateController {
     ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.CREATED);
     if (result.replayed()) response.header("Idempotency-Replayed", "true");
     return response.body(result.response());
+  }
+
+  @GetMapping("/return-sources")
+  public List<ReturnEstimateSource> returnSources(
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestParam UUID warehouseId,
+      @RequestParam UUID returnId) {
+    access.requireRead(jwt, warehouseId);
+    return returnEstimateSources.list(warehouseId, returnId);
   }
 
   @GetMapping("/{id}")

@@ -14,6 +14,7 @@ import org.springframework.security.oauth2.client.OAuth2AuthorizeRequest;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientManager;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.util.UriComponentsBuilder;
 import tools.jackson.databind.JsonNode;
 
@@ -552,14 +553,14 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
 
   @Override
   public FrozenPlan freezePlan(UUID idempotencyKey, JsonNode request) {
+    String authorization = bearer(MAINTENANCE_CLIENT, MAINTENANCE_SCOPE);
     JsonNode response =
-        post(
+        postFreezePlan(
             maintenanceBase + "/api/internal/maintenance/v1/inventory/plans",
             idempotencyKey,
             request,
             JsonNode.class,
-            MAINTENANCE_CLIENT,
-            MAINTENANCE_SCOPE);
+            authorization);
     JsonNode snapshot = response.get("snapshot");
     String fingerprint = response.path("fingerprint").asText();
     UUID warehouseId = uuid(response, "warehouseId");
@@ -571,6 +572,55 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
     }
     return new FrozenPlan(
         warehouseId, inventoryId, findingId, sourceRevision, snapshot, fingerprint);
+  }
+
+  /**
+   * Freezing a plan is idempotent at maintenance-service, so one immediate retry is safe when the
+   * first request did not receive a usable response from that dependency. The request body and
+   * idempotency key deliberately remain unchanged.
+   */
+  private <T> T postFreezePlan(
+      String uri, UUID key, Object body, Class<T> type, String authorization) {
+    try {
+      return postFreezePlanAttempt(uri, key, body, type, authorization);
+    } catch (RuntimeException firstFailure) {
+      if (!retryableFreezePlanFailure(firstFailure)) {
+        throw dependencyFailure(firstFailure);
+      }
+    }
+    try {
+      return postFreezePlanAttempt(uri, key, body, type, authorization);
+    } catch (RuntimeException retryFailure) {
+      throw dependencyFailure(retryFailure);
+    }
+  }
+
+  private <T> T postFreezePlanAttempt(
+      String uri, UUID key, Object body, Class<T> type, String authorization) {
+    RestClient.RequestBodySpec request =
+        client
+            .post()
+            .uri(uri)
+            .header(HttpHeaders.AUTHORIZATION, authorization);
+    if (key != null) {
+      request.header("Idempotency-Key", key.toString());
+    }
+    T value = request.body(body).retrieve().body(type);
+    if (value == null) {
+      throw malformed("Dependency returned an empty response");
+    }
+    return value;
+  }
+
+  private static boolean retryableFreezePlanFailure(RuntimeException failure) {
+    if (failure instanceof ResourceAccessException) {
+      return true;
+    }
+    if (failure instanceof RestClientResponseException response) {
+      int status = response.getStatusCode().value();
+      return status == 502 || status == 503 || status == 504;
+    }
+    return false;
   }
 
   @Override
@@ -718,14 +768,14 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
   private static RuntimeException dependencyFailure(RuntimeException failure) {
     if (failure instanceof InventoryException exception) return exception;
     if (failure instanceof RestClientResponseException response) {
-      if (response.getStatusCode() == HttpStatus.NOT_FOUND) {
+      int status = response.getStatusCode().value();
+      if (status == 404) {
         return InventoryException.notFound("Required dependency resource was not found");
       }
-      if (response.getStatusCode() == HttpStatus.CONFLICT) {
+      if (status == 409) {
         return InventoryException.conflict("Dependency rejected stale inventory state");
       }
-      if (response.getStatusCode() == HttpStatus.UNPROCESSABLE_ENTITY
-          || response.getStatusCode() == HttpStatus.BAD_REQUEST) {
+      if (status == 422 || status == 400) {
         return new InventoryException(
             HttpStatus.UNPROCESSABLE_ENTITY,
             "INVENTORY_VALIDATION_FAILED",

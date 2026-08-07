@@ -26,6 +26,8 @@ function finding(
     conflictResolution: null,
     conflicts: [],
     comment: "",
+    passportObservation: { presence: "ABSENT", value: null },
+    equipmentObservation: { presence: "ABSENT", value: null },
     media: [],
     coverMediaId: null,
     inspectionSource: "INVENTORY",
@@ -169,6 +171,56 @@ describe("InventoryStatistics", () => {
     const footer = totalLabel.closest("tfoot")
     expect(footer).not.toBeNull()
     expect(within(footer!).getByText("200,00 ₽")).toBeTruthy()
+  })
+
+  it("renders separate work and material tables when finishing inventory", () => {
+    render(
+      <InventoryStatistics
+        statistics={{
+          ...statistics,
+          aggregates: [
+            {
+              key: "work-1",
+              lineType: "WORK",
+              description: "Ремонт каркаса",
+              catalogNodeId: "catalog-work-1",
+              unit: "шт",
+              unitPrice: "100.00",
+              quantity: 1,
+              total: "100.00",
+            },
+            {
+              key: "material-1",
+              lineType: "MATERIAL",
+              description: "Доска",
+              catalogNodeId: "catalog-material-1",
+              unit: "шт",
+              unitPrice: "50.00",
+              quantity: 2,
+              total: "100.00",
+            },
+          ],
+        }}
+        findings={[finding()]}
+        separateAggregateTables
+      />
+    )
+
+    const workTable = screen.getByRole("table", { name: "Итоги работ" })
+    const materialTable = screen.getByRole("table", {
+      name: "Итоги материалов",
+    })
+
+    expect(within(workTable).getByText("Ремонт каркаса")).toBeTruthy()
+    expect(within(workTable).queryByText("Доска")).toBeNull()
+    expect(within(materialTable).getByText("Доска")).toBeTruthy()
+    expect(within(materialTable).queryByText("Ремонт каркаса")).toBeNull()
+    const workFooter = workTable.querySelector("tfoot")
+    const materialFooter = materialTable.querySelector("tfoot")
+    expect(workFooter).not.toBeNull()
+    expect(materialFooter).not.toBeNull()
+    expect(within(workFooter!).getByText("100,00 ₽")).toBeTruthy()
+    expect(within(materialFooter!).getByText("100,00 ₽")).toBeTruthy()
   })
 
   it("uses the saved finding line name for a catalog aggregate", () => {

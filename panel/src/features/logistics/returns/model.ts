@@ -80,15 +80,10 @@ export type ReturnAdditionalEquipment = {
   quantity: number
 }
 
-export type EquipmentShortage = {
-  equipmentId: string
-  missingQuantity: number
-}
-
-export type ReturnShortageLine = {
+/** Proof that one return line can start its own maintenance estimate. */
+export type ReturnEstimateLine = {
   lineId: string
   references: MediaReference[]
-  shortages: EquipmentShortage[]
 }
 
 export const RETURN_STATE_LABELS: Record<ReturnDocumentState, string> = {

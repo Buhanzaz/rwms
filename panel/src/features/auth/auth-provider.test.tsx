@@ -3,6 +3,7 @@ import { useEffect } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { CurrentUser } from "@/features/auth/auth-model"
+import type { AuthContextValue } from "@/features/auth/auth-context"
 import { AuthProvider } from "@/features/auth/auth-provider"
 import { useAuth } from "@/features/auth/use-auth"
 
@@ -99,6 +100,20 @@ function SessionProbe({ onUnmount }: { onUnmount: () => void }) {
   )
 }
 
+function AuthActionsProbe({
+  onActionsChanged,
+}: {
+  onActionsChanged: (actions: AuthContextValue) => void
+}) {
+  const actions = useAuth()
+
+  useEffect(() => {
+    onActionsChanged(actions)
+  }, [actions, onActionsChanged])
+
+  return null
+}
+
 afterEach(() => {
   cleanup()
   oidc.reset()
@@ -178,5 +193,105 @@ describe("AuthProvider refresh-token renewal", () => {
     )
     expect(oidc.manager.removeUser).toHaveBeenCalledTimes(1)
     expect(getCurrentUser).not.toHaveBeenCalled()
+  })
+
+  it("exchanges an authorization callback only once when it is delivered twice", async () => {
+    oidc.manager.getUser.mockResolvedValue(null)
+    oidc.manager.signinRedirectCallback.mockResolvedValue(user("callback-token"))
+    getCurrentUser.mockResolvedValue(currentUser)
+    const actions: { current: AuthContextValue | null } = { current: null }
+    const onActionsChanged = (next: AuthContextValue) => {
+      actions.current = next
+    }
+
+    render(
+      <AuthProvider>
+        <AuthActionsProbe onActionsChanged={onActionsChanged} />
+      </AuthProvider>
+    )
+
+    await waitFor(() =>
+      expect(actions.current?.status).toBe("unauthenticated")
+    )
+
+    let returns: string[] = []
+    await act(async () => {
+      returns = await Promise.all([
+        actions.current!.completeLogin(),
+        actions.current!.completeLogin(),
+      ])
+    })
+
+    expect(returns).toEqual(["/", "/"])
+    expect(oidc.manager.signinRedirectCallback).toHaveBeenCalledTimes(1)
+    expect(oidc.manager.removeUser).not.toHaveBeenCalled()
+  })
+
+  it("restores the already exchanged panel session after a duplicate callback delivery", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/auth/callback?code=recovered-code&state=recovered-state"
+    )
+    oidc.manager.getUser
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(user("recovered-access-token"))
+    oidc.manager.signinRedirectCallback.mockRejectedValue(
+      new Error("No matching state found in storage")
+    )
+    getCurrentUser.mockResolvedValue(currentUser)
+    const actions: { current: AuthContextValue | null } = { current: null }
+    const onActionsChanged = (next: AuthContextValue) => {
+      actions.current = next
+    }
+
+    render(
+      <AuthProvider>
+        <AuthActionsProbe onActionsChanged={onActionsChanged} />
+      </AuthProvider>
+    )
+
+    await waitFor(() =>
+      expect(actions.current?.status).toBe("unauthenticated")
+    )
+
+    await expect(actions.current!.completeLogin()).resolves.toBe("/")
+
+    expect(oidc.manager.removeUser).not.toHaveBeenCalled()
+    await waitFor(() =>
+      expect(actions.current?.status).toBe("authenticated")
+    )
+  })
+
+  it("fails closed when a missing callback state has no saved panel session", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/auth/callback?code=missing-code&state=missing-state"
+    )
+    oidc.manager.getUser.mockResolvedValue(null)
+    oidc.manager.signinRedirectCallback.mockRejectedValue(
+      new Error("No matching state found in storage")
+    )
+    const actions: { current: AuthContextValue | null } = { current: null }
+    const onActionsChanged = (next: AuthContextValue) => {
+      actions.current = next
+    }
+
+    render(
+      <AuthProvider>
+        <AuthActionsProbe onActionsChanged={onActionsChanged} />
+      </AuthProvider>
+    )
+
+    await waitFor(() =>
+      expect(actions.current?.status).toBe("unauthenticated")
+    )
+
+    await expect(actions.current!.completeLogin()).rejects.toThrow(
+      "No matching state found in storage"
+    )
+
+    expect(oidc.manager.removeUser).toHaveBeenCalledTimes(1)
   })
 })

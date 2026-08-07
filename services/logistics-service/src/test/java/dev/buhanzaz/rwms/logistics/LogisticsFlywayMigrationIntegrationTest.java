@@ -1442,6 +1442,23 @@ class LogisticsFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void v38AdmitsStartReturnEstimatesWithoutInvalidatingHistoricalEstimateReceipts() {
+    Flyway beforeV38 = configuration(MIGRATIONS).target("37").load();
+    assertThat(beforeV38.migrate().migrationsExecuted).isEqualTo(37);
+
+    assertThat(logisticsConstraintDefinition("ck_logistics_idempotency_operation"))
+        .contains("REQUEST_RETURN_ESTIMATE")
+        .doesNotContain("START_RETURN_ESTIMATES");
+
+    assertThat(configuration(MIGRATIONS).target("38").load().migrate().migrationsExecuted)
+        .isOne();
+
+    assertThat(logisticsConstraintDefinition("ck_logistics_idempotency_operation"))
+        .contains("REQUEST_RETURN_ESTIMATE", "START_RETURN_ESTIMATES");
+    assertJpaValidationStarts();
+  }
+
+  @Test
   void modifiedAppliedMigrationIsRejectedByChecksumValidation(@TempDir Path directory)
       throws IOException {
     Path migration = directory.resolve("V1__logistics_schema.sql");
@@ -1493,6 +1510,20 @@ class LogisticsFlywayMigrationIntegrationTest {
 
   private String toRegclass(String table) {
     return jdbc.queryForObject("select to_regclass(?)", String.class, "public." + table);
+  }
+
+  private String logisticsConstraintDefinition(String constraintName) {
+    return jdbc.queryForObject(
+        """
+        select pg_get_constraintdef(c.oid)
+        from pg_constraint c
+        join pg_class relation on relation.oid=c.conrelid
+        join pg_namespace namespace on namespace.oid=relation.relnamespace
+        where namespace.nspname='public' and relation.relname='logistics_idempotency_record'
+          and c.conname=?
+        """,
+        String.class,
+        constraintName);
   }
 
   private java.net.URL requireResource(String path) {

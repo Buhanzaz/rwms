@@ -235,6 +235,30 @@ public class CabinCompositionService {
     return new CabinSelection(rentalTypeId, dimensionId, finishingId, selectedCharacteristics);
   }
 
+  /**
+   * Resolves the manager client's name-based inventory passport inside the catalogue owner. This
+   * is deliberately available only to the inventory boundary: normal cabin commands remain UUID
+   * based and do not accept display labels.
+   */
+  @Transactional(readOnly = true)
+  public CabinSelection requireLegacyInventorySelection(
+      String rentalType,
+      String dimensions,
+      String finishing,
+      String characteristics) {
+    CabinCatalogItem type = requireActiveCatalogItemByName(
+        CabinCatalogKind.TYPE, rentalType, "rentalType");
+    CabinCatalogItem dimension = requireActiveCatalogItemByName(
+        CabinCatalogKind.DIMENSION, dimensions, "dimensions");
+    CabinCatalogItem finishingItem = requireActiveCatalogItemByName(
+        CabinCatalogKind.FINISHING, finishing, "finishing");
+    return requireSelection(
+        type.getId(),
+        dimension.getId(),
+        finishingItem.getId(),
+        legacyCharacteristicIds(characteristics));
+  }
+
   /** Replaces only the relation rows, preserving each characteristic as an individual UUID. */
   @Transactional
   public boolean replaceRentalItemCharacteristics(
@@ -358,6 +382,104 @@ public class CabinCompositionService {
     return catalog
         .findById(id)
         .orElseThrow(() -> new AssetNotFoundException("Cabin setting was not found"));
+  }
+
+  private CabinCatalogItem requireActiveCatalogItemByName(
+      CabinCatalogKind kind, String value, String field) {
+    CabinCatalogItem item = catalog
+        .findByKindAndNameNormalized(kind, normalizedLegacyName(value, field))
+        .orElseThrow(() -> new AssetNotFoundException("Cabin setting was not found"));
+    requireActiveKind(item, kind);
+    return item;
+  }
+
+  /**
+   * The current manager APK serializes selected characteristics as one comma-separated string.
+   * If a catalog value itself contains a comma, only an unambiguous spelling is accepted; this
+   * prevents one saved value from being silently converted into two different characteristics.
+   */
+  private List<UUID> legacyCharacteristicIds(String value) {
+    if (value == null || value.isBlank()) return List.of();
+    List<String> names = splitLegacyCharacteristicNames(value);
+    if (names.size() == 1) {
+      return List.of(
+          requireActiveCatalogItemByName(CabinCatalogKind.CHARACTERISTIC, names.getFirst(), "characteristics")
+              .getId());
+    }
+
+    Optional<CabinCatalogItem> wholeValue = normalizedLegacyNameIfCatalogValue(value)
+        .flatMap(name -> catalog.findByKindAndNameNormalized(CabinCatalogKind.CHARACTERISTIC, name));
+    List<CabinCatalogItem> splitItems = new ArrayList<>();
+    boolean splitIsActiveAndResolvable = true;
+    for (String name : names) {
+      Optional<CabinCatalogItem> item = catalog.findByKindAndNameNormalized(
+          CabinCatalogKind.CHARACTERISTIC, name);
+      if (item.isEmpty() || !item.get().isActive()) {
+        splitIsActiveAndResolvable = false;
+        break;
+      }
+      splitItems.add(item.get());
+    }
+    if (wholeValue.isPresent() && splitIsActiveAndResolvable) {
+      throw new IllegalArgumentException("Legacy characteristics value is ambiguous");
+    }
+    if (wholeValue.isPresent()) {
+      requireActiveKind(wholeValue.get(), CabinCatalogKind.CHARACTERISTIC);
+      return List.of(wholeValue.get().getId());
+    }
+    if (!splitIsActiveAndResolvable) {
+      // Return the standard not-found/inactive error rather than treating a label as free text.
+      return names.stream()
+          .map(
+              name ->
+                  requireActiveCatalogItemByName(
+                      CabinCatalogKind.CHARACTERISTIC, name, "characteristics").getId())
+          .toList();
+    }
+    if (splitItems.size() > 100) {
+      throw new IllegalArgumentException("characteristics must contain at most 100 values");
+    }
+    return orderedDistinct(
+        splitItems.stream().map(CabinCatalogItem::getId).toList(), "characteristics");
+  }
+
+  private static List<String> splitLegacyCharacteristicNames(String value) {
+    String[] parts = value.split(",", -1);
+    boolean hasSelectedName = false;
+    for (String part : parts) {
+      if (!part.isBlank()) {
+        hasSelectedName = true;
+        break;
+      }
+    }
+    if (!hasSelectedName) return List.of();
+    List<String> result = new ArrayList<>(parts.length);
+    for (String part : parts) {
+      result.add(normalizedLegacyName(part, "characteristics"));
+    }
+    if (result.size() > 100) {
+      throw new IllegalArgumentException("characteristics must contain at most 100 values");
+    }
+    return List.copyOf(result);
+  }
+
+  private static Optional<String> normalizedLegacyNameIfCatalogValue(String value) {
+    try {
+      return Optional.of(normalizedLegacyName(value, "characteristics"));
+    } catch (IllegalArgumentException exception) {
+      return Optional.empty();
+    }
+  }
+
+  private static String normalizedLegacyName(String value, String field) {
+    if (value == null) {
+      throw new IllegalArgumentException(field + " is required");
+    }
+    String normalized = value.trim().replaceAll("[\\p{Z}\\s]+", " ");
+    if (normalized.isEmpty() || normalized.length() > 255) {
+      throw new IllegalArgumentException(field + " must contain 1 to 255 characters");
+    }
+    return normalized.toLowerCase(Locale.ROOT);
   }
 
   private Map<UUID, CabinCatalogItem> requireCatalogItems(Collection<UUID> ids) {

@@ -1027,52 +1027,16 @@ func TestLogisticsVariantContentPathUsesStructuredIdentityOnly(t *testing.T) {
 	}
 }
 
-func TestCabinRotationUsesTheBoundWarehouseScope(t *testing.T) {
-	warehouseID, cabinID, mediaID, subjectID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	repository := &repositoryStub{
-		scopedAsset: persistence.AssetRecord{
-			ID: mediaID, OwnerType: persistence.OwnerTypeCabin, OwnerID: cabinID.String(),
-			WarehouseID: warehouseID, Status: media.StatusReady, Version: 4, Generation: 1,
-		},
-		rotateAsset: persistence.AssetRecord{
-			ID: mediaID, OwnerType: persistence.OwnerTypeCabin, OwnerID: cabinID.String(),
-			WarehouseID: warehouseID, Status: media.StatusProcessing, Version: 5, Generation: 1,
-		},
-	}
-	principal := auth.Principal{
-		SubjectID: subjectID, Scopes: map[string]struct{}{"rwms.write": {}},
-		Grants: []auth.WarehouseGrant{{WarehouseID: warehouseID, Level: auth.Edit}},
-	}
-	server := newTestServer(t, repository, validatorStub{principal: principal}, &storeStub{})
-	invalidations := &invalidationRecorder{}
-	server.invalidations = invalidations
-	path := "/api/media/v1/assets/" + mediaID.String() + "/rotation?ownerType=CABIN&ownerId=" +
-		cabinID.String() + "&warehouseId=" + warehouseID.String() + "&context=WAREHOUSE"
-	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"rotationDegrees":90,"expectedVersion":4}`))
-	request.Header.Set("Authorization", "Bearer test")
-	request.Header.Set("Idempotency-Key", uuid.NewString())
+func TestRotationEndpointIsNotExposed(t *testing.T) {
+	server := newTestServer(t, &repositoryStub{}, validatorStub{}, &storeStub{})
+	request := httptest.NewRequest(http.MethodPost,
+		"/api/media/v1/assets/"+uuid.NewString()+"/rotation", nil)
 	response := httptest.NewRecorder()
 
 	server.Handler().ServeHTTP(response, request)
 
-	if response.Code != http.StatusAccepted {
-		t.Fatalf("cabin rotation response = %d %s", response.Code, response.Body.String())
-	}
-	if repository.scopedCalls != 1 || repository.scopedOwnerType != persistence.OwnerTypeCabin ||
-		repository.scopedOwnerID != cabinID.String() || repository.scopedWarehouseID != warehouseID {
-		t.Fatalf("scoped lookup = type:%s owner:%s warehouse:%s calls:%d",
-			repository.scopedOwnerType, repository.scopedOwnerID, repository.scopedWarehouseID,
-			repository.scopedCalls)
-	}
-	if repository.rotateCalls != 1 || repository.rotateCommand.MediaID != mediaID ||
-		repository.rotateCommand.ExpectedVersion != 4 || repository.rotateCommand.Rotation != media.Rotation90 {
-		t.Fatalf("rotation command = %#v, calls=%d", repository.rotateCommand, repository.rotateCalls)
-	}
-	events := invalidations.snapshot()
-	if len(events) != 1 || events[0].WarehouseID != warehouseID || events[0].MediaID != mediaID ||
-		events[0].OwnerType != persistence.OwnerTypeCabin || events[0].OwnerID != cabinID.String() ||
-		events[0].Scope != "MEDIA_CHANGED" || events[0].Revision != 5 {
-		t.Fatalf("rotation invalidations = %#v", events)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("removed rotation endpoint response = %d %s", response.Code, response.Body.String())
 	}
 }
 
@@ -1960,11 +1924,6 @@ type repositoryStub struct {
 	scopedOwnerType              string
 	scopedOwnerID                string
 	scopedWarehouseID            uuid.UUID
-	rotateAsset                  persistence.AssetRecord
-	rotateReplay                 bool
-	rotateErr                    error
-	rotateCalls                  int
-	rotateCommand                persistence.RotateCommand
 	validationCalls              int
 	validationCommand            persistence.ValidateLogisticsReferencesCommand
 	validationErr                error
@@ -2193,18 +2152,6 @@ func (stub *repositoryStub) validationSnapshot() (int, persistence.ValidateLogis
 	stub.mutex.Lock()
 	defer stub.mutex.Unlock()
 	return stub.validationCalls, stub.validationCommand
-}
-
-func (stub *repositoryStub) Rotate(_ context.Context, command persistence.RotateCommand) (persistence.AssetRecord, bool, error) {
-	stub.rotateCalls++
-	stub.rotateCommand = command
-	if stub.rotateErr != nil {
-		return persistence.AssetRecord{}, false, stub.rotateErr
-	}
-	if stub.rotateAsset.ID == uuid.Nil {
-		return persistence.AssetRecord{}, false, errors.New("unexpected Rotate")
-	}
-	return stub.rotateAsset, stub.rotateReplay, nil
 }
 
 func (stub *repositoryStub) Delete(_ context.Context, command persistence.DeleteCommand) (persistence.AssetRecord, bool, error) {

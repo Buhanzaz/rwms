@@ -1704,6 +1704,7 @@ export function InventoryFinishPage() {
                 statistics={displayedStatistics}
                 findings={activeReviewSession.findings}
                 showCounters={false}
+                separateAggregateTables
               />
             </section>
           ) : null}

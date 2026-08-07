@@ -214,7 +214,8 @@ public class InventoryMaintenanceService {
     }
     String requestFingerprint = frozenHash(request);
     InventoryRepairSource replay = sources
-        .findByInventoryIdAndFindingId(request.inventoryId(), request.findingId())
+        .findByInventoryIdAndFindingIdAndSourceRevision(
+            request.inventoryId(), request.findingId(), request.sourceRevision())
         .orElse(null);
     if (replay != null) {
       if (!requestFingerprint.equals(replay.getPlanRequestSha256())) {
@@ -237,7 +238,8 @@ public class InventoryMaintenanceService {
     String fingerprint = frozenHash(snapshot);
 
     InventoryRepairSourceOperationId operationId =
-        new InventoryRepairSourceOperationId(request.inventoryId(), request.findingId());
+        new InventoryRepairSourceOperationId(
+            request.inventoryId(), request.findingId(), request.sourceRevision());
     String canonicalRequestFingerprint = requestFingerprint;
     registerConcurrentSafe(
         () -> sourceRegistrar.register(operationId, canonicalRequestFingerprint));
@@ -248,7 +250,8 @@ public class InventoryMaintenanceService {
       throw conflict("Inventory source is already bound to a different frozen plan request");
     }
     InventoryRepairSource existing = sources
-        .findBySourceForUpdate(request.inventoryId(), request.findingId())
+        .findBySourceRevisionForUpdate(
+            request.inventoryId(), request.findingId(), request.sourceRevision())
         .orElse(null);
     if (existing != null) {
       if (!requestFingerprint.equals(existing.getPlanRequestSha256())) {
@@ -349,7 +352,9 @@ public class InventoryMaintenanceService {
       UpsertInventoryRepairRequest request,
       UUID incomingAdmissionWarehouseId,
       List<InventoryPlanStageSnapshot> routingPreflightStages) {
-    InventoryRepairSource source = sources.findBySourceForUpdate(inventoryId, findingId)
+    InventoryRepairSource source =
+        sources
+            .findBySourceRevisionForUpdate(inventoryId, findingId, request.sourceRevision())
         .orElseThrow(() -> new MaintenanceNotFoundException("Frozen inventory plan not found"));
     requireHistoricalSource(source, request);
     String sourceFingerprint = sourceFingerprint(inventoryId, findingId, request);

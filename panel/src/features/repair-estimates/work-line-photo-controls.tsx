@@ -2,8 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Delete02Icon,
   ImageUploadIcon,
-  RotateLeft01Icon,
-  RotateRight01Icon,
 } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { toast } from "sonner"
@@ -208,8 +206,8 @@ export function WorkLinePhotoControls({
           <DialogHeader>
             <DialogTitle>Фотографии работы</DialogTitle>
             <DialogDescription>
-              Добавляйте и поворачивайте фотографии только этой работы. После
-              удаления фото останется доступно для повторного выбора.
+              Добавляйте фотографии только этой работы. После удаления фото
+              останется доступно для повторного выбора.
             </DialogDescription>
           </DialogHeader>
           <section
@@ -490,48 +488,6 @@ function OwnedWorkLinePhotoControls({
                     </div>
                   </CardContent>
                   <CardFooter className="flex-wrap justify-between gap-2">
-                    <div className="flex gap-1">
-                      <Button
-                        type="button"
-                        size="icon-sm"
-                        variant="outline"
-                        aria-label={`Повернуть ${asset.fileName} влево`}
-                        disabled={pending || asset.status !== "READY"}
-                        onClick={() => {
-                          void media
-                            .rotate({ asset, direction: "LEFT" })
-                            .catch((error) =>
-                              toast.error(
-                                error instanceof Error
-                                  ? error.message
-                                  : "Не удалось повернуть фото"
-                              )
-                            )
-                        }}
-                      >
-                        <HugeiconsIcon icon={RotateLeft01Icon} />
-                      </Button>
-                      <Button
-                        type="button"
-                        size="icon-sm"
-                        variant="outline"
-                        aria-label={`Повернуть ${asset.fileName} вправо`}
-                        disabled={pending || asset.status !== "READY"}
-                        onClick={() => {
-                          void media
-                            .rotate({ asset, direction: "RIGHT" })
-                            .catch((error) =>
-                              toast.error(
-                                error instanceof Error
-                                  ? error.message
-                                  : "Не удалось повернуть фото"
-                              )
-                            )
-                        }}
-                      >
-                        <HugeiconsIcon icon={RotateRight01Icon} />
-                      </Button>
-                    </div>
                     <Button
                       type="button"
                       size="icon-sm"

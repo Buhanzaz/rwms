@@ -135,6 +135,25 @@ public class InventoryIdempotencyRecord {
     updatedAt = now;
   }
 
+  /**
+   * Makes this reservation reclaimable after its owning command rolled back.
+   *
+   * <p>The schema intentionally keeps failed attempts as {@code IN_PROGRESS}: only successful
+   * responses are durable replays. An abandoned reservation therefore keeps the in-progress
+   * shape, but receives an already-expired, retired lease. A later identical request must still
+   * reclaim it under the row lock before executing.
+   */
+  public boolean abandon(
+      UUID expectedLeaseToken, String expectedRequestSha256, OffsetDateTime now) {
+    if (!ownsLease(expectedLeaseToken, expectedRequestSha256) || now == null) {
+      return false;
+    }
+    leaseToken = UUID.randomUUID();
+    leaseUntil = now;
+    updatedAt = now;
+    return true;
+  }
+
   public boolean hasRequestHash(String value) {
     return requestSha256.equals(value);
   }

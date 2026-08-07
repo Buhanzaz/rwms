@@ -97,11 +97,14 @@ func TestParseProcessingRequestRejectsContractViolations(t *testing.T) {
 		{name: "invalid processing kind", mutate: func(fixture *processingRecordFixture) {
 			fixture.payload()["processingKind"] = "RETRY"
 		}},
+		{name: "removed rotation processing kind", mutate: func(fixture *processingRecordFixture) {
+			fixture.payload()["processingKind"] = "ROTATION"
+		}},
 		{name: "zero generation", mutate: func(fixture *processingRecordFixture) {
 			fixture.payload()["generation"] = 0
 		}},
-		{name: "invalid rotation", mutate: func(fixture *processingRecordFixture) {
-			fixture.payload()["rotationDegrees"] = 45
+		{name: "nonzero rotation", mutate: func(fixture *processingRecordFixture) {
+			fixture.payload()["rotationDegrees"] = 90
 		}},
 		{name: "blank source version", mutate: func(fixture *processingRecordFixture) {
 			fixture.payload()["sourceVersionId"] = "  "

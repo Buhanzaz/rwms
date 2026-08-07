@@ -1638,6 +1638,10 @@ paths:
       description: >-
         Atomically creates one FREE asset and its normal rental-item fact. Permanent source identity
         inventoryId:findingId replays beyond ordinary idempotency retention; changed payload conflicts.
+        Canonical callers supply catalogue UUIDs. Supported manager clients may supply the documented
+        legacy display names instead; asset-service resolves only exact active
+        catalogue values before it registers the permanent source identity. The two representations
+        must never be mixed.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/InventorySourceAssetRequest' } } } }
       responses:
         '200':
@@ -3680,8 +3684,29 @@ components:
         quantity: { type: integer, format: int64, minimum: 0 }
     InventorySourceAssetRequest:
       type: object
+      description: >-
+        Exactly one passport representation is required. UUID fields are canonical. Legacy display
+        names are a manager-client compatibility format converted by asset-service;
+        characteristics is its comma-separated list of active characteristic names. A mixed or
+        incomplete representation is rejected before any source identity, number claim or asset is
+        persisted.
       additionalProperties: false
-      required: [inventoryId, findingId, warehouseId, number, rentalTypeId, dimensionId, finishingId, characteristicIds, linoleum]
+      required: [inventoryId, findingId, warehouseId, number, linoleum]
+      oneOf:
+        - required: [rentalTypeId, dimensionId, finishingId, characteristicIds]
+          not:
+            anyOf:
+              - required: [rentalType]
+              - required: [dimensions]
+              - required: [finishing]
+              - required: [characteristics]
+        - required: [rentalType, dimensions, finishing]
+          not:
+            anyOf:
+              - required: [rentalTypeId]
+              - required: [dimensionId]
+              - required: [finishingId]
+              - required: [characteristicIds]
       properties:
         inventoryId: { type: string, format: uuid }
         findingId: { type: string, format: uuid }
@@ -3690,12 +3715,31 @@ components:
         rentalTypeId: { type: string, format: uuid }
         dimensionId: { type: string, format: uuid }
         finishingId: { type: string, format: uuid }
+        rentalType:
+          description: Legacy exact active TYPE catalogue name. Cannot be mixed with rentalTypeId.
+          type: string
+          minLength: 1
+          maxLength: 255
+        dimensions:
+          description: Legacy exact active DIMENSION catalogue name. Cannot be mixed with dimensionId.
+          type: string
+          minLength: 1
+          maxLength: 255
+        finishing:
+          description: Legacy exact active FINISHING catalogue name. Cannot be mixed with finishingId.
+          type: string
+          minLength: 1
+          maxLength: 255
         category: { type: [string, 'null'], maxLength: 255 }
         characteristicIds:
           type: array
           maxItems: 100
           uniqueItems: true
           items: { type: string, format: uuid }
+        characteristics:
+          description: Legacy comma-separated active CHARACTERISTIC catalogue names.
+          type: string
+          maxLength: 26000
         linoleum: { type: boolean }
         passport: { $ref: '#/components/schemas/Passport' }
         tags: { type: array, items: { type: string, minLength: 1, maxLength: 128 } }

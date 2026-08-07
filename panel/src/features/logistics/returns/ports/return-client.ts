@@ -1,8 +1,8 @@
 import type {
   CreateReturnLine,
   ReturnDocument,
+  ReturnEstimateLine,
   ReturnMediaLine,
-  ReturnShortageLine,
 } from "@/features/logistics/returns/model"
 
 export type ReturnCreateCommand = {
@@ -30,8 +30,8 @@ export type ReturnAcceptUndamagedCommand = ReturnVersionedCommand & {
   lines: ReturnMediaLine[]
 }
 
-export type ReturnEstimateCommand = ReturnVersionedCommand & {
-  lines: ReturnShortageLine[]
+export type StartReturnEstimatesCommand = ReturnVersionedCommand & {
+  lines: ReturnEstimateLine[]
 }
 
 export interface ReturnClient {
@@ -40,5 +40,5 @@ export interface ReturnClient {
   create(input: ReturnCreateCommand): Promise<ReturnDocument>
   register(input: ReturnPickupCommand): Promise<ReturnDocument>
   acceptUndamaged(input: ReturnAcceptUndamagedCommand): Promise<ReturnDocument>
-  requestEstimate(input: ReturnEstimateCommand): Promise<ReturnDocument>
+  startEstimates(input: StartReturnEstimatesCommand): Promise<ReturnDocument>
 }

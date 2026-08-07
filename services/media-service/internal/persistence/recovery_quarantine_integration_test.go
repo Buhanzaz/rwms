@@ -171,14 +171,6 @@ func TestV1UpgradeQuarantinedAssetsAreRuntimeInvisibleAndDoNotConsumeQuota(t *te
 	if _, err := repository.Variants(ctx, quarantinedIDs[0], 0, true); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Variants(quarantined) error = %v, want ErrNotFound", err)
 	}
-	if _, _, err := repository.Rotate(ctx, RotateCommand{
-		MediaID: quarantinedIDs[0], SubjectID: uuid.New(), IdempotencyKey: uuid.New(),
-		RequestSHA256: hex64('2'), ExpectedVersion: 1, Rotation: media.Rotation90,
-		CorrelationID: uuid.New(),
-	}); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Rotate(quarantined) error = %v, want ErrNotFound", err)
-	}
-
 	fresh := createCommand(ownerID, warehouseID, media.KindImage, 101)
 	created, replayed, err := repository.CreateUpload(ctx, fresh)
 	if err != nil || replayed {

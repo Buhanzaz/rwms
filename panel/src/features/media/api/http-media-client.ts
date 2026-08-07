@@ -98,14 +98,6 @@ export interface MediaClient {
     owner: ServiceMediaOwner,
     variant: MediaVariant
   ): Promise<DisposableMediaObjectUrl>
-  rotate(
-    accessToken: string,
-    owner: ServiceMediaOwner,
-    mediaId: string,
-    rotationDegrees: MediaRotationDegrees,
-    expectedVersion: number,
-    idempotencyKey: string
-  ): Promise<MediaAsset>
   deleteAsset(
     accessToken: string,
     owner: ServiceMediaOwner,
@@ -367,28 +359,6 @@ export class HttpMediaClient implements MediaClient {
     )
     requireExactOwnerQuery(url, owner)
     return this.#createObjectUrl(accessToken, url, variant.contentType)
-  }
-
-  async rotate(
-    accessToken: string,
-    owner: ServiceMediaOwner,
-    mediaId: string,
-    rotationDegrees: MediaRotationDegrees,
-    expectedVersion: number,
-    idempotencyKey: string
-  ) {
-    const url = this.#apiUrl(
-      `v1/assets/${encodeURIComponent(mediaId)}/rotation`
-    )
-    setOwnerQuery(url, owner)
-    return parseMediaAsset(
-      await this.#requestJson<unknown>(accessToken, url, {
-        method: "POST",
-        headers: { "Idempotency-Key": idempotencyKey },
-        body: JSON.stringify({ rotationDegrees, expectedVersion }),
-      }),
-      this.#baseUrl.origin
-    )
   }
 
   async deleteAsset(

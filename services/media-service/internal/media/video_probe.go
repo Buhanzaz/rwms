@@ -29,7 +29,7 @@ func (FFprobe) Probe(ctx context.Context, path string) (VideoMetadata, error) {
 		"-of", "json", path)
 	var output boundedProbeBuffer
 	command.Stdout = &output
-	command.Stderr = &boundedBuffer{}
+	command.Stderr = &boundedDiagnosticBuffer{}
 	if err := command.Run(); err != nil {
 		return VideoMetadata{}, fmt.Errorf("ffprobe failed")
 	}
@@ -65,4 +65,19 @@ func (buffer *boundedProbeBuffer) Write(value []byte) (int, error) {
 		return 0, fmt.Errorf("ffprobe output exceeds limit")
 	}
 	return buffer.Buffer.Write(value)
+}
+
+type boundedDiagnosticBuffer struct{ bytes.Buffer }
+
+func (buffer *boundedDiagnosticBuffer) Write(value []byte) (int, error) {
+	const maximum = 4096
+	original := len(value)
+	if buffer.Len() < maximum {
+		remaining := maximum - buffer.Len()
+		if len(value) > remaining {
+			value = value[:remaining]
+		}
+		_, _ = buffer.Buffer.Write(value)
+	}
+	return original, nil
 }

@@ -51,20 +51,19 @@ public class ReturnCompletionProcessor {
                     work.fencingToken(),
                     work.documentId(),
                     work.lineId(),
-                    work.shortage()),
-                work.shortage());
+                    work.estimate()),
+                work.estimate());
         case MAINTENANCE ->
             store.confirmMaintenance(
                 work.operationId(),
-                dependencies.upsertReturnShortage(
+                dependencies.upsertReturnEstimateSource(
                     work.documentId(),
                     work.lineId(),
                     work.warehouseId(),
                     work.assetId(),
                     work.expectedAssetVersion(),
                     work.dispatchDate(),
-                    work.references(),
-                    work.shortages()));
+                    work.references()));
         case RETURN_EQUIPMENT ->
             store.confirmAdditionalEquipmentReceipt(
                 work.operationId(),

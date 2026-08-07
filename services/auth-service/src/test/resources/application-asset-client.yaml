@@ -5,7 +5,7 @@ rwms:
         - client-id: asset-service
           client-name: Asset Service Warehouse Registry Client
           enabled: ${ASSET_WAREHOUSE_CLIENT_ENABLED:false}
-          revision: ${ASSET_WAREHOUSE_CLIENT_REVISION:3}
+          revision: ${ASSET_WAREHOUSE_CLIENT_REVISION:4}
           authentication-methods: [client_secret_basic]
           grant-types: [client_credentials]
           scopes: [warehouse.read, warehouse.timezone.read, warehouse.operation.mark, warehouse.lifecycle.read, warehouse.lifecycle.confirm, media.asset-import]

@@ -13,7 +13,11 @@ import java.util.UUID;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
-/** Permanent inventory source identity and immutable maintenance-issued plan evidence. */
+/**
+ * Permanent inventory source identity for one finding revision and immutable
+ * maintenance-issued plan evidence. A supplemented inspection receives its own source revision;
+ * a previously frozen revision is never overwritten.
+ */
 @Entity
 @Table(name = "inventory_repair_source")
 public class InventoryRepairSource {

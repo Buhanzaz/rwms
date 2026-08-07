@@ -30,6 +30,7 @@ import dev.buhanzaz.rwms.maintenance.disposition.repository.PropertyDispositionD
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceAggregateType;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceEventType;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceRepair;
+import dev.buhanzaz.rwms.maintenance.domain.FurnitureAccountingMode;
 import dev.buhanzaz.rwms.maintenance.domain.RepairAcceptanceState;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceActorReferenceProvider;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventFactFactory;
@@ -252,6 +253,98 @@ public class PropertyDispositionApplicationService {
       List<MaintenanceDependencyGateway.MaintenanceFurnitureCustodyClaim> claims) {
     validateFurnitureCustodyInput(completedRepair, equipmentNames, claims);
     return materializeFurnitureCustodyInTransaction(completedRepair, equipmentNames, claims);
+  }
+
+  /**
+   * Records furniture selected from a legacy cabin with no recorded contents as separately
+   * approved loss decisions. No claim, balance fence, or asset-service effect is created.
+   */
+  @Transactional(propagation = Propagation.MANDATORY)
+  public int materializeUnaccountedFurnitureLocally(
+      MaintenanceRepair completedRepair,
+      Map<UUID, String> equipmentNames,
+      Map<UUID, Long> equipmentQuantities) {
+    require(completedRepair, "Completed repair is required for unaccounted furniture");
+    require(equipmentNames, "Furniture equipment names are required");
+    require(equipmentQuantities, "Furniture equipment quantities are required");
+    if (completedRepair.getFurnitureAccountingMode()
+        != FurnitureAccountingMode.UNACCOUNTED_CABIN_CONTENTS) {
+      throw conflict("Repair does not use unaccounted furniture accounting");
+    }
+    if (completedRepair.getAcceptanceState() != RepairAcceptanceState.PENDING) {
+      throw conflict("Unaccounted furniture can be proposed only after repair completion");
+    }
+    UUID rootRepairId = rootId(completedRepair);
+    int createdCount = 0;
+    for (Map.Entry<UUID, Long> line : equipmentQuantities.entrySet().stream()
+        .sorted(Map.Entry.comparingByKey(Comparator.comparing(UUID::toString)))
+        .toList()) {
+      UUID equipmentId = line.getKey();
+      Long quantity = line.getValue();
+      if (equipmentId == null || quantity == null || quantity < 1) {
+        throw conflict("Unaccounted furniture quantity is invalid");
+      }
+      String equipmentName = Optional.ofNullable(equipmentNames.get(equipmentId))
+          .map(String::trim)
+          .filter(value -> !value.isEmpty() && value.length() <= 255)
+          .orElseThrow(() -> conflict("Furniture equipment name is missing from repair truth"));
+      PropertyDispositionDecision existing = decisions
+          .findBySourceAndSourceRepairIdAndAssetId(
+              PropertyDispositionSource.UNACCOUNTED, completedRepair.getId(), equipmentId)
+          .orElse(null);
+      if (existing != null) {
+        if (!existing.getWarehouseId().equals(completedRepair.getWarehouseId())
+            || existing.getAssetKind() != PropertyDispositionAssetKind.EQUIPMENT
+            || !existing.getAssetId().equals(equipmentId)
+            || !java.util.Objects.equals(existing.getRootRepairId(), rootRepairId)
+            || !java.util.Objects.equals(existing.getQuantity(), quantity)
+            || existing.getMaintenanceCustodyClaimId() != null
+            || existing.getExpectedAssetVersion() != null
+            || existing.getExpectedSourceBalanceVersion() != null) {
+          throw conflict("Unaccounted furniture is already bound to another disposition");
+        }
+        continue;
+      }
+      String reason =
+          "Мебель отсутствует в записанном наполнении бытовки; требуется отдельное решение по утрате";
+      String requestHash =
+          hash(
+              new UnaccountedFurnitureDecisionFingerprint(
+                  rootRepairId,
+                  completedRepair.getId(),
+                  equipmentId,
+                  quantity,
+                  reason));
+      PropertyDispositionDecision decision =
+          PropertyDispositionDecision.initiate(
+              new PropertyDispositionDecisionDraft(
+                  completedRepair.getWarehouseId(),
+                  PropertyDispositionAssetKind.EQUIPMENT,
+                  equipmentId,
+                  equipmentName,
+                  PropertyDispositionKind.WRITE_OFF,
+                  PropertyDispositionSource.UNACCOUNTED,
+                  null,
+                  null,
+                  quantity,
+                  null,
+                  null,
+                  reason,
+                  null,
+                  completedRepair.getId(),
+                  rootRepairId,
+                  null,
+                  null,
+                  null,
+                  null,
+                  requestHash,
+                  systemActorJson(),
+                  null,
+                  List.of()));
+      created(decision);
+      createdCount++;
+    }
+    return createdCount;
   }
 
   private int materializeFurnitureCustodyInTransaction(
@@ -514,7 +607,9 @@ public class PropertyDispositionApplicationService {
     PropertyDispositionDecision decision = decisions.findById(decisionId)
         .orElseThrow(() -> new MaintenanceNotFoundException("Property disposition not found"));
     List<MaintenanceRepair> chain = repairChain(decision.getRootRepairId());
-    MaintenanceDependencyGateway.PropertyDispositionLeaseProof leaseProof = leaseProof(decision, chain);
+    boolean requiresAssetEffect = decision.requiresAssetEffect();
+    MaintenanceDependencyGateway.PropertyDispositionLeaseProof leaseProof =
+        requiresAssetEffect ? leaseProof(decision, chain) : null;
     List<MaintenanceDependencyGateway.PropertyDispositionContent> contents = decision.getContents().stream()
         .map(
             line ->
@@ -525,24 +620,26 @@ public class PropertyDispositionApplicationService {
                     line.getMoveQuantity()))
         .toList();
     MaintenanceDependencyGateway.PropertyDispositionPreparation preparation =
-        new MaintenanceDependencyGateway.PropertyDispositionPreparation(
-            decision.getWarehouseId(),
-            gatewayAssetKind(decision.getAssetKind()),
-            decision.getAssetId(),
-            gatewayDispositionKind(decision.getKind()),
-            decision.getAssetKind() == PropertyDispositionAssetKind.CABIN
-                ? decision.getExpectedAssetVersion()
-                : null,
-            decision.getExpectedSourceBalanceVersion(),
-            decision.getQuantity(),
-            decision.getMaintenanceCustodyClaimId(),
-            decision.getMaintenanceCustodyVersion(),
-            decision.getContentsMode() == null
-                ? null
-                : MaintenanceDependencyGateway.PropertyDispositionContentsMode.valueOf(
-                    decision.getContentsMode().name()),
-            contents,
-            leaseProof);
+        requiresAssetEffect
+            ? new MaintenanceDependencyGateway.PropertyDispositionPreparation(
+                decision.getWarehouseId(),
+                gatewayAssetKind(decision.getAssetKind()),
+                decision.getAssetId(),
+                gatewayDispositionKind(decision.getKind()),
+                decision.getAssetKind() == PropertyDispositionAssetKind.CABIN
+                    ? decision.getExpectedAssetVersion()
+                    : null,
+                decision.getExpectedSourceBalanceVersion(),
+                decision.getQuantity(),
+                decision.getMaintenanceCustodyClaimId(),
+                decision.getMaintenanceCustodyVersion(),
+                decision.getContentsMode() == null
+                    ? null
+                    : MaintenanceDependencyGateway.PropertyDispositionContentsMode.valueOf(
+                        decision.getContentsMode().name()),
+                contents,
+                leaseProof)
+            : null;
     MaintenanceDependencyGateway.PropertyEquipmentMovementCommand movement =
         decision.requiresMovement()
             ? new MaintenanceDependencyGateway.PropertyEquipmentMovementCommand(
@@ -570,6 +667,7 @@ public class PropertyDispositionApplicationService {
         decision.getState(),
         decision.getMovementTaskId(),
         decision.requiresMovement(),
+        requiresAssetEffect,
         preparation,
         movement,
         leaseReleaseCommand(decision, chain));
@@ -645,6 +743,20 @@ public class PropertyDispositionApplicationService {
               repairStages.findAllByRepairIdOrderByStageNo(savedRepair.getId())),
           projectionSnapshots.repair(savedRepair));
     }
+    PropertyDispositionDecision saved = decisions.saveAndFlush(decision);
+    append(saved, expectedVersion, MaintenanceEventType.PROPERTY_DISPOSITION_EFFECTIVE);
+  }
+
+  /** Commits an approved unaccounted-loss decision without requesting an asset-service effect. */
+  @Transactional
+  public void markEffectiveWithoutAssetEffect(UUID decisionId) {
+    long streamVersion = events.lockCurrentVersion(
+        MaintenanceAggregateType.PROPERTY_DISPOSITION, decisionId);
+    PropertyDispositionDecision decision = decisions.findByIdForUpdate(decisionId)
+        .orElseThrow(() -> new MaintenanceNotFoundException("Property disposition not found"));
+    assertStreamParity(decision, streamVersion);
+    long expectedVersion = decision.getVersion();
+    if (!decision.markEffectiveWithoutAssetEffect(expectedVersion)) return;
     PropertyDispositionDecision saved = decisions.saveAndFlush(decision);
     append(saved, expectedVersion, MaintenanceEventType.PROPERTY_DISPOSITION_EFFECTIVE);
   }
@@ -1393,6 +1505,7 @@ public class PropertyDispositionApplicationService {
       PropertyDispositionState state,
       UUID movementTaskId,
       boolean requiresMovement,
+      boolean requiresAssetEffect,
       MaintenanceDependencyGateway.PropertyDispositionPreparation preparation,
       MaintenanceDependencyGateway.PropertyEquipmentMovementCommand movementCommand,
       LeaseReleaseCommand leaseRelease) {}
@@ -1421,6 +1534,13 @@ public class PropertyDispositionApplicationService {
   private record FurnitureCustodyDecisionFingerprint(
       UUID claimId,
       long custodyVersion,
+      UUID rootRepairId,
+      UUID completedRepairId,
+      UUID equipmentId,
+      long quantity,
+      String reason) {}
+
+  private record UnaccountedFurnitureDecisionFingerprint(
       UUID rootRepairId,
       UUID completedRepairId,
       UUID equipmentId,
