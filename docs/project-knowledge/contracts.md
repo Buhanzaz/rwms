@@ -1,6 +1,6 @@
 # Contract Map And Evolution Rules
 
-Status: Confirmed repository layout as of 2026-08-05.
+Status: Confirmed repository layout as of 2026-08-07.
 
 ## Canonical Locations
 
@@ -24,6 +24,42 @@ Interactive clients use public `/auth/**` and `/api/**` gateway routes. Private
 `/api/internal/**` operations are for authenticated service-to-service calls
 only.
 
+### Media Upload Session Recovery
+
+The public create-upload command in
+[`media-service.yaml`](../../contracts/openapi/media-service.yaml) treats an
+exact idempotent replay as the same logical media creation. While the original
+session is open it returns that session. If the session expired before content
+was finalized, it may return a replacement session for the same media ID.
+Completed content is immutable and cannot be reopened through this recovery
+path. Active panel and Android consumers already use the session returned by
+each create response, so the change is compatible with their durable retries.
+
+### Media Orientation
+
+`media-service.yaml` has no mutable photo-rotation operation. Android clients
+normalize a captured or gallery JPEG into upright pixel data before it enters a
+durable upload queue; media-service stores and derives variants from that
+supplied orientation without applying EXIF or requested rotation. The
+read-only `rotationDegrees` response field remains only so older persisted
+assets can still be displayed compatibly; it is not a command for new media.
+
+Evidence: [`media-service.yaml`](../../contracts/openapi/media-service.yaml),
+[`ManagerCameraScreen.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/components/ManagerCameraScreen.kt),
+[`ManagerPhotos.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/components/ManagerPhotos.kt),
+[`image_processor.go`](../../services/media-service/internal/media/image_processor.go).
+
+### Inventory-Created Assets
+
+The private source-asset operation in
+[`asset-service.yaml`](../../contracts/openapi/asset-service.yaml) accepts one
+of two explicit representations: canonical catalogue UUIDs, or the supported
+manager-client name fields. They cannot be mixed. Name resolution belongs to
+asset-service and is completed against active catalogue data before any
+permanent source identity, cabin-number claim or rental item is stored. The
+stored source fingerprint uses the resolved UUID selection, so an equivalent
+retry in the other representation is the same idempotent command.
+
 ### Driver-Board Repair Places
 
 The public `DriverBoard` contract in
@@ -41,6 +77,26 @@ its private logistics projection in
 The panel must not call that private route or infer status from browser state;
 `logistics-service` validates and republishes the needed fields through the
 public driver-board response.
+
+### Return Estimate Sources And Legacy Furniture
+
+[`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml)
+defines `POST /returns/{documentId}/start-estimates`. Its request contains
+only immutable inspection-photo references for every return line: it does not
+select shortages or furniture. Logistics settles each line and calls the
+private maintenance `estimate-source` boundary with the permanent
+`returnId:lineId` identity. Maintenance creates exactly one empty `DRAFT`
+estimate for that source, and its public `GET /estimates/return-sources` read
+returns the separate estimate IDs to panel and Android clients.
+
+`CompleteEstimateRequest.allowUnaccountedFurniture` in
+[`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml)
+is an explicit confirmation. It is accepted only when the canonical
+cabin contents are empty; otherwise the server returns
+`MAINTENANCE_UNACCOUNTED_FURNITURE_CONFIRMATION_REQUIRED` or fails closed.
+The accepted legacy path creates separately approved `UNACCOUNTED` property
+decisions with `NOT_REQUIRED` asset effect, so it never decrements a warehouse
+additional-equipment balance.
 
 ### Property Disposition And Asset Effects
 
