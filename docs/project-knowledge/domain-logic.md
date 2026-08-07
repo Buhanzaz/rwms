@@ -1,6 +1,6 @@
 # Current Domain Logic Map
 
-Status: Confirmed high-level ownership as of 2026-08-05. Detailed request,
+Status: Confirmed high-level ownership as of 2026-08-07. Detailed request,
 status and field semantics remain in canonical contracts and owning service
 tests.
 
@@ -13,8 +13,23 @@ roles and warehouse-access grants. Other services validate issued Bearer JWTs
 and enforce their own domain authorization; they do not store passwords or mint
 replacement user identities.
 
+Machine clients are provisioned from versioned, exact-scope registrations.
+Adding a required downstream capability advances that client's revision so the
+stored registration and previously issued tokens cannot silently retain an
+older permission set.
+
+The panel keeps its one-time OIDC state and PKCE transaction in browser
+`sessionStorage`. A duplicate delivery or remount of the same callback must
+share the first callback exchange rather than attempting to consume the state a
+second time. If that state was already consumed, the panel may resume only an
+already stored, renewable `USER` session created by the first exchange; a
+genuinely absent state without that session fails closed. This preserves the
+same-origin `/auth/callback` contract and does not move tokens or PKCE data to
+long-lived browser storage.
+
 Evidence: [`services/auth-service/`](../../services/auth-service/),
-[`auth-service.yaml`](../../contracts/openapi/auth-service.yaml).
+[`auth-service.yaml`](../../contracts/openapi/auth-service.yaml),
+[`auth-provider.tsx`](../../panel/src/features/auth/auth-provider.tsx).
 
 ### Warehouses
 
@@ -73,11 +88,21 @@ creation path: it does not merge an existing cabin, does not synthesize a
 workflow/terminal status and records initial furniture as immutable receipts
 instead of replacing live quantities.
 
+The private inventory source-asset command accepts exactly one cabin-composition
+representation: canonical catalogue UUIDs or the supported manager client's
+display-name format. Asset-service alone resolves names to active catalogue
+IDs before registering the permanent inventory source or claiming the cabin
+number. Mixed, incomplete, unknown or ambiguous input persists nothing. The
+permanent fingerprint uses resolved UUIDs, so equivalent name and UUID retries
+return the same asset instead of creating a duplicate.
+
 Evidence: [`asset-service.yaml`](../../contracts/openapi/asset-service.yaml),
 [`warehouse-service.yaml`](../../contracts/openapi/warehouse-service.yaml),
 [`MaintenanceFurnitureCustodyService.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/MaintenanceFurnitureCustodyService.java),
 [`AssetWarehouseLifecycleReconciler.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/AssetWarehouseLifecycleReconciler.java),
 [`AdministrativeAssetCorrectionService.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/administrative/AdministrativeAssetCorrectionService.java),
+[`InventoryAssetService.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/InventoryAssetService.java),
+[`CabinCompositionService.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/CabinCompositionService.java),
 [`RentalItemHtmlImportService.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/RentalItemHtmlImportService.java),
 [`V28__equipment_catalog_identity_and_live_usage.sql`](../../services/asset-service/src/main/resources/db/migration/V28__equipment_catalog_identity_and_live_usage.sql),
 [`V34__maintenance_furniture_custody.sql`](../../services/asset-service/src/main/resources/db/migration/V34__maintenance_furniture_custody.sql).
@@ -97,6 +122,19 @@ Evidence: [`services/task-board-service/`](../../services/task-board-service/),
 rework and write-off decisions. Materials and works are maintenance catalog
 concepts; their effects on assets, inventory or tasks cross explicit service
 boundaries.
+
+A return inspection starts exactly one maintenance-owned `DRAFT` estimate for
+each submitted return line; a multi-cabin return never has a shared estimate.
+Logistics freezes only the exact per-line inspection photos and the
+`returnId:lineId` source, while furniture/loss selection happens later inside
+that individual estimate. For a cabin with recorded contents, selected
+furniture follows normal asset-owned pending-return custody. If the canonical
+contents are empty, estimate completion requires explicit confirmation. The
+confirmed legacy selection creates maintenance-owned `UNACCOUNTED` loss
+decisions only after the repair completes; they remain separately approvable
+and become effective without an asset-service custody or warehouse-balance
+effect. If contents appear before queuing the repair, the unaccounted path
+fails closed rather than bypassing normal accounting.
 
 Cabin and additional-equipment write-off/loss use one property-decision model.
 One list row is one decision/root asset; a repair chain remains visible in the
@@ -190,6 +228,30 @@ produce a version-fenced repeat command. A first, not-yet-saved inspection
 retains its normal offline-capable flow. Older revisions stay historical rather
 than being destructively deleted.
 
+For a supplement, Android resolves every retained logical media ID through the
+media owner's current `READY` projection and replaces only its generation before
+the final save. The same rebase is persisted immediately before a durable
+background retry. Missing or non-ready retained media fails the operation
+explicitly; it is never silently omitted from the inspection evidence.
+
+Each `WORK_STAGED` finding revision has its own immutable maintenance source
+key: `inventoryId:findingId:sourceRevision`. A supplement therefore freezes a
+new version of the proposal while retaining the earlier snapshot as historical
+evidence; it never overwrites that snapshot or creates a repair/task before
+session completion. Final publication supplies the exact selected revision, so
+maintenance binds only that historical source to the repair.
+
+Freezing that source is an idempotent maintenance command. Inventory may repeat
+it once, with the identical request and idempotency key, only after a transport
+failure or `502/503/504`; validation, conflict, authentication, other server
+errors and malformed responses are not retried.
+
+Inventory command replay stores only successful responses. If the owning
+command rolls back, its exact idempotency lease is retired in a separate short
+transaction so the same request can be retried immediately. A concurrent live
+owner still blocks duplicates, and a failed attempt is never replayed as a
+success.
+
 The operational planning date is never earlier than both the session business
 date and the current date in the warehouse timezone. Automatic movement and
 repair dates start from that effective date. A manual past date is rejected,
@@ -208,10 +270,17 @@ Evidence: [`services/inventory-service/`](../../services/inventory-service/),
 [`inventory-service.yaml`](../../contracts/openapi/inventory-service.yaml),
 [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml),
 [`InventoryApplicationService.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryApplicationService.java),
+[`InventoryIdempotencyService.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryIdempotencyService.java),
+[`InventoryIdempotencyRecoveryIntegrationTest.java`](../../services/inventory-service/src/test/java/dev/buhanzaz/rwms/inventory/service/InventoryIdempotencyRecoveryIntegrationTest.java),
 [`InventoryReadProjectionIntegrationTest.java`](../../services/inventory-service/src/test/java/dev/buhanzaz/rwms/inventory/InventoryReadProjectionIntegrationTest.java),
 [`MaintenanceApplicationService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceApplicationService.java),
+[`InventoryMaintenanceService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/InventoryMaintenanceService.java),
+[`V40__version_inventory_repair_sources.sql`](../../services/maintenance-service/src/main/resources/db/migration/V40__version_inventory_repair_sources.sql),
 [`InventoryAssetInboxProcessor.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/eventing/InventoryAssetInboxProcessor.java),
 [`InventoryScreens.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/screens/InventoryScreens.kt),
+[`ManagerViewModel.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/ManagerViewModel.kt),
+[`InventoryMediaRebasePolicy.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/uploads/InventoryMediaRebasePolicy.kt),
+[`BackgroundUploadWorker.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/uploads/BackgroundUploadWorker.kt),
 [`InventoryEquipmentPolicy.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/InventoryEquipmentPolicy.kt),
 [`InventoryReinspectionPolicy.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/InventoryReinspectionPolicy.kt),
 [`inventory-pages.tsx`](../../panel/src/features/inventory/inventory-pages.tsx),
@@ -262,8 +331,25 @@ Evidence:
 variants and transformations. MinIO remains private; other domains reference
 media IDs and ownership contexts rather than object keys or credentials.
 
+Phone-side capture and gallery intake normalize still-image pixels to their
+upright orientation before upload. Media-service neither auto-rotates EXIF
+images nor accepts a mutable rotation command for new media. Its historical
+`rotationDegrees` read field is retained for compatible display of old assets,
+not as current media state to mutate.
+
+An exact create-upload replay normally returns the existing open session. If
+the session expired before any content was finalized, media-service issues a
+new session for the same logical media ID and immutable object identity. It
+does not create a duplicate asset, event or idempotency record and never
+reopens or overwrites completed content.
+
 Evidence: [`services/media-service/`](../../services/media-service/),
-[`media-service.yaml`](../../contracts/openapi/media-service.yaml).
+[`media-service.yaml`](../../contracts/openapi/media-service.yaml),
+[`ManagerCameraScreen.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/components/ManagerCameraScreen.kt),
+[`ManagerPhotos.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/components/ManagerPhotos.kt),
+[`InventoryMediaRebasePolicy.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/uploads/InventoryMediaRebasePolicy.kt),
+[`BackgroundUploadWorker.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/uploads/BackgroundUploadWorker.kt),
+[`upload_session_recovery_integration_test.go`](../../services/media-service/internal/persistence/upload_session_recovery_integration_test.go).
 
 ### Read Projections And Assistant
 
