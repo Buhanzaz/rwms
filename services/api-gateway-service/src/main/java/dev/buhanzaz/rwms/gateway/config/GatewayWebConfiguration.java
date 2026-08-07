@@ -10,9 +10,17 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Registers servlet filters that establish the trusted public-request boundary before routing.
+ *
+ * <p>The ordering is intentional: untrusted forwarding metadata is discarded first, the request
+ * host is then checked against the configured public origin, and only auth requests receive
+ * gateway-derived forwarding metadata.
+ */
 @Configuration
 public class GatewayWebConfiguration {
 
+  /** Registers the earliest filter that removes client-supplied forwarding headers. */
   @Bean
   FilterRegistrationBean<TrustedForwardedHeaderFilter> trustedForwardedHeaderFilter(
       GatewayProperties properties) {
@@ -23,6 +31,7 @@ public class GatewayWebConfiguration {
     return registration;
   }
 
+  /** Registers the host allow-list immediately after forwarding-header sanitization. */
   @Bean
   FilterRegistrationBean<PublicHostBoundaryFilter> publicHostBoundaryFilter(
       GatewayProperties properties,
@@ -36,6 +45,7 @@ public class GatewayWebConfiguration {
     return registration;
   }
 
+  /** Supplies canonical forwarding metadata only to the internal auth-service route. */
   @Bean
   CanonicalAuthForwardedHeadersFilter canonicalAuthForwardedHeadersFilter(
       GatewayProperties properties) {

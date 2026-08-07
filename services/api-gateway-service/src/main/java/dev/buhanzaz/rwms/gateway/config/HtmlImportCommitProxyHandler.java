@@ -17,7 +17,12 @@ import org.springframework.web.servlet.function.HandlerFunction;
 import org.springframework.web.servlet.function.ServerRequest;
 import org.springframework.web.servlet.function.ServerResponse;
 
-/** Proxies bounded HTML import commits with a five-minute downstream read deadline. */
+/**
+ * Proxies a bounded HTML-import commit with a five-minute downstream read deadline.
+ *
+ * <p>The dedicated timeout protects ordinary gateway worker threads while still allowing the
+ * downstream asset-service import operation to complete within its supported public contract.
+ */
 @Component
 final class HtmlImportCommitProxyHandler
     implements HandlerFunction<ServerResponse>, ApplicationListener<ContextRefreshedEvent> {
@@ -44,11 +49,19 @@ final class HtmlImportCommitProxyHandler
             proxyExchange, requestHeaderFilters, responseHeaderFilters);
   }
 
+  /**
+   * Delegates the matched bounded import-commit request to Spring Cloud Gateway's proxy exchange.
+   *
+   * @param request matched public asset import request
+   * @return proxied downstream response
+   * @throws Exception when proxy setup or exchange fails before the response is committed
+   */
   @Override
   public ServerResponse handle(ServerRequest request) throws Exception {
     return delegate.handle(request);
   }
 
+  /** Completes delegate initialization after all ordered gateway header filters are available. */
   @Override
   public void onApplicationEvent(ContextRefreshedEvent event) {
     delegate.onApplicationEvent(event);

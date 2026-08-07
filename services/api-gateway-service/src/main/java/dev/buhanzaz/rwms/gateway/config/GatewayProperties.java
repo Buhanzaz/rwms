@@ -15,6 +15,14 @@ import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
+/**
+ * Validated configuration contract for the public gateway.
+ *
+ * <p>Downstream route values are private service origins, while {@link #publicBaseUri} is the
+ * single browser-visible origin used to derive the public auth issuer and trusted forwarding
+ * metadata. Keeping those identities separate prevents accidental routing loops and trust of
+ * client-controlled forwarding headers.
+ */
 @Getter
 @Validated
 @ConfigurationProperties("rwms.gateway")
@@ -28,6 +36,7 @@ public class GatewayProperties {
   @Setter
   @NotNull private URI publicBaseUri;
 
+  /** Private HTTP origins for the services exposed through the public gateway. */
   @Getter
   @Setter
   public static final class Routes {
@@ -44,6 +53,7 @@ public class GatewayProperties {
     @NotNull private URI assistantUri;
   }
 
+  /** JWT issuer and audience accepted at the public edge. */
   @Getter
   @Setter
   public static final class Security {
@@ -51,6 +61,7 @@ public class GatewayProperties {
     @NotBlank private String audience = "rwms-services";
   }
 
+  /** Browser origins explicitly allowed to call the public gateway. */
   @Setter
   @Getter
   public static final class Cors {
@@ -58,6 +69,7 @@ public class GatewayProperties {
 
   }
 
+  /** Android App Links identity published from {@code /.well-known/assetlinks.json}. */
   @Setter
   @Getter
   public static final class AppLinks {
@@ -74,6 +86,7 @@ public class GatewayProperties {
         sha256CertFingerprints = List.of();
   }
 
+  /** Resource limits for long-lived server-sent event proxy connections. */
   @Getter
   @Setter
   public static final class Sse {

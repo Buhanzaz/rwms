@@ -14,13 +14,22 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.web.filter.OncePerRequestFilter;
 
+/**
+ * Removes all client-controlled forwarding headers at the public boundary.
+ *
+ * <p>The gateway reconstructs the few forwarding headers auth-service needs from trusted
+ * configuration. No caller can choose a host, scheme, prefix, or client IP by submitting an
+ * {@code X-Forwarded-*} or {@code Forwarded} header.
+ */
 public final class TrustedForwardedHeaderFilter extends OncePerRequestFilter {
 
   private static final Set<String> FORWARDED_HEADERS =
       Set.of("forwarded", "front-end-https", "x-url-scheme");
 
+  /** Creates the stateless forwarding-header sanitizer. */
   public TrustedForwardedHeaderFilter() {}
 
+  /** Wraps the request in a view that hides all forwarding-related headers. */
   @Override
   protected void doFilterInternal(
       HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)

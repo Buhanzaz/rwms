@@ -13,8 +13,16 @@ import java.util.ArrayList;
 import java.util.List;
 import org.springframework.web.filter.OncePerRequestFilter;
 
+/**
+ * Makes the server-generated correlation ID observable as the canonical request header.
+ *
+ * <p>The platform correlation filter validates or creates the identifier first. This filter then
+ * wraps the request so every downstream gateway component sees that authoritative value rather
+ * than any conflicting caller-supplied header.
+ */
 public final class CanonicalCorrelationRequestFilter extends OncePerRequestFilter {
 
+  /** Replaces only the correlation header while preserving all other request metadata. */
   @Override
   protected void doFilterInternal(
       HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)

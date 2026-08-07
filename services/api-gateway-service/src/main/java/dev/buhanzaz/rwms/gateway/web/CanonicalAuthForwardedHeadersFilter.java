@@ -7,6 +7,13 @@ import org.springframework.core.Ordered;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.servlet.function.ServerRequest;
 
+/**
+ * Supplies auth-service with forwarding metadata derived solely from the configured public URI.
+ *
+ * <p>Only the {@code auth-service} route receives these headers. Incoming client-supplied
+ * forwarding headers have already been removed by {@link TrustedForwardedHeaderFilter}, so auth
+ * redirects cannot be influenced by a spoofed request header.
+ */
 public final class CanonicalAuthForwardedHeadersFilter
     implements HttpHeadersFilter.RequestHttpHeadersFilter, Ordered {
 
@@ -14,6 +21,11 @@ public final class CanonicalAuthForwardedHeadersFilter
   private final String scheme;
   private final String port;
 
+  /**
+   * Derives canonical authority metadata from the browser-visible gateway base URI.
+   *
+   * @param publicBase validated public gateway origin
+   */
   public CanonicalAuthForwardedHeadersFilter(URI publicBase) {
     this.host = publicBase.getRawAuthority();
     this.scheme = publicBase.getScheme();
@@ -24,6 +36,10 @@ public final class CanonicalAuthForwardedHeadersFilter
                 : ("https".equalsIgnoreCase(scheme) ? 443 : 80));
   }
 
+  /**
+   * Adds canonical forwarding headers to auth-service requests and leaves all other routes
+   * unchanged.
+   */
   @Override
   public HttpHeaders apply(HttpHeaders headers, ServerRequest request) {
     HttpHeaders result = new HttpHeaders();
@@ -38,6 +54,7 @@ public final class CanonicalAuthForwardedHeadersFilter
     return result;
   }
 
+  /** Runs after route header sanitization but before the downstream auth request is sent. */
   @Override
   public int getOrder() {
     return 100;

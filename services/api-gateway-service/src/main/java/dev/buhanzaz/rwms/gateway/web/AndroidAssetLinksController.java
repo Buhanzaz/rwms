@@ -11,6 +11,13 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * Publishes the Android Digital Asset Links statement for the RWMS worker application.
+ *
+ * <p>The endpoint is gateway-owned infrastructure rather than a domain API. It returns no cached
+ * statement while release certificate fingerprints are absent, preventing clients from trusting
+ * an incomplete configuration.
+ */
 @RestController
 public class AndroidAssetLinksController {
 
@@ -19,10 +26,21 @@ public class AndroidAssetLinksController {
 
   private final GatewayProperties properties;
 
+  /**
+   * Creates the endpoint from the validated gateway configuration.
+   *
+   * @param properties gateway App Links identity and release fingerprints
+   */
   public AndroidAssetLinksController(GatewayProperties properties) {
     this.properties = properties;
   }
 
+  /**
+   * Returns the currently configured Android App Links statement.
+   *
+   * @return a cacheable statement when release fingerprints are configured, otherwise a
+   *     no-store {@code 503} response
+   */
   @GetMapping(
       path = "/.well-known/assetlinks.json",
       produces = MediaType.APPLICATION_JSON_VALUE)

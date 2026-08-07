@@ -21,7 +21,12 @@ import org.springframework.web.servlet.function.ServerRequest;
 import org.springframework.web.servlet.function.ServerResponse;
 import tools.jackson.databind.ObjectMapper;
 
-/** Writes the same sanitized upstream-failure contract for synchronous and async proxy routes. */
+/**
+ * Writes one sanitized upstream-failure contract for synchronous and asynchronous proxy routes.
+ *
+ * <p>Timeouts map to {@code 504}; other connectivity failures map to {@code 502}. The original
+ * exception, destination, and request body are never returned to callers.
+ */
 @Component
 @RequiredArgsConstructor
 public class GatewayUpstreamProblemWriter {
@@ -29,6 +34,13 @@ public class GatewayUpstreamProblemWriter {
   private final ObjectMapper objectMapper;
   private final RwmsProblemDetailFactory problems;
 
+  /**
+   * Creates a functional-router Problem Details response for a failed proxy exchange.
+   *
+   * @param error upstream failure
+   * @param request failed functional request
+   * @return sanitized {@code 502} or {@code 504} response
+   */
   public ServerResponse response(Throwable error, ServerRequest request) {
     Failure failure = failure(error);
     UUID correlationId = correlation(request.servletRequest());
@@ -38,6 +50,14 @@ public class GatewayUpstreamProblemWriter {
         .body(problem(failure, URI.create(request.servletRequest().getRequestURI()), correlationId));
   }
 
+  /**
+   * Writes the equivalent Problem Details payload directly to an asynchronous servlet response.
+   *
+   * @param error upstream failure
+   * @param request failed servlet request
+   * @param response servlet response to populate
+   * @throws IOException if the response payload cannot be written
+   */
   public void write(Throwable error, HttpServletRequest request, HttpServletResponse response)
       throws IOException {
     Failure failure = failure(error);

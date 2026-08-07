@@ -25,9 +25,20 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+/**
+ * Declares the public gateway's stateless authentication, authorization, and CORS policy.
+ *
+ * <p>Private service routes are denied at the edge, worker task routes require their dedicated
+ * scope, and all other public API routes require a locally validated Bearer JWT. Authorization
+ * decisions inside individual domain services are deliberately not replicated here.
+ */
 @Configuration
 public class GatewaySecurityConfiguration {
 
+  /**
+   * Builds the ordered gateway security chain and maps authentication failures to RWMS Problem
+   * Details responses.
+   */
   @Bean
   SecurityFilterChain gatewaySecurityFilterChain(
       HttpSecurity http,
@@ -99,6 +110,12 @@ public class GatewaySecurityConfiguration {
     return http.build();
   }
 
+  /**
+   * Creates the local JWT decoder from the private auth-service JWKS endpoint.
+   *
+   * <p>The decoder validates token timestamps, the configured public issuer, and the configured
+   * service audience; it never resolves JWKS through the browser-visible gateway route.
+   */
   @Bean
   @ConditionalOnMissingBean(JwtDecoder.class)
   JwtDecoder gatewayJwtDecoder(
@@ -115,6 +132,12 @@ public class GatewaySecurityConfiguration {
     return decoder;
   }
 
+  /**
+   * Creates the credentialed CORS policy for the explicitly configured panel origins.
+   *
+   * <p>The allow-list is validated at startup; wildcard origins are rejected by
+   * {@link GatewayProductionSafetyValidator}.
+   */
   @Bean
   CorsConfigurationSource corsConfigurationSource(GatewayProperties properties) {
     var configuration = new CorsConfiguration();

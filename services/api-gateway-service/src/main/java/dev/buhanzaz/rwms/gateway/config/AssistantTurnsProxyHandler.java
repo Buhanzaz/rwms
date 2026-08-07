@@ -16,7 +16,12 @@ import org.springframework.web.servlet.function.HandlerFunction;
 import org.springframework.web.servlet.function.ServerRequest;
 import org.springframework.web.servlet.function.ServerResponse;
 
-/** Proxies long-lived assistant turn streams without the ordinary gateway read deadline. */
+/**
+ * Proxies a long-lived assistant-turn response without the ordinary gateway read deadline.
+ *
+ * <p>The route remains transport-only: this handler forwards the request and streaming response
+ * but does not accumulate assistant state or interpret tool-call events.
+ */
 @Component
 final class AssistantTurnsProxyHandler
     implements HandlerFunction<ServerResponse>, ApplicationListener<ContextRefreshedEvent> {
@@ -40,11 +45,19 @@ final class AssistantTurnsProxyHandler
             proxyExchange, requestHeaderFilters, responseHeaderFilters);
   }
 
+  /**
+   * Delegates the matched assistant-turn request to Spring Cloud Gateway's proxy exchange.
+   *
+   * @param request matched public assistant request
+   * @return proxied streaming response
+   * @throws Exception when proxy setup or exchange fails before the response is committed
+   */
   @Override
   public ServerResponse handle(ServerRequest request) throws Exception {
     return delegate.handle(request);
   }
 
+  /** Completes delegate initialization after all ordered gateway header filters are available. */
   @Override
   public void onApplicationEvent(ContextRefreshedEvent event) {
     delegate.onApplicationEvent(event);

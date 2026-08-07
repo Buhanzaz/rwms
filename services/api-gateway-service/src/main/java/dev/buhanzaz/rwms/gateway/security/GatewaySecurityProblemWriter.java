@@ -17,6 +17,13 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Writes sanitized RWMS Problem Details responses for gateway authentication and authorization
+ * failures.
+ *
+ * <p>Every response carries the canonical correlation ID. Authentication implementation details,
+ * token values, and downstream information are intentionally never exposed to callers.
+ */
 @Component
 @RequiredArgsConstructor
 public class GatewaySecurityProblemWriter {
@@ -24,11 +31,25 @@ public class GatewaySecurityProblemWriter {
   private final ObjectMapper objectMapper;
   private final RwmsProblemDetailFactory problems;
 
+  /**
+   * Writes the public {@code 401} problem returned for a missing or invalid Bearer token.
+   *
+   * @param request rejected request
+   * @param response servlet response to populate
+   * @throws IOException if the problem payload cannot be written
+   */
   public void unauthorized(HttpServletRequest request, HttpServletResponse response)
       throws IOException {
     write(request, response, HttpStatus.UNAUTHORIZED, "GATEWAY_UNAUTHORIZED", "Bearer token is missing or invalid");
   }
 
+  /**
+   * Writes the public {@code 403} problem returned when the authenticated caller lacks access.
+   *
+   * @param request rejected request
+   * @param response servlet response to populate
+   * @throws IOException if the problem payload cannot be written
+   */
   public void forbidden(HttpServletRequest request, HttpServletResponse response) throws IOException {
     write(request, response, HttpStatus.FORBIDDEN, "GATEWAY_FORBIDDEN", "Access is denied");
   }

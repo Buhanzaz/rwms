@@ -10,6 +10,14 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
+/**
+ * Rejects unsafe gateway configuration before the application starts accepting traffic.
+ *
+ * <p>The validator enforces a public/private origin split, derives the public issuer invariant,
+ * rejects wildcard CORS, and applies production-only HTTPS, certificate, and non-loopback
+ * requirements. It does not probe downstream availability; that remains deployment health
+ * infrastructure's responsibility.
+ */
 @Component
 @RequiredArgsConstructor
 public class GatewayProductionSafetyValidator {
@@ -17,6 +25,7 @@ public class GatewayProductionSafetyValidator {
   private final GatewayProperties properties;
   private final Environment environment;
 
+  /** Validates all configured public and private edge endpoints. */
   @PostConstruct
   void validate() {
     URI publicBase = requireOrigin("rwms.gateway.public-base-uri", properties.getPublicBaseUri());

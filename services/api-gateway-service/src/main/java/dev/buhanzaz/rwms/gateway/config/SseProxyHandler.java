@@ -53,9 +53,13 @@ import org.springframework.web.servlet.function.ServerResponse;
 import org.springframework.web.util.UriComponentsBuilder;
 
 /**
- * Proxies the warehouse invalidation streams with Servlet async I/O instead of the blocking MVC
- * proxy exchange. A client disconnect therefore cancels the upstream subscription rather than
- * asking {@code JdkClientHttpResponse.close()} to drain an unbounded SSE body.
+ * Proxies public server-sent event streams with Servlet asynchronous I/O instead of the blocking
+ * MVC proxy exchange.
+ *
+ * <p>The handler bounds concurrent streams, applies gateway header filters on both sides, and
+ * forwards each complete event/heartbeat item as it arrives. A client disconnect or an async
+ * failure cancels the upstream {@link Flow.Subscription}; it never drains an unbounded SSE body.
+ * Event meaning, replay, and state remain with the producing service.
  */
 @Component
 final class SseProxyHandler
@@ -107,6 +111,16 @@ final class SseProxyHandler
     this.headerTimeout = properties.getSse().getHeaderTimeout();
   }
 
+  /**
+   * Starts a bounded asynchronous relay for a matched SSE route.
+   *
+   * <p>A saturated relay pool returns {@code 503 Service Unavailable} with a short retry hint
+   * before opening an upstream connection. Otherwise the returned response owns the slot until
+   * the stream completes, fails, or the client disconnects.
+   *
+   * @param request matched public gateway request
+   * @return asynchronous response that bridges the upstream SSE body to the servlet response
+   */
   @Override
   public ServerResponse handle(ServerRequest request) {
     if (!this.connections.tryAcquire()) {
@@ -134,11 +148,18 @@ final class SseProxyHandler
     }
   }
 
+  /**
+   * Captures ordered gateway header filters after the application context is ready.
+   *
+   * <p>Initialization is also lazy in the request path, so early test or router construction does
+   * not force premature bean resolution.
+   */
   @Override
   public void onApplicationEvent(ContextRefreshedEvent event) {
     initializeHeaderFilters();
   }
 
+  /** Cancels the handler-owned HTTP executor during gateway shutdown. */
   @Override
   public void destroy() {
     this.httpClientExecutor.shutdownNow();

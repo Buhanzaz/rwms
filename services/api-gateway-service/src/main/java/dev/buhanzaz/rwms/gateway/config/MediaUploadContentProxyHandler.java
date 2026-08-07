@@ -17,7 +17,13 @@ import org.springframework.web.servlet.function.HandlerFunction;
 import org.springframework.web.servlet.function.ServerRequest;
 import org.springframework.web.servlet.function.ServerResponse;
 
-/** Proxies bounded media uploads with a five-minute downstream read deadline. */
+/**
+ * Proxies a bounded media-content upload with a five-minute downstream read deadline.
+ *
+ * <p>It is separate from the ordinary media route so a large but supported upload cannot inherit
+ * an unsuitable default proxy timeout. Media ownership and content processing remain in
+ * media-service.
+ */
 @Component
 final class MediaUploadContentProxyHandler
     implements HandlerFunction<ServerResponse>, ApplicationListener<ContextRefreshedEvent> {
@@ -44,11 +50,19 @@ final class MediaUploadContentProxyHandler
             proxyExchange, requestHeaderFilters, responseHeaderFilters);
   }
 
+  /**
+   * Delegates the matched bounded media-upload request to Spring Cloud Gateway's proxy exchange.
+   *
+   * @param request matched public media content request
+   * @return proxied downstream response
+   * @throws Exception when proxy setup or exchange fails before the response is committed
+   */
   @Override
   public ServerResponse handle(ServerRequest request) throws Exception {
     return delegate.handle(request);
   }
 
+  /** Completes delegate initialization after all ordered gateway header filters are available. */
   @Override
   public void onApplicationEvent(ContextRefreshedEvent event) {
     delegate.onApplicationEvent(event);

@@ -19,12 +19,27 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * Converts unmapped gateway servlet errors into the public RWMS Problem Details contract.
+ *
+ * <p>It intentionally reports a safe route/upstream failure summary rather than an exception
+ * message or downstream response body. Normal downstream errors are relayed by their owning
+ * service and do not become gateway business errors.
+ */
 @RestController
 @RequiredArgsConstructor
 public class GatewayErrorController implements ErrorController {
 
   private final RwmsProblemDetailFactory problems;
 
+  /**
+   * Produces the gateway's terminal error response unless the servlet response is already
+   * committed.
+   *
+   * @param request request carrying the servlet error attributes
+   * @param response response that may already be committed by an asynchronous path
+   * @return safe Problem Details response or an empty committed-response status
+   */
   @RequestMapping(value = "/error", produces = MediaType.APPLICATION_PROBLEM_JSON_VALUE)
   ResponseEntity<ApiProblem> error(HttpServletRequest request, HttpServletResponse response) {
     HttpStatus status = resolveStatus(request);

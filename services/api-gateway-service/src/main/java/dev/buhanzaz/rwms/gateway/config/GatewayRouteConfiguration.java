@@ -23,9 +23,21 @@ import org.springframework.web.servlet.function.ServerRequest;
 import org.springframework.web.servlet.function.ServerResponse;
 import org.springframework.web.util.UriUtils;
 
+/**
+ * Defines the public, transport-only route table for RWMS domain services.
+ *
+ * <p>Each route accepts only its documented public path, rejects encoded traversal-style paths,
+ * removes browser cookies before forwarding, and maps connectivity failures to the shared gateway
+ * Problem Details contract. This configuration must not aggregate responses or implement domain
+ * workflow.
+ */
 @Configuration
 public class GatewayRouteConfiguration {
 
+  /**
+   * Relays public OIDC routes to auth-service while retaining the SPA-owned callback and denying
+   * auth-service's private API path.
+   */
   @Bean
   RouterFunction<ServerResponse> authRoutes(
       GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
@@ -42,6 +54,11 @@ public class GatewayRouteConfiguration {
         .build();
   }
 
+  /**
+   * Relays the worker task-board invalidation stream through the bounded asynchronous SSE proxy.
+   *
+   * <p>The lower order makes this exact event route win over the generic task-board route.
+   */
   @Bean
   @Order(-100)
   RouterFunction<ServerResponse> taskBoardWorkerEventsRoute(
@@ -62,6 +79,7 @@ public class GatewayRouteConfiguration {
         .build();
   }
 
+  /** Relays the public asset invalidation stream through the bounded asynchronous SSE proxy. */
   @Bean
   @Order(-99)
   RouterFunction<ServerResponse> assetEventsRoute(
@@ -80,6 +98,7 @@ public class GatewayRouteConfiguration {
         .build();
   }
 
+  /** Relays the public media invalidation stream through the bounded asynchronous SSE proxy. */
   @Bean
   @Order(-98)
   RouterFunction<ServerResponse> mediaEventsRoute(
@@ -98,6 +117,14 @@ public class GatewayRouteConfiguration {
         .build();
   }
 
+  /**
+   * Relays public task-board APIs and rewrites their external prefix to the downstream
+   * {@code /api} namespace.
+   *
+   * <p>It excludes both the private namespace and the exact worker event stream owned by
+   * {@link #taskBoardWorkerEventsRoute(GatewayProperties, GatewayUpstreamProblemHandler,
+   * SseProxyHandler)}.
+   */
   @Bean
   RouterFunction<ServerResponse> taskBoardRoutes(
       GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
@@ -122,6 +149,7 @@ public class GatewayRouteConfiguration {
         .build();
   }
 
+  /** Relays only public warehouse APIs to the reserved warehouse-service route. */
   @Bean
   RouterFunction<ServerResponse> warehouseRoutes(
       GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
@@ -139,6 +167,10 @@ public class GatewayRouteConfiguration {
         .build();
   }
 
+  /**
+   * Uses the dedicated bounded proxy for the public HTML-import commit command instead of the
+   * generic asset route.
+   */
   @Bean
   @Order(-80)
   RouterFunction<ServerResponse> htmlImportCommitRoute(
@@ -157,6 +189,7 @@ public class GatewayRouteConfiguration {
         .build();
   }
 
+  /** Relays public asset APIs while keeping asset-service internal endpoints unreachable. */
   @Bean
   RouterFunction<ServerResponse> assetRoutes(
       GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
@@ -172,6 +205,7 @@ public class GatewayRouteConfiguration {
         .build();
   }
 
+  /** Relays public maintenance APIs while keeping maintenance-service internal endpoints unreachable. */
   @Bean
   RouterFunction<ServerResponse> maintenanceRoutes(
       GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
@@ -189,6 +223,9 @@ public class GatewayRouteConfiguration {
         .build();
   }
 
+  /**
+   * Uses the dedicated bounded proxy for media upload bytes instead of the generic media route.
+   */
   @Bean
   @Order(-79)
   RouterFunction<ServerResponse> mediaUploadContentRoute(
@@ -207,6 +244,11 @@ public class GatewayRouteConfiguration {
         .build();
   }
 
+  /**
+   * Relays public media APIs while excluding private/internal paths and the upload-content
+   * endpoint handled by {@link #mediaUploadContentRoute(GatewayProperties,
+   * GatewayUpstreamProblemHandler, MediaUploadContentProxyHandler)}.
+   */
   @Bean
   RouterFunction<ServerResponse> mediaRoutes(
       GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
@@ -228,6 +270,7 @@ public class GatewayRouteConfiguration {
         .build();
   }
 
+  /** Relays public inventory APIs while keeping inventory-service private and internal paths unreachable. */
   @Bean
   RouterFunction<ServerResponse> inventoryRoutes(
       GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
@@ -248,6 +291,7 @@ public class GatewayRouteConfiguration {
         .build();
   }
 
+  /** Relays public logistics APIs while keeping logistics-service private and internal paths unreachable. */
   @Bean
   RouterFunction<ServerResponse> logisticsRoutes(
       GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
@@ -268,6 +312,10 @@ public class GatewayRouteConfiguration {
         .build();
   }
 
+  /**
+   * Uses the dedicated streaming proxy for assistant turns so a legitimate long-lived answer does
+   * not inherit the ordinary proxy read deadline.
+   */
   @Bean
   @Order(-90)
   RouterFunction<ServerResponse> assistantTurnsRoute(
@@ -286,6 +334,10 @@ public class GatewayRouteConfiguration {
         .build();
   }
 
+  /**
+   * Relays the remaining public assistant APIs while excluding private/internal paths and the
+   * dedicated assistant-turn streaming command.
+   */
   @Bean
   RouterFunction<ServerResponse> assistantRoutes(
       GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
@@ -309,6 +361,10 @@ public class GatewayRouteConfiguration {
         .build();
   }
 
+  /**
+   * Relays only public dossier reads. Dossier-service is a read model and receives no gateway
+   * command route.
+   */
   @Bean
   RouterFunction<ServerResponse> dossierRoutes(
       GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
@@ -330,6 +386,10 @@ public class GatewayRouteConfiguration {
         .build();
   }
 
+  /**
+   * Relays authenticated analytics reads and rewrites the public {@code /api/analytics/v1}
+   * prefix to analytics-service's {@code /api/v1} namespace.
+   */
   @Bean
   RouterFunction<ServerResponse> analyticsRoutes(
       GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
