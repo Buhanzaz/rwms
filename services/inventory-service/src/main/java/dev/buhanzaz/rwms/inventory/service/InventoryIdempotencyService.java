@@ -103,34 +103,40 @@ public class InventoryIdempotencyService
       return read(reservation.responseBody(), responseType);
     }
 
-    return requireTransaction(
-        transactions.execute(
-            ignored -> {
-              InventoryIdempotencyRecord record =
-                  idempotencyRecords
-                      .findForUpdate(subjectId, commandScope, idempotencyKey)
-                      .orElseThrow(
-                          () ->
-                              new IllegalStateException("Idempotency reservation disappeared"));
-              if (!record.ownsLease(reservation.leaseToken(), requestHash)) {
-                throw idempotencyConflict("Idempotency reservation ownership changed");
-              }
-              markReplay(false);
-              T response = command.get();
-              String responseBody = writeResponse(response);
-              try {
-                record.complete(
-                    reservation.leaseToken(),
-                    requestHash,
-                    responseStatus,
-                    responseBody,
-                    now());
-                idempotencyRecords.flush();
-              } catch (IllegalStateException exception) {
-                throw idempotencyConflict(exception.getMessage());
-              }
-              return response;
-            }));
+    try {
+      return requireTransaction(
+          transactions.execute(
+              ignored -> {
+                InventoryIdempotencyRecord record =
+                    idempotencyRecords
+                        .findForUpdate(subjectId, commandScope, idempotencyKey)
+                        .orElseThrow(
+                            () ->
+                                new IllegalStateException("Idempotency reservation disappeared"));
+                if (!record.ownsLease(reservation.leaseToken(), requestHash)) {
+                  throw idempotencyConflict("Idempotency reservation ownership changed");
+                }
+                markReplay(false);
+                T response = command.get();
+                String responseBody = writeResponse(response);
+                try {
+                  record.complete(
+                      reservation.leaseToken(),
+                      requestHash,
+                      responseStatus,
+                      responseBody,
+                      now());
+                  idempotencyRecords.flush();
+                } catch (IllegalStateException exception) {
+                  throw idempotencyConflict(exception.getMessage());
+                }
+                return response;
+              }));
+    } catch (RuntimeException | Error failure) {
+      abandonReservationAfterFailure(
+          subjectId, commandScope, idempotencyKey, reservation.leaseToken(), requestHash, failure);
+      throw failure;
+    }
   }
 
   @Override
@@ -438,6 +444,29 @@ public class InventoryIdempotencyService
                                       "Idempotency reservation winner is missing")),
                       requestHash,
                       now())));
+    }
+  }
+
+  private void abandonReservationAfterFailure(
+      UUID subjectId,
+      String commandScope,
+      UUID idempotencyKey,
+      UUID leaseToken,
+      String requestHash,
+      Throwable commandFailure) {
+    try {
+      independentTransactions.executeWithoutResult(
+          ignored -> {
+            InventoryIdempotencyRecord record =
+                idempotencyRecords
+                    .findForUpdate(subjectId, commandScope, idempotencyKey)
+                    .orElse(null);
+            if (record != null && record.abandon(leaseToken, requestHash, now())) {
+              idempotencyRecords.flush();
+            }
+          });
+    } catch (RuntimeException abandonmentFailure) {
+      commandFailure.addSuppressed(abandonmentFailure);
     }
   }
 

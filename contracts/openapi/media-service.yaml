@@ -385,7 +385,11 @@ paths:
         pairs declared by MediaOwnerType are accepted.
         At most 100 live media assets may belong to one owner. The
         returned content path is same-origin and never reveals a MinIO origin
-        or storage credential.
+        or storage credential. An exact Idempotency-Key and request replay
+        normally returns the existing open session. If that session expired
+        before content was finalized, the replay issues a replacement session
+        for the same logical media asset; it does not create another asset or
+        overwrite completed content.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -402,7 +406,10 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/UploadSession' }
         '200':
-          description: Safe replay while the same upload session remains open.
+          description: >-
+            Safe exact replay. Returns the same open session, or a replacement
+            open session for the same media asset when the previous session
+            expired before content was finalized.
           headers:
             Cache-Control: { schema: { const: no-store } }
           content:
@@ -614,41 +621,6 @@ paths:
             X-Content-Type-Options: { schema: { const: nosniff } }
           content:
             image/webp: { schema: { type: string, format: binary } }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-        '503': { $ref: '#/components/responses/Unavailable' }
-  /api/media/v1/assets/{mediaId}/rotation:
-    post:
-      summary: Queue a new absolute rotated generation
-      operationId: rotateMedia
-      parameters:
-        - $ref: '#/components/parameters/MediaId'
-        - $ref: '#/components/parameters/IdempotencyKey'
-        - $ref: '#/components/parameters/OwnerType'
-        - $ref: '#/components/parameters/OwnerId'
-        - $ref: '#/components/parameters/DocumentId'
-        - $ref: '#/components/parameters/LineId'
-        - $ref: '#/components/parameters/WarehouseId'
-        - $ref: '#/components/parameters/OwnerContext'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/RotateRequest' }
-      responses:
-        '202':
-          description: A monotonically allocated generation is queued.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/MediaAsset' }
-        '200':
-          description: Exact command replay.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/MediaAsset' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1187,13 +1159,6 @@ components:
         objectVersionId: { type: string, minLength: 1, maxLength: 255 }
         etag: { type: string, minLength: 1, maxLength: 255 }
         checksumSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
-    RotateRequest:
-      type: object
-      additionalProperties: false
-      required: [rotationDegrees, expectedVersion]
-      properties:
-        rotationDegrees: { enum: [0, 90, 180, 270] }
-        expectedVersion: { type: integer, minimum: 1 }
     DeleteRequest:
       type: object
       additionalProperties: false
@@ -1308,7 +1273,9 @@ components:
         status: { enum: [UPLOADING, PROCESSING, READY, FAILED, DELETED] }
         version: { type: integer, minimum: 1 }
         generation: { type: integer, minimum: 0 }
-        rotationDegrees: { enum: [0, 90, 180, 270] }
+        rotationDegrees:
+          description: Historical read-only orientation metadata; newly processed assets always return 0.
+          enum: [0, 90, 180, 270]
         sortOrder: { type: integer, minimum: 0 }
         sizeBytes: { oneOf: [{ type: integer, minimum: 1 }, { type: 'null' }] }
         createdAt: { type: string, format: date-time }

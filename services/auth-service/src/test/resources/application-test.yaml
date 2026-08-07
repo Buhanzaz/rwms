@@ -103,7 +103,7 @@ rwms:
         - client-id: asset-service
           client-name: Asset Service Warehouse Registry Client
           enabled: false
-          revision: 3
+          revision: 4
           authentication-methods: [client_secret_basic]
           grant-types: [client_credentials]
           scopes: [warehouse.read, warehouse.timezone.read, warehouse.operation.mark, warehouse.lifecycle.read, warehouse.lifecycle.confirm, media.asset-import]
@@ -113,7 +113,7 @@ rwms:
         - client-id: maintenance-service
           client-name: Maintenance Service Downstream Client
           enabled: false
-          revision: 3
+          revision: 5
           authentication-methods: [client_secret_basic]
           grant-types: [client_credentials]
           scopes: [asset.maintenance, task-board.task-sync, queue-registry.write, media.maintenance, logistics.maintenance, warehouse.timezone.read, warehouse.operation.mark, warehouse.lifecycle.read, warehouse.lifecycle.confirm]

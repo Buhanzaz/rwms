@@ -9,7 +9,10 @@ import (
 
 func TestValidateProcessedVariantsRequiresExactGenerationSet(t *testing.T) {
 	mediaID := uuid.New()
-	job := WorkerJob{MediaID: mediaID, MediaKind: media.KindImage, Generation: 2, ContentType: "image/jpeg"}
+	job := WorkerJob{
+		MediaID: mediaID, MediaKind: media.KindImage, Generation: 2, ContentType: "image/jpeg",
+		ProcessingKind: media.ProcessingInitial, Rotation: media.Rotation0,
+	}
 	valid := processedImageVariants(mediaID, 2)
 	if err := validateProcessedVariants(job, valid); err != nil {
 		t.Fatalf("valid exact image set error = %v", err)
@@ -50,7 +53,10 @@ func TestValidateProcessedVariantsRequiresExactGenerationSet(t *testing.T) {
 
 func TestValidateProcessedVariantsRequiresOneExactVideoOriginal(t *testing.T) {
 	mediaID := uuid.New()
-	job := WorkerJob{MediaID: mediaID, MediaKind: media.KindVideo, Generation: 3, ContentType: "video/mp4"}
+	job := WorkerJob{
+		MediaID: mediaID, MediaKind: media.KindVideo, Generation: 3, ContentType: "video/mp4",
+		ProcessingKind: media.ProcessingInitial, Rotation: media.Rotation0,
+	}
 	valid := []media.ProcessedVariant{{
 		Variant: media.VariantOriginal, ObjectKey: media.OriginalObjectKey(mediaID.String(), 3, ".mp4"),
 		ObjectVersionID: "minio-video-version", ContentType: "video/mp4", SizeBytes: 128,

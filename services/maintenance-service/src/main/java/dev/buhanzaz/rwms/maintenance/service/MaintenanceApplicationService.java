@@ -11,6 +11,7 @@ import dev.buhanzaz.rwms.maintenance.domain.EstimateLine;
 import dev.buhanzaz.rwms.maintenance.domain.EstimatePlanStage;
 import dev.buhanzaz.rwms.maintenance.domain.EstimateRevision;
 import dev.buhanzaz.rwms.maintenance.domain.EstimateState;
+import dev.buhanzaz.rwms.maintenance.domain.FurnitureAccountingMode;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceAggregateType;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceEstimate;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceEventType;
@@ -1245,9 +1246,13 @@ public class MaintenanceApplicationService {
     }
     warehouseLifecycle.requireOutgoing(preflight.warehouseId());
     requireCustomRoutingReady(preflight.warehouseId(), preflight.plan());
+    FurnitureAccountingMode furnitureAccountingMode =
+        resolveEstimateFurnitureAccounting(preflight, request);
     return inLocalTransaction(
         "estimate completion finalization",
-        () -> completeEstimateInTransaction(subjectId, key, id, request));
+        () ->
+            completeEstimateInTransaction(
+                subjectId, key, id, request, furnitureAccountingMode));
   }
 
   private EstimateCompletionPreflight completeEstimatePreflight(
@@ -1256,16 +1261,57 @@ public class MaintenanceApplicationService {
     Optional<JsonNode> replay = idempotency.replay(subjectId, "estimate.complete:" + id, key, requestHash);
     if (replay.isPresent()) {
       return new EstimateCompletionPreflight(
-          new CreateResult<>(read(replay.get(), EstimateCommandResult.class), true), null, List.of());
+          new CreateResult<>(read(replay.get(), EstimateCommandResult.class), true),
+          null,
+          List.of(),
+          null,
+          List.of());
     }
     MaintenanceEstimate estimate = requireEstimate(id);
     assertVersion(estimate.getVersion(), request.expectedVersion());
     return new EstimateCompletionPreflight(
-        null, estimate.getWarehouseId(), storedPlanInputs(currentPlan(estimate)));
+        null,
+        estimate.getWarehouseId(),
+        storedPlanInputs(currentPlan(estimate)),
+        estimate.getRentalItemId(),
+        estimateFurnitureQuantities(estimate));
+  }
+
+  private FurnitureAccountingMode resolveEstimateFurnitureAccounting(
+      EstimateCompletionPreflight preflight, CompleteEstimateRequest request) {
+    if (preflight.furniture().isEmpty()) {
+      return FurnitureAccountingMode.TRACKED_CABIN_CONTENTS;
+    }
+    MaintenanceDependencyGateway.PropertyAssetSnapshot snapshot =
+        dependencies.getPropertyAssetSnapshot(
+            MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
+            preflight.rentalItemId(),
+            preflight.warehouseId());
+    boolean noRecordedContents =
+        hasNoRecordedCabinContents(
+            preflight.rentalItemId(), preflight.warehouseId(), snapshot);
+    if (noRecordedContents) {
+      if (!request.allowsUnaccountedFurniture()) {
+        throw new MaintenanceValidationException(
+            "MAINTENANCE_UNACCOUNTED_FURNITURE_CONFIRMATION_REQUIRED",
+            "Cabin has no recorded contents. Confirm completion without warehouse additional-equipment accounting.");
+      }
+      return FurnitureAccountingMode.UNACCOUNTED_CABIN_CONTENTS;
+    }
+    if (request.allowsUnaccountedFurniture()) {
+      throw new MaintenanceValidationException(
+          "MAINTENANCE_VALIDATION_FAILED",
+          "Unaccounted furniture confirmation is allowed only when the cabin has no recorded contents");
+    }
+    return FurnitureAccountingMode.TRACKED_CABIN_CONTENTS;
   }
 
   private CreateResult<EstimateCommandResult> completeEstimateInTransaction(
-      UUID subjectId, UUID key, UUID id, CompleteEstimateRequest request) {
+      UUID subjectId,
+      UUID key,
+      UUID id,
+      CompleteEstimateRequest request,
+      FurnitureAccountingMode furnitureAccountingMode) {
     String requestHash = hash(request);
     Optional<JsonNode> replay = idempotency.replay(subjectId, "estimate.complete:" + id, key, requestHash);
     if (replay.isPresent()) {
@@ -1291,7 +1337,8 @@ public class MaintenanceApplicationService {
               request.priority(),
               request.movementToRepair(),
               request.logisticsPlanningMode(),
-              request.logisticsScheduledDate());
+              request.logisticsScheduledDate(),
+              furnitureAccountingMode);
       estimate.complete(commandRepair.getId());
       enqueueRepairQueue(commandRepair, derived(key, "queue-repair"), false);
     }
@@ -2937,6 +2984,29 @@ public class MaintenanceApplicationService {
       MaintenanceReconciliationStore.WorkItem work) {
     FurnitureCustodyPlan plan = requireReconciliationResult(
         transactions.execute(status -> prepareFurnitureCustodyPlan(work)));
+    if (plan.furnitureAccountingMode() == FurnitureAccountingMode.UNACCOUNTED_CABIN_CONTENTS) {
+      warehouseLifecycle.requireOutgoing(plan.warehouseId());
+      transactions.executeWithoutResult(
+          status -> {
+            FurnitureCustodyPlan current = prepareFurnitureCustodyPlan(work);
+            if (!plan.equals(current)) {
+              throw new MaintenanceConflictException(
+                  "MAINTENANCE_STATE_CONFLICT",
+                  "Unaccounted furniture reconciliation changed before finalization");
+            }
+            int created = propertyDispositions.materializeUnaccountedFurnitureLocally(
+                requireRepair(current.repairId()),
+                current.equipmentNames(),
+                current.equipmentQuantities());
+            reconciliations.confirmed(
+                work,
+                Map.of(
+                    "repairId", current.repairId().toString(),
+                    "accountingMode", current.furnitureAccountingMode().name(),
+                    "createdDecisionCount", created));
+          });
+      return;
+    }
     List<MaintenanceDependencyGateway.MaintenanceFurnitureCustodyClaim> claims =
         dependencies.unresolvedFurnitureCustody(plan.ownerType(), plan.ownerId());
     // Property disposition admission is another remote warehouse-service read. It is deliberately
@@ -2978,7 +3048,11 @@ public class MaintenanceApplicationService {
         repair.getRentalItemId(),
         ownerType(repair),
         UUID.fromString(ownerId(repair)),
-        Map.copyOf(furnitureEquipmentNames(repair)));
+        repair.getFurnitureAccountingMode(),
+        Map.copyOf(furnitureEquipmentNames(repair)),
+        furnitureQuantities(repair).stream().collect(
+            java.util.stream.Collectors.toUnmodifiableMap(
+                FurnitureQuantity::equipmentId, FurnitureQuantity::quantity)));
   }
 
   private static void validateFurnitureCustodyClaims(
@@ -3252,15 +3326,20 @@ public class MaintenanceApplicationService {
     MaintenanceDependencyGateway.AssetSnapshot liveAsset =
         dependencies.getRentalItemSnapshot(plan.rentalItemId());
     validateQueueAssetTruth(plan, liveAsset);
-    List<MaintenanceDependencyGateway.FurniturePendingReturn> furniture =
-        plan.requestedFurniture().isEmpty()
-            ? List.of()
-            : pendingReturnsFromCabinSnapshot(
-                plan,
-                dependencies.getPropertyAssetSnapshot(
-                    MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
-                    plan.rentalItemId(),
-                    plan.warehouseId()));
+    List<MaintenanceDependencyGateway.FurniturePendingReturn> furniture;
+    if (plan.requestedFurniture().isEmpty()) {
+      furniture = List.of();
+    } else {
+      MaintenanceDependencyGateway.PropertyAssetSnapshot cabin =
+          dependencies.getPropertyAssetSnapshot(
+              MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
+              plan.rentalItemId(),
+              plan.warehouseId());
+      furniture =
+          plan.furnitureAccountingMode() == FurnitureAccountingMode.UNACCOUNTED_CABIN_CONTENTS
+              ? unaccountedFurnitureReturnsFromEmptyCabin(plan, cabin)
+              : pendingReturnsFromCabinSnapshot(plan, cabin);
+    }
 
     QueueRepairRemoteResult remote;
     if (("REPAIR".equals(liveAsset.status()) || "CAPITAL_REPAIR".equals(liveAsset.status()))
@@ -3366,6 +3445,7 @@ public class MaintenanceApplicationService {
             fact.getAssetStatus(),
             fact.getAggregateVersion(),
             existingOwner,
+            repair.getFurnitureAccountingMode(),
             List.copyOf(furnitureQuantities(repair))));
   }
 
@@ -3493,14 +3573,7 @@ public class MaintenanceApplicationService {
   private static List<MaintenanceDependencyGateway.FurniturePendingReturn>
       pendingReturnsFromCabinSnapshot(
           QueueRepairPlan plan, MaintenanceDependencyGateway.PropertyAssetSnapshot snapshot) {
-    if (snapshot == null
-        || snapshot.assetKind() != MaintenanceDependencyGateway.PropertyAssetKind.CABIN
-        || !plan.rentalItemId().equals(snapshot.assetId())
-        || !plan.warehouseId().equals(snapshot.warehouseId())) {
-      throw new MaintenanceDependencyException(
-          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-          "Asset-service returned another cabin while selecting repair furniture");
-    }
+    requireMatchingCabinForFurniture(plan.rentalItemId(), plan.warehouseId(), snapshot);
     Map<UUID, MaintenanceDependencyGateway.PropertyAssetContentSnapshot> contents =
         snapshot.contents().stream().collect(
             java.util.stream.Collectors.toMap(
@@ -3518,6 +3591,40 @@ public class MaintenanceApplicationService {
           return new MaintenanceDependencyGateway.FurniturePendingReturn(
               line.equipmentId(), content.balanceVersion(), line.quantity());
         }).toList();
+  }
+
+  private static List<MaintenanceDependencyGateway.FurniturePendingReturn>
+      unaccountedFurnitureReturnsFromEmptyCabin(
+          QueueRepairPlan plan, MaintenanceDependencyGateway.PropertyAssetSnapshot snapshot) {
+    if (!hasNoRecordedCabinContents(plan.rentalItemId(), plan.warehouseId(), snapshot)) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Cabin contents were recorded after unaccounted furniture confirmation; the repair cannot bypass normal furniture accounting");
+    }
+    return List.of();
+  }
+
+  private static boolean hasNoRecordedCabinContents(
+      UUID rentalItemId,
+      UUID warehouseId,
+      MaintenanceDependencyGateway.PropertyAssetSnapshot snapshot) {
+    requireMatchingCabinForFurniture(rentalItemId, warehouseId, snapshot);
+    return snapshot.contents().isEmpty();
+  }
+
+  private static void requireMatchingCabinForFurniture(
+      UUID rentalItemId,
+      UUID warehouseId,
+      MaintenanceDependencyGateway.PropertyAssetSnapshot snapshot) {
+    if (snapshot == null
+        || snapshot.assetKind() != MaintenanceDependencyGateway.PropertyAssetKind.CABIN
+        || !rentalItemId.equals(snapshot.assetId())
+        || !warehouseId.equals(snapshot.warehouseId())
+        || snapshot.contents() == null) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Asset-service returned another cabin while selecting repair furniture");
+    }
   }
 
   private static void validateQueueTransitionTruth(
@@ -4100,13 +4207,32 @@ public class MaintenanceApplicationService {
       boolean movementToRepair,
       RepairLogisticsPlanningMode logisticsPlanningMode,
       LocalDate logisticsScheduledDate) {
+    return createEstimateRepair(
+        estimate,
+        estimatePlan,
+        priority,
+        movementToRepair,
+        logisticsPlanningMode,
+        logisticsScheduledDate,
+        FurnitureAccountingMode.TRACKED_CABIN_CONTENTS);
+  }
+
+  private MaintenanceRepair createEstimateRepair(
+      MaintenanceEstimate estimate,
+      List<EstimatePlanStage> estimatePlan,
+      int priority,
+      boolean movementToRepair,
+      RepairLogisticsPlanningMode logisticsPlanningMode,
+      LocalDate logisticsScheduledDate,
+      FurnitureAccountingMode furnitureAccountingMode) {
     return createEstimateRepairFromPlan(
         estimate,
         storedPlanInputs(estimatePlan),
         priority,
         movementToRepair,
         logisticsPlanningMode,
-        logisticsScheduledDate);
+        logisticsScheduledDate,
+        furnitureAccountingMode);
   }
 
   private List<PlanStageInput> storedPlanInputs(List<EstimatePlanStage> estimatePlan) {
@@ -4151,9 +4277,30 @@ public class MaintenanceApplicationService {
       boolean movementToRepair,
       RepairLogisticsPlanningMode logisticsPlanningMode,
       LocalDate logisticsScheduledDate) {
+    return createEstimateRepairFromPlan(
+        estimate,
+        plan,
+        priority,
+        movementToRepair,
+        logisticsPlanningMode,
+        logisticsScheduledDate,
+        FurnitureAccountingMode.TRACKED_CABIN_CONTENTS);
+  }
+
+  private MaintenanceRepair createEstimateRepairFromPlan(
+      MaintenanceEstimate estimate,
+      List<PlanStageInput> plan,
+      int priority,
+      boolean movementToRepair,
+      RepairLogisticsPlanningMode logisticsPlanningMode,
+      LocalDate logisticsScheduledDate,
+      FurnitureAccountingMode furnitureAccountingMode) {
     MaintenanceRepair newRepair = MaintenanceRepair.primary(
         estimate.getWarehouseId(), estimate.getRentalItemId(), estimate.getRentalItemVersionSnapshot(),
         estimate.getId(), RepairOrigin.ESTIMATE, estimate.getDispatchDate(), estimate.getSourceParty(), actorJson());
+    if (furnitureAccountingMode == FurnitureAccountingMode.UNACCOUNTED_CABIN_CONTENTS) {
+      newRepair.useUnaccountedFurnitureAccounting();
+    }
     newRepair.selectPriority(priority);
     newRepair.selectMovementToRepair(
         movementToRepair,
@@ -8338,7 +8485,9 @@ public class MaintenanceApplicationService {
   private record EstimateCompletionPreflight(
       CreateResult<EstimateCommandResult> replay,
       UUID warehouseId,
-      List<PlanStageInput> plan) {}
+      List<PlanStageInput> plan,
+      UUID rentalItemId,
+      List<FurnitureQuantity> furniture) {}
   private record QueueRepairCommandPreflight(
       CreateResult<RepairCommandResult> replay,
       UUID warehouseId,
@@ -8467,7 +8616,9 @@ public class MaintenanceApplicationService {
       UUID rentalItemId,
       String ownerType,
       UUID ownerId,
-      Map<UUID, String> equipmentNames) {}
+      FurnitureAccountingMode furnitureAccountingMode,
+      Map<UUID, String> equipmentNames,
+      Map<UUID, Long> equipmentQuantities) {}
   private record EmptyEstimatePlan(
       UUID estimateId,
       UUID warehouseId,
@@ -8504,6 +8655,7 @@ public class MaintenanceApplicationService {
       String projectedAssetStatus,
       long projectedAssetVersion,
       boolean existingLifecycleOwner,
+      FurnitureAccountingMode furnitureAccountingMode,
       List<FurnitureQuantity> requestedFurniture) {
     static QueueRepairPlan alreadyQueued(MaintenanceRepair repair) {
       return new QueueRepairPlan(
@@ -8523,6 +8675,7 @@ public class MaintenanceApplicationService {
           null,
           0,
           false,
+          FurnitureAccountingMode.TRACKED_CABIN_CONTENTS,
           List.of());
     }
   }

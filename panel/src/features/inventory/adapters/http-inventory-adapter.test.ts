@@ -995,6 +995,8 @@ describe("http inventory adapter", () => {
         expectedFindingRevision: 8,
         inspection: "READY",
         comment: "",
+        passportObservation: { presence: "ABSENT", value: null },
+        equipmentObservation: { presence: "ABSENT", value: null },
         media: [],
         coverMediaId: null,
         planSelection: null,

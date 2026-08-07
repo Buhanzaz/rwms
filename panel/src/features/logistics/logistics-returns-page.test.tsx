@@ -21,7 +21,7 @@ const returnApi = vi.hoisted(() => ({
   createReturn: vi.fn(),
   listReturns: vi.fn(),
   registerReturn: vi.fn(),
-  requestReturnEstimate: vi.fn(),
+  startReturnEstimates: vi.fn(),
 }))
 const driverDirectoryApi = vi.hoisted(() => ({
   listRepairWorkerGroups: vi.fn(),
@@ -507,9 +507,9 @@ describe("LogisticsReturnsPage", () => {
     )
   })
 
-  it("requires READY line photos and sends them with return shortages", async () => {
+  it("requires READY line photos and starts one separate estimate per return line", async () => {
     const user = userEvent.setup()
-    returnApi.requestReturnEstimate.mockResolvedValue(
+    returnApi.startReturnEstimates.mockResolvedValue(
       returnDocument(INSPECTION_ID, "ESTIMATE_PENDING", 5)
     )
     renderPage()
@@ -522,12 +522,6 @@ describe("LogisticsReturnsPage", () => {
       )[0]!
     )
     await user.click(
-      screen.getByRole("combobox", {
-        name: "Оборудование · строка 1 · позиция 1",
-      })
-    )
-    await user.click(screen.getByRole("option", { name: "Стул" }))
-    await user.click(
       screen.getByRole("dialog").querySelector('button[type="submit"]')!
     )
 
@@ -536,7 +530,7 @@ describe("LogisticsReturnsPage", () => {
         "Добавьте хотя бы одну готовую фотографию осмотра для каждой строки."
       )
     ).toBeTruthy()
-    expect(returnApi.requestReturnEstimate).not.toHaveBeenCalled()
+    expect(returnApi.startReturnEstimates).not.toHaveBeenCalled()
 
     await user.click(
       screen.getByRole("button", { name: "Подготовить Фотографии строки 1" })
@@ -546,7 +540,7 @@ describe("LogisticsReturnsPage", () => {
     )
 
     await waitFor(() =>
-      expect(returnApi.requestReturnEstimate).toHaveBeenCalledWith({
+      expect(returnApi.startReturnEstimates).toHaveBeenCalledWith({
         accessToken: "return-token",
         documentId: INSPECTION_ID,
         expectedVersion: 4,
@@ -558,12 +552,6 @@ describe("LogisticsReturnsPage", () => {
               {
                 mediaId: "88888888-8888-4888-8888-888888888888",
                 generation: 1,
-              },
-            ],
-            shortages: [
-              {
-                equipmentId: EQUIPMENT_ID,
-                missingQuantity: 1,
               },
             ],
           },

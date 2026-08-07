@@ -691,14 +691,56 @@ public final class AssetApiModels {
       @NotNull UUID findingId,
       @NotNull UUID warehouseId,
       @NotBlank @Size(max = 128) String number,
-      @NotNull UUID rentalTypeId,
-      @NotNull UUID dimensionId,
-      @NotNull UUID finishingId,
+      UUID rentalTypeId,
+      UUID dimensionId,
+      UUID finishingId,
       @Size(max = 255) String category,
-      @NotNull @Size(max = 100) List<@NotNull UUID> characteristicIds,
+      @Size(max = 100) List<@NotNull UUID> characteristicIds,
       @NotNull Boolean linoleum,
       Map<String, Object> passport,
-      List<@NotBlank @Size(max = 128) String> tags) {}
+      List<@NotBlank @Size(max = 128) String> tags,
+      @Size(max = 255) String rentalType,
+      @Size(max = 255) String dimensions,
+      @Size(max = 255) String finishing,
+      @Size(max = 26000) String characteristics) {
+
+    /**
+     * Canonical UUID callers retain their existing constructor. Inventory's manager compatibility
+     * payload uses the four trailing human-readable fields instead and is resolved only by the
+     * asset-owned catalogue boundary.
+     */
+    public InventorySourceAssetRequest(
+        UUID inventoryId,
+        UUID findingId,
+        UUID warehouseId,
+        String number,
+        UUID rentalTypeId,
+        UUID dimensionId,
+        UUID finishingId,
+        String category,
+        List<UUID> characteristicIds,
+        Boolean linoleum,
+        Map<String, Object> passport,
+        List<String> tags) {
+      this(
+          inventoryId,
+          findingId,
+          warehouseId,
+          number,
+          rentalTypeId,
+          dimensionId,
+          finishingId,
+          category,
+          characteristicIds,
+          linoleum,
+          passport,
+          tags,
+          null,
+          null,
+          null,
+          null);
+    }
+  }
   public record InventorySourceAssetResponse(
       UUID inventoryId,
       UUID findingId,

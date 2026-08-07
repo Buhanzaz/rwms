@@ -88,17 +88,13 @@ public final class MaintenanceApiModels {
   public enum ReworkLineDisposition { ADDED, REPEAT }
 
   public record ActorSnapshot(String actorId, ActorType actorType) {}
-  public record LogisticsEquipmentShortage(
-      @NotNull UUID equipmentId,
-      @NotNull @Min(1) Long missingQuantity) {}
-  public record UpsertLogisticsReturnShortageRequest(
+  public record UpsertLogisticsReturnEstimateSourceRequest(
       @NotNull UUID warehouseId,
       @NotNull UUID rentalItemId,
       @NotNull @Min(0) Long rentalItemVersion,
       @NotNull LocalDate dispatchDate,
-      @NotNull @Size(min = 1, max = 20) List<@Valid MediaReferenceInput> mediaReferences,
-      @NotNull @Size(min = 1, max = 100) List<@Valid LogisticsEquipmentShortage> shortages) {}
-  public record LogisticsReturnShortageResponse(
+      @NotNull @Size(min = 1, max = 20) List<@Valid MediaReferenceInput> mediaReferences) {}
+  public record ReturnEstimateSource(
       UUID returnId,
       UUID lineId,
       long sourceVersion,
@@ -106,7 +102,6 @@ public final class MaintenanceApiModels {
       UUID rentalItemId,
       long rentalItemVersion,
       UUID estimateId,
-      List<LogisticsEquipmentShortage> shortages,
       String snapshotSha256,
       OffsetDateTime receivedAt) {}
   public record TransferRepairRequest(
@@ -300,12 +295,14 @@ public final class MaintenanceApiModels {
       @JsonProperty(required = true)
           RepairLogisticsPlanningMode logisticsPlanningMode,
       @JsonProperty(required = true)
-          LocalDate logisticsScheduledDate) {
+          LocalDate logisticsScheduledDate,
+      Boolean allowUnaccountedFurniture) {
     public CompleteEstimateRequest(Long expectedVersion) {
       this(
           expectedVersion,
           3,
           false,
+          null,
           null,
           null);
     }
@@ -317,7 +314,28 @@ public final class MaintenanceApiModels {
           priority,
           false,
           null,
+          null,
           null);
+    }
+
+    public CompleteEstimateRequest(
+        Long expectedVersion,
+        Integer priority,
+        boolean movementToRepair,
+        RepairLogisticsPlanningMode logisticsPlanningMode,
+        LocalDate logisticsScheduledDate) {
+      this(
+          expectedVersion,
+          priority,
+          movementToRepair,
+          logisticsPlanningMode,
+          logisticsScheduledDate,
+          null);
+    }
+
+    @JsonIgnore
+    public boolean allowsUnaccountedFurniture() {
+      return Boolean.TRUE.equals(allowUnaccountedFurniture);
     }
 
     @AssertTrue(

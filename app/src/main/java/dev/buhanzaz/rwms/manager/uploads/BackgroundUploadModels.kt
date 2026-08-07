@@ -2,7 +2,6 @@ package dev.buhanzaz.rwms.manager.uploads
 
 import dev.buhanzaz.rwms.manager.media.MediaOwner
 import dev.buhanzaz.rwms.manager.network.CabinFurnitureRequirementDto
-import dev.buhanzaz.rwms.manager.network.EquipmentShortageRequest
 import dev.buhanzaz.rwms.manager.network.EstimateLineInputDto
 import dev.buhanzaz.rwms.manager.network.InventoryPlanSelectionDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
@@ -37,7 +36,6 @@ data class BackgroundUploadPhoto(
     val owner: MediaOwner,
     val sortOrder: Int,
     val cover: Boolean = false,
-    val rotationDegrees: Int = 0,
     /** Maintenance/inventory editor line identity; null means aggregate photo. */
     val lineId: String? = null,
     val status: BackgroundPhotoStatus = BackgroundPhotoStatus.QUEUED,
@@ -86,7 +84,6 @@ data class PendingBackgroundPhoto(
     val owner: MediaOwner,
     val sortOrder: Int,
     val cover: Boolean = false,
-    val rotationDegrees: Int = 0,
     val lineId: String? = null,
 )
 
@@ -123,12 +120,6 @@ data class InventoryUploadCommand(
     val passportObservation: ObservationInput,
     val equipmentObservation: ObservationInput,
     val existingMedia: List<MediaReferenceDto> = emptyList(),
-    /**
-     * Requested absolute rotations for already attached inventory media. The worker resolves
-     * these against the current owner projection and persists the new generations before it
-     * saves the inventory finding.
-     */
-    val existingMediaRotations: List<InventoryExistingMediaRotation> = emptyList(),
     val existingCoverMediaId: String? = null,
     val planSelection: InventoryPlanSelectionDto? = null,
     val planLineIds: List<String> = emptyList(),
@@ -137,17 +128,6 @@ data class InventoryUploadCommand(
     val furnitureMove: InventoryFurnitureUploadCommand? = null,
     val inspectionSaved: Boolean = false,
 )
-
-data class InventoryExistingMediaRotation(
-    val reference: MediaReferenceDto,
-    val rotationDegrees: Int,
-) {
-    init {
-        require(rotationDegrees in setOf(0, 90, 180, 270)) {
-            "Недопустимый поворот фотографии инвентаризации"
-        }
-    }
-}
 
 data class InventoryFurnitureUploadCommand(
     val rentalItemId: String,
@@ -181,6 +161,10 @@ data class MaintenanceUploadCommand(
     val amendmentReason: String? = null,
     val submitRequest: PriorityVersionRequest? = null,
     val submitIdempotencyKey: String? = null,
+    /** Server requests this only after an explicit user confirmation for an unrecorded cabin. */
+    val allowUnaccountedFurniture: Boolean = false,
+    /** A 422 preflight requires the operator to confirm the accounting exception before retry. */
+    val requiresUnaccountedFurnitureConfirmation: Boolean = false,
 )
 
 data class AcceptanceUploadCommand(
@@ -203,13 +187,18 @@ data class TransferArrivalUploadCommand(
 
 enum class ReturnUploadAction {
     ACCEPT,
+    START_ESTIMATES,
+    /**
+     * Kept only to recover durable commands written by an older app. The worker sends them to
+     * the replacement start-estimates endpoint and deliberately ignores their removed shortages.
+     */
+    @Deprecated("Use START_ESTIMATES")
     REQUEST_ESTIMATE,
 }
 
 data class ReturnUploadLineCommand(
     val lineId: String,
     val equipmentConfirmed: Boolean = true,
-    val shortages: List<EquipmentShortageRequest> = emptyList(),
     val existingMedia: List<MediaReferenceDto> = emptyList(),
 )
 

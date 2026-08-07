@@ -149,6 +149,15 @@ export type MaintenanceEstimate = {
   actor: MaintenanceActorSnapshot
 }
 
+/** A maintenance-owned draft that was created for one return-document line. */
+export type MaintenanceReturnEstimateSource = {
+  returnId: string
+  lineId: string
+  warehouseId: string
+  rentalItemId: string
+  estimateId: string
+}
+
 export type MaintenancePage<T> = {
   items: T[]
   page: number
@@ -378,6 +387,17 @@ export function listMaintenanceEstimates(
   )
 }
 
+export function listMaintenanceReturnEstimateSources(
+  accessToken: string,
+  warehouseId: string,
+  returnId: string
+) {
+  const endpoint = new URL(`${MAINTENANCE_API}/estimates/return-sources`)
+  endpoint.searchParams.set("warehouseId", warehouseId)
+  endpoint.searchParams.set("returnId", returnId)
+  return bearerRequest<MaintenanceReturnEstimateSource[]>(accessToken, endpoint)
+}
+
 export function getMaintenanceEstimate(
   accessToken: string,
   warehouseId: string,
@@ -427,7 +447,8 @@ export function completeMaintenanceEstimate(
   idempotencyKey: string,
   movementToRepair: boolean,
   logisticsPlanningMode: "AUTO" | "FIXED_DATE",
-  logisticsScheduledDate: string | null
+  logisticsScheduledDate: string | null,
+  allowUnaccountedFurniture = false
 ) {
   const logisticsPlanning = validateLogisticsPlanning(
     movementToRepair,
@@ -443,6 +464,7 @@ export function completeMaintenanceEstimate(
         expectedVersion,
         priority,
         movementToRepair,
+        allowUnaccountedFurniture,
         ...logisticsPlanning,
       },
       { "Idempotency-Key": idempotencyKey }

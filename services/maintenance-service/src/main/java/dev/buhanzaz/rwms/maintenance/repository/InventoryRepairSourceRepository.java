@@ -11,14 +11,19 @@ import org.springframework.data.repository.query.Param;
 
 public interface InventoryRepairSourceRepository
     extends JpaRepository<InventoryRepairSource, UUID> {
-  Optional<InventoryRepairSource> findByInventoryIdAndFindingId(UUID inventoryId, UUID findingId);
+  Optional<InventoryRepairSource> findByInventoryIdAndFindingIdAndSourceRevision(
+      UUID inventoryId, UUID findingId, long sourceRevision);
   Optional<InventoryRepairSource> findByRepairId(UUID repairId);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("""
       select value from InventoryRepairSource value
-      where value.inventoryId = :inventoryId and value.findingId = :findingId
+      where value.inventoryId = :inventoryId
+        and value.findingId = :findingId
+        and value.sourceRevision = :sourceRevision
       """)
-  Optional<InventoryRepairSource> findBySourceForUpdate(
-      @Param("inventoryId") UUID inventoryId, @Param("findingId") UUID findingId);
+  Optional<InventoryRepairSource> findBySourceRevisionForUpdate(
+      @Param("inventoryId") UUID inventoryId,
+      @Param("findingId") UUID findingId,
+      @Param("sourceRevision") long sourceRevision);
 }

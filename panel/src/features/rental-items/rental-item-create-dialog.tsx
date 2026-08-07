@@ -13,7 +13,6 @@ import {
 import {
   cabinMediaOwner,
   createHttpMediaClient,
-  type MediaAsset,
 } from "@/features/media/media-service"
 import { retryOwnerProofOperation } from "@/features/media/owner-proof-retry"
 import {
@@ -171,33 +170,6 @@ function initialCompositionCategory(
 
 const rentalItemCreationMediaClient = createHttpMediaClient()
 
-async function waitForReadyCreationAsset({
-  accessToken,
-  owner,
-  mediaId,
-}: {
-  accessToken: string
-  owner: ReturnType<typeof cabinMediaOwner>
-  mediaId: string
-}): Promise<MediaAsset> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const page = await retryOwnerProofOperation(() =>
-      rentalItemCreationMediaClient.listOwnerMedia(accessToken, owner, {
-        limit: 100,
-      })
-    )
-    const asset = page.items.find((candidate) => candidate.id === mediaId)
-    if (asset?.status === "READY") return asset
-    if (asset?.status === "FAILED" || asset?.status === "DELETED") {
-      throw new Error("Media-service не смог обработать фотографию.")
-    }
-    await new Promise((resolve) => setTimeout(resolve, 750))
-  }
-  throw new Error(
-    "Фотография создана, но обработка ещё не завершена. Повторите загрузку позже."
-  )
-}
-
 function hasRequiredFormFields(
   form: RentalItemCreateFormState,
   photosEnabled: boolean
@@ -335,7 +307,7 @@ export function RentalItemCreationDialog<T>({
     try {
       const orderedPhotos = orderStagedRentalItemPhotosForUpload(photos)
       for (const [index, photo] of orderedPhotos.entries()) {
-        const result = await retryOwnerProofOperation(() =>
+        await retryOwnerProofOperation(() =>
           rentalItemCreationMediaClient.uploadFile(
             accessToken,
             owner,
@@ -345,23 +317,6 @@ export function RentalItemCreationDialog<T>({
             photo.commandKeys
           )
         )
-        if (photo.rotationDegrees !== 0) {
-          const readyAsset = await waitForReadyCreationAsset({
-            accessToken,
-            owner,
-            mediaId: result.asset.id,
-          })
-          await retryOwnerProofOperation(() =>
-            rentalItemCreationMediaClient.rotate(
-              accessToken,
-              owner,
-              readyAsset.id,
-              photo.rotationDegrees,
-              readyAsset.version,
-              photo.rotateKey
-            )
-          )
-        }
       }
       await queryClient.invalidateQueries({ queryKey: ["rental-item-media"] })
       await queryClient.invalidateQueries({

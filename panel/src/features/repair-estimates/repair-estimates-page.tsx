@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -30,9 +30,12 @@ import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { LogisticsDocumentFilters } from "@/features/logistics/logistics-document-filters"
 import {
   getRepairEstimate,
+  listReturnEstimateSources,
   listRepairEstimates,
   repairEstimateDetailQueryKey,
   repairEstimateListQueryKey,
+  returnEstimateSourcesQueryKey,
+  type ReturnEstimateSourceDto,
 } from "@/features/repair-estimates/api/repair-estimates-api"
 import type {
   RepairEstimateStatus,
@@ -68,6 +71,12 @@ function estimateStatusLabel(status: RepairEstimateStatus) {
   return status === "COMPLETED" ? "Завершена" : "Требует доработки"
 }
 
+function positiveIntegerSearchParam(value: string | null) {
+  if (!value) return null
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
+}
+
 const EMPTY_REPAIR_ESTIMATES: RepairEstimateSummaryDto[] = []
 
 export function RepairEstimatesPage() {
@@ -82,7 +91,10 @@ export function RepairEstimatesPage() {
   const [searchParams] = useSearchParams()
   const estimateId = searchParams.get("estimateId")
   const createRequested = searchParams.get("create") === "1"
-  const returnTaskId = searchParams.get("returnTaskId")
+  const returnId = searchParams.get("returnId")
+  const returnLineCount = positiveIntegerSearchParam(
+    searchParams.get("returnLineCount")
+  )
   const [mobileCreateDialogRequested, setMobileCreateDialogRequested] =
     useState(false)
   const [search, setSearch] = useState("")
@@ -93,7 +105,8 @@ export function RepairEstimatesPage() {
   const listSearchParams = new URLSearchParams(searchParams)
   listSearchParams.delete("estimateId")
   listSearchParams.delete("create")
-  listSearchParams.delete("returnTaskId")
+  listSearchParams.delete("returnId")
+  listSearchParams.delete("returnLineCount")
   const listSearch = listSearchParams.toString()
   const estimatesListHref = listSearch
     ? `/estimates?${listSearch}`
@@ -113,6 +126,23 @@ export function RepairEstimatesPage() {
     queryFn: () => listRepairEstimates(selectedWarehouseId!),
     enabled: selectedWarehouseId !== null,
   })
+  const returnEstimateSourcesQuery = useQuery({
+    queryKey: returnEstimateSourcesQueryKey(
+      selectedWarehouseId ?? "none",
+      returnId
+    ),
+    queryFn: () =>
+      listReturnEstimateSources(accessToken!, selectedWarehouseId!, returnId!),
+    enabled: Boolean(accessToken && selectedWarehouseId && returnId),
+    refetchInterval: (query) => {
+      if (!returnId) return false
+      const sourceCount = query.state.data?.length ?? 0
+      if (returnLineCount !== null) {
+        return sourceCount < returnLineCount ? 1_000 : false
+      }
+      return sourceCount === 0 ? 1_000 : false
+    },
+  })
   const unknownEstimateNotice =
     estimateId && detailQuery.isSuccess && detailQuery.data === null
       ? "Смета не найдена на выбранном складе"
@@ -120,13 +150,17 @@ export function RepairEstimatesPage() {
   const detailLoadError =
     estimateId && detailQuery.isError ? "Не удалось загрузить смету." : null
 
-  function openEstimate(id: string) {
-    const next = new URLSearchParams(searchParams)
-    next.delete("create")
-    next.delete("returnTaskId")
-    next.set("estimateId", id)
-    navigate(`/estimates?${next.toString()}`, workspaceEntryNavigationOptions)
-  }
+  const openEstimate = useCallback(
+    (id: string) => {
+      const next = new URLSearchParams(searchParams)
+      next.delete("create")
+      next.delete("returnId")
+      next.delete("returnLineCount")
+      next.set("estimateId", id)
+      navigate(`/estimates?${next.toString()}`, workspaceEntryNavigationOptions)
+    },
+    [navigate, searchParams]
+  )
 
   function clearEstimateSelection() {
     navigate(estimatesListHref, { replace: true })
@@ -140,7 +174,8 @@ export function RepairEstimatesPage() {
 
     const next = new URLSearchParams(searchParams)
     next.delete("estimateId")
-    next.delete("returnTaskId")
+    next.delete("returnId")
+    next.delete("returnLineCount")
     next.set("create", "1")
     navigate(`/estimates?${next.toString()}`, workspaceEntryNavigationOptions)
   }
@@ -159,6 +194,17 @@ export function RepairEstimatesPage() {
   function handleSaved() {
     closeEditor()
   }
+
+  const returnEstimateSources = returnEstimateSourcesQuery.data ?? []
+  useEffect(() => {
+    if (
+      returnId &&
+      returnLineCount === 1 &&
+      returnEstimateSources.length === 1
+    ) {
+      openEstimate(returnEstimateSources[0]!.estimateId)
+    }
+  }, [openEstimate, returnEstimateSources, returnId, returnLineCount])
 
   const estimates = listQuery.data ?? EMPTY_REPAIR_ESTIMATES
   const authorIds = useMemo(
@@ -189,7 +235,8 @@ export function RepairEstimatesPage() {
     () => filterRepairEstimates(estimates, search, filters, actorsById),
     [actorsById, estimates, filters, search]
   )
-  const workspaceOpen = createRequested || Boolean(estimateId)
+  const workspaceOpen =
+    createRequested || Boolean(estimateId) || Boolean(returnId)
   const mobileCreateBlocked = isMobile && createRequested
   const mobileCreateDialogOpen =
     isMobile && (mobileCreateBlocked || mobileCreateDialogRequested)
@@ -200,7 +247,7 @@ export function RepairEstimatesPage() {
     workspaceOpen &&
     selectedWarehouseId &&
     !(createRequested && (!canEdit || isMobile)) &&
-    !returnTaskId &&
+    !returnId &&
     !detailUnavailable
   )
 
@@ -220,17 +267,18 @@ export function RepairEstimatesPage() {
               </CardDescription>
             </CardHeader>
           </Card>
-        ) : returnTaskId ? (
-          <Card>
-            <CardHeader>
-              <CardTitle>Смета из возврата пока недоступна</CardTitle>
-              <CardDescription role="alert">
-                Публичный logistics-контракт ещё не определяет серверную связь
-                возврата со сметой. Создайте обычную смету без параметра
-                returnTaskId.
-              </CardDescription>
-            </CardHeader>
-          </Card>
+        ) : returnId ? (
+          <ReturnEstimateSourcesWorkspace
+            expectedLineCount={returnLineCount}
+            sources={returnEstimateSources}
+            pending={returnEstimateSourcesQuery.isLoading}
+            error={
+              returnEstimateSourcesQuery.isError
+                ? "Не удалось загрузить созданные сметы."
+                : null
+            }
+            onOpenEstimate={openEstimate}
+          />
         ) : detailUnavailable ? (
           <Card>
             <CardHeader>
@@ -456,6 +504,75 @@ export function RepairEstimatesPage() {
         operation="Создание сметы"
       />
     </div>
+  )
+}
+
+function ReturnEstimateSourcesWorkspace({
+  expectedLineCount,
+  sources,
+  pending,
+  error,
+  onOpenEstimate,
+}: {
+  expectedLineCount: number | null
+  sources: readonly ReturnEstimateSourceDto[]
+  pending: boolean
+  error: string | null
+  onOpenEstimate: (estimateId: string) => void
+}) {
+  const readyCount = sources.length
+  const stillPreparing =
+    pending ||
+    (expectedLineCount !== null
+      ? readyCount < expectedLineCount
+      : readyCount === 0)
+  const progress =
+    expectedLineCount === null
+      ? `Создано смет: ${readyCount}`
+      : `Создано смет: ${readyCount} из ${expectedLineCount}`
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Новые сметы из возврата</CardTitle>
+        <CardDescription>
+          Каждая бытовка оформляется отдельной сметой. Общей сметы для возврата
+          нет.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        {error ? (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        ) : null}
+        {!error ? (
+          <p className="text-sm text-muted-foreground">
+            {stillPreparing ? `${progress}. Подготавливаем…` : progress}
+          </p>
+        ) : null}
+        {sources.length > 0 ? (
+          <div className="grid gap-2">
+            {sources.map((source, index) => (
+              <Card key={source.estimateId} size="sm">
+                <CardContent className="flex flex-wrap items-center justify-between gap-2 py-3">
+                  <span className="text-sm font-medium">
+                    Отдельная смета {index + 1}
+                  </span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => onOpenEstimate(source.estimateId)}
+                  >
+                    Открыть смету
+                  </Button>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
   )
 }
 

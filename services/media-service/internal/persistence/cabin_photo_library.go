@@ -292,9 +292,8 @@ func insertCabinCoverFact(
 }
 
 // associateProcessedCabinImage makes direct CABIN uploads/imports participate
-// in the canonical gallery and advances an already-associated task evidence
-// generation after a later rotation. The first direct READY photo becomes the
-// explicit cover; subsequent direct photos never replace it implicitly.
+// in the canonical gallery. The first direct READY photo becomes the explicit
+// cover; subsequent direct photos never replace it implicitly.
 func (repository *Repository) associateProcessedCabinImage(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -358,7 +357,7 @@ func (repository *Repository) associateProcessedCabinImage(
 			return err
 		}
 	} else if *currentCover == asset.ID {
-		// Rotation changes the exact generation represented by the cover.
+		// Reprocessing keeps the current cover projection fresh.
 		version++
 		if _, err := tx.Exec(ctx, `update media_cabin_photo_library
 			set version=$2,updated_at=$3 where cabin_id=$1`, cabinID, version, now); err != nil {

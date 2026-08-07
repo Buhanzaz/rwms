@@ -103,7 +103,6 @@ export function useServiceOwnerMedia({
   const objectUrls = useRef(new Map<string, DisposableMediaObjectUrl>())
   const inFlight = useRef(new Map<string, Promise<void>>())
   const validSignatures = useRef(new Map<string, string>())
-  const rotateKeys = useRef(new Map<string, string>())
   const deleteKeys = useRef(new Map<string, string>())
   const mounted = useRef(true)
   const [loadedVariants, setLoadedVariants] = useState<
@@ -305,34 +304,6 @@ export function useServiceOwnerMedia({
     retryDelay: ownerProofRetryDelay,
     onSuccess: () => queryClient.invalidateQueries({ queryKey }),
   })
-  const rotateMutation = useMutation({
-    mutationFn: async ({
-      asset,
-      direction,
-    }: {
-      asset: MediaAsset
-      direction: "LEFT" | "RIGHT"
-    }) => {
-      if (!accessToken) throw new Error("Для поворота требуется авторизация")
-      const delta = direction === "RIGHT" ? 90 : 270
-      const rotation = ((asset.rotationDegrees + delta) % 360) as
-        0 | 90 | 180 | 270
-      const signature = `${asset.id}:${asset.version}:${rotation}`
-      const key = rotateKeys.current.get(signature) ?? crypto.randomUUID()
-      rotateKeys.current.set(signature, key)
-      return retryOwnerProofOperation(() =>
-        mediaClient.rotate(
-          accessToken,
-          owner,
-          asset.id,
-          rotation,
-          asset.version,
-          key
-        )
-      )
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey }),
-  })
   const deleteMutation = useMutation({
     mutationFn: async (asset: MediaAsset) => {
       if (!accessToken) throw new Error("Для удаления требуется авторизация")
@@ -400,7 +371,6 @@ export function useServiceOwnerMedia({
   ).length
   const operationError =
     uploadMutation.error ??
-    rotateMutation.error ??
     deleteMutation.error ??
     query.error
 
@@ -413,11 +383,9 @@ export function useServiceOwnerMedia({
     requestFullscreen,
     retryPreviews,
     upload: uploadMutation.mutateAsync,
-    rotate: rotateMutation.mutateAsync,
     remove: deleteMutation.mutateAsync,
     pending:
       uploadMutation.isPending ||
-      rotateMutation.isPending ||
       deleteMutation.isPending,
     error: operationError ? mutationError(operationError) : null,
     previewError,

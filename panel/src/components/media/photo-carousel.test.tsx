@@ -129,7 +129,7 @@ describe("PhotoCarousel", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
   })
 
-  it("shows shaded edge controls in the fullscreen viewer and supports zoom", async () => {
+  it("shows shaded edge controls, supports zoom, and does not expose rotation", async () => {
     render(<PhotoCarousel photos={photos} title="Фото до" />)
 
     fireEvent.click(screen.getByRole("button", { name: "Открыть фото 1" }))
@@ -153,6 +153,8 @@ describe("PhotoCarousel", () => {
     const image = screen.getByRole("img", {
       name: "Фото до, фото 2 из 2",
     })
+    expect(screen.queryByRole("button", { name: "Повернуть фото" })).toBeNull()
+    expect(image.style.transform).not.toContain("rotate(")
     fireEvent.click(image.closest("button")!)
 
     await waitFor(() => expect(image.style.transform).toContain("scale(2)"))

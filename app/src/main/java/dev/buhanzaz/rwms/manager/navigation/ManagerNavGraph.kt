@@ -187,6 +187,8 @@ private fun AuthenticatedManagerNavGraph(
                 onBack = navController::popManagerBackStack,
                 onRetryOperation = viewModel::retryBackgroundUpload,
                 onRetryPhoto = viewModel::retryBackgroundPhoto,
+                onConfirmUnaccountedFurniture =
+                    viewModel::confirmUnaccountedFurnitureBackgroundUpload,
                 onCancelOperation = viewModel::cancelBackgroundUpload,
             )
         }
@@ -219,9 +221,23 @@ private fun AuthenticatedManagerNavGraph(
                     navController.navigate(ManagerRoute.PhotoCapture.returnRoute(lineId))
                 },
                 onConfirmEquipment = viewModel::confirmReturnEquipment,
-                onUpdateShortage = viewModel::updateReturnShortage,
                 onAccept = viewModel::acceptReturn,
-                onCreateEstimate = viewModel::requestReturnEstimate,
+                onStartEstimates = viewModel::startReturnEstimates,
+                onEstimatesReady = { sources ->
+                    if (sources.size == 1) {
+                        viewModel.openEstimateEditor(sources.single().estimateId) {
+                            navController.navigate(ManagerRoute.MaintenanceEditor.route) {
+                                popUpTo(ManagerRoute.Returns.route) { inclusive = false }
+                                launchSingleTop = true
+                            }
+                        }
+                    } else {
+                        navController.navigate(ManagerRoute.Estimates.route) {
+                            popUpTo(ManagerRoute.Returns.route) { inclusive = false }
+                            launchSingleTop = true
+                        }
+                    }
+                },
             )
         }
         composable(ManagerRoute.Shipments.route) {
@@ -355,7 +371,6 @@ private fun AuthenticatedManagerNavGraph(
                 onAddPhoto = viewModel::addInventoryPhoto,
                 onSelectCoverPhoto = viewModel::selectInventoryCoverPhoto,
                 onRemovePhoto = viewModel::removeInventoryPhoto,
-                onRotatePhoto = viewModel::rotateInventoryPhoto,
                 onAddFurniture = {
                     navController.navigate(ManagerRoute.InventoryFurnitureDecision.route)
                 },

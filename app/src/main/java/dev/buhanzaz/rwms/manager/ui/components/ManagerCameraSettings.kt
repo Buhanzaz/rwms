@@ -114,11 +114,6 @@ internal fun <T> managerPhysicalLensOutputs(
     logicalCameraOutputs: List<T>,
 ): List<T> = physicalOutputs.ifEmpty { logicalCameraOutputs }
 
-internal fun managerPhotoHdrAvailable(
-    hdrExtensionAvailable: Boolean,
-    ultraHdrAvailable: Boolean,
-): Boolean = hdrExtensionAvailable || ultraHdrAvailable
-
 /** Discrete lens positions mirror the native camera UI; pinch zoom remains continuous. */
 internal fun managerSupportedZoomStops(minZoom: Float, maxZoom: Float): List<Float> {
     val minimum = normalizedManagerZoomMinimum(minZoom)

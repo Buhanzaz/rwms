@@ -95,25 +95,6 @@ class InventoryPersistedPhotoEvidencePolicyTest {
     }
 
     @Test
-    fun `rotating cached saved photo preserves its reference and previews only the local delta`() {
-        val persisted = MediaReferenceDto("persisted-media", 3)
-        val cachedUri = "file://cache/inventory/persisted-media.jpg"
-        val editor = supplementEditor(media = listOf(persisted)).copy(
-            photoUris = listOf(cachedUri),
-            coverPhotoUri = cachedUri,
-            persistedPhotoMedia = mapOf(cachedUri to persisted),
-            persistedPhotoRotationDegrees = mapOf(cachedUri to 90),
-        )
-
-        val rotated = editor.rotateInventoryPhoto(cachedUri)
-        val rotation = rotated.persistedInventoryPhotoRotations().single()
-
-        assertThat(rotation.reference).isEqualTo(persisted)
-        assertThat(rotation.rotationDegrees).isEqualTo(180)
-        assertThat(rotated.inventoryPhotoPreviewRotation(cachedUri)).isEqualTo(90)
-    }
-
-    @Test
     fun `persisted and already uploaded media are retained once by media id`() {
         val persisted = MediaReferenceDto("persisted-media", 3)
         val duplicateUpload = MediaReferenceDto("persisted-media", 4)

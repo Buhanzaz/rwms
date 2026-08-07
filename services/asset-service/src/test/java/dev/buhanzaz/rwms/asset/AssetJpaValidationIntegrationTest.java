@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.asset;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.CHARACTERISTIC_ELECTRICS_KK;
 import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.DIMENSION_24_X_6;
 import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.FINISHING_DVP;
 import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.CATEGORY_NEW;
@@ -345,6 +346,186 @@ class AssetJpaValidationIntegrationTest {
         List.of("TAG"));
     assertThatThrownBy(() -> inventoryAssetService.createSourceAsset(changed))
         .isInstanceOf(AssetConflictException.class);
+  }
+
+  @Test
+  @Transactional
+  void legacyInventorySourcePassportResolvesToCanonicalCatalogAndReplaysAcrossRepresentations() {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    String number = "LEGACY-SOURCE-" + UUID.randomUUID();
+    InventorySourceAssetRequest legacy = new InventorySourceAssetRequest(
+        inventoryId,
+        findingId,
+        warehouseId,
+        number,
+        null,
+        null,
+        null,
+        CATEGORY_NEW,
+        null,
+        true,
+        Map.of("source", "manager-apk"),
+        List.of("LEGACY"),
+        " БК-1 ",
+        "2.4x6",
+        "ДВП",
+        "Пластиковое окно, Электрика КК");
+
+    var created = inventoryAssetService.createSourceAsset(legacy);
+    RentalItem saved = rentalItems.findById(created.response().asset().assetId()).orElseThrow();
+
+    assertThat(created.replayed()).isFalse();
+    assertThat(saved.getRentalTypeId()).isEqualTo(TYPE_BK_1);
+    assertThat(saved.getDimensionId()).isEqualTo(DIMENSION_24_X_6);
+    assertThat(saved.getFinishingId()).isEqualTo(FINISHING_DVP);
+    assertThat(saved.getCategory()).isEqualTo(CATEGORY_NEW);
+    assertThat(
+            jdbc.query(
+                """
+                select characteristic_id from rental_item_characteristic
+                where rental_item_id=? order by sort_order
+                """,
+                (resultSet, rowNumber) -> resultSet.getObject("characteristic_id", UUID.class),
+                saved.getId()))
+        .containsExactly(plasticWindow().getFirst(), CHARACTERISTIC_ELECTRICS_KK);
+
+    InventorySourceAssetRequest canonical = new InventorySourceAssetRequest(
+        inventoryId,
+        findingId,
+        warehouseId,
+        number,
+        TYPE_BK_1,
+        DIMENSION_24_X_6,
+        FINISHING_DVP,
+        CATEGORY_NEW,
+        List.of(plasticWindow().getFirst(), CHARACTERISTIC_ELECTRICS_KK),
+        true,
+        Map.of("source", "manager-apk"),
+        List.of("LEGACY"));
+    var replayed = inventoryAssetService.createSourceAsset(canonical);
+
+    assertThat(replayed.replayed()).isTrue();
+    assertThat(replayed.response()).isEqualTo(created.response());
+    assertThat(jdbc.queryForObject(
+        "select count(*) from inventory_asset_source where inventory_id=? and finding_id=?",
+        Integer.class,
+        inventoryId,
+        findingId)).isEqualTo(1);
+  }
+
+  @Test
+  @Transactional
+  void legacyInventorySourceTrimsCaseAndTreatsBlankCommaCharacteristicsAsEmpty() {
+    InventorySourceAssetRequest request = new InventorySourceAssetRequest(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "LEGACY-BLANK-" + UUID.randomUUID(),
+        null,
+        null,
+        null,
+        CATEGORY_NEW,
+        null,
+        false,
+        Map.of(),
+        List.of(),
+        "  бк-1  ",
+        " 2.4X6 ",
+        " двп ",
+        " ,   , ");
+
+    var created = inventoryAssetService.createSourceAsset(request);
+    RentalItem saved = rentalItems.findById(created.response().asset().assetId()).orElseThrow();
+
+    assertThat(saved.getRentalTypeId()).isEqualTo(TYPE_BK_1);
+    assertThat(saved.getDimensionId()).isEqualTo(DIMENSION_24_X_6);
+    assertThat(saved.getFinishingId()).isEqualTo(FINISHING_DVP);
+    assertThat(jdbc.queryForObject(
+        "select count(*) from rental_item_characteristic where rental_item_id=?",
+        Integer.class,
+        saved.getId())).isZero();
+  }
+
+  @Test
+  void legacyInventorySourceRejectsMixedIncompleteAndUnknownPassportsBeforePersistence() {
+    UUID mixedInventoryId = UUID.randomUUID();
+    UUID mixedFindingId = UUID.randomUUID();
+    String mixedNumber = "MIXED-SOURCE-" + UUID.randomUUID();
+    InventorySourceAssetRequest mixed = new InventorySourceAssetRequest(
+        mixedInventoryId,
+        mixedFindingId,
+        UUID.randomUUID(),
+        mixedNumber,
+        TYPE_BK_1,
+        DIMENSION_24_X_6,
+        FINISHING_DVP,
+        CATEGORY_NEW,
+        List.of(),
+        false,
+        Map.of(),
+        List.of(),
+        "БК-1",
+        null,
+        null,
+        null);
+
+    assertThatThrownBy(() -> inventoryAssetService.createSourceAsset(mixed))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("either catalog UUIDs or legacy passport names");
+    assertSourceWasNotRegistered(mixedInventoryId, mixedFindingId, mixedNumber);
+
+    UUID incompleteInventoryId = UUID.randomUUID();
+    UUID incompleteFindingId = UUID.randomUUID();
+    String incompleteNumber = "INCOMPLETE-SOURCE-" + UUID.randomUUID();
+    InventorySourceAssetRequest incomplete = new InventorySourceAssetRequest(
+        incompleteInventoryId,
+        incompleteFindingId,
+        UUID.randomUUID(),
+        incompleteNumber,
+        null,
+        null,
+        null,
+        CATEGORY_NEW,
+        null,
+        false,
+        Map.of(),
+        List.of(),
+        "БК-1",
+        "2.4x6",
+        null,
+        null);
+
+    assertThatThrownBy(() -> inventoryAssetService.createSourceAsset(incomplete))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("Legacy inventory source passport is incomplete");
+    assertSourceWasNotRegistered(incompleteInventoryId, incompleteFindingId, incompleteNumber);
+
+    UUID unknownInventoryId = UUID.randomUUID();
+    UUID unknownFindingId = UUID.randomUUID();
+    String unknownNumber = "UNKNOWN-SOURCE-" + UUID.randomUUID();
+    InventorySourceAssetRequest unknown = new InventorySourceAssetRequest(
+        unknownInventoryId,
+        unknownFindingId,
+        UUID.randomUUID(),
+        unknownNumber,
+        null,
+        null,
+        null,
+        CATEGORY_NEW,
+        null,
+        false,
+        Map.of(),
+        List.of(),
+        "БК-1",
+        "2.4x6",
+        "Нет такой отделки",
+        null);
+
+    assertThatThrownBy(() -> inventoryAssetService.createSourceAsset(unknown))
+        .isInstanceOf(dev.buhanzaz.rwms.asset.service.AssetNotFoundException.class);
+    assertSourceWasNotRegistered(unknownInventoryId, unknownFindingId, unknownNumber);
   }
 
   @Test
@@ -1422,6 +1603,29 @@ class AssetJpaValidationIntegrationTest {
     assertThat(jdbc.queryForObject(
         "select count(*) from projection_checkpoint where projection_name=?", Integer.class,
         AssetReplayVerifier.SHADOW_PROJECTION)).isEqualTo(first.aggregateCount());
+  }
+
+  private void assertSourceWasNotRegistered(UUID inventoryId, UUID findingId, String number) {
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from inventory_asset_source_operation
+        where inventory_id=? and finding_id=?
+        """,
+        Integer.class,
+        inventoryId,
+        findingId)).isZero();
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from inventory_asset_number_claim
+        where inventory_id=? and finding_id=?
+        """,
+        Integer.class,
+        inventoryId,
+        findingId)).isZero();
+    assertThat(jdbc.queryForObject(
+        "select count(*) from rental_item where identity_match_key=?",
+        Integer.class,
+        RentalItem.identityMatchKey(number))).isZero();
   }
 
   private UUID seedStockBalance(UUID equipmentId, UUID warehouseId, long quantity) {

@@ -87,7 +87,6 @@ import dev.buhanzaz.rwms.manager.ui.inventoryFinishingOptions
 import dev.buhanzaz.rwms.manager.ui.inventoryInspectionLabel
 import dev.buhanzaz.rwms.manager.ui.inventoryPassportFacts
 import dev.buhanzaz.rwms.manager.ui.inventoryPhotoValidationError
-import dev.buhanzaz.rwms.manager.ui.inventoryPhotoPreviewRotation
 import dev.buhanzaz.rwms.manager.ui.inventoryRentalItemSuggestions
 import dev.buhanzaz.rwms.manager.ui.inventoryRentalTypeOptions
 import dev.buhanzaz.rwms.manager.ui.inventorySemanticChanges
@@ -1424,7 +1423,6 @@ fun InventoryPhotosScreen(
     onAddPhoto: (String) -> Unit,
     onSelectCoverPhoto: (String) -> Unit,
     onRemovePhoto: (String) -> Unit,
-    onRotatePhoto: (String) -> Unit,
     onAddFurniture: () -> Unit,
 ) {
     if (editor == null) {
@@ -1442,8 +1440,8 @@ fun InventoryPhotosScreen(
         ActivityResultContracts.OpenMultipleDocuments(),
     ) { uris ->
         uris.forEach { uri ->
-            // Import once into the app-owned original. Rotation then rewrites this same file, and
-            // MediaUploader sends these exact bytes instead of creating an upload-time copy.
+            // Import into one app-owned, upright original. MediaUploader then sends these exact
+            // bytes instead of relying on a server-side EXIF or rotation transform.
             copyManagerPhotoToAppCache(context, uri)?.let(onAddPhoto)
         }
     }
@@ -1460,134 +1458,145 @@ fun InventoryPhotosScreen(
     // labelled as a separate "photo inventory" mode: a tap chooses the cover and a hold opens
     // the common fullscreen carousel below.
     ManagerScreenScaffold(title = INVENTORY_PHOTOS_TITLE, onBack = onBack) { padding ->
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            item {
-                ManagerPanel {
-                    Text("Фото состояния", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        if (persistedPhotoCount > 0) {
-                            if (unavailablePersistedPhotoCount > 0) {
-                                "Сохранённые фотографии: $persistedPhotoCount. Сейчас не загрузились: " +
-                                    "$unavailablePersistedPhotoCount. Они останутся в осмотре; " +
-                                    "проверьте связь и откройте проверку снова."
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                // Leave room for the fixed furniture action. The last photograph can still be
+                // scrolled fully above it instead of being covered by the footer.
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    top = 16.dp,
+                    end = 16.dp,
+                    bottom = 96.dp,
+                ),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                item {
+                    ManagerPanel {
+                        Text("Фото состояния", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            if (persistedPhotoCount > 0) {
+                                if (unavailablePersistedPhotoCount > 0) {
+                                    "Сохранённые фотографии: $persistedPhotoCount. Сейчас не загрузились: " +
+                                        "$unavailablePersistedPhotoCount. Они останутся в осмотре; " +
+                                        "проверьте связь и откройте проверку снова."
+                                } else {
+                                    "Сохранённые фотографии: $persistedPhotoCount. " +
+                                        "Их можно просмотреть, удалить или выбрать титульной; " +
+                                        "новые фото можно добавить при необходимости."
+                                }
                             } else {
-                                "Сохранённые фотографии: $persistedPhotoCount. " +
-                                    "Их можно просмотреть, удалить, повернуть или выбрать титульной; " +
-                                    "новые фото можно добавить при необходимости."
-                            }
-                        } else {
-                            "Добавьте фото и выберите титульное."
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        FilledTonalButton(
-                            onClick = onOpenCamera,
-                            enabled = !busy,
-                            modifier = Modifier.weight(1f),
-                        ) { Text("Фотография") }
-                        FilledTonalButton(
-                            onClick = { galleryLauncher.launch(arrayOf("image/*")) },
-                            enabled = !busy,
-                            modifier = Modifier.weight(1f),
-                        ) { Text("Галерея") }
+                                "Добавьте фото и выберите титульное."
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            FilledTonalButton(
+                                onClick = onOpenCamera,
+                                enabled = !busy,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("Фотография") }
+                            FilledTonalButton(
+                                onClick = { galleryLauncher.launch(arrayOf("image/*")) },
+                                enabled = !busy,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("Галерея") }
+                        }
                     }
                 }
-            }
-            if (editor.photoUris.isNotEmpty()) {
-                item {
-                    Text("Выберите титульное фото", style = MaterialTheme.typography.titleMedium)
-                }
-                items(
-                    count = (editor.photoUris.size + 1) / 2,
-                    key = { row -> "inventory-photo-row-$row" },
-                ) { row ->
-                    val photos = editor.photoUris.drop(row * 2).take(2)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        photos.forEach { uri ->
-                            val selected = editor.coverPhotoUri == uri
-                            Column(modifier = Modifier.weight(1f)) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .aspectRatio(4f / 3f)
-                                        .border(
-                                            width = if (selected) 3.dp else 1.dp,
-                                            color = if (selected) {
-                                                Color(0xFF0A84C6)
-                                            } else {
-                                                MaterialTheme.colorScheme.outlineVariant
-                                            },
-                                            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
-                                        )
-                                        .padding(3.dp)
-                                        .inventoryPhotoGesture(
-                                            onClick = {
-                                                if (!busy) onSelectCoverPhoto(uri)
-                                            },
-                                            onLongPress = { galleryPhotoUri = uri },
-                                        )
-                                        .semantics {
-                                            role = Role.Button
-                                            contentDescription = if (selected) {
-                                                "Титульная фотография"
-                                            } else {
-                                                "Выбрать титульной фотографией; удерживайте для просмотра"
-                                            }
-                                            if (!busy) {
-                                                onClick(label = "Выбрать титульной фотографией") {
-                                                    onSelectCoverPhoto(uri)
+                if (editor.photoUris.isNotEmpty()) {
+                    item {
+                        Text("Выберите титульное фото", style = MaterialTheme.typography.titleMedium)
+                    }
+                    items(
+                        count = (editor.photoUris.size + 1) / 2,
+                        key = { row -> "inventory-photo-row-$row" },
+                    ) { row ->
+                        val photos = editor.photoUris.drop(row * 2).take(2)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            photos.forEach { uri ->
+                                val selected = editor.coverPhotoUri == uri
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .aspectRatio(4f / 3f)
+                                            .border(
+                                                width = if (selected) 3.dp else 1.dp,
+                                                color = if (selected) {
+                                                    Color(0xFF0A84C6)
+                                                } else {
+                                                    MaterialTheme.colorScheme.outlineVariant
+                                                },
+                                                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                                            )
+                                            .padding(3.dp)
+                                            .inventoryPhotoGesture(
+                                                onClick = {
+                                                    if (!busy) onSelectCoverPhoto(uri)
+                                                },
+                                                onLongPress = { galleryPhotoUri = uri },
+                                            )
+                                            .semantics {
+                                                role = Role.Button
+                                                contentDescription = if (selected) {
+                                                    "Титульная фотография"
+                                                } else {
+                                                    "Выбрать титульной фотографией; удерживайте для просмотра"
+                                                }
+                                                if (!busy) {
+                                                    onClick(label = "Выбрать титульной фотографией") {
+                                                        onSelectCoverPhoto(uri)
+                                                        true
+                                                    }
+                                                }
+                                                onLongClick(label = "Открыть полноэкранный просмотр") {
+                                                    galleryPhotoUri = uri
                                                     true
                                                 }
-                                            }
-                                            onLongClick(label = "Открыть полноэкранный просмотр") {
-                                                galleryPhotoUri = uri
-                                                true
-                                            }
-                                        },
-                                ) {
-                                    ManagerPhotoPreview(
-                                        photoUri = uri,
-                                        modifier = Modifier.fillMaxSize(),
-                                        rotationDegrees = editor.inventoryPhotoPreviewRotation(uri),
-                                    )
+                                            },
+                                    ) {
+                                        ManagerPhotoPreview(
+                                            photoUri = uri,
+                                            modifier = Modifier.fillMaxSize(),
+                                        )
+                                    }
+                                    TextButton(
+                                        onClick = { onRemovePhoto(uri) },
+                                        enabled = !busy,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) { Text("Удалить") }
                                 }
-                                TextButton(
-                                    onClick = { onRemovePhoto(uri) },
-                                    enabled = !busy,
-                                    modifier = Modifier.fillMaxWidth(),
-                                ) { Text("Удалить") }
                             }
+                            if (photos.size == 1) Box(modifier = Modifier.weight(1f))
                         }
-                        if (photos.size == 1) Box(modifier = Modifier.weight(1f))
+                    }
+                }
+                item {
+                    photoError?.let { error ->
+                        Text(
+                            error,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                     }
                 }
             }
-            item {
-                photoError?.let { error ->
-                    Text(
-                        error,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                Button(
-                    onClick = onAddFurniture,
-                    enabled = photoError == null && !busy,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Добавить мебель") }
-            }
+            Button(
+                onClick = onAddFurniture,
+                enabled = photoError == null && !busy,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            ) { Text("Добавить мебель") }
         }
     }
     galleryPhotoUri?.let { initialPhoto ->
@@ -1597,8 +1606,6 @@ fun InventoryPhotosScreen(
             photoUris = editor.photoUris,
             initialIndex = initialIndex,
             onRemovePhotoUri = onRemovePhoto,
-            photoRotationDegrees = editor::inventoryPhotoPreviewRotation,
-            onRotatePhotoUri = onRotatePhoto,
             onDismiss = { galleryPhotoUri = null },
         )
     }

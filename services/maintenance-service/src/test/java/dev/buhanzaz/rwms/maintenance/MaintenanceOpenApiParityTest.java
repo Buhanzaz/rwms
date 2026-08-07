@@ -148,12 +148,12 @@ class MaintenanceOpenApiParityTest {
   private static final List<OperationSpec> OPERATIONS = canonicalOperations();
 
   @Test
-  void allFiftyFourPathsAndSixtyFiveOperationsExactlyMatchTheApprovedAcceptanceMatrix()
+  void allFiftyFivePathsAndSixtySixOperationsExactlyMatchTheApprovedAcceptanceMatrix()
       throws Exception {
     Map<String, Object> document = openApi();
-    assertThat(child(document, "paths")).hasSize(54);
-    assertThat(openApiOperationCount(document)).isEqualTo(65);
-    assertThat(controllerOperations()).hasSize(65);
+    assertThat(child(document, "paths")).hasSize(55);
+    assertThat(openApiOperationCount(document)).isEqualTo(66);
+    assertThat(controllerOperations()).hasSize(66);
 
     for (OperationSpec expected : OPERATIONS) {
       assertOpenApiOperation(document, expected);
@@ -193,7 +193,7 @@ class MaintenanceOpenApiParityTest {
         .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
 
     assertThat(logisticsPaths).containsExactly(
-        "/api/internal/maintenance/v1/logistics/returns/{returnId}/lines/{lineId}/shortage",
+        "/api/internal/maintenance/v1/logistics/returns/{returnId}/lines/{lineId}/estimate-source",
         "/api/internal/maintenance/v1/logistics/transfers/{transferId}/lines/{lineId}/prepare-departure",
         "/api/internal/maintenance/v1/logistics/transfers/{transferId}/lines/{lineId}/arrival-preflight",
         "/api/internal/maintenance/v1/logistics/transfers/{transferId}/lines/{lineId}/complete-arrival",
@@ -503,7 +503,7 @@ class MaintenanceOpenApiParityTest {
     MockMvc mvc = MockMvcBuilders.standaloneSetup(
             new MaintenanceCatalogController(service, authorizer),
             new FurnitureEquipmentLinkController(furnitureLinks, authorizer),
-            new MaintenanceEstimateController(service, authorizer),
+            new MaintenanceEstimateController(service, logistics, authorizer),
             new MaintenanceRepairController(service, authorizer, dispositions),
             new MaintenanceInventoryController(inventory, publications, service, authorizer),
             new PropertyDispositionController(dispositions, authorizer),
@@ -690,17 +690,18 @@ class MaintenanceOpenApiParityTest {
         true,
         "400", "401", "403", "404", "409", "422", "503"));
     result.add(op("PUT",
-        "/api/internal/maintenance/v1/logistics/returns/{returnId}/lines/{lineId}/shortage",
-        "upsertLogisticsReturnShortage", MaintenanceLogisticsController.class, "upsert",
+        "/api/internal/maintenance/v1/logistics/returns/{returnId}/lines/{lineId}/estimate-source",
+        "upsertLogisticsReturnEstimateSource", MaintenanceLogisticsController.class, "upsert",
         List.of(path("returnId"), path("lineId")),
-        UpsertLogisticsReturnShortageRequest.class, "UpsertLogisticsReturnShortageRequest",
-        "200", "LogisticsReturnShortage", true,
+        UpsertLogisticsReturnEstimateSourceRequest.class,
+        "UpsertLogisticsReturnEstimateSourceRequest",
+        "200", "ReturnEstimateSource", true,
         "400", "401", "403", "409", "422"));
     result.add(op("GET",
-        "/api/internal/maintenance/v1/logistics/returns/{returnId}/lines/{lineId}/shortage",
-        "getLogisticsReturnShortage", MaintenanceLogisticsController.class, "get",
+        "/api/internal/maintenance/v1/logistics/returns/{returnId}/lines/{lineId}/estimate-source",
+        "getLogisticsReturnEstimateSource", MaintenanceLogisticsController.class, "get",
         List.of(path("returnId"), path("lineId")),
-        null, null, "200", "LogisticsReturnShortage", false,
+        null, null, "200", "ReturnEstimateSource", false,
         "401", "403", "404"));
     result.add(op("POST",
         "/api/internal/maintenance/v1/logistics/transfers/{transferId}/lines/{lineId}/prepare-departure",
@@ -836,6 +837,10 @@ class MaintenanceOpenApiParityTest {
         MaintenanceEstimateController.class, "create", idempotency,
         CreateEstimateRequest.class, "CreateEstimateRequest", "201", "Estimate", true,
         "400", "401", "403", "409", "422"));
+    result.add(op("GET", "/api/maintenance/v1/estimates/return-sources",
+        "listReturnEstimateSources", MaintenanceEstimateController.class, "returnSources",
+        List.of(query("warehouseId", true, "uuid", null), query("returnId", true, "uuid", null)),
+        null, null, "200", "[ReturnEstimateSource]", false, "401", "403"));
     result.add(op("GET", "/api/maintenance/v1/estimates/{id}", "getEstimate",
         MaintenanceEstimateController.class, "get", estimateId,
         null, null, "200", "Estimate", false, "401", "403", "404"));
@@ -845,7 +850,7 @@ class MaintenanceOpenApiParityTest {
         "400", "401", "403", "404", "409", "422"));
     result.add(op("POST", "/api/maintenance/v1/estimates/{id}/complete", "completeEstimate",
         MaintenanceEstimateController.class, "complete", append(estimateId, requiredHeader("Idempotency-Key")),
-        CompleteEstimateRequest.class, "PriorityVersionRequest", "200", "EstimateCommandResult", true,
+        CompleteEstimateRequest.class, "CompleteEstimateRequest", "200", "EstimateCommandResult", true,
         "400", "401", "403", "404", "409", "422", "503"));
     result.add(op("POST", "/api/maintenance/v1/estimates/{id}/amendments", "amendCompletedEstimate",
         MaintenanceEstimateController.class, "amend", append(estimateId, requiredHeader("Idempotency-Key")),
@@ -1581,8 +1586,8 @@ class MaintenanceOpenApiParityTest {
 
   private static LogisticsReturnShortageService logisticsFixture() throws Exception {
     LogisticsReturnShortageService logistics = mock(LogisticsReturnShortageService.class);
-    LogisticsReturnShortageResponse response = (LogisticsReturnShortageResponse) sample(
-        LogisticsReturnShortageResponse.class, "logisticsReturnShortage");
+    ReturnEstimateSource response =
+        (ReturnEstimateSource) sample(ReturnEstimateSource.class, "returnEstimateSource");
     when(logistics.upsert(
         org.mockito.ArgumentMatchers.any(),
         org.mockito.ArgumentMatchers.any(),
@@ -1591,6 +1596,9 @@ class MaintenanceOpenApiParityTest {
     when(logistics.get(
         org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
         .thenReturn(response);
+    when(logistics.list(
+        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+        .thenReturn(List.of(response));
     return logistics;
   }
 
@@ -1855,9 +1863,10 @@ class MaintenanceOpenApiParityTest {
     values.put(PropertyDispositionRepairChainEntry.class, "PropertyDispositionRepairChainEntry");
     values.put(PropertyDispositionDecisionResponse.class, "PropertyDispositionDecision");
     values.put(PropertyDispositionPage.class, "PropertyDispositionPage");
-    values.put(LogisticsEquipmentShortage.class, "LogisticsEquipmentShortage");
-    values.put(UpsertLogisticsReturnShortageRequest.class, "UpsertLogisticsReturnShortageRequest");
-    values.put(LogisticsReturnShortageResponse.class, "LogisticsReturnShortage");
+    values.put(
+        UpsertLogisticsReturnEstimateSourceRequest.class,
+        "UpsertLogisticsReturnEstimateSourceRequest");
+    values.put(ReturnEstimateSource.class, "ReturnEstimateSource");
     values.put(TransferRepairRequest.class, "TransferRepairRequest");
     values.put(PrepareTransferRepairResponse.class, "PrepareTransferRepairResult");
     values.put(
@@ -1878,7 +1887,7 @@ class MaintenanceOpenApiParityTest {
     values.put(ReplaceCatalogLinksRequest.class, "ReplaceCatalogLinksRequest");
     values.put(CreateCatalogRequest.class, "CreateCatalogRequest");
     values.put(VersionCommand.class, "ExpectedVersionRequest");
-    values.put(CompleteEstimateRequest.class, "PriorityVersionRequest");
+    values.put(CompleteEstimateRequest.class, "CompleteEstimateRequest");
     values.put(QueueRepairRequest.class, "PriorityVersionRequest");
     values.put(RetryInboundDeliveryRequest.class, "RetryInboundDeliveryRequest");
     values.put(
@@ -2035,8 +2044,9 @@ class MaintenanceOpenApiParityTest {
         FurnitureEquipmentLinkReviewRequest.class,
         "FurnitureEquipmentLinkReviewRequest");
     values.put(WriteOffRepairRequest.class, "WriteOffRepairRequest");
-    values.put(LogisticsEquipmentShortage.class, "LogisticsEquipmentShortage");
-    values.put(UpsertLogisticsReturnShortageRequest.class, "UpsertLogisticsReturnShortageRequest");
+    values.put(
+        UpsertLogisticsReturnEstimateSourceRequest.class,
+        "UpsertLogisticsReturnEstimateSourceRequest");
     values.put(TransferRepairRequest.class, "TransferRepairRequest");
     values.put(CompleteTransferRepairRequest.class, "CompleteTransferRepairRequest");
     values.put(MediaReferenceInput.class, "MediaReference");
@@ -2048,7 +2058,7 @@ class MaintenanceOpenApiParityTest {
     values.put(ReplaceCatalogNodesRequest.class, "ReplaceCatalogNodesRequest");
     values.put(ReplaceCatalogLinksRequest.class, "ReplaceCatalogLinksRequest");
     values.put(VersionCommand.class, "ExpectedVersionRequest");
-    values.put(CompleteEstimateRequest.class, "PriorityVersionRequest");
+    values.put(CompleteEstimateRequest.class, "CompleteEstimateRequest");
     values.put(QueueRepairRequest.class, "PriorityVersionRequest");
     values.put(RetryInboundDeliveryRequest.class, "RetryInboundDeliveryRequest");
     values.put(

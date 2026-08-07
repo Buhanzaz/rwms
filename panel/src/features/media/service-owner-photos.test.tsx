@@ -51,7 +51,6 @@ function mediaValue(overrides: Record<string, unknown> = {}) {
     query: { isError: false, isLoading: false, isSuccess: true },
     requestFullscreen: vi.fn(),
     upload: vi.fn(),
-    rotate: vi.fn(),
     remove: vi.fn(),
     pending: false,
     error: null,

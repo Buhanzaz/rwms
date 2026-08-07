@@ -177,6 +177,25 @@ describe("maintenance property disposition views", () => {
     expect(screen.queryByText("Списано")).toBeNull()
   })
 
+  it("labels unaccounted furniture losses as having no warehouse effect", async () => {
+    renderPage({
+      path: "/write-offs/equipment",
+      items: [
+        decision({
+          disposition: "LOSS",
+          source: "UNACCOUNTED",
+          state: "EFFECTIVE",
+          assetEffectState: "NOT_REQUIRED",
+        }),
+      ],
+    })
+
+    expect(
+      await screen.findAllByText("Неучтённое наполнение")
+    ).not.toHaveLength(0)
+    expect(screen.getAllByText("Без складского эффекта")).not.toHaveLength(0)
+  })
+
   it("excludes rental managers from initiation even with MANAGE access", async () => {
     renderPage({ role: "RENTAL_MANAGER" })
     await screen.findAllByText("БЫТ-101")

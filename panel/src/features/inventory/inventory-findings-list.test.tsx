@@ -31,6 +31,8 @@ function finding(
     conflictResolution: null,
     conflicts: [],
     comment: "",
+    passportObservation: { presence: "ABSENT", value: null },
+    equipmentObservation: { presence: "ABSENT", value: null },
     media: [],
     coverMediaId: null,
     inspectionSource: "INVENTORY",

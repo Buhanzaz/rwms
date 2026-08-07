@@ -392,14 +392,16 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       long fencingToken,
       UUID documentId,
       UUID lineId,
-      boolean shortage) {
+      boolean estimate) {
     RentalItemSnapshotResponse response =
         put(
             assetBase + "/rental-items/" + assetId + "/effects",
             idempotencyKey,
             new FencedEffectRequest(
                 expectedAssetVersion,
-                shortage ? "RETURN_SETTLE_SHORTAGE" : "RETURN_SETTLE_FREE",
+                // The asset action label is retained for stable replay of already queued return
+                // effects; it represents the estimate-needed branch, not a client-selected list.
+                estimate ? "RETURN_SETTLE_SHORTAGE" : "RETURN_SETTLE_FREE",
                 leaseId,
                 fencingToken,
                 LogisticsOwnerType.LOGISTICS_RETURN.name(),
@@ -718,19 +720,18 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   }
 
   @Override
-  public ReturnShortageSource upsertReturnShortage(
+  public ReturnEstimateSource upsertReturnEstimateSource(
       UUID returnId,
       UUID lineId,
       UUID warehouseId,
       UUID rentalItemId,
       long rentalItemVersion,
       LocalDate dispatchDate,
-      List<MediaReference> mediaReferences,
-      List<EquipmentShortage> shortages) {
-    ReturnShortageSourceResponse response =
+      List<MediaReference> mediaReferences) {
+    ReturnEstimateSourceResponse response =
         putWithoutIdempotency(
-            maintenanceBase + "/returns/" + returnId + "/lines/" + lineId + "/shortage",
-            new UpsertReturnShortageRequest(
+            maintenanceBase + "/returns/" + returnId + "/lines/" + lineId + "/estimate-source",
+            new UpsertReturnEstimateSourceRequest(
                 warehouseId,
                 rentalItemId,
                 rentalItemVersion,
@@ -740,15 +741,14 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
                         reference ->
                             new MediaReferenceRequest(
                                 reference.mediaId(), reference.generation()))
-                    .toList(),
-                shortages.stream().map(value -> new EquipmentShortageRequest(value.equipmentId(), value.missingQuantity())).toList()),
-            ReturnShortageSourceResponse.class,
+                    .toList()),
+            ReturnEstimateSourceResponse.class,
             MAINTENANCE_CLIENT,
             MAINTENANCE_SCOPE);
-    if (response == null || response.shortages() == null) {
-      throw malformed("Maintenance-service returned an empty shortage source");
+    if (response == null) {
+      throw malformed("Maintenance-service returned an empty return estimate source");
     }
-    return new ReturnShortageSource(
+    return new ReturnEstimateSource(
         response.returnId(),
         response.lineId(),
         response.sourceVersion(),
@@ -756,7 +756,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
         response.rentalItemId(),
         response.rentalItemVersion(),
         response.estimateId(),
-        response.shortages().stream().map(value -> new EquipmentShortage(value.equipmentId(), value.missingQuantity())).toList(),
         response.snapshotSha256(),
         response.receivedAt());
   }
@@ -2850,17 +2849,14 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID proofEventId,
       Boolean active) {}
 
-  private record EquipmentShortageRequest(UUID equipmentId, long missingQuantity) {}
-
-  private record UpsertReturnShortageRequest(
+  private record UpsertReturnEstimateSourceRequest(
       UUID warehouseId,
       UUID rentalItemId,
       long rentalItemVersion,
       LocalDate dispatchDate,
-      List<MediaReferenceRequest> mediaReferences,
-      List<EquipmentShortageRequest> shortages) {}
+      List<MediaReferenceRequest> mediaReferences) {}
 
-  private record ReturnShortageSourceResponse(
+  private record ReturnEstimateSourceResponse(
       UUID returnId,
       UUID lineId,
       long sourceVersion,
@@ -2868,7 +2864,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID rentalItemId,
       long rentalItemVersion,
       UUID estimateId,
-      List<EquipmentShortageRequest> shortages,
       String snapshotSha256,
       OffsetDateTime receivedAt) {}
 

@@ -27,6 +27,9 @@ public interface PropertyDispositionDecisionRepository
 
   Optional<PropertyDispositionDecision> findByMaintenanceCustodyClaimId(UUID claimId);
 
+  Optional<PropertyDispositionDecision> findBySourceAndSourceRepairIdAndAssetId(
+      PropertyDispositionSource source, UUID sourceRepairId, UUID assetId);
+
   Optional<PropertyDispositionDecision> findBySourceAndInventoryIdAndFindingId(
       PropertyDispositionSource source, UUID inventoryId, UUID findingId);
 

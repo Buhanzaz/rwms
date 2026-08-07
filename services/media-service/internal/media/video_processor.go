@@ -1,61 +1,24 @@
 package media
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
-type CommandRunner interface {
-	Run(context.Context, string, ...string) error
-}
-
-type ExecCommandRunner struct{}
-
-func (ExecCommandRunner) Run(ctx context.Context, name string, arguments ...string) error {
-	command := exec.CommandContext(ctx, name, arguments...)
-	var diagnostics boundedBuffer
-	command.Stdout = &diagnostics
-	command.Stderr = &diagnostics
-	err := command.Run()
-	if err != nil {
-		return fmt.Errorf("%s failed", name)
-	}
-	return nil
-}
-
-type boundedBuffer struct{ bytes.Buffer }
-
-func (buffer *boundedBuffer) Write(value []byte) (int, error) {
-	const maximum = 4096
-	original := len(value)
-	if buffer.Len() < maximum {
-		remaining := maximum - buffer.Len()
-		if len(value) > remaining {
-			value = value[:remaining]
-		}
-		_, _ = buffer.Buffer.Write(value)
-	}
-	return original, nil
-}
-
 type VideoProcessRequest struct {
 	MediaID string
-	// SourceObjectKey is the immutable ingress original for the same reason as
-	// image processing: Rotation is absolute, not a delta from a prior variant.
+	// SourceObjectKey is the immutable ingress original.
 	SourceObjectKey string
 	SourceVersionID string
 	ContentType     string
 	Generation      int
-	Rotation        Rotation
 }
 
 type VideoProcessResult struct {
@@ -64,7 +27,6 @@ type VideoProcessResult struct {
 
 type VideoProcessor struct {
 	Store         ObjectStore
-	Runner        CommandRunner
 	Probe         VideoProbe
 	AllowedCodecs map[string]struct{}
 	MaxDuration   time.Duration
@@ -72,7 +34,7 @@ type VideoProcessor struct {
 }
 
 func (processor VideoProcessor) Process(ctx context.Context, request VideoProcessRequest) (VideoProcessResult, error) {
-	if processor.Store == nil || processor.Runner == nil || processor.Probe == nil {
+	if processor.Store == nil || processor.Probe == nil {
 		return VideoProcessResult{}, fmt.Errorf("video processor is not configured")
 	}
 	if !processor.Limits.Valid() {
@@ -83,9 +45,6 @@ func (processor VideoProcessor) Process(ctx context.Context, request VideoProces
 	}
 	if request.MediaID == "" || request.SourceObjectKey == "" || request.SourceVersionID == "" || request.Generation <= 0 {
 		return VideoProcessResult{}, fmt.Errorf("invalid video processing request")
-	}
-	if _, err := ParseRotation(int16(request.Rotation)); err != nil {
-		return VideoProcessResult{}, err
 	}
 	contentType, err := normalizeVideoContentType(request.ContentType)
 	if err != nil {
@@ -100,10 +59,7 @@ func (processor VideoProcessor) Process(ctx context.Context, request VideoProces
 		return VideoProcessResult{}, err
 	}
 
-	if request.Rotation == Rotation0 {
-		return processor.copyOriginal(ctx, request, extension)
-	}
-	return processor.rotateOriginal(ctx, request, extension)
+	return processor.copyOriginal(ctx, request, extension)
 }
 
 func (processor VideoProcessor) validateSource(ctx context.Context, request VideoProcessRequest, extension string) error {
@@ -166,57 +122,6 @@ func (processor VideoProcessor) copyOriginal(ctx context.Context, request VideoP
 	return VideoProcessResult{Original: result}, nil
 }
 
-func (processor VideoProcessor) rotateOriginal(ctx context.Context, request VideoProcessRequest, extension string) (VideoProcessResult, error) {
-	directory, err := os.MkdirTemp("", "rwms-media-video-*")
-	if err != nil {
-		return VideoProcessResult{}, fmt.Errorf("create video workspace: %w", err)
-	}
-	defer os.RemoveAll(directory)
-
-	inputPath := filepath.Join(directory, "source"+extension)
-	outputPath := filepath.Join(directory, "rotated"+extension)
-	if err := processor.downloadToFile(ctx, request.SourceObjectKey, request.SourceVersionID, inputPath); err != nil {
-		return VideoProcessResult{}, err
-	}
-	processingContext, cancel := context.WithTimeout(ctx, processor.Limits.Timeout)
-	defer cancel()
-	if err := processor.Runner.Run(processingContext, "ffmpeg", videoRotationArguments(inputPath, outputPath, extension, request.Rotation, processor.Limits.MaxVideoOutputBytes)...); err != nil {
-		return VideoProcessResult{}, fmt.Errorf("rotate video: %w", err)
-	}
-	if err := processor.validateVideoFile(ctx, outputPath, extension); err != nil {
-		return VideoProcessResult{}, fmt.Errorf("validate rotated video: %w", err)
-	}
-	output, err := os.Open(outputPath)
-	if err != nil {
-		return VideoProcessResult{}, fmt.Errorf("open rotated video: %w", err)
-	}
-	defer output.Close()
-	info, err := output.Stat()
-	if err != nil {
-		return VideoProcessResult{}, fmt.Errorf("read rotated video metadata: %w", err)
-	}
-	if info.Size() <= 0 || info.Size() > processor.Limits.MaxVideoOutputBytes {
-		return VideoProcessResult{}, fmt.Errorf("rotated video exceeds output limit")
-	}
-	hash := sha256.New()
-	result := newProcessedVariant(
-		VariantOriginal,
-		OriginalObjectKey(request.MediaID, request.Generation, extension),
-		request.ContentType,
-		info.Size(),
-		0,
-		0,
-		"",
-	)
-	metadata, err := putObject(ctx, processor.Store, result.ObjectKey, io.TeeReader(output, hash), result.SizeBytes, result.ContentType)
-	if err != nil {
-		return VideoProcessResult{}, fmt.Errorf("write rotated video: %w", err)
-	}
-	result.ObjectVersionID = metadata.VersionID
-	result.ChecksumSHA256 = hex.EncodeToString(hash.Sum(nil))
-	return VideoProcessResult{Original: result}, nil
-}
-
 func (processor VideoProcessor) downloadToFile(ctx context.Context, objectKey, versionID, destination string) error {
 	source, metadata, err := getObject(ctx, processor.Store, objectKey, versionID)
 	if err != nil {
@@ -259,21 +164,6 @@ func normalizeVideoContentType(contentType string) (string, error) {
 		return "", err
 	}
 	return normalized, nil
-}
-
-func videoRotationArguments(inputPath, outputPath, extension string, rotation Rotation, maxOutputBytes int64) []string {
-	filter := map[Rotation]string{
-		Rotation90:  "transpose=1",
-		Rotation180: "transpose=1,transpose=1",
-		Rotation270: "transpose=2",
-	}[rotation]
-	arguments := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", inputPath, "-vf", filter}
-	if extension == ".webm" {
-		arguments = append(arguments, "-c:v", "libvpx-vp9", "-c:a", "libopus")
-	} else {
-		arguments = append(arguments, "-c:v", "libx264", "-c:a", "copy", "-movflags", "+faststart")
-	}
-	return append(arguments, "-fs", fmt.Sprintf("%d", maxOutputBytes), outputPath)
 }
 
 func containerMatches(extension, container string) bool {

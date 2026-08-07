@@ -35,7 +35,6 @@ describe("ServiceMediaManagerDialog", () => {
           onOpenChange={vi.fn()}
           onAddFiles={vi.fn()}
           onRemove={vi.fn()}
-          onRotate={vi.fn()}
           onSelectCover={(selected) => setCoverMediaId(selected.id)}
           onConfirm={onConfirm}
         />
@@ -45,6 +44,7 @@ describe("ServiceMediaManagerDialog", () => {
     render(<Harness />)
 
     const done = screen.getByRole("button", { name: "Готово" })
+    expect(screen.queryByRole("button", { name: /Повернуть/ })).toBeNull()
     expect((done as HTMLButtonElement).disabled).toBe(true)
     await user.click(
       screen.getByRole("button", { name: "Выбрать титульным" })

@@ -454,19 +454,6 @@ function OwnedServiceOwnerPhotos({
                 )
               )
           }}
-          onRotate={(item, direction) => {
-            const asset = assetFor(item)
-            if (!asset) return
-            void media
-              .rotate({ asset, direction })
-              .catch((error) =>
-                toast.error(
-                  error instanceof Error
-                    ? error.message
-                    : "Не удалось повернуть фото"
-                )
-              )
-          }}
           onSelectCover={(item) => onCoverMediaIdChange?.(item.id)}
         />
       ) : null}
@@ -478,7 +465,6 @@ type PendingOwnerPhoto = Readonly<{
   id: string
   file: File
   previewUrl: string
-  rotationDegrees: 0 | 90 | 180 | 270
 }>
 
 const unownedMediaClient = createHttpMediaClient()
@@ -494,9 +480,8 @@ async function uploadNewOwnerFile(
     createSession: crypto.randomUUID(),
     uploadAndFinalize: crypto.randomUUID(),
   }
-  const rotateKey = crypto.randomUUID()
   return retryOwnerProofOperation(async () => {
-    const result = await unownedMediaClient.uploadFile(
+    return unownedMediaClient.uploadFile(
       accessToken,
       owner,
       item.file,
@@ -504,18 +489,6 @@ async function uploadNewOwnerFile(
       folderId,
       commandKeys
     )
-    if (item.rotationDegrees === 0) {
-      return result
-    }
-    await unownedMediaClient.rotate(
-      accessToken,
-      owner,
-      result.asset.id,
-      item.rotationDegrees,
-      result.asset.version,
-      rotateKey
-    )
-    return result
   })
 }
 
@@ -567,7 +540,6 @@ function UnownedServiceOwnerPhotos({
       id: crypto.randomUUID(),
       file,
       previewUrl: URL.createObjectURL(file),
-      rotationDegrees: 0 as const,
     }))
     if (selected.length === 0) return
     setPendingItems((current) => [...current, ...selected].slice(0, maxItems))
@@ -640,7 +612,6 @@ function UnownedServiceOwnerPhotos({
     id: item.id,
     fileName: item.file.name,
     previewUrl: item.previewUrl,
-    rotationDegrees: item.rotationDegrees,
     statusLabel: uploading ? "Загрузка" : "Не загружено",
     pending: uploading,
   }))
@@ -695,20 +666,6 @@ function UnownedServiceOwnerPhotos({
               current.filter((candidate) => candidate.id !== item.id)
             )
             if (pendingCoverId === item.id) setPendingCoverId(null)
-          }}
-          onRotate={(item, direction) => {
-            const delta = direction === "RIGHT" ? 90 : 270
-            setPendingItems((current) =>
-              current.map((candidate) =>
-                candidate.id === item.id
-                  ? {
-                      ...candidate,
-                      rotationDegrees: ((candidate.rotationDegrees + delta) %
-                        360) as 0 | 90 | 180 | 270,
-                    }
-                  : candidate
-              )
-            )
           }}
           onSelectCover={(item) => setPendingCoverId(item.id)}
           onConfirm={() => void uploadPendingItems()}

@@ -115,6 +115,43 @@ class BackgroundUploadCoordinator(
     }
 
     /**
+     * Requeues only a maintenance completion that the server explicitly stopped because the
+     * returning cabin has no recorded furniture composition. A changed command receives a new
+     * idempotency key; the rejected `false` request must never be replayed with a new body.
+     */
+    suspend fun confirmUnaccountedFurniture(operationId: String) = withContext(Dispatchers.IO) {
+        store.initialize()
+        val now = System.currentTimeMillis()
+        var confirmed = false
+        val updated = store.update(operationId) { operation ->
+            val maintenance = operation.maintenance
+            if (
+                maintenance == null ||
+                    !maintenance.requiresUnaccountedFurnitureConfirmation ||
+                    maintenance.submitRequest == null
+            ) {
+                operation
+            } else {
+                confirmed = true
+                operation.copy(
+                    updatedAtEpochMillis = now,
+                    status = BackgroundUploadStatus.QUEUED,
+                    stage = "Ожидание сети",
+                    error = null,
+                    maintenance = maintenance.copy(
+                        allowUnaccountedFurniture = true,
+                        requiresUnaccountedFurnitureConfirmation = false,
+                        submitIdempotencyKey = UUID.randomUUID().toString(),
+                    ),
+                )
+            }
+        } ?: return@withContext
+        if (confirmed) {
+            schedule(updated.id, ExistingWorkPolicy.REPLACE)
+        }
+    }
+
+    /**
      * Stops only this device's durable upload outbox entry. This never calls RWMS, so media or
      * a final command already accepted by the server remain there. Waiting for WorkManager's
      * cancellation operation before deleting the local originals prevents a queued worker from
@@ -189,7 +226,6 @@ class BackgroundUploadCoordinator(
             owner = pending.owner,
             sortOrder = pending.sortOrder,
             cover = pending.cover,
-            rotationDegrees = pending.rotationDegrees,
             lineId = pending.lineId,
         )
     }

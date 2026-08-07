@@ -70,7 +70,6 @@ type repository interface {
 	UpsertServiceOwnerProof(context.Context, persistence.ServiceOwnerProofCommand) (persistence.ServiceOwnerProofRecord, bool, error)
 	ValidateLogisticsReferences(context.Context, persistence.ValidateLogisticsReferencesCommand) error
 	SetCabinCoverFromTaskEvidence(context.Context, persistence.SetCabinCoverFromTaskEvidenceCommand) (persistence.CabinCoverChangeRecord, bool, error)
-	Rotate(context.Context, persistence.RotateCommand) (persistence.AssetRecord, bool, error)
 	Delete(context.Context, persistence.DeleteCommand) (persistence.AssetRecord, bool, error)
 }
 
@@ -207,7 +206,6 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("POST /api/media/v1/cabin-covers", server.listCabinCovers)
 	server.mux.HandleFunc("GET /api/media/v1/assets/{mediaId}/original", server.getOriginal)
 	server.mux.HandleFunc("GET /api/media/v1/assets/{mediaId}/variants/{variant}/content", server.getVariantContent)
-	server.mux.HandleFunc("POST /api/media/v1/assets/{mediaId}/rotation", server.rotate)
 	server.mux.HandleFunc("POST /api/media/v1/assets/{mediaId}/deletion", server.deleteAsset)
 	server.mux.HandleFunc("POST /api/internal/media/v1/owner-proofs", server.upsertOwnerProof)
 	server.mux.HandleFunc("POST /api/internal/media/v1/asset-imports/preflight", server.preflightAssetImport)
@@ -229,7 +227,6 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("/api/media/v1/cabin-covers", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/media/v1/assets/{mediaId}/original", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/media/v1/assets/{mediaId}/variants/{variant}/content", server.methodNotAllowed)
-	server.mux.HandleFunc("/api/media/v1/assets/{mediaId}/rotation", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/media/v1/assets/{mediaId}/deletion", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/internal/media/v1/owner-proofs", server.methodNotAllowed)
 	// A trailing-prefix fallback is less specific than every method-qualified
@@ -1378,66 +1375,6 @@ func (server *Server) getVariantContent(response http.ResponseWriter, request *h
 	default:
 		server.streamVariant(response, request, derivedFileName(selectedAsset.FileName, variant, selectedVariant.ContentType), *selectedVariant)
 	}
-}
-
-type rotationRequest struct {
-	RotationDegrees int16 `json:"rotationDegrees"`
-	ExpectedVersion int64 `json:"expectedVersion"`
-}
-
-func (server *Server) rotate(response http.ResponseWriter, request *http.Request) {
-	principal, ok := server.principal(response, request)
-	if !ok {
-		return
-	}
-	ownerType, ownerID, warehouseID, ok := server.ownerScope(response, request)
-	if !ok {
-		return
-	}
-	mediaID, err := uuid.Parse(request.PathValue("mediaId"))
-	if err != nil {
-		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid media ID")
-		return
-	}
-	idempotencyKey, ok := requireUUIDHeader(response, request, "Idempotency-Key", server)
-	if !ok {
-		return
-	}
-	var body rotationRequest
-	if !server.decode(response, request, &body) {
-		return
-	}
-	rotation, err := media.ParseRotation(body.RotationDegrees)
-	if err != nil || body.ExpectedVersion <= 0 {
-		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid rotation request")
-		return
-	}
-	asset, err := server.repository.GetAssetScoped(request.Context(), mediaID, ownerType, ownerID, warehouseID)
-	if err != nil {
-		server.repositoryProblem(response, request, err)
-		return
-	}
-	if err := principal.Require("rwms.write", asset.WarehouseID, auth.Edit); err != nil {
-		server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
-		return
-	}
-	asset, replayed, err := server.repository.Rotate(request.Context(), persistence.RotateCommand{
-		MediaID: mediaID, SubjectID: principal.SubjectID, IdempotencyKey: idempotencyKey,
-		RequestSHA256: requestFingerprint(map[string]any{"mediaId": mediaID, "rotationDegrees": rotation, "expectedVersion": body.ExpectedVersion}), ExpectedVersion: body.ExpectedVersion,
-		Rotation: rotation, CorrelationID: correlationID(request.Context()),
-	})
-	if err != nil {
-		server.repositoryProblem(response, request, err)
-		return
-	}
-	if !replayed {
-		server.publishMediaChange(asset, "MEDIA_CHANGED")
-	}
-	status := http.StatusAccepted
-	if replayed {
-		status = http.StatusOK
-	}
-	writeJSON(response, status, assetResponse(asset, nil))
 }
 
 type deletionRequest struct {

@@ -15,7 +15,6 @@ import {
   GridViewIcon,
   ImageUploadIcon,
   ListViewIcon,
-  RotateClockwiseIcon,
   Search01Icon,
   Settings02Icon,
 } from "@hugeicons/core-free-icons"
@@ -636,19 +635,13 @@ function FolderDetails({
   item,
   folder,
   previewLoading,
-  canEdit,
-  rotating,
   onBack,
-  onRotate,
   onRequestFullscreen,
 }: {
   item: RentalItemDto
   folder: RentalItemPhotoFolder
   previewLoading: boolean
-  canEdit: boolean
-  rotating: boolean
   onBack: () => void
-  onRotate: (asset: MediaAsset) => void
   onRequestFullscreen: (photo: PhotoCarouselPhoto) => void | Promise<void>
 }) {
   const [activeIndex, setActiveIndex] = useState(0)
@@ -762,21 +755,6 @@ function FolderDetails({
                           {mediaStatusLabel[asset.status]}
                         </Badge>
                       </div>
-                      {canEdit && asset.status === "READY" ? (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          disabled={rotating}
-                          onClick={() => onRotate(asset)}
-                        >
-                          <HugeiconsIcon
-                            icon={RotateClockwiseIcon}
-                            data-icon="inline-start"
-                          />
-                          Повернуть
-                        </Button>
-                      ) : null}
                     </div>
                   ))
                 ) : (
@@ -800,9 +778,7 @@ export function RentalItemPhotosRegister({
   loading,
   error,
   canEdit,
-  rotating,
   onAdd,
-  onRotate,
   onOpenFolder,
   onRequestFullscreen,
 }: {
@@ -812,9 +788,7 @@ export function RentalItemPhotosRegister({
   loading: boolean
   error: unknown
   canEdit: boolean
-  rotating: boolean
   onAdd: () => void
-  onRotate: (asset: MediaAsset) => void
   onOpenFolder: (folderId: string) => Promise<unknown>
   onRequestFullscreen: (photo: PhotoCarouselPhoto) => void | Promise<void>
 }) {
@@ -933,10 +907,7 @@ export function RentalItemPhotosRegister({
         item={item}
         folder={selectedFolder}
         previewLoading={previewLoading}
-        canEdit={canEdit}
-        rotating={rotating}
         onBack={() => setSelectedFolderId(null)}
-        onRotate={onRotate}
         onRequestFullscreen={onRequestFullscreen}
       />
     )

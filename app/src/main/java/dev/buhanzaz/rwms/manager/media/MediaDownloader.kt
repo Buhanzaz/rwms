@@ -28,8 +28,8 @@ class MediaDownloader(
             ?.firstOrNull { file -> file.nameWithoutExtension == stem && file.length() > 0L }
             ?.let { cached -> return Uri.fromFile(cached).toString() }
 
-        val body = retryMediaReadAfterOwnerProof {
-            api.originalMedia(
+        return retryMediaReadAfterOwnerProof {
+            val body = api.originalMedia(
                 mediaId = mediaId,
                 generation = generation,
                 ownerType = ownerType,
@@ -39,8 +39,11 @@ class MediaDownloader(
                 warehouseId = warehouseId,
                 context = context,
             )
+            // A disconnect can happen while a successful HTTP response is being copied to the
+            // local cache, not just before headers arrive. Retry the whole idempotent read so a
+            // supplement does not lose a photo merely because its response body was interrupted.
+            persistBody(stem, body)
         }
-        return persistBody(stem, body)
     }
 
     suspend fun downloadVariant(
@@ -61,12 +64,9 @@ class MediaDownloader(
         mediaCacheDir.listFiles()
             ?.firstOrNull { file -> file.nameWithoutExtension == stem && file.length() > 0L }
             ?.let { cached -> return Uri.fromFile(cached).toString() }
-        return persistBody(
-            stem,
-            retryMediaReadAfterOwnerProof {
-                api.mediaVariantContent(contentPath)
-            },
-        )
+        return retryMediaReadAfterOwnerProof {
+            persistBody(stem, api.mediaVariantContent(contentPath))
+        }
     }
 
     private fun persistBody(stem: String, body: ResponseBody): String {

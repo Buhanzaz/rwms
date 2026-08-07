@@ -4,17 +4,14 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -40,7 +37,6 @@ fun PhotoPagerScreen(
     LaunchedEffect(paths) { viewModel.load(paths) }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val pager = rememberPagerState(pageCount = { paths.size })
-    val rotations = remember(paths) { mutableStateMapOf<String, Float>() }
     WorkerScreenScaffold(title = title, onBack = onBack) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
@@ -52,19 +48,11 @@ fun PhotoPagerScreen(
                     } else {
                         ZoomableBitmap(
                             bitmap = bitmap.asImageBitmap(),
-                            rotation = rotations[path] ?: 0f,
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
                 }
             }
-            FloatingActionButton(
-                onClick = {
-                    val current = paths[pager.currentPage]
-                    rotations[current] = ((rotations[current] ?: 0f) + 90f) % 360f
-                },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
-            ) { Text("90°") }
             state.error?.let { Text(it, modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp)) }
         }
     }
@@ -73,7 +61,6 @@ fun PhotoPagerScreen(
 @Composable
 private fun ZoomableBitmap(
     bitmap: androidx.compose.ui.graphics.ImageBitmap,
-    rotation: Float,
     modifier: Modifier = Modifier,
 ) {
     var scale by remember { mutableFloatStateOf(1f) }
@@ -82,7 +69,7 @@ private fun ZoomableBitmap(
         bitmap = bitmap,
         contentDescription = "Фото задания",
         modifier = modifier
-            .pointerInput(rotation) {
+            .pointerInput(Unit) {
                 detectTransformGestures { _, pan, zoom, _ ->
                     scale = (scale * zoom).coerceIn(1f, 5f)
                     offset = IntOffset(offset.x + pan.x.roundToInt(), offset.y + pan.y.roundToInt())
@@ -93,7 +80,6 @@ private fun ZoomableBitmap(
                 scaleY = scale,
                 translationX = offset.x.toFloat(),
                 translationY = offset.y.toFloat(),
-                rotationZ = rotation,
             ),
     )
 }

@@ -165,4 +165,37 @@ describe("property dispositions HTTP client", () => {
     expect(String(url)).toContain("state=QUARANTINED")
     expect(page).toMatchObject({ page: 2, size: 25, totalElements: 70 })
   })
+
+  it("accepts an unaccounted loss without a warehouse stock effect", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      json({
+        items: [
+          response({
+            disposition: "LOSS",
+            source: "UNACCOUNTED",
+            state: "EFFECTIVE",
+            assetEffectState: "NOT_REQUIRED",
+          }),
+        ],
+        page: 0,
+        size: 25,
+        totalElements: 1,
+      })
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    const page = await listPropertyDispositions({
+      accessToken: "token",
+      warehouseId: WAREHOUSE_ID,
+      disposition: "LOSS",
+      page: 0,
+      size: 25,
+      state: null,
+    })
+
+    expect(page.items[0]).toMatchObject({
+      source: "UNACCOUNTED",
+      assetEffectState: "NOT_REQUIRED",
+    })
+  })
 })

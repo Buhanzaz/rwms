@@ -244,6 +244,35 @@ class InventoryDomainStateMachineTest {
     assertThat(finding.getMaintenancePlanFingerprintSha256()).isNull();
   }
 
+  @Test
+  void abandonedIdempotencyLeaseCanOnlyBeExpiredByItsOwner() {
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    String requestHash = "1".repeat(64);
+    UUID ownerLease = UUID.randomUUID();
+    InventoryIdempotencyRecord record =
+        InventoryIdempotencyRecord.reserve(
+            UUID.randomUUID(),
+            "finding.create-source",
+            UUID.randomUUID(),
+            requestHash,
+            ownerLease,
+            now,
+            now.plusMinutes(1));
+
+    assertThat(record.abandon(UUID.randomUUID(), requestHash, now.plusSeconds(1))).isFalse();
+    assertThat(record.ownsLease(ownerLease, requestHash)).isTrue();
+
+    OffsetDateTime abandonedAt = now.plusSeconds(1);
+    assertThat(record.abandon(ownerLease, requestHash, abandonedAt)).isTrue();
+    assertThat(record.ownsLease(ownerLease, requestHash)).isFalse();
+    assertThat(record.hasActiveLease(abandonedAt)).isFalse();
+
+    UUID reclaimedLease = UUID.randomUUID();
+    record.reclaim(reclaimedLease, abandonedAt, abandonedAt.plusMinutes(1));
+
+    assertThat(record.ownsLease(reclaimedLease, requestHash)).isTrue();
+  }
+
   private InventorySession session() {
     InventorySession session =
         InventorySession.start(

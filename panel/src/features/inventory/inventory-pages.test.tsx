@@ -1671,9 +1671,14 @@ describe("InventoryFinishPage conflict resolution", () => {
         "Ожидалось: 1"
       )
     ).toBeNull()
-    expect(await screen.findByText("Итоговые позиции")).toBeTruthy()
-    expect(screen.getByText("Заменить дверь")).toBeTruthy()
-    expect(screen.getByText("Дверь металлическая")).toBeTruthy()
+    const workTotals = await screen.findByRole("table", { name: "Итоги работ" })
+    const materialTotals = screen.getByRole("table", {
+      name: "Итоги материалов",
+    })
+    expect(within(workTotals).getByText("Заменить дверь")).toBeTruthy()
+    expect(within(workTotals).queryByText("Дверь металлическая")).toBeNull()
+    expect(within(materialTotals).getByText("Дверь металлическая")).toBeTruthy()
+    expect(within(materialTotals).queryByText("Заменить дверь")).toBeNull()
     expect(screen.getAllByText("150,00 ₽").length).toBeGreaterThan(0)
   })
 

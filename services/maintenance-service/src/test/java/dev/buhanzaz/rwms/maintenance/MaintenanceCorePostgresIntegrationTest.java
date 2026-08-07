@@ -21,6 +21,7 @@ import dev.buhanzaz.rwms.maintenance.domain.MaintenanceEventType;
 import dev.buhanzaz.rwms.maintenance.domain.MediaFactProjection;
 import dev.buhanzaz.rwms.maintenance.domain.RepairAcceptanceState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairComplexity;
+import dev.buhanzaz.rwms.maintenance.domain.FurnitureAccountingMode;
 import dev.buhanzaz.rwms.maintenance.domain.RepairExecutionState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairLogisticsPlanningMode;
 import dev.buhanzaz.rwms.maintenance.domain.RepairReclassificationState;
@@ -3841,6 +3842,40 @@ class MaintenanceCorePostgresIntegrationTest {
             lines.getLast().id(),
             "",
             null);
+    MaintenanceDependencyGateway.PropertyAssetSnapshot noRecordedCabin =
+        new MaintenanceDependencyGateway.PropertyAssetSnapshot(
+            MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
+            rentalItemId,
+            "C-1",
+            warehouseId,
+            7,
+            "AFTER_RENT",
+            null,
+            null,
+            List.of(),
+            false,
+            false,
+            false,
+            true);
+    MaintenanceDependencyGateway.PropertyAssetSnapshot recordedCabin =
+        new MaintenanceDependencyGateway.PropertyAssetSnapshot(
+            MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
+            rentalItemId,
+            "C-1",
+            warehouseId,
+            7,
+            "AFTER_RENT",
+            null,
+            null,
+            List.of(
+                new MaintenanceDependencyGateway.PropertyAssetContentSnapshot(
+                    chairEquipmentId, "Chair", null, 3, 2),
+                new MaintenanceDependencyGateway.PropertyAssetContentSnapshot(
+                    tableEquipmentId, "Table", null, 5, 4)),
+            false,
+            false,
+            false,
+            true);
     var created = service.createEstimate(
         UUID.randomUUID(),
         UUID.randomUUID(),
@@ -3852,6 +3887,25 @@ class MaintenanceCorePostgresIntegrationTest {
             lines,
             List.of(planStage),
             List.of()));
+    when(dependencies.getPropertyAssetSnapshot(
+            MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
+            rentalItemId,
+            warehouseId))
+        .thenReturn(noRecordedCabin);
+    assertThatThrownBy(() -> service.completeEstimate(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        created.response().id(),
+        new CompleteEstimateRequest(created.response().version(), 2)))
+        .isInstanceOf(MaintenanceValidationException.class)
+        .satisfies(error -> assertThat(((MaintenanceValidationException) error).code())
+            .isEqualTo("MAINTENANCE_UNACCOUNTED_FURNITURE_CONFIRMATION_REQUIRED"));
+
+    when(dependencies.getPropertyAssetSnapshot(
+            MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
+            rentalItemId,
+            warehouseId))
+        .thenReturn(recordedCabin);
     var completed = service.completeEstimate(
         UUID.randomUUID(),
         UUID.randomUUID(),
@@ -3860,6 +3914,39 @@ class MaintenanceCorePostgresIntegrationTest {
     assertThat(completed.response().repair().priority()).isEqualTo(2);
     UUID repairId = completed.response().repair().id();
     UUID estimateId = created.response().id();
+
+    var unaccountedCreated = service.createEstimate(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        new CreateEstimateRequest(
+            warehouseId,
+            rentalItemId,
+            LocalDate.of(2026, 7, 19),
+            null,
+            lines,
+            List.of(planStage),
+            List.of()));
+    when(dependencies.getPropertyAssetSnapshot(
+            MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
+            rentalItemId,
+            warehouseId))
+        .thenReturn(noRecordedCabin);
+    var unaccountedCompleted = service.completeEstimate(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        unaccountedCreated.response().id(),
+        new CompleteEstimateRequest(
+            unaccountedCreated.response().version(), 2, false, null, null, true));
+    assertThat(
+            repairs.findById(unaccountedCompleted.response().repair().id()).orElseThrow()
+                .getFurnitureAccountingMode())
+        .isEqualTo(FurnitureAccountingMode.UNACCOUNTED_CABIN_CONTENTS);
+    assertThat(dispositions.list(
+        warehouseId,
+        PropertyDispositionKind.WRITE_OFF,
+        PropertyDispositionState.PENDING_APPROVAL,
+        0,
+        20).items()).isEmpty();
 
     List<EstimateLineInput> changedFurniture = new ArrayList<>(lines);
     EstimateLineInput first = changedFurniture.getFirst();
@@ -3918,25 +4005,7 @@ class MaintenanceCorePostgresIntegrationTest {
             MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
             rentalItemId,
             warehouseId))
-        .thenReturn(
-            new MaintenanceDependencyGateway.PropertyAssetSnapshot(
-                MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
-                rentalItemId,
-                "C-1",
-                warehouseId,
-                7,
-                "AFTER_RENT",
-                null,
-                null,
-                List.of(
-                    new MaintenanceDependencyGateway.PropertyAssetContentSnapshot(
-                        chairEquipmentId, "Chair", null, 3, 2),
-                    new MaintenanceDependencyGateway.PropertyAssetContentSnapshot(
-                        tableEquipmentId, "Table", null, 5, 4)),
-                false,
-                false,
-                false,
-                true));
+        .thenReturn(recordedCabin);
     when(dependencies.acquireLease(
         any(), eq(rentalItemId), eq(7L), eq("MAINTENANCE_ESTIMATE"), eq(estimateId.toString())))
         .thenReturn(new MaintenanceDependencyGateway.LeaseSnapshot(

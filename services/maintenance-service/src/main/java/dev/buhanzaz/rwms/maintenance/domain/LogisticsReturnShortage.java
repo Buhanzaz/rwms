@@ -12,7 +12,11 @@ import lombok.Getter;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
-/** Immutable maintenance-owned receipt of one logistics return-line shortage snapshot. */
+/**
+ * Immutable maintenance-owned receipt of one logistics return-line estimate source.
+ *
+ * <p>The physical table retains its historical name so existing source rows remain readable.
+ */
 @Entity
 @Table(name = "logistics_return_shortage")
 @Getter
@@ -44,7 +48,7 @@ public class LogisticsReturnShortage {
 
   @Column(name = "shortage_snapshot", nullable = false, columnDefinition = "jsonb")
   @JdbcTypeCode(SqlTypes.JSON)
-  private String shortageSnapshot;
+  private String estimateSourceSnapshot;
 
   @Column(name = "created_at", nullable = false)
   private OffsetDateTime createdAt;
@@ -58,16 +62,16 @@ public class LogisticsReturnShortage {
       long rentalItemVersionSnapshot,
       String sourceSha256,
       String snapshotSha256,
-      String shortageSnapshot) {
+      String estimateSourceSnapshot) {
     if (id == null
         || warehouseId == null
         || rentalItemId == null
         || rentalItemVersionSnapshot < 0
         || !sha256(sourceSha256)
         || !sha256(snapshotSha256)
-        || shortageSnapshot == null
-        || shortageSnapshot.isBlank()) {
-      throw new IllegalArgumentException("Logistics return shortage source is incomplete");
+        || estimateSourceSnapshot == null
+        || estimateSourceSnapshot.isBlank()) {
+      throw new IllegalArgumentException("Logistics return estimate source is incomplete");
     }
     LogisticsReturnShortage value = new LogisticsReturnShortage();
     value.id = id;
@@ -76,7 +80,7 @@ public class LogisticsReturnShortage {
     value.rentalItemVersionSnapshot = rentalItemVersionSnapshot;
     value.sourceSha256 = sourceSha256;
     value.snapshotSha256 = snapshotSha256;
-    value.shortageSnapshot = shortageSnapshot;
+    value.estimateSourceSnapshot = estimateSourceSnapshot;
     return value;
   }
 
@@ -86,7 +90,7 @@ public class LogisticsReturnShortage {
     }
     if (this.estimateId != null && !this.estimateId.equals(estimateId)) {
       throw new IllegalStateException(
-          "Logistics return shortage is already bound to another estimate");
+          "Logistics return estimate source is already bound to another estimate");
     }
     this.estimateId = estimateId;
   }

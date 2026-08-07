@@ -35,6 +35,7 @@ class LogisticsContractFoundationTest {
             "/api/logistics/v1/returns",
             "/api/logistics/v1/returns/{documentId}",
             "/api/logistics/v1/returns/{documentId}/register",
+            "/api/logistics/v1/returns/{documentId}/start-estimates",
             "/api/logistics/v1/shipments",
             "/api/logistics/v1/shipments/{documentId}",
             "/api/logistics/v1/shipments/{documentId}/furniture-readiness",
@@ -81,6 +82,8 @@ class LogisticsContractFoundationTest {
     assertThat(child(child(document, "components"), "schemas"))
         .containsKeys(
             "CreateReturnRequest",
+            "ReturnEstimateLineRequest",
+            "StartReturnEstimatesRequest",
             "CreateShipmentRequest",
             "ShipmentFurnitureTaskResult",
             "ShipmentFurnitureReadiness",
@@ -176,7 +179,7 @@ class LogisticsContractFoundationTest {
             "getReturn",
             "registerReturn",
             "acceptUndamagedReturn",
-            "requestReturnEstimate",
+            "startReturnEstimates",
             "listShipments",
             "createShipment",
             "getShipment",
@@ -385,12 +388,12 @@ class LogisticsContractFoundationTest {
   }
 
   @Test
-  void returnInspectionCommandsRequireLineOwnedPhotosAndExplicitEquipmentConfirmation()
+  void returnInspectionCommandsRequireLineOwnedPhotosAndDeferFurnitureSelectionToEstimates()
       throws Exception {
     Map<String, Object> schemas = child(child(openApi(), "components"), "schemas");
     Map<String, Object> acceptanceLine = child(schemas, "ReturnMediaLineRequest");
     Map<String, Object> acceptanceProperties = child(acceptanceLine, "properties");
-    Map<String, Object> estimateLine = child(schemas, "ReturnShortageLineRequest");
+    Map<String, Object> estimateLine = child(schemas, "ReturnEstimateLineRequest");
     Map<String, Object> estimateProperties = child(estimateLine, "properties");
 
     assertThat(acceptanceLine.get("required"))
@@ -399,9 +402,10 @@ class LogisticsContractFoundationTest {
     assertThat(child(acceptanceProperties, "equipmentConfirmed"))
         .containsEntry("type", "boolean")
         .containsEntry("const", true);
-    assertThat(estimateLine.get("required"))
-        .isEqualTo(List.of("lineId", "references", "shortages"));
+    assertThat(estimateLine.get("required")).isEqualTo(List.of("lineId", "references"));
     assertThat(child(estimateProperties, "references").get("minItems")).isEqualTo(1);
+    assertThat(estimateProperties).doesNotContainKey("shortages");
+    assertThat(schemas).doesNotContainKey("ReturnShortageLineRequest");
   }
 
   @Test

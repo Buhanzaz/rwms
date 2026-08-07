@@ -198,7 +198,10 @@ public class PropertyDispositionDecision {
     value.kind = draft.kind();
     value.source = draft.source();
     value.state = PropertyDispositionState.PENDING_APPROVAL;
-    value.assetEffectState = PropertyDispositionAssetEffectState.NOT_STARTED;
+    value.assetEffectState =
+        draft.source() == PropertyDispositionSource.UNACCOUNTED
+            ? PropertyDispositionAssetEffectState.NOT_REQUIRED
+            : PropertyDispositionAssetEffectState.NOT_STARTED;
     value.contentsMode = draft.contentsMode();
     value.expectedAssetVersion = draft.expectedAssetVersion();
     value.expectedSourceBalanceVersion = draft.expectedSourceBalanceVersion();
@@ -260,7 +263,10 @@ public class PropertyDispositionDecision {
     requireExpectedVersion(expectedVersion);
     requireState(PropertyDispositionState.PENDING_APPROVAL, "reject");
     state = PropertyDispositionState.REJECTED;
-    assetEffectState = PropertyDispositionAssetEffectState.NOT_STARTED;
+    assetEffectState =
+        source == PropertyDispositionSource.UNACCOUNTED
+            ? PropertyDispositionAssetEffectState.NOT_REQUIRED
+            : PropertyDispositionAssetEffectState.NOT_STARTED;
     reviewedByActorSnapshot = reviewer;
     reviewComment = null;
     this.rejectionReason = normalizedReason;
@@ -309,6 +315,10 @@ public class PropertyDispositionDecision {
     }
     requireExpectedVersion(expectedVersion);
     requireState(PropertyDispositionState.APPROVED, "start an asset effect");
+    if (!requiresAssetEffect()) {
+      throw new PropertyDispositionConflictException(
+          "An unaccounted disposition must not start an asset effect");
+    }
     if (requiresMovement()) {
       throw new PropertyDispositionConflictException(
           "Selected cabin contents must complete logistics movement before the asset effect");
@@ -334,6 +344,23 @@ public class PropertyDispositionDecision {
     }
     effectId = appliedEffectId;
     assetEffectState = PropertyDispositionAssetEffectState.APPLIED;
+    state = PropertyDispositionState.EFFECTIVE;
+    return true;
+  }
+
+  /** Finalizes a separately approved loss that deliberately has no asset-service effect. */
+  public boolean markEffectiveWithoutAssetEffect(long expectedVersion) {
+    if (state == PropertyDispositionState.EFFECTIVE
+        && assetEffectState == PropertyDispositionAssetEffectState.NOT_REQUIRED) {
+      return false;
+    }
+    requireExpectedVersion(expectedVersion);
+    requireState(PropertyDispositionState.APPROVED, "finalize an unaccounted disposition");
+    if (requiresAssetEffect()) {
+      throw new PropertyDispositionConflictException(
+          "This property disposition requires an asset-service effect");
+    }
+    assetEffectState = PropertyDispositionAssetEffectState.NOT_REQUIRED;
     state = PropertyDispositionState.EFFECTIVE;
     return true;
   }
@@ -391,7 +418,9 @@ public class PropertyDispositionDecision {
     recoveredAt = now();
     state = quarantineResumeState;
     assetEffectState =
-        state == PropertyDispositionState.EFFECT_PENDING
+        source == PropertyDispositionSource.UNACCOUNTED
+            ? PropertyDispositionAssetEffectState.NOT_REQUIRED
+            : state == PropertyDispositionState.EFFECT_PENDING
             ? PropertyDispositionAssetEffectState.PENDING
             : PropertyDispositionAssetEffectState.NOT_STARTED;
     recoveryVersion++;
@@ -429,6 +458,10 @@ public class PropertyDispositionDecision {
 
   public boolean requiresMovement() {
     return contents.stream().anyMatch(line -> line.getMoveQuantity() > 0);
+  }
+
+  public boolean requiresAssetEffect() {
+    return source != PropertyDispositionSource.UNACCOUNTED;
   }
 
   /** Exact, subject-bound replay check for a permanent manual idempotency record. */
@@ -469,6 +502,10 @@ public class PropertyDispositionDecision {
       throw new IllegalArgumentException(
           "Manual disposition requires subject-bound idempotency identity");
     }
+    boolean unaccounted = draft.source() == PropertyDispositionSource.UNACCOUNTED;
+    if (unaccounted && draft.assetKind() != PropertyDispositionAssetKind.EQUIPMENT) {
+      throw new IllegalArgumentException("Unaccounted disposition must describe one equipment item");
+    }
     if (draft.assetKind() == PropertyDispositionAssetKind.EQUIPMENT) {
       boolean custody = draft.maintenanceCustodyClaimId() != null
           || draft.maintenanceCustodyVersion() != null;
@@ -478,7 +515,15 @@ public class PropertyDispositionDecision {
           || !draft.contents().isEmpty()) {
         throw new IllegalArgumentException("Equipment disposition requires a positive quantity");
       }
-      if (custody) {
+      if (unaccounted) {
+        if (custody
+            || draft.expectedAssetVersion() != null
+            || draft.expectedSourceBalanceVersion() != null
+            || draft.sourceRepairId() == null
+            || draft.rootRepairId() == null) {
+          throw new IllegalArgumentException("Unaccounted equipment disposition fence is invalid");
+        }
+      } else if (custody) {
         if (draft.maintenanceCustodyClaimId() == null
             || draft.maintenanceCustodyVersion() == null
             || draft.maintenanceCustodyVersion() < 0

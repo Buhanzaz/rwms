@@ -358,14 +358,75 @@ func (repository *Repository) findCreateReplay(
 	}
 	asset, err := scanAssetWithSession(tx.QueryRow(ctx, assetWithSessionSQL+`
 		where a.media_id=$1 and media_asset_is_available(a.media_id)`, assetID))
-	if err == nil {
-		if err = requireOwnerBinding(ctx, tx, asset.OwnerType, asset.OwnerID, asset.WarehouseID, repository.now()); err == nil {
-			if asset.UploadCompletedAt != nil || !repository.now().Before(asset.UploadExpiresAt) {
-				err = ErrConflict
-			}
-		}
+	if err != nil {
+		return asset, true, err
 	}
-	return asset, true, err
+	// Byte ingress keeps this same advisory lock while it streams and finalizes
+	// content. Acquire it before locking the row: otherwise a slow, already
+	// accepted upload can hold the content lock and wait for this row while a
+	// replay waits for the content lock. The re-read below makes the decision
+	// from the state after any in-flight upload has finished.
+	if err := lockUploadSessionContentTransaction(ctx, tx, asset.UploadSessionID); err != nil {
+		return asset, true, err
+	}
+	asset, err = scanAssetWithSession(tx.QueryRow(ctx, assetWithSessionSQL+`
+		where a.media_id=$1 and media_asset_is_available(a.media_id) for update of a,s`, assetID))
+	if err != nil {
+		return asset, true, err
+	}
+	now := repository.now().UTC()
+	if err = requireOwnerBinding(ctx, tx, asset.OwnerType, asset.OwnerID, asset.WarehouseID, now); err != nil {
+		return asset, true, err
+	}
+
+	// A CREATE_UPLOAD replay normally returns its existing, still-open session.
+	// If that session expired before any bytes were finalized, the same logical
+	// asset may safely receive a replacement session. This matters for durable
+	// mobile outboxes: an old client retries the exact create request, then uses
+	// the session returned by this response for byte ingress. The media ID,
+	// source object key, owner and idempotency identity remain immutable.
+	if asset.UploadCompletedAt != nil || asset.Status != media.StatusUploading {
+		return asset, true, ErrConflict
+	}
+	if now.Before(asset.UploadExpiresAt) {
+		return asset, true, nil
+	}
+	if !now.Before(command.UploadExpiresAt) {
+		return asset, true, ErrConflict
+	}
+
+	newSessionID := command.UploadSessionID
+	if newSessionID == uuid.Nil {
+		newSessionID = uuid.New()
+	}
+	result, err := tx.Exec(ctx, `
+		update media_upload_session
+		set upload_session_id=$1, principal_type=$2, subject_id=$3, idempotency_key=$4,
+			expected_content_length=$5, expected_content_type=$6, expected_checksum_sha256=$7,
+			expires_at=$8, completed_at=null, created_at=$9
+		where media_id=$10 and upload_session_id=$11 and principal_type=$2 and subject_id=$3
+			and completed_at is null and expires_at <= $9`,
+		newSessionID, command.PrincipalType, command.SubjectID, command.IdempotencyKey,
+		command.ContentLength, command.ContentType, command.ChecksumSHA256,
+		command.UploadExpiresAt.UTC(), now, asset.ID, asset.UploadSessionID)
+	if err != nil {
+		return asset, true, translateConstraint(err)
+	}
+	if result.RowsAffected() != 1 {
+		return asset, true, ErrConflict
+	}
+	_, err = tx.Exec(ctx, `
+		update media_command_idempotency set expires_at=$1
+		where principal_type=$2 and subject_id=$3 and command_type='CREATE_UPLOAD' and idempotency_key=$4`,
+		now.Add(24*time.Hour), command.PrincipalType, command.SubjectID, command.IdempotencyKey)
+	if err != nil {
+		return asset, true, translateConstraint(err)
+	}
+	asset.UploadSessionID = newSessionID
+	asset.UploadExpiresAt = command.UploadExpiresAt.UTC()
+	asset.ExpectedLength = command.ContentLength
+	asset.ExpectedChecksum = command.ChecksumSHA256
+	return asset, true, nil
 }
 
 func validateCreateActor(command CreateUploadCommand) error {
@@ -759,7 +820,7 @@ func (repository *Repository) FinalizeUpload(ctx context.Context, command Finali
 	asset.SourceVersionID = command.ObjectVersionID
 	asset.SourceETag = command.ETag
 	asset.SourceChecksum = command.ChecksumSHA256
-	if err := insertProcessingRequestOutbox(ctx, tx, jobID, asset, generation, media.ProcessingInitial, media.Rotation0, command.CorrelationID, now, &uploadedID); err != nil {
+	if err := insertProcessingRequestOutbox(ctx, tx, jobID, asset, generation, command.CorrelationID, now, &uploadedID); err != nil {
 		return AssetRecord{}, false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -784,115 +845,6 @@ func requireFinalizeWorkerAccess(ctx context.Context, tx pgx.Tx, asset AssetReco
 		return ErrOwnerProofMissing
 	}
 	return RequireTaskBoardEntryWorkerAccess(ctx, tx, entryID, asset.WarehouseID, *command.WorkerID)
-}
-
-type RotateCommand struct {
-	MediaID         uuid.UUID
-	SubjectID       uuid.UUID
-	IdempotencyKey  uuid.UUID
-	RequestSHA256   string
-	ExpectedVersion int64
-	Rotation        media.Rotation
-	CorrelationID   uuid.UUID
-}
-
-func (repository *Repository) Rotate(ctx context.Context, command RotateCommand) (AssetRecord, bool, error) {
-	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
-	if err != nil {
-		return AssetRecord{}, false, err
-	}
-	defer tx.Rollback(ctx)
-	if err := lockCommand(ctx, tx, command.SubjectID, "ROTATE", command.IdempotencyKey); err != nil {
-		return AssetRecord{}, false, err
-	}
-	var existingSHA string
-	var replayID uuid.UUID
-	err = tx.QueryRow(ctx, `select request_sha256, media_id from media_command_idempotency
-		where principal_type='USER' and subject_id=$1 and command_type='ROTATE' and idempotency_key=$2 for update`,
-		command.SubjectID, command.IdempotencyKey).Scan(&existingSHA, &replayID)
-	if err == nil {
-		if existingSHA != command.RequestSHA256 || replayID != command.MediaID {
-			return AssetRecord{}, false, ErrIdempotencyMismatch
-		}
-		asset, loadErr := repository.assetForUpdate(ctx, tx, replayID)
-		if loadErr != nil {
-			return AssetRecord{}, false, loadErr
-		}
-		if proofErr := requireOwnerBinding(ctx, tx, asset.OwnerType, asset.OwnerID, asset.WarehouseID, repository.now()); proofErr != nil {
-			return AssetRecord{}, false, proofErr
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return AssetRecord{}, false, err
-		}
-		return asset, true, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return AssetRecord{}, false, err
-	}
-	asset, err := repository.assetForUpdate(ctx, tx, command.MediaID)
-	if err != nil {
-		return AssetRecord{}, false, err
-	}
-	if err := requireOwnerBinding(ctx, tx, asset.OwnerType, asset.OwnerID, asset.WarehouseID, repository.now()); err != nil {
-		return AssetRecord{}, false, err
-	}
-	if asset.Status != media.StatusReady || asset.Version != command.ExpectedVersion || asset.Generation <= 0 || asset.Rotation == command.Rotation {
-		return AssetRecord{}, false, ErrConflict
-	}
-	jobID := uuid.New()
-	var generation int
-	err = tx.QueryRow(ctx, `
-		update media_asset as a set processing_status='PROCESSING',
-			pending_generation=next_generation, pending_rotation_degrees=$2,
-			next_generation=next_generation+1, version=version+1, updated_at=$3
-		where a.media_id=$1 and version=$4 and processing_status='READY'
-		  and media_asset_is_available(a.media_id)
-		returning pending_generation, version`,
-		asset.ID, command.Rotation, repository.now().UTC(), command.ExpectedVersion).
-		Scan(&generation, &asset.Version)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return AssetRecord{}, false, ErrConflict
-	}
-	if err != nil {
-		return AssetRecord{}, false, err
-	}
-	_, err = tx.Exec(ctx, `insert into media_processing_job (
-		processing_job_id, media_id, generation, processing_kind,
-		requested_rotation_degrees, job_status, source_version_id,
-		source_checksum_sha256, next_attempt_at)
-		values ($1,$2,$3,'ROTATION',$4,'PENDING',$5,$6,$7)`,
-		jobID, asset.ID, generation, command.Rotation, asset.SourceVersionID,
-		asset.SourceChecksum, repository.now().UTC())
-	if err != nil {
-		return AssetRecord{}, false, translateConstraint(err)
-	}
-	_, err = tx.Exec(ctx, `insert into media_command_idempotency (
-		principal_type,subject_id, command_type, idempotency_key, request_sha256, media_id, created_at, expires_at)
-		values ('USER',$1,'ROTATE',$2,$3,$4,$5,$6)`, command.SubjectID, command.IdempotencyKey,
-		command.RequestSHA256, asset.ID, repository.now().UTC(), repository.now().UTC().Add(24*time.Hour))
-	if err != nil {
-		return AssetRecord{}, false, translateConstraint(err)
-	}
-	if err := appendEvent(ctx, tx, asset.ID, "media.rotation.requested.v1", command.SubjectID, command.CorrelationID, repository.now().UTC()); err != nil {
-		return AssetRecord{}, false, err
-	}
-	var dependency uuid.UUID
-	if err := tx.QueryRow(ctx, `select event_id from media_transport_outbox
-		where aggregate_type='MEDIA' and aggregate_id=$1 and aggregate_version=$2
-		order by recorded_at desc,event_id desc limit 1`, asset.ID, asset.Version-1).Scan(&dependency); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return AssetRecord{}, false, ErrConflict
-		}
-		return AssetRecord{}, false, err
-	}
-	if err := insertProcessingRequestOutbox(ctx, tx, jobID, asset, generation, media.ProcessingRotation, command.Rotation, command.CorrelationID, repository.now().UTC(), &dependency); err != nil {
-		return AssetRecord{}, false, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return AssetRecord{}, false, translateConstraint(err)
-	}
-	asset.Status = media.StatusProcessing
-	return asset, false, nil
 }
 
 func (repository *Repository) ListOwner(
@@ -1877,9 +1829,9 @@ func readTaskBoardSourceVariant(ctx context.Context, tx pgx.Tx, entryID, warehou
 	if found {
 		// A source reference pins an immutable historical generation. Surface
 		// that exact generation to the worker-only callback rather than the
-		// source asset's possibly newer current generation. A later rotation may
-		// leave the asset PROCESSING while this immutable referenced variant is
-		// still ready to display, so status follows the pinned variant too.
+		// source asset's possibly newer current generation. The immutable
+		// referenced variant can remain ready while a newer processing attempt is
+		// pending, so status follows the pinned variant too.
 		asset.Generation = generation
 		if variant != nil {
 			asset.Status = media.StatusReady
@@ -2119,6 +2071,19 @@ func lockActorCommand(ctx context.Context, tx pgx.Tx, principalType string, subj
 	return err
 }
 
+// lockUploadSessionContentTransaction uses the same lock identity as
+// AcquireUploadSessionContentLock. It lets recovery wait for an in-flight
+// content request before replacing an expired session, without holding a row
+// lock that the finalization path also needs.
+func lockUploadSessionContentTransaction(ctx context.Context, tx pgx.Tx, sessionID uuid.UUID) error {
+	if sessionID == uuid.Nil {
+		return ErrConflict
+	}
+	_, err := tx.Exec(ctx, `select pg_advisory_xact_lock(hashtextextended($1,0))`,
+		"media-upload-session-content:"+sessionID.String())
+	return err
+}
+
 func appendInitialEvent(ctx context.Context, tx pgx.Tx, aggregateID uuid.UUID, eventType string, subjectID, correlationID uuid.UUID, recordedAt time.Time) error {
 	return appendInitialEventForActor(ctx, tx, aggregateID, eventType,
 		ActorReference{SubjectID: subjectID, PrincipalType: PrincipalTypeUser}, correlationID, recordedAt)
@@ -2288,12 +2253,12 @@ func insertFactOutboxForActor(ctx context.Context, tx pgx.Tx, eventID uuid.UUID,
 	return translateConstraint(err)
 }
 
-func insertProcessingRequestOutbox(ctx context.Context, tx pgx.Tx, jobID uuid.UUID, asset AssetRecord, generation int, kind media.ProcessingKind, rotation media.Rotation, correlationID uuid.UUID, recordedAt time.Time, dependency *uuid.UUID) error {
+func insertProcessingRequestOutbox(ctx context.Context, tx pgx.Tx, jobID uuid.UUID, asset AssetRecord, generation int, correlationID uuid.UUID, recordedAt time.Time, dependency *uuid.UUID) error {
 	eventID := uuid.New()
 	payload := map[string]any{
 		"processingJobId": jobID, "mediaId": asset.ID, "warehouseId": asset.WarehouseID,
-		"kind": asset.Kind, "processingKind": kind, "generation": generation,
-		"rotationDegrees": rotation, "sourceVersionId": asset.SourceVersionID,
+		"kind": asset.Kind, "processingKind": media.ProcessingInitial, "generation": generation,
+		"rotationDegrees": media.Rotation0, "sourceVersionId": asset.SourceVersionID,
 	}
 	body, checksum, err := envelope(eventID, "media.processing.request.v1", "PROCESSING_JOB", jobID, 1, nil, correlationID, recordedAt, payload)
 	if err != nil {

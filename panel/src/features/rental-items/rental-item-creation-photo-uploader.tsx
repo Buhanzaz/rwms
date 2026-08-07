@@ -3,7 +3,6 @@ import {
   Delete02Icon,
   EyeIcon,
   ImageUploadIcon,
-  RotateClockwiseIcon,
 } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 
@@ -21,10 +20,7 @@ import {
   FieldLegend,
   FieldSet,
 } from "@/components/ui/field"
-import type {
-  MediaRotationDegrees,
-  MediaUploadCommandKeys,
-} from "@/features/media/media-service"
+import type { MediaUploadCommandKeys } from "@/features/media/media-service"
 import { cn } from "@/lib/utils"
 
 const MAX_CREATION_PHOTOS = 20
@@ -34,9 +30,7 @@ export type StagedRentalItemPhoto = Readonly<{
   id: string
   file: File
   previewUrl: string
-  rotationDegrees: MediaRotationDegrees
   commandKeys: MediaUploadCommandKeys
-  rotateKey: string
   title: boolean
 }>
 
@@ -45,21 +39,11 @@ function stagePhoto(file: File, title = false): StagedRentalItemPhoto {
     id: crypto.randomUUID(),
     file,
     previewUrl: URL.createObjectURL(file),
-    rotationDegrees: 0,
     commandKeys: {
       createSession: crypto.randomUUID(),
       uploadAndFinalize: crypto.randomUUID(),
     },
-    rotateKey: crypto.randomUUID(),
     title,
-  }
-}
-
-function rotatePhoto(photo: StagedRentalItemPhoto): StagedRentalItemPhoto {
-  return {
-    ...photo,
-    rotationDegrees: ((photo.rotationDegrees + 90) %
-      360) as MediaRotationDegrees,
   }
 }
 
@@ -222,10 +206,7 @@ export function RentalItemCreationPhotoUploader({
                     <img
                       src={photo.previewUrl}
                       alt={photo.file.name}
-                      className="size-full object-cover transition-transform"
-                      style={{
-                        transform: `rotate(${photo.rotationDegrees}deg)`,
-                      }}
+                      className="size-full object-cover"
                     />
                   </button>
                   <div className="flex flex-col gap-2 p-2">
@@ -233,9 +214,6 @@ export function RentalItemCreationPhotoUploader({
                       <div className="min-w-0">
                         <div className="truncate text-xs font-medium">
                           {photo.file.name}
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          Поворот: {photo.rotationDegrees}°
                         </div>
                       </div>
                       <div className="flex shrink-0 gap-1">
@@ -247,24 +225,6 @@ export function RentalItemCreationPhotoUploader({
                           onClick={() => setPreviewId(photo.id)}
                         >
                           <HugeiconsIcon icon={EyeIcon} />
-                        </Button>
-                        <Button
-                          type="button"
-                          size="icon-sm"
-                          variant="ghost"
-                          aria-label={`Повернуть ${photo.file.name}`}
-                          disabled={disabled}
-                          onClick={() =>
-                            onChange(
-                              photos.map((candidate) =>
-                                candidate.id === photo.id
-                                  ? rotatePhoto(candidate)
-                                  : candidate
-                              )
-                            )
-                          }
-                        >
-                          <HugeiconsIcon icon={RotateClockwiseIcon} />
                         </Button>
                         <Button
                           type="button"
@@ -310,10 +270,7 @@ export function RentalItemCreationPhotoUploader({
               <img
                 src={selectedPhoto.previewUrl}
                 alt={selectedPhoto.file.name}
-                className="max-h-[70svh] max-w-full object-contain transition-transform"
-                style={{
-                  transform: `rotate(${selectedPhoto.rotationDegrees}deg)`,
-                }}
+                className="max-h-[70svh] max-w-full object-contain"
               />
             </div>
           ) : null}

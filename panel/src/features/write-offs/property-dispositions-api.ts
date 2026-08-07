@@ -4,7 +4,7 @@ import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 export type PropertyDispositionAssetKind = "CABIN" | "EQUIPMENT"
 export type PropertyDispositionKind = "WRITE_OFF" | "LOSS"
 export type PropertyDispositionSource =
-  "MANUAL" | "REPAIR" | "ESTIMATE" | "INVENTORY"
+  "MANUAL" | "REPAIR" | "ESTIMATE" | "INVENTORY" | "UNACCOUNTED"
 export type PropertyDispositionState =
   | "PENDING_APPROVAL"
   | "APPROVED"
@@ -14,7 +14,7 @@ export type PropertyDispositionState =
   | "REJECTED"
   | "QUARANTINED"
 export type PropertyDispositionAssetEffectState =
-  "NOT_STARTED" | "PENDING" | "APPLIED" | "QUARANTINED"
+  "NOT_STARTED" | "PENDING" | "APPLIED" | "NOT_REQUIRED" | "QUARANTINED"
 
 export type CabinContentsDispositionMode =
   "MOVE_SELECTED_TO_STOCK" | "DISPOSE_WITH_CABIN"
@@ -124,7 +124,13 @@ const UUID_PATTERN =
 
 const ASSET_KINDS = ["CABIN", "EQUIPMENT"] as const
 const DISPOSITION_KINDS = ["WRITE_OFF", "LOSS"] as const
-const SOURCES = ["MANUAL", "REPAIR", "ESTIMATE", "INVENTORY"] as const
+const SOURCES = [
+  "MANUAL",
+  "REPAIR",
+  "ESTIMATE",
+  "INVENTORY",
+  "UNACCOUNTED",
+] as const
 const STATES = [
   "PENDING_APPROVAL",
   "APPROVED",
@@ -138,6 +144,7 @@ const EFFECT_STATES = [
   "NOT_STARTED",
   "PENDING",
   "APPLIED",
+  "NOT_REQUIRED",
   "QUARANTINED",
 ] as const
 const CONTENTS_MODES = ["MOVE_SELECTED_TO_STOCK", "DISPOSE_WITH_CABIN"] as const

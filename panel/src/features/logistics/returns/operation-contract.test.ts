@@ -12,7 +12,7 @@ describe("return UI contract mapping", () => {
       createReceipt: "createReturn",
       registerReceipt: "registerReturn",
       acceptUndamaged: "acceptUndamagedReturn",
-      requestEstimate: "requestReturnEstimate",
+      startEstimates: "startReturnEstimates",
     })
   })
 

@@ -4,7 +4,10 @@ import android.Manifest
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
+import android.graphics.Matrix
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.media.MediaActionSound
@@ -28,6 +31,7 @@ import androidx.camera.core.DynamicRange
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.MirrorMode
 import androidx.camera.core.Preview
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
@@ -123,9 +127,11 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.buhanzaz.rwms.manager.MainActivity
 import java.io.File
+import java.io.FileOutputStream
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -148,6 +154,9 @@ internal fun ManagerCameraExperience(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val mainExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
+    // CameraX invokes the file callback on this executor. Keep pixel normalization off the main
+    // thread: a high-resolution JPEG can take noticeably longer than the shutter animation.
+    val photoFileExecutor = remember(context) { Executors.newSingleThreadExecutor() }
     val previewView = remember(context) {
         PreviewView(context).apply {
             scaleType = PreviewView.ScaleType.FILL_CENTER
@@ -192,6 +201,10 @@ internal fun ManagerCameraExperience(
 
     DisposableEffect(shutterSound) {
         onDispose { shutterSound.release() }
+    }
+
+    DisposableEffect(photoFileExecutor) {
+        onDispose { photoFileExecutor.shutdown() }
     }
 
     DisposableEffect(context, previewView) {
@@ -533,17 +546,11 @@ internal fun ManagerCameraExperience(
                                 manager.isExtensionAvailable(baseSelector, ExtensionMode.HDR)
                             }.getOrDefault(false)
                         } ?: false
-                        val ultraHdrOutputAvailable = runCatching {
-                            ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR in
-                                ImageCapture.getImageCaptureCapabilities(selectedLens.cameraInfo)
-                                    .supportedOutputFormats
-                        }.getOrDefault(false)
                         val requestedExtensionMode = when {
                             cameraMode == ManagerCameraMode.Night && nightAvailable ->
                                 ExtensionMode.NIGHT
                             cameraMode == ManagerCameraMode.Photo &&
                                 settings.ultraHdrEnabled &&
-                                !ultraHdrOutputAvailable &&
                                 photoHdrExtensionAvailable -> ExtensionMode.HDR
                             else -> null
                         }
@@ -664,17 +671,17 @@ internal fun ManagerCameraExperience(
             }
         }
         playManagerCameraFeedback(context, shutterSound)
-        val fallbackExifOrientation = managerExifOrientationForRotationDegrees(
-            camera?.cameraInfo?.getSensorRotationDegrees(captureTargetRotation) ?: 0,
-        )
         captureManagerCameraPhoto(
             imageCapture = capture,
             targetRotation = captureTargetRotation,
-            fallbackExifOrientation = fallbackExifOrientation,
             cacheDir = context.cacheDir,
-            executor = mainExecutor,
-            onCaptured = { uri ->
+            ioExecutor = photoFileExecutor,
+            mainExecutor = mainExecutor,
+            onCaptured = { uri, resolutionReduced ->
                 captureInProgress = false
+                if (resolutionReduced) {
+                    cameraMessage = "Фото сохранено с разрешением до 13 МП для стабильной загрузки"
+                }
                 onPhotoCaptured(uri)
             },
             onError = {
@@ -962,13 +969,57 @@ private tailrec fun Context.managerMainActivity(): MainActivity? = when (this) {
     else -> null
 }
 
+private const val MANAGER_CAPTURE_WIDE_ZOOM_TARGET = 0.6f
+
+/**
+ * Keeps the shared 0.6× stop available on logical cameras that really support it. A physical
+ * lens is already an optical selection, so its local 1× baseline remains the appropriate stop.
+ * Invalid or narrower hardware ranges never receive a made-up zoom request.
+ */
+internal fun managerCaptureMinimumZoom(
+    hardwareMinimum: Float?,
+    hardwareMaximum: Float?,
+    selectedLensIsPhysical: Boolean,
+): Float {
+    val minimum = managerCaptureSupportedMinimumZoom(hardwareMinimum, hardwareMaximum)
+    val maximum = managerCaptureMaximumZoom(hardwareMinimum, hardwareMaximum)
+    val target = if (selectedLensIsPhysical) 1f else MANAGER_CAPTURE_WIDE_ZOOM_TARGET
+    return target.takeIf { zoom -> zoom in minimum..maximum } ?: minimum
+}
+
+internal fun managerCaptureMaximumZoom(
+    hardwareMinimum: Float?,
+    hardwareMaximum: Float?,
+): Float {
+    val minimum = managerCaptureSupportedMinimumZoom(hardwareMinimum, hardwareMaximum)
+    return hardwareMaximum
+        ?.takeIf { zoom -> zoom.isFinite() && zoom >= minimum }
+        ?: minimum
+}
+
+private fun managerCaptureSupportedMinimumZoom(
+    hardwareMinimum: Float?,
+    hardwareMaximum: Float?,
+): Float {
+    val reportedMinimum = hardwareMinimum?.takeIf { zoom -> zoom.isFinite() && zoom > 0f }
+    val reportedMaximum = hardwareMaximum?.takeIf { zoom -> zoom.isFinite() && zoom > 0f }
+    return when {
+        reportedMinimum != null && reportedMaximum != null && reportedMaximum >= reportedMinimum ->
+            reportedMinimum
+        reportedMinimum != null -> reportedMinimum
+        // When a vendor reports only a usable maximum, that maximum is the one value known to
+        // be safe. Do not invent a 1× request outside the published range.
+        reportedMaximum != null -> reportedMaximum
+        else -> 1f
+    }
+}
+
 private data class ManagerBoundCameraCapabilities(
     val hasFlashUnit: Boolean = false,
     val canSwitchCamera: Boolean = false,
     val nightExtensionAvailable: Boolean = false,
     val lowLightBoostAvailable: Boolean = false,
     val photoHdrAvailable: Boolean = false,
-    val ultraHdrAvailable: Boolean = false,
     val videoHdrAvailable: Boolean = false,
     val videoStabilizationAvailable: Boolean = false,
     val photoMegapixels: List<Int> = emptyList(),
@@ -1038,9 +1089,6 @@ private fun bindManagerCamera(
 ): ManagerCameraBinding {
     provider.unbindAll()
     val baseCameraInfo = selectedLens.cameraInfo
-    val availablePhotoFormats = runCatching {
-        ImageCapture.getImageCaptureCapabilities(baseCameraInfo).supportedOutputFormats
-    }.getOrDefault(setOf(ImageCapture.OUTPUT_FORMAT_JPEG))
     val videoCapabilities = Recorder.getVideoCapabilities(baseCameraInfo)
     val sdrQualities = videoCapabilities.getSupportedQualities(DynamicRange.SDR)
         .mapNotNull(::managerVideoQualityFromCameraX)
@@ -1075,25 +1123,21 @@ private fun bindManagerCamera(
     val facingPhotoPixelCounts = availableLenses
         .filter { lens -> lens.lensFacing == selectedLens.lensFacing }
         .flatMap(ManagerCameraLens::photoPixelCounts)
-    val selectedPhotoMegapixels = settings.requestedMegapixels
-        ?: managerPhotoMegapixelOptions(selectedLens.photoPixelCounts).firstOrNull()
-    val fullResolutionPhoto = selectedPhotoMegapixels != null && selectedPhotoMegapixels >= 40
     val zoomState = baseCameraInfo.zoomState.value
     val exposure = baseCameraInfo.exposureState
     val exposureStep = exposure.exposureCompensationStep.toFloat().takeIf { it > 0f } ?: 0f
-    val ultraHdrAvailable = ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR in availablePhotoFormats &&
-        !fullResolutionPhoto
+    val supportedMinimumZoom = zoomState?.minZoomRatio
+    val supportedMaximumZoom = zoomState?.maxZoomRatio
     val capabilities = ManagerBoundCameraCapabilities(
         hasFlashUnit = baseCameraInfo.hasFlashUnit(),
         canSwitchCamera = provider.hasManagerCamera(CameraSelector.LENS_FACING_BACK) &&
             provider.hasManagerCamera(CameraSelector.LENS_FACING_FRONT),
         nightExtensionAvailable = nightExtensionAvailable,
         lowLightBoostAvailable = baseCameraInfo.isLowLightBoostSupported,
-        photoHdrAvailable = managerPhotoHdrAvailable(
-            hdrExtensionAvailable = photoHdrExtensionAvailable,
-            ultraHdrAvailable = ultraHdrAvailable,
-        ),
-        ultraHdrAvailable = ultraHdrAvailable,
+        // Every still capture is normalized into an app-owned SDR JPEG before it can be
+        // uploaded. JPEG-R gain maps cannot survive that deterministic pixel transform, so do
+        // not advertise a selectable Ultra HDR still format.
+        photoHdrAvailable = photoHdrExtensionAvailable,
         videoHdrAvailable = videoHdrAvailable,
         videoStabilizationAvailable = videoCapabilities.isStabilizationSupported,
         photoMegapixels = managerPhotoMegapixelOptions(facingPhotoPixelCounts),
@@ -1102,8 +1146,15 @@ private fun bindManagerCamera(
         selectedLensZoom = selectedLens.displayZoom,
         videoQualities = dynamicRangeQualities,
         videoFramesPerSecond = supportedFps,
-        minimumZoom = if (selectedLens.isPhysical) 1f else zoomState?.minZoomRatio ?: 1f,
-        maximumZoom = zoomState?.maxZoomRatio ?: 1f,
+        minimumZoom = managerCaptureMinimumZoom(
+            hardwareMinimum = supportedMinimumZoom,
+            hardwareMaximum = supportedMaximumZoom,
+            selectedLensIsPhysical = selectedLens.isPhysical,
+        ),
+        maximumZoom = managerCaptureMaximumZoom(
+            hardwareMinimum = supportedMinimumZoom,
+            hardwareMaximum = supportedMaximumZoom,
+        ),
         minimumExposureTenths = if (exposureStep > 0f) {
             (exposure.exposureCompensationRange.lower * exposureStep * 10).roundToInt()
         } else {
@@ -1177,16 +1228,9 @@ private fun bindManagerCamera(
         if (selectedLens.isPhysical && !extensionActive && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             Camera2Interop.Extender(captureBuilder).setPhysicalCameraId(selectedLens.cameraId)
         }
-        val useUltraHdr = settings.ultraHdrEnabled &&
-            capabilities.ultraHdrAvailable &&
-            !extensionActive
-        captureBuilder.setOutputFormat(
-            if (useUltraHdr) {
-                ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR
-            } else {
-                ImageCapture.OUTPUT_FORMAT_JPEG
-            },
-        )
+        // The app rotates the captured pixels locally and writes Orientation=1. Use an ordinary
+        // JPEG from CameraX so the final upload is one deterministic, widely supported format.
+        captureBuilder.setOutputFormat(ImageCapture.OUTPUT_FORMAT_JPEG)
         val capture = captureBuilder.build()
         val boundCamera = provider.bindToLifecycle(lifecycleOwner, selector, preview, capture)
         ManagerCameraBinding(
@@ -2143,7 +2187,6 @@ private fun ManagerPhotoSettingsPanel(
             ManagerSettingsDetail.Quality -> ManagerQualitySettings(
                 settings = settings,
                 capabilities = capabilities,
-                nightMode = nightMode,
                 onBack = { onDetailChanged(ManagerSettingsDetail.None) },
                 onSettingsChanged = onSettingsChanged,
             )
@@ -2239,24 +2282,6 @@ private fun ManagerPhotoSettingsPanel(
                         activeColor = ManagerCameraBlue,
                         onClick = {
                             onSettingsChanged(settings.copy(aspectRatio = settings.aspectRatio.next()))
-                        },
-                    ),
-                    ManagerSettingTileModel(
-                        symbol = if (settings.ultraHdrEnabled) "JPG R" else "JPG",
-                        title = "Формат",
-                        value = if (
-                            settings.ultraHdrEnabled && capabilities.ultraHdrAvailable && !nightMode
-                        ) {
-                            "Ultra HDR"
-                        } else {
-                            "JPEG"
-                        },
-                        activeColor = ManagerCameraBlue.takeIf {
-                            settings.ultraHdrEnabled && capabilities.ultraHdrAvailable && !nightMode
-                        },
-                        enabled = capabilities.ultraHdrAvailable && !nightMode,
-                        onClick = {
-                            onSettingsChanged(settings.copy(ultraHdrEnabled = !settings.ultraHdrEnabled))
                         },
                     ),
                 )
@@ -2435,7 +2460,6 @@ private fun ManagerExposureSettings(
 private fun ManagerQualitySettings(
     settings: ManagerCameraSettings,
     capabilities: ManagerBoundCameraCapabilities,
-    nightMode: Boolean,
     onBack: () -> Unit,
     onSettingsChanged: (ManagerCameraSettings) -> Unit,
 ) {
@@ -2468,7 +2492,6 @@ private fun ManagerQualitySettings(
                                 } else {
                                     settings.aspectRatio
                                 },
-                                ultraHdrEnabled = settings.ultraHdrEnabled && megapixels < 40,
                             ),
                         )
                     },
@@ -2481,22 +2504,6 @@ private fun ManagerQualitySettings(
                 color = Color.White.copy(alpha = 0.58f),
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 8.dp),
-            )
-        }
-        Spacer(Modifier.height(14.dp))
-        Text("Формат", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CameraChoiceChip(
-                text = "JPEG",
-                selected = !settings.ultraHdrEnabled || !capabilities.ultraHdrAvailable || nightMode,
-                onClick = { onSettingsChanged(settings.copy(ultraHdrEnabled = false)) },
-            )
-            CameraChoiceChip(
-                text = "JPEG Ultra HDR",
-                selected = settings.ultraHdrEnabled && capabilities.ultraHdrAvailable && !nightMode,
-                enabled = capabilities.ultraHdrAvailable && !nightMode,
-                onClick = { onSettingsChanged(settings.copy(ultraHdrEnabled = true)) },
             )
         }
     }
@@ -2768,63 +2775,309 @@ private val ManagerCameraLightMode.settingsColor: Color?
 private fun captureManagerCameraPhoto(
     imageCapture: ImageCapture,
     targetRotation: Int,
-    fallbackExifOrientation: Int,
     cacheDir: File,
-    executor: Executor,
-    onCaptured: (String) -> Unit,
+    ioExecutor: Executor,
+    mainExecutor: Executor,
+    onCaptured: (String, Boolean) -> Unit,
     onError: () -> Unit,
 ) {
-    // CameraX normally writes the target rotation into JPEG/Ultra HDR EXIF. Some vendor HALs
-    // return the invalid Orientation=0 instead, so repair only that metadata value without
-    // decoding or recompressing the image. media-service remains the canonical pixel processor.
+    // File output lets a vendor choose whether to rotate the pixels or only write EXIF. Some
+    // devices incorrectly write Orientation=1 while leaving the JPEG buffer sideways. The in-memory
+    // callback gives CameraX's explicit rotation for the unrotated JPEG, so normalize from that
+    // authoritative value instead of guessing from vendor EXIF.
     imageCapture.targetRotation = targetRotation
-    val file = createManagerCameraMediaFile(cacheDir, "capture", "jpg") ?: run {
-        onError()
-        return
-    }
     imageCapture.takePicture(
-        ImageCapture.OutputFileOptions.Builder(file).build(),
-        executor,
-        object : ImageCapture.OnImageSavedCallback {
-            override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                if (repairManagerCameraExifOrientation(file, fallbackExifOrientation)) {
-                    onCaptured(Uri.fromFile(file).toString())
+        ioExecutor,
+        object : ImageCapture.OnImageCapturedCallback() {
+            override fun onCaptureSuccess(image: ImageProxy) {
+                val capturedFile = createManagerCameraMediaFile(cacheDir, "capture", "jpg")
+                val normalized = if (capturedFile == null) {
+                    image.close()
+                    null
                 } else {
-                    file.delete()
-                    onError()
+                    persistManagerCameraImageProxy(image, capturedFile)
+                }
+                if (normalized != null && capturedFile != null) {
+                    if (normalized.file != capturedFile && !capturedFile.delete()) {
+                        Log.w(
+                            "ManagerCamera",
+                            "Unable to remove pre-normalized capture ${capturedFile.name}",
+                        )
+                    }
+                    mainExecutor.execute {
+                        onCaptured(
+                            Uri.fromFile(normalized.file).toString(),
+                            normalized.resolutionReduced,
+                        )
+                    }
+                } else {
+                    capturedFile?.delete()
+                    mainExecutor.execute { onError() }
                 }
             }
 
             override fun onError(exception: ImageCaptureException) {
-                file.delete()
-                Log.e("ManagerCamera", "Unable to save photo", exception)
-                onError()
+                Log.e("ManagerCamera", "Unable to capture photo", exception)
+                mainExecutor.execute { onError() }
             }
         },
     )
 }
 
-internal fun repairManagerCameraExifOrientation(file: File, fallbackOrientation: Int): Boolean =
-    runCatching {
-        val exif = ExifInterface(file)
-        val currentOrientation = exif.getAttributeInt(
-            ExifInterface.TAG_ORIENTATION,
-            ExifInterface.ORIENTATION_UNDEFINED,
+/**
+ * Persists one in-memory CameraX JPEG and applies the authoritative clockwise transform carried
+ * by [ImageProxy.getImageInfo]. The proxy is always closed, including unsupported or malformed
+ * output, so a failed normalization cannot stall the camera pipeline.
+ */
+internal fun persistManagerCameraImageProxy(
+    image: ImageProxy,
+    target: File,
+): ManagerNormalizedCameraPhoto? = try {
+    val rotationDegrees = image.imageInfo.rotationDegrees
+    writeManagerCameraJpeg(image, target)
+    normalizeManagerCameraCapturedJpegOrientation(
+        source = target,
+        rotationDegrees = rotationDegrees,
+    )
+} catch (failure: Exception) {
+    Log.e("ManagerCamera", "Unable to persist captured JPEG", failure)
+    null
+} finally {
+    image.close()
+}
+
+/** Writes the unrotated standard-JPEG buffer returned by CameraX without depending on EXIF. */
+private fun writeManagerCameraJpeg(image: ImageProxy, target: File) {
+    check(image.format == ImageFormat.JPEG) {
+        "CameraX returned image format ${image.format}, expected JPEG"
+    }
+    val jpegBuffer = image.planes.singleOrNull()?.buffer?.duplicate()
+        ?: error("CameraX returned a JPEG without exactly one plane")
+    check(jpegBuffer.remaining() >= 4) { "CameraX returned a truncated JPEG" }
+    val firstByte = jpegBuffer.get(jpegBuffer.position())
+    val secondByte = jpegBuffer.get(jpegBuffer.position() + 1)
+    val penultimateByte = jpegBuffer.get(jpegBuffer.limit() - 2)
+    val lastByte = jpegBuffer.get(jpegBuffer.limit() - 1)
+    check(
+        firstByte == 0xff.toByte() &&
+            secondByte == 0xd8.toByte() &&
+            penultimateByte == 0xff.toByte() &&
+            lastByte == 0xd9.toByte()
+    ) { "CameraX returned malformed JPEG bytes" }
+    FileOutputStream(target).channel.use { channel ->
+        while (jpegBuffer.hasRemaining()) channel.write(jpegBuffer)
+    }
+    check(target.length() > 0L) { "CameraX returned an empty JPEG" }
+}
+
+/**
+ * Produces an app-owned JPEG whose pixels already have the orientation declared by the camera.
+ * A normal source stays in place; transformed sources are written beside it so a failed rewrite
+ * never destroys the captured original. The caller removes that original only after success.
+ */
+internal fun normalizeManagerCameraJpegOrientation(
+    source: File,
+    fallbackOrientation: Int,
+): File? = normalizeManagerCameraPhotoOrientation(
+    source = source,
+    fallbackOrientation = fallbackOrientation,
+    trustRecordedExif = true,
+)?.file
+
+/**
+ * CameraX delivers unrotated JPEG pixels with the exact clockwise transform in [rotationDegrees].
+ * That value must win over a vendor's file EXIF, which is precisely what protects landscape
+ * captures from HALs that report `Orientation=1` incorrectly.
+ */
+internal fun normalizeManagerCameraCapturedJpegOrientation(
+    source: File,
+    rotationDegrees: Int,
+): ManagerNormalizedCameraPhoto? = normalizeManagerCameraPhotoOrientation(
+    source = source,
+    fallbackOrientation = managerExifOrientationForRotationDegrees(rotationDegrees),
+    trustRecordedExif = false,
+)
+
+internal data class ManagerNormalizedCameraPhoto(
+    val file: File,
+    val resolutionReduced: Boolean,
+)
+
+private fun normalizeManagerCameraPhotoOrientation(
+    source: File,
+    fallbackOrientation: Int,
+    trustRecordedExif: Boolean,
+): ManagerNormalizedCameraPhoto? = try {
+    val sourceExif = ExifInterface(source)
+    val recordedOrientation = sourceExif.getAttributeInt(
+        ExifInterface.TAG_ORIENTATION,
+        ExifInterface.ORIENTATION_UNDEFINED,
+    )
+    val orientation = if (trustRecordedExif) {
+        managerResolvedCameraExifOrientation(
+            recordedOrientation = recordedOrientation,
+            fallbackOrientation = fallbackOrientation,
         )
-        if (managerExifOrientationNeedsRepair(currentOrientation)) {
-            exif.setAttribute(ExifInterface.TAG_ORIENTATION, fallbackOrientation.toString())
-            exif.saveAttributes()
-            val savedOrientation = ExifInterface(file).getAttributeInt(
-                ExifInterface.TAG_ORIENTATION,
-                ExifInterface.ORIENTATION_UNDEFINED,
-            )
-            check(savedOrientation == fallbackOrientation) {
-                "EXIF orientation repair was not persisted"
-            }
+    } else {
+        fallbackOrientation.takeIf { !managerExifOrientationNeedsRepair(it) }
+            ?: ExifInterface.ORIENTATION_NORMAL
+    }
+    if (orientation == ExifInterface.ORIENTATION_NORMAL) {
+        // The source pixels already match the requested target rotation. Still persist the
+        // explicit normal value because several devices use Orientation=0 instead of omitting
+        // the tag.
+        if (recordedOrientation != ExifInterface.ORIENTATION_NORMAL) {
+            managerWriteCameraExifOrientation(source, ExifInterface.ORIENTATION_NORMAL)
         }
-    }.onFailure { failure ->
-        Log.e("ManagerCamera", "Unable to persist capture orientation", failure)
-    }.isSuccess
+        ManagerNormalizedCameraPhoto(source, resolutionReduced = false)
+    } else {
+        val decodeInput = File.createTempFile(
+            "decode-unoriented-",
+            ".image",
+            requireNotNull(source.parentFile) { "Capture file has no parent directory" },
+        )
+        try {
+            source.inputStream().use { input ->
+                decodeInput.outputStream().use { output -> input.copyTo(output) }
+            }
+            // BitmapFactory implementations differ in whether they honor source EXIF. Decode a
+            // disposable copy with Orientation=1, then apply the source transform exactly once.
+            managerWriteCameraExifOrientation(decodeInput, ExifInterface.ORIENTATION_NORMAL)
+            val decodePlan = managerCameraOrientationDecodePlan(decodeInput)
+            val sourceBitmap = BitmapFactory.decodeFile(decodeInput.path, decodePlan.options)
+                ?: error("Unable to decode JPEG")
+            try {
+                val orientedBitmap = Bitmap.createBitmap(
+                    sourceBitmap,
+                    0,
+                    0,
+                    sourceBitmap.width,
+                    sourceBitmap.height,
+                    managerExifOrientationMatrix(orientation),
+                    true,
+                )
+                try {
+                    val parent = requireNotNull(source.parentFile) {
+                        "Capture file has no parent directory"
+                    }
+                    val output = File.createTempFile("upright-", ".jpg", parent)
+                    var outputReady = false
+                    try {
+                        output.outputStream().buffered().use { stream ->
+                            check(
+                                orientedBitmap.compress(
+                                    Bitmap.CompressFormat.JPEG,
+                                    MANAGER_NORMALIZED_JPEG_QUALITY,
+                                    stream,
+                                ),
+                            ) { "Unable to encode normalized JPEG" }
+                        }
+                        managerWriteCameraExifOrientation(output, ExifInterface.ORIENTATION_NORMAL)
+                        outputReady = true
+                        ManagerNormalizedCameraPhoto(
+                            file = output,
+                            resolutionReduced = decodePlan.resolutionReduced,
+                        )
+                    } finally {
+                        if (!outputReady) output.delete()
+                    }
+                } finally {
+                    if (orientedBitmap !== sourceBitmap) orientedBitmap.recycle()
+                }
+            } finally {
+                sourceBitmap.recycle()
+            }
+        } finally {
+            decodeInput.delete()
+        }
+    }
+} catch (failure: Exception) {
+    Log.e("ManagerCamera", "Unable to normalize capture orientation", failure)
+    null
+}
+
+internal fun managerResolvedCameraExifOrientation(
+    recordedOrientation: Int,
+    fallbackOrientation: Int,
+): Int = when {
+    !managerExifOrientationNeedsRepair(recordedOrientation) -> recordedOrientation
+    !managerExifOrientationNeedsRepair(fallbackOrientation) -> fallbackOrientation
+    else -> ExifInterface.ORIENTATION_NORMAL
+}
+
+internal fun managerExifOrientationMatrix(orientation: Int): Matrix = Matrix().apply {
+    when (orientation) {
+        ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> setScale(-1f, 1f)
+        ExifInterface.ORIENTATION_ROTATE_180 -> setRotate(180f)
+        ExifInterface.ORIENTATION_FLIP_VERTICAL -> {
+            setRotate(180f)
+            postScale(-1f, 1f)
+        }
+        ExifInterface.ORIENTATION_TRANSPOSE -> {
+            setRotate(90f)
+            postScale(-1f, 1f)
+        }
+        ExifInterface.ORIENTATION_ROTATE_90 -> setRotate(90f)
+        ExifInterface.ORIENTATION_TRANSVERSE -> {
+            setRotate(-90f)
+            postScale(-1f, 1f)
+        }
+        ExifInterface.ORIENTATION_ROTATE_270 -> setRotate(-90f)
+        else -> Unit
+    }
+}
+
+private data class ManagerCameraOrientationDecodePlan(
+    val options: BitmapFactory.Options,
+    val resolutionReduced: Boolean,
+)
+
+/**
+ * Rotation needs both the decoded source and a destination bitmap at once. Cap each bitmap at
+ * roughly 13 MP (about 52 MB ARGB_8888) so a selected 48–50 MP photo cannot exhaust the app
+ * heap while it is being made upload-safe. CameraX captures below this limit retain full size.
+ */
+private fun managerCameraOrientationDecodePlan(file: File): ManagerCameraOrientationDecodePlan {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(file.path, bounds)
+    val width = bounds.outWidth
+    val height = bounds.outHeight
+    check(width > 0 && height > 0) { "Unable to read JPEG dimensions" }
+    var sampleSize = 1
+    while (managerSampledPixelCount(width, height, sampleSize) >
+        MANAGER_MAX_ORIENTATION_NORMALIZATION_PIXELS
+    ) {
+        sampleSize *= 2
+    }
+    return ManagerCameraOrientationDecodePlan(
+        options = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        },
+        resolutionReduced = sampleSize > 1,
+    )
+}
+
+private fun managerSampledPixelCount(width: Int, height: Int, sampleSize: Int): Long {
+    val sampledWidth = (width.toLong() + sampleSize - 1L) / sampleSize
+    val sampledHeight = (height.toLong() + sampleSize - 1L) / sampleSize
+    return sampledWidth * sampledHeight
+}
+
+private fun managerWriteCameraExifOrientation(file: File, orientation: Int) {
+    ExifInterface(file).run {
+        setAttribute(ExifInterface.TAG_ORIENTATION, orientation.toString())
+        saveAttributes()
+    }
+    val persisted = ExifInterface(file).getAttributeInt(
+        ExifInterface.TAG_ORIENTATION,
+        ExifInterface.ORIENTATION_UNDEFINED,
+    )
+    check(persisted == orientation) { "EXIF orientation was not persisted" }
+}
+
+private const val MANAGER_NORMALIZED_JPEG_QUALITY = 95
+private const val MANAGER_MAX_ORIENTATION_NORMALIZATION_PIXELS = 13_000_000L
 
 private fun createManagerCameraMediaFile(
     cacheDir: File,

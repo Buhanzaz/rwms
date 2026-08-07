@@ -253,7 +253,7 @@ class InventoryIdempotencyRecoveryIntegrationTest {
   }
 
   @Test
-  void commandFailureRollsBackDomainWriteAndLeavesOnlyRetryableReservation() throws Exception {
+  void commandFailureRollsBackDomainWriteAndImmediatelyReclaimsItsReservation() {
     UUID subjectId = UUID.randomUUID();
     UUID idempotencyKey = UUID.randomUUID();
     UUID operationId = UUID.randomUUID();
@@ -290,8 +290,23 @@ class InventoryIdempotencyRecoveryIntegrationTest {
                 "session.resolve-number",
                 idempotencyKey))
         .isEqualTo("IN_PROGRESS");
+    assertThat(
+            jdbc.queryForObject(
+                "select lease_until <= current_timestamp from inventory_idempotency_record where subject_id=? and command_scope=? and idempotency_key=?",
+                Boolean.class,
+                subjectId,
+                "session.resolve-number",
+                idempotencyKey))
+        .isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "select response_status from inventory_idempotency_record where subject_id=? and command_scope=? and idempotency_key=?",
+                Integer.class,
+                subjectId,
+                "session.resolve-number",
+                idempotencyKey))
+        .isNull();
 
-    Thread.sleep(300);
     NumberResolutionView retried =
         idempotency.execute(
             subjectId,

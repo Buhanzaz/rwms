@@ -225,7 +225,8 @@ public final class MaintenanceEventPayloads {
             "Inventory disposition fact requires inventory and finding identities");
       }
       if ((source == PropertyDispositionSource.REPAIR
-              || source == PropertyDispositionSource.ESTIMATE)
+              || source == PropertyDispositionSource.ESTIMATE
+              || source == PropertyDispositionSource.UNACCOUNTED)
           && rootRepairId == null) {
         throw new IllegalArgumentException(
             "Repair-derived disposition fact requires its root repair identity");
@@ -234,7 +235,18 @@ public final class MaintenanceEventPayloads {
         throw new IllegalArgumentException(
             "Movement-pending disposition fact requires the logistics task identity");
       }
-      if (state == PropertyDispositionState.EFFECTIVE && effectId == null) {
+      if (source == PropertyDispositionSource.UNACCOUNTED && sourceRepairId == null) {
+        throw new IllegalArgumentException(
+            "Unaccounted disposition fact requires the completed repair identity");
+      }
+      if (source == PropertyDispositionSource.UNACCOUNTED
+          && assetEffectState != PropertyDispositionAssetEffectState.NOT_REQUIRED) {
+        throw new IllegalArgumentException(
+            "Unaccounted disposition fact must not require an asset effect");
+      }
+      if (state == PropertyDispositionState.EFFECTIVE
+          && effectId == null
+          && assetEffectState != PropertyDispositionAssetEffectState.NOT_REQUIRED) {
         throw new IllegalArgumentException(
             "Effective disposition fact requires the applied asset effect identity");
       }

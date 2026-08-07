@@ -16,8 +16,6 @@ const authState = vi.hoisted(() => ({
 
 const mediaApi = vi.hoisted(() => ({
   uploadFile: vi.fn(),
-  listOwnerMedia: vi.fn(),
-  rotate: vi.fn(),
 }))
 
 const assetApi = vi.hoisted(() => ({
@@ -87,8 +85,6 @@ beforeEach(() => {
   mediaApi.uploadFile.mockResolvedValue({
     asset: { id: "media-1" },
   })
-  mediaApi.listOwnerMedia.mockResolvedValue({ items: [], next: null })
-  mediaApi.rotate.mockResolvedValue(undefined)
   assetApi.getRentalItemCreationOptions.mockResolvedValue({
     newCategory: "Новая",
     usedCategories: ["Обычная"],

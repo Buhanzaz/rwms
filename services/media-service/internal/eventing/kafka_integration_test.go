@@ -107,7 +107,7 @@ func TestKafkaRelayAckBeforeDatabaseMarkIsReconciledByProcessingConsumerIntegrat
 	processor := worker.Processor{Image: media.ImageProcessor{Store: store, Limits: media.ProcessingLimits{
 		MaxImageBytes: 1 << 20, MaxImageOutputBytes: 1 << 20,
 		MaxDecodedPixels: 1_000_000, MaxVideoBytes: 1 << 20,
-		MaxVideoOutputBytes: 1 << 20, Timeout: 5 * time.Second,
+		Timeout: 5 * time.Second,
 	}}}
 	processingConsumer := worker.NewConsumer(repository, consumerClient, processor,
 		"ack-race-worker-"+uuid.NewString(), 10*time.Second, integrationLogger())

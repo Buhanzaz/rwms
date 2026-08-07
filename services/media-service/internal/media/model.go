@@ -26,8 +26,7 @@ const (
 type ProcessingKind string
 
 const (
-	ProcessingInitial  ProcessingKind = "INITIAL"
-	ProcessingRotation ProcessingKind = "ROTATION"
+	ProcessingInitial ProcessingKind = "INITIAL"
 )
 
 type Variant string
@@ -39,24 +38,11 @@ const (
 	VariantOriginal Variant = "ORIGINAL"
 )
 
+// Rotation is retained only to read legacy media metadata. New processing is
+// always physically oriented by the client and uses Rotation0.
 type Rotation int16
 
-const (
-	Rotation0   Rotation = 0
-	Rotation90  Rotation = 90
-	Rotation180 Rotation = 180
-	Rotation270 Rotation = 270
-)
-
-func ParseRotation(value int16) (Rotation, error) {
-	rotation := Rotation(value)
-	switch rotation {
-	case Rotation0, Rotation90, Rotation180, Rotation270:
-		return rotation, nil
-	default:
-		return 0, fmt.Errorf("unsupported media rotation %d", value)
-	}
-}
+const Rotation0 Rotation = 0
 
 func KindForContentType(contentType string) (Kind, bool) {
 	normalized := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
@@ -105,26 +91,7 @@ func (asset *Asset) QueueInitialProcessing() (ProcessingJob, error) {
 	if asset.CurrentGeneration != 0 || asset.PendingGeneration != nil {
 		return ProcessingJob{}, fmt.Errorf("media %s already has a processing generation", asset.ID)
 	}
-	return asset.queueProcessing(ProcessingInitial, asset.allocateGeneration(), Rotation0)
-}
-
-func (asset *Asset) QueueRotation(expectedVersion int64, rotation Rotation) (ProcessingJob, error) {
-	if expectedVersion != asset.Version {
-		return ProcessingJob{}, fmt.Errorf("media %s version conflict: expected %d, actual %d", asset.ID, expectedVersion, asset.Version)
-	}
-	if asset.Status != StatusReady {
-		return ProcessingJob{}, fmt.Errorf("media %s cannot rotate from %s", asset.ID, asset.Status)
-	}
-	if asset.CurrentGeneration <= 0 {
-		return ProcessingJob{}, fmt.Errorf("media %s has no current generation", asset.ID)
-	}
-	if _, err := ParseRotation(int16(rotation)); err != nil {
-		return ProcessingJob{}, err
-	}
-	if rotation == asset.Rotation {
-		return ProcessingJob{}, fmt.Errorf("media %s is already rotated to %d degrees", asset.ID, rotation)
-	}
-	return asset.queueProcessing(ProcessingRotation, asset.allocateGeneration(), rotation)
+	return asset.queueProcessing(asset.allocateGeneration())
 }
 
 func (asset *Asset) CompleteProcessing(job ProcessingJob) error {
@@ -151,17 +118,15 @@ func (asset *Asset) FailProcessing(job ProcessingJob, reason string) error {
 	if asset.CurrentGeneration == 0 {
 		asset.Status = StatusFailed
 	} else {
-		// A failed rotation must keep the previously verified generation current.
+		// A failed reprocessing attempt keeps the previously verified generation current.
 		asset.Status = StatusReady
 	}
 	asset.Version++
 	return nil
 }
 
-func (asset *Asset) queueProcessing(kind ProcessingKind, generation int, rotation Rotation) (ProcessingJob, error) {
-	if _, err := ParseRotation(int16(rotation)); err != nil {
-		return ProcessingJob{}, err
-	}
+func (asset *Asset) queueProcessing(generation int) (ProcessingJob, error) {
+	rotation := Rotation0
 	asset.Status = StatusProcessing
 	asset.PendingGeneration = &generation
 	asset.PendingRotation = &rotation
@@ -171,7 +136,7 @@ func (asset *Asset) queueProcessing(kind ProcessingKind, generation int, rotatio
 		MediaID:    asset.ID,
 		Generation: generation,
 		Rotation:   rotation,
-		Kind:       kind,
+		Kind:       ProcessingInitial,
 	}, nil
 }
 
@@ -188,6 +153,9 @@ func (asset *Asset) allocateGeneration() int {
 }
 
 func (asset *Asset) validatePendingJob(job ProcessingJob) error {
+	if job.Kind != ProcessingInitial || job.Rotation != Rotation0 {
+		return fmt.Errorf("media %s has an unsupported processing job", asset.ID)
+	}
 	if asset.Status != StatusProcessing || asset.PendingGeneration == nil || asset.PendingRotation == nil {
 		return fmt.Errorf("media %s has no pending processing job", asset.ID)
 	}

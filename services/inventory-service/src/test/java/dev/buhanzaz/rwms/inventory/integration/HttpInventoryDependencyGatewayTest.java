@@ -18,10 +18,13 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.security.oauth2.client.OAuth2AuthorizeRequest;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
@@ -46,6 +49,12 @@ class HttpInventoryDependencyGatewayTest {
   private final AtomicReference<UUID> responseWarehouseId = new AtomicReference<>();
   private final AtomicReference<Boolean> assetPresent = new AtomicReference<>(true);
   private final AtomicReference<String> reconciliationResponse = new AtomicReference<>();
+  private final AtomicInteger freezePlanCalls = new AtomicInteger();
+  private final AtomicReference<Integer> firstFreezePlanStatus = new AtomicReference<>();
+  private final AtomicReference<String> firstFreezePlanIdempotencyKey = new AtomicReference<>();
+  private final AtomicReference<String> secondFreezePlanIdempotencyKey = new AtomicReference<>();
+  private final AtomicReference<String> firstFreezePlanBody = new AtomicReference<>();
+  private final AtomicReference<String> secondFreezePlanBody = new AtomicReference<>();
   private final UUID cabinId = UUID.randomUUID();
   private HttpServer server;
   private HttpInventoryDependencyGateway gateway;
@@ -53,6 +62,12 @@ class HttpInventoryDependencyGatewayTest {
   @BeforeEach
   void startServer() throws IOException {
     assetPresent.set(true);
+    freezePlanCalls.set(0);
+    firstFreezePlanStatus.set(null);
+    firstFreezePlanIdempotencyKey.set(null);
+    secondFreezePlanIdempotencyKey.set(null);
+    firstFreezePlanBody.set(null);
+    secondFreezePlanBody.set(null);
     server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     server.createContext(
         "/api/internal/asset/v1/inventory/number-resolutions", this::resolveNumber);
@@ -66,6 +81,8 @@ class HttpInventoryDependencyGatewayTest {
         "/api/internal/maintenance/v1/inventory/reconciliations", this::applyReconciliation);
     server.createContext(
         "/api/internal/maintenance/v1/inventory/dispositions", this::createLossDisposition);
+    server.createContext(
+        "/api/internal/maintenance/v1/inventory/plans", this::freezePlan);
     server.createContext(
         "/api/internal/warehouse/v1/warehouses", this::warehouseOperation);
     server.createContext(
@@ -350,6 +367,72 @@ class HttpInventoryDependencyGatewayTest {
     assertThat(body.path("evidenceLink").isNull()).isTrue();
   }
 
+  @ParameterizedTest
+  @ValueSource(ints = {502, 503, 504})
+  void retriesOneTransientFreezePlanFailureWithTheSameRequestAndIdempotencyKey(
+      int transientStatus) throws Exception {
+    UUID warehouseId = UUID.randomUUID();
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID idempotencyKey = UUID.randomUUID();
+    firstFreezePlanStatus.set(transientStatus);
+    JsonNode request =
+        mapper
+            .createObjectNode()
+            .put("warehouseId", warehouseId.toString())
+            .put("inventoryId", inventoryId.toString())
+            .put("findingId", findingId.toString());
+
+    InventoryDependencyGateway.FrozenPlan plan = gateway.freezePlan(idempotencyKey, request);
+
+    assertThat(plan.warehouseId()).isEqualTo(warehouseId);
+    assertThat(plan.inventoryId()).isEqualTo(inventoryId);
+    assertThat(plan.findingId()).isEqualTo(findingId);
+    assertThat(plan.sourceRevision()).isEqualTo(1);
+    assertThat(freezePlanCalls.get()).isEqualTo(2);
+    assertThat(firstFreezePlanIdempotencyKey.get()).isEqualTo(idempotencyKey.toString());
+    assertThat(secondFreezePlanIdempotencyKey.get()).isEqualTo(idempotencyKey.toString());
+    assertThat(mapper.readTree(firstFreezePlanBody.get())).isEqualTo(request);
+    assertThat(mapper.readTree(secondFreezePlanBody.get())).isEqualTo(request);
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {400, 422})
+  void doesNotRetryFreezePlanClientErrors(int status) {
+    firstFreezePlanStatus.set(status);
+    JsonNode request =
+        mapper
+            .createObjectNode()
+            .put("warehouseId", UUID.randomUUID().toString())
+            .put("inventoryId", UUID.randomUUID().toString())
+            .put("findingId", UUID.randomUUID().toString());
+
+    assertThatThrownBy(() -> gateway.freezePlan(UUID.randomUUID(), request))
+        .isInstanceOf(InventoryException.class)
+        .hasMessage("Dependency rejected invalid inventory input");
+
+    assertThat(freezePlanCalls.get()).isEqualTo(1);
+    assertThat(secondFreezePlanIdempotencyKey.get()).isNull();
+  }
+
+  @Test
+  void doesNotRetryFreezePlanInternalServerErrors() {
+    firstFreezePlanStatus.set(500);
+    JsonNode request =
+        mapper
+            .createObjectNode()
+            .put("warehouseId", UUID.randomUUID().toString())
+            .put("inventoryId", UUID.randomUUID().toString())
+            .put("findingId", UUID.randomUUID().toString());
+
+    assertThatThrownBy(() -> gateway.freezePlan(UUID.randomUUID(), request))
+        .isInstanceOf(InventoryException.class)
+        .hasMessage("Mandatory inventory dependency is unavailable");
+
+    assertThat(freezePlanCalls.get()).isEqualTo(1);
+    assertThat(secondFreezePlanIdempotencyKey.get()).isNull();
+  }
+
   private OAuth2AuthorizedClient authorizedClient(
       String base, String registrationId, String tokenValue, String scope) {
     ClientRegistration registration = ClientRegistration
@@ -525,6 +608,37 @@ class HttpInventoryDependencyGatewayTest {
                 request.path("findingId").asText(),
                 request.path("warehouseId").asText(),
                 request.path("equipmentId").asText()));
+  }
+
+  private void freezePlan(HttpExchange exchange) throws IOException {
+    int call = freezePlanCalls.incrementAndGet();
+    String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+    String key = exchange.getRequestHeaders().getFirst("Idempotency-Key");
+    if (call == 1) {
+      firstFreezePlanIdempotencyKey.set(key);
+      firstFreezePlanBody.set(body);
+      Integer status = firstFreezePlanStatus.get();
+      if (status != null) {
+        respond(exchange, status, "{}");
+        return;
+      }
+    } else {
+      secondFreezePlanIdempotencyKey.set(key);
+      secondFreezePlanBody.set(body);
+    }
+    JsonNode request = mapper.readTree(body);
+    respond(
+        exchange,
+        200,
+        """
+        {"warehouseId":"%s","inventoryId":"%s","findingId":"%s","sourceRevision":1,
+         "snapshot":{},"fingerprint":"%s"}
+        """
+            .formatted(
+                request.path("warehouseId").asText(),
+                request.path("inventoryId").asText(),
+                request.path("findingId").asText(),
+                "a".repeat(64)));
   }
 
   private static void respond(HttpExchange exchange, int status, String body) throws IOException {

@@ -337,6 +337,62 @@ class MaintenanceInventoryBoundaryIntegrationTest {
   }
 
   @Test
+  void supplementedInspectionCreatesANewImmutableSourceRevisionWithoutOverwritingTheFirst() {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    FreezeInventoryPlanRequest initialRequest = autoRequest(inventoryId, findingId, List.of());
+    FrozenInventoryPlanResponse initial = inventory.freeze(initialRequest).response();
+    FreezeInventoryPlanRequest supplementedRequest = new FreezeInventoryPlanRequest(
+        warehouseId,
+        inventoryId,
+        findingId,
+        4L,
+        initialRequest.mode(),
+        initialRequest.lines(),
+        initialRequest.plan(),
+        initialRequest.mediaReferences(),
+        initialRequest.priority(),
+        initialRequest.coverMediaId());
+
+    InventoryMaintenanceService.FreezeResult supplemented = inventory.freeze(supplementedRequest);
+    assertThat(supplemented.replayed()).isFalse();
+    assertThat(supplemented.response().sourceRevision()).isEqualTo(4L);
+    assertThat(inventory.freeze(supplementedRequest).replayed()).isTrue();
+    assertThat(jdbc.queryForList("""
+        select source_revision from inventory_repair_source
+        where inventory_id=? and finding_id=?
+        order by source_revision
+        """, Long.class, inventoryId, findingId)).containsExactly(3L, 4L);
+
+    UUID rentalItemId = UUID.randomUUID();
+    rentalItems.saveAndFlush(RentalItemFactProjection.create(
+        rentalItemId, warehouseId, "FREE", 7));
+    InventoryMaintenanceService.UpsertResult created = inventory.upsert(
+        inventoryId,
+        findingId,
+        new UpsertInventoryRepairRequest(
+            warehouseId,
+            4L,
+            rentalItemId,
+            7L,
+            LocalDate.of(2026, 7, 17),
+            supplemented.response().fingerprint(),
+            supplemented.response().snapshot()));
+
+    assertThat(created.replayed()).isFalse();
+    assertThat(created.source().sourceRevision()).isEqualTo(4L);
+    assertThat(jdbc.queryForObject("""
+        select repair_id from inventory_repair_source
+        where inventory_id=? and finding_id=? and source_revision=3
+        """, UUID.class, inventoryId, findingId)).isNull();
+    assertThat(jdbc.queryForObject("""
+        select repair_id from inventory_repair_source
+        where inventory_id=? and finding_id=? and source_revision=4
+        """, UUID.class, inventoryId, findingId)).isEqualTo(created.repairId());
+    assertThat(initial.sourceRevision()).isEqualTo(3L);
+  }
+
+  @Test
   void inventoryAdmissionAndRoutingPreflightsDoNotRunWithMaintenanceTransactions() {
     when(dependencies.productionReady()).thenReturn(true);
     when(dependencies.warehouseAdmission(any(UUID.class), any()))

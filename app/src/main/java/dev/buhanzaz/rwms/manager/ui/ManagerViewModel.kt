@@ -21,7 +21,6 @@ import dev.buhanzaz.rwms.manager.network.CreateFindingAssetRequest
 import dev.buhanzaz.rwms.manager.network.CreateReworkRequest
 import dev.buhanzaz.rwms.manager.network.CreateTransferRequest
 import dev.buhanzaz.rwms.manager.network.CurrentUserDto
-import dev.buhanzaz.rwms.manager.network.EquipmentShortageRequest
 import dev.buhanzaz.rwms.manager.network.EquipmentCatalogItemDto
 import dev.buhanzaz.rwms.manager.network.EstimateCommandResultDto
 import dev.buhanzaz.rwms.manager.network.EstimateDto
@@ -48,6 +47,7 @@ import dev.buhanzaz.rwms.manager.network.RepairStageDto
 import dev.buhanzaz.rwms.manager.network.ReworkCandidateDto
 import dev.buhanzaz.rwms.manager.network.ReworkLineInputDto
 import dev.buhanzaz.rwms.manager.network.ReconcileLogisticsRequest
+import dev.buhanzaz.rwms.manager.network.ReturnEstimateSourceDto
 import dev.buhanzaz.rwms.manager.network.ReplaceEstimateRequest
 import dev.buhanzaz.rwms.manager.network.ReplaceRepairPlanRequest
 import dev.buhanzaz.rwms.manager.network.ResolveInventoryConflictRequest
@@ -56,6 +56,8 @@ import dev.buhanzaz.rwms.manager.network.RoutingSnapshotDto
 import dev.buhanzaz.rwms.manager.network.RwmsBackend
 import dev.buhanzaz.rwms.manager.network.ShipmentFurnitureReadinessDto
 import dev.buhanzaz.rwms.manager.network.ShipmentPlanRequest
+import dev.buhanzaz.rwms.manager.network.StartReturnEstimateLine
+import dev.buhanzaz.rwms.manager.network.StartReturnEstimatesRequest
 import dev.buhanzaz.rwms.manager.network.TaskBoardSnapshotDto
 import dev.buhanzaz.rwms.manager.network.TaskBoardDateEntryExpectationDto
 import dev.buhanzaz.rwms.manager.network.SwapTaskBoardDatesRequest
@@ -68,7 +70,6 @@ import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadArea
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadCoordinator
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadDraft
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadOperation
-import dev.buhanzaz.rwms.manager.uploads.InventoryExistingMediaRotation
 import dev.buhanzaz.rwms.manager.uploads.InventoryUploadCommand
 import dev.buhanzaz.rwms.manager.uploads.MaintenanceReplaceKind
 import dev.buhanzaz.rwms.manager.uploads.MaintenanceUploadCommand
@@ -77,6 +78,10 @@ import dev.buhanzaz.rwms.manager.uploads.ReturnUploadAction
 import dev.buhanzaz.rwms.manager.uploads.ReturnUploadCommand
 import dev.buhanzaz.rwms.manager.uploads.ReturnUploadLineCommand
 import dev.buhanzaz.rwms.manager.uploads.TransferArrivalUploadCommand
+import dev.buhanzaz.rwms.manager.uploads.readyOwnerMediaAssetsById
+import dev.buhanzaz.rwms.manager.uploads.readyOwnerMediaReferencesById
+import dev.buhanzaz.rwms.manager.uploads.rebaseRetainedInventoryMediaReferences
+import dev.buhanzaz.rwms.manager.uploads.rebaseRetainedWorkLineMedia
 import java.io.IOException
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -98,7 +103,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import retrofit2.HttpException
 
 data class ManagerUiState(
@@ -119,11 +126,6 @@ data class ManagerUiState(
     val returnPhotoUris: Map<String, List<String>> = emptyMap(),
     val returnReadyMedia: Map<String, List<MediaReferenceDto>> = emptyMap(),
     val returnEquipmentConfirmed: Set<String> = emptySet(),
-    val returnEquipmentCatalog: List<EquipmentCatalogItemDto> = emptyList(),
-    val returnEquipmentCatalogStatus: ReturnEquipmentCatalogStatus =
-        ReturnEquipmentCatalogStatus.NOT_LOADED,
-    val returnShortageEquipment: Map<String, String> = emptyMap(),
-    val returnShortageQuantity: Map<String, String> = emptyMap(),
     val shipments: List<LogisticsDocumentDto> = emptyList(),
     val selectedShipment: LogisticsDocumentDto? = null,
     val shipmentFurnitureReadiness: ShipmentFurnitureReadinessDto? = null,
@@ -306,13 +308,9 @@ data class InventoryEditorState(
      * photo that is actually visible in this editor.
      */
     val persistedPhotoMedia: Map<String, MediaReferenceDto> = emptyMap(),
-    /** Canonical server orientation for a cached previous photo, by local URI. */
-    val persistedPhotoRotationDegrees: Map<String, Int> = emptyMap(),
     /** Previous inventory media explicitly removed by the operator. */
     val removedPersistedMediaIds: Set<String> = emptySet(),
     val uploadedPhotoMedia: Map<String, MediaReferenceDto> = emptyMap(),
-    /** Absolute orientation requested for the same server-side media asset, by local URI. */
-    val photoRotationDegrees: Map<String, Int> = emptyMap(),
     val equipmentCatalog: List<EquipmentCatalogItemDto> = emptyList(),
     val equipmentObservationRequested: Boolean? = null,
     val equipmentQuantities: Map<String, String> = emptyMap(),
@@ -426,6 +424,19 @@ class ManagerViewModel(
     fun retryBackgroundPhoto(operationId: String, photoId: String) {
         viewModelScope.launch {
             backgroundUploads.await().retryPhoto(operationId, photoId)
+        }
+    }
+
+    fun confirmUnaccountedFurnitureBackgroundUpload(operationId: String) {
+        viewModelScope.launch {
+            try {
+                backgroundUploads.await().confirmUnaccountedFurniture(operationId)
+                message("Списание без учёта склада подтверждено и добавлено в очередь")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                handleFailure(failure)
+            }
         }
     }
 
@@ -673,9 +684,6 @@ class ManagerViewModel(
         val persistedPhotoMedia = persistedPhotos.associate { photo ->
             photo.uri to photo.reference
         }
-        val persistedPhotoRotationDegrees = persistedPhotos.associate { photo ->
-            photo.uri to photo.rotationDegrees
-        }
         val parsedCharacteristics = parseInventoryCharacteristics(
             passport["characteristics"],
         )
@@ -708,7 +716,6 @@ class ManagerViewModel(
                         .firstOrNull { photo -> photo.reference.mediaId == latest.coverMediaId }
                         ?.uri,
                     persistedPhotoMedia = persistedPhotoMedia,
-                    persistedPhotoRotationDegrees = persistedPhotoRotationDegrees,
                     removedPersistedMediaIds = latest.inventoryReinspectionRemovedMediaIds(mode),
                     equipmentCatalog = equipmentCatalog,
                     equipmentObservationRequested = furnitureSeed.observationRequested,
@@ -893,13 +900,6 @@ class ManagerViewModel(
         }
     }
 
-    /** Marks the original media asset for an absolute 90° clockwise rotation on save. */
-    fun rotateInventoryPhoto(uri: String) {
-        editInventory { editor ->
-            editor.rotateInventoryPhoto(uri)
-        }
-    }
-
     fun closeInventoryEditor() {
         mutableState.update { it.copy(inventoryEditor = null) }
     }
@@ -967,29 +967,44 @@ class ManagerViewModel(
             context = "INSPECTION",
         )
         val persistedMedia = editor.persistedInventoryMediaReferences()
-        val readyPersistedMedia = persistedMedia.takeIf { it.isNotEmpty() }
-            ?.let { persisted ->
-                val readyReferences = retryMediaReadAfterOwnerProof {
+        val planLineIds = editor.planLines.map(MaintenanceLineEditorState::id)
+        val planWorkLineIds = editor.planLines
+            .asSequence()
+            .filter { line -> line.lineType == "WORK" }
+            .map(MaintenanceLineEditorState::id)
+            .toList()
+        val hasRetainedPlanMedia = editor.planLines
+            .asSequence()
+            .filter { line -> line.lineType == "WORK" }
+            .any { line -> line.mediaReferences.isNotEmpty() }
+        val readyOwnerReferencesById = if (
+            persistedMedia.isNotEmpty() ||
+                hasRetainedPlanMedia ||
+                editor.uploadedPhotoMedia.isNotEmpty()
+        ) {
+            retryMediaReadAfterOwnerProof {
+                readyOwnerMediaReferencesById(
                     backend.api.ownerMedia(
                         ownerType = "INVENTORY_FINDING",
                         ownerId = attached.id,
                         warehouseId = session.warehouseId,
                         context = "INSPECTION",
-                    ).items
-                        .asSequence()
-                        .filter { it.status == "READY" && it.generation > 0 }
-                        .map { MediaReferenceDto(it.id, it.generation) }
-                        .toSet()
-                }
-                inventoryReadyPersistedMediaReferences(persisted, readyReferences)
+                    ).items,
+                )
             }
-            .orEmpty()
-        require(readyPersistedMedia.size == persistedMedia.size) {
-            "Не все сохранённые фотографии готовы. Проверьте связь и повторите сохранение."
+        } else {
+            emptyMap()
         }
-        val existingMedia = inventoryExistingMediaReferences(
-            persisted = readyPersistedMedia,
-            uploadedByUri = editor.uploadedPhotoMedia,
+        val readyPersistedMedia = rebaseRetainedInventoryMediaReferences(
+            references = persistedMedia,
+            currentReadyByMediaId = readyOwnerReferencesById,
+        )
+        val existingMedia = rebaseRetainedInventoryMediaReferences(
+            references = inventoryExistingMediaReferences(
+                persisted = readyPersistedMedia,
+                uploadedByUri = editor.uploadedPhotoMedia,
+            ),
+            currentReadyByMediaId = readyOwnerReferencesById,
         )
         if (orderedPhotoUris.isEmpty() && existingMedia.isEmpty()) {
             throw IllegalArgumentException("Добавьте хотя бы одну фотографию")
@@ -1006,6 +1021,10 @@ class ManagerViewModel(
         val planSelection = inventoryPlanSelection(
             editor = editor,
             coverMediaId = existingCoverMediaId,
+        )?.rebaseRetainedWorkLineMedia(
+            currentReadyByMediaId = readyOwnerReferencesById,
+            lineIds = planLineIds,
+            workLineIds = planWorkLineIds.toSet(),
         )
         backgroundUploads.await().enqueue(
             BackgroundUploadDraft(
@@ -1018,7 +1037,6 @@ class ManagerViewModel(
                         owner = owner,
                         sortOrder = requireNotNull(photoSortOrderByUri[uri]),
                         cover = uri == editor.coverPhotoUri,
-                        rotationDegrees = editor.photoRotationDegrees[uri] ?: 0,
                     )
                 } + editor.planLines
                     .asSequence()
@@ -1047,18 +1065,10 @@ class ManagerViewModel(
                     },
                     equipmentObservation = equipmentObservation,
                     existingMedia = existingMedia,
-                    existingMediaRotations = editor.persistedInventoryPhotoRotations()
-                        .filter { rotation ->
-                            existingMedia.any { media -> media == rotation.reference }
-                        },
                     existingCoverMediaId = existingCoverMediaId,
                     planSelection = planSelection,
-                    planLineIds = editor.planLines.map(MaintenanceLineEditorState::id),
-                    planWorkLineIds = editor.planLines
-                        .asSequence()
-                        .filter { line -> line.lineType == "WORK" }
-                        .map(MaintenanceLineEditorState::id)
-                        .toList(),
+                    planLineIds = planLineIds,
+                    planWorkLineIds = planWorkLineIds,
                 ),
             ),
         )
@@ -1643,50 +1653,16 @@ class ManagerViewModel(
                 returnPhotoUris = document.lines.associate { line -> line.id to emptyList() },
                 returnReadyMedia = document.lines.associate { line -> line.id to emptyList() },
                 returnEquipmentConfirmed = emptySet(),
-                returnEquipmentCatalog = emptyList(),
-                returnEquipmentCatalogStatus = ReturnEquipmentCatalogStatus.LOADING,
-                returnShortageEquipment = emptyMap(),
-                returnShortageQuantity = emptyMap(),
             )
         }
         command {
-            val currentDocument = try {
-                backend.api.returnDocument(document.id).also { loaded ->
-                    require(loaded.documentType == "RETURN") {
-                        "RWMS вернул не документ возврата"
-                    }
+            val currentDocument = backend.api.returnDocument(document.id).also { loaded ->
+                require(loaded.documentType == "RETURN") {
+                    "RWMS вернул не документ возврата"
                 }
-            } catch (failure: Throwable) {
-                mutableState.update { current ->
-                    current.withUnavailableReturnEquipmentCatalog(document.id)
-                }
-                throw failure
             }
             applyCurrentReturnDocument(currentDocument)
-            val equipment = try {
-                backend.api.equipment(currentDocument.warehouseId).map { it.equipment }
-            } catch (failure: Throwable) {
-                mutableState.update { current ->
-                    current.withUnavailableReturnEquipmentCatalog(currentDocument.id)
-                }
-                throw failure
-            }
-            mutableState.update { current ->
-                current.withLoadedReturnEquipmentCatalog(currentDocument.id, equipment)
-            }
-            val ready = currentDocument.lines.associate { line ->
-                line.id to retryMediaReadAfterOwnerProof {
-                    backend.api.ownerMedia(
-                        ownerType = "LOGISTICS_RETURN",
-                        documentId = currentDocument.id,
-                        lineId = line.id,
-                        warehouseId = currentDocument.warehouseId,
-                        context = "RETURN_INSPECTION",
-                    )
-                }.items
-                    .filter { it.status == "READY" && it.generation > 0 }
-                    .map { MediaReferenceDto(it.id, it.generation) }
-            }
+            val ready = loadReturnReadyMedia(currentDocument)
             mutableState.update { current ->
                 current.withLoadedReturnReadyMedia(
                     documentId = currentDocument.id,
@@ -1703,10 +1679,6 @@ class ManagerViewModel(
                 returnPhotoUris = emptyMap(),
                 returnReadyMedia = emptyMap(),
                 returnEquipmentConfirmed = emptySet(),
-                returnEquipmentCatalog = emptyList(),
-                returnEquipmentCatalogStatus = ReturnEquipmentCatalogStatus.NOT_LOADED,
-                returnShortageEquipment = emptyMap(),
-                returnShortageQuantity = emptyMap(),
             )
         }
     }
@@ -1740,15 +1712,6 @@ class ManagerViewModel(
         }
     }
 
-    fun updateReturnShortage(lineId: String, equipmentId: String, quantity: String) {
-        mutableState.update {
-            it.copy(
-                returnShortageEquipment = it.returnShortageEquipment + (lineId to equipmentId),
-                returnShortageQuantity = it.returnShortageQuantity + (lineId to quantity),
-            )
-        }
-    }
-
     fun acceptReturn(onSaved: () -> Unit) = command {
         val displayedDocument = requireNotNull(mutableState.value.selectedReturn)
         val document = currentReturnInspectionDocument(displayedDocument)
@@ -1769,44 +1732,64 @@ class ManagerViewModel(
         onSaved()
     }
 
-    fun requestReturnEstimate(onSaved: () -> Unit) = command {
+    fun startReturnEstimates(
+        onSourcesReady: (List<ReturnEstimateSourceDto>) -> Unit,
+        onQueued: () -> Unit,
+    ) = command {
         val displayedDocument = requireNotNull(mutableState.value.selectedReturn)
         val document = currentReturnInspectionDocument(displayedDocument)
-        val state = mutableState.value
-        when (state.returnEquipmentCatalogStatus) {
-            ReturnEquipmentCatalogStatus.AVAILABLE -> Unit
-            ReturnEquipmentCatalogStatus.EMPTY -> throw IllegalStateException(
-                "В справочнике выбранного склада нет активного оборудования",
+        if (document.lines.any { line ->
+                mutableState.value.returnPhotoUris[line.id].orEmpty().isNotEmpty()
+            }
+        ) {
+            enqueueReturnUpload(
+                document = document,
+                action = ReturnUploadAction.START_ESTIMATES,
             )
-            ReturnEquipmentCatalogStatus.UNAVAILABLE -> throw IllegalStateException(
-                "Справочник оборудования недоступен. Повторно откройте возврат после восстановления связи",
-            )
-            ReturnEquipmentCatalogStatus.NOT_LOADED,
-            ReturnEquipmentCatalogStatus.LOADING ->
-                throw IllegalStateException("Справочник оборудования ещё загружается")
+            closeReturn()
+            message("Фотографии загружаются. Отдельные сметы будут созданы после их проверки")
+            onQueued()
+            return@command
         }
-        val shortageInputs = document.lines.associate { line ->
-            val equipment = state.returnShortageEquipment[line.id]
-                .let(state.returnEquipmentCatalog::selectedReturnShortageEquipment)
-                ?: throw IllegalArgumentException(
-                    "Укажите оборудование с недостачей для строки ${line.lineNumber}",
-                )
-            val quantity = state.returnShortageQuantity[line.id]
-                ?.toLongOrNull()
-                ?.takeIf { it > 0 }
-                ?: throw IllegalArgumentException(
-                    "Укажите количество недостачи для строки ${line.lineNumber}",
-                )
-            line.id to EquipmentShortageRequest(equipment.id, quantity)
-        }
-        enqueueReturnUpload(
-            document = document,
-            action = ReturnUploadAction.REQUEST_ESTIMATE,
-            shortages = shortageInputs,
+        val readyMedia = loadReturnReadyMedia(document)
+        val signature = "return-start-estimates:${document.id}:${document.version}"
+        val updated = backend.api.startReturnEstimates(
+            documentId = document.id,
+            expectedVersion = document.version,
+            idempotencyKey = logisticsCommandKey(signature),
+            request = StartReturnEstimatesRequest(
+                document.lines.map { line ->
+                    StartReturnEstimateLine(
+                        lineId = line.id,
+                        references = requireNotNull(readyMedia[line.id]) {
+                            "Не найдены фотографии для строки ${line.lineNumber}"
+                        }.also { references ->
+                            require(references.isNotEmpty()) {
+                                "Добавьте и дождитесь загрузки фотографии для строки ${line.lineNumber}"
+                            }
+                        },
+                    )
+                },
+            ),
         )
+        commandKeys.complete(signature)
+        applyCurrentReturnDocument(updated)
+        val sources = awaitReturnEstimateSources(document)
         closeReturn()
-        message("Запрос на смету добавлен в фоновые загрузки")
-        onSaved()
+        if (sources.size == document.lines.size) {
+            refreshMaintenance(force = true)
+            message(
+                if (sources.size == 1) {
+                    "Черновик сметы создан"
+                } else {
+                    "Созданы отдельные черновики смет: ${sources.size}"
+                },
+            )
+            onSourcesReady(sources)
+        } else {
+            message("Сметы создаются. Откройте раздел «Сметы» через несколько секунд")
+            onQueued()
+        }
     }
 
     fun loadMaintenance() = command { refreshMaintenance() }
@@ -2122,12 +2105,11 @@ class ManagerViewModel(
     private data class ScopedMediaResult(
         val reference: MediaReferenceDto,
         val uri: String,
-        val rotationDegrees: Int,
     )
 
     private data class ScopedDownloadedPhoto(
+        val reference: MediaReferenceDto,
         val uri: String,
-        val rotationDegrees: Int,
     )
 
     private suspend fun loadInventoryPhotoUris(
@@ -2149,6 +2131,7 @@ class ManagerViewModel(
                 )
             },
         warehouseId = warehouseId,
+        preferCurrentOwnerReference = true,
     )
 
     private suspend fun loadMaintenancePhotoUris(
@@ -2165,6 +2148,7 @@ class ManagerViewModel(
     private suspend fun loadScopedPhotoUris(
         requests: List<ScopedMediaDownload>,
         warehouseId: String,
+        preferCurrentOwnerReference: Boolean = false,
     ): List<ScopedMediaResult> {
         if (requests.isEmpty()) return emptyList()
         val allScopes = requests.flatMap(ScopedMediaDownload::scopes).distinct()
@@ -2184,18 +2168,24 @@ class ManagerViewModel(
                 }
             }.map { lookup -> lookup.await() }.toMap()
         }
+        // Do not start every historical original/preview at once. A supplement can contain many
+        // photos; a small bound avoids saturating a weak mobile connection and turning a single
+        // transient failure into a partially loaded editor.
+        val downloadPermits = Semaphore(MANAGER_PHOTO_DOWNLOAD_PARALLELISM)
         return coroutineScope {
             requests.map { request ->
                 async {
-                    val downloaded = downloadScopedPhoto(
-                        request = request,
-                        assetsByScope = assetsByScope,
-                        warehouseId = warehouseId,
-                    ) ?: return@async null
+                    val downloaded = downloadPermits.withPermit {
+                        downloadScopedPhoto(
+                            request = request,
+                            assetsByScope = assetsByScope,
+                            warehouseId = warehouseId,
+                            preferCurrentOwnerReference = preferCurrentOwnerReference,
+                        )
+                    } ?: return@async null
                     ScopedMediaResult(
-                        reference = request.reference,
+                        reference = downloaded.reference,
                         uri = downloaded.uri,
-                        rotationDegrees = downloaded.rotationDegrees,
                     )
                 }
             }.mapNotNull { download -> download.await() }
@@ -2206,14 +2196,29 @@ class ManagerViewModel(
         request: ScopedMediaDownload,
         assetsByScope: Map<MaintenanceMediaScope, List<MediaAssetDto>?>,
         warehouseId: String,
+        preferCurrentOwnerReference: Boolean,
     ): ScopedDownloadedPhoto? {
         request.scopes.distinct().forEach { scope ->
-            val asset = assetsByScope[scope]
-                ?.firstOrNull { candidate ->
+            val ownerAssets = assetsByScope[scope]
+            val asset = if (preferCurrentOwnerReference) {
+                ownerAssets
+                    ?.let(::readyOwnerMediaAssetsById)
+                    ?.get(request.reference.mediaId)
+            } else {
+                ownerAssets?.firstOrNull { candidate ->
                     candidate.id == request.reference.mediaId &&
                         candidate.generation == request.reference.generation &&
                         candidate.status == "READY"
                 }
+            }
+            if (preferCurrentOwnerReference && ownerAssets != null && asset == null) {
+                // The owner projection is authoritative for an editable inventory photo.  Do not
+                // display an obsolete generation as though it were still an active attachment.
+                return@forEach
+            }
+            val currentReference = asset?.let { candidate ->
+                MediaReferenceDto(candidate.id, candidate.generation)
+            } ?: request.reference
             val preview = asset?.variants
                 ?.sortedBy { variant ->
                     when (variant.kind) {
@@ -2226,25 +2231,31 @@ class ManagerViewModel(
             if (preview != null) {
                 runCatching {
                     mediaDownloader.downloadVariant(
-                        mediaId = request.reference.mediaId,
-                        generation = request.reference.generation,
+                        mediaId = currentReference.mediaId,
+                        generation = currentReference.generation,
                         contentPath = preview.contentPath,
                     )
                 }.getOrNull()?.let { uri ->
-                    return ScopedDownloadedPhoto(uri, asset.rotationDegrees)
+                    return ScopedDownloadedPhoto(
+                        reference = currentReference,
+                        uri = uri,
+                    )
                 }
             }
             runCatching {
                 mediaDownloader.downloadOriginal(
-                    mediaId = request.reference.mediaId,
-                    generation = request.reference.generation,
+                    mediaId = currentReference.mediaId,
+                    generation = currentReference.generation,
                     ownerType = scope.ownerType,
                     ownerId = scope.ownerId,
                     warehouseId = warehouseId,
                     context = scope.context,
                 )
             }.getOrNull()?.let { uri ->
-                return ScopedDownloadedPhoto(uri, asset?.rotationDegrees ?: 0)
+                return ScopedDownloadedPhoto(
+                    reference = currentReference,
+                    uri = uri,
+                )
             }
         }
         return null
@@ -4790,7 +4801,6 @@ class ManagerViewModel(
     private suspend fun enqueueReturnUpload(
         document: LogisticsDocumentDto,
         action: ReturnUploadAction,
-        shortages: Map<String, EquipmentShortageRequest> = emptyMap(),
     ) {
         val photos = document.lines.flatMap { line ->
             val existing = mutableState.value.returnReadyMedia[line.id].orEmpty()
@@ -4834,7 +4844,6 @@ class ManagerViewModel(
                         ReturnUploadLineCommand(
                             lineId = line.id,
                             equipmentConfirmed = true,
-                            shortages = shortages[line.id]?.let(::listOf).orEmpty(),
                             existingMedia = mutableState.value.returnReadyMedia[line.id].orEmpty(),
                         )
                     },
@@ -4842,6 +4851,54 @@ class ManagerViewModel(
                 ),
             ),
         )
+    }
+
+    private suspend fun loadReturnReadyMedia(
+        document: LogisticsDocumentDto,
+    ): Map<String, List<MediaReferenceDto>> = document.lines.associate { line ->
+        line.id to retryMediaReadAfterOwnerProof {
+            backend.api.ownerMedia(
+                ownerType = "LOGISTICS_RETURN",
+                documentId = document.id,
+                lineId = line.id,
+                warehouseId = document.warehouseId,
+                context = "RETURN_INSPECTION",
+            )
+        }.items
+            .filter { it.status == "READY" && it.generation > 0 }
+            .map { MediaReferenceDto(it.id, it.generation) }
+    }
+
+    private suspend fun awaitReturnEstimateSources(
+        document: LogisticsDocumentDto,
+    ): List<ReturnEstimateSourceDto> {
+        val expectedLineIds = document.lines.mapTo(linkedSetOf()) { line -> line.id }
+        repeat(RETURN_ESTIMATE_SOURCE_POLL_ATTEMPTS) { attempt ->
+            val sources = backend.api.returnEstimateSources(
+                warehouseId = document.warehouseId,
+                returnId = document.id,
+            )
+            val sourceLineIds = sources.mapTo(linkedSetOf()) { source ->
+                require(source.returnId == document.id) {
+                    "Сервис смет вернул источник другого возврата"
+                }
+                require(source.warehouseId == document.warehouseId) {
+                    "Сервис смет вернул источник другого склада"
+                }
+                source.lineId
+            }
+            require(sourceLineIds.size == sources.size) {
+                "Сервис смет вернул повторный источник для одной бытовки"
+            }
+            require(sourceLineIds.all(expectedLineIds::contains)) {
+                "Сервис смет вернул источник отсутствующей строки возврата"
+            }
+            if (sourceLineIds == expectedLineIds) return sources
+            if (attempt < RETURN_ESTIMATE_SOURCE_POLL_ATTEMPTS - 1) {
+                delay(RETURN_ESTIMATE_SOURCE_POLL_DELAY_MILLIS)
+            }
+        }
+        return emptyList()
     }
 
     private suspend fun currentReturnInspectionDocument(
@@ -5332,12 +5389,10 @@ internal fun InventoryEditorState.removeInventoryPhoto(uri: String): InventoryEd
         photoUris = photoUris - uri,
         coverPhotoUri = coverPhotoUri.takeUnless { selected -> selected == uri },
         persistedPhotoMedia = persistedPhotoMedia - uri,
-        persistedPhotoRotationDegrees = persistedPhotoRotationDegrees - uri,
         removedPersistedMediaIds = removedReference?.mediaId?.let { mediaId ->
             removedPersistedMediaIds + mediaId
         } ?: removedPersistedMediaIds,
         uploadedPhotoMedia = uploadedPhotoMedia - uri,
-        photoRotationDegrees = photoRotationDegrees - uri,
     )
 }
 
@@ -5349,30 +5404,6 @@ internal fun InventoryEditorState.retainUploadedInventoryPhoto(
     copy(uploadedPhotoMedia = uploadedPhotoMedia + (uri to reference))
 } else {
     this
-}
-
-/**
- * The URI continues to identify the original device file.  This only records the absolute
- * canonical orientation that media-service must apply to its one media asset on save.
- */
-internal fun InventoryEditorState.rotateInventoryPhoto(uri: String): InventoryEditorState {
-    if (uri !in photoUris) return this
-    val persistedRotation = persistedPhotoRotationDegrees[uri] ?: 0
-    val nextRotation = ((photoRotationDegrees[uri] ?: persistedRotation) + 90) % 360
-    return copy(
-        photoRotationDegrees = if (nextRotation == persistedRotation) {
-            photoRotationDegrees - uri
-        } else {
-            photoRotationDegrees + (uri to nextRotation)
-        },
-    )
-}
-
-/** The local preview only needs the delta from the canonical server image already downloaded. */
-internal fun InventoryEditorState.inventoryPhotoPreviewRotation(uri: String): Int {
-    val requestedRotation = photoRotationDegrees[uri] ?: return 0
-    val persistedRotation = persistedPhotoRotationDegrees[uri] ?: 0
-    return (requestedRotation - persistedRotation + 360) % 360
 }
 
 internal fun inventoryMediaReferencesForEditor(
@@ -5392,23 +5423,10 @@ internal fun inventoryMediaReferencesForEditor(
     }
         .distinctBy(MediaReferenceDto::mediaId)
 
-internal fun inventoryReadyPersistedMediaReferences(
-    persisted: List<MediaReferenceDto>,
-    readyOwnerReferences: Set<MediaReferenceDto>,
-): List<MediaReferenceDto> =
-    persisted.filter(readyOwnerReferences::contains)
-
 internal fun InventoryEditorState.persistedInventoryMediaReferences(): List<MediaReferenceDto> =
     finding?.media.orEmpty()
         .filterNot { reference -> reference.mediaId in removedPersistedMediaIds }
         .distinctBy(MediaReferenceDto::mediaId)
-
-internal fun InventoryEditorState.persistedInventoryPhotoRotations(): List<InventoryExistingMediaRotation> =
-    photoUris.mapNotNull { uri ->
-        val reference = persistedPhotoMedia[uri] ?: return@mapNotNull null
-        val rotationDegrees = photoRotationDegrees[uri] ?: return@mapNotNull null
-        InventoryExistingMediaRotation(reference = reference, rotationDegrees = rotationDegrees)
-    }
 
 internal fun inventoryExistingMediaReferences(
     persisted: List<MediaReferenceDto>,
@@ -6231,6 +6249,9 @@ private fun canonicalMaintenanceMoney(value: String): String {
 }
 
 private const val SERVER_CONNECTIVITY_CHECK_MILLIS = 30_000L
+private const val MANAGER_PHOTO_DOWNLOAD_PARALLELISM = 3
+private const val RETURN_ESTIMATE_SOURCE_POLL_ATTEMPTS = 15
+private const val RETURN_ESTIMATE_SOURCE_POLL_DELAY_MILLIS = 1_000L
 private const val MAINTENANCE_AMENDMENT_REASON = "Изменение работ до начала ремонта"
 private val PRE_START_REPAIR_STATES = setOf("DRAFT", "QUEUED")
 private val MAINTENANCE_QUANTITY_PATTERN = Regex("^(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,3})?$")

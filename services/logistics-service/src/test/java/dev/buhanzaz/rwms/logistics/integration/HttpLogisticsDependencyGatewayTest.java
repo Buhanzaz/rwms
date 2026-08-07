@@ -1146,12 +1146,11 @@ class HttpLogisticsDependencyGatewayTest {
   }
 
   @Test
-  void createsTheReturnEstimateWithInspectionDateAndPhotos() {
+  void createsTheReturnEstimateSourceWithInspectionDateAndPhotos() {
     UUID returnId = UUID.randomUUID();
     UUID lineId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
     UUID rentalItemId = UUID.randomUUID();
-    UUID equipmentId = UUID.randomUUID();
     UUID mediaId = UUID.randomUUID();
     UUID estimateId = UUID.randomUUID();
     LocalDate dispatchDate = LocalDate.parse("2026-07-27");
@@ -1162,7 +1161,7 @@ class HttpLogisticsDependencyGatewayTest {
                     + returnId
                     + "/lines/"
                     + lineId
-                    + "/shortage"))
+                    + "/estimate-source"))
         .andExpect(method(HttpMethod.PUT))
         .andExpect(header("Authorization", "Bearer test-maintenance.logistics"))
         .andExpect(jsonPath("$.warehouseId").value(warehouseId.toString()))
@@ -1171,8 +1170,7 @@ class HttpLogisticsDependencyGatewayTest {
         .andExpect(jsonPath("$.dispatchDate").value("2026-07-27"))
         .andExpect(jsonPath("$.mediaReferences[0].mediaId").value(mediaId.toString()))
         .andExpect(jsonPath("$.mediaReferences[0].generation").value(4))
-        .andExpect(jsonPath("$.shortages[0].equipmentId").value(equipmentId.toString()))
-        .andExpect(jsonPath("$.shortages[0].missingQuantity").value(3))
+        .andExpect(jsonPath("$.shortages").doesNotExist())
         .andRespond(
             withSuccess(
                 """
@@ -1184,7 +1182,6 @@ class HttpLogisticsDependencyGatewayTest {
                   "rentalItemId":"%s",
                   "rentalItemVersion":8,
                   "estimateId":"%s",
-                  "shortages":[{"equipmentId":"%s","missingQuantity":3}],
                   "snapshotSha256":"%s",
                   "receivedAt":"2026-07-27T12:00:00Z"
                 }
@@ -1195,20 +1192,18 @@ class HttpLogisticsDependencyGatewayTest {
                         warehouseId,
                         rentalItemId,
                         estimateId,
-                        equipmentId,
                         "a".repeat(64)),
                 MediaType.APPLICATION_JSON));
 
-    LogisticsDependencyGateway.ReturnShortageSource source =
-        gateway.upsertReturnShortage(
+    LogisticsDependencyGateway.ReturnEstimateSource source =
+        gateway.upsertReturnEstimateSource(
             returnId,
             lineId,
             warehouseId,
             rentalItemId,
             8,
             dispatchDate,
-            List.of(new LogisticsDependencyGateway.MediaReference(mediaId, 4)),
-            List.of(new LogisticsDependencyGateway.EquipmentShortage(equipmentId, 3)));
+            List.of(new LogisticsDependencyGateway.MediaReference(mediaId, 4)));
 
     assertThat(source.estimateId()).isEqualTo(estimateId);
     server.verify();
