@@ -121,7 +121,8 @@ export type OrderMovement = {
   documentId: string
   documentType: "SHIPMENT" | "RETURN"
   state: string
-  scheduledDate: string
+  /** Null while an automatically created return has not been planned yet. */
+  scheduledDate: string | null
   actualAt: string | null
   rentalShipmentId: string | null
   createdAt: string

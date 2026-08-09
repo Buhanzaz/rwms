@@ -61,7 +61,7 @@ export function CreateOrderDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         ref={contentRef}
-        className="max-h-[90vh] max-w-3xl overflow-y-auto"
+        className="max-h-[90vh] max-w-4xl overflow-y-auto"
       >
         <DialogHeader>
           <DialogTitle>Новое бронирование</DialogTitle>
@@ -221,6 +221,9 @@ function CreateOrderDialogContent({
           accessToken={accessToken}
           actorId={currentUser.id}
           idPrefix="order"
+          responsibleManagerDisplayName={
+            currentUser.displayName || currentUser.id
+          }
           portalContainer={portalContainer}
           initialClient={initialClientQuery.data ?? null}
           onChange={handleChoice}

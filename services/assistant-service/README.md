@@ -119,8 +119,8 @@ service origin:
 
 Conversation creation accepts exactly one of `clientId` or `newClient`.
 `newClient` contains `clientType`, `displayName`, `phone`, optional `email`,
-`comment` and `source`, plus required `contactPerson` for a sole proprietor or
-legal entity. The responsible manager remains logistics-owned and cannot be
+`comment` and `source`, plus required `contactPerson` for a legal entity. The
+responsible manager remains logistics-owned and cannot be
 chosen through this request.
 
 The service requires a UUID JWT subject and rentalAccess claim before it reads

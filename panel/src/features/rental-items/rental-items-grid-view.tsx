@@ -30,6 +30,8 @@ export type RentalItemsGridViewProps = {
   accessToken: string
   mediaCovers: ReadonlyMap<string, CabinCoverProjection>
   coverAvailability?: RentalItemCoverAvailability
+  /** Fits the viewport to the configured visible rows instead of its flex parent. */
+  autoHeight?: boolean
   renderPhotoOverlay?: (item: RentalItemDto) => ReactNode
   renderItemActions?: (item: RentalItemDto) => ReactNode
 }
@@ -134,6 +136,24 @@ function limitCountBySize(
   )
 }
 
+function getAutoGridHeight(
+  rowCount: number,
+  requestedVisibleRowCount: number,
+  gap: number
+) {
+  const visibleRowCount = Math.max(
+    1,
+    Math.min(Math.max(rowCount, 1), requestedVisibleRowCount)
+  )
+  return Math.min(
+    DEFAULT_GRID_HEIGHT,
+    Math.max(
+      MIN_ADAPTIVE_CARD_HEIGHT,
+      visibleRowCount * MIN_ADAPTIVE_CARD_HEIGHT + (visibleRowCount - 1) * gap
+    )
+  )
+}
+
 export function RentalItemsGridView({
   items,
   gridFormat,
@@ -142,6 +162,7 @@ export function RentalItemsGridView({
   accessToken,
   mediaCovers,
   coverAvailability = "available",
+  autoHeight = false,
   renderPhotoOverlay,
   renderItemActions,
 }: RentalItemsGridViewProps) {
@@ -179,9 +200,15 @@ export function RentalItemsGridView({
     MIN_ADAPTIVE_CARD_WIDTH,
     gridGap
   )
+  let rowCount = Math.ceil(items.length / columnCount)
+  let gridHeight = autoHeight
+    ? getAutoGridHeight(rowCount, requestedVisibleRowCount, gridGap)
+    : dimensions.height
   let visibleRowCount = limitCountBySize(
-    requestedVisibleRowCount,
-    dimensions.height,
+    autoHeight
+      ? Math.min(Math.max(rowCount, 1), requestedVisibleRowCount)
+      : requestedVisibleRowCount,
+    gridHeight,
     MIN_ADAPTIVE_CARD_HEIGHT,
     gridGap
   )
@@ -192,9 +219,15 @@ export function RentalItemsGridView({
     MIN_ADAPTIVE_CARD_WIDTH,
     gridGap
   )
+  rowCount = Math.ceil(items.length / columnCount)
+  gridHeight = autoHeight
+    ? getAutoGridHeight(rowCount, requestedVisibleRowCount, gridGap)
+    : dimensions.height
   visibleRowCount = limitCountBySize(
-    requestedVisibleRowCount,
-    dimensions.height,
+    autoHeight
+      ? Math.min(Math.max(rowCount, 1), requestedVisibleRowCount)
+      : requestedVisibleRowCount,
+    gridHeight,
     MIN_ADAPTIVE_CARD_HEIGHT,
     gridGap
   )
@@ -202,9 +235,7 @@ export function RentalItemsGridView({
   const columnWidth = dimensions.width / columnCount
   const rowHeight = Math.max(
     MIN_CARD_HEIGHT,
-    Math.floor(
-      (dimensions.height - gridGap * (visibleRowCount - 1)) / visibleRowCount
-    )
+    Math.floor((gridHeight - gridGap * (visibleRowCount - 1)) / visibleRowCount)
   )
   const virtualRowHeight = rowHeight + gridGap
   const detailedDescription = columnWidth >= 220 && compactness <= 3
@@ -225,7 +256,6 @@ export function RentalItemsGridView({
   const showDescription = descriptionHeight >= 32
   const showExtraDescription = descriptionHeight >= 72 && detailedDescription
   const showCharacteristics = descriptionHeight >= 84 && detailedDescription
-  const rowCount = Math.ceil(items.length / columnCount)
 
   const rowVirtualizer = useVirtualizer({
     count: rowCount,
@@ -242,7 +272,11 @@ export function RentalItemsGridView({
     <div
       ref={parentRef}
       data-grid-format={`${columnCount}x${visibleRowCount}`}
-      className="min-h-0 min-w-0 flex-1 overflow-auto"
+      className={cn(
+        "min-w-0 overflow-auto",
+        autoHeight ? "" : "min-h-0 flex-1"
+      )}
+      style={autoHeight ? { height: `${gridHeight}px` } : undefined}
     >
       <div
         className="relative"

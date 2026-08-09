@@ -51,9 +51,9 @@ response remains `PREPARED` for that exact retry only until its persisted comman
 which the slot becomes recoverable. The remote calls run outside local transactions, and the receipt
 is effect/replay evidence rather than a duplicate of the authoritative asset-owned selection.
 
-`POST /api/logistics/v1/clients` creates a logistics rental client of type `INDIVIDUAL`,
-`SOLE_PROPRIETOR` or `LEGAL_ENTITY`. Name/FIO and main phone are required; sole proprietors and
-legal entities also require a contact person. Email, comment and source are optional, while the
+`POST /api/logistics/v1/clients` creates a logistics rental client of type `INDIVIDUAL` or
+`LEGAL_ENTITY`. Name/FIO and main phone are required; legal entities also require a contact person.
+Email, comment and source are optional, while the
 responsible-manager identity and display-name snapshot come only from the authenticated write
 actor. Historical clients keep the truthful creator-subject UUID as manager identity and may have
 no display-name snapshot. Client search/detail and the paged `/clients/{clientId}/orders` route use
@@ -181,11 +181,17 @@ are forbidden.
 
 Migration
 [`V42__clients_order_delivery_and_acceptable_dates.sql`](src/main/resources/db/migration/V42__clients_order_delivery_and_acceptable_dates.sql)
-adds the sole-proprietor client type, contact/manager/comment/source client fields, order delivery
-facts, the ordered unique acceptable-date collection and durable exact-command receipts for inquiry
-cabin selection. It backfills only the truthful responsible manager UUID from
+adds contact/manager/comment/source client fields, order delivery facts, the ordered unique
+acceptable-date collection and durable exact-command receipts for inquiry cabin selection. It
+backfills only the truthful responsible manager UUID from
 `created_by_subject_id`; it does not invent a historical display name. Legacy phone/contact rows
 remain readable while new writes are constrained, and V39-V41 remain immutable.
+
+Migration
+[`V43__remove_sole_proprietor_client_type.sql`](src/main/resources/db/migration/V43__remove_sole_proprietor_client_type.sql)
+reclassifies historical `SOLE_PROPRIETOR` rows to `LEGAL_ENTITY` before restricting client types to
+`INDIVIDUAL` and `LEGAL_ENTITY`. It stops before the update when that reclassification would collide
+with an existing legal entity by normalized phone, preserving every record for manual resolution.
 
 Logistics commits facts, projection checkpoints and a transactional outbox together. Kafka delivery
 is at-least-once: aggregate IDs are record keys, event IDs are dedupe identities, and consumers retain

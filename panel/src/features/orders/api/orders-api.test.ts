@@ -133,6 +133,27 @@ describe("parseOrderDetail", () => {
     })
   })
 
+  it("accepts an unscheduled automatically created return movement", () => {
+    const order = parseOrderDetail({
+      ...orderDetailResponse,
+      movements: [
+        {
+          documentId: "1b14d50d-4b0b-4a4d-9aaf-b29cd877fcd3",
+          documentType: "RETURN",
+          state: "DRAFT",
+          scheduledDate: null,
+          actualAt: null,
+          rentalShipmentId: null,
+          createdAt: "2026-07-19T19:49:56.046806Z",
+          updatedAt: "2026-07-19T20:49:56.046806Z",
+          cabins: [],
+        },
+      ],
+    })
+
+    expect(order.movements[0]?.scheduledDate).toBeNull()
+  })
+
   it("updates an order client through the same-origin gateway with CAS and idempotency", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify(orderDetailResponse), {

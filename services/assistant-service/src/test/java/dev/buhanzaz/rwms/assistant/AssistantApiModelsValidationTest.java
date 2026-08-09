@@ -33,11 +33,11 @@ class AssistantApiModelsValidationTest {
   }
 
   @Test
-  void soleProprietorRequiresAHumanContactPerson() {
+  void legalEntityRequiresAHumanContactPerson() {
     AssistantApiModels.NewClientRequest request =
         new AssistantApiModels.NewClientRequest(
-            "SOLE_PROPRIETOR",
-            "ИП Север",
+            "LEGAL_ENTITY",
+            "ООО Север",
             "8 (999) 000-00-00",
             null,
             null,
@@ -48,6 +48,25 @@ class AssistantApiModelsValidationTest {
       assertThat(factory.getValidator().validate(request))
           .extracting(violation -> violation.getPropertyPath().toString())
           .contains("contactPersonRequirementSatisfied");
+    }
+  }
+
+  @Test
+  void removedSoleProprietorIsRejectedAtTheAssistantBoundary() {
+    AssistantApiModels.NewClientRequest request =
+        new AssistantApiModels.NewClientRequest(
+            "SOLE_PROPRIETOR",
+            "ИП Север",
+            "8 (999) 000-00-00",
+            "Иван Петров",
+            null,
+            null,
+            null);
+
+    try (ValidatorFactory factory = Validation.buildDefaultValidatorFactory()) {
+      assertThat(factory.getValidator().validate(request))
+          .extracting(violation -> violation.getPropertyPath().toString())
+          .contains("clientType");
     }
   }
 }

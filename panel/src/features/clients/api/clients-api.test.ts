@@ -12,8 +12,8 @@ const MANAGER_ID = "22222222-2222-4222-8222-222222222222"
 const clientResponse = {
   id: CLIENT_ID,
   version: 2,
-  type: "SOLE_PROPRIETOR",
-  displayName: "ИП Петров",
+  type: "LEGAL_ENTITY",
+  displayName: "ООО Петров",
   phone: null,
   contactPerson: "Пётр Петров",
   email: "client@example.ru",
@@ -55,7 +55,7 @@ describe("clients API", () => {
     await expect(
       listClients({
         accessToken: "token",
-        type: "SOLE_PROPRIETOR",
+        type: "LEGAL_ENTITY",
         search: " Петров ",
         page: 2,
         size: 50,
@@ -66,7 +66,7 @@ describe("clients API", () => {
     const endpoint = new URL(url)
     expect(endpoint.pathname).toBe("/api/logistics/v1/clients")
     expect(Object.fromEntries(endpoint.searchParams)).toEqual({
-      type: "SOLE_PROPRIETOR",
+      type: "LEGAL_ENTITY",
       search: "Петров",
       page: "2",
       size: "50",
@@ -85,8 +85,8 @@ describe("clients API", () => {
     )
     vi.stubGlobal("fetch", fetchMock)
     const input = {
-      clientType: "SOLE_PROPRIETOR" as const,
-      displayName: "ИП Петров",
+      clientType: "LEGAL_ENTITY" as const,
+      displayName: "ООО Петров",
       phone: "+79990000000",
       contactPerson: "Пётр Петров",
       email: null,
@@ -128,6 +128,9 @@ describe("clients API", () => {
   it("fails closed on a malformed client response", () => {
     expect(() =>
       parseRentalClient({ ...clientResponse, id: "not-a-uuid" })
+    ).toThrow("некорректный ответ")
+    expect(() =>
+      parseRentalClient({ ...clientResponse, type: "SOLE_PROPRIETOR" })
     ).toThrow("некорректный ответ")
   })
 })

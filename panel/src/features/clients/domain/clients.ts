@@ -1,14 +1,9 @@
-export const CLIENT_TYPES = [
-  "INDIVIDUAL",
-  "SOLE_PROPRIETOR",
-  "LEGAL_ENTITY",
-] as const
+export const CLIENT_TYPES = ["INDIVIDUAL", "LEGAL_ENTITY"] as const
 
 export type ClientType = (typeof CLIENT_TYPES)[number]
 
 export const CLIENT_TYPE_LABELS: Record<ClientType, string> = {
   INDIVIDUAL: "Физическое лицо",
-  SOLE_PROPRIETOR: "ИП",
   LEGAL_ENTITY: "Юридическое лицо",
 }
 
@@ -61,5 +56,5 @@ export function normalizeClientSearch(value: string) {
 }
 
 export function clientNeedsContactPerson(type: ClientType) {
-  return type === "SOLE_PROPRIETOR" || type === "LEGAL_ENTITY"
+  return type === "LEGAL_ENTITY"
 }

@@ -1,13 +1,17 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+const coverApi = vi.hoisted(() => ({
+  load: vi.fn().mockResolvedValue({ items: [] }),
+}))
+
 vi.mock("@/features/rental-items/use-rental-item-covers", () => ({
   RENTAL_ITEM_COVERS_QUERY_KEY: ["rental-item-media-covers"],
-  loadRentalItemCoverPage: vi.fn().mockResolvedValue({ items: [] }),
+  loadRentalItemCoverPage: coverApi.load,
 }))
 
 vi.mock("@/features/rental-items/rental-item-photo-dialog", () => ({
@@ -18,11 +22,21 @@ vi.mock("@/features/rental-items/rental-items-grid-view", () => ({
   RentalItemsGridView: ({
     items,
     renderPhotoOverlay,
+    mediaCovers,
+    autoHeight,
   }: {
     items: RentalItemDto[]
     renderPhotoOverlay: (item: RentalItemDto) => ReactNode
+    mediaCovers: ReadonlyMap<string, { previews: readonly unknown[] }>
+    autoHeight?: boolean
   }) => (
-    <div data-testid="booking-grid">
+    <div
+      data-testid="booking-grid"
+      data-auto-height={String(autoHeight)}
+      data-preview-count={String(
+        items[0] ? (mediaCovers.get(items[0].id)?.previews.length ?? 0) : 0
+      )}
+    >
       {items.map((item) => (
         <div key={item.id}>{renderPhotoOverlay(item)}</div>
       ))}
@@ -63,7 +77,7 @@ const item: RentalItemDto = {
   tags: [],
 }
 
-function renderBrowser(onToggle = vi.fn()) {
+function renderBrowser(onToggle = vi.fn(), compact = false) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -79,6 +93,7 @@ function renderBrowser(onToggle = vi.fn()) {
           search=""
           onSearchChange={vi.fn()}
           onToggle={onToggle}
+          compact={compact}
         />
       </QueryClientProvider>
     </MemoryRouter>
@@ -122,5 +137,44 @@ describe("BookingCabinBrowser", () => {
       screen.getByRole("checkbox", { name: "Выбрать бытовки БЫТ-001" })
     )
     expect(onToggle).toHaveBeenCalledWith(item)
+  })
+
+  it("uses one preview per card and a compact auto-height grid when requested", async () => {
+    coverApi.load.mockResolvedValue({
+      items: [
+        {
+          cabinId: item.id,
+          photoCount: 2,
+          cover: null,
+          previews: [
+            {
+              mediaId: "33333333-3333-4333-8333-333333333333",
+              generation: 1,
+              kind: "SMALL",
+              contentType: "image/webp",
+              contentPath: "/api/media/first.webp",
+              width: 360,
+              height: 240,
+            },
+            {
+              mediaId: "44444444-4444-4444-8444-444444444444",
+              generation: 1,
+              kind: "SMALL",
+              contentType: "image/webp",
+              contentPath: "/api/media/second.webp",
+              width: 360,
+              height: 240,
+            },
+          ],
+        },
+      ],
+    })
+    renderBrowser(vi.fn(), true)
+
+    const grid = screen.getByTestId("booking-grid")
+    await waitFor(() =>
+      expect(grid.getAttribute("data-preview-count")).toBe("1")
+    )
+    expect(grid.getAttribute("data-auto-height")).toBe("true")
   })
 })

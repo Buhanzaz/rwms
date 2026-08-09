@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
 import { MemoryRouter, Route, Routes } from "react-router-dom"
@@ -109,7 +109,7 @@ function configureAvailableItem() {
   api.list.mockResolvedValue({
     content: [item],
     page: 0,
-    size: 200,
+    size: 50,
     totalElements: 1,
     totalPages: 1,
   })
@@ -156,9 +156,26 @@ afterEach(() => {
   cleanup()
   api.available = true
   vi.clearAllMocks()
+  vi.useRealTimers()
 })
 
 describe("BookingCatalogPage", () => {
+  it("loads available cabins in 50-item pages without a timed full-catalog refresh", async () => {
+    configureAvailableItem()
+    renderPage()
+
+    await waitFor(() => expect(api.list).toHaveBeenCalledTimes(1))
+    expect(api.list).toHaveBeenCalledWith(
+      expect.objectContaining({ size: 50, search: "" })
+    )
+
+    vi.useFakeTimers()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_100)
+    })
+    expect(api.list).toHaveBeenCalledTimes(1)
+  })
+
   it("stages checked cabins without a hold and reserves only on Continue", async () => {
     const user = userEvent.setup()
     configureAvailableItem()

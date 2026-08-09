@@ -102,9 +102,9 @@ class AssistantOpenApiContractTest {
             "filterSuggestions",
             "ClarificationQuestion",
             "CabinSelection",
-            "SOLE_PROPRIETOR",
+            "LEGAL_ENTITY",
             "enum: [FREE]");
-    assertThat(serialized).doesNotContain("request_search_merge_confirmation");
+    assertThat(serialized).doesNotContain("request_search_merge_confirmation", "SOLE_PROPRIETOR");
     assertThat(serialized).doesNotContain("ALL_RENTABLE", "NEW_ONLY", "enum: [FREE, NEW]");
     Map<String, Object> cabinSearchToolResult =
         (Map<String, Object>) schemas.get("CabinSearchToolResult");
@@ -131,6 +131,9 @@ class AssistantOpenApiContractTest {
     assertThat((Map<String, Object>) removeItems.get("items"))
         .containsEntry("$ref", "#/components/schemas/AvailableCabin");
     Map<String, Object> newClient = (Map<String, Object>) schemas.get("NewClient");
+    Map<String, Object> newClientProperties = (Map<String, Object>) newClient.get("properties");
+    assertThat(((Map<String, Object>) newClientProperties.get("clientType")).get("enum"))
+        .isEqualTo(List.of("INDIVIDUAL", "LEGAL_ENTITY"));
     assertThat((Map<String, Object>) ((Map<String, Object>) newClient.get("properties")).get("phone"))
         .containsEntry("pattern", "^(?:\\+|8)[0-9() .-]{6,31}$");
     assertThat(openApiEndpoints(document))

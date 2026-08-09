@@ -112,13 +112,16 @@ vi.mock("@/features/auth/use-auth", () => ({
 vi.mock("@/features/orders/components/order-client-chooser", () => ({
   OrderClientChooser: ({
     initialClient,
+    responsibleManagerDisplayName,
   }: {
     initialClient?: { displayName: string } | null
+    responsibleManagerDisplayName: string
   }) => (
     <div>
       {initialClient
         ? `Предвыбран клиент: ${initialClient.displayName}`
         : "Выбор клиента"}
+      <output>{`Ответственный менеджер формы: ${responsibleManagerDisplayName}`}</output>
     </div>
   ),
 }))
@@ -389,6 +392,9 @@ describe("AssistantPage composer", () => {
 
     expect(
       screen.getByText("Предвыбран клиент: ООО Предвыбранный клиент")
+    ).toBeTruthy()
+    expect(
+      screen.getByText("Ответственный менеджер формы: Менеджер")
     ).toBeTruthy()
   })
 

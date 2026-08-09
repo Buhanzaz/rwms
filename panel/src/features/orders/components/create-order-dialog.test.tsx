@@ -33,6 +33,7 @@ vi.mock("@/features/orders/orders-module-context", () => ({
     accessToken: "orders-token",
     currentUser: {
       id: "11111111-1111-4111-8111-111111111111",
+      displayName: "Мария Менеджер",
       globalRole: "RENTAL_MANAGER",
     },
     warehouses: [],
@@ -268,7 +269,7 @@ describe("CreateOrderDialog", () => {
       )
     ).toBeTruthy()
     expect(ordersApi.createOrder).not.toHaveBeenCalled()
-    fireEvent.change(screen.getByLabelText("Телефон"), {
+    fireEvent.change(screen.getByLabelText("Основной телефон"), {
       target: { value: "+7 999 123-45-67" },
     })
     fireEvent.change(screen.getByLabelText("Основное контактное лицо"), {
@@ -336,7 +337,15 @@ describe("CreateOrderDialog", () => {
       })
     )
     expect(ordersApi.createOrder).not.toHaveBeenCalled()
-    await user.type(screen.getByLabelText("Телефон"), "+7 999 765-43-21")
+    const manager = screen.getByLabelText(
+      "Ответственный менеджер"
+    ) as HTMLInputElement
+    expect(manager.value).toBe("Мария Менеджер")
+    expect(manager.readOnly).toBe(true)
+    await user.type(
+      screen.getByLabelText("Основной телефон"),
+      "+7 999 765-43-21"
+    )
     await user.type(
       screen.getByLabelText("Основное контактное лицо"),
       "Анна Петрова"

@@ -81,7 +81,7 @@ class HttpLogisticsClientTest {
   }
 
   @Test
-  void forwardsEverySupportedSoleProprietorClientField() throws Exception {
+  void forwardsEverySupportedLegalEntityClientField() throws Exception {
     UUID conversationId = UUID.randomUUID();
     UUID inquiryId = UUID.randomUUID();
     UUID clientId = UUID.randomUUID();
@@ -93,7 +93,7 @@ class HttpLogisticsClientTest {
               exchange,
               201,
               """
-              {"id":"%s","state":"ACTIVE","client":{"id":"%s","type":"SOLE_PROPRIETOR","displayName":"ИП Север"}}
+              {"id":"%s","state":"ACTIVE","client":{"id":"%s","type":"LEGAL_ENTITY","displayName":"ООО Север"}}
               """
                   .formatted(inquiryId, clientId));
         });
@@ -103,8 +103,8 @@ class HttpLogisticsClientTest {
             conversationId,
             null,
             new AssistantApiModels.NewClientRequest(
-                "SOLE_PROPRIETOR",
-                "ИП Север",
+                "LEGAL_ENTITY",
+                "ООО Север",
                 "+79990000000",
                 "Иван Петров",
                 "client@example.test",
@@ -113,7 +113,7 @@ class HttpLogisticsClientTest {
             "current-user-bearer");
 
     JsonNode newClient = received.getFirst().body().path("newClient");
-    assertThat(newClient.path("clientType").asText()).isEqualTo("SOLE_PROPRIETOR");
+    assertThat(newClient.path("clientType").asText()).isEqualTo("LEGAL_ENTITY");
     assertThat(newClient.path("contactPerson").asText()).isEqualTo("Иван Петров");
     assertThat(newClient.path("email").asText()).isEqualTo("client@example.test");
     assertThat(newClient.path("comment").asText()).isEqualTo("Приоритетный клиент");

@@ -47,6 +47,7 @@ import { BookingUnavailableDialog } from "@/features/booking/booking-availabilit
 import { BookingCabinBrowser } from "@/features/booking/booking-cabin-browser"
 import { buildManualBookingPresentationGroups } from "@/features/booking/booking-presentation"
 import { useBookingSelection } from "@/features/booking/booking-selection-context"
+import { useBookingHoldExpiry } from "@/features/booking/use-booking-hold-expiry"
 import { OrderCommandIdentityRegistry } from "@/features/orders/api/order-command-identity"
 import {
   OrderClientChooser,
@@ -103,6 +104,9 @@ export function BookingContinuePage() {
         key={selectedWarehouse.id}
         accessToken={accessToken}
         actorId={currentUser.id}
+        responsibleManagerDisplayName={
+          currentUser.displayName || currentUser.id
+        }
         warehouseId={selectedWarehouse.id}
       />
     )
@@ -119,10 +123,12 @@ export function BookingContinuePage() {
 function BookingContinuePageState({
   accessToken,
   actorId,
+  responsibleManagerDisplayName,
   warehouseId,
 }: {
   accessToken: string
   actorId: string
+  responsibleManagerDisplayName: string
   warehouseId: string
 }) {
   const navigate = useNavigate()
@@ -208,17 +214,10 @@ function BookingContinuePageState({
     [currentHold?.rentalItemIds]
   )
   const holdCoversAllStaged = stagedIds.every((id) => heldIds.has(id))
-  const [now, setNow] = useState(() => Date.now())
   const holdExpiresAt = currentHold?.expiresAt
     ? Date.parse(currentHold.expiresAt)
     : 0
-  const holdExpired = !currentHold || holdExpiresAt <= now
-
-  useEffect(() => {
-    if (!currentHold) return
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000)
-    return () => window.clearInterval(timer)
-  }, [currentHold])
+  const holdExpired = useBookingHoldExpiry(currentHold)
 
   useEffect(() => {
     if (!holdQuery.data) return
@@ -383,13 +382,14 @@ function BookingContinuePageState({
     <>
       <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto">
         {stagedItems.length > 0 ? (
-          <div className="min-h-80 flex-1">
+          <div className="shrink-0">
             <BookingCabinBrowser
               accessToken={accessToken}
               subjectId={actorId}
               warehouseId={warehouseId}
               items={stagedItems}
               selectedIds={effectiveFinalSelectedIds}
+              compact
               search={search}
               onSearchChange={setSearch}
               onToggle={(item) =>
@@ -447,7 +447,7 @@ function BookingContinuePageState({
         ) : null}
 
         {stagedItems.length > 0 ? (
-          <Card className="shrink-0">
+          <Card className="w-full max-w-4xl shrink-0 self-center">
             <CardHeader>
               <CardTitle>Клиентское представление</CardTitle>
               <CardDescription>
@@ -473,6 +473,9 @@ function BookingContinuePageState({
                       accessToken={accessToken}
                       actorId={actorId}
                       idPrefix="manual-booking"
+                      responsibleManagerDisplayName={
+                        responsibleManagerDisplayName
+                      }
                       initialClient={initialClientQuery.data ?? null}
                       newClientCreationContext="при создании представления"
                       onChange={handleChoice}

@@ -2966,7 +2966,7 @@ components:
         reason: { type: string, minLength: 1, maxLength: 500 }
     ClientType:
       type: string
-      enum: [INDIVIDUAL, SOLE_PROPRIETOR, LEGAL_ENTITY]
+      enum: [INDIVIDUAL, LEGAL_ENTITY]
     NewClientInput:
       type: object
       additionalProperties: false
@@ -2987,7 +2987,7 @@ components:
       allOf:
         - if:
             properties:
-              clientType: { enum: [SOLE_PROPRIETOR, LEGAL_ENTITY] }
+              clientType: { enum: [LEGAL_ENTITY] }
             required: [clientType]
           then:
             required: [contactPerson]
@@ -3013,7 +3013,7 @@ components:
       allOf:
         - if:
             properties:
-              clientType: { enum: [SOLE_PROPRIETOR, LEGAL_ENTITY] }
+              clientType: { enum: [LEGAL_ENTITY] }
             required: [clientType]
           then:
             required: [contactPerson]

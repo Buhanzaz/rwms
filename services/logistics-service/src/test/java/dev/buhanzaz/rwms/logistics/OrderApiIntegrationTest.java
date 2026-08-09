@@ -309,7 +309,7 @@ class OrderApiIntegrationTest {
   }
 
   @Test
-  void soleProprietorRequiresContactAndManagerSnapshotComesFromTheWriteActor()
+  void legalEntityRequiresContactAndManagerSnapshotComesFromTheWriteActor()
       throws Exception {
     String phone = nextTestPhone();
     mvc.perform(
@@ -318,7 +318,7 @@ class OrderApiIntegrationTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
                     """
-                    {"clientType":"SOLE_PROPRIETOR","displayName":"ИП Петров","phone":"%s"}
+                    {"clientType":"LEGAL_ENTITY","displayName":"ООО Петров","phone":"%s"}
                     """
                         .formatted(phone))
                 .with(manager(MANAGER_1, "manager-one")))
@@ -331,8 +331,8 @@ class OrderApiIntegrationTest {
                 .content(
                     """
                     {
-                      "clientType":"SOLE_PROPRIETOR",
-                      "displayName":"ИП Петров",
+                      "clientType":"LEGAL_ENTITY",
+                      "displayName":"ООО Петров",
                       "phone":"%s",
                       "contactPerson":"Пётр Петров",
                       "email":"OWNER@EXAMPLE.TEST",
@@ -343,7 +343,7 @@ class OrderApiIntegrationTest {
                         .formatted(phone))
                 .with(manager(MANAGER_1, "manager-one")))
         .andExpect(status().isCreated())
-        .andExpect(jsonPath("$.type").value("SOLE_PROPRIETOR"))
+        .andExpect(jsonPath("$.type").value("LEGAL_ENTITY"))
         .andExpect(jsonPath("$.contactPerson").value("Пётр Петров"))
         .andExpect(jsonPath("$.email").value("owner@example.test"))
         .andExpect(jsonPath("$.responsibleManagerId").value(MANAGER_1.toString()))
@@ -879,14 +879,19 @@ class OrderApiIntegrationTest {
   }
 
   @Test
-  void unsupportedClientTypeIsRejectedBeforeMutation() throws Exception {
+  void removedSoleProprietorClientTypeIsRejectedBeforeMutation() throws Exception {
     mvc.perform(
             post("/api/logistics/v1/clients")
                 .header("Idempotency-Key", UUID.randomUUID())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
                     """
-                    {"clientType":"ENTREPRENEUR","displayName":"Петров А.В.","phone":"+79990000001"}
+                    {
+                      "clientType":"SOLE_PROPRIETOR",
+                      "displayName":"ИП Петров",
+                      "phone":"+79990000001",
+                      "contactPerson":"Пётр Петров"
+                    }
                     """)
                 .with(manager(MANAGER_1, "manager-one")))
         .andExpect(status().isBadRequest());

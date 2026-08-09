@@ -222,7 +222,8 @@ function parseOrderMovement(value: unknown): OrderMovement {
     documentId: uuid(source.documentId),
     documentType: enumValue(source.documentType, ["SHIPMENT", "RETURN"]),
     state: text(source.state),
-    scheduledDate: date(source.scheduledDate),
+    scheduledDate:
+      source.scheduledDate === null ? null : date(source.scheduledDate),
     actualAt: source.actualAt === null ? null : timestamp(source.actualAt),
     rentalShipmentId: nullableUuid(source.rentalShipmentId),
     createdAt: timestamp(source.createdAt),

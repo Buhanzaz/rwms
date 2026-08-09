@@ -185,7 +185,7 @@ public class OrderClientService {
     String normalizedName = normalizeName(displayName);
     String normalizedPhone = normalizePhone(requestedPhone);
     String contactPerson = normalizeOptionalText(requestedContactPerson, 255, "contactPerson");
-    if (type != ClientType.INDIVIDUAL && contactPerson == null) {
+    if (type == ClientType.LEGAL_ENTITY && contactPerson == null) {
       throw new IllegalArgumentException("contactPerson is required for this client type");
     }
     String normalizedEmail = normalizeEmail(requestedEmail);

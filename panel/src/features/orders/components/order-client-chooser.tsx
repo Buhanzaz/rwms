@@ -20,16 +20,11 @@ import {
   FieldError,
   FieldLabel,
 } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
 import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+  ClientCreateFields,
+  ClientTypeField,
+  type ClientCreateFieldsValue,
+} from "@/features/clients/components/client-create-fields"
 import {
   listOrderClients,
   ORDERS_QUERY_KEY,
@@ -37,12 +32,9 @@ import {
 import {
   normalizeClientDisplayName,
   normalizeClientSearch,
-  ORDER_CLIENT_TYPES,
-  ORDER_CLIENT_TYPE_LABELS,
   type OrderClientSearchItem,
   type OrderClientType,
 } from "@/features/orders/domain/orders"
-import { clientNeedsContactPerson } from "@/features/clients/domain/clients"
 
 export type OrderClientChoice =
   | {
@@ -76,10 +68,31 @@ type CreateClientOption = {
 
 type ClientOption = ExistingClientOption | CreateClientOption
 
+function emptyClientValue(
+  clientType: OrderClientType
+): ClientCreateFieldsValue {
+  return {
+    clientType,
+    displayName: "",
+    phone: "",
+    contactPerson: "",
+    email: "",
+    comment: "",
+    source: "",
+  }
+}
+
+/**
+ * Finds an existing rental client or collects the same fields for a new one.
+ *
+ * <p>The parent owns command submission; this component only emits a normalized choice and
+ * never lets the browser select the responsible manager.</p>
+ */
 export function OrderClientChooser({
   accessToken,
   actorId,
   idPrefix,
+  responsibleManagerDisplayName,
   portalContainer,
   initialClient = null,
   newClientCreationContext = "после успешного создания бронирования",
@@ -88,13 +101,15 @@ export function OrderClientChooser({
   accessToken: string
   actorId: string
   idPrefix: string
+  responsibleManagerDisplayName: string
   portalContainer?: RefObject<HTMLDivElement | null>
   initialClient?: OrderClientSearchItem | null
   newClientCreationContext?: string
   onChange: (choice: OrderClientChoice | null) => void
 }) {
-  const [clientType, setClientType] = useState<OrderClientType>(
-    initialClient?.type ?? "LEGAL_ENTITY"
+  const initialType = initialClient?.type ?? "LEGAL_ENTITY"
+  const [clientValue, setClientValue] = useState<ClientCreateFieldsValue>(() =>
+    emptyClientValue(initialType)
   )
   const [clientComboboxOpen, setClientComboboxOpen] = useState(false)
   const [search, setSearch] = useState(initialClient?.displayName ?? "")
@@ -108,11 +123,6 @@ export function OrderClientChooser({
         }
       : null
   )
-  const [phone, setPhone] = useState("")
-  const [contactPerson, setContactPerson] = useState("")
-  const [email, setEmail] = useState("")
-  const [comment, setComment] = useState("")
-  const [source, setSource] = useState("")
   const normalizedSearch = normalizeClientSearch(search)
   const displayName = normalizeClientDisplayName(search)
 
@@ -121,13 +131,13 @@ export function OrderClientChooser({
       ...ORDERS_QUERY_KEY,
       "clients",
       actorId,
-      clientType,
+      clientValue.clientType,
       normalizedSearch,
     ],
     queryFn: () =>
       listOrderClients({
         accessToken,
-        type: clientType,
+        type: clientValue.clientType,
         search: normalizeClientDisplayName(search),
         page: 0,
         size: 20,
@@ -180,35 +190,22 @@ export function OrderClientChooser({
     if (selection?.kind === "create") {
       onChange({
         kind: "new",
-        clientType,
+        clientType: clientValue.clientType,
         displayName: selection.displayName,
-        phone: phone.trim(),
-        contactPerson: contactPerson.trim() || null,
-        email: email.trim() || null,
-        comment: comment.trim() || null,
-        source: source.trim() || null,
+        phone: clientValue.phone.trim(),
+        contactPerson: clientValue.contactPerson.trim() || null,
+        email: clientValue.email.trim() || null,
+        comment: clientValue.comment.trim() || null,
+        source: clientValue.source.trim() || null,
       })
       return
     }
     onChange(null)
-  }, [
-    clientType,
-    comment,
-    contactPerson,
-    email,
-    onChange,
-    phone,
-    selection,
-    source,
-  ])
+  }, [clientValue, onChange, selection])
 
-  function resetChoice() {
+  function resetChoice(clientType = clientValue.clientType) {
     setSelection(null)
-    setPhone("")
-    setContactPerson("")
-    setEmail("")
-    setComment("")
-    setSource("")
+    setClientValue(emptyClientValue(clientType))
   }
 
   function selectNewClient() {
@@ -216,34 +213,23 @@ export function OrderClientChooser({
 
     setSelection(createOption)
     setSearch(createOption.displayName)
+    setClientValue((current) => ({
+      ...current,
+      displayName: createOption.displayName,
+    }))
     setClientComboboxOpen(false)
   }
 
   return (
     <>
-      <Field>
-        <FieldLabel htmlFor={`${idPrefix}-client-type`}>Тип клиента</FieldLabel>
-        <Select
-          value={clientType}
-          onValueChange={(value) => {
-            setClientType(value as OrderClientType)
-            resetChoice()
-          }}
-        >
-          <SelectTrigger id={`${idPrefix}-client-type`} className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              {ORDER_CLIENT_TYPES.map((type) => (
-                <SelectItem key={type} value={type}>
-                  {ORDER_CLIENT_TYPE_LABELS[type]}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-      </Field>
+      <ClientTypeField
+        id={`${idPrefix}-client-type`}
+        value={clientValue.clientType}
+        onChange={(clientType) => {
+          setSearch("")
+          resetChoice(clientType)
+        }}
+      />
 
       <Field data-invalid={clientsQuery.isError || undefined}>
         <FieldLabel htmlFor={`${idPrefix}-client-search`}>Клиент</FieldLabel>
@@ -258,11 +244,11 @@ export function OrderClientChooser({
           itemToStringValue={(option) => option.value}
           isItemEqualToValue={(left, right) => left.value === right.value}
           onOpenChange={setClientComboboxOpen}
-          onInputValueChange={(value) => {
-            setSearch(value)
+          onInputValueChange={(next) => {
+            setSearch(next)
             if (
               selection &&
-              normalizeClientSearch(value) !==
+              normalizeClientSearch(next) !==
                 normalizeClientSearch(
                   selection.kind === "existing"
                     ? selection.client.displayName
@@ -359,80 +345,14 @@ export function OrderClientChooser({
       </Field>
 
       {selection?.kind === "create" ? (
-        <>
-          <Field>
-            <FieldLabel htmlFor={`${idPrefix}-client-phone`}>
-              Телефон
-            </FieldLabel>
-            <Input
-              id={`${idPrefix}-client-phone`}
-              type="tel"
-              value={phone}
-              required
-              autoComplete="tel"
-              placeholder="+7 999 000-00-00"
-              onChange={(event) => setPhone(event.target.value)}
-            />
-            <FieldDescription>
-              Обязателен и используется для поиска существующего клиента.
-            </FieldDescription>
-          </Field>
-          {clientNeedsContactPerson(clientType) ? (
-            <Field>
-              <FieldLabel htmlFor={`${idPrefix}-client-contact-person`}>
-                Основное контактное лицо
-              </FieldLabel>
-              <Input
-                id={`${idPrefix}-client-contact-person`}
-                value={contactPerson}
-                required
-                autoComplete="name"
-                placeholder="Фамилия Имя"
-                onChange={(event) => setContactPerson(event.target.value)}
-              />
-              <FieldDescription>
-                Обязательно для ИП и юридического лица.
-              </FieldDescription>
-            </Field>
-          ) : null}
-          <Field>
-            <FieldLabel htmlFor={`${idPrefix}-client-email`}>Email</FieldLabel>
-            <Input
-              id={`${idPrefix}-client-email`}
-              type="email"
-              value={email}
-              autoComplete="email"
-              placeholder="client@example.ru"
-              onChange={(event) => setEmail(event.target.value)}
-            />
-            <FieldDescription>Необязательное поле.</FieldDescription>
-          </Field>
-          <Field>
-            <FieldLabel htmlFor={`${idPrefix}-client-source`}>
-              Источник клиента
-            </FieldLabel>
-            <Input
-              id={`${idPrefix}-client-source`}
-              value={source}
-              maxLength={255}
-              placeholder="Рекомендация, сайт, звонок"
-              onChange={(event) => setSource(event.target.value)}
-            />
-            <FieldDescription>Необязательное поле.</FieldDescription>
-          </Field>
-          <Field>
-            <FieldLabel htmlFor={`${idPrefix}-client-comment`}>
-              Комментарий о клиенте
-            </FieldLabel>
-            <Textarea
-              id={`${idPrefix}-client-comment`}
-              value={comment}
-              maxLength={2_000}
-              onChange={(event) => setComment(event.target.value)}
-            />
-            <FieldDescription>Необязательное поле.</FieldDescription>
-          </Field>
-        </>
+        <ClientCreateFields
+          idPrefix={idPrefix}
+          value={clientValue}
+          responsibleManagerDisplayName={responsibleManagerDisplayName}
+          showClientType={false}
+          showDisplayName={false}
+          onChange={setClientValue}
+        />
       ) : null}
     </>
   )

@@ -295,12 +295,12 @@ components:
             clientType: { const: INDIVIDUAL }
         - required: [contactPerson]
           properties:
-            clientType: { enum: [SOLE_PROPRIETOR, LEGAL_ENTITY] }
+            clientType: { enum: [LEGAL_ENTITY] }
             contactPerson: { type: string, minLength: 1, maxLength: 255 }
       properties:
         clientType:
           type: string
-          enum: [INDIVIDUAL, SOLE_PROPRIETOR, LEGAL_ENTITY]
+          enum: [INDIVIDUAL, LEGAL_ENTITY]
         displayName:
           type: string
           minLength: 1

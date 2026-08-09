@@ -111,8 +111,8 @@ Interactive clients вызывают только public gateway routes, а не
 
 Conversation creation принимает ровно одно из `clientId` или `newClient`.
 `newClient` содержит `clientType`, `displayName`, `phone`, optional `email`,
-`comment` и `source`, а для sole proprietor или legal entity также обязательный
-`contactPerson`. Responsible manager остаётся во владении logistics и не может
+`comment` и `source`, а для legal entity также обязательный `contactPerson`.
+Responsible manager остаётся во владении logistics и не может
 быть выбран этим request.
 
 Сервис требует UUID JWT subject и rentalAccess claim до чтения или изменения conversation state. Private logistics request пересылает current Bearer token, поэтому logistics сохраняет собственное user и warehouse authorization decision. Сервис никогда не отправляет этот token LLM provider и не логирует request bodies или provider credentials.

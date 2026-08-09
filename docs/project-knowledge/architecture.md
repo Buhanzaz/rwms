@@ -95,7 +95,10 @@ Evidence:
 The panel's rental workspace exposes logistics-owned clients, their orders and
 complete delivery facts. A client can start a manual order, warehouse booking
 or assistant conversation without copying the client record into browser
-state. Assistant clarification cards and result-group tabs are presentation of
+state. The panel collects a new client through one shared individual/legal-
+entity field surface; its visible responsible-manager value is session-derived
+and read-only, while logistics remains the command owner. Assistant
+clarification cards and result-group tabs are presentation of
 assistant/logistics state: exact button answers are persisted by the assistant,
 while selected cabin identifiers, expiry and hold effects remain authoritative
 in logistics and asset services.

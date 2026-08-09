@@ -309,6 +309,9 @@ export function AssistantPage() {
             <ClientGate
               accessToken={accessToken}
               actorId={currentUser.id}
+              responsibleManagerDisplayName={
+                currentUser.displayName || currentUser.id
+              }
               initialClient={requestedClientQuery.data ?? null}
               initialClientLoading={
                 requestedClientId !== null && requestedClientQuery.isPending
@@ -454,6 +457,7 @@ function AssistantPageAlertBoundary({ children }: { children: ReactNode }) {
 function ClientGate({
   accessToken,
   actorId,
+  responsibleManagerDisplayName,
   initialClient,
   initialClientLoading,
   initialClientError,
@@ -462,6 +466,7 @@ function ClientGate({
 }: {
   accessToken: string
   actorId: string
+  responsibleManagerDisplayName: string
   initialClient: RentalClient | null
   initialClientLoading: boolean
   initialClientError: unknown
@@ -518,7 +523,7 @@ function ClientGate({
 
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-6">
-      <Card className="w-full max-w-xl">
+      <Card className="w-full max-w-4xl">
         <CardHeader>
           <div className="mb-2 flex size-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
             <HugeiconsIcon icon={AiChat02Icon} className="size-6" />
@@ -547,6 +552,7 @@ function ClientGate({
                   accessToken={accessToken}
                   actorId={actorId}
                   idPrefix="assistant"
+                  responsibleManagerDisplayName={responsibleManagerDisplayName}
                   initialClient={initialClient}
                   newClientCreationContext="после открытия диалога"
                   onChange={handleChoice}

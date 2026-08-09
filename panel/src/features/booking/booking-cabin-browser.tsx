@@ -109,6 +109,13 @@ async function loadCoverPages(
   return { items: pages.flatMap((page) => page.items) }
 }
 
+function toBookingCardCover(projection: CabinCoverProjection) {
+  return {
+    ...projection,
+    previews: projection.previews.slice(0, 1),
+  }
+}
+
 export function BookingCabinBrowser({
   accessToken,
   subjectId,
@@ -124,6 +131,7 @@ export function BookingCabinBrowser({
   emptyText = "Свободные бытовки не найдены.",
   footer,
   onReachEnd,
+  compact = false,
 }: {
   accessToken: string
   subjectId: string
@@ -139,6 +147,7 @@ export function BookingCabinBrowser({
   emptyText?: string
   footer?: ReactNode
   onReachEnd?: () => void
+  compact?: boolean
 }) {
   const navigate = useNavigate()
   const viewport = useRentalItemsGridViewport()
@@ -184,10 +193,10 @@ export function BookingCabinBrowser({
   const mediaCovers = useMemo(
     () =>
       new Map(
-        (coverQuery.data?.items ?? []).map((projection) => [
-          projection.cabinId,
-          projection,
-        ])
+        (coverQuery.data?.items ?? []).map((projection) => {
+          const cardCover = toBookingCardCover(projection)
+          return [cardCover.cabinId, cardCover] as const
+        })
       ) as ReadonlyMap<string, CabinCoverProjection>,
     [coverQuery.data?.items]
   )
@@ -230,7 +239,11 @@ export function BookingCabinBrowser({
 
   return (
     <div
-      className="flex h-full min-h-0 flex-col gap-4"
+      className={
+        compact
+          ? "flex min-h-0 flex-col gap-4"
+          : "flex h-full min-h-0 flex-col gap-4"
+      }
       onScrollCapture={handleScroll}
     >
       <div className="flex shrink-0 flex-col gap-3">
@@ -275,6 +288,7 @@ export function BookingCabinBrowser({
         <RentalItemsGridView
           items={filteredItems}
           gridFormat={gridFormat}
+          autoHeight={compact}
           accessToken={accessToken}
           mediaCovers={mediaCovers}
           coverAvailability={coverAvailability}

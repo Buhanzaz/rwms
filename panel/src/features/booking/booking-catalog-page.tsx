@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import { useInfiniteQuery, useMutation } from "@tanstack/react-query"
 import { useLocation, useNavigate } from "react-router-dom"
 import { toast } from "sonner"
@@ -14,6 +21,7 @@ import { putManualBookingDraftHold } from "@/features/booking/api/manual-booking
 import { BookingUnavailableDialog } from "@/features/booking/booking-availability"
 import { BookingCabinBrowser } from "@/features/booking/booking-cabin-browser"
 import { useBookingSelection } from "@/features/booking/booking-selection-context"
+import { useBookingHoldExpiry } from "@/features/booking/use-booking-hold-expiry"
 import { useSelectedRentalItemsAvailability } from "@/features/booking/use-selected-rental-items-availability"
 import { ManagerBookingAlertDialog } from "@/features/assistant/components/manager-booking-alert-dialog"
 import { useAuth } from "@/features/auth/use-auth"
@@ -22,9 +30,8 @@ import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { ApiError } from "@/lib/api-client"
 
-const PAGE_SIZE = 200
+const PAGE_SIZE = 50
 const BOOKING_QUERY_CACHE_TIME_MS = 2 * 60 * 60 * 1_000
-const AVAILABLE_REFETCH_INTERVAL_MS = 15_000
 
 function uniqueAvailableItems(
   pages: readonly { content: RentalItemDto[] }[] | undefined
@@ -118,21 +125,16 @@ function BookingCatalogPageState({
   } = useBookingSelection()
   const [search, setSearch] = useState("")
   const [unavailableItems, setUnavailableItems] = useState<RentalItemDto[]>([])
-  const [now, setNow] = useState(() => Date.now())
+  const deferredSearch = useDeferredValue(search)
+  const holdExpired = useBookingHoldExpiry(activeHold)
   const holdIdentity = useRef(new OrderCommandIdentityRegistry())
-
-  useEffect(() => {
-    if (!activeHold) return
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000)
-    return () => window.clearInterval(timer)
-  }, [activeHold])
 
   const availableQuery = useInfiniteQuery({
     queryKey: [
       ...RENTAL_BOOKING_AVAILABLE_QUERY_KEY,
       subjectId,
       warehouseId,
-      search,
+      deferredSearch,
     ],
     queryFn: ({ pageParam }) =>
       listAvailableRentalItems({
@@ -140,14 +142,13 @@ function BookingCatalogPageState({
         warehouseId,
         page: pageParam,
         size: PAGE_SIZE,
-        search,
+        search: deferredSearch,
       }),
     initialPageParam: 0,
     getNextPageParam: (lastPage) =>
       lastPage.page + 1 < lastPage.totalPages ? lastPage.page + 1 : undefined,
     staleTime: Infinity,
     gcTime: BOOKING_QUERY_CACHE_TIME_MS,
-    refetchInterval: AVAILABLE_REFETCH_INTERVAL_MS,
     refetchOnWindowFocus: "always",
     refetchOnReconnect: "always",
   })
@@ -166,13 +167,10 @@ function BookingCatalogPageState({
   )
   const activeHeldIds = useMemo(
     () =>
-      activeHold &&
-      activeHold.draftId === draftId &&
-      activeHold.expiresAt !== null &&
-      Date.parse(activeHold.expiresAt) > now
+      activeHold && activeHold.draftId === draftId && !holdExpired
         ? new Set(activeHold.rentalItemIds)
         : new Set<string>(),
-    [activeHold, draftId, now]
+    [activeHold, draftId, holdExpired]
   )
   const unheldSelectionIds = useMemo(
     () =>

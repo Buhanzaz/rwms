@@ -23,7 +23,7 @@ public final class AssistantApiModels {
   /** Inline client identity accepted when a conversation creates its logistics inquiry. */
   public record NewClientRequest(
       @NotBlank
-          @Pattern(regexp = "INDIVIDUAL|SOLE_PROPRIETOR|LEGAL_ENTITY")
+          @Pattern(regexp = "INDIVIDUAL|LEGAL_ENTITY")
           String clientType,
       @NotBlank @Size(max = 512) String displayName,
       @NotBlank
@@ -34,10 +34,10 @@ public final class AssistantApiModels {
       @Email @Size(max = 320) String email,
       @Pattern(regexp = "(?s).*\\S.*") @Size(max = 2000) String comment,
       @Pattern(regexp = "(?s).*\\S.*") @Size(max = 255) String source) {
-    @AssertTrue(message = "contactPerson is required for an organization or sole proprietor")
+    @AssertTrue(message = "contactPerson is required for a legal entity")
     @JsonIgnore
     public boolean isContactPersonRequirementSatisfied() {
-      return "INDIVIDUAL".equals(clientType)
+      return !"LEGAL_ENTITY".equals(clientType)
           || (contactPerson != null && !contactPerson.isBlank());
     }
   }

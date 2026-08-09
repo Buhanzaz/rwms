@@ -53,9 +53,9 @@ key и запросом использует те же bytes и deadlines, а и
 local transactions, а receipt является evidence эффекта/replay, а не дубликатом авторитетной
 asset-owned selection.
 
-`POST /api/logistics/v1/clients` создаёт rental client логистики типа `INDIVIDUAL`,
-`SOLE_PROPRIETOR` или `LEGAL_ENTITY`. Name/FIO и основной телефон обязательны; для ИП и юридических
-лиц обязательно также контактное лицо. Email, комментарий и источник необязательны, а identity и
+`POST /api/logistics/v1/clients` создаёт rental client логистики типа `INDIVIDUAL` или
+`LEGAL_ENTITY`. Name/FIO и основной телефон обязательны; для юридических лиц обязательно также
+контактное лицо. Email, комментарий и источник необязательны, а identity и
 display-name snapshot ответственного менеджера берутся только из authenticated write actor.
 Исторические клиенты сохраняют правдивый UUID subject создателя как manager identity и могут не
 иметь display-name snapshot. Поиск/detail клиента и paged route `/clients/{clientId}/orders`
@@ -184,11 +184,18 @@ Flyway migrations в `src/main/resources/db/migration/` владеют logistics
 
 Migration
 [`V42__clients_order_delivery_and_acceptable_dates.sql`](src/main/resources/db/migration/V42__clients_order_delivery_and_acceptable_dates.sql)
-добавляет тип клиента ИП, client fields contact/manager/comment/source, order delivery facts и
-ordered unique collection приемлемых дат, а также durable exact-command receipts для cabin
-selection inquiry. Она backfill только правдивый UUID ответственного менеджера из
+добавляет client fields contact/manager/comment/source, order delivery facts и ordered unique
+collection приемлемых дат, а также durable exact-command receipts для cabin selection inquiry. Она
+backfill только правдивый UUID ответственного менеджера из
 `created_by_subject_id` и не выдумывает historical display name. Legacy строки без phone/contact
 остаются читаемыми, новые writes ограничены constraints, а V39-V41 неизменяемы.
+
+Migration
+[`V43__remove_sole_proprietor_client_type.sql`](src/main/resources/db/migration/V43__remove_sole_proprietor_client_type.sql)
+переклассифицирует historical строки `SOLE_PROPRIETOR` в `LEGAL_ENTITY` до ограничения типов
+клиента значениями `INDIVIDUAL` и `LEGAL_ENTITY`. Если переклассификация столкнётся с существующим
+юридическим лицом по нормализованному телефону, она останавливается до update и сохраняет все
+записи для ручного разрешения.
 
 Logistics вместе фиксирует facts, projection checkpoints и transactional outbox. Kafka delivery —
 at-least-once: aggregate IDs являются record keys, event IDs — dedupe identities, а consumers хранят

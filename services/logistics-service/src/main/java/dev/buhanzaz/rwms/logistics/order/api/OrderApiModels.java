@@ -37,7 +37,7 @@ public final class OrderApiModels {
     @AssertTrue(message = "contactPerson is required for this client type")
     public boolean hasRequiredContactPerson() {
       return clientType == null
-          || clientType == ClientType.INDIVIDUAL
+          || clientType != ClientType.LEGAL_ENTITY
           || (contactPerson != null && !contactPerson.isBlank());
     }
   }
@@ -54,7 +54,7 @@ public final class OrderApiModels {
     @AssertTrue(message = "contactPerson is required for this client type")
     public boolean hasRequiredContactPerson() {
       return clientType == null
-          || clientType == ClientType.INDIVIDUAL
+          || clientType != ClientType.LEGAL_ENTITY
           || (contactPerson != null && !contactPerson.isBlank());
     }
   }

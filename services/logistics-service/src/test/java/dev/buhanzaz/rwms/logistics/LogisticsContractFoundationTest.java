@@ -519,14 +519,23 @@ class LogisticsContractFoundationTest {
             Map.class,
             phone -> assertThat(phone.get("pattern")).isEqualTo("^\\+[1-9][0-9]{6,14}$"));
     assertThat(child(schemas, "ClientType").get("enum"))
-        .isEqualTo(List.of("INDIVIDUAL", "SOLE_PROPRIETOR", "LEGAL_ENTITY"));
-    assertThat(child(child(schemas, "CreateClientRequest"), "properties"))
+        .isEqualTo(List.of("INDIVIDUAL", "LEGAL_ENTITY"));
+    Map<String, Object> createClient = child(schemas, "CreateClientRequest");
+    assertThat(child(createClient, "properties"))
         .containsKeys("contactPerson", "email", "comment", "source")
         .doesNotContainKeys(
             "responsibleManagerId", "responsibleManagerDisplayName", "electronicDocuments");
+    List<?> createClientContactRules = (List<?>) createClient.get("allOf");
     assertThat(
             child(
-                    child(child(schemas, "CreateClientRequest"), "properties"),
+                    child(
+                        child(objectMap(createClientContactRules.getFirst()), "if"), "properties"),
+                    "clientType")
+                .get("enum"))
+        .isEqualTo(List.of("LEGAL_ENTITY"));
+    assertThat(
+            child(
+                    child(createClient, "properties"),
                     "phone")
                 .get("pattern"))
         .isEqualTo("^(?:\\+|8)[0-9() .-]{6,31}$");

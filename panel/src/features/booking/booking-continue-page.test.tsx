@@ -61,11 +61,14 @@ vi.mock("@/features/orders/components/order-client-chooser", () => ({
   OrderClientChooser: ({
     onChange,
     initialClient,
+    responsibleManagerDisplayName,
   }: {
     onChange: (choice: unknown) => void
     initialClient?: { id: string; displayName: string } | null
+    responsibleManagerDisplayName: string
   }) => (
     <div>
+      <span>Ответственный менеджер: {responsibleManagerDisplayName}</span>
       {initialClient ? (
         <span>Предвыбран клиент: {initialClient.displayName}</span>
       ) : null}
@@ -94,14 +97,16 @@ vi.mock("@/features/booking/booking-cabin-browser", () => ({
     onToggle,
     actions,
     footer,
+    compact,
   }: {
     items: RentalItemDto[]
     selectedIds: ReadonlySet<string>
     onToggle: (item: RentalItemDto) => void
     actions: ReactNode
     footer: ReactNode
+    compact?: boolean
   }) => (
-    <div>
+    <div data-testid="booking-continue-grid" data-compact={String(compact)}>
       <span>Показано бытовок: {items.length}</span>
       <span>Финально выбрано: {selectedIds.size}</span>
       {items[0] ? (
@@ -250,6 +255,7 @@ describe("BookingContinuePage", () => {
     expect(
       await screen.findByText("Предвыбран клиент: ООО Предвыбранный клиент")
     ).toBeTruthy()
+    expect(screen.getByText("Ответственный менеджер: manager-1")).toBeTruthy()
     expect(flow.getClient).toHaveBeenCalledWith("access-token", clientId)
   })
 
@@ -279,6 +285,9 @@ describe("BookingContinuePage", () => {
 
     await user.click(screen.getByRole("button", { name: "Подготовить 31" }))
     expect(await screen.findByText("Показано бытовок: 31")).toBeTruthy()
+    expect(
+      screen.getByTestId("booking-continue-grid").getAttribute("data-compact")
+    ).toBe("true")
     expect(screen.getByText(/Резерв действует до/)).toBeTruthy()
     await user.click(screen.getByRole("button", { name: "Изменить первую" }))
     expect(screen.getByText("Финально выбрано: 30")).toBeTruthy()

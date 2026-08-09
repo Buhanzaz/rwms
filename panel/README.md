@@ -64,9 +64,10 @@ contexts and screens are usable.
   terminal conversation refetch. The browser never treats a local checkbox set
   as authoritative state.
 - Rental navigation exposes `/clients/new`, `/clients`, and
-  `/clients/:clientId`. The create form requires the client type, display name,
-  and phone, additionally requires a contact person for a sole proprietor or
-  legal entity, and visibly shows the authenticated responsible manager as a
+  `/clients/:clientId`. The create form offers only individual and legal-entity
+  client types, requires the client type, display name, and phone, additionally
+  requires a contact person for a legal entity, and visibly shows the
+  authenticated responsible manager as a
   read-only server-owned value. The client grid is server-paginated; a client
   detail reads that client's orders and links to chat, warehouse selection, or
   manual order creation with only `clientId` as prefill. A truthful null phone
@@ -74,6 +75,13 @@ contexts and screens are usable.
   in the browser. See the
   [logistics OpenAPI](../contracts/openapi/logistics-service.yaml) and the
   [client feature](src/features/clients/).
+- Booking requests 50 cabins per server page and defers text before it becomes
+  a query. It does not poll the full catalogue on a timer, card grids size to
+  their actual compact content, and each card initially loads one preview;
+  final availability and hold effects remain server-authoritative. Hold expiry
+  schedules one deadline refresh instead of re-rendering the whole booking
+  screen each second. See the [booking catalogue](src/features/booking/booking-catalog-page.tsx)
+  and [expiry hook](src/features/booking/use-booking-hold-expiry.ts).
 - Order create/edit screens persist the delivery address, latitude, longitude,
   editable contact phone, comment, and concrete acceptable delivery dates.
   Lists and details render those server projections. Order detail shows

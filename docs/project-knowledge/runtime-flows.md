@@ -403,10 +403,12 @@ and
 ### Rental client and order entry
 
 1. The manager creates a logistics-owned client explicitly or inline with an
-   order/inquiry. The server derives the responsible manager from the actor,
-   normalizes the required phone and requires contact person for IP/legal
-   entity records. Idempotent replay returns the same record; invisible
-   duplicates do not disclose an identifier.
+   order/inquiry. The only supported forms are an individual and a legal
+   entity. The server derives the responsible manager from the actor,
+   normalizes the required phone and requires a contact person only for a legal
+   entity. Idempotent replay returns the same record; invisible duplicates do
+   not disclose an identifier. V43 reclassifies historical sole proprietors as
+   legal entities, but stops before any ambiguous same-phone reclassification.
 2. A draft order records one existing or inline-created client, delivery
    address, coordinate pair, contact phone, optional comment and one to 31
    unique acceptable dates. A manual order, warehouse booking or assistant
@@ -418,11 +420,21 @@ and
    projection into “no estimate/repair”. The evidence lower bound is the latest
    actual return for that cabin, with order creation only as an explicit
    fallback.
+4. The panel reuses one client-field surface in explicit client creation and
+   inline order, booking and assistant entry. It visibly shows the
+   session-derived responsible manager as read-only and never sends it as
+   browser-owned client data. The booking catalogue uses bounded pages and a
+   deferred query; availability of selected cabins and final hold commands
+   remain server-authoritative. A hold expiry schedules one exact deadline
+   refresh rather than polling the entire booking screen every second.
 
 Evidence:
 [`OrderClientService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/OrderClientService.java),
 [`RentalOrderService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderService.java),
 [`client detail page`](../../panel/src/features/clients/pages/client-detail-page.tsx),
+[`shared client fields`](../../panel/src/features/clients/components/client-create-fields.tsx),
+[`booking catalogue`](../../panel/src/features/booking/booking-catalog-page.tsx),
+[`booking hold expiry`](../../panel/src/features/booking/use-booking-hold-expiry.ts),
 and
 [`order dossier evidence`](../../panel/src/features/orders/components/order-unit-dossier-evidence.tsx).
 

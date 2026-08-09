@@ -1868,6 +1868,81 @@ class LogisticsFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void v43MapsHistoricalSoleProprietorsBeforeRestrictingTheClientTypeConstraint() {
+    Flyway beforeV43 = configuration(MIGRATIONS).target("42").load();
+    assertThat(beforeV43.migrate().migrationsExecuted).isEqualTo(42);
+
+    UUID managerId = UUID.randomUUID();
+    UUID proprietorId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into order_client(
+          id,version,client_type,display_name,normalized_name,phone,normalized_phone,
+          contact_person,responsible_manager_id,responsible_manager_display_name,
+          created_by_subject_id,creation_idempotency_key,creation_request_sha256,
+          created_at,updated_at)
+        values (?,0,'SOLE_PROPRIETOR','ИП История','ип история','+79990000043','+79990000043',
+          'Иван Исторический',?,'Исторический менеджер',?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        proprietorId,
+        managerId,
+        managerId,
+        UUID.randomUUID(),
+        "a".repeat(64));
+
+    Flyway upgraded = configuration(MIGRATIONS).target("43").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+    assertThat(upgraded.migrate().migrationsExecuted).isZero();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select client_type from order_client where id=?", String.class, proprietorId))
+        .isEqualTo("LEGAL_ENTITY");
+    assertThat(
+            jdbc.queryForObject(
+                "select contact_person from order_client where id=?", String.class, proprietorId))
+        .isEqualTo("Иван Исторический");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    insert into order_client(
+                      id,version,client_type,display_name,normalized_name,phone,normalized_phone,
+                      contact_person,responsible_manager_id,responsible_manager_display_name,
+                      created_by_subject_id,creation_idempotency_key,creation_request_sha256,
+                      created_at,updated_at)
+                    values (?,0,'SOLE_PROPRIETOR','ИП После','ип после','+79990000044','+79990000044',
+                      'Иван После',?,'Менеджер',?,?,?,clock_timestamp(),clock_timestamp())
+                    """,
+                    UUID.randomUUID(),
+                    managerId,
+                    managerId,
+                    UUID.randomUUID(),
+                    "b".repeat(64)))
+        .hasMessageContaining("ck_order_client_type");
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v43StopsBeforeAnAmbiguousSamePhoneReclassification() {
+    Flyway beforeV43 = configuration(MIGRATIONS).target("42").load();
+    assertThat(beforeV43.migrate().migrationsExecuted).isEqualTo(42);
+
+    UUID managerId = UUID.randomUUID();
+    String normalizedPhone = "+79990000045";
+    insertV42Client("LEGAL_ENTITY", "ООО Дубликат", "ооо дубликат", normalizedPhone, managerId);
+    insertV42Client("SOLE_PROPRIETOR", "ИП Дубликат", "ип дубликат", normalizedPhone, managerId);
+
+    assertThatThrownBy(() -> configuration(MIGRATIONS).target("43").load().migrate())
+        .hasMessageContaining("same normalized phone");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from order_client where client_type='SOLE_PROPRIETOR'", Long.class))
+        .isOne();
+  }
+
+  @Test
   void modifiedAppliedMigrationIsRejectedByChecksumValidation(@TempDir Path directory)
       throws IOException {
     Path migration = directory.resolve("V1__logistics_schema.sql");
@@ -2103,6 +2178,33 @@ class LogisticsFlywayMigrationIntegrationTest {
         UUID.randomUUID(),
         UUID.randomUUID(),
         "d".repeat(64));
+  }
+
+  private void insertV42Client(
+      String clientType,
+      String displayName,
+      String normalizedName,
+      String normalizedPhone,
+      UUID managerId) {
+    jdbc.update(
+        """
+        insert into order_client(
+          id,version,client_type,display_name,normalized_name,phone,normalized_phone,
+          contact_person,responsible_manager_id,responsible_manager_display_name,
+          created_by_subject_id,creation_idempotency_key,creation_request_sha256,
+          created_at,updated_at)
+        values (?,0,?,?,?,?,?,'Контакт',?,'Менеджер',?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        UUID.randomUUID(),
+        clientType,
+        displayName,
+        normalizedName,
+        normalizedPhone,
+        normalizedPhone,
+        managerId,
+        managerId,
+        UUID.randomUUID(),
+        "a".repeat(64));
   }
 
   private java.net.URL requireResource(String path) {

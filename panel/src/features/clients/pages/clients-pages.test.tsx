@@ -54,8 +54,8 @@ const ORDER_ID = "33333333-3333-4333-8333-333333333333"
 const client = {
   id: CLIENT_ID,
   version: 1,
-  type: "SOLE_PROPRIETOR" as const,
-  displayName: "ИП Петров",
+  type: "LEGAL_ENTITY" as const,
+  displayName: "ООО Петров",
   phone: null,
   contactPerson: "Пётр Петров",
   email: null,
@@ -141,7 +141,7 @@ afterEach(() => {
 })
 
 describe("client pages", () => {
-  it("requires a contact person for an IP and keeps the authenticated manager read-only", async () => {
+  it("requires a contact person for a legal entity and keeps the authenticated manager read-only", async () => {
     const user = userEvent.setup()
     renderRoute("/clients/new", "/clients/new", <ClientCreatePage />)
 
@@ -156,9 +156,10 @@ describe("client pages", () => {
     expect(
       comment.compareDocumentPosition(source) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
+    expect(screen.queryByRole("radio", { name: "ИП" })).toBeNull()
 
-    await user.click(screen.getByRole("radio", { name: "ИП" }))
-    await user.type(screen.getByLabelText("Наименование или ФИО"), "ИП Петров")
+    await user.click(screen.getByRole("radio", { name: "Юридическое лицо" }))
+    await user.type(screen.getByLabelText("Наименование или ФИО"), "ООО Петров")
     await user.type(screen.getByLabelText("Основной телефон"), "+79990000000")
     const submit = screen.getByRole("button", { name: "Создать клиента" })
     fireEvent.submit(submit.closest("form")!)
@@ -187,8 +188,8 @@ describe("client pages", () => {
         accessToken: "token",
         idempotencyKey: expect.any(String),
         input: {
-          clientType: "SOLE_PROPRIETOR",
-          displayName: "ИП Петров",
+          clientType: "LEGAL_ENTITY",
+          displayName: "ООО Петров",
           phone: "+79990000000",
           contactPerson: "Пётр Петров",
           email: null,
@@ -206,11 +207,11 @@ describe("client pages", () => {
     renderRoute("/clients", "/clients", <ClientsListPage />)
 
     const row = await screen.findByLabelText(
-      "Клиент ИП Петров. Двойное нажатие открывает карточку."
+      "Клиент ООО Петров. Двойное нажатие открывает карточку."
     )
     expect(row.getAttribute("tabindex")).toBe("0")
     expect(
-      screen.getByRole("link", { name: "ИП Петров" }).getAttribute("href")
+      screen.getByRole("link", { name: "ООО Петров" }).getAttribute("href")
     ).toBe(`/clients/${CLIENT_ID}`)
     expect(screen.getAllByText("Не указан").length).toBeGreaterThan(0)
     fireEvent.doubleClick(row)
