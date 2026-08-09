@@ -1,0 +1,10 @@
+{
+  "name": "rwms-worker-download",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build-site.mjs",
+    "check": "node scripts/build-site.mjs && node scripts/verify-site.mjs && node scripts/verify-worker.mjs"
+  }
+}

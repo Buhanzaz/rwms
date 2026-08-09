@@ -54,6 +54,7 @@ media-service дополнительно владеет приватными о�
 | [`panel/`](panel/) | Web-клиент React/TypeScript | Основная панель менеджеров и операций |
 | [`app/`](app/) | Android-клиент менеджера | Мобильные сценарии менеджера |
 | [`worker-app/`](worker-app/) | Android-клиент работника | Вход работника, назначения, исполнение задач и съёмка медиа |
+| [`worker-download-site/`](worker-download-site/) | Исходники static release-сайта, не развёрнуты | Страница загрузки Worker APK; текущий manifest pending и APK не выдаёт |
 | [`api-gateway-service`](services/api-gateway-service/) | Stateless Spring edge | Публичные `/auth/**` и `/api/**`, edge-политика JWT, ограниченные стримы и transport failures |
 | [`auth-service`](services/auth-service/) | Stateful Spring-сервис | OIDC/OAuth2, пользователи, работники, роли, клиенты и доступ к складам |
 | [`warehouse-service`](services/warehouse-service/) | Stateful Spring-сервис | Идентичность, lifecycle, метаданные и effective-dated timezone склада |
@@ -117,6 +118,7 @@ work. Браузер никогда не координирует согласо
 | [`panel/`](panel/) | Основная web-панель |
 | [`app/`](app/) | Android-приложение менеджера |
 | [`worker-app/`](worker-app/) | Android-приложение работника |
+| [`worker-download-site/`](worker-download-site/) | Исходники static-страницы загрузки Worker APK; текущий релиз pending |
 | [`docs/project-knowledge/`](docs/project-knowledge/) | Поддерживаемая навигация по архитектуре и домену |
 | [`docs/reviews/`](docs/reviews/) | Аудиты с доказательствами и планы исправлений |
 | [`compose.yaml`](compose.yaml) | Только локальные/test-зависимости, не production orchestration |

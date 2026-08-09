@@ -157,13 +157,16 @@ work.
 ## Android Release Publication Trust
 
 - Status: `Open`
-- Affected owner and consumers: manager Android app, manager-download-site,
-  release engineering and device administrators.
+- Affected owner and consumers: manager Android app, worker Android app,
+  manager-download-site, worker-download-site, release engineering and device
+  administrators.
 - Requested behavior: every published APK must be traceable to one reviewed
   source revision and expose a verifiable version, signature and checksum.
-- Conflicting contract or invariant: the download site has two manually kept
-  HTML implementations and publishes a mutable debug APK with hand-entered
-  version/date/size metadata. There is no canonical release manifest or
+- Conflicting contract or invariant: the manager download site has two manually
+  kept HTML implementations and publishes a mutable debug APK with hand-entered
+  version/date/size metadata. The worker site has one validated release
+  manifest but is deliberately pending because no reviewed worker APK exists.
+  There is no shared release registry or organization-wide
   checksum-verification flow.
 - Evidence:
   [`manager app build`](../../app/build.gradle.kts),

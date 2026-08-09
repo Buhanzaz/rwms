@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Страница загрузки Android-приложения RWMS для работников."
+    />
+    <meta name="theme-color" content="#f8fafb" />
+    <title>{{APPLICATION_NAME}} — Android</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family:
+          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        background: #f8fafb;
+        color: #252b31;
+        font-synthesis: none;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        min-width: 320px;
+        background: #f8fafb;
+      }
+
+      body {
+        min-width: 320px;
+        min-height: 100vh;
+        margin: 0;
+      }
+
+      .application-frame {
+        display: flex;
+        min-height: 100vh;
+        background: #f8fafb;
+      }
+
+      .sidebar {
+        display: flex;
+        position: fixed;
+        inset: 0 auto 0 0;
+        z-index: 1;
+        width: 256px;
+        flex-direction: column;
+        border-right: 1px solid #e5eaed;
+        background: #fcfdfd;
+      }
+
+      .sidebar-brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        height: 64px;
+        padding: 0 20px;
+        border-bottom: 1px solid #e5eaed;
+      }
+
+      .rwms-mark {
+        display: inline-flex;
+        width: 30px;
+        height: 30px;
+        flex: 0 0 auto;
+        align-items: center;
+        justify-content: center;
+        border-radius: 8px;
+        background: #1775a7;
+        color: #f8fcff;
+      }
+
+      .rwms-mark svg {
+        width: 20px;
+        height: 20px;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 1.8;
+      }
+
+      .sidebar-brand strong {
+        display: block;
+        color: #202a31;
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+
+      .sidebar-brand span {
+        display: block;
+        margin-top: 1px;
+        color: #7a858d;
+        font-size: 10px;
+        line-height: 1.2;
+      }
+
+      .sidebar-navigation {
+        padding: 22px 12px;
+      }
+
+      .sidebar-label {
+        margin: 0 8px 7px;
+        color: #7b858c;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .sidebar-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 40px;
+        padding: 8px;
+        border-radius: 7px;
+        color: #59656d;
+        font-size: 14px;
+        line-height: 1.3;
+      }
+
+      .sidebar-item svg {
+        width: 18px;
+        height: 18px;
+        flex: 0 0 auto;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 1.8;
+      }
+
+      .sidebar-item-active {
+        background: #edf5f8;
+        color: #1d536e;
+        font-weight: 600;
+      }
+
+      .sidebar-footer {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: auto;
+        padding: 18px 20px;
+        border-top: 1px solid #e5eaed;
+        color: #6d7880;
+        font-size: 12px;
+      }
+
+      .sidebar-footer-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #bb861a;
+        box-shadow: 0 0 0 3px #fbf3df;
+      }
+
+      .workspace {
+        display: flex;
+        width: 100%;
+        min-width: 0;
+        margin-left: 256px;
+        flex: 1;
+        flex-direction: column;
+      }
+
+      .topbar {
+        display: flex;
+        min-height: 64px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 0 32px;
+        border-bottom: 1px solid #e5eaed;
+        background: #ffffff;
+      }
+
+      .breadcrumb {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        gap: 9px;
+        color: #7b858c;
+        font-size: 14px;
+      }
+
+      .breadcrumb strong {
+        overflow: hidden;
+        color: #2c353b;
+        font-weight: 500;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .breadcrumb-separator {
+        color: #b2bac0;
+      }
+
+      .platform-badge,
+      .release-status {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid #dce9ee;
+        border-radius: 999px;
+        background: #f3f8fa;
+        color: #3f7088;
+        font-size: 12px;
+        font-weight: 600;
+        line-height: 1;
+        white-space: nowrap;
+      }
+
+      .platform-badge {
+        min-height: 28px;
+        padding: 0 10px;
+      }
+
+      .release-status {
+        min-height: 23px;
+        padding: 0 8px;
+        font-size: 11px;
+      }
+
+      .release-status-pending {
+        border-color: #ecdcb7;
+        background: #fffaf0;
+        color: #8a6418;
+      }
+
+      .mobile-brand {
+        display: none;
+        min-width: 0;
+        align-items: center;
+        gap: 8px;
+        color: #202a31;
+        font-size: 14px;
+      }
+
+      .mobile-brand .rwms-mark {
+        width: 27px;
+        height: 27px;
+        border-radius: 7px;
+      }
+
+      .mobile-brand .rwms-mark svg {
+        width: 18px;
+        height: 18px;
+      }
+
+      .main-content {
+        flex: 1;
+        padding: 52px 32px 72px;
+      }
+
+      .page-content {
+        width: min(100%, 816px);
+        margin: 0 auto;
+      }
+
+      .page-intro {
+        max-width: 660px;
+        margin-bottom: 30px;
+      }
+
+      .eyebrow {
+        margin: 0 0 10px;
+        color: #4e7d94;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        margin-bottom: 12px;
+        color: #232b31;
+        font-size: clamp(28px, 4vw, 38px);
+        font-weight: 650;
+        letter-spacing: -0.035em;
+        line-height: 1.14;
+      }
+
+      .page-intro > p:last-child {
+        margin-bottom: 0;
+        color: #657179;
+        font-size: 16px;
+        line-height: 1.55;
+      }
+
+      .release-card {
+        padding: clamp(22px, 4vw, 32px);
+        border: 1px solid #e3e9ec;
+        border-radius: 12px;
+        background: #ffffff;
+        box-shadow:
+          0 1px 2px rgb(29 45 55 / 0.025),
+          0 10px 28px rgb(29 45 55 / 0.035);
+      }
+
+      .release-heading {
+        display: flex;
+        align-items: flex-start;
+        gap: 14px;
+        margin-bottom: 24px;
+      }
+
+      .release-icon {
+        display: inline-flex;
+        width: 42px;
+        height: 42px;
+        flex: 0 0 auto;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid #d9e7ed;
+        border-radius: 9px;
+        background: #f2f8fa;
+        color: #307495;
+      }
+
+      .release-icon svg,
+      .note > svg,
+      .download-main svg {
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 1.9;
+      }
+
+      .release-icon svg {
+        width: 21px;
+        height: 21px;
+      }
+
+      .release-title-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .release-heading h2 {
+        margin: 0;
+        color: #29333a;
+        font-size: 17px;
+        font-weight: 650;
+        letter-spacing: -0.015em;
+        line-height: 1.3;
+      }
+
+      .release-heading p {
+        margin: 5px 0 0;
+        color: #6b767d;
+        font-size: 14px;
+        line-height: 1.45;
+      }
+
+      .download {
+        display: flex;
+        min-height: 74px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 14px 18px;
+        border: 1px solid #126792;
+        border-radius: 8px;
+        background: #1775a7;
+        box-shadow: 0 1px 2px rgb(16 79 112 / 0.18);
+        color: #ffffff;
+        text-decoration: none;
+        transition:
+          background-color 160ms ease,
+          border-color 160ms ease,
+          box-shadow 160ms ease,
+          transform 160ms ease;
+      }
+
+      a.download:hover {
+        border-color: #105b82;
+        background: #126a98;
+        box-shadow: 0 5px 12px rgb(16 79 112 / 0.18);
+        transform: translateY(-1px);
+      }
+
+      a.download:active {
+        background: #0f608a;
+        box-shadow: none;
+        transform: translateY(0);
+      }
+
+      .download-disabled {
+        border-color: #d9e1e5;
+        background: #edf1f3;
+        box-shadow: none;
+        color: #64727a;
+        cursor: not-allowed;
+      }
+
+      .download-main {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 16px;
+        font-weight: 650;
+      }
+
+      .download-main svg {
+        width: 20px;
+        height: 20px;
+      }
+
+      .download-meta {
+        color: rgb(255 255 255 / 0.78);
+        font-size: 13px;
+        font-weight: 500;
+        text-align: right;
+      }
+
+      .download-disabled .download-meta {
+        color: #76838a;
+      }
+
+      .release-details {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin: 22px 0;
+        border: 1px solid #e5ebee;
+        border-radius: 9px;
+        overflow: hidden;
+      }
+
+      .release-details div {
+        min-width: 0;
+        padding: 15px 16px;
+        background: #fbfcfc;
+      }
+
+      .release-details div + div {
+        border-left: 1px solid #e5ebee;
+      }
+
+      .release-details dt {
+        color: #7a858c;
+        font-size: 12px;
+        line-height: 1.3;
+      }
+
+      .release-details dd {
+        margin: 6px 0 0;
+        overflow-wrap: anywhere;
+        color: #303a40;
+        font-size: 13px;
+        font-weight: 600;
+        line-height: 1.35;
+      }
+
+      .notes-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .note {
+        display: flex;
+        gap: 11px;
+        min-width: 0;
+        padding: 14px;
+        border: 1px solid #e4eaed;
+        border-radius: 9px;
+        background: #fbfcfc;
+      }
+
+      .note > svg {
+        width: 18px;
+        height: 18px;
+        flex: 0 0 auto;
+        margin-top: 1px;
+      }
+
+      .note-install > svg {
+        color: #4b7e96;
+      }
+
+      .note-access {
+        border-color: #dbe9e2;
+        background: #f7fbf8;
+      }
+
+      .note-access > svg {
+        color: #438064;
+      }
+
+      .note h3 {
+        margin: 0 0 4px;
+        color: #344048;
+        font-size: 13px;
+        font-weight: 650;
+        line-height: 1.25;
+      }
+
+      .note p {
+        margin: 0;
+        color: #66737a;
+        font-size: 12px;
+        line-height: 1.48;
+      }
+
+      .checksum {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 18px 0 0;
+        color: #51616a;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .checksum strong {
+        color: #344048;
+      }
+
+      .checksum code {
+        overflow-wrap: anywhere;
+        color: #3c667b;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 11px;
+      }
+
+      .checksum-pending {
+        color: #748088;
+      }
+
+      .release-policy {
+        margin: 14px 0 0;
+        color: #718087;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      a.download:focus-visible {
+        outline: 3px solid rgb(45 126 169 / 0.34);
+        outline-offset: 3px;
+      }
+
+      @media (max-width: 760px) {
+        .sidebar {
+          display: none;
+        }
+
+        .workspace {
+          margin-left: 0;
+        }
+
+        .mobile-brand {
+          display: flex;
+        }
+
+        .breadcrumb {
+          display: none;
+        }
+
+        .topbar {
+          padding: 0 20px;
+        }
+
+        .main-content {
+          padding: 38px 20px 52px;
+        }
+      }
+
+      @media (max-width: 590px) {
+        .release-details,
+        .notes-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .release-details div + div {
+          border-top: 1px solid #e5ebee;
+          border-left: 0;
+        }
+
+        .download {
+          align-items: flex-start;
+          flex-direction: column;
+          gap: 7px;
+        }
+
+        .download-meta {
+          text-align: left;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="application-frame">
+      <aside class="sidebar" aria-label="Контекст страницы">
+        <div class="sidebar-brand">
+          <span class="rwms-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" fill="none">
+              <path d="M5.5 8.5 16 3l10.5 5.5v15L16 29 5.5 23.5v-15Z" />
+              <path d="m5.5 8.5 10.5 5.75 10.5-5.75M16 14.25V29" />
+            </svg>
+          </span>
+          <div>
+            <strong>RWMS</strong>
+            <span>Warehouse management</span>
+          </div>
+        </div>
+
+        <nav class="sidebar-navigation" aria-label="Раздел">
+          <p class="sidebar-label">Приложения</p>
+          <div class="sidebar-item sidebar-item-active" aria-current="page">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <rect x="3.5" y="3.5" width="7" height="7" rx="1.25" />
+              <rect x="13.5" y="3.5" width="7" height="7" rx="1.25" />
+              <rect x="3.5" y="13.5" width="7" height="7" rx="1.25" />
+              <path d="M15 17h5.5m-2.75-2.75v5.5" />
+            </svg>
+            <span>Приложение работника</span>
+          </div>
+        </nav>
+
+        <div class="sidebar-footer">
+          <span class="sidebar-footer-dot" aria-hidden="true"></span>
+          Сборка ожидает публикации
+        </div>
+      </aside>
+
+      <div class="workspace">
+        <header class="topbar">
+          <div class="mobile-brand">
+            <span class="rwms-mark" aria-hidden="true">
+              <svg viewBox="0 0 32 32" fill="none">
+                <path d="M5.5 8.5 16 3l10.5 5.5v15L16 29 5.5 23.5v-15Z" />
+                <path d="m5.5 8.5 10.5 5.75 10.5-5.75M16 14.25V29" />
+              </svg>
+            </span>
+            <strong>RWMS</strong>
+          </div>
+          <div class="breadcrumb" aria-label="Навигационная цепочка">
+            <span>RWMS</span>
+            <span class="breadcrumb-separator" aria-hidden="true">/</span>
+            <strong>Приложение работника</strong>
+          </div>
+          <span class="platform-badge">Android</span>
+        </header>
+
+        <main class="main-content">
+          <div class="page-content">
+            <section class="page-intro" aria-labelledby="page-title">
+              <p class="eyebrow">Приложение RWMS</p>
+              <h1 id="page-title">Приложение работника</h1>
+              <p>
+                Android-приложение для сотрудников, которые получают назначения,
+                выполняют рабочие задачи и прикладывают подтверждающие материалы.
+              </p>
+            </section>
+
+            <section class="release-card" aria-labelledby="release-title">
+              <div class="release-heading">
+                <div class="release-icon">
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <rect x="5" y="2.75" width="14" height="18.5" rx="2.25" />
+                    <path d="M10 18h4" />
+                  </svg>
+                </div>
+                <div>
+                  <div class="release-title-row">
+                    <h2 id="release-title">Сборка для Android</h2>
+                    <span class="release-status {{STATUS_CLASS}}">{{STATUS_LABEL}}</span>
+                  </div>
+                  <p>{{RELEASE_DESCRIPTION}}</p>
+                </div>
+              </div>
+
+              {{DOWNLOAD_CONTROL}}
+
+              <dl class="release-details">
+                <div>
+                  <dt>Дата публикации</dt>
+                  <dd>{{PUBLICATION_LABEL}}</dd>
+                </div>
+                <div>
+                  <dt>Минимальная версия</dt>
+                  <dd>{{MINIMUM_ANDROID}}</dd>
+                </div>
+                <div>
+                  <dt>Package name</dt>
+                  <dd>{{PACKAGE_NAME}}</dd>
+                </div>
+              </dl>
+
+              <div class="notes-grid">
+                <section class="note note-install" aria-label="Установка приложения">
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M12 3v11m0 0 4-4m-4 4-4-4M5 17v2.5c0 .83.67 1.5 1.5 1.5h11c.83 0 1.5-.67 1.5-1.5V17" />
+                  </svg>
+                  <div>
+                    <h3>Установка</h3>
+                    <p>
+                      После публикации скачайте APK, откройте его на устройстве
+                      и при необходимости разрешите установку из этого источника.
+                    </p>
+                  </div>
+                </section>
+
+                <section class="note note-access" aria-label="Доступ к приложению">
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M12 3.25 19 6v5.08c0 4.5-2.98 8.53-7 9.67-4.02-1.14-7-5.17-7-9.67V6l7-2.75Z" />
+                    <path d="m9.25 11.85 1.8 1.8 3.7-4" />
+                  </svg>
+                  <div>
+                    <h3>Доступ к приложению</h3>
+                    <p>
+                      Используйте учётную запись работника RWMS. Набор доступных
+                      задач и действий определяет сервер RWMS.
+                    </p>
+                  </div>
+                </section>
+              </div>
+
+              {{CHECKSUM}}
+              <p class="release-policy">
+                Gateway RWMS: {{GATEWAY_HOST}}. Публикуется только проверенный
+                APK с неизменяемой ссылкой и контрольной суммой SHA-256.
+              </p>
+            </section>
+          </div>
+        </main>
+      </div>
+    </div>
+  </body>
+</html>

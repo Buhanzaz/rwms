@@ -53,6 +53,7 @@ The split protects four important properties:
 | [`panel/`](panel/) | React/TypeScript web client | Main manager and operations panel |
 | [`app/`](app/) | Android manager client | Mobile manager workflows |
 | [`worker-app/`](worker-app/) | Android worker client | Worker authentication, assignments, task execution, and media capture |
+| [`worker-download-site/`](worker-download-site/) | Static release-site source, not deployed | Worker APK download page; the current manifest is pending and exposes no APK |
 | [`api-gateway-service`](services/api-gateway-service/) | Stateless Spring edge | Public `/auth/**` and `/api/**` routing, JWT edge policy, bounded streaming, and transport failures |
 | [`auth-service`](services/auth-service/) | Stateful Spring service | OIDC/OAuth2, users, workers, roles, clients, and warehouse grants |
 | [`warehouse-service`](services/warehouse-service/) | Stateful Spring service | Warehouse identity, lifecycle, metadata, and effective-dated timezone |
@@ -117,6 +118,7 @@ smallest product decision needed.
 | [`panel/`](panel/) | Primary web panel |
 | [`app/`](app/) | Manager Android app |
 | [`worker-app/`](worker-app/) | Worker Android app |
+| [`worker-download-site/`](worker-download-site/) | Static Worker APK download-page source; current release is pending |
 | [`docs/project-knowledge/`](docs/project-knowledge/) | Maintained architecture and domain navigation layer |
 | [`docs/reviews/`](docs/reviews/) | Evidence-backed audits and remediation plans |
 | [`compose.yaml`](compose.yaml) | Local/test dependencies only, never production orchestration |

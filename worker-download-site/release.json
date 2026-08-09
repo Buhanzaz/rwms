@@ -1,0 +1,12 @@
+{
+  "applicationName": "RWMS Worker",
+  "packageName": "dev.buhanzaz.rwms.worker",
+  "versionCode": 12,
+  "versionName": "0.1.11-debug",
+  "status": "pending",
+  "minimumAndroidVersion": "Android 6.0",
+  "publicGateway": "https://77-90-158-90.sslip.io",
+  "downloadUrl": null,
+  "sha256": null,
+  "publishedAt": null
+}
