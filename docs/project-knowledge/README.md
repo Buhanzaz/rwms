@@ -1,5 +1,7 @@
 # RWMS Current Project Knowledge
 
+[Русская версия](README.ru.md)
+
 This folder is the maintained navigation layer for the current RWMS product.
 It records durable architecture, ownership, business invariants, contract
 locations and significant changes so future tasks can find authoritative
@@ -29,10 +31,20 @@ request, record the conflict in `open-questions.md` and ask for a decision.
 
 - [`architecture.md`](architecture.md) — deployables, owners and dependency
   boundaries.
+- [`runtime-flows.md`](runtime-flows.md) — end-to-end request, command, event,
+  saga, projection, media, SSE and warehouse-lifecycle execution.
+- [`cabin-lifecycle.md`](cabin-lifecycle.md) /
+  [`cabin-lifecycle.ru.md`](cabin-lifecycle.ru.md) — the complete confirmed
+  cabin path from registration and booking through shipment, return, estimate,
+  repair, inventory, transfer and disposition, including operational variants.
+- [`service-catalog.md`](service-catalog.md) — active clients, deployables,
+  state ownership, permitted boundaries and primary evidence.
 - [`domain-logic.md`](domain-logic.md) — confirmed business responsibilities
   and cross-domain invariants.
 - [`contracts.md`](contracts.md) — canonical contract index and safe evolution
   procedure.
+- [`documentation-standard.md`](documentation-standard.md) — paired README and
+  source-documentation rules for active components.
 - [`change-log.md`](change-log.md) — append-only record of durable
   architecture, logic and contract changes.
 - [`open-questions.md`](open-questions.md) — unresolved contradictions and
@@ -54,4 +66,4 @@ build. Put unresolved choices in `open-questions.md`.
 Do not store secrets, credentials, production endpoints, customer information,
 full schema copies, generated output or transient debugging notes here.
 
-Last structure review: 2026-08-04.
+Last structure review: 2026-08-08.

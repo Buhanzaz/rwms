@@ -1,0 +1,95 @@
+# Current Component Catalog
+
+Status: Confirmed repository map as of 2026-08-08.
+
+This catalog answers three operational questions: which component owns a
+decision, where its authoritative state lives, and which boundary another
+component may use. It is an index, not a replacement for OpenAPI, event
+schemas, Flyway, owner code, or tests.
+
+Primary evidence:
+
+- [`settings.gradle.kts`](../../settings.gradle.kts)
+- [`services/`](../../services/)
+- [`contracts/openapi/`](../../contracts/openapi/)
+- [`contracts/events/`](../../contracts/events/)
+- [`compose.yaml`](../../compose.yaml)
+
+Known implementation deviations and their remediation order are kept in the
+[`full architecture audit`](../reviews/20260808-full-architecture-audit.md),
+not normalized here as intended behavior.
+
+## Interactive clients
+
+| Component | Responsibility | Local state boundary | Server boundary | Primary evidence |
+| --- | --- | --- | --- | --- |
+| `panel` | Primary browser UI for management and operational workflows, including rental clients, order delivery evidence and interactive assistant selection | UI preferences, OIDC transaction/session material, principal-scoped TanStack Query cache; never authoritative client, order, question or hold state | Same-origin public gateway; ordinary HTTP and assistant streaming share one safe status-bearing Problem Details mapper | [`panel/README.md`](../../panel/README.md), [`clients routes`](../../panel/src/features/clients/clients-routes.tsx), [`assistant page`](../../panel/src/features/assistant/pages/assistant-page.tsx), [`api-client.ts`](../../panel/src/lib/api-client.ts) |
+| `app` | Android manager workflows, including offline-capable reads and durable media/command upload | Encrypted authentication plus explicitly account-and-warehouse-scoped caches/upload work | Public gateway only; 60 fixed Retrofit routes plus two caller-guarded public media URLs; native login consumes the HTTPS callback without exposing AppAuth's custom-scheme receiver | [`app/README.md`](../../app/README.md), [`ManagerAuth.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/auth/ManagerAuth.kt), [`RwmsApiContractBoundaryTest.kt`](../../app/src/test/java/dev/buhanzaz/rwms/manager/network/RwmsApiContractBoundaryTest.kt) |
+| `worker-app` | Android worker login, assignments, task execution, invalidation and media capture | Encrypted session, worker-scoped snapshots and bounded invalidation cursors | Public gateway only; nine fixed Retrofit routes plus two guarded public media URLs; exact terminal/retry taxonomy and a four-run jittered WorkManager budget | [`worker-app/README.md`](../../worker-app/README.md), [`GatewayFailure.kt`](../../worker-app/core-network/src/main/java/dev/buhanzaz/rwms/worker/core/network/GatewayFailure.kt), [`WorkerSyncWork.kt`](../../worker-app/core-sync/src/main/java/dev/buhanzaz/rwms/worker/core/sync/WorkerSyncWork.kt), [`WorkerGatewayApiContractBoundaryTest.kt`](../../worker-app/core-network/src/test/java/dev/buhanzaz/rwms/worker/core/network/WorkerGatewayApiContractBoundaryTest.kt) |
+
+Clients may combine independent reads for presentation. They do not own a
+cross-service saga, fabricate a successful dependency result, or call private
+service routes.
+
+## Edge and identity
+
+| Component | Owns | Durable state | Allowed dependencies and boundary | Recovery model | Primary evidence |
+| --- | --- | --- | --- | --- | --- |
+| `api-gateway-service` | Public route allow-list, forwarded metadata policy, bounded HTTP/SSE transport and edge token policy | None | Routes all 265 canonical domain-public operations to one configured owner; canonical internal operations and reserved private/internal aliases are unroutable; no database, Kafka, business aggregation, session or token store | Explicit upstream Problem Details/transport failure; SSE cancellation and concurrency bounds | [`README`](../../services/api-gateway-service/README.md), [`GatewayRouteConfiguration.java`](../../services/api-gateway-service/src/main/java/dev/buhanzaz/rwms/gateway/config/GatewayRouteConfiguration.java), [`GatewayRouteSecurityParityTest.java`](../../services/api-gateway-service/src/test/java/dev/buhanzaz/rwms/gateway/config/GatewayRouteSecurityParityTest.java) |
+| `auth-service` | OAuth2/OIDC, subjects, users, worker credentials, OAuth clients, global roles and warehouse grants | Service-owned PostgreSQL and Flyway | Public auth/user APIs; narrow private credential and validation APIs; versioned auth facts | Transactional event store/outbox, replay/reconciliation and sanitized DLT paths | [`README`](../../services/auth-service/README.md), [`auth-service.yaml`](../../contracts/openapi/auth-service.yaml), [`auth event schema`](../../contracts/events/auth/auth-events-v1.schema.json) |
+
+## Command-owning domain services
+
+| Component | Owns | Durable state | Main boundaries | Cross-domain/recovery model | Primary evidence |
+| --- | --- | --- | --- | --- | --- |
+| `warehouse-service` | Warehouse identity, normalized name, metadata, `ACTIVE -> DRAINING -> INACTIVE`, directional admission, operated marks and effective-dated timezone | Service-owned PostgreSQL and Flyway | Public warehouse API and private existence, identity, admission, readiness and operation-mark routes | Version-fenced readiness protocol; idempotent marks; transactional outbox with reviewed terminal recovery | [`README`](../../services/warehouse-service/README.md), [`warehouse-service.yaml`](../../contracts/openapi/warehouse-service.yaml), [`WarehouseService.java`](../../services/warehouse-service/src/main/java/dev/buhanzaz/rwms/warehouse/service/WarehouseService.java) |
+| `asset-service` | Cabins, lifecycle status, passport/equipment composition, warehouse balances, holds, leases and custody | Service-owned PostgreSQL and Flyway | Public asset API plus narrow private inventory, maintenance and logistics effects | Optimistic fences, stable effect identities, outbox/inbox and durable warehouse-lifecycle work; cabin-search effects use subject-scoped idempotency and frozen successful-response replay | [`README`](../../services/asset-service/README.md), [`asset-service.yaml`](../../contracts/openapi/asset-service.yaml), [`asset-events.yaml`](../../contracts/events/asset-events.yaml), [`PresentationHoldService.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/PresentationHoldService.java) |
+| `task-board-service` | Queue definitions, entries, workforce, groups, assignments, work timing, task board and group KPI evidence | Service-owned PostgreSQL and Flyway | Public manager/worker APIs, private typed task/queue routes, worker SSE invalidation | Owner-local command transactions, outbox/inbox, external credential-operation reconciliation and periodic worker refresh | [`README`](../../services/task-board-service/README.md), [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml), [`task-board-events.yaml`](../../contracts/events/task-board-events.yaml) |
+| `maintenance-service` | Catalog, estimates, repair execution, acceptance, inventory-derived work and property disposition decisions | Service-owned PostgreSQL and Flyway | Public maintenance API and narrow private inventory/logistics boundaries | Prepare/remote/finalize transactions, immutable durable attempts, stable idempotency and bounded reconciliation | [`README`](../../services/maintenance-service/README.md), [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml), [`MaintenanceApplicationService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceApplicationService.java) |
+| `inventory-service` | Inventory sessions, population, findings, frozen plans, completion and publication | Service-owned PostgreSQL and Flyway | Public inventory API and private owner-proof/publication routes | Versioned findings, idempotent remote effects, outbox/inbox and explicit quarantined-intent recovery; asset inbox SQL and PostgreSQL JSONB canonicalization have exact technical owners | [`README`](../../services/inventory-service/README.md), [`inventory-service.yaml`](../../contracts/openapi/inventory-service.yaml), [`InventoryApplicationService.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/service/InventoryApplicationService.java), [`InventoryAssetInboxStore.java`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/eventing/InventoryAssetInboxStore.java) |
+| `logistics-service` | Rental counterparties, inquiries and orders; returns, shipments, transfers, drivers, movement scheduling and initiating logistics sagas | Service-owned PostgreSQL and Flyway; V42 owns client/contact, acceptable-delivery-date and selection-command receipts; provider-specific SQL remains confined to exact technical persistence paths | Public client/order/inquiry/catalog/selection APIs plus private assistant/maintenance/task-board coordination routes | Bounded token/fence/version/hash external-attempt claims; search and selection effects use durable exact-byte receipts with remote calls outside local transactions; selection removal releases holds and resets the retained selection lifetime; fail-closed warehouse admission and exact replay evidence | [`README`](../../services/logistics-service/README.md), [`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml), [`OrderClientService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/OrderClientService.java), [`RentalInquiryCabinSelectionStore.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/RentalInquiryCabinSelectionStore.java), [`LogisticsExternalAttemptClaimService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/service/LogisticsExternalAttemptClaimService.java), [`V42`](../../services/logistics-service/src/main/resources/db/migration/V42__clients_order_delivery_and_acceptable_dates.sql) |
+| `media-service` | Media identity, owner proof, upload/finalize state, originals, derivatives and processing status | Service-owned PostgreSQL plus private MinIO objects | Public owner-scoped upload/read API, narrow internal owner-proof lookups and a separate loopback-only OpenMetrics listener | Four-attempt fenced processing, bounded persistence/commit recovery, append-only terminal/review evidence, idempotent DB-success redelivery and capped identity-free recovery metrics; an executable structural gate protects the single-deployable package graph | [`README`](../../services/media-service/README.md), [`media-service.yaml`](../../contracts/openapi/media-service.yaml), [`media-events.yaml`](../../contracts/events/media-events.yaml), [`processing metrics`](../../services/media-service/internal/observability/processing_metrics.go), [`architecture gate`](../../services/media-service/internal/architecture/architecture_test.go), [`V11`](../../services/media-service/db/migration/V11__bounded_media_processing_recovery.sql) |
+
+## Read projections and assistant
+
+| Component | Owns | Must not own | Durable state and recovery | Primary evidence |
+| --- | --- | --- | --- | --- |
+| `dossier-service` | Explainable cross-domain cabin activity projection, generations, checkpoints and cabin-scoped visibility status | Producer aggregate commands or producer status transitions | Service-owned PostgreSQL; strict consumers, inbox/checkpoints, operational unlinked facts, independently scoped DLT coverage and generation-fenced rebuild publication; maintenance repair-transfer facts retain their producer-owned source/target warehouse snapshots; lazy recovery/outbox gauges never change visibility or relay state | [`README`](../../services/dossier-service/README.md), [`dossier-service.yaml`](../../contracts/openapi/dossier-service.yaml), [`dossier-consumers.yaml`](../../contracts/events/dossier-consumers.yaml), [`DossierVisibilityCoverageResolver.java`](../../services/dossier-service/src/main/java/dev/buhanzaz/rwms/dossier/service/DossierVisibilityCoverageResolver.java), [`DossierRecoveryMetrics.java`](../../services/dossier-service/src/main/java/dev/buhanzaz/rwms/dossier/eventing/DossierRecoveryMetrics.java), [`V4`](../../services/dossier-service/src/main/resources/db/migration/V4__dossier_repair_transfer_activities.sql) |
+| `analytics-service` | KPI/dashboard source facts, aggregate/partition checkpoints and read projections | Operational commands or producer aggregate truth | Service-owned PostgreSQL; strict consumers, inbox, checkpoints and sanitized DLT metadata; lazy read-only gap/DLT recovery gauges add no dynamic labels or recovery transition | [`README`](../../services/analytics-service/README.md), [`analytics-service.yaml`](../../contracts/openapi/analytics-service.yaml), [`analytics-consumers.yaml`](../../contracts/events/analytics-consumers.yaml), [`AnalyticsRecoveryMetrics.java`](../../services/analytics-service/src/main/java/dev/buhanzaz/rwms/analytics/eventing/AnalyticsRecoveryMetrics.java) |
+| `assistant-service` | Conversations, messages, durable independent clarification branches, tool-call history and the local effect of a booked rental-inquiry fact | Rental counterparties, availability, holds, inquiries or order transitions | Service-owned PostgreSQL; V5 persists exact button questions/answers; read-only catalog help creates no hold; search and selection delegate to logistics; strict booking inbox, bounded attempts, sanitized DLT and reviewed replay remain owner-local | [`README`](../../services/assistant-service/README.md), [`assistant-service.yaml`](../../contracts/openapi/assistant-service.yaml), [`AssistantClarificationService.java`](../../services/assistant-service/src/main/java/dev/buhanzaz/rwms/assistant/service/AssistantClarificationService.java), [`AssistantCabinSearchTool.java`](../../services/assistant-service/src/main/java/dev/buhanzaz/rwms/assistant/service/AssistantCabinSearchTool.java), [`AssistantSelectionService.java`](../../services/assistant-service/src/main/java/dev/buhanzaz/rwms/assistant/service/AssistantSelectionService.java), [`V5`](../../services/assistant-service/src/main/resources/db/migration/V5__assistant_clarification_questions.sql) |
+
+Projection completeness is a claim that must be proven by its checkpoint and
+recovery state. A missing or blocked producer fact is exposed as partial,
+stale, unavailable or otherwise contract-defined; it is not silently treated
+as complete. Dossier visibility uses only unresolved evidence proven for the
+requested cabin and active generation; global operational evidence is retained
+for recovery without contaminating unrelated reads.
+
+## Shared technical modules
+
+| Module | Allowed content | Forbidden content | Primary evidence |
+| --- | --- | --- | --- |
+| `platform:technical-contracts` | Framework-neutral envelope, correlation and Problem Details value types | Spring, JPA, Kafka clients and mutable business-domain models | [`README`](../../platform/technical-contracts/README.md), [`build.gradle.kts`](../../platform/technical-contracts/build.gradle.kts) |
+| `platform:spring-boot-starter` | Shared JWT audience, Problem Details, correlation, Jackson, JPA safety, Kafka publication and observability infrastructure | Service-owned workflows, aggregates, repositories and route semantics | [`README`](../../platform/spring-boot-starter/README.md), [`src/main`](../../platform/spring-boot-starter/src/main/) |
+| `platform:architecture-tests` | Dependency-direction and forbidden-coupling policy for all 11 active Java services, stateless gateway/read-model command bans and the deterministic canonical contract-integrity gate | Runtime behavior, business fixtures or broad allow-lists that hide production violations | [`README`](../../platform/architecture-tests/README.md), [`ArchitectureRules.java`](../../platform/architecture-tests/src/test/java/dev/buhanzaz/rwms/architecture/ArchitectureRules.java), [`ServiceBoundaryArchitectureTest.java`](../../platform/architecture-tests/src/test/java/dev/buhanzaz/rwms/architecture/ServiceBoundaryArchitectureTest.java), [`CanonicalContractIntegrityGate.java`](../../platform/architecture-tests/src/test/java/dev/buhanzaz/rwms/contracts/CanonicalContractIntegrityGate.java) |
+
+## Dependency rules
+
+1. One command or invariant has one owning service.
+2. A stateful service reads and writes only its own PostgreSQL schema and
+   service-local Flyway history.
+3. Internal calls use private addresses and service identity or an explicitly
+   approved delegated-identity contract; clients use only the public gateway.
+4. Cross-domain effects use canonical HTTP commands or versioned facts, never
+   shared repositories or generated transport DTOs as persistence entities.
+5. A producer transaction records its outbox fact; Kafka delivery is
+   at-least-once and every effectful consumer is idempotent.
+6. A multi-service workflow keeps durable recovery state in its initiator and
+   never relies on a browser rollback or an ambient distributed transaction.
+7. Read projections expose missing evidence and version gaps; Kafka retention
+   is transport retention, not the system archive.
+8. Runtime configuration fails closed when disabling a dependency would leave
+   accepted commands, undelivered outbox work or skipped lifecycle effects.
+
+See [`runtime-flows.md`](runtime-flows.md) for execution sequences and
+[`contracts.md`](contracts.md) for safe boundary evolution.

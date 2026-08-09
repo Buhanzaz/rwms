@@ -293,8 +293,54 @@ Evidence: [`services/inventory-service/`](../../services/inventory-service/),
 driver work and their orchestration. It persists its workflow/reconciliation
 state and calls other owners through versioned, idempotent boundaries.
 
+Rental counterparties are logistics domain records, not OAuth clients. Every
+new client has a normalized required phone and an authenticated responsible
+manager; an IP or legal entity also requires a contact person. Reads are
+manager/warehouse scoped, and an inaccessible duplicate is reported as a
+generic conflict without disclosing its identity. Rental orders carry the
+delivery address, optional coordinate pair, contact phone, comment and a
+unique bounded set of acceptable delivery dates. Saving requires all delivery
+facts except the comment, and a planned shipment date must belong to the
+accepted set.
+
+The assistant-facing cabin boundary remains logistics-owned. Facets expose
+current characteristics and exact type-to-dimension relations; catalog lookup
+is read-only. A search group cannot acquire holds until it has an exact type
+and finish. Selection replacement stores a durable exact-byte command receipt
+before calling asset-service. Removing items sends the complete retained set,
+which releases removed holds immediately and gives retained holds a new
+settings-derived expiry; an empty set releases the whole selection.
+
+A first warehouse-bound create always requires warehouse-service admission and
+fails before owner/outbox persistence when dependencies are disabled,
+unavailable or the warehouse lifecycle rejects the direction. New accepted
+operations persist the exact admitted direction and lifecycle version with
+their permanent operated-boundary marks. Only a live owner identity, live
+idempotency receipt and complete exact mark vector can form a dependency-free
+replay candidate; the document/equipment/driver owner remains the checksum
+authority. Legacy, incomplete, expired or mismatched evidence is never guessed
+and instead requires remote re-admission or returns an explicit dependency
+failure.
+
+Background external effects are claimed per owner in bounded stable pages.
+The persisted claim token, monotonic fence, expiry, row version and request
+hash form one capability; both preflight and final mutation revalidate it.
+Remote HTTP runs only after the claim transaction closes. Database time owns
+due/expiry/defer decisions, and owner permits plus a bounded worker executor
+prevent one slow workflow family from starving the others. A stale worker or
+duplicate completion cannot mutate the attempt after lease expiry/reclaim.
+
 Evidence: [`services/logistics-service/`](../../services/logistics-service/),
-[`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml).
+[`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml),
+[`LogisticsWarehouseLifecycle.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/service/LogisticsWarehouseLifecycle.java),
+[`LogisticsWarehouseLifecycleStore.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/service/LogisticsWarehouseLifecycleStore.java),
+[`V39__warehouse_admission_evidence.sql`](../../services/logistics-service/src/main/resources/db/migration/V39__warehouse_admission_evidence.sql),
+[`LogisticsExternalAttemptClaimService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/service/LogisticsExternalAttemptClaimService.java),
+[`V40__bounded_logistics_external_attempt_claims.sql`](../../services/logistics-service/src/main/resources/db/migration/V40__bounded_logistics_external_attempt_claims.sql),
+[`OrderClientService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/OrderClientService.java),
+[`RentalInquiryCabinSelectionStore.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/RentalInquiryCabinSelectionStore.java),
+and
+[`V42__clients_order_delivery_and_acceptable_dates.sql`](../../services/logistics-service/src/main/resources/db/migration/V42__clients_order_delivery_and_acceptable_dates.sql).
 
 ### Repair Places And Driver Queue
 
@@ -343,12 +389,24 @@ new session for the same logical media ID and immutable object identity. It
 does not create a duplicate asset, event or idempotency record and never
 reopens or overwrites completed content.
 
+Processing has one durable four-attempt cycle with fenced leases and bounded
+1s/2s/4s dependency recovery. A validation failure is terminal immediately;
+the fourth dependency failure is terminal, and a crashed fourth attempt is
+reclaimed only to record `PROCESSING_ATTEMPT_EXHAUSTED` without a fifth
+processor invocation. Database success remains authoritative across a failed
+Kafka commit, so redelivery produces neither a second variant set nor a second
+`READY` fact. Terminal/review records are immutable audit evidence and do not
+themselves authorize or execute another cycle.
+
 Evidence: [`services/media-service/`](../../services/media-service/),
 [`media-service.yaml`](../../contracts/openapi/media-service.yaml),
 [`ManagerCameraScreen.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/components/ManagerCameraScreen.kt),
 [`ManagerPhotos.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/components/ManagerPhotos.kt),
 [`InventoryMediaRebasePolicy.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/uploads/InventoryMediaRebasePolicy.kt),
 [`BackgroundUploadWorker.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/uploads/BackgroundUploadWorker.kt),
+[`consumer.go`](../../services/media-service/internal/worker/consumer.go),
+[`worker.go`](../../services/media-service/internal/persistence/worker.go),
+[`V11__bounded_media_processing_recovery.sql`](../../services/media-service/db/migration/V11__bounded_media_processing_recovery.sql),
 [`upload_session_recovery_integration_test.go`](../../services/media-service/internal/persistence/upload_session_recovery_integration_test.go).
 
 ### Read Projections And Assistant
@@ -359,9 +417,52 @@ owner for source aggregates. `assistant-service` owns conversation state and
 tool-call history, while rental availability and inquiry decisions remain in
 `logistics-service`.
 
+Assistant clarification branches are durable and independent. A question is
+superseded only by a newer question for the same branch, so ОСБ and ЛДСП
+questions may be answered in either order and survive reload. The server, not
+the LLM or browser, validates exact facet relationships before searching: a
+single compatible dimension may be selected automatically, while multiple
+dimensions produce buttons. Approximate six-metre input resolves only through
+the current 6x2.4 relation; module and security-post choices are never guessed.
+Read-only reference lookup by number or text reports current types, finishes,
+dimensions, characteristics and linoleum without creating or renewing holds.
+
+Dossier `PARTIAL` means that the requested cabin's active generation has
+hidden or unresolved proven coverage. Globally unlinked facts, raw validation
+failures and legacy DLT rows without exact cabin/generation proof stay in
+operational recovery state but do not make every cabin partial. Resolving or
+rebuilding coverage never deletes its audit evidence, and relay delivery state
+does not substitute for projection completeness.
+
+Analytics recovery metrics are observations, not projection transitions.
+Read-only aggregate queries report active and terminal gaps, oldest gap age,
+maximum retained gap attempt, pending/retry sanitized-DLT backlog and its
+oldest age, and terminal DLT count. Scraping cannot resolve a gap, advance a
+checkpoint, replay an event or mark DLT work complete. Empty state is zero,
+future age is clamped to zero, and a failed database observation is `NaN`.
+
+Dossier uses the same observational rule for ten fixed gauges. Operational
+counts span retained generations for unresolved unlinked facts and exact DLT
+coverage, while activity-outbox and sanitized-DLT gauges split pending/retry
+backlog from terminal rows and expose oldest backlog ages. These broader
+operational counts never participate in cabin-scoped `PARTIAL` calculation,
+generation activation, replay or publication transitions.
+
+Assistant exposes two observational gauges for durable tool calls still in
+`STARTED`: current count and oldest age. `COMPLETED` and `FAILED` remain
+terminal history and are not classified as recovery backlog. These reads do
+not retry a tool, create a logistics command or resolve the separately recorded
+durable coordination decision.
+
 Evidence: [`services/dossier-service/`](../../services/dossier-service/),
 [`services/analytics-service/`](../../services/analytics-service/),
-[`services/assistant-service/`](../../services/assistant-service/).
+[`services/assistant-service/`](../../services/assistant-service/),
+[`DossierQueryService.java`](../../services/dossier-service/src/main/java/dev/buhanzaz/rwms/dossier/service/DossierQueryService.java),
+[`DossierSanitizedDeadLetter.java`](../../services/dossier-service/src/main/java/dev/buhanzaz/rwms/dossier/domain/DossierSanitizedDeadLetter.java),
+[`AnalyticsRecoveryMetrics.java`](../../services/analytics-service/src/main/java/dev/buhanzaz/rwms/analytics/eventing/AnalyticsRecoveryMetrics.java),
+[`DossierRecoveryMetrics.java`](../../services/dossier-service/src/main/java/dev/buhanzaz/rwms/dossier/eventing/DossierRecoveryMetrics.java),
+and
+[`AssistantRecoveryMetrics.java`](../../services/assistant-service/src/main/java/dev/buhanzaz/rwms/assistant/eventing/AssistantRecoveryMetrics.java).
 
 ## Cross-Domain Invariants
 

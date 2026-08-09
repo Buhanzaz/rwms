@@ -106,6 +106,12 @@ that current authoritative sources answer unambiguously.
 ### 4. Implement The Smallest Complete Change
 
 - Deliver one production implementation of the requested behavior end to end.
+- Do not concentrate independent use-case families in a god class, coordinator,
+  adapter or shared base. A compatibility facade may preserve the public API,
+  but it contains delegation rather than business decisions; each collaborator
+  owns one cohesive workflow and receives only the dependencies it needs.
+  Never disguise the same coupling as a universal `*Support`, dependency bag,
+  inherited repository surface or single mega-coordinator.
 - Change a canonical contract and all affected producers/consumers together
   when the boundary must evolve.
 - Keep commands and business orchestration in the owning service, not in a UI,
@@ -144,17 +150,35 @@ Before handoff, review the final diff for:
 Fix violations within scope. If fixing one requires a new product decision,
 report it and ask before proceeding.
 
-### 7. Update Project Knowledge
+### 7. Update Documentation And Project Knowledge
 
-When a task changes architecture, an owner, a business invariant, a contract or
-an important cross-component flow:
+Documentation is part of every implementation and refactoring task, not a
+separate optional cleanup:
 
-1. update the relevant document in `docs/project-knowledge/`;
-2. cite the authoritative repository paths that prove the statement;
-3. append one concise entry to
-   `docs/project-knowledge/change-log.md`;
-4. place unresolved decisions in
+1. add meaningful JavaDoc/KDoc/GoDoc for every newly added real type declaration,
+   including package-private, private, nested and local classes, interfaces,
+   records, enums and objects; update it for every changed public or
+   architecture-significant type and for every changed method whose ownership,
+   authorization, transaction, fencing, idempotency, retry, time or recovery
+   semantics are not obvious from its signature;
+2. when behavior, dependencies, configuration, API, persistence, events,
+   recovery, operational checks or internal component structure changes,
+   update the owning component's `README.md` and `README.ru.md` together with
+   matching section order and identical facts, warnings, commands and
+   references;
+3. update the relevant structure and flow descriptions in
+   `docs/project-knowledge/` whenever deployables, packages, collaborators,
+   ownership boundaries or cross-component flows change;
+4. cite the authoritative repository paths that prove every durable statement;
+5. append one concise entry to
+   `docs/project-knowledge/change-log.md` when architecture, an owner, a
+   business invariant, a contract or an important cross-component flow changes;
+6. place unresolved decisions in
    `docs/project-knowledge/open-questions.md` instead of inventing an answer.
+
+If a change has no documentation-visible effect, state that explicitly in the
+handoff after checking the paired README and structure map. Do not add filler
+comments or touch documentation merely to create a diff.
 
 Do not copy complete schemas or implementation details that will immediately
 drift. Link to canonical sources and record the durable meaning.
@@ -182,8 +206,15 @@ architecture and business logic. Start at
 The folder contains:
 
 - `architecture.md` — deployables, ownership and dependency boundaries;
+- `service-catalog.md` — current component responsibilities and primary source
+  locations;
+- `runtime-flows.md` — confirmed request, command, event, saga and projection
+  sequences;
+- `cabin-lifecycle.md` / `cabin-lifecycle.ru.md` — the confirmed bilingual
+  end-to-end cabin workflow and its supported variants;
 - `domain-logic.md` — confirmed business responsibilities and invariants;
 - `contracts.md` — contract locations and safe change procedure;
+- `documentation-standard.md` — JavaDoc/KDoc/GoDoc and bilingual README rules;
 - `change-log.md` — append-only record of durable architecture/logic changes;
 - `open-questions.md` — unresolved product decisions and contradictions.
 
@@ -247,13 +278,13 @@ mutable domain models are forbidden.
 
 | Flow                                                                                 | Owner                                                            |
 | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
-| Login, users, roles, clients and warehouse access                                    | `auth-service`                                                   |
+| Login, users, roles, OAuth/OIDC clients and warehouse access                         | `auth-service`                                                   |
 | Warehouse identity, metadata and timezone                                            | `warehouse-service`                                              |
 | Cabins, status, equipment, balances, holds and leases                                | `asset-service`                                                  |
 | Queues, workforce, assignments and operational board                                 | `task-board-service`                                             |
 | Catalog, estimates, repairs, acceptance and write-off decisions                      | `maintenance-service`                                            |
 | Inventory sessions, findings, completion and publication                             | `inventory-service`                                              |
-| Rental inquiries, returns, shipments, transfers, drivers and logistics orchestration | `logistics-service`                                              |
+| Rental counterparties, inquiries, returns, shipments, transfers and drivers          | `logistics-service`                                              |
 | Media metadata, upload/finalize, originals and transformations                       | `media-service`                                                  |
 | Cross-domain cabin activity                                                          | read-only `dossier-service` projection                           |
 | KPI and dashboard facts                                                              | `analytics-service` projections                                  |
@@ -379,8 +410,29 @@ issue or the user asks.
 Use one primary agent by default. Additional agents are allowed only for
 concrete parallel coding lanes with explicit, non-overlapping file ownership,
 frozen contracts and independent focused verification. Do not create separate
-discovery, planning, documentation, reviewer, status or QA agents. Additional
-agents must not create their own subagents.
+discovery, planning, documentation, reviewer, status or QA agents, except for
+the required read-only Luna web UI verification agent below. Additional agents
+must not create their own subagents.
+
+### Web UI Verification With Luna
+
+For every change to the active web panel UI, the focused web UI verification
+must be executed by a separate agent explicitly started with the
+`gpt-5.6-luna` model. This includes component or interaction Vitest suites and
+Playwright or other real-browser flows; panel type checking, linting and builds
+may be included in the same serialized verification gate. The implementation
+agent may write the UI and its tests, but it must not be the only executor or
+approver of those tests.
+
+The primary agent remains responsible for the verdict. Before the Luna run it
+must review and freeze the exact source scope, test inputs, expected user flow,
+commands and required artifacts. After the run it must inspect the raw output,
+test counts, timestamps and any screenshots, traces or reports, compare them
+with the requested behavior, and direct any required fix and rerun. A Luna
+summary alone is not proof that the UI is correct. The Luna verification agent
+is read-only for production and test sources unless it receives a separate,
+explicit coding assignment. Backend-only, contract-only and native Android
+checks continue to follow their own focused-verification rules.
 
 Before starting another coding agent, state its exact outcome, exclusive files
 or directories, frozen inputs, files it must not touch and required checks.

@@ -24,6 +24,32 @@ Interactive clients use public `/auth/**` and `/api/**` gateway routes. Private
 `/api/internal/**` operations are for authenticated service-to-service calls
 only.
 
+### Rental clients, interactive search and selection
+
+[`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml)
+defines logistics-owned rental clients, their orders and delivery facts. Client
+creation requires an `Idempotency-Key`; type, name and phone are mandatory,
+while IP/legal entities additionally require a contact person. Order create and
+update carry address, optional coordinate pair, contact phone, optional comment
+and a bounded unique acceptable-date list. Detail exposes logistics document
+movement evidence rather than a browser-owned history.
+
+The same contract defines search `resultMode`, characteristic and
+type-dimension facets, paged facts-only catalog lookup, and owner-scoped
+selection GET/PUT. Selection PUT carries the complete requested identifier set
+plus warehouse and `Idempotency-Key`; an empty set is an explicit release.
+[`assistant-service.yaml`](../../contracts/openapi/assistant-service.yaml)
+exposes durable clarification questions, exact button-answer turns, structured
+clarification/selection SSE events and an owner-checked selection proxy. It
+does not redefine availability or hold state. Asset private contracts carry
+the exact result mode/facets and remain the hold-effect boundary.
+
+Evidence:
+[`logistics OpenAPI`](../../contracts/openapi/logistics-service.yaml),
+[`assistant OpenAPI`](../../contracts/openapi/assistant-service.yaml),
+and
+[`asset OpenAPI`](../../contracts/openapi/asset-service.yaml).
+
 ### Media Upload Session Recovery
 
 The public create-upload command in
@@ -48,6 +74,18 @@ Evidence: [`media-service.yaml`](../../contracts/openapi/media-service.yaml),
 [`ManagerCameraScreen.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/components/ManagerCameraScreen.kt),
 [`ManagerPhotos.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/components/ManagerPhotos.kt),
 [`image_processor.go`](../../services/media-service/internal/media/image_processor.go).
+
+### Media Processing Terminal DLT
+
+The sanitized processing DLT contract in
+[`media-processing-dlt-v1.schema.json`](../../contracts/events/media/media-processing-dlt-v1.schema.json)
+includes `PROCESSING_ATTEMPT_EXHAUSTED` for an expired, already-fourth fenced
+attempt that is terminalized without another processor call. This is a
+compatible enum addition for the current repository: no active consumer outside
+media-service was found. The payload remains hash-only and may not contain the
+source record, object key, owner data or free-form dependency error. Any
+out-of-repository strict enum consumer must accept the added value before a
+runtime rollout.
 
 ### Inventory-Created Assets
 
@@ -151,6 +189,73 @@ Kafka is at-least-once transport. Producer outbox, consumer inbox,
 aggregate-version handling and sanitized DLT behavior remain service-owned
 implementations constrained by these contracts.
 
+## Canonical Integrity Gate
+
+The root `verifyCanonicalContracts` task is the deterministic repository gate
+for canonical transport sources. It parses every YAML and JSON document under
+`contracts/`, resolves only bounded local file references and JSON Pointers,
+compiles every declared JSON Schema draft, and rejects missing, escaping or
+remote references. Within each owning document or catalog, it also requires
+unique non-blank OpenAPI `operationId` values and unique lowercase namespaced
+AsyncAPI message names ending in `.vN`.
+
+Schema identity is path-bound. Schemas under `contracts/events/technical/`
+retain the established
+`https://rwms.example/contracts/events/technical/` namespace; every other
+event schema uses `https://rwms.local/contracts/events/`. In both cases the
+complete `$id` must equal the schema's relative repository path, so a valid
+host with a wrong path is still rejected. This narrow legacy namespace rule
+does not authorize another host or a new exception.
+
+Run the gate from the repository root:
+
+```bash
+bash ./gradlew verifyCanonicalContracts
+```
+
+Evidence:
+[`root task`](../../build.gradle.kts),
+[`architecture test task`](../../platform/architecture-tests/build.gradle.kts),
+[`integrity coordinator`](../../platform/architecture-tests/src/test/java/dev/buhanzaz/rwms/contracts/CanonicalContractIntegrityGate.java),
+and
+[`negative and checked-in fixtures`](../../platform/architecture-tests/src/test/java/dev/buhanzaz/rwms/contracts/CanonicalContractIntegrityTest.java).
+
+## Implementation Parity Gates
+
+Canonical structure is supplemented by executable implementation inventories.
+Inventory-service and logistics-service parse their owning OpenAPI documents,
+compare every method/path pair with merged Spring controller mappings, and send
+unauthenticated probes through the real owner security filter chain. Inventory
+contains 27 bearer operations. Logistics contains 77
+operations: 73 bearer operations and exactly four anonymous client-presentation
+operations.
+
+The gateway inventory resolves every canonical domain-public operation through
+the current functional routers and the real edge security chain. It covers 265
+domain-public operations, proves the four logistics presentation operations are
+the only anonymous domain routes, and proves canonical internal operations and
+reserved internal/private aliases are not public gateway routes. Auth callbacks
+and media health remain explicit owner-specific exclusions rather than hidden
+route gaps.
+
+Manager and worker Retrofit gates inventory all declared client methods,
+eagerly validate their converters and exercise representative encode/decode
+fixtures for every consumed JSON root family. Manager has 62 methods (60 fixed
+public gateway paths and two media-only guarded `@Url` methods); worker has 11
+(nine fixed and two guarded media methods). The worker action serializer emits
+all seven required contract properties, including explicit `null` for the
+required nullable `workerGroupId` and `evidenceId`, without enabling global
+explicit-null serialization.
+
+Evidence:
+[`inventory parity`](../../services/inventory-service/src/test/java/dev/buhanzaz/rwms/inventory/config/InventoryRouteSecurityParityTest.java),
+[`logistics parity`](../../services/logistics-service/src/test/java/dev/buhanzaz/rwms/logistics/config/LogisticsRouteSecurityParityTest.java),
+[`gateway parity`](../../services/api-gateway-service/src/test/java/dev/buhanzaz/rwms/gateway/config/GatewayRouteSecurityParityTest.java),
+[`manager boundary`](../../app/src/test/java/dev/buhanzaz/rwms/manager/network/RwmsApiContractBoundaryTest.kt),
+[`worker boundary`](../../worker-app/core-network/src/test/java/dev/buhanzaz/rwms/worker/core/network/WorkerGatewayApiContractBoundaryTest.kt),
+and
+[`worker action serializer`](../../worker-app/core-network/src/main/java/dev/buhanzaz/rwms/worker/core/network/WorkerActionRequestDtoSerializer.kt).
+
 ## Safe Change Procedure
 
 1. Identify the owning service and canonical schema.
@@ -162,8 +267,8 @@ implementations constrained by these contracts.
 5. If meaning or ownership must break and the user did not decide it, stop and
    ask a focused question.
 6. Change the canonical schema, owner and consumers in one task.
-7. Run schema validation and focused producer/consumer compatibility tests,
-   including relevant failure behavior.
+7. Run `verifyCanonicalContracts`, then focused producer/consumer compatibility
+   tests including relevant failure behavior.
 8. Remove the obsolete version/path once no supported consumer remains.
 9. Update this knowledge base and append the durable change to the log.
 
