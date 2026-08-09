@@ -10,6 +10,9 @@ import org.springframework.stereotype.Repository;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * inventory boundary for sanitized terminal event-processing failures.
+ */
 @Repository
 public class InventoryDeadLetterStore {
   private final JdbcTemplate jdbc;

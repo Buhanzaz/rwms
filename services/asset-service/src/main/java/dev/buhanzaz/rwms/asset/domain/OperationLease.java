@@ -18,6 +18,9 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 import org.hibernate.proxy.HibernateProxy;
 
+/**
+ * JPA entity that persists operation lease in the asset-owned database.
+ */
 @Entity
 @Table(name = "operation_lease")
 public class OperationLease {

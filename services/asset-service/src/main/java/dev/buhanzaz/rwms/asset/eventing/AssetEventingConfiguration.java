@@ -15,6 +15,10 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import tools.jackson.databind.JsonNode;
 
+/**
+ * Registers payload validators that bind every asset event type to its permitted aggregate type
+ * before an envelope can be accepted for transport.
+ */
 @Configuration
 @EnableScheduling
 @EnableConfigurationProperties({AssetOutboxProperties.class, AssetIdempotencyProperties.class, RwmsKafkaProperties.class})

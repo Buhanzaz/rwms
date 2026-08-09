@@ -14,6 +14,9 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data repository for service-local presentation unit hold persistence.
+ */
 public interface PresentationUnitHoldRepository
     extends JpaRepository<PresentationUnitHold, UUID> {
   List<PresentationUnitHold> findAllByPresentationIdAndStateOrderByCreatedAtAscIdAsc(

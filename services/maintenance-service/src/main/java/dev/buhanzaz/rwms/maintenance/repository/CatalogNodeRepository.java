@@ -6,6 +6,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/** Spring Data persistence boundary for CatalogNode; business transitions remain in the owning service. */
 public interface CatalogNodeRepository extends JpaRepository<CatalogNode, UUID> {
   List<CatalogNode> findAllByCatalogVersionIdOrderByNameAscIdAsc(UUID catalogVersionId);
   Optional<CatalogNode> findByCatalogVersionIdAndId(UUID catalogVersionId, UUID id);

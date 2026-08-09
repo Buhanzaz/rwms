@@ -12,6 +12,9 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data repository for service-local order unit reservation persistence.
+ */
 public interface OrderUnitReservationRepository
     extends JpaRepository<OrderUnitReservation, UUID> {
   Optional<OrderUnitReservation> findByOrderIdAndRentalItemIdAndState(

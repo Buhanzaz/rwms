@@ -6,6 +6,9 @@ import java.io.Serializable;
 import java.util.Objects;
 import java.util.UUID;
 
+/**
+ * JPA composite identifier for inventory asset capture member id.
+ */
 @Embeddable
 public class InventoryAssetCaptureMemberId implements Serializable {
   @Column(name = "capture_id", nullable = false)

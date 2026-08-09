@@ -39,6 +39,10 @@ public class AssetOutboxRecoveryService {
     this.payloads = payloads;
   }
 
+  /**
+   * Requeues one terminal ordered outbox head after immutable-envelope validation. The review
+   * version and request fingerprint fence an administrator retry from changing a prior decision.
+   */
   @Transactional
   public AssetOutboxRequeueResponse requeue(
       UUID eventId, Long expectedReviewVersion, UUID reviewerSubjectId, String reason) {

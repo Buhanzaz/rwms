@@ -13,6 +13,7 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+/** Persists the ordered application position and gap state for one source aggregate in the analytics projection. */
 @Entity
 @Table(name = "analytics_aggregate_checkpoint")
 @Getter

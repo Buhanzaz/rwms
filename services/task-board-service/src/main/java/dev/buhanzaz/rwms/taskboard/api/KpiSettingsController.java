@@ -25,6 +25,13 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * Public per-warehouse configuration API for task-board KPI presentation and working time.
+ *
+ * <p>Palette and schedule are version-fenced independently from task execution. A pending
+ * schedule is deliberately activated with an idempotency key so a retry cannot create a second
+ * effective configuration decision.
+ */
 @RestController
 @RequiredArgsConstructor
 @Validated
@@ -33,6 +40,7 @@ public class KpiSettingsController {
   private final KpiSettingsService service;
   private final WarehouseAccessAuthorizer access;
 
+  /** Returns the selected warehouse's active and pending KPI settings. */
   @GetMapping
   public WarehouseKpiSettingsResponse get(
       @AuthenticationPrincipal Jwt jwt, @PathVariable UUID warehouseId) {
@@ -40,6 +48,7 @@ public class KpiSettingsController {
     return service.get(warehouseId);
   }
 
+  /** Replaces the version-fenced palette used to classify KPI percentages. */
   @PutMapping("/palette")
   public WarehouseKpiSettingsResponse savePalette(
       @AuthenticationPrincipal Jwt jwt,
@@ -49,6 +58,7 @@ public class KpiSettingsController {
     return service.savePalette(warehouseId, request);
   }
 
+  /** Saves a future-effective work schedule without making it active immediately. */
   @PutMapping("/work-schedule")
   public WarehouseKpiSettingsResponse saveWorkSchedule(
       @AuthenticationPrincipal Jwt jwt,
@@ -58,6 +68,7 @@ public class KpiSettingsController {
     return service.saveWorkSchedule(warehouseId, request);
   }
 
+  /** Removes the pending schedule under the currently observed settings version. */
   @DeleteMapping("/work-schedule/pending")
   @ResponseStatus(HttpStatus.NO_CONTENT)
   public void deletePendingWorkSchedule(
@@ -68,6 +79,7 @@ public class KpiSettingsController {
     service.deletePendingWorkSchedule(warehouseId, expectedVersion);
   }
 
+  /** Activates the pending schedule exactly once for the supplied operation identity. */
   @PostMapping("/activate")
   public WarehouseKpiSettingsResponse activate(
       @AuthenticationPrincipal Jwt jwt,

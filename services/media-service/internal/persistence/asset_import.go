@@ -13,6 +13,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// CreateAssetImport creates or exactly replays a durable preflight job without
+// persisting the public Yandex URL.
 func (repository *Repository) CreateAssetImport(ctx context.Context, command assetimport.CreateCommand) (assetimport.Job, bool, error) {
 	if command.JobID == uuid.Nil || command.AssetImportID == uuid.Nil || command.WarehouseID == uuid.Nil ||
 		command.IdempotencyKey == uuid.Nil || !validSHA256(command.RequestSHA256) || len(command.Sources) < 1 ||
@@ -84,10 +86,13 @@ func (repository *Repository) CreateAssetImport(ctx context.Context, command ass
 	return job, false, nil
 }
 
+// GetAssetImport returns one durable asset-import job and its private entries.
 func (repository *Repository) GetAssetImport(ctx context.Context, jobID uuid.UUID) (assetimport.Job, error) {
 	return loadAssetImport(ctx, repository.pool, jobID)
 }
 
+// ActivateAssetImport binds preflight sources to current CABIN proofs and
+// queues the job for idempotent worker ingestion.
 func (repository *Repository) ActivateAssetImport(ctx context.Context, command assetimport.ActivateCommand) (assetimport.Job, bool, error) {
 	if command.JobID == uuid.Nil || command.IdempotencyKey == uuid.Nil || !validSHA256(command.RequestSHA256) ||
 		len(command.Bindings) < 1 || len(command.Bindings) > assetimport.MaxSourcesPerJob {
@@ -144,6 +149,8 @@ func (repository *Repository) ActivateAssetImport(ctx context.Context, command a
 	return job, false, nil
 }
 
+// RetryAssetImport requeues a permitted terminal import phase exactly once per
+// idempotent retry request.
 func (repository *Repository) RetryAssetImport(ctx context.Context, command assetimport.RetryCommand) (assetimport.Job, bool, error) {
 	if command.JobID == uuid.Nil || command.IdempotencyKey == uuid.Nil || !validSHA256(command.RequestSHA256) {
 		return assetimport.Job{}, false, assetimport.ErrConflict
@@ -207,6 +214,8 @@ func (repository *Repository) RetryAssetImport(ctx context.Context, command asse
 	return job, false, nil
 }
 
+// ReplaceAssetImportSources corrects source keys only for a terminal preflight
+// job, then queues a new safe enumeration.
 func (repository *Repository) ReplaceAssetImportSources(ctx context.Context, command assetimport.ReplaceSourcesCommand) (assetimport.Job, bool, error) {
 	if command.JobID == uuid.Nil || command.IdempotencyKey == uuid.Nil || !validSHA256(command.RequestSHA256) ||
 		len(command.Replacements) < 1 || len(command.Replacements) > assetimport.MaxSourcesPerJob {
@@ -291,6 +300,7 @@ func (repository *Repository) ReplaceAssetImportSources(ctx context.Context, com
 	return job, false, nil
 }
 
+// ClaimAssetImport leases one ready preflight or activation job to a worker.
 func (repository *Repository) ClaimAssetImport(ctx context.Context, owner string, lease time.Duration) (assetimport.Work, bool, error) {
 	if strings.TrimSpace(owner) == "" || len(owner) > 128 || lease <= 0 {
 		return assetimport.Work{}, false, assetimport.ErrConflict
@@ -338,6 +348,7 @@ func (repository *Repository) ClaimAssetImport(ctx context.Context, owner string
 	return assetimport.Work{Job: job, LeaseToken: token}, true, nil
 }
 
+// RenewAssetImportLease extends a fenced worker's durable import job lease.
 func (repository *Repository) RenewAssetImportLease(ctx context.Context, jobID, token uuid.UUID, owner string, lease time.Duration) error {
 	if jobID == uuid.Nil || token == uuid.Nil || strings.TrimSpace(owner) == "" || lease <= 0 {
 		return assetimport.ErrLeaseLost
@@ -356,6 +367,8 @@ func (repository *Repository) RenewAssetImportLease(ctx context.Context, jobID, 
 	return nil
 }
 
+// CompleteAssetImportPreflight stores the bounded sanitized enumeration for a
+// fenced preflight job.
 func (repository *Repository) CompleteAssetImportPreflight(ctx context.Context, jobID, token uuid.UUID, entries []assetimport.DiscoveredEntry) error {
 	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
@@ -400,10 +413,14 @@ func (repository *Repository) CompleteAssetImportPreflight(ctx context.Context, 
 	return tx.Commit(ctx)
 }
 
+// RequeueAssetImport returns a fenced job to its phase queue at the supplied
+// durable retry time.
 func (repository *Repository) RequeueAssetImport(ctx context.Context, jobID, token uuid.UUID, phase assetimport.Phase, code string, next time.Time) error {
 	return repository.finishAssetImportAttempt(ctx, jobID, token, phase, code, next.UTC(), false)
 }
 
+// FailAssetImport marks a fenced import phase terminally failed with a safe
+// failure code.
 func (repository *Repository) FailAssetImport(ctx context.Context, jobID, token uuid.UUID, phase assetimport.Phase, code string) error {
 	return repository.finishAssetImportAttempt(ctx, jobID, token, phase, code, repository.now().UTC(), true)
 }
@@ -434,6 +451,8 @@ func (repository *Repository) finishAssetImportAttempt(ctx context.Context, jobI
 	return nil
 }
 
+// SetAssetImportEntryStatus advances one fenced discovered entry to a terminal
+// status or records its sanitized warning.
 func (repository *Repository) SetAssetImportEntryStatus(ctx context.Context, jobID, token, entryID uuid.UUID, status assetimport.EntryStatus, warningCode string) error {
 	if status != assetimport.EntryDownloading && status != assetimport.EntrySkipped && status != assetimport.EntryFailed {
 		return assetimport.ErrConflict
@@ -461,6 +480,8 @@ func (repository *Repository) SetAssetImportEntryStatus(ctx context.Context, job
 	return tx.Commit(ctx)
 }
 
+// ImportAsset atomically records an externally ingested image through normal
+// CABIN media ownership, processing, and outbox rules.
 func (repository *Repository) ImportAsset(ctx context.Context, command assetimport.ImportAssetCommand) (assetimport.ImportAssetResult, error) {
 	if !validImportAssetCommand(command) {
 		return assetimport.ImportAssetResult{}, assetimport.ErrConflict
@@ -597,6 +618,8 @@ func (repository *Repository) ImportAsset(ctx context.Context, command assetimpo
 	return assetimport.ImportAssetResult{MediaID: command.MediaID}, nil
 }
 
+// CompleteAssetImportActivation closes a fenced activation job after all its
+// entries have reached terminal outcomes.
 func (repository *Repository) CompleteAssetImportActivation(ctx context.Context, jobID, token uuid.UUID) error {
 	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {

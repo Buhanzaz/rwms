@@ -14,6 +14,9 @@ import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * Effective-dated warehouse work schedule revision used for deterministic KPI time accounting.
+ */
 @Entity
 @Table(name = "kpi_work_schedule")
 public class KpiWorkScheduleRevision extends AbstractVersionedEntity {

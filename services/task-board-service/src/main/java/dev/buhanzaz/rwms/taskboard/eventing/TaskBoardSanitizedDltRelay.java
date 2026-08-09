@@ -10,6 +10,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MimeTypeUtils;
 
+/** Publishes leased sanitized DLT metadata without exposing the rejected source payload. */
 @Component
 @RequiredArgsConstructor
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")

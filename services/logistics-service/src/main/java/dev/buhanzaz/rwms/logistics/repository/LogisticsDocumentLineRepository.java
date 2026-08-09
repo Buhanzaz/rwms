@@ -7,6 +7,9 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data persistence boundary for logistics-owned Logistics Document Line Repository; it does not own cross-service workflow decisions.
+ */
 public interface LogisticsDocumentLineRepository extends JpaRepository<LogisticsDocumentLine, UUID> {
   List<LogisticsDocumentLine> findAllByDocument_IdOrderByLineNumber(UUID documentId);
 

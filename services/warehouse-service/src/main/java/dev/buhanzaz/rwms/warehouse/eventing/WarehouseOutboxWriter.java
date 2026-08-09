@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
+/** Appends a canonical, checksummed warehouse envelope in the owning aggregate transaction. */
 @Service
 public class WarehouseOutboxWriter {
   private static final String PRODUCER = "warehouse-service";

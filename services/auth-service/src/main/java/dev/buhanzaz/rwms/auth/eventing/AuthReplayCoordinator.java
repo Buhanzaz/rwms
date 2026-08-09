@@ -8,6 +8,13 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 
+/**
+ * Coordinates an audited, idempotent rebuild of auth's replay shadow projection.
+ *
+ * <p>The coordinator creates or resumes the audit record before rebuilding. A completed operation
+ * returns its stored parity result; a failed one is never silently retried under the same ID.
+ * Runtime failures are classified and durably recorded by an independent audit transaction.
+ */
 @Service
 @RequiredArgsConstructor
 public class AuthReplayCoordinator {
@@ -15,6 +22,15 @@ public class AuthReplayCoordinator {
     private final AuthReplayAuditStore audit;
     private final AuthReplayVerifier verifier;
 
+    /**
+     * Rebuilds the shadow projection under a caller-provided operation identity.
+     *
+     * @param operationId idempotency and audit identity
+     * @param actorSubjectId responsible operator
+     * @param reason bounded operator explanation
+     * @return canonical parity summary for the completed rebuild
+     * @throws OptimisticLockingFailureException when the operation previously failed or conflicts
+     */
     public AuthReplayVerifier.ReplayParityResult rebuild(
             UUID operationId, UUID actorSubjectId, String reason) {
         Operation operation = audit.start(

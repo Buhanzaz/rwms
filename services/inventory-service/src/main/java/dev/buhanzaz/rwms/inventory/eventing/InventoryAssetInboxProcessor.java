@@ -1,22 +1,26 @@
 package dev.buhanzaz.rwms.inventory.eventing;
 
+import dev.buhanzaz.rwms.inventory.persistence.InventoryPostgresJsonbCanonicalizer;
 import dev.buhanzaz.rwms.inventory.service.InventoryApplicationService;
 import dev.buhanzaz.rwms.platform.contracts.OpaqueActorReference;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.util.Set;
 import java.util.UUID;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Validates and deduplicates asset rental-item facts before applying inventory membership changes.
+ * Invalid or conflicting deliveries are retained in the local retry/DLT path instead of guessed.
+ */
 @Service
 public class InventoryAssetInboxProcessor {
-  static final String CONSUMER = "inventory-service-asset-membership-v1";
-  static final String TOPIC = "rwms.asset.rental-item.v1";
+  static final String CONSUMER = InventoryAssetInboxStore.CONSUMER;
+  static final String TOPIC = InventoryAssetInboxStore.TOPIC;
   private static final Set<String> ROOT_FIELDS =
       Set.of(
           "envelopeVersion",
@@ -54,22 +58,29 @@ public class InventoryAssetInboxProcessor {
   private static final Set<String> NOTE_PAYLOAD_FIELDS =
       Set.of("rentalItemId", "noteId");
 
-  private final JdbcTemplate jdbc;
+  private final InventoryAssetInboxStore inbox;
+  private final InventoryPostgresJsonbCanonicalizer jsonb;
   private final ObjectMapper mapper;
   private final InventoryDeadLetterStore deadLetters;
   private final InventoryApplicationService inventory;
 
   public InventoryAssetInboxProcessor(
-      JdbcTemplate jdbc,
+      InventoryAssetInboxStore inbox,
+      InventoryPostgresJsonbCanonicalizer jsonb,
       ObjectMapper mapper,
       InventoryDeadLetterStore deadLetters,
       InventoryApplicationService inventory) {
-    this.jdbc = jdbc;
+    this.inbox = inbox;
+    this.jsonb = jsonb;
     this.mapper = mapper;
     this.deadLetters = deadLetters;
     this.inventory = inventory;
   }
 
+  /**
+   * Persists and deduplicates one broker delivery before membership application. The record key is
+   * checked against the event aggregate so an at-least-once retry cannot be redirected to another asset.
+   */
   @Transactional
   public void initial(byte[] bytes, byte[] recordKey) {
     String hash = InventoryEventChecksum.sha256(bytes);
@@ -82,30 +93,15 @@ public class InventoryAssetInboxProcessor {
     }
     String body = canonical(new String(bytes, StandardCharsets.UTF_8));
     int inserted =
-        jdbc.update(
-            """
-            insert into inbox_message(
-              consumer_group,event_id,source_topic,aggregate_type,aggregate_id,record_key,
-              aggregate_version,event_type,payload_sha256,envelope_body,status,attempt_count,received_at)
-            values (?,?,'rwms.asset.rental-item.v1','RENTAL_ITEM',?,?,?,?,?,?::jsonb,
-              'RECEIVED',0,clock_timestamp())
-            on conflict do nothing
-            """,
-            CONSUMER,
+        inbox.insertReceived(
             event.eventId(),
-            event.assetId().toString(),
-            event.assetId().toString(),
+            event.assetId(),
             event.aggregateVersion(),
             event.eventType(),
             hash,
             body);
     if (inserted == 0) {
-      String existing =
-          jdbc.queryForObject(
-              "select payload_sha256 from inbox_message where consumer_group=? and event_id=?",
-              String.class,
-              CONSUMER,
-              event.eventId());
+      String existing = inbox.payloadSha256(event.eventId());
       if (!hash.equals(existing == null ? null : existing.trim())) {
         deadLetters.record("EVENT_ID_CONFLICT", hash, TOPIC, event.eventId());
       }
@@ -116,35 +112,15 @@ public class InventoryAssetInboxProcessor {
 
   @Transactional
   public void retry(UUID eventId) {
-    String body =
-        jdbc.queryForObject(
-            """
-            select envelope_body::text from inbox_message
-             where consumer_group=? and event_id=? and status='RETRY' for update
-            """,
-            String.class,
-            CONSUMER,
-            eventId);
-    String recordKey =
-        jdbc.queryForObject(
-            "select record_key from inbox_message where consumer_group=? and event_id=?",
-            String.class,
-            CONSUMER,
-            eventId);
+    String body = inbox.lockRetryEnvelope(eventId);
+    String recordKey = inbox.retryRecordKey(eventId);
     if (body == null || recordKey == null) return;
     byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
     try {
       apply(validate(bytes, recordKey.getBytes(StandardCharsets.UTF_8)));
     } catch (InvalidAssetEvent exception) {
       String hash = InventoryEventChecksum.sha256(bytes);
-      jdbc.update(
-          """
-          update inbox_message set status='DLT',dlt_at=clock_timestamp(),next_attempt_at=null,
-            quarantine_reason='VALIDATION_REJECTED'
-           where consumer_group=? and event_id=?
-          """,
-          CONSUMER,
-          eventId);
+      inbox.markValidationRejected(eventId);
       deadLetters.record("VALIDATION_REJECTED", hash, TOPIC, eventId);
     }
   }
@@ -158,14 +134,7 @@ public class InventoryAssetInboxProcessor {
           event.eventId(),
           event.occurredAt());
     }
-    jdbc.update(
-        """
-        update inbox_message set status='PROCESSED',processed_at=clock_timestamp(),
-          next_attempt_at=null,dlt_at=null,quarantine_reason=null
-         where consumer_group=? and event_id=?
-        """,
-        CONSUMER,
-        event.eventId());
+    inbox.markProcessed(event.eventId());
   }
 
   private AssetEvent validate(byte[] bytes, byte[] recordKey) {
@@ -257,7 +226,7 @@ public class InventoryAssetInboxProcessor {
   }
 
   private String canonical(String raw) {
-    String value = jdbc.queryForObject("select (?::jsonb)::text", String.class, raw);
+    String value = jsonb.canonicalize(raw);
     if (value == null) throw new IllegalStateException("PostgreSQL did not canonicalize asset fact");
     return value;
   }

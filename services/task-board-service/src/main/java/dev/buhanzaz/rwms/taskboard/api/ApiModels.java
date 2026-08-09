@@ -29,9 +29,25 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * Transport models for the manager, public operational and private service task-board APIs.
+ *
+ * <p>They are boundary types, not persistence entities. Mutable commands carry an observed version
+ * or a stable external identity where the contract requires replay safety.
+ */
 public final class ApiModels {
   private ApiModels() {}
 
+  /**
+   * Version-fenced command for a global worker qualification class.
+   *
+   * @param version observed class version; use zero when creating
+   * @param name human-readable class name
+   * @param description optional class description
+   * @param comment optional administrator note
+   * @param sortOrder display order
+   * @param active whether the class is selectable for new bindings
+   */
   public record WorkerClassRequest(
       @NotNull @Min(0) Long version,
       @NotBlank @Size(max = 128) String name,
@@ -50,6 +66,15 @@ public final class ApiModels {
       boolean active,
       boolean logisticsPrimary) {}
 
+  /**
+   * Declares how a qualified worker class participates in a queue.
+   *
+   * @param workerClassId global worker-class identity
+   * @param order deterministic binding order
+   * @param stopTaskOnTake whether taking the step interrupts compatible work
+   * @param participationPolicy primary or optional participation policy
+   * @param notifyOnPrimaryTake whether primary take sends an availability signal
+   */
   public record QueueBindingRequest(
       @NotNull UUID workerClassId,
       @Min(0) int order,
@@ -61,6 +86,27 @@ public final class ApiModels {
     }
   }
 
+  /**
+   * Version-fenced definition of the shared {@code GENERAL} queue standard.
+   *
+   * <p>The binding order and participation policy are process rules shared by every derived
+   * warehouse projection.
+   *
+   * @param version observed definition version; use zero when creating
+   * @param name global queue name
+   * @param description optional queue description
+   * @param type operational queue type
+   * @param purpose global or logistics-driver purpose
+   * @param sortOrder requested catalog order
+   * @param active whether new work may use the queue
+   * @param hidden whether the queue is hidden from normal board display
+   * @param collapsed whether the board initially collapses the queue
+   * @param holdingPeriodMinutes optional terminal holding period
+   * @param notificationThreshold optional queue notification threshold
+   * @param notifyWhenThresholdReached whether threshold notification is enabled
+   * @param resultPhotoMinCount minimum result-photo count for completion
+   * @param bindings qualified worker-class process bindings
+   */
   public record QueueDefinitionRequest(
       @NotNull @Min(0) Long version,
       @NotBlank @Size(max = 128) String name,
@@ -77,6 +123,25 @@ public final class ApiModels {
       @NotNull @Min(0) @Max(20) Integer resultPhotoMinCount,
       @NotNull List<@Valid QueueBindingRequest> bindings) {}
 
+  /**
+   * Global queue-definition representation returned by the registry API.
+   *
+   * @param id stable definition identity
+   * @param version current definition version
+   * @param name global queue name
+   * @param description optional queue description
+   * @param type operational queue type
+   * @param purpose global or logistics-driver purpose
+   * @param sortOrder canonical catalog order
+   * @param active whether new work may use the queue
+   * @param hidden whether the queue is hidden from normal board display
+   * @param collapsed whether the board initially collapses the queue
+   * @param holdingPeriodMinutes optional terminal holding period
+   * @param notificationThreshold optional queue notification threshold
+   * @param notifyWhenThresholdReached whether threshold notification is enabled
+   * @param resultPhotoMinCount minimum result-photo count for completion
+   * @param bindings qualified worker-class process bindings
+   */
   public record QueueDefinitionDto(
       UUID id,
       long version,
@@ -97,9 +162,27 @@ public final class ApiModels {
   public record QueueDefinitionOrderItem(
       @NotNull UUID definitionId, @NotNull @Min(0) Long expectedVersion) {}
 
+  /**
+   * Complete version-fenced order declaration for all global {@code GENERAL} definitions.
+   *
+   * @param definitions complete ordered global-definition identity and version list
+   */
   public record QueueDefinitionOrderRequest(
       @NotEmpty List<@Valid QueueDefinitionOrderItem> definitions) {}
 
+  /**
+   * Version-fenced configuration for one warehouse's dedicated logistics-driver queue.
+   *
+   * @param expectedVersion observed physical queue version
+   * @param active whether new driver work may use the queue
+   * @param hidden whether the queue is hidden from normal display
+   * @param collapsed whether the board initially collapses the queue
+   * @param holdingPeriodMinutes optional terminal holding period
+   * @param notificationThreshold optional queue notification threshold
+   * @param notifyWhenThresholdReached whether threshold notification is enabled
+   * @param resultPhotoMinCount minimum result-photo count for completion
+   * @param bindings qualified worker-class process bindings
+   */
   public record DriverQueueRequest(
       @NotNull @Min(0) Long expectedVersion,
       boolean active,
@@ -121,6 +204,28 @@ public final class ApiModels {
       ParticipationPolicy participationPolicy,
       boolean notifyOnPrimaryTake) {}
 
+  /**
+   * Stable physical queue projection used for local assignments and historic route references.
+   *
+   * @param id stable physical queue identity
+   * @param version current physical queue version
+   * @param warehouseId owning warehouse identity
+   * @param definitionId source global definition identity, if derived
+   * @param definitionVersion version of the source definition
+   * @param name display name
+   * @param description optional description
+   * @param type operational queue type
+   * @param purpose global or logistics-driver purpose
+   * @param sortOrder display order
+   * @param active whether new work may use the queue
+   * @param hidden whether the queue is hidden from normal display
+   * @param collapsed whether the board initially collapses the queue
+   * @param holdingPeriodMinutes optional terminal holding period
+   * @param notificationThreshold optional queue notification threshold
+   * @param notifyWhenThresholdReached whether threshold notification is enabled
+   * @param resultPhotoMinCount minimum result-photo count for completion
+   * @param bindings qualified worker-class process bindings
+   */
   public record WorkQueueDto(
       UUID id,
       long version,
@@ -144,6 +249,23 @@ public final class ApiModels {
   public record QualificationRequest(
       @NotNull UUID workerClassId, boolean active, @Size(max = 1000) String comment) {}
 
+  /**
+   * Version-fenced worker profile and qualification declaration.
+   *
+   * <p>The password is redacted from {@link #toString()} and must never be copied into events or
+   * logs.
+   *
+   * @param version observed worker version; use zero when creating
+   * @param displayName display name
+   * @param firstName optional first name
+   * @param lastName optional last name
+   * @param middleName optional middle name
+   * @param active whether the worker may be assigned new work
+   * @param comment optional administrator note
+   * @param appLogin optional worker-app login
+   * @param password optional credential secret, redacted in string output
+   * @param qualifications worker-class qualification declarations
+   */
   public record WorkerRequest(
       @NotNull @Min(0) Long version,
       @NotBlank @Size(max = 256) String displayName,
@@ -188,9 +310,21 @@ public final class ApiModels {
       GroupOperationalStatus operationalAvailability,
       List<QualificationDto> qualifications) {}
 
+  /**
+   * Version-fenced selection of a worker's active group, or {@code null} to clear it.
+   *
+   * @param expectedVersion observed worker version
+   * @param workerGroupId selected group identity, or null
+   */
   public record SetCurrentGroupRequest(
       @NotNull @Min(0) Long expectedVersion, UUID workerGroupId) {}
 
+  /**
+   * Version-fenced password command whose string representation redacts the secret.
+   *
+   * @param expectedVersion observed worker version
+   * @param password new credential secret
+   */
   public record CredentialPasswordRequest(
       @NotNull @Min(0) Long expectedVersion,
       @NotBlank @Size(min = 8, max = 256) String password) {
@@ -208,6 +342,16 @@ public final class ApiModels {
     }
   }
 
+  /**
+   * Version-fenced warehouse group with one worker class and declarative memberships.
+   *
+   * @param version observed group version; use zero when creating
+   * @param workerClassId globally defined class for all group members
+   * @param name display name
+   * @param description optional description
+   * @param active whether the group may accept work
+   * @param members active or inactive membership declarations
+   */
   public record WorkerGroupRequest(
       @NotNull @Min(0) Long version,
       @NotNull UUID workerClassId,
@@ -236,6 +380,12 @@ public final class ApiModels {
       String unavailabilityReason,
       List<GroupMemberDto> members) {}
 
+  /**
+   * Version-fenced operational availability command; disabling requires a human-readable reason.
+   *
+   * @param expectedVersion observed group version
+   * @param reason unavailable reason, required when disabling
+   */
   public record GroupAvailabilityRequest(
       @NotNull @Min(0) Long expectedVersion,
       @Size(max = 1000) String reason) {}
@@ -244,6 +394,11 @@ public final class ApiModels {
       @NotNull UUID queueDefinitionId,
       @NotNull QueueType type) {}
 
+  /**
+   * Read-only maintenance request that validates UUID-based global queue prerequisites.
+   *
+   * @param queues exact required global queue-definition identities and types
+   */
   public record CatalogRoutingPreflightRequest(
       @NotEmpty @Size(max = 100) List<@Valid MaintenanceRoutingQueueRequirement> queues) {}
 
@@ -257,6 +412,14 @@ public final class ApiModels {
   public record CatalogRoutingResolvedDefinition(
       UUID queueDefinitionId, String name, QueueType type) {}
 
+  /**
+   * Typed catalog preflight result that separates missing definitions from incompatible ones.
+   *
+   * @param ready whether every requested definition is usable
+   * @param missingQueueDefinitionIds unknown global definition identities
+   * @param mismatches known definitions with incompatible properties
+   * @param resolvedDefinitions resolved compatible definitions
+   */
   public record CatalogRoutingPreflightResponse(
       boolean ready,
       List<UUID> missingQueueDefinitionIds,
@@ -269,6 +432,15 @@ public final class ApiModels {
     }
   }
 
+  /**
+   * Read-only maintenance routing prerequisite check for a target warehouse.
+   *
+   * <p>Only exact queue-definition UUIDs are resolved; names and legacy aliases are deliberately
+   * not accepted as routing identities.
+   *
+   * @param warehouseId warehouse whose physical bindings are checked
+   * @param queues required global queue-definition identities and types
+   */
   public record MaintenanceRoutingPreflightRequest(
       @NotNull UUID warehouseId,
       @NotEmpty @Size(max = 100) List<@Valid MaintenanceRoutingQueueRequirement> queues) {}
@@ -292,6 +464,16 @@ public final class ApiModels {
       String name,
       QueueType type) {}
 
+  /**
+   * Complete routing preflight result, including missing global and local bindings separately.
+   *
+   * @param warehouseId checked warehouse identity
+   * @param ready whether all requested routes are usable
+   * @param missingQueueDefinitionIds unknown global definitions
+   * @param missingWarehouseBindingDefinitionIds definitions missing a physical binding
+   * @param mismatches known definitions or bindings with incompatible properties
+   * @param resolvedQueues resolved physical queues for compatible requirements
+   */
   public record MaintenanceRoutingPreflightResponse(
       UUID warehouseId,
       boolean ready,
@@ -309,6 +491,12 @@ public final class ApiModels {
 
   public record MovementQueueCapability(UUID queueDefinitionId, UUID workQueueId) {}
 
+  /**
+   * Read-only active queue capabilities used by maintenance and logistics routing clients.
+   *
+   * @param warehouseId checked warehouse identity
+   * @param movementQueueDefinitions active movement definition-to-queue mappings
+   */
   public record WarehouseQueueCapabilities(
       UUID warehouseId,
       List<MovementQueueCapability> movementQueueDefinitions) {
@@ -429,6 +617,19 @@ public final class ApiModels {
     }
   }
 
+  /**
+   * User-originated board task with a complete ordered route.
+   *
+   * @param externalTaskId optional stable external correlation identity
+   * @param title task title
+   * @param unitNumber optional human-facing unit identifier
+   * @param description optional task description
+   * @param plannedDurationMinutes optional planned duration
+   * @param deadlineAt optional deadline
+   * @param route complete ordered route declaration
+   * @param scheduledDate optional initial operational date
+   * @param priority optional priority from one through five
+   */
   public record CreateBoardTaskRequest(
       UUID externalTaskId,
       @NotBlank @Size(max = 256) String title,
@@ -463,6 +664,26 @@ public final class ApiModels {
   public record TaskSourceReferenceDto(
       @NotNull TaskSourceType type, @NotNull UUID sourceId) {}
 
+  /**
+   * Source-service request to register externally owned work.
+   *
+   * <p>{@code externalTaskId}, together with the authenticated source client, is the idempotent
+   * task identity. The source describes work; task-board owns execution state and queue entries.
+   *
+   * @param warehouseId warehouse that owns the initial route
+   * @param externalTaskId stable source-owned idempotency identity
+   * @param title task title
+   * @param unitNumber optional human-facing unit identifier
+   * @param description optional task description
+   * @param plannedDurationMinutes optional planned duration
+   * @param deadlineAt optional deadline
+   * @param route complete ordered route declaration
+   * @param scheduledDate optional initial operational date
+   * @param priority optional priority from one through five
+   * @param dailyCapacity optional source planning capacity
+   * @param source optional immutable source-domain reference
+   * @param lane requested initial task lane
+   */
   public record RegisterExternalTaskRequest(
       @NotNull UUID warehouseId,
       @NotNull UUID externalTaskId,
@@ -561,6 +782,13 @@ public final class ApiModels {
   /**
    * Logistics supplies immutable equipment facts only. Task-board owns the title,
    * description, queue and route generated from these facts.
+   *
+   * @param warehouseId warehouse that owns the movement work
+   * @param externalTaskId stable logistics task identity
+   * @param unitNumber optional human-facing unit identifier
+   * @param plannedDurationMinutes optional planned duration
+   * @param deadlineAt required movement deadline
+   * @param operations immutable equipment movement facts
    */
   public record RegisterLogisticsEquipmentMovementTaskRequest(
       @NotNull UUID warehouseId,
@@ -587,6 +815,17 @@ public final class ApiModels {
       TaskStatus status,
       OffsetDateTime doneAt) {}
 
+  /**
+   * Source-owned content replacement that is valid only before execution begins.
+   *
+   * @param expectedTaskVersion observed task version
+   * @param title replacement task title
+   * @param unitNumber optional replacement unit identifier
+   * @param description optional replacement description
+   * @param plannedDurationMinutes optional replacement planned duration
+   * @param deadlineAt optional replacement deadline
+   * @param route complete replacement route declaration
+   */
   public record PreStartUpdateTaskRequest(
       @NotNull @Min(0) Long expectedTaskVersion,
       @NotBlank @Size(max = 256) String title,
@@ -596,15 +835,39 @@ public final class ApiModels {
       OffsetDateTime deadlineAt,
       @NotEmpty List<@Valid RouteStepRequest> route) {}
 
+  /**
+   * Version-fenced source task relocation to a target warehouse.
+   *
+   * @param expectedTaskVersion observed task version
+   * @param targetWarehouseId target warehouse identity
+   */
   public record RelocateExternalTaskRequest(
       @NotNull @Min(0) Long expectedTaskVersion,
       @NotNull UUID targetWarehouseId) {}
 
+  /**
+   * Version-fenced take command with optional explicit group or worker selection for manager use.
+   *
+   * @param expectedVersion observed entry version
+   * @param workerGroupId optional target group
+   * @param workerId optional target worker
+   */
   public record TakeEntryRequest(
       @NotNull @Min(0) Long expectedVersion, UUID workerGroupId, UUID workerId) {}
 
+  /**
+   * Minimal optimistic-concurrency command for an entry transition.
+   *
+   * @param expectedVersion observed entry version
+   */
   public record VersionCommand(@NotNull @Min(0) Long expectedVersion) {}
 
+  /**
+   * Version-fenced source request to place a driver task into an explicit lane.
+   *
+   * @param expectedTaskVersion observed task version
+   * @param lane requested driver lane
+   */
   public record SetTaskLaneRequest(
       @NotNull @Min(0) Long expectedTaskVersion, @NotNull TaskLane lane) {}
 
@@ -618,6 +881,12 @@ public final class ApiModels {
       UUID warehouseId,
       OffsetDateTime recordedAt) {}
 
+  /**
+   * Version-fenced cancellation with an auditable reason.
+   *
+   * @param expectedTaskVersion observed task version
+   * @param reason human-readable cancellation reason
+   */
   public record CancelTaskRequest(
       @NotNull @Min(0) Long expectedTaskVersion,
       @NotBlank @Size(max = 1000) String reason) {}
@@ -657,6 +926,26 @@ public final class ApiModels {
       String taskText,
       Integer plannedDurationMinutes) {}
 
+  /**
+   * Source-facing registration that maps one external task to task-board task and route IDs.
+   *
+   * @param taskId stable task-board task identity
+   * @param taskVersion current task version
+   * @param warehouseId current owning warehouse identity
+   * @param externalTaskId stable source-owned identity
+   * @param title task title
+   * @param unitNumber optional unit identifier
+   * @param description optional task description
+   * @param status current task status
+   * @param plannedDurationMinutes optional planned duration
+   * @param deadlineAt optional deadline
+   * @param scheduledDate current operational date
+   * @param lane current task lane
+   * @param priority task priority
+   * @param pinned whether the task is pinned
+   * @param doneAt completion or cancellation time, if terminal
+   * @param route registered route steps and their stable entry identities
+   */
   public record BoardTaskRegistrationDto(
       UUID taskId,
       long taskVersion,
@@ -675,9 +964,24 @@ public final class ApiModels {
       OffsetDateTime doneAt,
       List<RegisteredRouteStepDto> route) {}
 
+  /**
+   * Version-fenced pause command with an optional durable reason.
+   *
+   * @param expectedVersion observed entry version
+   * @param reason optional pause reason
+   */
   public record PauseEntryRequest(
       @NotNull @Min(0) Long expectedVersion, @Size(max = 1000) String reason) {}
 
+  /**
+   * Version-fenced movement of an entry to a permitted queue, date and zero-based position.
+   *
+   * @param expectedVersion observed entry version
+   * @param expectedTaskVersion observed parent task version
+   * @param targetQueueId permitted target physical queue
+   * @param targetIndex zero-based target position
+   * @param targetDate target operational date
+   */
   public record MoveEntryRequest(
       @NotNull @Min(0) Long expectedVersion,
       @NotNull @Min(0) Long expectedTaskVersion,
@@ -685,6 +989,15 @@ public final class ApiModels {
       @NotNull @Min(0) Integer targetIndex,
       @NotNull LocalDate targetDate) {}
 
+  /**
+   * Version-fenced logistics movement command for a dedicated driver entry.
+   *
+   * @param expectedTaskVersion observed task version
+   * @param expectedEntryVersion observed driver-entry version
+   * @param targetLane target driver lane
+   * @param targetDate target operational date
+   * @param targetIndex zero-based target position
+   */
   public record MoveExternalLogisticsTaskRequest(
       @NotNull @Min(0) Long expectedTaskVersion,
       @NotNull @Min(0) Long expectedEntryVersion,
@@ -696,6 +1009,10 @@ public final class ApiModels {
    * Exchanges the scheduled dates assigned to two complete visual task-board date columns.
    * Every entry returned by both {@code includeShadow=true} snapshots must be represented so a
    * stale or partial browser view cannot move only part of a column.
+   *
+   * @param firstDate first visible date column
+   * @param secondDate second visible date column
+   * @param entries complete entry and task version expectations for both columns
    */
   public record SwapTaskBoardDatesRequest(
       @NotNull LocalDate firstDate,
@@ -707,6 +1024,12 @@ public final class ApiModels {
       @NotNull @Min(0) Long expectedVersion,
       @NotNull @Min(0) Long expectedTaskVersion) {}
 
+  /**
+   * Version-fenced pin declaration applied consistently to every task route entry.
+   *
+   * @param expectedTaskVersion observed task version
+   * @param pinned requested pin state
+   */
   public record PinTaskRequest(
       @NotNull @Min(0) Long expectedTaskVersion, boolean pinned) {}
 
@@ -739,6 +1062,40 @@ public final class ApiModels {
       OffsetDateTime nextTransitionAt,
       OffsetDateTime serverTime) {}
 
+  /**
+   * Current operational projection of one route entry.
+   *
+   * <p>{@code version} fences entry commands and {@code taskVersion} fences task-wide commands;
+   * clients must use the version appropriate to the operation rather than substituting one for the
+   * other.
+   *
+   * @param id stable route-entry identity
+   * @param version current entry version
+   * @param taskId parent task identity
+   * @param externalTaskId optional source-facing task identity
+   * @param taskVersion current parent task version
+   * @param title task title
+   * @param unitNumber optional unit identifier
+   * @param taskStatus current parent task status
+   * @param scheduledDate operational date
+   * @param lane current task lane
+   * @param priority task priority
+   * @param pinned whether the task is pinned
+   * @param queueId current physical queue identity
+   * @param queuePurpose current queue purpose
+   * @param routeIndex immutable route-step index
+   * @param queuePosition current zero-based queue position
+   * @param entryType route entry type
+   * @param status current entry status
+   * @param taskText route-step text
+   * @param plannedDurationMinutes optional planned duration
+   * @param activeStartedAt latest active-work start time
+   * @param pausedAt latest pause time
+   * @param activeWorkSeconds accumulated active-work duration
+   * @param assignments assignment snapshots
+   * @param timerSnapshot server-calculated timer state
+   * @param source immutable source-domain reference, if any
+   */
   public record BoardEntryDto(
       UUID id,
       long version,
@@ -775,6 +1132,14 @@ public final class ApiModels {
       int sortOrder,
       List<BoardEntryDto> entries) {}
 
+  /**
+   * Date-scoped board snapshot returned to managers and eligible workers.
+   *
+   * @param warehouseId warehouse that owns the board
+   * @param selectedDate date resolved for this representation
+   * @param availableDates operational dates with board data
+   * @param columns queues and entries for the selected date
+   */
   public record TaskBoardSnapshot(
       UUID warehouseId,
       LocalDate selectedDate,
@@ -788,6 +1153,15 @@ public final class ApiModels {
     }
   }
 
+  /**
+   * Dedicated driver-board snapshot with a sticky current lane and dated future columns.
+   *
+   * @param warehouseId warehouse that owns the driver queue
+   * @param queueId stable driver-queue identity
+   * @param queueVersion current driver-queue version
+   * @param current sticky current-lane entries
+   * @param dates non-empty scheduled-date columns
+   */
   public record LogisticsBoardSnapshot(
       UUID warehouseId,
       UUID queueId,
@@ -800,6 +1174,12 @@ public final class ApiModels {
     }
   }
 
+  /**
+   * Typed private reference that prevents deletion of a queue definition still used by a source.
+   *
+   * @param type source-domain reference type
+   * @param externalReferenceId stable reference identity in that source
+   */
   public record QueueReferenceRequest(
       @NotNull QueueReferenceType type, @NotBlank @Size(max = 128) String externalReferenceId) {}
 
@@ -810,6 +1190,20 @@ public final class ApiModels {
       QueueReferenceType type,
       String externalReferenceId) {}
 
+  /**
+   * Immutable timing fact for audit, work-duration and KPI calculations.
+   *
+   * @param id stable time-event identity
+   * @param version current event version
+   * @param entryId route entry that emitted the fact
+   * @param workerId attributed worker, if any
+   * @param workerName human-readable worker name snapshot
+   * @param workerGroupName human-readable group name snapshot
+   * @param eventType transition type
+   * @param reason optional transition reason
+   * @param createdAt authoritative event time
+   * @param relatedEntryId optional related route entry
+   */
   public record TimeEventDto(
       UUID id,
       long version,

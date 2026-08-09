@@ -13,6 +13,7 @@ import jakarta.validation.constraints.NotNull;
 import java.util.Locale;
 import java.util.UUID;
 
+/** Owns the global queue identity and policy mirrored by warehouse-specific work queues. */
 @Entity
 @Table(
     name = "queue_definition",

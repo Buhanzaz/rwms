@@ -4,6 +4,9 @@ import java.net.URI;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+/**
+ * Configuration value for the inventory private integration boundary.
+ */
 @ConfigurationProperties("rwms.inventory.dependencies")
 public record InventoryDependencyProperties(
     boolean enabled,

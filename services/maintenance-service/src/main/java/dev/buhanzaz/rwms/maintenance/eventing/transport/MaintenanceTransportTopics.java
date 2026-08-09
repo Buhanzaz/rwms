@@ -4,10 +4,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+/**
+ * Defines exact versioned Kafka topics and the canonical ordered maintenance output allow-list.
+ */
 public final class MaintenanceTransportTopics {
   public static final String CATALOG = "rwms.maintenance.catalog-version.v1";
   public static final String ESTIMATE = "rwms.maintenance.estimate.v1";
   public static final String REPAIR = "rwms.maintenance.repair.v1";
+  public static final String PROPERTY_DISPOSITION =
+      "rwms.maintenance.property-disposition.v1";
   public static final String BOARD_TASK = "rwms.task-board.board-task.v1";
   public static final String QUEUE_ENTRY = "rwms.task-board.queue-entry.v1";
   public static final String TASK_EVIDENCE = "rwms.task-board.task-evidence.v1";
@@ -17,7 +22,9 @@ public final class MaintenanceTransportTopics {
   public static final String SANITIZED_DLT = "rwms.maintenance.dlt.v1";
   public static final String CONSUMER_GROUP = "maintenance-service-inbox-v1";
 
-  public static final List<String> OUTPUTS = List.of(CATALOG, ESTIMATE, REPAIR, SANITIZED_DLT);
+  /** Ordered owner outputs shared by startup validation and binding initialization. */
+  public static final List<String> OUTPUTS =
+      List.of(CATALOG, ESTIMATE, REPAIR, PROPERTY_DISPOSITION, SANITIZED_DLT);
   public static final Set<String> INPUTS =
       Set.of(BOARD_TASK, QUEUE_ENTRY, TASK_EVIDENCE, MEDIA, RENTAL_ITEM, OPERATION_LEASE);
 

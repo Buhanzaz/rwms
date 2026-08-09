@@ -21,6 +21,9 @@ import lombok.NoArgsConstructor;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.proxy.HibernateProxy;
 
+/**
+ * JPA persistence model for Order Command Receipt in the logistics-owned database.
+ */
 @Entity
 @Table(name = "rental_order_command_receipt")
 @Getter

@@ -10,6 +10,7 @@ import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/** Enforces the exact event-specific payload shape before a warehouse fact enters the outbox. */
 @Component
 public class WarehouseEventPayloadPolicy {
   private static final Set<String> FIELDS =

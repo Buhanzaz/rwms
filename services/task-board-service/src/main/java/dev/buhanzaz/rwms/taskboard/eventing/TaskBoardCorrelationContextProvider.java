@@ -6,6 +6,7 @@ import java.util.UUID;
 import org.slf4j.MDC;
 import org.springframework.stereotype.Component;
 
+/** Resolves or creates correlation context without copying business data into transport headers. */
 @Component
 public class TaskBoardCorrelationContextProvider {
   public CorrelationContext current() {

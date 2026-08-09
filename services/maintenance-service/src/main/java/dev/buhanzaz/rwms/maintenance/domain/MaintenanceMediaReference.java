@@ -12,6 +12,7 @@ import java.util.UUID;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+/** JPA reference to a media revision used as maintenance evidence; media-service owns the content. */
 @Entity
 @Table(name = "maintenance_media_reference")
 @IdClass(MaintenanceMediaReferenceId.class)

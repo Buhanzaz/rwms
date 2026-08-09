@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/** Spring Data persistence boundary for InventoryPublicationSourceOperation; business transitions remain in the owning service. */
 public interface InventoryPublicationSourceOperationRepository
     extends JpaRepository<InventoryPublicationSourceOperation, InventoryPublicationSourceId> {
   @Lock(LockModeType.PESSIMISTIC_WRITE)

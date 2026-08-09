@@ -10,6 +10,12 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MimeTypeUtils;
 
+/**
+ * Delivers durable, sanitized dead-letter metadata to the appropriate Kafka DLT destination.
+ *
+ * <p>This relay checks the safe body's checksum before publishing and fences completion with the
+ * claim lease. It carries no original message payload, credentials, or private profile data.
+ */
 @Component
 @RequiredArgsConstructor
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")
@@ -20,6 +26,7 @@ public class AuthSanitizedDltRelay {
     private final StreamBridge streamBridge;
     private final AuthEventingMetrics metrics;
 
+    /** Runs one bounded sanitized-DLT relay attempt on the configured schedule. */
     @Scheduled(
             fixedDelayString = "${rwms.auth.eventing.outbox.relay-delay:1s}",
             initialDelayString = "${rwms.auth.eventing.outbox.relay-initial-delay:1s}")
@@ -27,6 +34,11 @@ public class AuthSanitizedDltRelay {
         relayOne();
     }
 
+    /**
+     * Claims and delivers at most one sanitized DLT record.
+     *
+     * @return {@code true} only when the broker acknowledges the record and its claim is settled
+     */
     public boolean relayOne() {
         var claimed = store.claim(properties.instanceId(), properties.leaseDuration());
         if (claimed.isEmpty()) {

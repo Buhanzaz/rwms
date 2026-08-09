@@ -11,6 +11,7 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+/** Persists source-partition high-water marks used to tail and verify a rebuilding projection generation. */
 @Entity
 @Table(name = "dossier_replay_partition_high_water")
 @Getter

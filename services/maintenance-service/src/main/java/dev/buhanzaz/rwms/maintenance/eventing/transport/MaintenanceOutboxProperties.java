@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.maintenance.eventing.transport;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+/** Validated configuration for the maintenance eventing boundary. */
 @ConfigurationProperties("rwms.maintenance.eventing.outbox")
 public class MaintenanceOutboxProperties {
   private Duration relayDelay = Duration.ofSeconds(1);

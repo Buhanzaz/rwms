@@ -1,3 +1,5 @@
+// Package auth validates RWMS bearer JWTs and turns their constrained claims
+// into principals that the media boundary can authorize.
 package auth
 
 import (
@@ -19,23 +21,36 @@ import (
 )
 
 var (
+	// ErrUnauthorized indicates that the caller did not present a valid bearer
+	// token or that token validation could not safely complete.
 	ErrUnauthorized = errors.New("unauthorized")
-	ErrForbidden    = errors.New("forbidden")
+	// ErrForbidden indicates that a valid principal lacks the requested media
+	// operation, scope, warehouse grant, or service identity.
+	ErrForbidden = errors.New("forbidden")
 )
 
+// AccessLevel is the ordered warehouse permission level embedded in a USER
+// principal's warehouse grants.
 type AccessLevel int
 
 const (
+	// View permits read-only access to a warehouse-scoped media operation.
 	View AccessLevel = iota
+	// Edit permits ordinary mutable media operations in a warehouse.
 	Edit
+	// Manage permits the highest warehouse-scoped permission level.
 	Manage
 )
 
+// WarehouseGrant binds a USER principal to one warehouse and its permission
+// level.
 type WarehouseGrant struct {
 	WarehouseID uuid.UUID
 	Level       AccessLevel
 }
 
+// Principal is the validated USER token representation accepted by public
+// media routes.
 type Principal struct {
 	SubjectID uuid.UUID
 	Scopes    map[string]struct{}
@@ -65,6 +80,8 @@ type ServicePrincipal struct {
 	Scopes   map[string]struct{}
 }
 
+// Validator verifies RS256 JWTs against the configured issuer, audience, and
+// cached JWKS signing keys.
 type Validator struct {
 	issuer    string
 	audience  string
@@ -77,6 +94,8 @@ type Validator struct {
 	expires   time.Time
 }
 
+// NewValidator creates a JWT validator for one issuer, audience, and JWKS
+// endpoint. It rejects incomplete trust configuration.
 func NewValidator(issuer, audience, jwksURL string) (*Validator, error) {
 	if strings.TrimSpace(issuer) == "" || strings.TrimSpace(audience) == "" || strings.TrimSpace(jwksURL) == "" {
 		return nil, fmt.Errorf("JWT issuer, audience, and JWKS URL are required")
@@ -91,6 +110,8 @@ func NewValidator(issuer, audience, jwksURL string) (*Validator, error) {
 	}, nil
 }
 
+// Validate verifies a bearer token and returns a USER principal with its
+// scopes, global role, and warehouse grants.
 func (validator *Validator) Validate(ctx context.Context, authorization string) (Principal, error) {
 	claims, err := validator.validateClaims(ctx, authorization)
 	if err != nil {
@@ -119,6 +140,8 @@ func (validator *Validator) Validate(ctx context.Context, authorization string) 
 	return Principal{SubjectID: subject, Scopes: scopes, Role: role, Grants: grants}, nil
 }
 
+// ValidateWorker verifies a bearer token and returns the deliberately limited
+// WORKER principal accepted only by task-board media routes.
 func (validator *Validator) ValidateWorker(ctx context.Context, authorization string) (WorkerPrincipal, error) {
 	claims, err := validator.validateClaims(ctx, authorization)
 	if err != nil {
@@ -155,6 +178,8 @@ func (validator *Validator) ValidateWorker(ctx context.Context, authorization st
 	}, nil
 }
 
+// RequireTaskAccess confirms the worker token's sole warehouse and
+// worker.tasks scope before a task-board media operation proceeds.
 func (principal WorkerPrincipal) RequireTaskAccess(warehouseID uuid.UUID) error {
 	if warehouseID == uuid.Nil || warehouseID != principal.WarehouseID {
 		return ErrForbidden
@@ -165,6 +190,8 @@ func (principal WorkerPrincipal) RequireTaskAccess(warehouseID uuid.UUID) error 
 	return nil
 }
 
+// ValidateService verifies a bearer token and returns a single-scope SERVICE
+// principal for a private media operation.
 func (validator *Validator) ValidateService(ctx context.Context, authorization string) (ServicePrincipal, error) {
 	claims, err := validator.validateClaims(ctx, authorization)
 	if err != nil {
@@ -186,6 +213,8 @@ func (validator *Validator) ValidateService(ctx context.Context, authorization s
 	return ServicePrincipal{Subject: subject, ClientID: clientID, Scopes: scopes}, nil
 }
 
+// RequireExact requires an exact service subject/client ID and its one allowed
+// scope, preventing a broader token from reaching a private route.
 func (principal ServicePrincipal) RequireExact(clientID, scope string) error {
 	if principal.Subject != clientID || principal.ClientID != clientID || len(principal.Scopes) != 1 {
 		return ErrForbidden
@@ -222,6 +251,8 @@ func (validator *Validator) validateClaims(ctx context.Context, authorization st
 	return claims, nil
 }
 
+// Require verifies the requested USER scope and warehouse permission level;
+// global WMS administrators are authorized without an individual grant.
 func (principal Principal) Require(scope string, warehouseID uuid.UUID, level AccessLevel) error {
 	if _, ok := principal.Scopes[scope]; !ok {
 		return ErrForbidden

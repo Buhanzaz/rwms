@@ -4,6 +4,9 @@ import java.time.Duration;
 import java.util.UUID;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+/**
+ * Binds configuration for bounded, lease-based delivery of the logistics transactional outbox.
+ */
 @ConfigurationProperties("rwms.logistics.eventing.outbox")
 public class LogisticsOutboxProperties {
   private Duration relayDelay = Duration.ofSeconds(1);

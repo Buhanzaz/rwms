@@ -6,6 +6,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
+/** Groups public analytics transport records so persistence entities do not cross the HTTP boundary. */
 public final class AnalyticsApiModels {
   private AnalyticsApiModels() {}
 

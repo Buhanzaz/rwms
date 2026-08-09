@@ -8,6 +8,7 @@ import org.mapstruct.Mapping;
 import org.mapstruct.MappingConstants;
 import org.mapstruct.ReportingPolicy;
 
+/** Maps CatalogFurnitureReference at the maintenance boundary without applying a domain transition. */
 @Mapper(
     componentModel = MappingConstants.ComponentModel.SPRING,
     injectionStrategy = InjectionStrategy.CONSTRUCTOR,

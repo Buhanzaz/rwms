@@ -4,6 +4,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
+/** Boot entry point for the analytics read projection and its scheduled local gap-recovery work. */
 @EnableScheduling
 @SpringBootApplication
 public class AnalyticsServiceApplication {

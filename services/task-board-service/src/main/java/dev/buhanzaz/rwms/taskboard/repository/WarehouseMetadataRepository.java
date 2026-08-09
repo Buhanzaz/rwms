@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/** Stores the version-checked warehouse metadata projection used by task-board calculations. */
 public interface WarehouseMetadataRepository extends JpaRepository<WarehouseMetadata, UUID> {
   List<WarehouseMetadata> findAllByActiveTrueOrderByIdAsc();
 }

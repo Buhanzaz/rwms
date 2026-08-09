@@ -78,7 +78,7 @@ class DossierContractFixtureValidationTest {
                     "REPAIR",
                     0,
                     """
-                    {"repairId":"%s","rootRepairId":"%s","sourceRepairId":null,"estimateId":null,"warehouseId":"%s","rentalItemId":"%s","origin":"DIRECT_REPAIR","kind":"PRIMARY","executionState":"DRAFT","acceptanceState":"NOT_READY","dispatchDate":"2026-07-18","stages":[]}
+                    {"repairId":"%s","rootRepairId":"%s","sourceRepairId":null,"estimateId":null,"warehouseId":"%s","rentalItemId":"%s","origin":"DIRECT_REPAIR","kind":"PRIMARY","executionState":"DRAFT","acceptanceState":"NOT_READY","dispatchDate":"2026-07-18","priority":3,"stages":[]}
                     """
                         .formatted(AGGREGATE_ID, AGGREGATE_ID, WAREHOUSE_ID, CABIN_ID))),
             Map.entry(
@@ -150,7 +150,7 @@ class DossierContractFixtureValidationTest {
                     "BOARD_TASK",
                     0,
                     """
-                    {"boardTaskId":"%s","warehouseId":"%s","externalTaskId":null,"status":"ACTIVE","plannedDurationMinutes":null,"deadlineAt":null,"doneAt":null,"deleted":false}
+                    {"boardTaskId":"%s","warehouseId":"%s","externalTaskId":null,"status":"ACTIVE","scheduledDate":"2026-07-18","lane":"SCHEDULED","priority":3,"pinned":false,"plannedDurationMinutes":null,"deadlineAt":null,"doneAt":null,"deleted":false}
                     """
                         .formatted(AGGREGATE_ID, WAREHOUSE_ID))),
             Map.entry(
@@ -161,7 +161,7 @@ class DossierContractFixtureValidationTest {
                     "QUEUE_ENTRY",
                     0,
                     """
-                    {"queueEntryId":"%s","taskId":"%s","queueId":null,"routeIndex":0,"queuePosition":0,"entryType":"REAL","status":"WAITING","plannedDurationMinutes":null,"activeStartedAt":null,"pausedAt":null,"doneAt":null,"activeWorkSeconds":0,"pauseOrigin":null,"assignments":[],"timeEvents":[],"interruptions":[],"deleted":false}
+                    {"queueEntryId":"%s","taskId":"%s","queueId":null,"routeIndex":0,"queuePosition":0,"entryType":"REAL","status":"WAITING","plannedDurationMinutes":null,"activeStartedAt":null,"pausedAt":null,"doneAt":null,"activeWorkSeconds":0,"originalBudgetSeconds":null,"currentBudgetSeconds":null,"pauseOrigin":null,"assignments":[],"timeEvents":[],"interruptions":[],"deleted":false}
                     """
                         .formatted(AGGREGATE_ID, SECONDARY_ID))));
 

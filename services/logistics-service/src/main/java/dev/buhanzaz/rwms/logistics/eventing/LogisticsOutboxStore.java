@@ -9,11 +9,22 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Claims and completes local outbox records with aggregate-version ordering and durable lease recovery.
+ */
 @Repository
 @RequiredArgsConstructor
 public class LogisticsOutboxStore {
   private final JdbcTemplate jdbc;
 
+  /**
+   * Atomically leases the earliest deliverable outbox fact. The claim query preserves aggregate
+   * version ordering and makes an expired lease eligible for recovery by another relay pass.
+   *
+   * @param owner relay instance requesting the lease
+   * @param leaseDuration bounded time for the relay to finish the delivery attempt
+   * @return the claimed event and lease token, or empty when no event is deliverable
+   */
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public Optional<Claim> claim(String owner, Duration leaseDuration) {
     UUID leaseToken = UUID.randomUUID();

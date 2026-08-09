@@ -12,6 +12,9 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data repository for service-local inventory capture release persistence.
+ */
 public interface InventoryCaptureReleaseRepository
     extends JpaRepository<InventoryCaptureRelease, UUID> {
   @Lock(LockModeType.PESSIMISTIC_WRITE)

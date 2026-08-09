@@ -9,6 +9,7 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 
+/** Active qualification link between a worker and a worker class. */
 @Entity
 @Table(
     name = "worker_class_assignment",

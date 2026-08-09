@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.analytics.eventing;
 
+/** Names the exact analytics input and sanitized DLT destinations; callers must not derive alternate topic names. */
 public final class AnalyticsTopics {
   public static final String INPUT = "rwms.task-board.group-kpi-day.v1";
   public static final String CONSUMER_GROUP = "analytics-projection-v1";

@@ -6,11 +6,12 @@ import java.util.Set;
 import java.util.regex.Pattern;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+/** Binds the explicit allow-list and enablement flags that constrain platform Kafka publishing. */
 @ConfigurationProperties("rwms.platform.kafka")
 public class RwmsKafkaProperties {
 
     private static final Pattern DESTINATION = Pattern.compile(
-            "^rwms\\.[a-z0-9]+(?:-[a-z0-9]+)*\\.[a-z0-9]+(?:-[a-z0-9]+)*\\.v[1-9][0-9]*$");
+            "^rwms\\.[a-z0-9]+(?:-[a-z0-9]+)*\\.[a-z0-9]+(?:-[a-z0-9]+)*(?:\\.events)?\\.v[1-9][0-9]*$");
 
     private boolean enabled;
     private List<String> destinations = List.of();

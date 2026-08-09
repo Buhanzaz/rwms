@@ -2,6 +2,9 @@ package dev.buhanzaz.rwms.asset.service;
 
 import org.springframework.http.HttpStatus;
 
+/**
+ * Signals a asset workflow failure that the HTTP boundary maps to a stable response.
+ */
 public class AssetDependencyException extends RuntimeException {
   private final HttpStatus status;
 

@@ -9,6 +9,7 @@ import org.mapstruct.Mapping;
 import org.mapstruct.MappingConstants;
 import org.mapstruct.ReportingPolicy;
 
+/** Maps service-owned conversation and message records to public assistant response models without exposing tool persistence internals. */
 @Mapper(
     componentModel = MappingConstants.ComponentModel.SPRING,
     injectionStrategy = InjectionStrategy.CONSTRUCTOR,

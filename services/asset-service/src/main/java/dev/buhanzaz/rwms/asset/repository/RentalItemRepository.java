@@ -17,6 +17,9 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data repository for service-local rental item persistence.
+ */
 public interface RentalItemRepository extends JpaRepository<RentalItem, UUID> {
   boolean existsByRentalTypeId(UUID rentalTypeId);
 

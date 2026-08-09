@@ -9,7 +9,7 @@ import org.springframework.kafka.listener.CommonErrorHandler;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
-/** Keeps only the Stage 9 projection consumers that may be restarted after database recovery. */
+/** Keeps only dossier projection consumers that may be restarted after database recovery. */
 @Component
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")
 public class DossierKafkaConsumerLifecycleRegistry implements KafkaListenerContainerCustomizer {

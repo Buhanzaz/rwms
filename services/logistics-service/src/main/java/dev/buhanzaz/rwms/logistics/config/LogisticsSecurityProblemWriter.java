@@ -15,6 +15,9 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Writes canonical Problem Details for authentication and authorization failures at the logistics HTTP boundary.
+ */
 @Component
 public class LogisticsSecurityProblemWriter {
   private final ObjectMapper objectMapper;

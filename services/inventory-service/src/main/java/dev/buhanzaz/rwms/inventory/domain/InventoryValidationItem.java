@@ -9,6 +9,9 @@ import java.io.Serializable;
 import java.util.Objects;
 import java.util.UUID;
 
+/**
+ * JPA entity that persists inventory validation item in the inventory-owned database.
+ */
 @Entity
 @Table(name = "inventory_validation_item")
 @IdClass(InventoryValidationItem.Key.class)

@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+/** Creates sanitized, hash-only local DLT records for validation, processing and terminal-gap failures. */
 @Service
 public class AnalyticsDeadLetterService {
   private final AnalyticsSanitizedDeadLetterRepository repository;

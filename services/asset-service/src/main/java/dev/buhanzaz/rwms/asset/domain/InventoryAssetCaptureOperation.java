@@ -9,6 +9,9 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
 
+/**
+ * JPA entity that persists inventory asset capture operation in the asset-owned database.
+ */
 @Entity
 @Table(name = "inventory_asset_capture_operation")
 public class InventoryAssetCaptureOperation {

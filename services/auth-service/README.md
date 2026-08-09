@@ -1,152 +1,301 @@
 # RWMS Auth Service
 
-Spring Authorization Server for RWMS users, workers, OIDC clients, JWT/JWKS, and warehouse-access claims.
+[Русская версия](README.ru.md)
+
+`auth-service` is RWMS's stateful identity and authorization authority. It owns
+interactive users and workers, password credentials, global roles, warehouse
+access grants, OAuth/OIDC client registration, token minting, and JWT/JWKS
+publication.
+
+It is deliberately not a general business service: cabins, warehouse lifecycle,
+tasks, maintenance, inventory, logistics, and media remain owned by their
+respective domain services. Those services validate issued Bearer JWTs locally
+and make their own domain authorization decisions.
+
+## Why this service exists
+
+Identity and access policy must have one accountable owner. Letting each domain
+service store its own passwords, clients, roles, and warehouse grants would
+create duplicate accounts, contradictory permissions, inconsistent logout or
+revocation behaviour, and a much larger credential attack surface.
+
+| Problem | Auth-service responsibility | Result |
+| --- | --- | --- |
+| Clients need one trusted sign-in protocol | Run the standards-based OAuth 2.1/OIDC authorization server and publish JWKS | Panel and mobile clients integrate once; APIs validate signed JWTs without sharing passwords. |
+| Users and workers need distinct access models | Own USER/WORKER subjects, credentials, principal type, and allowed client types | A worker token cannot be issued through a user-only client, and vice versa. |
+| Services need stable authorization context | Mint subject, role, scope, audience, and warehouse-access claims | Downstream services can authorize locally without a synchronous call for every request. |
+| Administrators need safe user changes | Fence mutable commands with `expectedVersion`, protect SYSTEM_ADMIN invariants, and revoke stored authorizations when access is removed | Stale updates return `409`; a user cannot silently retain a newly removed session/authorization. |
+| Clients and secrets must evolve safely | Provision managed OAuth clients with explicit revisions and fail-closed validation | Security-relevant client configuration cannot drift silently between deployments. |
+| Identity changes must reach other services reliably | Persist authorization events and use transactional outbox/inbox/replay controls | Kafka delivery is recoverable and does not become the system of record. |
+
+## Ownership and boundaries
+
+Auth-service owns:
+
+- login, password verification and password changes for RWMS users and workers;
+- OIDC sessions, OAuth authorization, token issuance, signing keys, JWKS, and
+  registered clients;
+- global roles, mobile/rental entitlements, and per-user warehouse grants;
+- authorization events and their transactional delivery state.
+
+It does not own:
+
+- a warehouse's identity, status, timezone, or lifecycle — these belong to
+  `warehouse-service`;
+- business-level authorization inside another service's aggregate;
+- the panel's OIDC PKCE transaction or long-lived browser token storage;
+- public routing. Production clients reach it through
+  [`api-gateway-service`](../api-gateway-service/README.md); private
+  service-to-service calls use private addresses and service credentials.
+
+This boundary prevents the authorization service from becoming a cross-domain
+workflow engine or a shared database for product state.
+
+## How sign-in and token issuance work
+
+```text
+Panel / manager app / worker app
+          |
+          | Authorization Code + PKCE through public /auth/**
+          v
+API gateway (public edge; routing and transport policy only)
+          |
+          v
+auth-service: login, consent/session, OAuth/OIDC authorization server
+          |
+          +--> signed access token / ID token
+          +--> JWKS at the authorization-server endpoint
+          |
+          v
+Owning API service: local JWT validation + domain authorization
+```
+
+The service uses the Authorization Code flow with PKCE for public panel and
+mobile clients. Confidential internal clients use `client_credentials` with
+their deployment-provided secret. Client policy explicitly defines grants,
+authentication methods, scopes, audience, allowed principal type, redirect and
+post-logout URIs, allowed origins, PKCE policy, and token lifetimes.
+
+In production the public issuer is `<gateway>/auth`. The upstream service keeps
+its native authorization-server paths (`/oauth2/**`, `/login`, `/logout`, and
+`/api/**`); the gateway strips exactly one `/auth` prefix. The panel callback
+remains `/auth/callback` and is panel-owned, not forwarded to auth-service.
+
+User access and ID tokens include the canonical claims `sub`,
+`preferred_username`, `principal_type=USER`, `global_role`, and camel-case
+`rentalAccess`. The public contract, not this README, is authoritative for the
+exact claim and endpoint shape.
+
+## Public API and access rules
+
+The canonical contract is
+[`contracts/openapi/auth-service.yaml`](../../contracts/openapi/auth-service.yaml).
+It defines the public administration and current-user projection API; OAuth/OIDC
+authorization endpoints are standards-based.
+
+| Public endpoint | Purpose | Access rule |
+| --- | --- | --- |
+| `GET /api/admin/users` | List administrable users | USER JWT with `SYSTEM_ADMIN` or `WMS_ADMIN`. |
+| `POST /api/admin/users` | Create an administrable user | Same role; only `SYSTEM_ADMIN` may create a `SYSTEM_ADMIN` account. |
+| `GET /api/admin/users/{id}` | Read one administrative user projection | USER JWT with `SYSTEM_ADMIN` or `WMS_ADMIN`. |
+| `PUT /api/admin/users/{id}` | Version-fenced profile and authorization update | Same role; `expectedVersion` is required and `WMS_ADMIN` cannot manage `SYSTEM_ADMIN`. |
+| `GET /api/users/me` | Read the active caller's current access projection | USER Bearer JWT. |
+
+The service returns shared Problem Details for invalid, unauthenticated,
+forbidden, not-found, and conflict cases. Administrative user profile, password,
+and warehouse-access mutations use optimistic concurrency. A `409` means the
+caller must refresh authoritative state before retrying its command.
+
+`SYSTEM_ADMIN` and `WMS_ADMIN` have all-warehouse access in the current-user
+projection; other roles receive their active grants with their effective access
+level. `rentalAccess` is a persisted entitlement, not a fact that callers should
+infer from a role. When omitted during creation it defaults by role; an omitted
+update preserves its current persisted value.
+
+## Safety properties
+
+- Passwords and password hashes are never returned in public responses or
+  events. Delivering an initial or reset worker credential to a physical worker
+  is a separate operational contract.
+- Disabling a user blocks new form login and new token minting from its session.
+  Already minted self-contained access tokens remain valid only until their
+  short configured lifetime (five minutes in the current managed-client policy).
+- Stored authorizations and consents are removed when a password, relevant
+  access entitlement, or client access is revoked. Client-specific revocation is
+  used where a change affects only one client audience.
+- Physical user deletion is deliberately fail-closed. Disabling is the supported
+  operation until the absence of external audit history and active sessions can
+  be proven.
+- The last active `SYSTEM_ADMIN` cannot be disabled, demoted, or deleted; a
+  non-system administrator cannot create or manage a system-administrator
+  account.
+- Incoming names cannot collide with reserved OAuth client identifiers.
+
+These rules put durable access invariants where the credential and token owner
+can enforce them transactionally, rather than relying on UI checks or every
+downstream service to repeat them.
+
+## OAuth client lifecycle
+
+Managed clients are declared under `rwms.auth.oauth.clients`. Provisioning first
+validates the complete configuration and then takes a PostgreSQL advisory lock.
+An unchanged configuration is byte-stable: the registered-client ID, issued
+timestamp, and encoded secret remain intact.
+
+Security-relevant configuration or secret changes require a monotonically
+increasing `revision`. `revoke-authorizations: true` with a new revision is the
+explicit choice when stored authorizations and consents must be removed.
+`enabled: false` retains the client and audit rows but makes lookup fail closed.
+Once a managed client exists, removing it from configuration is a startup error;
+disable it explicitly instead.
+
+This is preferable to recreating clients at every startup: stable client IDs
+preserve valid state, while a deliberate revision makes security changes
+reviewable and prevents accidental reactivation after a deployment rollback.
+
+## Warehouse-grant validation
+
+Warehouse identity belongs to `warehouse-service`. Auth-service therefore does
+not create or alter warehouse records. It accepts only canonical UUIDs plus the
+reviewed `spb` and `msk` aliases, then optionally verifies distinct requested
+warehouses against Warehouse Service before persisting a grant or worker
+credential.
+
+`rwms.auth.warehouse-validation.enabled` is `false` by default. In that state,
+the no-op port introduces no Warehouse Service URL, token URL, client secret, or
+network call; known aliases are still canonicalized locally.
+
+When enabled, the adapter obtains a bounded `client_credentials` token with
+exactly `warehouse.read` and calls only the private singular existence endpoint.
+It requires strict JSON, an exact matching canonical ID, and an active
+warehouse. OAuth, network, malformed-response, missing, inactive, and invalid
+identifier failures reject the complete mutation. JWT reads and token issuance
+do not call Warehouse Service.
+
+The adapter has no redirect following and no token cache. This keeps the default
+deployment independent of Warehouse Service while making the enabled integration
+explicit, bounded, and fail-closed.
+
+## Eventing and recovery
+
+PostgreSQL authorization projections and the event store are authoritative;
+Kafka is at-least-once transport. Authorization and worker-access changes are
+recorded together with their event stream and transactional outbox. Consumers
+use inbox/deduplication and version-aware replay semantics so a duplicate,
+out-of-order, or temporarily unavailable broker cannot become a second source
+of truth.
+
+The service contains replay, shadow-reconciliation, quarantine, and audit
+components to prove or recover projection parity. These are operational recovery
+mechanisms, not public command APIs and not a licence to repair business state
+from an arbitrary Kafka message.
+
+## Why this design is preferable
+
+| Alternative | Problem | Chosen design |
+| --- | --- | --- |
+| Each service stores its own users and passwords | Duplicated credentials, conflicting roles, and no single revocation owner. | One identity authority; other services validate JWTs and own their domain authorization. |
+| A gateway owns login, tokens, and clients | Makes the public transport edge stateful and couples it to identity persistence. | Gateway routes `/auth/**`; auth-service owns OIDC state and signing material. |
+| Introspect every token at every API call | Adds latency and makes each domain request depend on auth-service availability. | Locally validate signed, short-lived JWTs using JWKS. |
+| Infer permissions only from roles | Cannot represent an explicit persisted rental entitlement or scoped warehouse grants. | Include role and entitlement claims plus effective warehouse access. |
+| Accept stale administrative commands | One administrator can silently overwrite another's change. | Require `expectedVersion` and reject stale writes with `409`. |
+| Publish directly to Kafka in the business transaction | A database commit and broker publish can diverge during failure. | Persist event and outbox state transactionally; relay and recover delivery separately. |
 
 ## Local development
 
-Start PostgreSQL from the repository root, then run the service with the explicit dev profile:
+Start PostgreSQL from the repository root, then run the service with the
+explicit development profile:
 
 ```powershell
 docker compose up -d auth-db
 .\gradlew.bat :services:auth-service:bootRun --args="--spring.profiles.active=dev"
 ```
 
-On an empty development database, application startup runs Flyway migration
-V2 before JPA validation. A non-empty database without
-`flyway_schema_history` is rejected; adopt it only through the documented
-version-2 preflight and explicit baseline workflow.
+On an empty development database, startup runs Flyway migration V2 before JPA
+validation. A non-empty database without `flyway_schema_history` is rejected;
+adopt it only through the documented version-2 preflight and explicit baseline
+workflow.
 
-The dev profile enables `admin` / `admin`, the local task-board client secret, and an ephemeral RSA signing key. These defaults are disabled in the base configuration.
-It also overrides the public issuer to `http://localhost:9000`; production uses
-the gateway issuer ending in `/auth`.
+The development profile enables the local `rwms_auth` PostgreSQL connection,
+`admin` / `admin`, the local task-board client secret, and an ephemeral RSA
+signing key. These defaults are disabled in base configuration. It also sets the
+direct local issuer to `http://localhost:9000`; production uses the gateway
+issuer ending in `/auth`.
 
-The Gradle `processResources` task runs `npm ci` and `npm run build` in `ui/`, then packages `ui/dist` into `BOOT-INF/classes/static`. The authorization server serves that build from `GET /login`; `POST /login` remains Spring Security's form-login processing endpoint.
+`processResources` runs `npm ci` and `npm run build` in `ui/`, then packages
+`ui/dist` under `BOOT-INF/classes/static`. The authorization server serves the
+result at `GET /login`; `POST /login` remains Spring Security form-login
+processing.
 
 ## Production requirements
 
-Set at least:
+Provide at least:
 
-- `AUTH_DEV_DEFAULT_CREDENTIALS=false`
-- `AUTH_BOOTSTRAP_ADMIN_USERNAME`
-- `AUTH_BOOTSTRAP_ADMIN_PASSWORD` (at least 12 characters)
-- `TASK_BOARD_CLIENT_SECRET`
-- `AUTH_WAREHOUSE_CLIENT_SECRET` when Warehouse Service validation is activated
-- `AUTH_SIGNING_KEY_STORE` (PKCS12)
-- `AUTH_SIGNING_KEY_STORE_PASSWORD`
-- `AUTH_SIGNING_KEY_ALIAS`
-- database credentials and public HTTPS issuer/origins/redirect URIs
+- `AUTH_DEV_DEFAULT_CREDENTIALS=false`;
+- `AUTH_BOOTSTRAP_ADMIN_USERNAME` and a 12+-character
+  `AUTH_BOOTSTRAP_ADMIN_PASSWORD`;
+- `TASK_BOARD_CLIENT_SECRET` and every enabled client secret;
+- `AUTH_SIGNING_KEY_STORE`, `AUTH_SIGNING_KEY_STORE_PASSWORD`, and
+  `AUTH_SIGNING_KEY_ALIAS` for the persistent PKCS12 signing key;
+- `AUTH_DB_URL`, `AUTH_DB_USERNAME`, and `AUTH_DB_PASSWORD` with a non-loopback
+  PostgreSQL endpoint and deployment-specific credentials;
+- a public HTTPS issuer/base, allowed origins, and registered redirect URIs.
 
-The service refuses to start outside dev/test when required bootstrap credentials, client secret, or the persistent signing keystore are absent.
-Production session cookies are secure by default and forwarded headers are interpreted through Spring's framework strategy. The dev profile disables the secure-cookie flag for local HTTP only. The default worker UI origin is `http://localhost:8082`; port 8081 belongs to task-board-service.
+Outside dev/test, startup refuses missing bootstrap credentials, client secrets,
+signing material, and missing or development-default datasource settings. The
+datasource guard runs after profile configuration is loaded and before the
+application context can initialize Flyway, JPA, or a `DataSource`; its errors
+name only the required variable and never print credential values. Production
+session cookies are secure by default. The framework processes trusted
+forwarding metadata; the public gateway is responsible for deriving it from
+configured public values rather than accepting client-supplied forwarding
+headers.
 
-OAuth clients are declared under `rwms.auth.oauth.clients`. Each client declares
-its revision, grants, authentication methods, scopes, audience, allowed
-principal type, redirect/logout URIs, CORS origins, PKCE policy and access-token
-TTL. Confidential clients name an environment variable containing their secret;
-the secret value is never part of configuration metadata or logs.
+To activate Warehouse Service validation in one coordinated deployment:
 
-Provisioning validates the complete list before taking a PostgreSQL transaction
-advisory lock. An unchanged configuration is byte-stable and preserves the
-registered-client ID, issued timestamp and encoded secret. Security-relevant
-configuration or secret changes require a monotonically increasing `revision`.
-Set `revoke-authorizations: true` with a new revision only when stored
-authorizations/consents must be deleted. `enabled: false` retains the client and
-audit rows but makes lookup fail closed. Once a managed client exists, omitting
-it is a startup error; disable it explicitly.
+1. Set `AUTH_WAREHOUSE_CLIENT_ENABLED=true` and increase
+   `AUTH_WAREHOUSE_CLIENT_REVISION`.
+2. Provide `AUTH_WAREHOUSE_CLIENT_SECRET` from the deployment secret store.
+3. Set `AUTH_WAREHOUSE_VALIDATION_ENABLED=true`,
+   `WAREHOUSE_SERVICE_INTERNAL_BASE_URL`, and `AUTH_WAREHOUSE_TOKEN_URI`.
+4. Optionally set positive `AUTH_WAREHOUSE_CONNECT_TIMEOUT` and
+   `AUTH_WAREHOUSE_READ_TIMEOUT` values; both are bounded to 30 seconds.
 
-Self-contained JWTs minted before client/user disable or explicit revocation
-remain valid until their five-minute expiry. Rotate
-`TASK_BOARD_CLIENT_SECRET` with a revision increment and deploy auth-service and
-task-board-service with the same new value.
+## Schema and safe changes
 
-## Warehouse grant validation
+Flyway is the only active schema migration and checksum authority. Hibernate is
+configured with `ddl-auto=validate`; it never creates, updates, or drops the
+schema. Use the immutable service-local migrations under
+`src/main/resources/db/migration/`. The detailed existing-database adoption
+procedure is in [database/flyway/README.md](database/flyway/README.md).
 
-`rwms.auth.warehouse-validation.enabled` is `false` by default. In that state
-auth-service creates a no-op local port: no Warehouse Service URL, token URL or
-client secret is required, and login/token/read paths make no warehouse call.
-Known `spb`/`msk` inputs are still stored as their canonical UUID; other
-non-UUID grant and worker warehouse identifiers are rejected locally.
+When changing this service:
 
-W1 activation is one coordinated deployment configuration change:
+1. Start with the canonical OpenAPI or event contract and the owner rule; do not
+   invent a gateway-only or client-only identity transition.
+2. Keep passwords, password hashes, client secrets, refresh tokens, and
+   signing-key material out of public DTOs, events, logs, and documentation.
+3. Preserve the public/private address split: browser traffic uses gateway
+   `/auth/**`; internal client-credentials traffic uses private service routes.
+4. For a state or authorization change, preserve optimistic concurrency,
+   event-stream ordering, transactional outbox/inbox, and replay safety.
+5. Evolve a database change through immutable Flyway migration and JPA
+   validation; never rely on Hibernate schema mutation.
 
-- set `AUTH_WAREHOUSE_CLIENT_ENABLED=true` and
-  `AUTH_WAREHOUSE_CLIENT_REVISION=2`;
-- provide `AUTH_WAREHOUSE_CLIENT_SECRET` from the deployment secret store;
-- set `AUTH_WAREHOUSE_VALIDATION_ENABLED=true`,
-  `WAREHOUSE_SERVICE_INTERNAL_BASE_URL`, and `AUTH_WAREHOUSE_TOKEN_URI`;
-- optionally set positive bounded `AUTH_WAREHOUSE_CONNECT_TIMEOUT` and
-  `AUTH_WAREHOUSE_READ_TIMEOUT` values (both must be at most 30 seconds).
+Useful verification commands from the repository root are:
 
-The confidential client uses only `client_secret_basic`, `client_credentials`,
-scope `warehouse.read`, and audience `rwms-services`. Enabling it without the
-revision increase fails provisioning. Enabled mutation requests obtain that
-token and call only singular
-`GET /api/internal/warehouse/v1/warehouses/{warehouseId}/existence`. All distinct
-warehouses are checked before any grant insert/delete/touch. Invalid IDs,
-inactive/missing warehouses, malformed strict JSON, OAuth failures and network
-failures reject the complete mutation. JWT reads and token issuance never call
-Warehouse Service.
+```bash
+bash ./gradlew :services:auth-service:test
+bash ./gradlew :services:auth-service:javadoc
+```
 
-The adapter deliberately uses a conditional JDK `HttpClient` rather than adding
-unconditional OAuth client auto-configuration to the Authorization Server. It
-performs the standard client-credentials exchange, does not follow redirects,
-caches no token, and exists only when validation is enabled. This keeps the
-pre-W1 process free of URL, secret and startup dependencies.
+## Primary references
 
-## Schema migrations
-
-Flyway is the only active auth schema migration, version and checksum authority.
-Hibernate uses only `ddl-auto=validate` in base, development and test profiles;
-it never creates, updates or drops the schema. Liquibase is not a runtime
-dependency.
-
-A new empty database is installed by the immutable cumulative migration
-`src/main/resources/db/migration/V2__auth_schema.sql`. Start the application or
-run `flyway migrate`; do not baseline a new database.
-
-An existing post-F1C database must first pass
-`database/flyway/verify-version-2.sql`, then an operator explicitly runs Flyway
-`baseline` with `baselineVersion=2`, followed by `migrate` and `validate`.
-`baselineOnMigrate` remains false in every profile. The exact operator sequence
-is documented in `database/flyway/README.md`.
-
-The old repository-level custom runner, `database/baseline`,
-`database/releases`, `rwms_schema_history` and `databasechangelog*` are retained
-unchanged as read-only migration evidence. They are no longer the active
-production migration path.
-
-Historical `V0001__adopt-auth-schema` supports both an empty PostgreSQL database and the
-verified F0 schema. It does not create, alter or delete `databasechangelog*`;
-those historical tables remain unused evidence. The runner owns only
-`public.rwms_schema_history`.
-
-Historical `V0002__canonicalize-warehouse-identifiers` maps only the reviewed
-case-insensitive aliases `spb` and `msk`, and normalizes exact UUID text for USER
-grants and WORKER subjects. It locks tables in a fixed order and performs all
-unmapped-value, collision and version-overflow checks before updates. Changed
-rows retain IDs, increment optimistic versions and update timestamps. There is
-no reverse-alias compensating SQL; rollback is the verified pre-migration F0/F1
-backup because reverse reconstruction would be ambiguous.
-
-## Gateway prefix contract
-
-The public production issuer is `<gateway>/auth`, while auth-service keeps its
-internal endpoint paths (`/oauth2/**`, `/login`, `/logout`, `/api/**`). The
-gateway must strip exactly one `/auth` prefix and provide trusted forwarded
-headers including `X-Forwarded-Prefix: /auth`. Login UI form, CSRF, static image
-and bundled asset paths are relative so they work both through the prefix and
-directly in the dev profile.
-
-The existing panel callback is `/auth/callback`. F3 must register this exact
-callback route with higher priority to the panel (or otherwise exclude it from
-the auth-service `/auth/**` route). It must never forward the callback to
-auth-service. This explicit exclusion is the compatibility choice for F1; a
-callback rename requires a later coordinated panel transition.
-
-## Deliberate constraints
-
-- Physical user deletion is fail-closed because this service cannot yet prove the absence of external audit history and all active sessions. Disable the user instead.
-- Worker passwords and password hashes are never returned. Delivery of initial/reset credentials to the physical worker is a separate operational contract and remains `UNKNOWN`.
-- Disabling a user prevents form login and prevents an existing session from minting another token. Already issued browser access tokens remain valid until their five-minute expiry; public browser clients receive no refresh token.
-- `WMS_ADMIN` can administer ordinary users but cannot create, assign, or manage `SYSTEM_ADMIN` accounts. Only `SYSTEM_ADMIN` can do that; this is a fail-safe target hardening because the exact legacy privilege hierarchy is `UNKNOWN`.
-- Admin profile, password, and warehouse-access mutations require `expectedVersion`; stale commands return HTTP 409.
+- [Canonical public API](../../contracts/openapi/auth-service.yaml)
+- [Authorization event schemas](../../contracts/events/)
+- [Service configuration](src/main/resources/application.yaml)
+- [Authorization-server configuration](src/main/java/dev/buhanzaz/rwms/auth/config/AuthorizationServerConfiguration.java)
+- [User administration owner](src/main/java/dev/buhanzaz/rwms/auth/service/UserAdministrationService.java)
+- [Eventing implementation](src/main/java/dev/buhanzaz/rwms/auth/eventing/)
+- [Current project architecture](../../docs/project-knowledge/architecture.md)
+- [Identity and access ownership](../../docs/project-knowledge/domain-logic.md)

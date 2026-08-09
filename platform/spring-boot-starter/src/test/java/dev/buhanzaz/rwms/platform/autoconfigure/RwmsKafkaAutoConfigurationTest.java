@@ -43,6 +43,20 @@ class RwmsKafkaAutoConfigurationTest {
     }
 
     @Test
+    void acceptsTheCanonicalRentalInquiryEventsSubfamily() {
+        contextRunner
+                .withPropertyValues(
+                        "rwms.platform.kafka.enabled=true",
+                        "rwms.platform.kafka.destinations[0]=rwms.logistics.rental-inquiry.events.v1")
+                .run(context -> {
+                    assertThat(context).hasSingleBean(RwmsKafkaProperties.class);
+                    assertThat(context).hasSingleBean(RwmsKafkaOutboundEventPublisher.class);
+                    assertThat(context.getBean(RwmsKafkaProperties.class).destinations())
+                            .containsExactly("rwms.logistics.rental-inquiry.events.v1");
+                });
+    }
+
+    @Test
     void supportsKafkaConsumersThatDoNotPublishCanonicalDomainEvents() {
         contextRunner
                 .withPropertyValues(
@@ -77,6 +91,13 @@ class RwmsKafkaAutoConfigurationTest {
                 .withPropertyValues(
                         "rwms.platform.kafka.enabled=true",
                         "rwms.platform.kafka.destinations[0]=rwms.task-board.board-task.created.v1")
+                .run(context -> assertThat(context).hasFailed());
+
+        contextRunner
+                .withPropertyValues(
+                        "rwms.platform.kafka.enabled=true",
+                        "rwms.platform.kafka.destinations[0]="
+                                + "rwms.logistics.return.v1.logistics-service.dlt")
                 .run(context -> assertThat(context).hasFailed());
     }
 }

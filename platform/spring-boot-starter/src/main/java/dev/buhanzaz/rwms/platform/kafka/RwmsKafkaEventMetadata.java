@@ -8,6 +8,7 @@ import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/** Validates the technical metadata required to publish a canonical V2 aggregate-keyed event through the platform publisher. */
 public record RwmsKafkaEventMetadata(
         int envelopeVersion,
         UUID eventId,

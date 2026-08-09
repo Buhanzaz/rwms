@@ -13,6 +13,7 @@ import dev.buhanzaz.rwms.logistics.order.security.OrderActor;
 import dev.buhanzaz.rwms.logistics.order.security.OrderAuthorizer;
 import dev.buhanzaz.rwms.logistics.order.service.OrderClientService;
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
@@ -24,8 +25,12 @@ import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Owns rental inquiry transitions and persists the local state from which presentations are built.
+ */
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
@@ -35,7 +40,7 @@ public class RentalInquiryService {
   private final RentalInquiryResponseMapper mapper;
   private final LogisticsDependencyGateway dependencies;
   private final OrderAuthorizer access;
-  private final RentalSettingsService settings;
+  private final LogisticsTransactionLock transactionLock;
 
   @Transactional
   public RentalInquiryResponse create(
@@ -47,7 +52,7 @@ public class RentalInquiryService {
       throw new IllegalArgumentException(
           "Idempotency-Key must equal the assistant conversation ID");
     }
-    inquiries.acquireTransactionLock("rental-inquiry:conversation:" + request.conversationId());
+    transactionLock.acquire("rental-inquiry:conversation:" + request.conversationId());
     RentalInquiry existing =
         inquiries.findByConversationId(request.conversationId()).orElse(null);
     if (existing != null) {
@@ -58,7 +63,7 @@ public class RentalInquiryService {
 
     OrderClient client;
     if (request.clientId() != null) {
-      client = clients.required(request.clientId());
+      client = clients.required(actor, request.clientId());
     } else {
       client = clients.createForOrder(actor, idempotencyKey, request.newClient()).client();
     }
@@ -78,6 +83,8 @@ public class RentalInquiryService {
     return mapper.toResponse(requiredOwned(actor, inquiryId));
   }
 
+  /** Reads asset-owned facets only after the owner check finishes without a local transaction. */
+  @Transactional(propagation = Propagation.NEVER)
   public CabinFacetsResponse facets(OrderActor actor, UUID inquiryId) {
     RentalInquiry inquiry = requiredOwned(actor, inquiryId);
     requireActive(inquiry);
@@ -116,7 +123,14 @@ public class RentalInquiryService {
                 facets.cabinTypes(),
                 facets.finishes(),
                 facets.dimensions(),
-                facets.categories()));
+                facets.categories(),
+                facets.characteristics(),
+                facets.typeDimensions().stream()
+                    .map(
+                        relation ->
+                            new CabinTypeDimensionRelation(
+                                relation.cabinType(), relation.dimensions()))
+                    .toList()));
       } catch (LogisticsDependencyException exception) {
         throw dependencyProblem(exception);
       }
@@ -124,73 +138,8 @@ public class RentalInquiryService {
     return new CabinFacetsResponse(List.copyOf(response));
   }
 
-  @Transactional
-  public CabinSearchResponse search(
-      OrderActor actor, UUID inquiryId, CabinSearchRequest request) {
-    RentalInquiry inquiry =
-        inquiries
-            .findForUpdate(inquiryId)
-            .orElseThrow(() -> notFound("Диалог аренды не найден"));
-    requireOwner(actor, inquiry);
-    requireActive(inquiry);
-    access.requireWarehouseRead(actor, request.warehouseId());
-    try {
-      LogisticsDependencyGateway.WarehouseIdentity warehouse =
-          dependencies.readWarehouseIdentity(request.warehouseId());
-      if (!warehouse.active()) {
-        throw new OrderProblemException(
-            HttpStatus.CONFLICT, "WAREHOUSE_UNAVAILABLE", "Склад недоступен");
-      }
-      inquiry.selectWarehouse(request.warehouseId(), now());
-      inquiries.saveAndFlush(inquiry);
-      OffsetDateTime expiresAt =
-          now().plusMinutes(settings.chatSelectionHoldMinutes(actor));
-      LogisticsDependencyGateway.CabinSearchResult result =
-          dependencies.searchAvailableCabins(
-              request.warehouseId(),
-              inquiry.getId(),
-              expiresAt,
-              actor.subjectId(),
-              actor.role(),
-              request.groups().stream()
-                  .map(
-                      group ->
-                          new LogisticsDependencyGateway.CabinSearchGroup(
-                              group.cabinType(),
-                              group.finish(),
-                              group.dimensions(),
-                              group.category(),
-                              group.characteristics(),
-                              group.linoleum(),
-                              group.quantity()))
-                  .toList());
-      return new CabinSearchResponse(
-          result.warehouseId(),
-          result.expiresAt(),
-          result.groups().stream()
-              .map(
-                  group ->
-                      new CabinSearchGroupResult(
-                          new CabinSearchGroup(
-                              group.group().cabinType(),
-                              group.group().finish(),
-                              group.group().dimensions(),
-                              group.group().category(),
-                              group.group().characteristics(),
-                              group.group().linoleum(),
-                              group.group().quantity()),
-                          group.cabins().stream().map(RentalInquiryService::cabin).toList()))
-              .toList());
-    } catch (LogisticsDependencyException exception) {
-      throw dependencyProblem(exception);
-    } catch (IllegalStateException exception) {
-      throw new OrderProblemException(
-          HttpStatus.CONFLICT,
-          "INQUIRY_WAREHOUSE_LOCKED",
-          "Для одного диалога можно использовать только один склад");
-    }
-  }
-
+  /** Reads asset-owned availability without holding a logistics database transaction open. */
+  @Transactional(propagation = Propagation.NEVER)
   public CabinAvailabilityResponse availability(
       OrderActor actor, UUID inquiryId, CabinAvailabilityRequest request) {
     RentalInquiry inquiry = requiredOwned(actor, inquiryId);
@@ -261,25 +210,6 @@ public class RentalInquiryService {
           "CONVERSATION_CLIENT_IMMUTABLE",
           "Клиента существующего диалога нельзя изменить");
     }
-  }
-
-  private static AvailableCabinResponse cabin(
-      LogisticsDependencyGateway.AvailableCabin source) {
-    return new AvailableCabinResponse(
-        source.id(),
-        source.version(),
-        source.warehouseId(),
-        source.status(),
-        source.number(),
-        source.rentalType(),
-        source.dimensions(),
-        source.finishing(),
-        source.category(),
-        source.characteristics(),
-        source.linoleum(),
-        source.passport(),
-        source.tags(),
-        source.updatedAt());
   }
 
   private static List<UUID> uniqueIds(List<UUID> values) {

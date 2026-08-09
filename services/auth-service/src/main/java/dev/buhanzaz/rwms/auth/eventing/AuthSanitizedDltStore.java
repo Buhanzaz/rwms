@@ -12,6 +12,13 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Durable store for safe dead-letter metadata produced by auth Kafka consumers.
+ *
+ * <p>Records are idempotent by destination, message checksum, and failure code. Claims use
+ * expiring leases and tokens so multiple instances can retry delivery without storing or
+ * forwarding the rejected source payload.
+ */
 @Repository
 @RequiredArgsConstructor
 public class AuthSanitizedDltStore {
@@ -19,6 +26,14 @@ public class AuthSanitizedDltStore {
     private final JdbcTemplate jdbc;
     private final ObjectMapper objectMapper;
 
+    /**
+     * Idempotently queues a canonical, safe DLT body for later broker delivery.
+     *
+     * @param destination fixed sanitized-DLT destination
+     * @param messageSha256 checksum of the rejected source message
+     * @param failureCode stable non-sensitive rejection classification
+     * @param safeBody allow-listed DLT metadata; never the original message
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void enqueue(
             String destination,
@@ -51,6 +66,13 @@ public class AuthSanitizedDltStore {
         return UUID.nameUUIDFromBytes(identity.getBytes(StandardCharsets.UTF_8));
     }
 
+    /**
+     * Atomically leases one ready or expired sanitized-DLT record.
+     *
+     * @param owner relay instance acquiring the lease
+     * @param leaseDuration maximum time the lease remains valid
+     * @return the fenced claim, or empty when no record is ready
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Optional<Claim> claim(String owner, Duration leaseDuration) {
         UUID leaseToken = UUID.randomUUID();
@@ -83,6 +105,12 @@ public class AuthSanitizedDltStore {
                 .findFirst();
     }
 
+    /**
+     * Marks a claimed DLT record published after broker acknowledgement.
+     *
+     * @param claim record and lease token to settle
+     * @return {@code true} when the claim still owned the record
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public boolean published(Claim claim) {
         return jdbc.update(
@@ -97,6 +125,14 @@ public class AuthSanitizedDltStore {
                 == 1;
     }
 
+    /**
+     * Records a failed DLT delivery and retries it with bounded exponential backoff.
+     *
+     * <p>After the fourth failed attempt the durable record remains in {@code FAILED} for explicit
+     * operator action instead of retrying indefinitely.
+     *
+     * @param claim record whose owned lease failed to publish
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void failed(Claim claim) {
         int attempts = claim.attemptCount() + 1;
@@ -127,6 +163,13 @@ public class AuthSanitizedDltStore {
                 claim.leaseToken());
     }
 
+    /**
+     * Requeues a failed DLT record using its observed attempt count as an optimistic fence.
+     *
+     * @param id DLT record identifier
+     * @param expectedAttemptCount attempt count observed by the operator
+     * @return {@code true} when the record was still eligible for requeueing
+     */
     @Transactional
     public boolean requeue(UUID id, int expectedAttemptCount) {
         return jdbc.update(
@@ -159,6 +202,16 @@ public class AuthSanitizedDltStore {
         }
     }
 
+    /**
+     * Immutable lease of a sanitized DLT record.
+     *
+     * @param id durable DLT identifier
+     * @param destination Kafka destination for safe metadata
+     * @param safeBody canonical safe metadata body
+     * @param bodySha256 checksum used before publication
+     * @param attemptCount failures recorded before this claim
+     * @param leaseToken token that fences settlement operations
+     */
     public record Claim(
             UUID id,
             String destination,

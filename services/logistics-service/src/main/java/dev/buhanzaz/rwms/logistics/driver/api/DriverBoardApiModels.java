@@ -8,6 +8,9 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * Defines transport models for the authenticated driver board HTTP boundary.
+ */
 public final class DriverBoardApiModels {
   private DriverBoardApiModels() {}
 

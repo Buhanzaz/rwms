@@ -12,6 +12,10 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.stereotype.Component;
 
+/**
+ * Binds asset event output channels at startup and unbinds them at shutdown when Kafka transport
+ * is enabled, keeping the transactional-outbox relay independent of static channel declarations.
+ */
 @Component
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")
 public class AssetKafkaOutputBindingInitializer implements SmartInitializingSingleton, DisposableBean {

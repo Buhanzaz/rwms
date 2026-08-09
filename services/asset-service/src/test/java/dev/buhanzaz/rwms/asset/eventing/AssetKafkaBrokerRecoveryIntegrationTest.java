@@ -166,14 +166,18 @@ class AssetKafkaBrokerRecoveryIntegrationTest {
     return value == null ? 0 : value;
   }
 
+  /** Bounds the probe shutdown so a deliberately paused broker cannot stall the recovery gate. */
   private boolean brokerAvailable() {
     Properties configuration = new Properties();
     configuration.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers());
-    try (AdminClient admin = AdminClient.create(configuration)) {
+    AdminClient admin = AdminClient.create(configuration);
+    try {
       admin.describeCluster().nodes().get(5, TimeUnit.SECONDS);
       return true;
     } catch (Exception exception) {
       return false;
+    } finally {
+      admin.close(Duration.ofSeconds(1));
     }
   }
 

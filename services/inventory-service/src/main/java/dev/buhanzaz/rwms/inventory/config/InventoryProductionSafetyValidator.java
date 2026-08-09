@@ -8,6 +8,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
+/**
+ * Production startup guard for inventory dependencies, Kafka and fail-closed authentication.
+ */
 @Component
 public final class InventoryProductionSafetyValidator implements SmartInitializingSingleton {
   private final Environment environment;

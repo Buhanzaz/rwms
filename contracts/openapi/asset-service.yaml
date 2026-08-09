@@ -1392,22 +1392,59 @@ paths:
           content: { application/json: { schema: { $ref: '#/components/schemas/CabinFacetResponse' } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /api/internal/asset/v1/logistics/cabin-catalog:
+    get:
+      operationId: readPresentationCabinCatalog
+      description: >-
+        Requires SERVICE logistics-service with exactly asset.logistics. Returns a bounded
+        facts-only warehouse page searchable by cabin number, type, finish, dimensions, category,
+        characteristics or linoleum. It includes current status but neither checks availability nor
+        creates, renews or releases a presentation hold.
+      parameters:
+        - { $ref: '#/components/parameters/WarehouseIdQuery' }
+        - name: query
+          in: query
+          required: true
+          schema: { type: string, maxLength: 255 }
+        - name: page
+          in: query
+          required: true
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: size
+          in: query
+          required: true
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: Facts-only cabin page; no availability or hold semantics are implied.
+          content: { application/json: { schema: { $ref: '#/components/schemas/CabinCatalogPage' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/internal/asset/v1/logistics/cabin-searches:
     post:
       operationId: searchPresentationCabins
       description: >-
         Requires SERVICE logistics-service with exactly asset.logistics. Matches currently
-        available rentable cabins for each requested group and creates or renews this inquiry's
-        short-lived holds; a cabin is returned at most once across the groups in a response.
+        available rentable cabins for each requested group and mutates this inquiry's short-lived
+        holds atomically. REPLACE releases every previous inquiry hold not selected by this exact
+        search, including when no cabin matches. Explicit APPEND preserves and renews the previous
+        selection and returns only newly selected cabins. A cabin is returned at most once across
+        the groups in a response. The
+        mandatory Idempotency-Key is scoped to the exact logistics-service subject and
+        logistics.cabin-search request fingerprint. An identical retry replays the frozen response;
+        the same key with another request returns 409.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody:
         required: true
         content: { application/json: { schema: { $ref: '#/components/schemas/CabinSearchRequest' } } }
       responses:
         '200':
           description: Available cabin matches, grouped in request order.
+          headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
           content: { application/json: { schema: { $ref: '#/components/schemas/CabinSearchResponse' } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/internal/asset/v1/logistics/cabin-availability:
     post:
       operationId: checkPresentationCabinAvailability
@@ -2563,6 +2600,13 @@ components:
           minItems: 1
           maxItems: 20
           items: { $ref: '#/components/schemas/CabinSearchGroup' }
+        resultMode:
+          type: [string, 'null']
+          enum: [APPEND, REPLACE, null]
+          default: REPLACE
+          description: >-
+            Missing or null is replacement-safe REPLACE. APPEND is honored only when explicitly
+            supplied by the caller.
     CabinAvailabilityRequest:
       type: object
       additionalProperties: false
@@ -2578,13 +2622,28 @@ components:
     CabinFacetResponse:
       type: object
       additionalProperties: false
-      required: [warehouseId, cabinTypes, finishes, dimensions, categories]
+      required: [warehouseId, cabinTypes, finishes, dimensions, categories, characteristics, typeDimensions]
       properties:
         warehouseId: { type: string, format: uuid }
         cabinTypes: { type: array, items: { type: string, minLength: 1, maxLength: 255 } }
         finishes: { type: array, items: { type: string, minLength: 1, maxLength: 255 } }
         dimensions: { type: array, items: { type: string, minLength: 1, maxLength: 255 } }
         categories: { type: array, items: { type: string, minLength: 1, maxLength: 255 } }
+        characteristics: { type: array, items: { type: string, minLength: 1, maxLength: 255 } }
+        typeDimensions:
+          type: array
+          items: { $ref: '#/components/schemas/CabinTypeDimensions' }
+    CabinTypeDimensions:
+      type: object
+      additionalProperties: false
+      required: [cabinType, dimensions]
+      properties:
+        cabinType: { type: string, minLength: 1, maxLength: 255 }
+        dimensions:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { type: string, minLength: 1, maxLength: 255 }
     AvailableCabin:
       type: object
       additionalProperties: false
@@ -2604,6 +2663,19 @@ components:
         passport: { $ref: '#/components/schemas/Passport' }
         tags: { type: array, items: { type: string } }
         updatedAt: { type: string, format: date-time }
+    CabinCatalogPage:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, content, page, size, totalElements, totalPages]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        content:
+          type: array
+          items: { $ref: '#/components/schemas/AvailableCabin' }
+        page: { type: integer, format: int64, minimum: 0 }
+        size: { type: integer, format: int64, minimum: 1, maximum: 100 }
+        totalElements: { type: integer, format: int64, minimum: 0 }
+        totalPages: { type: integer, format: int64, minimum: 0 }
     CabinSearchGroupResult:
       type: object
       additionalProperties: false

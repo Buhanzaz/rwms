@@ -16,6 +16,9 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Component;
 
+/**
+ * Authorization boundary for rental-order operations, including role and warehouse access checks.
+ */
 @Component
 public class OrderAuthorizer {
   private static final UUID DEVELOPMENT_SUBJECT =

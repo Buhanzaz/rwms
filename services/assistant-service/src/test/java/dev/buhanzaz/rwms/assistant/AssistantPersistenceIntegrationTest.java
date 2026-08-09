@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.buhanzaz.rwms.assistant.api.AssistantApiModels;
 import dev.buhanzaz.rwms.assistant.domain.AssistantConversation;
+import dev.buhanzaz.rwms.assistant.domain.AssistantClarificationKind;
 import dev.buhanzaz.rwms.assistant.domain.AssistantMessage;
 import dev.buhanzaz.rwms.assistant.domain.AssistantToolCall;
 import dev.buhanzaz.rwms.assistant.domain.AssistantToolCallStatus;
@@ -13,15 +14,26 @@ import dev.buhanzaz.rwms.assistant.eventing.RentalInquiryBookedEventParser;
 import dev.buhanzaz.rwms.assistant.integration.LogisticsClient;
 import dev.buhanzaz.rwms.assistant.mapper.AssistantResponseMapperImpl;
 import dev.buhanzaz.rwms.assistant.repository.AssistantConversationRepository;
+import dev.buhanzaz.rwms.assistant.repository.AssistantClarificationQuestionRepository;
 import dev.buhanzaz.rwms.assistant.repository.AssistantEventInboxRepository;
 import dev.buhanzaz.rwms.assistant.repository.AssistantMessageRepository;
 import dev.buhanzaz.rwms.assistant.repository.AssistantToolCallRepository;
 import dev.buhanzaz.rwms.assistant.service.AssistantConversationService;
+import dev.buhanzaz.rwms.assistant.service.AssistantConversationCreationStore;
+import dev.buhanzaz.rwms.assistant.service.AssistantClarificationService;
 import dev.buhanzaz.rwms.assistant.service.AssistantNotFoundException;
+import dev.buhanzaz.rwms.assistant.service.AssistantSelectionService;
 import dev.buhanzaz.rwms.assistant.service.AssistantToolDefinitions;
+import jakarta.persistence.EntityManager;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
@@ -30,10 +42,13 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.testcontainers.containers.PostgreSQLContainer;
 import tools.jackson.databind.ObjectMapper;
 
+/** Exercises Flyway/JPA persistence, durable chat state and idempotent creation boundaries. */
 @SpringBootTest(
     classes = AssistantServiceApplication.class,
     webEnvironment = SpringBootTest.WebEnvironment.NONE,
@@ -55,7 +70,10 @@ class AssistantPersistenceIntegrationTest {
   @Autowired AssistantConversationRepository conversations;
   @Autowired AssistantMessageRepository messages;
   @Autowired AssistantToolCallRepository toolCalls;
+  @Autowired AssistantClarificationQuestionRepository clarificationQuestions;
   @Autowired AssistantEventInboxRepository inbox;
+  @Autowired EntityManager entityManager;
+  @Autowired AssistantConversationCreationStore creationStore;
 
   @DynamicPropertySource
   static void postgresProperties(DynamicPropertyRegistry registry) {
@@ -97,16 +115,22 @@ class AssistantPersistenceIntegrationTest {
     RentalInquiryBookedEventParser parser = new RentalInquiryBookedEventParser(new ObjectMapper());
     UUID eventId = UUID.randomUUID();
     UUID orderId = UUID.randomUUID();
-    String event =
-        """
-        {"eventId":"%s","eventType":"logistics.rental-inquiry.booked.v1",
-        "occurredAt":"2026-07-27T12:00:00Z","rentalInquiryId":"%s",
-        "conversationId":"%s","orderId":"%s"}
-        """
-            .formatted(eventId, inquiryId, conversationId, orderId);
+    String event = bookingEnvelope(eventId, inquiryId, conversationId, orderId);
+    RentalInquiryBookedEventParser.ParsedEvent parsed =
+        parser.parse(
+            "rwms.logistics.rental-inquiry.events.v1",
+            0,
+            42,
+            conversationId.toString(),
+            event);
 
-    assertThat(archive.archive(parser.parse(event))).isTrue();
-    assertThat(archive.archive(parser.parse(event))).isFalse();
+    assertThat(archive.stage(parsed))
+        .isEqualTo(RentalInquiryArchiveService.StageOutcome.READY);
+    assertThat(archive.claimNextAttempt(eventId).attemptNumber()).isOne();
+    assertThat(archive.process(parsed))
+        .isEqualTo(RentalInquiryArchiveService.ProcessingOutcome.PROCESSED);
+    assertThat(archive.stage(parsed))
+        .isEqualTo(RentalInquiryArchiveService.StageOutcome.DUPLICATE);
 
     assertThat(conversations.findById(conversationId).orElseThrow().isArchived()).isTrue();
     assertThat(messages.findByConversationIdOrderByCreatedAtAscIdAsc(conversationId))
@@ -139,6 +163,49 @@ class AssistantPersistenceIntegrationTest {
   }
 
   @Test
+  @Transactional(propagation = Propagation.NOT_SUPPORTED)
+  void concurrentConversationCreationKeepsRemoteCallsOutsideTransactionsAndCreatesOneLocalRow() {
+    UUID owner = UUID.randomUUID();
+    UUID clientId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID conversationId = UUID.randomUUID();
+    CountingLogisticsClient logistics = new CountingLogisticsClient(inquiryId, clientId);
+    AssistantConversationService service = service(logistics);
+    AssistantApiModels.CreateConversationRequest request =
+        new AssistantApiModels.CreateConversationRequest(conversationId, clientId, null);
+    CountDownLatch start = new CountDownLatch(1);
+    var executor = Executors.newFixedThreadPool(2);
+    try {
+      CompletableFuture<AssistantApiModels.CreateConversationResponse> first =
+          CompletableFuture.supplyAsync(
+              () -> createAfter(start, service, owner, request), executor);
+      CompletableFuture<AssistantApiModels.CreateConversationResponse> second =
+          CompletableFuture.supplyAsync(
+              () -> createAfter(start, service, owner, request), executor);
+      start.countDown();
+
+      List<AssistantApiModels.CreateConversationResponse> results =
+          List.of(first.join(), second.join());
+      assertThat(results)
+          .extracting(result -> result.conversation().id())
+          .containsOnly(conversationId);
+      assertThat(results)
+          .extracting(result -> result.inquiry().id())
+          .containsOnly(inquiryId);
+      assertThat(conversations.findAll())
+          .filteredOn(conversation -> conversation.getId().equals(conversationId))
+          .hasSize(1);
+      assertThat(logistics.creates.get()).isBetween(1, 2);
+      assertThat(logistics.createTransactionStates)
+          .isNotEmpty()
+          .containsOnly(false);
+    } finally {
+      executor.shutdownNow();
+      conversations.findById(conversationId).ifPresent(conversations::delete);
+    }
+  }
+
+  @Test
   void newClientReplayIsRevalidatedByTheOwningLogisticsInquiry() {
     UUID owner = UUID.randomUUID();
     UUID clientId = UUID.randomUUID();
@@ -154,6 +221,9 @@ class AssistantPersistenceIntegrationTest {
                 "LEGAL_ENTITY",
                 "ООО Север",
                 "+79990000000",
+                "Иван Петров",
+                null,
+                null,
                 null));
 
     service.create(owner, request, "current-user-bearer");
@@ -161,6 +231,148 @@ class AssistantPersistenceIntegrationTest {
 
     assertThat(logistics.creates.get()).isEqualTo(2);
     assertThat(conversations.count()).isEqualTo(1);
+  }
+
+  @Test
+  void independentOsbAndLdspQuestionsPersistAndCanBeAnsweredInReverseOrderAfterReload() {
+    UUID owner = UUID.randomUUID();
+    UUID conversationId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    conversations.saveAndFlush(
+        AssistantConversation.create(
+            conversationId, owner, UUID.randomUUID(), inquiryId, "PERSON", "Client summary"));
+    AssistantMessage turnMessage =
+        messages.saveAndFlush(
+            AssistantMessage.user(conversationId, "Нужны бытовки ОСБ и ЛДСП"));
+    AssistantToolCall toolCall =
+        toolCalls.saveAndFlush(
+            AssistantToolCall.start(
+                conversationId,
+                turnMessage.getId(),
+                "clarifications-osb-ldsp",
+                AssistantToolDefinitions.REQUEST_CABIN_CLARIFICATIONS,
+                new ObjectMapper().createObjectNode()));
+    String osbBranch = "search:" + UUID.randomUUID() + ":osb:type";
+    String ldspBranch = "search:" + UUID.randomUUID() + ":ldsp:type";
+    AssistantClarificationService clarificationService =
+        new AssistantClarificationService(clarificationQuestions);
+    List<AssistantApiModels.ClarificationQuestionResponse> created =
+        clarificationService.create(
+            conversationId,
+            turnMessage.getId(),
+            toolCall.getId(),
+            warehouseId,
+            List.of(
+                new AssistantClarificationService.QuestionDraft(
+                    osbBranch,
+                    AssistantClarificationKind.CABIN_TYPE,
+                    "Какой тип бытовки нужен для ОСБ?",
+                    null,
+                    List.of(
+                        new AssistantClarificationService.OptionDraft("Модуль", "Модуль"),
+                        new AssistantClarificationService.OptionDraft(
+                            "Пост охраны", "Пост охраны"))),
+                new AssistantClarificationService.QuestionDraft(
+                    ldspBranch,
+                    AssistantClarificationKind.CABIN_TYPE,
+                    "Какой тип бытовки нужен для ЛДСП?",
+                    null,
+                    List.of(
+                        new AssistantClarificationService.OptionDraft("Модуль", "Модуль"),
+                        new AssistantClarificationService.OptionDraft(
+                            "Пост охраны", "Пост охраны")))));
+    entityManager.flush();
+    entityManager.clear();
+
+    List<AssistantApiModels.ClarificationQuestionResponse> reloadedPending =
+        clarificationService.current(conversationId);
+    assertThat(reloadedPending)
+        .extracting(
+            AssistantApiModels.ClarificationQuestionResponse::branchKey,
+            AssistantApiModels.ClarificationQuestionResponse::status)
+        .containsExactlyInAnyOrder(
+            org.assertj.core.groups.Tuple.tuple(osbBranch, "PENDING"),
+            org.assertj.core.groups.Tuple.tuple(ldspBranch, "PENDING"));
+    AssistantApiModels.ClarificationQuestionResponse reloadedOsb =
+        reloadedPending.stream()
+            .filter(question -> osbBranch.equals(question.branchKey()))
+            .findFirst()
+            .orElseThrow();
+    AssistantApiModels.ClarificationQuestionResponse reloadedLdsp =
+        reloadedPending.stream()
+            .filter(question -> ldspBranch.equals(question.branchKey()))
+            .findFirst()
+            .orElseThrow();
+    assertThat(reloadedOsb.options()).containsExactlyElementsOf(created.get(0).options());
+    assertThat(reloadedLdsp.options()).containsExactlyElementsOf(created.get(1).options());
+
+    AssistantConversationService conversationService =
+        service(new CountingLogisticsClient(inquiryId, UUID.randomUUID()));
+    AssistantApiModels.ClarificationOptionResponse ldspChoice =
+        reloadedLdsp.options().get(1);
+    AssistantConversationService.TurnStart ldspAnswer =
+        conversationService.beginTurn(
+            owner,
+            conversationId,
+            new AssistantApiModels.TurnRequest(
+                null,
+                new AssistantApiModels.ClarificationAnswerRequest(
+                    reloadedLdsp.id(), ldspChoice.id())));
+    assertThat(ldspAnswer.userMessage())
+        .contains("Какой тип бытовки нужен для ЛДСП?", ldspChoice.label())
+        .doesNotContain("search:", ldspBranch);
+    assertThat(clarificationService.current(conversationId))
+        .extracting(
+            AssistantApiModels.ClarificationQuestionResponse::branchKey,
+            AssistantApiModels.ClarificationQuestionResponse::status)
+        .containsExactlyInAnyOrder(
+            org.assertj.core.groups.Tuple.tuple(osbBranch, "PENDING"),
+            org.assertj.core.groups.Tuple.tuple(ldspBranch, "ANSWERED"));
+    entityManager.flush();
+    entityManager.clear();
+
+    AssistantApiModels.ClarificationQuestionResponse osbReloaded =
+        clarificationService.current(conversationId).stream()
+            .filter(question -> osbBranch.equals(question.branchKey()))
+            .findFirst()
+            .orElseThrow();
+    AssistantApiModels.ClarificationOptionResponse osbChoice = osbReloaded.options().getFirst();
+    AssistantConversationService.TurnStart osbAnswer =
+        conversationService.beginTurn(
+            owner,
+            conversationId,
+            new AssistantApiModels.TurnRequest(
+                null,
+                new AssistantApiModels.ClarificationAnswerRequest(
+                    osbReloaded.id(), osbChoice.id())));
+    entityManager.flush();
+    entityManager.clear();
+
+    assertThat(osbAnswer.userMessage())
+        .contains("Какой тип бытовки нужен для ОСБ?", osbChoice.label())
+        .doesNotContain("search:", osbBranch);
+    assertThat(clarificationService.current(conversationId))
+        .extracting(
+            AssistantApiModels.ClarificationQuestionResponse::branchKey,
+            AssistantApiModels.ClarificationQuestionResponse::status)
+        .containsExactlyInAnyOrder(
+            org.assertj.core.groups.Tuple.tuple(osbBranch, "ANSWERED"),
+            org.assertj.core.groups.Tuple.tuple(ldspBranch, "ANSWERED"));
+    assertThat(
+            messages.findByConversationIdOrderByCreatedAtAscIdAsc(conversationId).stream()
+                .map(AssistantMessage::getContent)
+                .toList())
+        .anySatisfy(
+            content ->
+                assertThat(content)
+                    .contains("Какой тип бытовки нужен для ЛДСП?", ldspChoice.label())
+                    .doesNotContain("search:", ldspBranch))
+        .anySatisfy(
+            content ->
+                assertThat(content)
+                    .contains("Какой тип бытовки нужен для ОСБ?", osbChoice.label())
+                    .doesNotContain("search:", osbBranch));
   }
 
   @Test
@@ -319,6 +531,10 @@ class AssistantPersistenceIntegrationTest {
 
     assertThat(result.path("data").path("expiresAt").asText())
         .isEqualTo("2030-07-27T12:10:00Z");
+    assertThat(result.path("filterSuggestions").propertyNames())
+        .containsExactlyInAnyOrder(
+            "cabinTypes", "finishes", "dimensions", "categories", "characteristics");
+    assertThat(result.path("filterSuggestions").path("cabinTypes")).isEmpty();
     assertThat(groups.size()).isEqualTo(2);
     assertThat(groups.get(0).path("group").path("cabinType").asText()).isEqualTo("БК-1");
     assertThat(groups.get(0).path("cabins").get(0).path("id").asText())
@@ -684,20 +900,70 @@ class AssistantPersistenceIntegrationTest {
     toolCalls.saveAndFlush(call);
   }
 
+  private static String bookingEnvelope(
+      UUID eventId, UUID inquiryId, UUID conversationId, UUID orderId) {
+    return
+        """
+        {
+          "envelopeVersion":2,
+          "eventId":"%s",
+          "eventType":"logistics.rental-inquiry.booked.v1",
+          "eventVersion":1,
+          "occurredAt":"2026-07-27T12:00:00Z",
+          "recordedAt":"2026-07-27T12:00:01Z",
+          "producer":"logistics-service",
+          "aggregateType":"RENTAL_INQUIRY",
+          "aggregateId":"%s",
+          "aggregateVersion":1,
+          "correlation":{"correlationId":"%s","causationId":null},
+          "actorRef":null,
+          "payload":{"conversationId":"%s","orderId":"%s"}
+        }
+        """
+            .formatted(
+                eventId,
+                inquiryId,
+                conversationId,
+                conversationId,
+                orderId);
+  }
+
   private AssistantConversationService service(LogisticsClient logistics) {
+    ObjectMapper objectMapper = new ObjectMapper();
     return new AssistantConversationService(
         conversations,
+        creationStore,
         messages,
         toolCalls,
         logistics,
-        new AssistantResponseMapperImpl());
+        new AssistantResponseMapperImpl(),
+        new AssistantClarificationService(clarificationQuestions),
+        new AssistantSelectionService(logistics, objectMapper));
   }
 
+  private static AssistantApiModels.CreateConversationResponse createAfter(
+      CountDownLatch start,
+      AssistantConversationService service,
+      UUID owner,
+      AssistantApiModels.CreateConversationRequest request) {
+    try {
+      start.await();
+      return service.create(owner, request, "current-user-bearer");
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("Conversation creation test was interrupted", interrupted);
+    }
+  }
+
+  /** Deterministic logistics fake that records creation calls and transaction state. */
   private static final class CountingLogisticsClient implements LogisticsClient {
     private final UUID inquiryId;
     private final UUID clientId;
     private final AtomicInteger creates = new AtomicInteger();
     private Optional<ClientPresentation> clientPresentation = Optional.empty();
+    private final List<Boolean> createTransactionStates = new CopyOnWriteArrayList<>();
+    private final UUID selectedWarehouseId = UUID.randomUUID();
+    private final UUID selectedRentalItemId = UUID.randomUUID();
 
     private CountingLogisticsClient(UUID inquiryId, UUID clientId) {
       this.inquiryId = inquiryId;
@@ -709,7 +975,9 @@ class AssistantPersistenceIntegrationTest {
         UUID conversationId,
         UUID requestedClientId,
         AssistantApiModels.NewClientRequest newClient,
-        String bearerToken) {
+      String bearerToken) {
+      createTransactionStates.add(
+          TransactionSynchronizationManager.isActualTransactionActive());
       creates.incrementAndGet();
       return new InquiryBootstrap(inquiryId, clientId, "ACTIVE", "PERSON", "Client summary");
     }
@@ -722,7 +990,62 @@ class AssistantPersistenceIntegrationTest {
 
     @Override
     public tools.jackson.databind.JsonNode searchAvailableCabins(
-        UUID rentalInquiryId, CabinSearch search, String bearerToken) {
+        UUID rentalInquiryId,
+        UUID idempotencyKey,
+        CabinSearch search,
+        String bearerToken) {
+      return new ObjectMapper().createObjectNode();
+    }
+
+    @Override
+    public CabinSelection readCabinSelection(UUID rentalInquiryId, String bearerToken) {
+      return new CabinSelection(
+          inquiryId,
+          selectedWarehouseId,
+          OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(15),
+          List.of(selectedRentalItemId),
+          List.of(
+              new ObjectMapper()
+                  .createObjectNode()
+                  .put("id", selectedRentalItemId.toString())
+                  .put("number", "CAB-1")));
+    }
+
+    @Override
+    public CabinSelection replaceCabinSelection(
+        UUID rentalInquiryId,
+        UUID idempotencyKey,
+        UUID warehouseId,
+        List<UUID> rentalItemIds,
+        String bearerToken) {
+      List<tools.jackson.databind.JsonNode> items =
+          rentalItemIds.stream()
+              .map(
+                  id ->
+                      (tools.jackson.databind.JsonNode)
+                          new ObjectMapper()
+                              .createObjectNode()
+                              .put("id", id.toString())
+                              .put("number", "CAB-1"))
+              .toList();
+      return new CabinSelection(
+          inquiryId,
+          warehouseId,
+          rentalItemIds.isEmpty()
+              ? null
+              : OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(15),
+          rentalItemIds,
+          items);
+    }
+
+    @Override
+    public tools.jackson.databind.JsonNode lookupCabinCatalog(
+        UUID rentalInquiryId,
+        UUID warehouseId,
+        String query,
+        int page,
+        int size,
+        String bearerToken) {
       return new ObjectMapper().createObjectNode();
     }
 

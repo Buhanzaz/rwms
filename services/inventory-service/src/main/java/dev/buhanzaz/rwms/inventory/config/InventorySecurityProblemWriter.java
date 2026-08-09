@@ -10,6 +10,9 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Writes inventory authentication and authorization failures as safe Problem Details responses.
+ */
 @Component
 final class InventorySecurityProblemWriter {
   private final ObjectMapper mapper;

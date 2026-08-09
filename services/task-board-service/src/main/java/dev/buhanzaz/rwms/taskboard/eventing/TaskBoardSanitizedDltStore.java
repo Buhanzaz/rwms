@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
 
+/** Owns durable enqueue, lease, retry, and terminal state for task-board sanitized DLT records. */
 @Repository
 @RequiredArgsConstructor
 public class TaskBoardSanitizedDltStore {

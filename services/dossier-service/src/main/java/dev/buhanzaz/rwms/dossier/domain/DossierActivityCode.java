@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.dossier.domain;
 
+/** Defines the public, sanitized vocabulary of cabin activities that the dossier may expose. */
 public enum DossierActivityCode {
   CABIN_CREATED,
   CABIN_PASSPORT_CHANGED,
@@ -18,6 +19,8 @@ public enum DossierActivityCode {
   REPAIR_STAGE_COMPLETED,
   REPAIR_PENDING_ACCEPTANCE,
   REPAIR_REWORK_CREATED,
+  REPAIR_TRANSFER_PREPARED,
+  REPAIR_TRANSFERRED,
   REPAIR_ACCEPTED,
   REPAIR_WRITTEN_OFF,
   INVENTORY_FINDING_ADDED,

@@ -10,6 +10,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Component;
 
+/** Enforces JWT principal, scope and warehouse-view rules before analytics evidence is queried. */
 @Component
 public final class AnalyticsAuthorizer {
   private final boolean developmentBypass;
@@ -21,6 +22,10 @@ public final class AnalyticsAuthorizer {
     developmentBypass = configuredBypass && environment.matchesProfiles("dev") && !production;
   }
 
+  /**
+   * Requires a USER principal with {@code rwms.read} and either an administrative role or a
+   * warehouse claim granting at least VIEW; malformed claims grant no access.
+   */
   public void requireWarehouseView(Jwt jwt, UUID warehouseId) {
     if (developmentBypass) return;
     if (jwt == null

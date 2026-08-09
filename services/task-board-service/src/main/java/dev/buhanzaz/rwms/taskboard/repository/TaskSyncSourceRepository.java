@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/** Resolves a task's exact source service, external identity, and idempotency fingerprint. */
 public interface TaskSyncSourceRepository extends JpaRepository<TaskSyncSource, UUID> {
   boolean existsByBoardTaskIdAndSourceClientId(UUID boardTaskId, String sourceClientId);
 

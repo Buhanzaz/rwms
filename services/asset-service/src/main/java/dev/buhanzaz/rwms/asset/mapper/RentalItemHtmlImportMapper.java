@@ -6,6 +6,10 @@ import org.mapstruct.InjectionStrategy;
 import org.mapstruct.Mapper;
 import org.mapstruct.ReportingPolicy;
 
+/**
+ * MapStruct mapper for rental item html import boundary representations.
+ * It maps data without performing a domain transition.
+ */
 @Mapper(
     componentModel = "spring",
     injectionStrategy = InjectionStrategy.CONSTRUCTOR,

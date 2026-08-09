@@ -20,6 +20,8 @@ import (
 
 const taskBoardOwnerProofRecordLimit = 1 << 20
 
+// TaskBoardEntryOwnerProofConsumer materializes task-board ownership and
+// worker-access evidence for worker-scoped media routes.
 type TaskBoardEntryOwnerProofConsumer struct {
 	repository  taskBoardEntryOwnerProofPersistence
 	client      kafkaConsumerClient
@@ -33,6 +35,8 @@ type taskBoardEntryOwnerProofPersistence interface {
 	RecordTaskBoardEntryOwnerProofDLT(context.Context, string) error
 }
 
+// NewTaskBoardEntryOwnerProofKafkaConsumer creates a manual-commit client only
+// for the canonical task-board entry owner-proof topic and group.
 func NewTaskBoardEntryOwnerProofKafkaConsumer(brokers []string, group, topic string) (*kgo.Client, error) {
 	if len(brokers) == 0 || group != persistence.TaskBoardEntryOwnerProofConsumer ||
 		topic != persistence.TaskBoardEntryOwnerProofTopic {
@@ -41,6 +45,8 @@ func NewTaskBoardEntryOwnerProofKafkaConsumer(brokers []string, group, topic str
 	return newTaskBoardEntryOwnerProofKafkaClient(brokers, group, topic)
 }
 
+// NewTaskBoardEntryOwnerProofKafkaConsumerForIsolatedTest binds unique physical
+// Kafka resources while keeping the parsed contract canonical.
 func NewTaskBoardEntryOwnerProofKafkaConsumerForIsolatedTest(brokers []string, group, physicalTopic string) (*kgo.Client, error) {
 	if len(brokers) == 0 || strings.TrimSpace(group) == "" || strings.TrimSpace(physicalTopic) == "" ||
 		group == persistence.TaskBoardEntryOwnerProofConsumer || physicalTopic == persistence.TaskBoardEntryOwnerProofTopic {
@@ -62,6 +68,8 @@ func newTaskBoardEntryOwnerProofKafkaClient(brokers []string, group, topic strin
 	)
 }
 
+// NewTaskBoardEntryOwnerProofConsumer constructs the production task-board
+// entry owner-proof consumer.
 func NewTaskBoardEntryOwnerProofConsumer(repository *persistence.Repository, client *kgo.Client, logger *slog.Logger) *TaskBoardEntryOwnerProofConsumer {
 	return newTaskBoardEntryOwnerProofConsumer(repository, client, logger, persistence.TaskBoardEntryOwnerProofTopic)
 }
@@ -76,6 +84,8 @@ func newTaskBoardEntryOwnerProofConsumer(repository taskBoardEntryOwnerProofPers
 	}
 }
 
+// Run validates, persists, and acknowledges task-board owner facts until ctx
+// is canceled or a dependency failure stops this runtime process.
 func (consumer *TaskBoardEntryOwnerProofConsumer) Run(ctx context.Context) error {
 	for {
 		fetches, pollTimedOut := pollKafkaFetches(ctx, consumer.client, consumer.pollTimeout)
@@ -127,6 +137,7 @@ func (consumer *TaskBoardEntryOwnerProofConsumer) handle(ctx context.Context, re
 	return err
 }
 
+// Close stops the underlying task-board owner-proof Kafka client.
 func (consumer *TaskBoardEntryOwnerProofConsumer) Close() { consumer.client.Close() }
 
 type taskBoardOwnerProofPayload struct {

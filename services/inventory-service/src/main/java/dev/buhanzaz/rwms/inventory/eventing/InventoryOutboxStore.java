@@ -8,6 +8,9 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Lease-based persistence boundary for ordered inventory transactional-outbox delivery.
+ */
 @Repository
 public class InventoryOutboxStore {
   private final JdbcTemplate jdbc;
@@ -16,6 +19,10 @@ public class InventoryOutboxStore {
     this.jdbc = jdbc;
   }
 
+  /**
+   * Claims one ordered inventory aggregate head in an independent transaction. The issued lease
+   * token is required by later state changes so duplicate relay workers cannot finalize a lost claim.
+   */
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public Optional<Claim> claim(String owner, Duration leaseDuration) {
     UUID leaseToken = UUID.randomUUID();

@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.taskboard.kpi;
 
+/** Raw duration and task-count evidence consumed by the versioned KPI formula. */
 public record KpiRawComponents(
     long completedBudgetSeconds,
     long earnedRemainingSeconds,

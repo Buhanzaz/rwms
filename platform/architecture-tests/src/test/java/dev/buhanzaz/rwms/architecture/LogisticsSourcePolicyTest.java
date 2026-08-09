@@ -169,6 +169,27 @@ class LogisticsSourcePolicyTest {
   }
 
   @Test
+  void rejectsJdbcInTheWarehousePersistencePackageOutsideItsExactAdapters() throws Exception {
+    write(
+        "src/main/java/dev/buhanzaz/rwms/logistics/service/persistence/UnauthorizedJdbcPersistence.java",
+        """
+        package dev.buhanzaz.rwms.logistics.service.persistence;
+
+        import org.springframework.jdbc.core.JdbcTemplate;
+
+        final class UnauthorizedJdbcPersistence {
+          private JdbcTemplate jdbc;
+        }
+        """);
+
+    AssertionError failure =
+        assertThrows(
+            AssertionError.class,
+            () -> LogisticsSourcePolicy.assertSourceBoundarySafe(temporaryDirectory));
+    assertTrue(failure.getMessage().contains("low-level SQL is restricted"));
+  }
+
+  @Test
   void rejectsArbitraryNativeSqlInABusinessRepository() throws Exception {
     write(
         "src/main/java/dev/buhanzaz/rwms/logistics/repository/UnsafeBusinessRepository.java",

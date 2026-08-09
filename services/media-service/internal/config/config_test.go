@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestLoadRequiresExplicitResourceAndUploadLimits(t *testing.T) {
 	t.Setenv("MEDIA_RUNTIME_PROFILE", "production")
@@ -51,6 +54,9 @@ func TestLoadAcceptsCompleteFailClosedConfiguration(t *testing.T) {
 	if configuration.MaxUploadBytes != 1048576 || len(configuration.AllowedMIMETypes) != 2 {
 		t.Fatalf("unexpected configuration: %#v", configuration)
 	}
+	if configuration.ManagementAddress != "127.0.0.1:9095" {
+		t.Fatalf("management address = %q, want default loopback", configuration.ManagementAddress)
+	}
 	if configuration.InventoryTopic != "rwms.inventory.session.v1" ||
 		configuration.InventoryOwnerGroup != "media-service-inventory-owner-v1" ||
 		configuration.InventoryOwnerDLT != "rwms.inventory.session.v1.media-service-inventory-owner-v1.dlt" {
@@ -63,6 +69,42 @@ func TestLoadAcceptsCompleteFailClosedConfiguration(t *testing.T) {
 	if configuration.TaskBoardEntryOwnerProofTopic != "rwms.task-board.entry-owner-proof.v1" ||
 		configuration.TaskBoardEntryOwnerProofGroup != "media-service-task-board-entry-owner-proof-v1" {
 		t.Fatalf("task-board owner proof Kafka configuration = %#v", configuration)
+	}
+}
+
+func TestLoadRejectsUnsafeManagementListenerAddress(t *testing.T) {
+	addresses := []string{
+		":9095",
+		"0.0.0.0:9095",
+		"[::]:9095",
+		"localhost:9095",
+		"10.0.0.8:9095",
+		"127.0.0.1:0",
+		"127.0.0.1:65536",
+	}
+	for _, address := range addresses {
+		t.Run(address, func(t *testing.T) {
+			setCompleteConfiguration(t)
+			t.Setenv("MEDIA_RUNTIME_PROFILE", "production")
+			t.Setenv("MEDIA_MANAGEMENT_ADDRESS", address)
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), "MEDIA_MANAGEMENT_ADDRESS") {
+				t.Fatalf("Load() error = %v, want loopback address rejection", err)
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsExplicitIPv6LoopbackManagementListener(t *testing.T) {
+	setCompleteConfiguration(t)
+	t.Setenv("MEDIA_RUNTIME_PROFILE", "production")
+	t.Setenv("MEDIA_MANAGEMENT_ADDRESS", "[::1]:9095")
+	configuration, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if configuration.ManagementAddress != "[::1]:9095" {
+		t.Fatalf("management address = %q", configuration.ManagementAddress)
 	}
 }
 

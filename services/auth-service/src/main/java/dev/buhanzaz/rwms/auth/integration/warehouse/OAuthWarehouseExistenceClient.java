@@ -17,6 +17,13 @@ import tools.jackson.core.StreamReadFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Warehouse-validation adapter that uses a narrowly scoped OAuth client-credentials token to call
+ * Warehouse Service's private existence endpoint.
+ *
+ * <p>The adapter validates both OAuth and existence response shapes strictly, follows no redirects,
+ * and keeps no token cache. It is instantiated only when warehouse validation is enabled.
+ */
 final class OAuthWarehouseExistenceClient implements WarehouseExistenceClient {
 
     private static final Set<String> EXISTENCE_FIELDS = Set.of("id", "version", "active");
@@ -26,6 +33,13 @@ final class OAuthWarehouseExistenceClient implements WarehouseExistenceClient {
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
 
+    /**
+     * Creates a strict-response adapter from already validated integration properties.
+     *
+     * @param properties validated private endpoints, credentials, and bounded timeouts
+     * @param objectMapper base mapper used to create a duplicate-key-detecting mapper
+     * @param httpClient client with the configured bounded connection timeout
+     */
     OAuthWarehouseExistenceClient(
             WarehouseValidationProperties.Validated properties,
             ObjectMapper objectMapper,
@@ -35,6 +49,12 @@ final class OAuthWarehouseExistenceClient implements WarehouseExistenceClient {
         this.httpClient = httpClient;
     }
 
+    /**
+     * Obtains one exact-scope access token and verifies every requested warehouse before the caller
+     * may persist its mutation.
+     *
+     * @param warehouseIds distinct canonical warehouse identifiers to validate
+     */
     @Override
     public void requireActive(Set<UUID> warehouseIds) {
         if (warehouseIds.isEmpty()) {
@@ -46,6 +66,7 @@ final class OAuthWarehouseExistenceClient implements WarehouseExistenceClient {
         }
     }
 
+    /** Obtains and validates a client-credentials token limited to {@code warehouse.read}. */
     private String requestAccessToken() {
         String credentials = formEncode(properties.clientId()) + ":" + formEncode(properties.clientSecret());
         String body = "grant_type=client_credentials&scope="
@@ -86,6 +107,7 @@ final class OAuthWarehouseExistenceClient implements WarehouseExistenceClient {
         }
     }
 
+    /** Calls the private existence endpoint and maps its status to an authorization-safe failure. */
     private void validateWarehouse(UUID requestedId, String accessToken) {
         URI uri = URI.create(properties.baseUrl()
                 + "/api/internal/warehouse/v1/warehouses/"
@@ -112,6 +134,10 @@ final class OAuthWarehouseExistenceClient implements WarehouseExistenceClient {
         validateExistenceResponse(requestedId, response.body());
     }
 
+    /**
+     * Accepts only the strict, minimal existence representation for the identifier that was asked
+     * for and rejects inactive warehouses.
+     */
     private void validateExistenceResponse(UUID requestedId, String body) {
         try {
             JsonNode json = objectMapper.readTree(body);
@@ -153,6 +179,10 @@ final class OAuthWarehouseExistenceClient implements WarehouseExistenceClient {
         }
     }
 
+    /**
+     * Executes one bounded request and translates transport failures without exposing upstream
+     * implementation details to an API caller.
+     */
     private HttpResponse<String> exchange(HttpRequest request, String upstream) {
         try {
             return httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
@@ -167,6 +197,7 @@ final class OAuthWarehouseExistenceClient implements WarehouseExistenceClient {
         }
     }
 
+    /** Splits an OAuth scope response into its distinct space-delimited scope names. */
     private Set<String> scopes(String value) {
         if (value == null || value.isBlank()) {
             return Set.of();
@@ -174,10 +205,12 @@ final class OAuthWarehouseExistenceClient implements WarehouseExistenceClient {
         return new HashSet<>(java.util.Arrays.asList(value.trim().split("\\s+")));
     }
 
+    /** Encodes one credential component for the OAuth form/basic-auth construction. */
     private String formEncode(String value) {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 
+    /** Requires an application/json response before its body is parsed as a trusted payload. */
     private void requireJsonContentType(HttpResponse<?> response, String upstream) {
         String contentType = response.headers().firstValue("Content-Type").orElse("");
         if (!contentType.toLowerCase(java.util.Locale.ROOT).matches("application/json(?:\\s*;.*)?")) {
@@ -185,6 +218,7 @@ final class OAuthWarehouseExistenceClient implements WarehouseExistenceClient {
         }
     }
 
+    /** Creates the HTTP client with the integration's bounded connect timeout. */
     static HttpClient httpClient(Duration connectTimeout) {
         return HttpClient.newBuilder().connectTimeout(connectTimeout).build();
     }

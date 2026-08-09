@@ -7,6 +7,9 @@ import java.util.Optional;
 import java.util.UUID;
 import tools.jackson.databind.JsonNode;
 
+/**
+ * Disabled development/test implementation of the inventory private dependency boundary.
+ */
 final class DisabledInventoryDependencyGateway implements InventoryDependencyGateway {
   private InventoryException unavailable() {
     return InventoryException.dependency("Inventory dependencies are disabled");

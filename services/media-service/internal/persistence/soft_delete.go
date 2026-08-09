@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// DeleteCommand requests an idempotent owner-scoped logical deletion fenced by
+// the caller's expected asset version.
 type DeleteCommand struct {
 	MediaID         uuid.UUID
 	OwnerType       string

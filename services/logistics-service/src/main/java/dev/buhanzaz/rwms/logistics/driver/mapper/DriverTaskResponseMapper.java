@@ -7,6 +7,9 @@ import org.mapstruct.Mapper;
 import org.mapstruct.MappingConstants;
 import org.mapstruct.ReportingPolicy;
 
+/**
+ * Maps driver-task persistence state to driver HTTP responses without changing workflow state.
+ */
 @Mapper(
     componentModel = MappingConstants.ComponentModel.SPRING,
     injectionStrategy = InjectionStrategy.CONSTRUCTOR,

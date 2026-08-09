@@ -26,6 +26,12 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Persists append-only task-board events and their ordered transactional outbox envelopes.
+ *
+ * <p>The store verifies aggregate version continuity, canonical JSON, payload policy, and checksum;
+ * Kafka delivery is a later recoverable effect.
+ */
 @Service
 @RequiredArgsConstructor
 public class TaskBoardEventStore {

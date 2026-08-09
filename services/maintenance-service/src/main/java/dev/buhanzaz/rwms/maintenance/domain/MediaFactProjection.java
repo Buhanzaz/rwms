@@ -10,6 +10,7 @@ import java.util.UUID;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+/** Local maintenance projection for MediaFactProjection; it does not replace an external owner as source of truth. */
 @Entity
 @Table(name = "media_fact_projection")
 public class MediaFactProjection {

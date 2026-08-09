@@ -14,6 +14,9 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data persistence boundary for logistics-owned equipment movement tasks and lines.
+ */
 public interface EquipmentMovementTaskRepository extends JpaRepository<EquipmentMovementTask, UUID> {
   Optional<EquipmentMovementTask> findByCreatedBySubjectIdAndIdempotencyKey(
       UUID createdBySubjectId, UUID idempotencyKey);
@@ -37,9 +40,4 @@ public interface EquipmentMovementTaskRepository extends JpaRepository<Equipment
       @Param("states") Collection<EquipmentMovementTaskState> states,
       @Param("now") OffsetDateTime now);
 
-  @Query(
-      value =
-          "select 1 from pg_advisory_xact_lock(hashtextextended(cast(:lockKey as text), 0))",
-      nativeQuery = true)
-  Integer acquireTransactionLock(@Param("lockKey") String lockKey);
 }

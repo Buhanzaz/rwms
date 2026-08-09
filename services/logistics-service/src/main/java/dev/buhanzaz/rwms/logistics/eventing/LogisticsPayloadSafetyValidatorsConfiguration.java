@@ -4,6 +4,9 @@ import dev.buhanzaz.rwms.platform.kafka.RwmsKafkaPayloadSafetyValidator;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+/**
+ * Registers payload validators that fence invalid logistics event envelopes before transport.
+ */
 @Configuration(proxyBeanMethods = false)
 public class LogisticsPayloadSafetyValidatorsConfiguration {
   @Bean

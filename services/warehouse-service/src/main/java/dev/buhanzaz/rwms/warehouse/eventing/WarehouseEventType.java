@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.warehouse.eventing;
 
+/** Stable event names emitted for externally relevant warehouse changes. */
 public enum WarehouseEventType {
   CREATED("warehouse.warehouse.created.v1"),
   CHANGED("warehouse.warehouse.changed.v1"),

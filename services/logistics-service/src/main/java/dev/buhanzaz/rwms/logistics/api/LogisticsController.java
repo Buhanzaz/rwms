@@ -50,6 +50,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * HTTP boundary for logistics documents; authenticated requests delegate state transitions to LogisticsDocumentService.
+ */
 @RestController
 @Validated
 @RequestMapping("/api/logistics/v1")

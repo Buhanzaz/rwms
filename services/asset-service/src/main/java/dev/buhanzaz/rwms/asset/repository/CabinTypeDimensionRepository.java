@@ -6,6 +6,9 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/**
+ * Spring Data repository for service-local cabin type dimension persistence.
+ */
 public interface CabinTypeDimensionRepository extends JpaRepository<CabinTypeDimension, UUID> {
   boolean existsByCabinTypeId(UUID cabinTypeId);
 

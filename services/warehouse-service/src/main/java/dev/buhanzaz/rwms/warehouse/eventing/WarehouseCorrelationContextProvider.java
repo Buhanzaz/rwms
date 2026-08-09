@@ -6,6 +6,7 @@ import java.util.UUID;
 import org.slf4j.MDC;
 import org.springframework.stereotype.Component;
 
+/** Propagates the request correlation identifier or creates one for scheduled warehouse work. */
 @Component
 public class WarehouseCorrelationContextProvider {
   public CorrelationContext current() {

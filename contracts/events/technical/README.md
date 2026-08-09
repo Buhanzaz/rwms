@@ -1,19 +1,29 @@
-# F4K technical event conventions
+# RWMS Technical Event Conventions
 
-These schemas define transport and persistence mechanics, not business events.
-They do not create Kafka bindings, database tables, shared JPA entities or a
-consumer runtime.
+[Русская версия](README.ru.md)
 
-- `event-delivery-policy-v1.schema.yaml` fixes the first attempt plus retries
-  after 1s, 2s and 4s, followed by the consumer-owned
-  `<topic>.<consumer-group>.dlt`. Validation errors are never retried.
-- `aggregate-checkpoint-policy-v1.schema.yaml` fixes aggregate ordering and
+These schemas define transport and persistence mechanics shared by current
+event families. They do not define business events, create Kafka bindings or
+database tables, or provide a shared consumer runtime.
+
+## Schemas
+
+- `domain-event-envelope-v2.schema.yaml` defines the framework-neutral event
+  identity, producer, aggregate, version, correlation, actor, and payload shape.
+- `event-delivery-policy-v1.schema.yaml` defines one initial attempt followed by
+  bounded retries after 1s, 2s, and 4s, then a consumer-owned sanitized
+  `<topic>.<consumer-group>.dlt`. Validation failures are never retried.
+- `aggregate-checkpoint-policy-v1.schema.yaml` defines aggregate ordering and
   requires explicit reconciliation after a version gap. Later effects for that
-  aggregate remain blocked until reconciliation.
-- `event-store-convention-v1.schema.yaml` lists the seven required
-  service-local technical tables, snapshot threshold and transaction/CAS
-  invariants. Owning services still implement separate SQL and mappings during
-  F4A or F4T.
+  aggregate remain blocked until reconciliation succeeds.
+- `event-store-convention-v1.schema.yaml` defines the required service-local
+  technical tables, snapshot threshold, and transaction/CAS invariants. Every
+  owner still implements its own SQL, mappings, retention, and recovery.
 
-Kafka is delivery transport. The service-local append-only `domain_event` store
-is the replay authority; neither broker retention nor a DLT is an event archive.
+Kafka is at-least-once delivery transport. A service-local append-only
+`domain_event` store or authoritative current projection is the replay source;
+broker retention and DLT storage are not an event archive.
+
+Changing a technical schema requires tracing every active producer and consumer
+and validating the coordinated compatibility path. Technical conventions never
+transfer ownership of a domain aggregate into a shared library.

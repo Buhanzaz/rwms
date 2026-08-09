@@ -13,9 +13,23 @@ import java.util.List;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 
+/**
+ * Maps authorization aggregates and their read-side profile data to transport-safe API responses.
+ *
+ * <p>Credential hashes and other authentication secrets are intentionally absent from every
+ * mapping defined here.
+ */
 @Mapper
 public interface AuthResponseMapper {
 
+    /**
+     * Maps an interactive user and its warehouse grants to the administrative representation.
+     *
+     * @param subject authorization aggregate
+     * @param profile read-side profile data for the aggregate
+     * @param warehouseAccesses configured warehouse grants
+     * @return transport-safe administrative user projection
+     */
     @Mapping(target = "id", source = "subject.id")
     @Mapping(target = "version", source = "subject.version")
     @Mapping(target = "username", source = "profile.username")
@@ -31,6 +45,16 @@ public interface AuthResponseMapper {
     AdminUserResponse toAdmin(
             AuthSubject subject, Profile profile, List<WarehouseAccessDto> warehouseAccesses);
 
+    /**
+     * Maps the authenticated subject to the representation returned by the current-user API.
+     *
+     * @param subject authorization aggregate
+     * @param profile read-side profile data for the aggregate
+     * @param displayName derived human-readable name
+     * @param warehouseAccessAll whether the role has unrestricted warehouse access
+     * @param warehouseAccesses effective warehouse grants
+     * @return current-user projection
+     */
     @Mapping(target = "id", source = "subject.id")
     @Mapping(target = "username", source = "profile.username")
     @Mapping(target = "displayName", source = "displayName")
@@ -49,6 +73,13 @@ public interface AuthResponseMapper {
             boolean warehouseAccessAll,
             List<EffectiveWarehouseAccessDto> warehouseAccesses);
 
+    /**
+     * Maps a subject to the compact, non-secret display data used to identify actors.
+     *
+     * @param subject authorization aggregate
+     * @param profile read-side profile data for the aggregate
+     * @return compact actor display projection
+     */
     @Mapping(target = "subjectId", source = "subject.id")
     @Mapping(target = "principalType", source = "subject.principalType")
     @Mapping(target = "globalRole", source = "subject.globalRole")
@@ -58,6 +89,15 @@ public interface AuthResponseMapper {
     @Mapping(target = "email", source = "profile.email")
     ActorDisplayResponse toActorDisplay(AuthSubject subject, Profile profile);
 
+    /**
+     * Maps worker credential state to a response that never contains the supplied password.
+     *
+     * @param workerId external worker identifier
+     * @param warehouseId bound warehouse identifier
+     * @param appLogin worker-application login
+     * @param status credential lifecycle status
+     * @return non-secret worker credential projection
+     */
     WorkerCredentialResponse toWorker(
             String workerId,
             String warehouseId,

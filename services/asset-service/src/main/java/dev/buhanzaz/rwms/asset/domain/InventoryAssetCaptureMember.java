@@ -10,6 +10,9 @@ import java.util.UUID;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+/**
+ * JPA entity that persists inventory asset capture member in the asset-owned database.
+ */
 @Entity
 @Table(name = "inventory_asset_capture_member")
 public class InventoryAssetCaptureMember {

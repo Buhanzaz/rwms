@@ -9,6 +9,7 @@ import org.springframework.kafka.listener.CommonErrorHandler;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.messaging.Message;
 
+/** Declares maintenance inbound Kafka consumers and their fail-closed handling. */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")
 public class MaintenanceKafkaConsumers {

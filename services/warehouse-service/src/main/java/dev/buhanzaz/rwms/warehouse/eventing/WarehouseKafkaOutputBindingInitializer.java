@@ -8,6 +8,7 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.stereotype.Component;
 
+/** Binds and later unbinds the canonical warehouse producer channel when Kafka is enabled. */
 @Component
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")
 public class WarehouseKafkaOutputBindingInitializer

@@ -15,6 +15,7 @@ import org.springframework.security.oauth2.client.registration.ClientRegistratio
 import org.springframework.security.oauth2.core.http.converter.OAuth2AccessTokenResponseHttpMessageConverter;
 import org.springframework.web.client.RestClient;
 
+/** Configures the OAuth client that applies recoverable worker-credential effects in auth-service. */
 @Configuration
 @EnableConfigurationProperties(TaskBoardClientProperties.class)
 public class WorkerCredentialClientConfiguration {

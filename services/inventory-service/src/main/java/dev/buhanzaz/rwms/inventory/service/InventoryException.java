@@ -2,6 +2,9 @@ package dev.buhanzaz.rwms.inventory.service;
 
 import org.springframework.http.HttpStatus;
 
+/**
+ * Signals a inventory workflow failure that the HTTP boundary maps to a stable response.
+ */
 public final class InventoryException extends RuntimeException {
   private final HttpStatus status;
   private final String code;

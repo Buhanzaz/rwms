@@ -26,6 +26,7 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/** Appends maintenance events, checkpoints and transactional outbox rows in the caller transaction. */
 @Service
 public class MaintenanceEventStore {
   static final String LOCAL_EVENT_MODEL = "maintenance-full-state-v1";

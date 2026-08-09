@@ -10,6 +10,9 @@ import java.time.OffsetDateTime;
 import java.util.Objects;
 import java.util.UUID;
 
+/**
+ * JPA entity that persists inventory start capture attempt in the inventory-owned database.
+ */
 @Entity
 @Table(name = "inventory_start_capture_attempt")
 @IdClass(InventoryStartCaptureAttempt.Key.class)

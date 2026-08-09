@@ -7,6 +7,7 @@ import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 
+/** Repository for the single active-generation pointer that query traffic reads. */
 public interface DossierActiveGenerationRepository
     extends JpaRepository<DossierActiveGeneration, UUID> {
   Optional<DossierActiveGeneration> findByPointerName(String pointerName);

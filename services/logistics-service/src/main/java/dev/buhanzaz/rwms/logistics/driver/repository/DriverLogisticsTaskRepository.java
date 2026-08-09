@@ -15,6 +15,9 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data persistence boundary for logistics-owned driver tasks and their locked workflow reads.
+ */
 public interface DriverLogisticsTaskRepository
     extends JpaRepository<DriverLogisticsTask, UUID> {
   Optional<DriverLogisticsTask> findByCreatedBySubjectIdAndIdempotencyKey(
@@ -106,9 +109,4 @@ public interface DriverLogisticsTaskRepository
       @Param("warehouseId") UUID warehouseId,
       @Param("state") DriverTaskState state);
 
-  @Query(
-      value =
-          "select 1 from pg_advisory_xact_lock(hashtextextended(cast(:lockKey as text), 0))",
-      nativeQuery = true)
-  Integer acquireTransactionLock(@Param("lockKey") String lockKey);
 }

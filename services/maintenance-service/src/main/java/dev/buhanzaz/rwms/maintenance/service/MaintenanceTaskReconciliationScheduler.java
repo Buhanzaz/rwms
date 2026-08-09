@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.maintenance.service;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+/** Runs maintenance recovery or retention work outside the owning business transaction. */
 @Component
 public class MaintenanceTaskReconciliationScheduler {
   private final MaintenanceApplicationService service;

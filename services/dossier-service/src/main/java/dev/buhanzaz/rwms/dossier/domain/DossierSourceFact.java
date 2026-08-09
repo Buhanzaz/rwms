@@ -17,6 +17,7 @@ import lombok.NoArgsConstructor;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+/** Immutable validated source journal fact used for deduplication, recovery and generation replay. */
 @Entity
 @Table(name = "dossier_source_fact")
 @Getter

@@ -4,6 +4,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
+/** Computes the canonical checksum that binds a durable maintenance command or event payload. */
 public final class MaintenanceChecksum {
   private MaintenanceChecksum() {}
 

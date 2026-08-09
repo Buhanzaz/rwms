@@ -29,10 +29,15 @@ const (
 )
 
 var (
+	// ErrExternalUnavailable identifies a transient Yandex.Disk dependency
+	// failure that may be retried by the durable worker.
 	ErrExternalUnavailable = errors.New("Yandex public resources unavailable")
-	ErrExternalRejected    = errors.New("Yandex public resource rejected")
-	ErrUnsafeDownload      = errors.New("unsafe Yandex download target")
-	nonPublicIPRanges      = []netip.Prefix{
+	// ErrExternalRejected identifies a remote source that violates import rules.
+	ErrExternalRejected = errors.New("Yandex public resource rejected")
+	// ErrUnsafeDownload prevents an untrusted URL or network target from being
+	// requested by the Yandex.Disk import client.
+	ErrUnsafeDownload = errors.New("unsafe Yandex download target")
+	nonPublicIPRanges = []netip.Prefix{
 		netip.MustParsePrefix("192.0.0.0/24"),    // IETF protocol assignments
 		netip.MustParsePrefix("192.0.2.0/24"),    // TEST-NET-1
 		netip.MustParsePrefix("192.88.99.0/24"),  // deprecated 6to4 relay anycast
@@ -53,6 +58,8 @@ type YandexOptions struct {
 	ValidateURL  func(*url.URL) error
 }
 
+// YandexClient is the hardened client for the official public-resources API.
+// It retains public keys and transient download URLs within this package.
 type YandexClient struct {
 	resourcesURL *url.URL
 	downloadURL  *url.URL
@@ -60,6 +67,8 @@ type YandexClient struct {
 	validateURL  func(*url.URL) error
 }
 
+// NewYandexClient creates a production client pinned to Yandex.Disk's official
+// HTTPS public-resources endpoint and DNS/redirect safety policy.
 func NewYandexClient() (*YandexClient, error) {
 	client := newSafeYandexHTTPClient()
 	return newYandexClient(YandexOptions{
@@ -69,6 +78,8 @@ func NewYandexClient() (*YandexClient, error) {
 	}, false)
 }
 
+// NewYandexClientForTest creates a client with injectable HTTP dependencies
+// for isolated tests. Production must use NewYandexClient.
 func NewYandexClientForTest(options YandexOptions) (*YandexClient, error) {
 	return newYandexClient(options, true)
 }
@@ -98,6 +109,8 @@ func newYandexClient(options YandexOptions, allowTestEndpoint bool) (*YandexClie
 	return &YandexClient{resourcesURL: resourcesURL, downloadURL: &downloadURL, client: client, validateURL: validate}, nil
 }
 
+// Enumerate recursively lists bounded, supported entries for one private
+// public key without downloading their content.
 func (client *YandexClient) Enumerate(ctx context.Context, publicKey string) ([]DiscoveredEntry, error) {
 	if client == nil || client.resourcesURL == nil || client.client == nil || client.validateURL == nil || !ValidYandexPublicKey(publicKey) {
 		return nil, ErrExternalRejected
@@ -179,6 +192,8 @@ func (client *YandexClient) Enumerate(ctx context.Context, publicKey string) ([]
 	return entries, nil
 }
 
+// Download opens one approved resource path behind a public key. Callers own
+// the returned stream and must close it without logging its transient URL.
 func (client *YandexClient) Download(ctx context.Context, publicKey, resourcePath string) (io.ReadCloser, DownloadMetadata, error) {
 	if client == nil || client.downloadURL == nil || client.client == nil || client.validateURL == nil || !ValidYandexPublicKey(publicKey) ||
 		strings.TrimSpace(resourcePath) == "" || len(resourcePath) > 4096 {
@@ -326,6 +341,7 @@ type yandexResource struct {
 	Size      *int64 `json:"size"`
 }
 
+// UnmarshalJSON accepts the bounded Yandex resource-page shape used by the import adapter.
 func (page *yandexResourcePage) UnmarshalJSON(body []byte) error {
 	type rawPage struct {
 		Type      string                 `json:"type"`

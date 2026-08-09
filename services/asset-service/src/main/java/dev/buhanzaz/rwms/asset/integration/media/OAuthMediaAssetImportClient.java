@@ -25,6 +25,9 @@ import tools.jackson.core.StreamReadFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Client-credential HTTP implementation of the asset media-import boundary.
+ */
 final class OAuthMediaAssetImportClient implements MediaAssetImportClient {
   private static final int MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
   private static final Set<String> REQUIRED_JOB_FIELDS =

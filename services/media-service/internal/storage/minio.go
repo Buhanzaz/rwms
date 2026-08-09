@@ -1,3 +1,5 @@
+// Package storage adapts private, versioned MinIO objects to the media domain's
+// immutable object-store operations.
 package storage
 
 import (
@@ -32,11 +34,15 @@ type MinIOOptions struct {
 	UseSSL    bool
 }
 
+// MinIOObjectStore accesses one private, versioned MinIO bucket on behalf of
+// media-service. It never exposes storage coordinates to public callers.
 type MinIOObjectStore struct {
 	client *minio.Client
 	bucket string
 }
 
+// NewMinIOObjectStore validates server-only credentials and creates a store
+// for one configured MinIO bucket.
 func NewMinIOObjectStore(options MinIOOptions) (*MinIOObjectStore, error) {
 	if strings.TrimSpace(options.Endpoint) == "" {
 		return nil, fmt.Errorf("MinIO endpoint is required")
@@ -58,6 +64,8 @@ func NewMinIOObjectStore(options MinIOOptions) (*MinIOObjectStore, error) {
 	return &MinIOObjectStore{client: client, bucket: options.Bucket}, nil
 }
 
+// GetVersion opens exactly the requested immutable object version and returns
+// its verified storage metadata.
 func (store *MinIOObjectStore) GetVersion(ctx context.Context, key, versionID string) (io.ReadCloser, media.ObjectMetadata, error) {
 	if strings.TrimSpace(versionID) == "" {
 		return nil, media.ObjectMetadata{}, fmt.Errorf("object version ID is required")
@@ -79,6 +87,8 @@ func (store *MinIOObjectStore) GetVersion(ctx context.Context, key, versionID st
 	return object, metadata(info), nil
 }
 
+// StatVersion returns metadata for exactly the requested immutable object
+// version without opening its content stream.
 func (store *MinIOObjectStore) StatVersion(ctx context.Context, key, versionID string) (media.ObjectMetadata, error) {
 	if strings.TrimSpace(versionID) == "" {
 		return media.ObjectMetadata{}, fmt.Errorf("object version ID is required")
@@ -104,6 +114,8 @@ func classifyVersionError(operation, key, versionID string, err error) error {
 		ErrDependency, operation, key, versionID, err)
 }
 
+// PutVersion writes a derived object and requires MinIO to return its immutable
+// version identifier.
 func (store *MinIOObjectStore) PutVersion(ctx context.Context, key string, source io.Reader, sizeBytes int64, contentType string) (media.ObjectMetadata, error) {
 	if sizeBytes < 0 {
 		return media.ObjectMetadata{}, fmt.Errorf("object %q requires a known content length", key)
@@ -161,6 +173,8 @@ func (store *MinIOObjectStore) PutIngressVersion(
 	}, nil
 }
 
+// EnsureVersioning verifies that the configured bucket has versioning enabled,
+// which is required before media-service accepts uploads.
 func (store *MinIOObjectStore) EnsureVersioning(ctx context.Context) error {
 	configuration, err := store.client.GetBucketVersioning(ctx, store.bucket)
 	if err != nil {

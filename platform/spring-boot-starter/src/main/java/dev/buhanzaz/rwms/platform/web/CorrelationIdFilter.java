@@ -9,6 +9,7 @@ import java.util.UUID;
 import org.slf4j.MDC;
 import org.springframework.web.filter.OncePerRequestFilter;
 
+/** Normalizes a UUID correlation ID into the HTTP response, request attributes and MDC for the lifetime of one servlet request. */
 public final class CorrelationIdFilter extends OncePerRequestFilter {
 
     public static final String HEADER_NAME = "X-Correlation-Id";

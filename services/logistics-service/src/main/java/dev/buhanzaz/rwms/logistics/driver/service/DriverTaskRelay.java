@@ -14,6 +14,10 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+/**
+ * Scheduled recovery loop for due driver work and warehouse queue promotion; failed work remains
+ * recoverable through its durable task state.
+ */
 @Component
 @RequiredArgsConstructor
 @ConditionalOnProperty(

@@ -15,6 +15,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.JdbcTypeCode;
 
+/** Transactional consumer inbox that records source event identity, payload hash and projection outcome. */
 @Entity
 @Table(name = "dossier_inbox")
 @Getter

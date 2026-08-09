@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+/** HTTP controller for MaintenanceInventory; it authorizes the request and delegates the business transition. */
 @RestController
 @Validated
 @RequestMapping("/api/internal/maintenance/v1/inventory")

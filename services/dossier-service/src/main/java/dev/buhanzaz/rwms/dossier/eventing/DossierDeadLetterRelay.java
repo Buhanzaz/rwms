@@ -15,6 +15,7 @@ import org.springframework.util.MimeTypeUtils;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.SerializationFeature;
 
+/** Schedules broker publication of locally committed sanitized dossier consumer failures. */
 @Component
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")
 public class DossierDeadLetterRelay {

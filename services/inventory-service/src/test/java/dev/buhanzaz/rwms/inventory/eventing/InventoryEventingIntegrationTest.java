@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -63,6 +64,7 @@ class InventoryEventingIntegrationTest {
   @Autowired InventoryMediaFactProjectionRepository mediaFacts;
   @Autowired InventoryMediaRetryStore mediaRetries;
   @Autowired InventoryAssetInboxProcessor assetInbox;
+  @Autowired InventoryAssetRetryStore assetRetries;
   @Autowired JdbcTemplate jdbc;
   @Autowired ObjectMapper mapper;
   @Autowired ApplicationContext context;
@@ -191,34 +193,13 @@ class InventoryEventingIntegrationTest {
   }
 
   @Test
-  void assetMembershipInboxDeduplicatesAndPreservesCausation() {
+  void assetMembershipInboxDeduplicatesExactRedeliveryAndQuarantinesEventIdConflicts() {
     UUID eventId = UUID.randomUUID();
     UUID assetId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
     UUID correlationId = UUID.randomUUID();
     OffsetDateTime recordedAt = OffsetDateTime.now(ZoneOffset.UTC);
-    ObjectNode envelope = mapper.createObjectNode();
-    envelope.put("envelopeVersion", 2);
-    envelope.put("eventId", eventId.toString());
-    envelope.put("eventType", "asset.rental-item.status-changed.v1");
-    envelope.put("eventVersion", 1);
-    envelope.putNull("occurredAt");
-    envelope.put("recordedAt", recordedAt.toString());
-    envelope.put("producer", "asset-service");
-    envelope.put("aggregateType", "RENTAL_ITEM");
-    envelope.put("aggregateId", assetId.toString());
-    envelope.put("aggregateVersion", 7);
-    envelope
-        .putObject("correlation")
-        .put("correlationId", correlationId.toString())
-        .putNull("causationId");
-    envelope.putNull("actorRef");
-    envelope
-        .putObject("payload")
-        .put("rentalItemId", assetId.toString())
-        .put("warehouseId", warehouseId.toString())
-        .put("status", "AFTER_RENT")
-        .put("numberSha256", "a".repeat(64));
+    ObjectNode envelope = assetFact(eventId, assetId, warehouseId, correlationId, recordedAt, 7);
     byte[] body = envelope.toString().getBytes(StandardCharsets.UTF_8);
     byte[] key = assetId.toString().getBytes(StandardCharsets.UTF_8);
 
@@ -237,6 +218,74 @@ class InventoryEventingIntegrationTest {
                 Integer.class,
                 InventoryAssetInboxProcessor.CONSUMER,
                 eventId))
+        .isOne();
+
+    byte[] conflictingBody =
+        envelope.put("aggregateVersion", 8).toString().getBytes(StandardCharsets.UTF_8);
+    assetInbox.initial(conflictingBody, key);
+
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from sanitized_dead_letter
+                 where source_event_id=? and message_sha256=? and failure_code='EVENT_ID_CONFLICT'
+                """,
+                Integer.class,
+                eventId,
+                InventoryEventChecksum.sha256(conflictingBody)))
+        .isOne();
+  }
+
+  @Test
+  void transientAssetFailuresKeepTheRetryEnvelopeAndTerminalizeAfterThreeRetries() {
+    UUID eventId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    byte[] body =
+        assetFact(
+                eventId,
+                assetId,
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                OffsetDateTime.now(ZoneOffset.UTC),
+                2)
+            .toString()
+            .getBytes(StandardCharsets.UTF_8);
+    byte[] key = assetId.toString().getBytes(StandardCharsets.UTF_8);
+    assertThat(assetRetries.scheduleInitial(body, key)).isTrue();
+    doThrow(new IllegalStateException("asset membership unavailable"))
+        .when(inventory)
+        .reconcileAssetMembership(any(), isNull(), any(), any(), any());
+
+    for (int failure = 0; failure < 3; failure++) {
+      assertThatThrownBy(() -> assetInbox.retry(eventId))
+          .isInstanceOf(IllegalStateException.class)
+          .hasMessage("asset membership unavailable");
+      assetRetries.failed(eventId);
+    }
+
+    assertThat(
+            jdbc.queryForObject(
+                "select status from inbox_message where event_id=?", String.class, eventId))
+        .isEqualTo("DLT");
+    assertThat(
+            jdbc.queryForObject(
+                "select attempt_count from inbox_message where event_id=?", Integer.class, eventId))
+        .isEqualTo(4);
+    assertThat(
+            jdbc.queryForObject(
+                "select next_attempt_at is null and dlt_at is not null from inbox_message where event_id=?",
+                Boolean.class,
+                eventId))
+        .isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from sanitized_dead_letter
+                 where source_event_id=? and message_sha256=? and failure_code='PROCESSING_FAILED'
+                """,
+                Integer.class,
+                eventId,
+                InventoryEventChecksum.sha256(body)))
         .isOne();
   }
 
@@ -645,6 +694,39 @@ class InventoryEventingIntegrationTest {
         now,
         now);
     return findingId;
+  }
+
+  /** Builds a contract-shaped asset fact for persistence and recovery-path assertions. */
+  private ObjectNode assetFact(
+      UUID eventId,
+      UUID assetId,
+      UUID warehouseId,
+      UUID correlationId,
+      OffsetDateTime recordedAt,
+      long aggregateVersion) {
+    ObjectNode envelope = mapper.createObjectNode();
+    envelope.put("envelopeVersion", 2);
+    envelope.put("eventId", eventId.toString());
+    envelope.put("eventType", "asset.rental-item.status-changed.v1");
+    envelope.put("eventVersion", 1);
+    envelope.putNull("occurredAt");
+    envelope.put("recordedAt", recordedAt.toString());
+    envelope.put("producer", "asset-service");
+    envelope.put("aggregateType", "RENTAL_ITEM");
+    envelope.put("aggregateId", assetId.toString());
+    envelope.put("aggregateVersion", aggregateVersion);
+    envelope
+        .putObject("correlation")
+        .put("correlationId", correlationId.toString())
+        .putNull("causationId");
+    envelope.putNull("actorRef");
+    envelope
+        .putObject("payload")
+        .put("rentalItemId", assetId.toString())
+        .put("warehouseId", warehouseId.toString())
+        .put("status", "AFTER_RENT")
+        .put("numberSha256", "a".repeat(64));
+    return envelope;
   }
 
   private byte[] mediaFact(

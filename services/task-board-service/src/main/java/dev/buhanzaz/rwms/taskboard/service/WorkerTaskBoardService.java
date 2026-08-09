@@ -32,6 +32,13 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Builds worker-scoped task views and applies replay-safe worker commands.
+ *
+ * <p>All reads and mutations are bounded by the authenticated worker and warehouse. Offline work
+ * uses a short-lived lease, a client operation ID and the observed entry version so reconnecting a
+ * device cannot silently replay a stale action against a changed task.
+ */
 @Service
 public class WorkerTaskBoardService {
   private static final String AVAILABLE = "AVAILABLE";
@@ -68,6 +75,7 @@ public class WorkerTaskBoardService {
     this.kpiSettings = kpiSettings;
   }
 
+  /** Returns a worker's current access context, feed revision and offline lease. */
   public WorkerContext context(UUID workerId, UUID warehouseId) {
     WorkerAccess access = access(workerId, warehouseId);
     OffsetDateTime now = now();
@@ -111,6 +119,11 @@ public class WorkerTaskBoardService {
         leases.issue(workerId, warehouseId, revision, now));
   }
 
+  /**
+   * Returns one worker-authorized feed page for a fixed revision.
+   *
+   * <p>A cursor from another revision is rejected rather than serving a mixed snapshot.
+   */
   public FeedPage feed(
       UUID workerId, UUID warehouseId, String encodedCursor, int requestedLimit) {
     int limit = Math.max(1, Math.min(MAX_LIMIT, requestedLimit));
@@ -167,6 +180,7 @@ public class WorkerTaskBoardService {
         etag);
   }
 
+  /** Returns task detail after verifying that the worker may see the entry. */
   public WorkerTaskDetail detail(UUID workerId, UUID warehouseId, UUID entryId) {
     WorkerAccess access = access(workerId, warehouseId);
     BoardEntryDto entry = taskBoard.entry(warehouseId, entryId);
@@ -305,6 +319,7 @@ public class WorkerTaskBoardService {
   }
 
   @Transactional
+  /** Reserves an idempotent media-evidence upload for an authorized worker action. */
   public TaskEvidence reserveEvidence(
       UUID workerId,
       UUID warehouseId,
@@ -408,6 +423,7 @@ public class WorkerTaskBoardService {
   }
 
   @Transactional
+  /** Registers one authenticated worker-device installation for push invalidations. */
   public DeviceRegistrationResult registerDevice(
       UUID workerId,
       UUID warehouseId,
@@ -488,6 +504,7 @@ public class WorkerTaskBoardService {
   }
 
   @Transactional
+  /** Removes an installation only when it belongs to the authenticated worker and warehouse. */
   public void unregisterDevice(
       UUID workerId, UUID warehouseId, String installationId) {
     access(workerId, warehouseId);
@@ -506,6 +523,12 @@ public class WorkerTaskBoardService {
   }
 
   @Transactional
+  /**
+   * Applies a worker task action exactly once for its idempotency key and offline lease.
+   *
+   * <p>A replay returns the already-applied outcome; a divergent replay or stale observed version
+   * is a conflict rather than an implicit overwrite.
+   */
   public WorkerActionAppliedResult applyAction(
       UUID workerId,
       UUID warehouseId,
@@ -615,6 +638,7 @@ public class WorkerTaskBoardService {
     return new WorkerActionAppliedResult("APPLIED", changed.version(), changed);
   }
 
+  /** Returns the current worker-feed revision used to fence pagination and invalidations. */
   public long revision() {
     Long value =
         jdbc.queryForObject(

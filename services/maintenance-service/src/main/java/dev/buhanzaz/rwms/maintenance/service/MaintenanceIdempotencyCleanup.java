@@ -4,6 +4,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+/** Stores or configures idempotent maintenance command replay for the owning workflow. */
 @Component
 public class MaintenanceIdempotencyCleanup {
   private final JdbcTemplate jdbc;

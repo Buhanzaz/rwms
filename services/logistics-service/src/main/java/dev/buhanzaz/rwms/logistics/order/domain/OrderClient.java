@@ -21,6 +21,10 @@ import lombok.NoArgsConstructor;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.proxy.HibernateProxy;
 
+/**
+ * Logistics-owned rental client with normalized contact projections and an authenticated
+ * responsible-manager snapshot.
+ */
 @Entity
 @Table(name = "order_client")
 @Getter
@@ -57,6 +61,21 @@ public class OrderClient {
   @Column(name = "normalized_email", length = 320)
   private String normalizedEmail;
 
+  @Column(name = "contact_person", length = 255)
+  private String contactPerson;
+
+  @Column(name = "responsible_manager_id", nullable = false)
+  private UUID responsibleManagerId;
+
+  @Column(name = "responsible_manager_display_name", length = 255)
+  private String responsibleManagerDisplayName;
+
+  @Column(name = "comment", length = 2_000)
+  private String comment;
+
+  @Column(name = "source", length = 255)
+  private String source;
+
   @Column(name = "created_by_subject_id", nullable = false)
   private UUID createdBySubjectId;
 
@@ -73,6 +92,13 @@ public class OrderClient {
   @Column(name = "updated_at", nullable = false)
   private OffsetDateTime updatedAt;
 
+  /**
+   * Creates a client owned by the authenticated responsible manager.
+   *
+   * <p>A contact person is mandatory for an individual entrepreneur or legal entity. The phone
+   * projection is mandatory for every new client even though historical rows created before V42
+   * can still contain no phone.</p>
+   */
   public static OrderClient create(
       ClientType clientType,
       String displayName,
@@ -81,6 +107,11 @@ public class OrderClient {
       String normalizedPhone,
       String email,
       String normalizedEmail,
+      String contactPerson,
+      UUID responsibleManagerId,
+      String responsibleManagerDisplayName,
+      String comment,
+      String source,
       UUID actorSubjectId,
       UUID idempotencyKey,
       String requestSha256) {
@@ -88,16 +119,23 @@ public class OrderClient {
     client.clientType = Objects.requireNonNull(clientType, "clientType");
     client.displayName = requireText(displayName, 512, "displayName");
     client.normalizedName = requireText(normalizedName, 512, "normalizedName");
-    client.phone = optionalText(phone, 32, "phone");
-    client.normalizedPhone = optionalText(normalizedPhone, 32, "normalizedPhone");
+    client.phone = requireText(phone, 32, "phone");
+    client.normalizedPhone = requireText(normalizedPhone, 32, "normalizedPhone");
     client.email = optionalText(email, 320, "email");
     client.normalizedEmail = optionalText(normalizedEmail, 320, "normalizedEmail");
-    if ((client.phone == null) != (client.normalizedPhone == null)) {
-      throw new IllegalArgumentException("phone projection is invalid");
-    }
     if ((client.email == null) != (client.normalizedEmail == null)) {
       throw new IllegalArgumentException("email projection is invalid");
     }
+    client.contactPerson = optionalText(contactPerson, 255, "contactPerson");
+    if (client.clientType != ClientType.INDIVIDUAL && client.contactPerson == null) {
+      throw new IllegalArgumentException("contactPerson is required for this client type");
+    }
+    client.responsibleManagerId =
+        Objects.requireNonNull(responsibleManagerId, "responsibleManagerId");
+    client.responsibleManagerDisplayName =
+        requireText(responsibleManagerDisplayName, 255, "responsibleManagerDisplayName");
+    client.comment = optionalText(comment, 2_000, "comment");
+    client.source = optionalText(source, 255, "source");
     client.createdBySubjectId = Objects.requireNonNull(actorSubjectId, "actorSubjectId");
     client.creationIdempotencyKey = Objects.requireNonNull(idempotencyKey, "idempotencyKey");
     client.creationRequestSha256 = requireHash(requestSha256);

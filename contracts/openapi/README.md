@@ -1,5 +1,7 @@
 # HTTP API Contracts
 
+[Русская версия](README.ru.md)
+
 This directory contains the canonical handwritten OpenAPI specifications for
 synchronous RWMS APIs. One owning service has one specification family; there
 is no cross-domain aggregate API schema.

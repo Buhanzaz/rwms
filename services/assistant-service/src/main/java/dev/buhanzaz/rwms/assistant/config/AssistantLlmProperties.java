@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.assistant.config;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+/** Binds and validates the configured OpenAI-compatible provider endpoint, model, timeouts and startup credential policy. */
 @ConfigurationProperties(prefix = "rwms.assistant.llm")
 public record AssistantLlmProperties(
     String baseUrl,

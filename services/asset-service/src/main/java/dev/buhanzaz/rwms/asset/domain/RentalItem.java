@@ -19,6 +19,9 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 import org.hibernate.proxy.HibernateProxy;
 
+/**
+ * JPA entity that persists rental item in the asset-owned database.
+ */
 @Entity
 @Table(name = "rental_item")
 public class RentalItem {

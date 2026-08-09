@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+/** Owns locked local state transitions for activity and sanitized-DLT outbox rows while relays communicate with Kafka. */
 @Service
 public class DossierRelayTransactions {
   private final DossierOutboxEventRepository outbox;
@@ -55,6 +56,10 @@ public class DossierRelayTransactions {
     outbox.findById(eventId).orElseThrow().published(OffsetDateTime.now(ZoneOffset.UTC));
   }
 
+  /**
+   * Records a failed activity relay independently of the broker attempt, applying bounded
+   * backoff and terminal dead-lettering while preserving per-cabin publication ordering.
+   */
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public void outboxFailed(UUID eventId) {
     DossierOutboxEvent event = outbox.findById(eventId).orElseThrow();
@@ -65,14 +70,23 @@ public class DossierRelayTransactions {
     }
   }
 
+  /** Marks delivery successful while serializing with coverage attachment and resolution. */
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public void deadLetterPublished(UUID id) {
-    deadLetters.findById(id).orElseThrow().published(OffsetDateTime.now(ZoneOffset.UTC));
+    deadLetters
+        .findForUpdateById(id)
+        .orElseThrow()
+        .published(OffsetDateTime.now(ZoneOffset.UTC));
   }
 
+  /**
+   * Records a failed sanitized-DLT relay independently, with the same bounded retry policy so a
+   * broker outage does not roll back the already committed consumer failure. The row lock
+   * serializes transport retry state with concurrent coverage mutations.
+   */
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public void deadLetterFailed(UUID id) {
-    DossierSanitizedDeadLetter value = deadLetters.findById(id).orElseThrow();
+    DossierSanitizedDeadLetter value = deadLetters.findForUpdateById(id).orElseThrow();
     if (value.getAttemptCount() >= 3) {
       value.deadLetter();
     } else {
@@ -92,11 +106,14 @@ public class DossierRelayTransactions {
     event.requeueFromDeadLetter(OffsetDateTime.now(ZoneOffset.UTC));
   }
 
-  /** Explicit service-local recovery for a sanitized DLT relay after broker restoration. */
+  /**
+   * Explicit service-local recovery for a sanitized DLT relay after broker restoration, serialized
+   * with coverage attachment and resolution on the same audit row.
+   */
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public void recoverDeadLetter(UUID id) {
     deadLetters
-        .findById(id)
+        .findForUpdateById(id)
         .orElseThrow()
         .requeueFromDeadLetter(OffsetDateTime.now(ZoneOffset.UTC));
   }

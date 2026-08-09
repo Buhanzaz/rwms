@@ -12,6 +12,9 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data repository for service-local rental item html import persistence.
+ */
 public interface RentalItemHtmlImportRepository
     extends JpaRepository<RentalItemHtmlImport, UUID> {
   Optional<RentalItemHtmlImport> findByActorSubjectIdAndIdempotencyKey(

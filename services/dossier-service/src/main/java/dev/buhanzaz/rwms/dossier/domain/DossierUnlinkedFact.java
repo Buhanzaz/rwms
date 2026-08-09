@@ -17,6 +17,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.JdbcTypeCode;
 
+/** Journals a validated source fact whose cabin subject is missing, quarantined or otherwise not provable. */
 @Entity
 @Table(name = "dossier_unlinked_fact")
 @Getter

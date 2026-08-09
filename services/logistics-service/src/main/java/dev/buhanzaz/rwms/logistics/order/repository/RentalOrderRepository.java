@@ -14,6 +14,9 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data persistence boundary for logistics-owned Rental Order Repository; it does not own cross-service workflow decisions.
+ */
 public interface RentalOrderRepository
     extends JpaRepository<RentalOrder, UUID>, JpaSpecificationExecutor<RentalOrder> {
   @Override
@@ -32,12 +35,6 @@ public interface RentalOrderRepository
   Optional<RentalOrder> findByCreatedBySubjectIdAndCreationIdempotencyKey(
       UUID createdBySubjectId, UUID creationIdempotencyKey);
 
-  @Query(value = "select nextval('rental_order_number_seq')", nativeQuery = true)
+  @Query("select function('nextval', 'rental_order_number_seq')")
   long nextOrderNumber();
-
-  @Query(
-      value =
-          "select 1 from pg_advisory_xact_lock(hashtextextended(cast(:lockKey as text), 0))",
-      nativeQuery = true)
-  Integer acquireTransactionLock(@Param("lockKey") String lockKey);
 }

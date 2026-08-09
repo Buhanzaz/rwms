@@ -11,6 +11,9 @@ import java.time.ZoneOffset;
 import java.util.Objects;
 import java.util.UUID;
 
+/**
+ * JPA entity that persists finding media reference in the inventory-owned database.
+ */
 @Entity
 @Table(name = "finding_media_reference")
 @IdClass(FindingMediaReference.Key.class)

@@ -13,6 +13,10 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Validates and deduplicates media facts for inventory findings before updating the local media
+ * projection. Facts owned by another context are acknowledged without being interpreted as findings.
+ */
 @Service
 public class InventoryMediaInboxProcessor {
   private static final String CONSUMER = "inventory-service-media-inbox-v1";
@@ -95,6 +99,10 @@ public class InventoryMediaInboxProcessor {
     initial(bytes, null);
   }
 
+  /**
+   * Persists and deduplicates one broker delivery before projecting an inventory finding's media
+   * fact. The received record key is part of validation so a retry cannot change media identity.
+   */
   @Transactional
   public void initial(byte[] bytes, byte[] recordKey) {
     String rawHash = InventoryEventChecksum.sha256(bytes);

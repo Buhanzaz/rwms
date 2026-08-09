@@ -13,6 +13,12 @@ import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Strictly validates and deduplicates task-board facts before advancing its local shadow checkpoint.
+ *
+ * <p>An aggregate version gap blocks that aggregate and records quarantine work; it is never
+ * skipped merely to advance the Kafka offset.
+ */
 @Service
 public class TaskBoardInboxProcessor {
   private static final String SHADOW_PROJECTION = "task-board-kafka-shadow-v1";

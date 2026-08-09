@@ -15,6 +15,7 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+/** Metadata and lifecycle state for one independently rebuildable dossier read-model generation. */
 @Entity
 @Table(name = "dossier_projection_generation")
 @Getter

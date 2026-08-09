@@ -17,6 +17,7 @@ import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
 import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskService;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionKind;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
 import java.time.LocalDate;
@@ -143,7 +144,8 @@ class CabinFurnitureTaskServiceTest {
         requirements,
         now,
         Map.of(WAREHOUSE, now.toLocalDate()),
-        true);
+        true,
+        AdmissionKind.TEST_ONLY);
   }
 
   private static LogisticsDependencyGateway.CabinFurnitureMovementPlan changedPlan() {

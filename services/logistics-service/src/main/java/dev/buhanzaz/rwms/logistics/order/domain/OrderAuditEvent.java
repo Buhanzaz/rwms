@@ -21,6 +21,9 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.Immutable;
 import org.hibernate.type.SqlTypes;
 
+/**
+ * JPA persistence model for Order Audit Event in the logistics-owned database.
+ */
 @Entity
 @Table(name = "rental_order_audit_event")
 @Immutable

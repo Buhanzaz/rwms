@@ -30,8 +30,10 @@ import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
+import dev.buhanzaz.rwms.logistics.service.LogisticsExternalAttemptClaimService;
 import dev.buhanzaz.rwms.logistics.service.ReturnCompletionProcessor;
 import dev.buhanzaz.rwms.logistics.service.ReturnRegistrationProcessor;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -73,6 +75,7 @@ class ReturnCompletionSagaIntegrationTest {
   static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
   @Autowired LogisticsDocumentService documents;
+  @Autowired LogisticsExternalAttemptClaimService claims;
   @Autowired ReturnRegistrationProcessor registration;
   @Autowired ReturnCompletionProcessor completion;
   @Autowired JdbcTemplate jdbc;
@@ -192,7 +195,7 @@ class ReturnCompletionSagaIntegrationTest {
     assertThat(replayed.replayed()).isTrue();
     assertThat(started.response().state()).isEqualTo(LogisticsDocumentState.ACCEPTING);
 
-    completion.processUntilIdle(registered.documentId());
+    LogisticsExternalAttemptTestClaims.drainReturnCompletion(claims, completion);
 
     assertThat(documents.get(registered.documentId(), LogisticsDocumentType.RETURN).state())
         .isEqualTo(LogisticsDocumentState.ACCEPTED);
@@ -323,7 +326,7 @@ class ReturnCompletionSagaIntegrationTest {
                 "select count(*) from logistics_return_shortage_snapshot", Long.class))
         .isOne();
 
-    completion.processUntilIdle(registered.documentId());
+    LogisticsExternalAttemptTestClaims.drainReturnCompletion(claims, completion);
 
     assertThat(
             jdbc.queryForList(
@@ -441,6 +444,11 @@ class ReturnCompletionSagaIntegrationTest {
                 "+79990000001",
                 null,
                 null,
+                "Tenant contact",
+                SUBJECT,
+                "Dispatcher",
+                null,
+                null,
                 SUBJECT,
                 UUID.randomUUID(),
                 "0".repeat(64)));
@@ -453,6 +461,12 @@ class ReturnCompletionSagaIntegrationTest {
             SUBJECT,
             "Dispatcher",
             "RENTAL_MANAGER",
+            "Moscow, test address",
+            new BigDecimal("55.750000"),
+            new BigDecimal("37.620000"),
+            "+79990000001",
+            null,
+            List.of(LocalDate.now()),
             UUID.randomUUID(),
             "1".repeat(64));
     order.selectWarehouse(WAREHOUSE);
@@ -528,7 +542,7 @@ class ReturnCompletionSagaIntegrationTest {
         0,
         new ReturnPickupRequest(
             "Driver snapshot", LocalDate.parse("2026-07-01")));
-    registration.processUntilIdle(documentId);
+    LogisticsExternalAttemptTestClaims.drainReturnRegistration(claims, registration);
     long version = documents.get(documentId, LogisticsDocumentType.RETURN).version();
     assertThat(documents.get(documentId, LogisticsDocumentType.RETURN).state())
         .isEqualTo(LogisticsDocumentState.INSPECTION_REQUIRED);

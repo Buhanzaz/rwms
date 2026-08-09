@@ -16,6 +16,12 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
+/**
+ * Public global registry for worker qualifications.
+ *
+ * <p>Classes describe capability, while workers and groups are warehouse-scoped. Keeping the
+ * qualification vocabulary global makes queue bindings and cross-warehouse reporting comparable.
+ */
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/worker-classes")
@@ -24,12 +30,14 @@ public class WorkerClassController {
   private final RegistryService service;
   private final WarehouseAccessAuthorizer access;
 
+  /** Lists the global qualification catalog. */
   @GetMapping
   public List<WorkerClassDto> list(@AuthenticationPrincipal Jwt jwt) {
     access.requireUserScope(jwt, "rwms.read");
     return service.listClasses();
   }
 
+  /** Creates a global worker-class definition. */
   @PostMapping
   @ResponseStatus(HttpStatus.CREATED)
   public WorkerClassDto create(
@@ -38,6 +46,7 @@ public class WorkerClassController {
     return service.createClass(request);
   }
 
+  /** Replaces a version-fenced worker-class definition. */
   @PutMapping("/{id}")
   public WorkerClassDto update(
       @AuthenticationPrincipal Jwt jwt,
@@ -47,6 +56,7 @@ public class WorkerClassController {
     return service.updateClass(id, request);
   }
 
+  /** Deletes an unused worker class; referenced classes must be deactivated instead. */
   @DeleteMapping("/{id}")
   @ResponseStatus(HttpStatus.NO_CONTENT)
   public void delete(

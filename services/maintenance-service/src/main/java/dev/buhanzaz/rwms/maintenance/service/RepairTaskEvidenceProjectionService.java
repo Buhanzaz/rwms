@@ -11,6 +11,7 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/** Application service for RepairTaskEvidenceProjectionService; it coordinates maintenance-owned state and durable effects. */
 @Service
 public class RepairTaskEvidenceProjectionService {
   private final MaintenanceRepairRepository repairs;

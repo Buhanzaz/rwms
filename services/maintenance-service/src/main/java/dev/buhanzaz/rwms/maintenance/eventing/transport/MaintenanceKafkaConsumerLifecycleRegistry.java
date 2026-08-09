@@ -7,6 +7,10 @@ import org.springframework.cloud.stream.binder.kafka.KafkaListenerContainerCusto
 import org.springframework.kafka.listener.AbstractMessageListenerContainer;
 import org.springframework.stereotype.Component;
 
+/**
+ * Tracks maintenance Kafka consumer containers so readiness/recovery code can detect and restart a
+ * stopped inbox consumer group.
+ */
 @Component
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")
 public class MaintenanceKafkaConsumerLifecycleRegistry

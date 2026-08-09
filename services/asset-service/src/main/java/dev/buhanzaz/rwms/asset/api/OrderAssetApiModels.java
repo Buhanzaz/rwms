@@ -12,6 +12,10 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * HTTP transport model container for order asset.
+ * Its records are boundary representations, not persistence entities.
+ */
 public final class OrderAssetApiModels {
   private OrderAssetApiModels() {}
 

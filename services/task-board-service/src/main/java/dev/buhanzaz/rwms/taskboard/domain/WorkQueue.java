@@ -12,6 +12,7 @@ import jakarta.persistence.UniqueConstraint;
 import jakarta.validation.constraints.NotNull;
 import java.util.UUID;
 
+/** Warehouse-specific physical queue derived from a global definition or logistics driver lane. */
 @Entity
 @Table(
     name = "work_queue",

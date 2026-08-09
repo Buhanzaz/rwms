@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.dossier.domain;
 
+/** Enumerates sanitized, stable reasons a dossier source record is published to its consumer DLT. */
 public enum DossierDltFailureCode {
   INVALID_ENVELOPE,
   UNSUPPORTED_PRODUCER,

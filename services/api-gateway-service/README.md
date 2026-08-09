@@ -146,8 +146,9 @@ implements the following policy:
 - CORS uses an explicit configured origin allow-list, an explicit method/header
   set, and credentials where needed. Wildcard origins are rejected by startup
   safety validation.
-- Production validation requires a public/private address split, HTTPS public
-  values, and rejects localhost or loopback internal targets.
+- Production validation applies one policy to every downstream: each target is
+  a path-free HTTP(S) origin, cannot reuse the public gateway host, and cannot
+  use localhost or a loopback address. Public values must use HTTPS.
 
 This division is important: the edge authenticates and protects the public
 surface, while the owner service authorizes the business operation. Copying all
@@ -218,6 +219,24 @@ warehouse target at `8083`, derive JWKS from the internal auth target on
 `8080`; it proxies `/auth` and `/api` to `8088` while keeping `/auth/callback`
 in the SPA. Production has no localhost or secret-bearing defaults and must
 provide every target, public issuer/base URI, and allowed panel origin.
+
+## Executable route and security parity
+
+[`GatewayRouteSecurityParityTest`](src/test/java/dev/buhanzaz/rwms/gateway/config/GatewayRouteSecurityParityTest.java)
+parses every canonical service OpenAPI and evaluates the real ordered router functions. Its domain
+inventory contains every canonical public `/api/**` operation; auth-service operations delegated
+under `/auth/**` and media-service-local `/health/**` probes are explicit separate partitions. The
+gate verifies owner-specific task-board and analytics path rewrites, dedicated SSE/upload/import/
+assistant route precedence, zero routing for every canonical internal operation and reserved
+private/internal alias, and the real edge security classification. All public domain operations
+require Bearer authentication except the four explicitly anonymous logistics client-presentation
+operations.
+
+Run the focused gate from the repository root:
+
+```bash
+bash ./gradlew :services:api-gateway-service:test --tests 'dev.buhanzaz.rwms.gateway.config.GatewayRouteSecurityParityTest'
+```
 
 ## Safe change rules
 

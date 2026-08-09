@@ -18,6 +18,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
+/** Framework-local immutable payload records for the canonical task-board event families. */
 public final class TaskBoardEventPayloads {
   public record WorkerClassFact(
       UUID workerClassId, UUID revisionMarker, int sortOrder, boolean active, boolean deleted) {}

@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/** Stores ordered worker-class eligibility for global queue definitions. */
 public interface QueueDefinitionClassBindingRepository
     extends JpaRepository<QueueDefinitionClassBinding, UUID> {
   List<QueueDefinitionClassBinding> findAllByDefinitionIdOrderByBindingOrderAscIdAsc(

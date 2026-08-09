@@ -7,6 +7,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/** Repository for independently buildable projection generations and their activation state. */
 public interface DossierProjectionGenerationRepository
     extends JpaRepository<DossierProjectionGeneration, UUID> {
   Optional<DossierProjectionGeneration> findByState(DossierGenerationState state);

@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+/** HTTP controller for MaintenanceSettings; it authorizes the request and delegates the business transition. */
 @RestController
 @RequestMapping("/api/maintenance/v1/settings/repair-capacity")
 public class MaintenanceSettingsController {

@@ -8,6 +8,7 @@ import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskReposito
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsNotFoundException;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -43,6 +44,7 @@ public class DriverQueueScheduler {
   private final DriverTaskWorkflowStore store;
   private final DriverTaskProcessor processor;
   private final LogisticsDependencyGateway dependencies;
+  private final LogisticsTransactionLock transactionLock;
 
   @Transactional
   public void reconcileAndPromote(UUID warehouseId) {
@@ -511,7 +513,7 @@ public class DriverQueueScheduler {
   }
 
   private void lockWarehouseQueue(UUID warehouseId) {
-    tasks.acquireTransactionLock("driver-queue:" + warehouseId);
+    transactionLock.acquire("driver-queue:" + warehouseId);
   }
 
   private static OffsetDateTime now() {

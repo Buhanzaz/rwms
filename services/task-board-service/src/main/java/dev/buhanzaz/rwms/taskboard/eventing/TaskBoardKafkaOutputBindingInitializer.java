@@ -12,6 +12,7 @@ import org.springframework.context.annotation.DependsOn;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.stereotype.Component;
 
+/** Creates and verifies every allowed dynamic task-board output binding before relay work starts. */
 @Component
 @DependsOn("taskBoardProductionSafetyValidator")
 @RequiredArgsConstructor

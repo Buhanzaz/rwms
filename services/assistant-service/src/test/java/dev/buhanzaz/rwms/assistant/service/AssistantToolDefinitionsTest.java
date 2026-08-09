@@ -5,9 +5,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.ArrayList;
 import org.junit.jupiter.api.Test;
 
+/** Verifies the bounded model tool allow-list and its JSON schemas. */
 class AssistantToolDefinitionsTest {
   @Test
-  void exposesMergeClarificationOnlyForALiveSelectionAndSupportsLogicalSharedQuantitySearches() {
+  void exposesInteractiveSearchReferenceAndSelectionToolsWithBoundedSchemas() {
     AssistantToolDefinitions definitionsFactory = new AssistantToolDefinitions();
     var definitions = definitionsFactory.definitions(true);
 
@@ -16,12 +17,16 @@ class AssistantToolDefinitionsTest {
         .containsExactly(
             AssistantToolDefinitions.LIST_AVAILABLE_CABIN_FACETS,
             AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS,
-            AssistantToolDefinitions.REQUEST_SEARCH_MERGE_CONFIRMATION);
+            AssistantToolDefinitions.REQUEST_CABIN_CLARIFICATIONS,
+            AssistantToolDefinitions.LOOKUP_CABIN_CATALOG,
+            AssistantToolDefinitions.REMOVE_SELECTED_CABINS);
     assertThat(definitionsFactory.definitions(false))
         .extracting(definition -> definition.name())
         .containsExactly(
             AssistantToolDefinitions.LIST_AVAILABLE_CABIN_FACETS,
-            AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS);
+            AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS,
+            AssistantToolDefinitions.REQUEST_CABIN_CLARIFICATIONS,
+            AssistantToolDefinitions.LOOKUP_CABIN_CATALOG);
     var search = definitions.get(1).parameters();
     var required = new ArrayList<String>();
     search.path("required").forEach(value -> required.add(value.asText()));
@@ -60,17 +65,20 @@ class AssistantToolDefinitionsTest {
             "totalQuantity 10",
             "categories [\"Обычная\", \"ИТР\"]",
             "exceed 100",
-            "characteristic text requested by the user",
+            "exact returned characteristic",
             "linoleum=false",
             "six БК-1 plus six БК-2",
             "listing facets alone is not an answer",
-            "formed by removing one filter at a time",
-            "resultMode defaults to REPLACE");
+            "resultMode defaults to REPLACE",
+            "exact cabinType",
+            "exact finish",
+            "only compatible types",
+            "six-metre");
+    assertThat(definitions.get(2).description())
+        .contains("independent button questions", "ОСБ and ЛДСП", "SEARCH_MERGE");
+    assertThat(definitions.get(3).description())
+        .contains("without creating or renewing holds", "number or text", "linoleum");
     assertThat(definitions.getLast().description())
-        .contains(
-            "additional new group/type/set",
-            "show-all",
-            "Добавить к текущей подборке или заменить её?",
-            "resultMode APPEND");
+        .contains("current logistics-owned selection", "releases removed holds immediately");
   }
 }

@@ -16,6 +16,9 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+/**
+ * Translates inventory boundary failures into the public Problem Details vocabulary.
+ */
 @RestControllerAdvice
 public class InventoryProblemHandler {
   @ExceptionHandler(InventoryException.class)

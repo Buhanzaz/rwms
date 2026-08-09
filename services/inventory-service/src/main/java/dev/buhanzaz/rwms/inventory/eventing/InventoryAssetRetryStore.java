@@ -1,28 +1,42 @@
 package dev.buhanzaz.rwms.inventory.eventing;
 
+import dev.buhanzaz.rwms.inventory.persistence.InventoryPostgresJsonbCanonicalizer;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import java.util.UUID;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Persistence boundary for retrying inventory inbox records without losing their identity.
+ */
 @Repository
 public class InventoryAssetRetryStore {
-  private final JdbcTemplate jdbc;
+  private final InventoryAssetInboxStore inbox;
+  private final InventoryPostgresJsonbCanonicalizer jsonb;
   private final ObjectMapper mapper;
   private final InventoryDeadLetterStore deadLetters;
 
   public InventoryAssetRetryStore(
-      JdbcTemplate jdbc, ObjectMapper mapper, InventoryDeadLetterStore deadLetters) {
-    this.jdbc = jdbc;
+      InventoryAssetInboxStore inbox,
+      InventoryPostgresJsonbCanonicalizer jsonb,
+      ObjectMapper mapper,
+      InventoryDeadLetterStore deadLetters) {
+    this.inbox = inbox;
+    this.jsonb = jsonb;
     this.mapper = mapper;
     this.deadLetters = deadLetters;
   }
 
+  /**
+   * Stores the first retry attempt in an independent transaction after a consumer failure.
+   *
+   * <p>The lightweight identity/key check prevents a malformed fallback from taking ownership of
+   * another asset; full envelope validation remains with {@link InventoryAssetInboxProcessor}.
+   */
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public boolean scheduleInitial(byte[] bytes, byte[] recordKey) {
     try {
@@ -33,21 +47,11 @@ public class InventoryAssetRetryStore {
       String key = new String(recordKey, StandardCharsets.UTF_8);
       if (version < 0 || !assetId.toString().equals(key)) return false;
       String raw = new String(bytes, StandardCharsets.UTF_8);
-      String body = jdbc.queryForObject("select (?::jsonb)::text", String.class, raw);
+      String body = jsonb.canonicalize(raw);
       if (body == null) return false;
-      jdbc.update(
-          """
-          insert into inbox_message(
-            consumer_group,event_id,source_topic,aggregate_type,aggregate_id,record_key,
-            aggregate_version,event_type,payload_sha256,envelope_body,status,attempt_count,
-            received_at,next_attempt_at)
-          values (?,?,'rwms.asset.rental-item.v1','RENTAL_ITEM',?,?,?,?,?,?::jsonb,
-            'RETRY',1,clock_timestamp(),clock_timestamp()+interval '1 second')
-          on conflict do nothing
-          """,
-          InventoryAssetInboxProcessor.CONSUMER,
+      inbox.insertInitialRetry(
           eventId,
-          assetId.toString(),
+          assetId,
           key,
           version,
           root.path("eventType").asText(),
@@ -59,44 +63,27 @@ public class InventoryAssetRetryStore {
     }
   }
 
+  /**
+   * Returns one retry whose durable backoff has elapsed without reserving it outside the worker's
+   * transaction.
+   */
   @Transactional(readOnly = true)
   public Optional<UUID> due() {
-    return jdbc
-        .query(
-            """
-            select event_id from inbox_message where consumer_group=? and status='RETRY'
-              and next_attempt_at<=clock_timestamp() order by next_attempt_at,received_at limit 1
-            """,
-            (resultSet, rowNumber) -> resultSet.getObject("event_id", UUID.class),
-            InventoryAssetInboxProcessor.CONSUMER)
-        .stream()
-        .findFirst();
+    return inbox.dueRetry();
   }
 
+  /**
+   * Atomically advances a failed retry's exponential backoff or records its terminal DLT state.
+   *
+   * <p>The inbox row lock, terminal state and sanitized DLT write stay in this independent
+   * transaction so concurrent recovery workers cannot create an extra terminal attempt.
+   */
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public void failed(UUID eventId) {
-    RetryState state =
-        jdbc.queryForObject(
-            """
-            select attempt_count,payload_sha256 from inbox_message
-             where consumer_group=? and event_id=? and status='RETRY' for update
-            """,
-            (resultSet, rowNumber) ->
-                new RetryState(
-                    resultSet.getInt("attempt_count"),
-                    resultSet.getString("payload_sha256").trim()),
-            InventoryAssetInboxProcessor.CONSUMER,
-            eventId);
+    InventoryAssetInboxStore.RetryState state = inbox.lockRetryState(eventId);
     if (state == null) return;
     if (state.attempts() >= 3) {
-      jdbc.update(
-          """
-          update inbox_message set status='DLT',attempt_count=attempt_count+1,
-            dlt_at=clock_timestamp(),next_attempt_at=null,quarantine_reason='PROCESSING_FAILED'
-           where consumer_group=? and event_id=? and status='RETRY'
-          """,
-          InventoryAssetInboxProcessor.CONSUMER,
-          eventId);
+      inbox.markProcessingFailedTerminal(eventId);
       deadLetters.record(
           "PROCESSING_FAILED",
           state.hash(),
@@ -106,17 +93,6 @@ public class InventoryAssetRetryStore {
     }
     int attempts = state.attempts() + 1;
     long delaySeconds = 1L << (attempts - 1);
-    jdbc.update(
-        """
-        update inbox_message set attempt_count=?,
-          next_attempt_at=clock_timestamp()+(?*interval '1 second')
-         where consumer_group=? and event_id=? and status='RETRY'
-        """,
-        attempts,
-        delaySeconds,
-        InventoryAssetInboxProcessor.CONSUMER,
-        eventId);
+    inbox.reschedule(eventId, attempts, delaySeconds);
   }
-
-  private record RetryState(int attempts, String hash) {}
 }

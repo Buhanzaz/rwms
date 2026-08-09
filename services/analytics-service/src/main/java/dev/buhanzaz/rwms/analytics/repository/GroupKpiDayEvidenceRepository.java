@@ -8,6 +8,7 @@ import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 
+/** Repository for raw daily KPI evidence queried and aggregated by the read-only API. */
 public interface GroupKpiDayEvidenceRepository
     extends JpaRepository<GroupKpiDayEvidence, UUID> {
   List<GroupKpiDayEvidence>

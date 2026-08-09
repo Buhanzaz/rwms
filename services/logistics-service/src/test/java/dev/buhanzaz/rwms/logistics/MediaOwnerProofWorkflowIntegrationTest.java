@@ -18,6 +18,7 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferLineRequest;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
+import dev.buhanzaz.rwms.logistics.service.LogisticsExternalAttemptClaimService;
 import dev.buhanzaz.rwms.logistics.service.MediaOwnerProofProcessor;
 import java.time.LocalDate;
 import java.util.List;
@@ -66,6 +67,7 @@ class MediaOwnerProofWorkflowIntegrationTest {
   static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
   @Autowired LogisticsDocumentService documents;
+  @Autowired LogisticsExternalAttemptClaimService claims;
   @Autowired MediaOwnerProofProcessor processor;
   @Autowired JdbcTemplate jdbc;
 
@@ -120,9 +122,7 @@ class MediaOwnerProofWorkflowIntegrationTest {
                 "Driver",
                 List.of(new ShipmentLineRequest(SHIPMENT_ASSET, 2))));
 
-    assertThat(processor.processUntilIdle(returnDocument.response().id())).isOne();
-    assertThat(processor.processUntilIdle(transferDocument.response().id())).isOne();
-    assertThat(processor.processUntilIdle(shipmentDocument.response().id())).isZero();
+    assertThat(LogisticsExternalAttemptTestClaims.drainMediaOwnerProof(claims, processor)).isEqualTo(2);
 
     verify(dependencies)
         .upsertMediaOwnerProof(
@@ -182,7 +182,7 @@ class MediaOwnerProofWorkflowIntegrationTest {
                 LogisticsDependencyException.FailureKind.TRANSIENT, "media unavailable"))
         .thenAnswer(MediaOwnerProofWorkflowIntegrationTest::echoProof);
 
-    assertThat(processor.processUntilIdle(documentId)).isOne();
+    assertThat(LogisticsExternalAttemptTestClaims.drainMediaOwnerProof(claims, processor)).isOne();
     assertThat(
             jdbc.queryForObject(
                 "select result || ':' || retry_count from logistics_external_attempt "
@@ -194,8 +194,8 @@ class MediaOwnerProofWorkflowIntegrationTest {
         "update logistics_external_attempt set next_attempt_at=clock_timestamp() where operation_id=?",
         proofEventId);
 
-    assertThat(processor.processUntilIdle(documentId)).isOne();
-    assertThat(processor.processUntilIdle(documentId)).isZero();
+    assertThat(LogisticsExternalAttemptTestClaims.drainMediaOwnerProof(claims, processor)).isOne();
+    assertThat(LogisticsExternalAttemptTestClaims.drainMediaOwnerProof(claims, processor)).isZero();
 
     ArgumentCaptor<UUID> proofEvents = ArgumentCaptor.forClass(UUID.class);
     verify(dependencies, times(2))
@@ -244,7 +244,7 @@ class MediaOwnerProofWorkflowIntegrationTest {
             SUBJECT, cancellationKey, CORRELATION, documentId, created.response().version());
     assertThat(replayed.replayed()).isTrue();
     assertThat(replayed.response()).isEqualTo(cancelled.response());
-    assertThat(processor.processUntilIdle(documentId)).isEqualTo(2);
+    assertThat(LogisticsExternalAttemptTestClaims.drainMediaOwnerProof(claims, processor)).isEqualTo(2);
 
     ArgumentCaptor<Long> revisions = ArgumentCaptor.forClass(Long.class);
     ArgumentCaptor<Long> versions = ArgumentCaptor.forClass(Long.class);
@@ -287,7 +287,7 @@ class MediaOwnerProofWorkflowIntegrationTest {
                 LogisticsDependencyException.FailureKind.PERMANENT_REJECTION,
                 "proof rejected"));
 
-    assertThat(processor.processUntilIdle(created.response().id())).isOne();
+    assertThat(LogisticsExternalAttemptTestClaims.drainMediaOwnerProof(claims, processor)).isOne();
 
     assertThat(
             jdbc.queryForObject(

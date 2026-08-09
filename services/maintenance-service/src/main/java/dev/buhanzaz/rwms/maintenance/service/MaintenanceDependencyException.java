@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.maintenance.service;
 
 import org.springframework.http.HttpStatus;
 
+/** Signals a maintenance service-boundary failure for MaintenanceDependency. */
 public class MaintenanceDependencyException extends RuntimeException {
   private final HttpStatus status;
 

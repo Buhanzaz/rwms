@@ -1,3 +1,5 @@
+// Package worker runs the durable Kafka consumers, processing workers, and
+// operator-only reconciliation commands used by media-service.
 package worker
 
 import (
@@ -11,21 +13,161 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"dev.buhanzaz.rwms/media-service/internal/media"
 	"dev.buhanzaz.rwms/media-service/internal/persistence"
 	"dev.buhanzaz.rwms/media-service/internal/realtime"
+	"dev.buhanzaz.rwms/media-service/internal/storage"
 	"github.com/google/uuid"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+// Processor dispatches a claimed media generation to its image or video
+// transformation implementation.
 type Processor struct {
 	Image media.ImageProcessor
 	Video media.VideoProcessor
 }
 
+const (
+	processingPersistenceAttemptLimit = 4
+	processingCommitAttemptLimit      = 3
+	processingCommitAttemptTimeout    = 3 * time.Second
+	processingCircuitFailureThreshold = 2
+	processingCircuitOpenDuration     = 5 * time.Second
+	processingTelemetryInterval       = 30 * time.Second
+)
+
+// ProcessingPartitionTelemetry reports progress for one bounded Kafka
+// partition dimension. It intentionally contains no event or media identity.
+type ProcessingPartitionTelemetry struct {
+	Partition           int32
+	LastHandledOffset   int64
+	LastCommittedOffset int64
+	HasCommittedOffset  bool
+	CommitFailures      int64
+}
+
+// ProcessingConsumerTelemetry combines durable recovery state with local
+// offset and circuit-breaker progress for one processing consumer instance.
+type ProcessingConsumerTelemetry struct {
+	Recovery     persistence.ProcessingRecoveryTelemetry
+	BreakerState string
+	Partitions   []ProcessingPartitionTelemetry
+}
+
+// processingFailureClass is the closed worker-side distinction between
+// cancellation, dependency outage, and a terminal processor result.
+type processingFailureClass string
+
+const (
+	processingFailureCanceled  processingFailureClass = "CANCELED"
+	processingFailureTransient processingFailureClass = "TRANSIENT_DEPENDENCY"
+	processingFailureTerminal  processingFailureClass = "TERMINAL_PROCESSOR"
+)
+
+// ProcessingRecoveryObserver receives fixed-cardinality recovery snapshots.
+// Implementations must not enrich observations with record or payload data.
+type ProcessingRecoveryObserver interface {
+	Observe(ProcessingConsumerTelemetry)
+}
+
+// processingRepository is the service-owned persistence boundary required by
+// the Kafka processing consumer.
+type processingRepository interface {
+	ClaimProcessingJob(context.Context, persistence.ProcessingMessage, string, time.Duration) (persistence.ClaimResult, error)
+	ResolveProcessingClaimConflict(context.Context, persistence.ProcessingMessage) (persistence.ProcessingConflictResolution, error)
+	CompleteProcessingJob(context.Context, persistence.WorkerJob, []media.ProcessedVariant) error
+	RecordProcessingFailure(context.Context, persistence.WorkerJob, string) (time.Duration, bool, error)
+	RecordProcessingAttemptExhaustion(context.Context, persistence.WorkerJob) error
+	RecordInvalidProcessingMessage(context.Context, persistence.ProcessingMessage, string) error
+	ProcessingRecoveryTelemetry(context.Context) (persistence.ProcessingRecoveryTelemetry, error)
+	ReleaseProcessingLeases(context.Context, string) error
+}
+
+// processingDependencyCircuit prevents a failing object dependency from being
+// hammered across adjacent processing records while retaining durable retries.
+type processingDependencyCircuit struct {
+	failureThreshold int
+	openDuration     time.Duration
+	consecutive      int
+	openUntil        time.Time
+	probe            bool
+	now              func() time.Time
+}
+
+// slogProcessingRecoveryObserver emits the typed telemetry through the
+// service's existing structured operational log surface.
+type slogProcessingRecoveryObserver struct {
+	logger *slog.Logger
+}
+
+// Observe writes one bounded snapshot without record or domain identifiers.
+func (observer slogProcessingRecoveryObserver) Observe(snapshot ProcessingConsumerTelemetry) {
+	observer.logger.Info("media processing recovery telemetry",
+		"breakerState", snapshot.BreakerState,
+		"pendingJobs", snapshot.Recovery.PendingJobs,
+		"runningJobs", snapshot.Recovery.RunningJobs,
+		"pendingValidationReviews", snapshot.Recovery.PendingValidationReviews,
+		"pendingDependencyReviews", snapshot.Recovery.PendingDependencyReviews,
+		"pendingExhaustedReviews", snapshot.Recovery.PendingExhaustedReviews,
+		"pendingLegacyReviews", snapshot.Recovery.PendingLegacyReviews,
+		"oldestActiveJobAgeSeconds", snapshot.Recovery.OldestActiveJobAge.Seconds(),
+		"maximumActiveAttemptInCycle", snapshot.Recovery.MaximumActiveAttemptInCycle,
+		"partitionOffsets", snapshot.Partitions)
+}
+
+// processingRecoveryObserverFanout delivers one bounded snapshot to the
+// retained structured-log observer and any explicitly registered observers.
+// Registration is synchronized because management setup and a scrape-capable
+// observer must never race an in-flight telemetry emission.
+type processingRecoveryObserverFanout struct {
+	mutex     sync.RWMutex
+	observers []ProcessingRecoveryObserver
+}
+
+// newProcessingRecoveryObserverFanout creates a fanout after removing nil
+// observers, which keeps telemetry emission independent from optional wiring.
+func newProcessingRecoveryObserverFanout(
+	observers ...ProcessingRecoveryObserver,
+) *processingRecoveryObserverFanout {
+	fanout := &processingRecoveryObserverFanout{}
+	for _, observer := range observers {
+		fanout.Add(observer)
+	}
+	return fanout
+}
+
+// Add registers one observer while preserving every existing observer.
+func (fanout *processingRecoveryObserverFanout) Add(observer ProcessingRecoveryObserver) {
+	if fanout == nil || observer == nil {
+		return
+	}
+	fanout.mutex.Lock()
+	fanout.observers = append(fanout.observers, observer)
+	fanout.mutex.Unlock()
+}
+
+// Observe copies registrations before invoking them so a slow observer cannot
+// block a concurrent metrics registration while preserving observation order.
+func (fanout *processingRecoveryObserverFanout) Observe(snapshot ProcessingConsumerTelemetry) {
+	if fanout == nil {
+		return
+	}
+	fanout.mutex.RLock()
+	observers := append([]ProcessingRecoveryObserver(nil), fanout.observers...)
+	fanout.mutex.RUnlock()
+	for _, observer := range observers {
+		observer.Observe(snapshot)
+	}
+}
+
+// Process creates all immutable outputs required for the claimed job's media
+// kind. It leaves persistence and retry decisions to Consumer.
 func (processor Processor) Process(ctx context.Context, job persistence.WorkerJob) ([]media.ProcessedVariant, error) {
 	switch job.MediaKind {
 	case media.KindImage:
@@ -53,20 +195,36 @@ func (processor Processor) Process(ctx context.Context, job persistence.WorkerJo
 	}
 }
 
+// Consumer persistently processes media-processing Kafka facts with idempotent
+// claims, bounded retries, and offset acknowledgement after durable handling.
 type Consumer struct {
-	repository   *persistence.Repository
-	client       kafkaConsumerClient
-	processor    Processor
-	owner        string
-	lease        time.Duration
-	timeout      time.Duration
-	pollTimeout  time.Duration
-	logger       *slog.Logger
-	publisher    realtime.Publisher
-	handleRecord func(context.Context, *kgo.Record) error
-	sleep        func(context.Context, time.Duration) error
+	repository       processingRepository
+	client           kafkaConsumerClient
+	processor        Processor
+	owner            string
+	lease            time.Duration
+	timeout          time.Duration
+	pollTimeout      time.Duration
+	logger           *slog.Logger
+	publisher        realtime.Publisher
+	handleRecord     func(context.Context, *kgo.Record) error
+	processJob       func(context.Context, persistence.WorkerJob) ([]media.ProcessedVariant, error)
+	sleep            func(context.Context, time.Duration) error
+	now              func() time.Time
+	circuit          *processingDependencyCircuit
+	observer         ProcessingRecoveryObserver
+	persistLimit     int
+	commitLimit      int
+	commitTimeout    time.Duration
+	telemetryEvery   time.Duration
+	lastTelemetry    time.Time
+	handledOffsets   map[int32]int64
+	committedOffsets map[int32]int64
+	commitFailures   map[int32]int64
 }
 
+// NewKafkaConsumer creates the manual-commit Kafka client for the canonical
+// media-processing topic and consumer group supplied by configuration.
 func NewKafkaConsumer(brokers []string, group, topic string) (*kgo.Client, error) {
 	return kgo.NewClient(
 		kgo.SeedBrokers(brokers...),
@@ -79,20 +237,190 @@ func NewKafkaConsumer(brokers []string, group, topic string) (*kgo.Client, error
 	)
 }
 
+// NewConsumer builds the durable media-processing worker for one lease owner.
 func NewConsumer(repository *persistence.Repository, client *kgo.Client, processor Processor, owner string, processingTimeout time.Duration, logger *slog.Logger) *Consumer {
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
 	consumer := &Consumer{repository: repository, client: client, processor: processor, owner: owner,
 		lease: processingTimeout + 30*time.Second, timeout: processingTimeout,
 		pollTimeout: kafkaConsumerPollTimeout, logger: logger,
-		sleep: sleepProcessingConsumer}
+		sleep: sleepProcessingConsumer, now: time.Now,
+		persistLimit: processingPersistenceAttemptLimit,
+		commitLimit:  processingCommitAttemptLimit, commitTimeout: processingCommitAttemptTimeout,
+		telemetryEvery: processingTelemetryInterval}
 	consumer.handleRecord = consumer.handle
+	consumer.processJob = consumer.processor.Process
+	consumer.circuit = newProcessingDependencyCircuit(consumer.now)
+	consumer.observer = newProcessingRecoveryObserverFanout(slogProcessingRecoveryObserver{logger: logger})
 	return consumer
 }
 
+// SetInvalidationPublisher attaches the optional process-local signal emitted
+// after a processing job reaches a visible terminal state.
 func (consumer *Consumer) SetInvalidationPublisher(publisher realtime.Publisher) {
 	consumer.publisher = publisher
 }
 
+// SetRecoveryObserver replaces optional observers while retaining the
+// structured-log observer. New production integrations should use
+// AddRecoveryObserver so independently owned observers fan out together.
+func (consumer *Consumer) SetRecoveryObserver(observer ProcessingRecoveryObserver) {
+	if observer == nil {
+		return
+	}
+	consumer.observer = newProcessingRecoveryObserverFanout(
+		slogProcessingRecoveryObserver{logger: processingRecoveryLogger(consumer.logger)}, observer)
+}
+
+// AddRecoveryObserver registers an additional bounded telemetry observer
+// without replacing the existing structured operational log observer.
+func (consumer *Consumer) AddRecoveryObserver(observer ProcessingRecoveryObserver) {
+	if observer == nil {
+		return
+	}
+	if fanout, ok := consumer.observer.(*processingRecoveryObserverFanout); ok {
+		fanout.Add(observer)
+		return
+	}
+	if consumer.observer != nil {
+		consumer.observer = newProcessingRecoveryObserverFanout(consumer.observer, observer)
+		return
+	}
+	consumer.observer = newProcessingRecoveryObserverFanout(
+		slogProcessingRecoveryObserver{logger: processingRecoveryLogger(consumer.logger)}, observer)
+}
+
+// newProcessingDependencyCircuit creates the fixed worker-side breaker policy.
+func newProcessingDependencyCircuit(now func() time.Time) *processingDependencyCircuit {
+	return &processingDependencyCircuit{
+		failureThreshold: processingCircuitFailureThreshold,
+		openDuration:     processingCircuitOpenDuration,
+		now:              now,
+	}
+}
+
+// wait blocks only until an open circuit permits one half-open probe.
+func (circuit *processingDependencyCircuit) wait(
+	ctx context.Context,
+	sleep func(context.Context, time.Duration) error,
+) error {
+	if circuit == nil || circuit.openUntil.IsZero() {
+		return nil
+	}
+	delay := circuit.openUntil.Sub(circuit.now())
+	if delay > 0 {
+		if err := sleep(ctx, delay); err != nil {
+			return err
+		}
+	}
+	circuit.openUntil = time.Time{}
+	circuit.probe = true
+	return nil
+}
+
+// failure advances the breaker without retaining the underlying error.
+func (circuit *processingDependencyCircuit) failure() {
+	if circuit == nil {
+		return
+	}
+	circuit.consecutive++
+	if circuit.probe || circuit.consecutive >= circuit.failureThreshold {
+		circuit.openUntil = circuit.now().Add(circuit.openDuration)
+		circuit.probe = false
+	}
+}
+
+// success closes the breaker after a dependency-safe processor outcome.
+func (circuit *processingDependencyCircuit) success() {
+	if circuit == nil {
+		return
+	}
+	circuit.consecutive = 0
+	circuit.openUntil = time.Time{}
+	circuit.probe = false
+}
+
+// state returns one of the fixed CLOSED, OPEN, or HALF_OPEN telemetry values.
+func (circuit *processingDependencyCircuit) state() string {
+	if circuit == nil {
+		return "CLOSED"
+	}
+	if !circuit.openUntil.IsZero() && circuit.openUntil.After(circuit.now()) {
+		return "OPEN"
+	}
+	if circuit.probe {
+		return "HALF_OPEN"
+	}
+	return "CLOSED"
+}
+
+// prepare fills runtime defaults for constructed and focused-test consumers.
+func (consumer *Consumer) prepare() {
+	if consumer.logger == nil {
+		consumer.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	if consumer.handleRecord == nil {
+		consumer.handleRecord = consumer.handle
+	}
+	if consumer.processJob == nil {
+		consumer.processJob = consumer.processor.Process
+	}
+	if consumer.sleep == nil {
+		consumer.sleep = sleepProcessingConsumer
+	}
+	if consumer.now == nil {
+		consumer.now = time.Now
+	}
+	if consumer.circuit == nil {
+		consumer.circuit = newProcessingDependencyCircuit(consumer.now)
+	}
+	if consumer.persistLimit <= 0 {
+		consumer.persistLimit = processingPersistenceAttemptLimit
+	}
+	if consumer.commitLimit <= 0 {
+		consumer.commitLimit = processingCommitAttemptLimit
+	}
+	if consumer.commitTimeout <= 0 {
+		consumer.commitTimeout = processingCommitAttemptTimeout
+	}
+	if consumer.telemetryEvery <= 0 {
+		consumer.telemetryEvery = processingTelemetryInterval
+	}
+	if consumer.timeout <= 0 {
+		consumer.timeout = 30 * time.Second
+	}
+	if consumer.lease <= 0 {
+		consumer.lease = consumer.timeout + 30*time.Second
+	}
+	if consumer.handledOffsets == nil {
+		consumer.handledOffsets = make(map[int32]int64)
+	}
+	if consumer.committedOffsets == nil {
+		consumer.committedOffsets = make(map[int32]int64)
+	}
+	if consumer.commitFailures == nil {
+		consumer.commitFailures = make(map[int32]int64)
+	}
+	if consumer.observer == nil {
+		consumer.observer = newProcessingRecoveryObserverFanout(
+			slogProcessingRecoveryObserver{logger: processingRecoveryLogger(consumer.logger)})
+	}
+}
+
+// processingRecoveryLogger returns a safe logger for observer construction in
+// focused tests and normal worker initialization alike.
+func processingRecoveryLogger(logger *slog.Logger) *slog.Logger {
+	if logger != nil {
+		return logger
+	}
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// Run polls, persists, and then acknowledges media-processing records until
+// ctx is canceled or a dependency failure requires the runtime to restart it.
 func (consumer *Consumer) Run(ctx context.Context) error {
+	consumer.prepare()
 	for {
 		fetches, pollTimedOut := pollKafkaFetches(ctx, consumer.client, consumer.pollTimeout)
 		if ctx.Err() != nil {
@@ -115,20 +443,32 @@ func (consumer *Consumer) Run(ctx context.Context) error {
 			record := iterator.Next()
 			if err := consumer.handleUntilPersisted(ctx, record); err != nil {
 				consumer.client.AllowRebalance()
-				return nil
+				if ctx.Err() != nil {
+					return nil
+				}
+				return err
 			}
+			consumer.handledOffsets[record.Partition] = record.Offset
 			if err := consumer.commitUntilAcknowledged(ctx, record); err != nil {
+				consumer.emitRecoveryTelemetry(ctx)
 				consumer.client.AllowRebalance()
-				return nil
+				if ctx.Err() != nil {
+					return nil
+				}
+				return err
 			}
+			consumer.committedOffsets[record.Partition] = record.Offset
+			consumer.emitRecoveryTelemetry(ctx)
 		}
 		consumer.client.AllowRebalance()
 	}
 }
 
+// handleUntilPersisted bounds transient persistence retries for one ordered
+// record and returns an explicit restart error without acknowledging it.
 func (consumer *Consumer) handleUntilPersisted(ctx context.Context, record *kgo.Record) error {
-	delay := time.Second
-	for {
+	delay := 250 * time.Millisecond
+	for attempt := 1; attempt <= consumer.persistLimit; attempt++ {
 		err := consumer.handleRecord(ctx, record)
 		if err == nil {
 			return nil
@@ -136,43 +476,107 @@ func (consumer *Consumer) handleUntilPersisted(ctx context.Context, record *kgo.
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		consumer.logger.Error("process media request", "eventOffset", record.Offset,
-			"errorType", "DEPENDENCY_ERROR")
+		failureType := "PERSISTENCE_UNAVAILABLE"
+		if errors.Is(err, persistence.ErrConflict) || errors.Is(err, persistence.ErrIdempotencyMismatch) ||
+			errors.Is(err, persistence.ErrVersionGap) {
+			failureType = "PROCESSING_STATE_UNRESOLVED"
+		}
+		consumer.logger.Error("persist media processing outcome", "partition", record.Partition,
+			"offset", record.Offset, "failureType", failureType,
+			"attempt", attempt)
+		if attempt == consumer.persistLimit {
+			return fmt.Errorf("media processing persistence retry exhausted: %w", err)
+		}
 		if err := consumer.sleep(ctx, delay); err != nil {
 			return err
 		}
-		if delay < 4*time.Second {
+		if delay < time.Second {
 			delay *= 2
 		}
 	}
+	return errors.New("media processing persistence retry exhausted")
 }
 
+// commitUntilAcknowledged applies a per-call deadline and a total attempt bound
+// so shutdown or rebalance cannot be held by one unavailable broker commit.
 func (consumer *Consumer) commitUntilAcknowledged(ctx context.Context, record *kgo.Record) error {
-	delay := time.Second
-	for {
-		if err := consumer.client.CommitRecords(ctx, record); err == nil {
+	delay := 250 * time.Millisecond
+	for attempt := 1; attempt <= consumer.commitLimit; attempt++ {
+		commitContext, cancel := context.WithTimeout(ctx, consumer.commitTimeout)
+		err := consumer.client.CommitRecords(commitContext, record)
+		cancel()
+		if err == nil {
 			return nil
 		}
+		consumer.commitFailures[record.Partition]++
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		consumer.logger.Error("commit media request", "eventOffset", record.Offset,
-			"errorType", "BROKER_UNAVAILABLE")
+		consumer.logger.Error("commit media processing offset", "partition", record.Partition,
+			"offset", record.Offset, "failureType", "BROKER_COMMIT_UNAVAILABLE",
+			"attempt", attempt)
+		if attempt == consumer.commitLimit {
+			return fmt.Errorf("media processing offset commit retry exhausted: %w", err)
+		}
 		if err := consumer.sleep(ctx, delay); err != nil {
 			return err
 		}
-		if delay < 4*time.Second {
+		if delay < time.Second {
 			delay *= 2
 		}
 	}
+	return errors.New("media processing offset commit retry exhausted")
 }
 
+// emitRecoveryTelemetry samples durable recovery state and local offsets at a
+// bounded cadence without changing record handling on observer failure.
+func (consumer *Consumer) emitRecoveryTelemetry(ctx context.Context) {
+	if consumer.repository == nil || consumer.observer == nil || ctx.Err() != nil {
+		return
+	}
+	now := consumer.now()
+	if !consumer.lastTelemetry.IsZero() && now.Sub(consumer.lastTelemetry) < consumer.telemetryEvery {
+		return
+	}
+	consumer.lastTelemetry = now
+	telemetryContext, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	recovery, err := consumer.repository.ProcessingRecoveryTelemetry(telemetryContext)
+	if err != nil {
+		consumer.logger.Warn("read media processing recovery telemetry",
+			"failureType", "PERSISTENCE_UNAVAILABLE")
+		return
+	}
+	partitions := make([]int, 0, len(consumer.handledOffsets))
+	for partition := range consumer.handledOffsets {
+		partitions = append(partitions, int(partition))
+	}
+	sort.Ints(partitions)
+	offsets := make([]ProcessingPartitionTelemetry, 0, len(partitions))
+	for _, partitionValue := range partitions {
+		partition := int32(partitionValue)
+		committedOffset, hasCommittedOffset := consumer.committedOffsets[partition]
+		offsets = append(offsets, ProcessingPartitionTelemetry{
+			Partition: partition, LastHandledOffset: consumer.handledOffsets[partition],
+			LastCommittedOffset: committedOffset, HasCommittedOffset: hasCommittedOffset,
+			CommitFailures: consumer.commitFailures[partition],
+		})
+	}
+	consumer.observer.Observe(ProcessingConsumerTelemetry{
+		Recovery: recovery, BreakerState: consumer.circuit.state(), Partitions: offsets,
+	})
+}
+
+// handle maps one record to a durable poison, retry, terminal, success, or
+// exact-duplicate outcome before offset acknowledgement is attempted.
 func (consumer *Consumer) handle(ctx context.Context, record *kgo.Record) error {
+	consumer.prepare()
 	message, err := parseProcessingRequest(record)
 	if err != nil {
 		sanitized := invalidMessage(record)
 		return consumer.repository.RecordInvalidProcessingMessage(ctx, sanitized, "INVALID_PROCESSING_REQUEST")
 	}
+	conflictRetries := 0
 	for {
 		claim, err := consumer.repository.ClaimProcessingJob(ctx, message, consumer.owner, consumer.lease)
 		if errors.Is(err, persistence.ErrVersionGap) {
@@ -187,6 +591,10 @@ func (consumer *Consumer) handle(ctx context.Context, record *kgo.Record) error 
 			case persistence.ProcessingConflictTerminalConflict:
 				return nil
 			case persistence.ProcessingConflictRetryAt:
+				conflictRetries++
+				if conflictRetries > processingPersistenceAttemptLimit {
+					return persistence.ErrConflict
+				}
 				delay := time.Until(resolution.RetryAt)
 				if delay <= 0 {
 					delay = 100 * time.Millisecond
@@ -205,10 +613,21 @@ func (consumer *Consumer) handle(ctx context.Context, record *kgo.Record) error 
 		if claim.Duplicate {
 			return nil
 		}
+		if claim.AttemptBudgetExhausted {
+			err := consumer.repository.RecordProcessingAttemptExhaustion(ctx, claim.Job)
+			if err == nil {
+				consumer.publish(claim.Job, "MEDIA_CHANGED")
+			}
+			return err
+		}
+		if err := consumer.circuit.wait(ctx, consumer.sleep); err != nil {
+			return err
+		}
 		processingContext, cancel := context.WithTimeout(ctx, consumer.timeout)
-		variants, processErr := consumer.processor.Process(processingContext, claim.Job)
+		variants, processErr := consumer.processJob(processingContext, claim.Job)
 		cancel()
 		if processErr == nil {
+			consumer.circuit.success()
 			err := consumer.repository.CompleteProcessingJob(ctx, claim.Job, variants)
 			if err == nil {
 				consumer.publish(claim.Job, "MEDIA_CHANGED")
@@ -216,13 +635,21 @@ func (consumer *Consumer) handle(ctx context.Context, record *kgo.Record) error 
 			return err
 		}
 		job := claim.Job
-		if !transient(processErr) {
+		switch classifyProcessingFailure(processErr) {
+		case processingFailureCanceled:
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return processErr
+		case processingFailureTerminal:
+			consumer.circuit.success()
 			_, _, err = consumer.repository.RecordProcessingFailure(ctx, job, "VALIDATION_FAILED")
 			if err == nil {
 				consumer.publish(job, "MEDIA_CHANGED")
 			}
 			return err
 		}
+		consumer.circuit.failure()
 		delay, terminal, err := consumer.repository.RecordProcessingFailure(ctx, job, "PROCESSING_DEPENDENCY_UNAVAILABLE")
 		if err != nil || terminal {
 			if err == nil && terminal {
@@ -262,6 +689,7 @@ func sleepProcessingConsumer(ctx context.Context, delay time.Duration) error {
 	}
 }
 
+// Close stops Kafka consumption and releases this worker's processing leases.
 func (consumer *Consumer) Close(ctx context.Context) error {
 	consumer.client.Close()
 	return consumer.repository.ReleaseProcessingLeases(ctx, consumer.owner)
@@ -387,7 +815,19 @@ func nullableUUID(value json.RawMessage) bool {
 	return err == nil
 }
 
-func transient(err error) bool {
+func classifyProcessingFailure(err error) processingFailureClass {
+	if errors.Is(err, context.Canceled) {
+		return processingFailureCanceled
+	}
+	if errors.Is(err, storage.ErrObjectVersionMismatch) {
+		return processingFailureTerminal
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, storage.ErrDependency) {
+		return processingFailureTransient
+	}
 	var networkError net.Error
-	return errors.As(err, &networkError) || strings.Contains(err.Error(), "MinIO")
+	if errors.As(err, &networkError) || strings.Contains(err.Error(), "MinIO") {
+		return processingFailureTransient
+	}
+	return processingFailureTerminal
 }

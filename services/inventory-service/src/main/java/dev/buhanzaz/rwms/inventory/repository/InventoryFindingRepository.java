@@ -14,6 +14,9 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data repository for service-local inventory finding persistence.
+ */
 public interface InventoryFindingRepository extends JpaRepository<InventoryFinding, UUID> {
   Optional<InventoryFinding> findByIdAndInventoryId(UUID id, UUID inventoryId);
 

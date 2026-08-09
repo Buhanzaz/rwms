@@ -14,6 +14,7 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/** Application service for RepairComplexitySettingsService; it coordinates maintenance-owned state and durable effects. */
 @Service
 public class RepairComplexitySettingsService {
   private static final List<RepairExecutionState> RECALCULATED_STATES =

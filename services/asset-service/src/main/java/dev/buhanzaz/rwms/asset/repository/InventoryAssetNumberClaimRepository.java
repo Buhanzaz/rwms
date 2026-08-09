@@ -9,6 +9,9 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data repository for service-local inventory asset number claim persistence.
+ */
 public interface InventoryAssetNumberClaimRepository
     extends JpaRepository<InventoryAssetNumberClaim, UUID> {
   boolean existsByWarehouseIdAndIdentityMatchKey(UUID warehouseId, String identityMatchKey);

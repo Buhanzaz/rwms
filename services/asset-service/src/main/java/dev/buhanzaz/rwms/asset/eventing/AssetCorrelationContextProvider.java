@@ -6,6 +6,10 @@ import java.util.UUID;
 import org.slf4j.MDC;
 import org.springframework.stereotype.Component;
 
+/**
+ * Supplies the current correlation ID for asset event metadata. It generates a fresh correlation
+ * ID when request MDC data is absent or malformed and leaves causation unset.
+ */
 @Component
 public class AssetCorrelationContextProvider {
   public CorrelationContext current() {

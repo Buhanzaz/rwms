@@ -10,6 +10,9 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data repository for service-local equipment catalog item persistence.
+ */
 public interface EquipmentCatalogItemRepository extends JpaRepository<EquipmentCatalogItem, UUID> {
   boolean existsByNormalizedName(String normalizedName);
 

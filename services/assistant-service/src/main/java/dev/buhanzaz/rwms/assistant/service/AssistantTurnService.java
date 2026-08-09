@@ -22,6 +22,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Runs one asynchronous LLM-assisted turn, persists the server-authoritative outcome and streams
+ * only safe SSE events.
+ */
 @Service
 public class AssistantTurnService {
   private static final int MAX_TOOL_ROUNDS = 6;
@@ -34,136 +38,71 @@ public class AssistantTurnService {
               + "уточните\\s+запрос|нет\\s+(?:свобод[а-я]*|вариант[а-я]*|результат[а-я]*|"
               + "данных|кабин[а-я]*|связ[а-я]*)|unavailable|not\\s+found|technical\\s+error|"
               + "try\\s+again)");
-  private static final String ALTERNATIVE_SEARCH_REMINDER =
+  private static final String OUTCOME_TOOL_REMINDER =
       """
-      The immediately preceding exact cabin search returned no cabins. Do not
-      answer or ask whether alternatives are wanted. Call search_available_cabins
-      now with broader alternative groups made by removing one requested filter
-      at a time. The tool result, not a textual guess, must supply the alternatives.
-      """;
-  private static final String FRESH_SEARCH_REMINDER =
-      """
-      This current user turn still has no fresh cabin-search attempt. Do not
-      answer yet. Call search_available_cabins now. A tool failure is a current
-      technical failure that must not be mentioned in final prose; it is never
-      evidence that no cabins are available.
+      This user turn still has no authoritative outcome. Do not answer yet. For
+      availability, call search_available_cabins or request exact clarification
+      buttons. For a factual question, call lookup_cabin_catalog. For requested
+      selection removal, call remove_selected_cabins. Listing facets alone is not
+      an outcome. A tool failure is never evidence that cabins are unavailable.
       """;
   static final String SYSTEM_PROMPT =
       """
-      You are the RWMS rental assistant. Answer only from the current conversation
-      and tool results. You have no database, SQL, web browsing, embeddings, or
-      hidden deterministic parser. Every user turn in this cabin-selection chat
-      must make a fresh search_available_cabins attempt before you return text.
-      The only clarification exception is a successful
-      request_search_merge_confirmation call while the dynamic selection context
-      says that an unexpired unpublished selection exists. That tool asks whether
-      to add to the current selection or replace it; it is not a search. The
-      next user answer still requires a fresh cabin search. The model, not the
-      browser, decides whether a request is explicitly add/append or replace.
-      On the first provider round, use the supplied tools to learn exact facets
-      when needed, then make the required current search. Do not invent
-      availability. Do not request, repeat, or infer client phone numbers or
-      email addresses. Keep answers concise: describe only cabins returned by
-      tools, or use a neutral completion when no cabins were returned.
+      You are the RWMS rental assistant. Answer only from this conversation and
+      current tool results. You have no SQL, browser, hidden catalog, availability
+      state or hold state. Never invent a facet, relation, cabin or availability.
+      Do not request, repeat or infer client phone numbers or email addresses.
 
-      Treat a cabin-facet result only as a bounded list of exact valid filter
-      values. It never proves that a cabin type, finish, or dimension combination
-      is available. Only a cabin-search result proves current availability.
-      The service has no local parser. You may interpret natural language or an
-      apparent typo only after facets provide one reasonably unambiguous exact
-      value; use that exact value in a search and tell the user which value you
-      interpreted. Prefer a unique one-character correction and continue instead
-      of asking; for example, interpret requested "ТВП" as returned facet "ДВП"
-      when no "ТВП" facet exists. Ask only when multiple facet values are equally
-      plausible. Tool arguments must always use an exact returned facet value;
-      never invent a value.
+      Choose one authoritative outcome before replying. For availability or a
+      request to show/select cabins, use list_available_cabin_facets as needed,
+      then search_available_cabins. For factual questions about cabin numbers,
+      types, finishes, dimensions, type-to-dimension relations, characteristics
+      or linoleum, use lookup_cabin_catalog; it is read-only and creates no hold.
+      For ambiguity, use request_cabin_clarifications or let the search service
+      return exact persistent questions. For removal, use remove_selected_cabins.
+      Facets are exact filter metadata, never proof of availability.
 
-      A normal search must contain only groups and units the user explicitly
-      requested. Preserve every applicable prior filter and use the exact user
-      quantity. Every search result contains only FREE cabins. cabinType, finish,
-      dimensions, and category are base exact facets and must use exact values
-      returned by facets. characteristics forwards the user's requested
-      characteristic text exactly; do not invent, normalize, or infer it.
-      Set linoleum to true when the user requests linoleum and false only when
-      the user explicitly requests no linoleum; otherwise omit it. The category
-      is an independent exact facet: use category "Новая" whenever the user
-      explicitly requests new cabins, including "новые", "покажи новые", or
-      "только новые"; the word "только" is not required. "Новая" is a
-      category, never a cabin status. For default, "all", "show", "free",
-      "available", "все", "свободные", or "доступные" requests, omit category
-      so all FREE categories are searched. Preserve the applicable category,
-      as well as filters and quantity, in every follow-up, show-all refresh, and
-      broader alternative search. Do not add extra groups or units. Every
-      distinct requested combination or type needs a separate logical group
-      with its own requested quantity: for example, six БК-1 plus six БК-2 means
-      two groups, each with quantity 6. When the user explicitly requests
-      multiple exact categories for one type, put those exact facet values in
-      that one group's categories array, not in separate logical groups. When a
-      user asks for one total split/divided across cabin types (for example,
-      "Покажи 10 свободных бытовок в СПБ, подели по типам, категории только
-      Обычная или ИТР"), list facets first, create one logical group for every
-      exact applicable cabin type, put categories ["Обычная", "ИТР"] in each
-      group, omit every group quantity, and set totalQuantity to 10. The
-      categories array is exact OR filtering; never use category and categories
-      together. Do not use totalQuantity with per-group quantities. The sum of
-      explicit per-group quantities must not exceed 100. Every request to show, repeat,
-      retry, refresh, recheck, or search for cabins requires at least one new
-      search_available_cabins call in that same turn. Never claim current
-      availability from an earlier search result; use history only to recover
-      the applicable structured filters. When the user explicitly asks to show
-      all/everything available (including a follow-up such as "show all" or
-      "покажи все") without changing filters, that asks to expand the last
-      applicable search, not to discard its filters: refresh/check facets, then
-      call search_available_cabins again with the same exact filters and quantity
-      30, the tool maximum. If the search returns fewer cabins, show every cabin
-      returned instead of replying with only a count.
+      Every availability group must have an exact current cabinType and finish
+      before any result or hold. A finish such as ЛДСП, ОСБ or ДВП is not a cabin
+      type: for “покажи 2 ЛДСП”, preserve finish ЛДСП and quantity 2, then ask
+      which cabin type is needed. If ОСБ and ЛДСП each need a choice, create two
+      independent questions with different stable branchKey values. Never combine
+      those branches; either may be answered first while the other stays pending.
+      Use only options returned by current metadata.
 
-      An empty exact search is the only exception to the rule against additional
-      groups. Do not answer immediately and do not merely name possible
-      alternatives. You MUST make one additional search_available_cabins call
-      for real alternatives. Derive each alternative by removing exactly one of
-      the empty group's requested filters while preserving the warehouse and all
-      remaining filters; never replace a filter with a guessed value. Preserve
-      the requested quantity, except that an explicit show-all request uses
-      quantity 30 for alternatives too. For example, if cabinType plus finish is
-      empty, search once by the same cabinType without finish and once by the
-      same finish without cabinType. In the final prose, describe only cabins
-      actually returned by tools; do not mention that an exact group was absent
-      or unavailable, a requested quantity was incomplete, alternatives, a
-      technical failure, an error, or a retry. The panel renders those outcomes
-      separately from structured tool notices. Never present alternatives as an
-      exact match or silently substitute them. Use at most three tool-call rounds
-      in a turn so that a final answer can still be produced.
+      Dimensions must be related to the selected exact type. If that type has one
+      current size, omission may resolve to it. If it has several, ask with exact
+      size buttons before searching. Interpret “6 метров” only through current
+      type-dimension relations as an exact 6x2.4-equivalent facet. If type is
+      missing, narrow the type buttons to compatible relations; auto-resolve only
+      one compatible type and never apply a global six-metre guess. “Модуль” or
+      “пост охраны” may be proposed only when the returned relations contain those
+      exact related choices. Never manufacture a relation.
 
-      A search result can contain structured notices. They are authoritative
-      UI-only availability feedback and are rendered after your response. Do
-      not repeat, paraphrase, summarise, or otherwise refer to a
-      CABINS_NOT_FOUND or CABINS_PARTIALLY_FOUND notice in final prose. If no
-      cabins were returned, use a short neutral completion such as "Подбор
-      обновлён." without explaining why. Do not describe a technical failure in
-      final prose either; the panel handles it separately.
+      Use exact returned category and characteristics values. Set linoleum=true
+      only when linoleum is requested, false only when explicitly excluded, and
+      otherwise omit it. Multiple requested types/combinations are separate
+      groups. Use the user’s exact quantity (30 only for an explicit show-all).
+      Do not add cabins or groups the user did not request. Omitted resultMode is
+      REPLACE. APPEND is allowed only when the user explicitly chooses to add;
+      otherwise ask a SEARCH_MERGE question with exact APPEND/REPLACE buttons when
+      an active selection exists. APPEND must use at most one exact category and
+      per-group quantities; never use shared-total/category capacity probes for
+      APPEND.
 
-      When the dynamic selection context says an active unpublished selection
-      exists, use request_search_merge_confirmation only when the latest user
-      request introduces an additional new cabin group, type, or set and does
-      not explicitly say add/append or replace. Do not ask that question for a
-      normal refresh, retry, recheck, "show all such cabins", or a refinement of
-      the currently displayed request; those must make a fresh REPLACE search
-      directly unless the user explicitly asks to append. After a merge
-      clarification, ask exactly whether to add to the current selection or
-      replace it and do not run a cabin search in that clarification turn. After
-      a later add/yes answer, make the fresh search with resultMode APPEND.
-      After a later replace/no answer, make it with resultMode REPLACE. If there
-      is no active selection, that confirmation tool is unavailable and you must
-      not ask about old history.
+      A successful search result contains only current held FREE cabins. Describe
+      only those returned cabins. Structured notices are rendered by the panel;
+      do not paraphrase CABINS_NOT_FOUND or CABINS_PARTIALLY_FOUND. If no cabins
+      are returned, say only “Подбор обновлён.” After results, you may offer other
+      search parameters only from the result’s filterSuggestions arrays; never
+      invent a follow-up filter. Historical results do not prove current holds.
+      remove_selected_cabins accepts only exact IDs/numbers already in the current
+      authoritative selection; do not construct arbitrary replacement state.
 
-      A tool result with a failure code, including LOGISTICS_UNAVAILABLE,
-      TOOL_FAILED, or TOOL_ARGUMENTS_INVALID, is a technical failure, not an
-      empty search result. Do not mention this failure in final prose and never
-      claim that there are no cabins based on a failure code.
-      INQUIRY_ARCHIVED is different: it means the rental dialog was already
-      completed, not that availability failed. Give a concise completion message
-      and do not offer or attempt another cabin search.
+      A failure code is a technical failure, not an empty result. Do not claim
+      that cabins are absent because of LOGISTICS_UNAVAILABLE, TOOL_FAILED or
+      TOOL_ARGUMENTS_INVALID. INQUIRY_ARCHIVED means the rental dialog is already
+      complete; reply concisely and do not call another tool.
       """;
   private static final String ARCHIVED_INQUIRY_MESSAGE =
       "Этот диалог уже завершён: подборка больше не активна.";
@@ -193,25 +132,47 @@ public class AssistantTurnService {
     this.executor = executor;
   }
 
+  /**
+   * Schedules a provider turn on the bounded assistant executor and returns immediately. The
+   * worker owns message persistence and SSE completion, so callers must not treat this call as a
+   * completed assistant response.
+   */
   public void stream(
       UUID ownerSubjectId,
       UUID conversationId,
       String message,
       String bearerToken,
       SseEmitter emitter) {
+    stream(
+        ownerSubjectId,
+        conversationId,
+        new AssistantApiModels.TurnRequest(message),
+        bearerToken,
+        emitter);
+  }
+
+  /** Schedules either free text or one exact persisted clarification-button answer. */
+  public void stream(
+      UUID ownerSubjectId,
+      UUID conversationId,
+      AssistantApiModels.TurnRequest request,
+      String bearerToken,
+      SseEmitter emitter) {
     executor.execute(
-        () -> runTurn(ownerSubjectId, conversationId, message, bearerToken, emitter));
+        () -> runTurn(ownerSubjectId, conversationId, request, bearerToken, emitter));
   }
 
   private void runTurn(
       UUID ownerSubjectId,
       UUID conversationId,
-      String message,
+      AssistantApiModels.TurnRequest request,
       String bearerToken,
       SseEmitter emitter) {
     try {
       AssistantConversationService.TurnStart started =
-          conversations.beginTurn(ownerSubjectId, conversationId, message);
+          request.clarificationAnswer() == null
+              ? conversations.beginTurn(ownerSubjectId, conversationId, request.message())
+              : conversations.beginTurn(ownerSubjectId, conversationId, request);
       emit(
           emitter,
           new AssistantApiModels.TurnEvent(
@@ -222,26 +183,38 @@ public class AssistantTurnService {
               null,
               null,
               null));
+      if (started.answeredClarification() != null) {
+        emit(
+            emitter,
+            new AssistantApiModels.TurnEvent(
+                "clarification.answered",
+                conversationId,
+                started.userMessageId(),
+                null,
+                null,
+                null,
+                null,
+                started.answeredClarification()));
+      }
 
       boolean hasActiveSearchResult =
           conversations.hasActiveSearchResult(ownerSubjectId, conversationId, bearerToken);
       List<ChatMessage> history = history(ownerSubjectId, conversationId, hasActiveSearchResult);
       StringBuilder completeText = new StringBuilder();
       List<ToolDefinition> toolDefinitions = definitions.definitions(hasActiveSearchResult);
-      FreshSearchGuard freshSearch = new FreshSearchGuard();
-      AlternativeSearchGuard alternativeSearch = new AlternativeSearchGuard();
+      OutcomeToolGuard outcome = new OutcomeToolGuard();
       boolean suppressAvailabilityExplanations = false;
       for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
         ToolCallCollector calls = new ToolCallCollector();
         FinishTracker finish = new FinishTracker();
         StringBuilder roundText = new StringBuilder();
-        boolean toolCallRequired = freshSearch.required() || alternativeSearch.required();
+        boolean toolCallRequired = outcome.required();
         List<ToolDefinition> roundToolDefinitions =
             toolCallRequired && round > 0
                 ? toolDefinitions.stream()
                     .filter(
                         definition ->
-                            AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS.equals(
+                            !AssistantToolDefinitions.LIST_AVAILABLE_CABIN_FACETS.equals(
                                 definition.name()))
                     .toList()
                 : toolDefinitions;
@@ -288,17 +261,16 @@ public class AssistantTurnService {
               completeArchivedInquiryTurn(ownerSubjectId, conversationId, emitter);
               return;
             }
-            freshSearch.record(call.name(), execution.result());
-            alternativeSearch.record(call.name(), execution.result());
+            outcome.record(call.name());
           }
-          addSearchReminder(history, freshSearch, alternativeSearch);
+          addOutcomeReminder(history, outcome);
           continue;
         }
         if (!"stop".equals(finish.reason)) {
           throw new AssistantProviderException("LLM provider did not complete the turn");
         }
         if (toolCallRequired) {
-          addSearchReminder(history, freshSearch, alternativeSearch);
+          addOutcomeReminder(history, outcome);
           continue;
         }
         completeText.append(roundText);
@@ -446,15 +418,9 @@ public class AssistantTurnService {
     return mapper.writeValueAsString(result);
   }
 
-  private static void addSearchReminder(
-      List<ChatMessage> history,
-      FreshSearchGuard freshSearch,
-      AlternativeSearchGuard alternativeSearch) {
-    if (alternativeSearch.required()) {
-      history.add(ChatMessage.system(ALTERNATIVE_SEARCH_REMINDER));
-    } else if (freshSearch.required()) {
-      history.add(ChatMessage.system(FRESH_SEARCH_REMINDER));
-    }
+  private static void addOutcomeReminder(
+      List<ChatMessage> history, OutcomeToolGuard outcome) {
+    if (outcome.required()) history.add(ChatMessage.system(OUTCOME_TOOL_REMINDER));
   }
 
   private static void emit(SseEmitter emitter, AssistantApiModels.TurnEvent event) {
@@ -473,10 +439,12 @@ public class AssistantTurnService {
     emitter.complete();
   }
 
+  /** Captures the provider finish reason for one streamed round. */
   private static final class FinishTracker {
     private String reason;
   }
 
+  /** Reassembles indexed streamed tool-call fragments into complete provider calls. */
   private static final class ToolCallCollector {
     private final Map<Integer, MutableToolCall> calls = new LinkedHashMap<>();
 
@@ -499,60 +467,25 @@ public class AssistantTurnService {
     }
   }
 
+  /** Mutable fragment accumulator scoped to one provider tool-call index. */
   private static final class MutableToolCall {
     private String id;
     private String name;
     private final StringBuilder arguments = new StringBuilder();
   }
 
-  private static final class FreshSearchGuard {
+  /** Tracks whether a turn has reached one authoritative use-case outcome. */
+  private static final class OutcomeToolGuard {
     private boolean required = true;
 
     boolean required() {
       return required;
     }
 
-    void record(String toolName, tools.jackson.databind.JsonNode result) {
-      if (AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS.equals(toolName)) {
-        required = false;
-        return;
-      }
-      if (AssistantToolDefinitions.REQUEST_SEARCH_MERGE_CONFIRMATION.equals(toolName)
-          && AssistantToolDefinitions.REQUEST_SEARCH_MERGE_CONFIRMATION.equals(
-              result.path("tool").asText())) {
+    void record(String toolName) {
+      if (!AssistantToolDefinitions.LIST_AVAILABLE_CABIN_FACETS.equals(toolName)) {
         required = false;
       }
-    }
-  }
-
-  private static final class AlternativeSearchGuard {
-    private boolean required;
-    private boolean alternativeAttempted;
-
-    boolean required() {
-      return required;
-    }
-
-    void record(String toolName, tools.jackson.databind.JsonNode result) {
-      if (!AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS.equals(toolName)) return;
-      if (required) {
-        required = false;
-        alternativeAttempted = true;
-        return;
-      }
-      if (!alternativeAttempted && isEmptyCabinSearch(result)) {
-        required = true;
-      }
-    }
-
-    private static boolean isEmptyCabinSearch(tools.jackson.databind.JsonNode result) {
-      tools.jackson.databind.JsonNode groups = result.path("data").path("groups");
-      if (!groups.isArray()) return false;
-      for (tools.jackson.databind.JsonNode group : groups) {
-        tools.jackson.databind.JsonNode cabins = group.path("cabins");
-        if (!cabins.isArray() || !cabins.isEmpty()) return false;
-      }
-      return true;
     }
   }
 }

@@ -16,6 +16,9 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 import org.springframework.data.domain.Persistable;
 
+/**
+ * JPA entity that persists inventory finding in the inventory-owned database.
+ */
 @Entity
 @Table(name = "inventory_finding")
 public class InventoryFinding implements Persistable<UUID> {

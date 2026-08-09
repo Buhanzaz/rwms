@@ -10,6 +10,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Component;
 
+/** Enforces maintenance user, service-credential, role and warehouse-access rules. */
 @Component
 public class MaintenanceAuthorizer {
   private static final UUID DEV_SUBJECT = UUID.fromString("00000000-0000-0000-0000-0000000000d6");

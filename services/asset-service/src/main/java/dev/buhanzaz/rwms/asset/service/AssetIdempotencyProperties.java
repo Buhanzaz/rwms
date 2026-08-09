@@ -3,6 +3,9 @@ package dev.buhanzaz.rwms.asset.service;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+/**
+ * Configuration value for asset idempotency.
+ */
 @ConfigurationProperties("rwms.asset.idempotency")
 public class AssetIdempotencyProperties {
   private Duration retention = Duration.ofDays(7);

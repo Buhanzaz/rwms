@@ -33,6 +33,10 @@ import java.util.List;
 import java.util.UUID;
 import tools.jackson.databind.JsonNode;
 
+/**
+ * HTTP transport model container for inventory.
+ * Its records are boundary representations, not persistence entities.
+ */
 public final class InventoryApiModels {
   private InventoryApiModels() {}
 

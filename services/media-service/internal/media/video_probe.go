@@ -11,18 +11,24 @@ import (
 	"time"
 )
 
+// VideoMetadata is the codec, container, and duration needed to validate an
+// uploaded video before it becomes a media generation.
 type VideoMetadata struct {
 	Codec     string
 	Container string
 	Duration  time.Duration
 }
 
+// VideoProbe obtains validated metadata from a temporary immutable video file.
 type VideoProbe interface {
 	Probe(context.Context, string) (VideoMetadata, error)
 }
 
+// FFprobe is the production VideoProbe backed by the ffprobe executable.
 type FFprobe struct{}
 
+// Probe runs ffprobe with bounded output and parses the first video stream's
+// codec together with the container and duration.
 func (FFprobe) Probe(ctx context.Context, path string) (VideoMetadata, error) {
 	command := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-select_streams", "v:0",
 		"-show_entries", "stream=codec_name", "-show_entries", "format=format_name,duration",
@@ -59,6 +65,7 @@ func (FFprobe) Probe(ctx context.Context, path string) (VideoMetadata, error) {
 
 type boundedProbeBuffer struct{ bytes.Buffer }
 
+// Write implements io.Writer while rejecting ffprobe output above the diagnostic bound.
 func (buffer *boundedProbeBuffer) Write(value []byte) (int, error) {
 	const maximum = 64 << 10
 	if buffer.Len()+len(value) > maximum {
@@ -69,6 +76,7 @@ func (buffer *boundedProbeBuffer) Write(value []byte) (int, error) {
 
 type boundedDiagnosticBuffer struct{ bytes.Buffer }
 
+// Write implements io.Writer while retaining only the bounded diagnostic prefix.
 func (buffer *boundedDiagnosticBuffer) Write(value []byte) (int, error) {
 	const maximum = 4096
 	original := len(value)

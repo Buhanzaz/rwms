@@ -22,6 +22,13 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.validation.annotation.Validated;
 
+/**
+ * Private maintenance-service boundary for durable references to global queue definitions.
+ *
+ * <p>References prevent a catalog-driven process definition from being deleted while maintenance
+ * still relies on it. The caller identity is derived from the service credential, not a request
+ * field.
+ */
 @RestController
 @RequestMapping("/api/internal/queue-definitions")
 @Validated
@@ -35,6 +42,7 @@ public class InternalQueueReferenceController {
     this.access = access;
   }
 
+  /** Registers a typed external reference against one global queue definition. */
   @PostMapping("/{queueDefinitionId}/references")
   public QueueReferenceDto register(
       @AuthenticationPrincipal Jwt jwt,
@@ -44,6 +52,7 @@ public class InternalQueueReferenceController {
     return registry.registerReference(queueDefinitionId, request);
   }
 
+  /** Deletes a previously registered typed external reference under its version fence. */
   @DeleteMapping("/references/{type}/{externalReferenceId}")
   @ResponseStatus(HttpStatus.NO_CONTENT)
   public void delete(

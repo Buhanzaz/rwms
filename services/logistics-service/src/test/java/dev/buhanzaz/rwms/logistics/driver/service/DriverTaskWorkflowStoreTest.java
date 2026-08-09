@@ -17,6 +17,7 @@ import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -314,7 +315,7 @@ class DriverTaskWorkflowStoreTest {
         .thenReturn(Optional.of(task));
     var compensation =
         new MaintenanceDriverTaskCompensationService(
-                tasks, mock(LogisticsDependencyGateway.class))
+                tasks, mock(LogisticsDependencyGateway.class), mock(LogisticsTransactionLock.class))
             .lookup(task.getRepairId(), DriverTaskKind.DELIVER_TO_REPAIR);
 
     assertThat(compensation.outcome())

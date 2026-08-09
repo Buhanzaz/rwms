@@ -22,6 +22,7 @@ import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/** Enforces exact event-type fields and task-board data-minimization rules before publication/use. */
 @Component
 public class TaskBoardEventPayloadPolicy {
   private static final Set<String> FORBIDDEN_FIELDS = Set.of(

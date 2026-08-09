@@ -7,6 +7,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Component;
 
+/** Derives the opaque event actor reference from a validated JWT without copying profile data. */
 @Component
 public class WarehouseActorReferenceProvider {
   public OpaqueActorReference current() {

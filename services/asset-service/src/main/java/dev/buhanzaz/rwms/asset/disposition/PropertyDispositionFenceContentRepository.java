@@ -4,6 +4,9 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/**
+ * Spring Data repository for service-local property disposition fence content persistence.
+ */
 public interface PropertyDispositionFenceContentRepository
     extends JpaRepository<PropertyDispositionFenceContent, UUID> {
   List<PropertyDispositionFenceContent> findAllByDecisionIdOrderByEquipmentIdAsc(UUID decisionId);

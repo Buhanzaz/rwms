@@ -1,5 +1,7 @@
 # RWMS Media Service
 
+[Русская версия](README.ru.md)
+
 `media-service` is the single stateful Go runtime for upload authorization,
 metadata, immutable MinIO object generations, image/video processing and media
 facts. PostgreSQL is its replay authority; Kafka is at-least-once transport.
@@ -19,6 +21,56 @@ Images produce `SMALL`, `MEDIUM`, `LARGE` WebP variants and an authorized
 original-only and validated with FFprobe. An unproved video dimension remains
 SQL `NULL`.
 
+## Why this service exists
+
+Media is not a generic shared file bucket in RWMS. A photograph or video is
+business evidence that must remain attributable to one warehouse owner, survive
+retries without duplicate objects, and be read without exposing storage
+credentials. Keeping that responsibility in one stateful service gives every
+domain the same safe media lifecycle while preserving its own aggregate
+ownership.
+
+This design solves four concrete problems:
+
+- **Private storage:** browsers and other domain services never receive a
+  MinIO endpoint, object key, signed URL, or credential.
+- **Correct retries:** an `Idempotency-Key` creates one logical media asset;
+  an expired unfinished upload session is replaced for that same asset, never
+  duplicated. Completed content is never reopened or overwritten.
+- **Authoritative access:** public reads and mutations require a USER/WORKER
+  JWT plus a current local owner proof and warehouse scope. Caller-provided
+  owner or warehouse values are never trusted by themselves.
+- **Recoverable delivery:** PostgreSQL owns state and exact replay; Kafka
+  carries at-least-once facts through a transactional outbox and idempotent
+  consumers. A broker outage cannot make Kafka the media database.
+
+## How the lifecycle works
+
+The canonical HTTP boundary is
+[`contracts/openapi/media-service.yaml`](../../contracts/openapi/media-service.yaml).
+Interactive clients use the public same-origin media routes through the API
+gateway; private `/api/internal/**` routes are service-to-service only.
+
+1. A client creates an upload session with an `Idempotency-Key`, the proven
+   owner context, declared MIME type, length, and SHA-256 checksum.
+2. It streams bytes to the returned same-origin content path. Media-service
+   serializes ingress for that session, verifies the declared content and pins
+   the exact private MinIO version.
+3. It completes the session with the same idempotency key. The service commits
+   the upload fact and processing request atomically.
+4. A Kafka worker creates a canonical image original plus WebP variants, or
+   validates and copies a video original. It then publishes a safe
+   invalidation; clients refresh their scoped projection.
+5. Scoped reads stream only the pinned object version through media-service
+   with `private, no-store` headers. Logical deletion changes PostgreSQL state
+   and emits one fact; it never physically deletes versioned bytes.
+
+The design deliberately avoids direct client-to-MinIO uploads and mutable
+public URLs. Those approaches would leak storage authority, make object
+versions and retry outcomes ambiguous, and let an owner change race a media
+read. The service instead makes authorization, version pinning, and ownership
+checks one coherent server-side operation.
+
 ## Schema startup gate
 
 Flyway is external to this process. Apply
@@ -33,12 +85,13 @@ Flyway is external to this process. Apply
 `db/migration/V7__dynamic_cabin_owner_projection.sql`, then
 `db/migration/V8__task_board_worker_media.sql` and
 `db/migration/V9__asset_import_worker.sql`, then
-`db/migration/V10__canonical_cabin_photo_library.sql` before starting the service. The
-Go application never migrates, baselines, repairs or silently adopts a
-database.
+`db/migration/V10__canonical_cabin_photo_library.sql`, then
+`db/migration/V11__bounded_media_processing_recovery.sql` before starting the
+service. The Go application never migrates, baselines, repairs or silently
+adopts a database.
 
-- New local/test databases migrate through V1 to V10.
-- A database already at the exact V9 history is upgraded by applying V10.
+- New local/test databases migrate through V1 to V11.
+- A database already at the exact V10 history is upgraded by applying V11.
 - `baselineOnMigrate` must remain `false`; a non-empty unversioned database is
   rejected.
 - Startup verifies both successful Flyway history rows, their versions,
@@ -85,9 +138,11 @@ absent.
 When a video MIME type is allowed, `MEDIA_MAX_VIDEO_DURATION` and the
 comma-separated `MEDIA_ALLOWED_VIDEO_CODECS` are also required.
 
-Optional settings are `MEDIA_HTTP_ADDRESS` (default `:8085`) and
-`MEDIA_AUTH_AUDIENCE` (default `rwms-services`). The processing group and topic
-variables have canonical defaults and may not be changed:
+Optional settings are `MEDIA_HTTP_ADDRESS` (default `:8085`),
+`MEDIA_MANAGEMENT_ADDRESS` (default `127.0.0.1:9095`, an explicit numeric IPv4
+or IPv6 loopback host with a non-zero TCP port), and `MEDIA_AUTH_AUDIENCE`
+(default `rwms-services`). The processing group and topic variables have
+canonical defaults and may not be changed:
 `media-service-processing-v1`, `rwms.media.media.v1` and
 `rwms.media.processing.v1`. Terminal processing failures publish only a
 hash-only record to
@@ -204,6 +259,66 @@ retries; validation is terminal on its actual attempt. A DLT record uses the
 source processing-job UUID key for a valid request, or deterministic UUIDv5 in
 the OID namespace over SHA-256 of the raw bytes for an invalid request.
 
+## Bounded processing recovery
+
+The processing consumer classifies malformed Kafka input, a transient object
+dependency/timeout, a terminal processor result and an offset-commit failure as
+separate outcomes. Its exact behavior is owned by
+[`internal/worker/consumer.go`](internal/worker/consumer.go) and the durable
+state transition is owned by
+[`internal/persistence/worker.go`](internal/persistence/worker.go).
+
+- A poison record is written as a hash-only `INVALID_PROCESSING_REQUEST` DLT
+  before its offset is acknowledged, so the next valid record can proceed.
+- A dependency failure receives at most four attempts in one durable cycle,
+  with 1s/2s/4s retry scheduling. Two consecutive dependency failures open a
+  five-second circuit; the next attempt is a single half-open probe. A
+  validation or other permanent processor result is terminal on its current
+  attempt.
+- If the fourth lease expires before an outcome is persisted, one claimant
+  receives a new fence without incrementing either attempt counter and records
+  `PROCESSING_ATTEMPT_EXHAUSTED` without a fifth processor call. The same code
+  is emitted in the sanitized DLT under the compatible closed enum in
+  [`media-processing-dlt-v1.schema.json`](../../contracts/events/media/media-processing-dlt-v1.schema.json).
+- Persistence of an outcome is retried at most four times. Offset commit is
+  retried at most three times, each with a three-second context deadline. On
+  exhaustion or shutdown, the consumer releases the blocked rebalance and
+  leaves the offset uncommitted. A later delivery observes the exact inbox
+  result and cannot create a second READY fact or variant set.
+- [`V11__bounded_media_processing_recovery.sql`](db/migration/V11__bounded_media_processing_recovery.sql)
+  constrains the per-cycle attempt to `0..4` and stores versioned terminal and
+  review evidence. Review identity, reviewer UUID, closed decision/reason and
+  source message SHA-256 are retained; source payload, object coordinates and
+  free-form errors are not. An existing failed job is linked to source evidence
+  only when exactly one eligible DLT row exists; zero or multiple rows become
+  `LEGACY_TERMINAL` without guessed source identity.
+- A retry approval is evidence only. It is version-fenced and idempotent, but
+  does not requeue a terminal job. There is currently no authenticated operator
+  API/command for that follow-up transition; it must be designed before retry
+  execution is exposed. `ATTEMPT_BUDGET_RESET` records review of an exhausted
+  attempt cycle but likewise performs no reset or requeue by itself.
+
+The typed, fixed-cardinality recovery snapshot continues to be emitted through
+structured logs and is also copied to standard-library OpenMetrics text at
+`GET /metrics`. [`cmd/media-service/main.go`](cmd/media-service/main.go)
+composes the exporter from
+[`internal/observability/processing_metrics.go`](internal/observability/processing_metrics.go)
+with the separate private listener in
+[`cmd/media-service/metrics_runtime.go`](cmd/media-service/metrics_runtime.go).
+[`internal/config/config.go`](internal/config/config.go) rejects wildcard,
+hostname, public, non-loopback and zero-port management binds; the public
+`api.Server` handler receives no metrics route.
+
+The exporter exposes durable active/pending/running and terminal-review counts,
+oldest active age, maximum cycle attempt, and the fixed one-hot
+closed/open/half-open breaker state. Handled and committed offsets use only a
+numeric `partition` label; an unavailable committed offset is omitted. Each
+current snapshot retains at most the lowest 64 non-negative partition IDs, so
+partition labels cannot grow without a cap. It contains no media, event or user
+IDs, payload, error text, topic label or free-form label. Alert thresholds and
+runtime rollout remain open because the Task 0 baseline and deployment
+authorization are absent.
+
 ## Private logistics media boundaries
 
 `POST /api/internal/media/v1/logistics/references/validate` requires the exact `logistics-service` SERVICE JWT with
@@ -233,6 +348,30 @@ warehouse, state, generation and variant mismatch is an opaque 404. There is
 no public logistics presentation-media route; logistics owns any later
 browser-facing proxy.
 
+## Structural architecture gate
+
+[`internal/architecture/architecture_test.go`](internal/architecture/architecture_test.go)
+parses non-test Go source and derives the module identity from `go.mod`. It
+requires this module to retain exactly one executable package at
+`cmd/media-service`, then checks that the service-local import graph resolves,
+remains acyclic and follows the reviewed foundation, capability, persistence,
+delivery, observability and composition directions. A new production package
+has no implicit role: the gate fails until its ownership direction is reviewed
+and classified.
+
+The same gate prevents public API, worker and observability packages from
+using datastore or object-store clients directly. Observability may consume
+only the typed worker snapshot, and telemetry structures and structured-log
+keys cannot acquire payload, credential, domain-identity, object-coordinate or
+raw-error details. These are source boundaries, not substitutes for runtime,
+contract or integration tests.
+
+Run the focused gate with:
+
+```bash
+go test ./internal/architecture -count=1
+```
+
 ## Local verification
 
 The build host needs Go 1.25, CGO, libvips, FFmpeg and FFprobe.
@@ -244,6 +383,6 @@ go build -trimpath -o /tmp/rwms-media-service ./cmd/media-service
 ```
 
 Migration verification must run separately with Flyway and PostgreSQL and cover
-clean V1-to-V10 install, V9-to-V10 upgrade, repeat, checksum drift and non-empty
+clean V1-to-V11 install, V10-to-V11 upgrade, repeat, checksum drift and non-empty
 unversioned rejection. MinIO integration checks must use a versioned local/test
 bucket; Kafka checks must use the canonical topics and broker acknowledgements.

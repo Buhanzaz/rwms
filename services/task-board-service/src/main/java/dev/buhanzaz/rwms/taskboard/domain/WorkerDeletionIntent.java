@@ -12,6 +12,7 @@ import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import java.time.OffsetDateTime;
 
+/** Durable workflow intent that coordinates worker deletion with auth-service credential effects. */
 @Entity
 @Table(
     name = "worker_deletion_intent",

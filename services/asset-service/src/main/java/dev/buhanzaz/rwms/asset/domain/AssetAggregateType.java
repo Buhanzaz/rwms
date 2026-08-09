@@ -2,6 +2,9 @@ package dev.buhanzaz.rwms.asset.domain;
 
 import java.util.List;
 
+/**
+ * Enumerates permitted asset aggregate type values in the asset persistent workflow state.
+ */
 public enum AssetAggregateType {
   RENTAL_ITEM("rwms.asset.rental-item.v1"),
   EQUIPMENT_CATALOG("rwms.asset.equipment-catalog.v1"),

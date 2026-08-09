@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+/** Writes durable maintenance reconciliation state without taking ownership from its source service. */
 @Service
 public class InventoryRepairReconciliationWriter {
   private static final String DEPENDENCY = "ASSET";

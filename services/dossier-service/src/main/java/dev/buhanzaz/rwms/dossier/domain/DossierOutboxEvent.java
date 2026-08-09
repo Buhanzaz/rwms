@@ -16,6 +16,7 @@ import lombok.NoArgsConstructor;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+/** Transactional outbox record for a committed sanitized dossier activity fact awaiting broker acknowledgement. */
 @Entity
 @Table(name = "dossier_outbox_event")
 @Getter

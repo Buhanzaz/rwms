@@ -11,6 +11,9 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Component;
 
+/**
+ * Authorizes user callers for inventory-owned operations and warehouse scope.
+ */
 @Component
 public class InventoryAuthorizer {
   private static final UUID DEV_SUBJECT = UUID.fromString("00000000-0000-0000-0000-0000000000d7");

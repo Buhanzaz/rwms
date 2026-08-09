@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.maintenance.domain;
 
+/** Enumerates MaintenanceEventType values used by maintenance-owned domain state. */
 public enum MaintenanceEventType {
   CATALOG_IMPORTED("maintenance.catalog-version.imported.v1"),
   CATALOG_CHANGED("maintenance.catalog-version.changed.v1"),

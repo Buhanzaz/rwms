@@ -83,6 +83,8 @@ class DossierTerminalRecoveryTest {
         "b".repeat(64),
         "c".repeat(64),
         DossierDltFailureCode.PROCESSING_FAILED,
+        null,
+        null,
         OffsetDateTime.now());
   }
 }

@@ -54,6 +54,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * HTTP boundary for authenticated rental-order commands and reads.
+ */
 @RestController
 @Validated
 @RequestMapping("/api/logistics/v1")
@@ -185,7 +188,8 @@ public class OrderController {
       @Valid @RequestBody CreateOrderRentalShipmentRequest request,
       HttpServletRequest servletRequest) {
     OrderActor actor = access.writeActor(jwt);
-    UUID warehouseId = orders.rentalShipmentAdmissionWarehouse(actor, orderId);
+    UUID warehouseId =
+        orders.rentalShipmentAdmissionWarehouse(actor, orderId, request.scheduledDate());
     var admission =
         warehouseLifecycle.prepareDocument(
             actor.subjectId(),
@@ -288,8 +292,43 @@ public class OrderController {
       @RequestParam(defaultValue = "") String search,
       @RequestParam(defaultValue = "0") @Min(0) int page,
       @RequestParam(defaultValue = "25") @Min(1) @Max(100) int size) {
-    access.readActor(jwt);
-    return clients.search(type, search, page, size);
+    return clients.search(access.readActor(jwt), type, search, page, size);
+  }
+
+  @GetMapping("/clients/{clientId}")
+  public ResponseEntity<ClientResponse> client(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID clientId) {
+    ClientResponse response = clients.get(access.readActor(jwt), clientId);
+    return ResponseEntity.ok().eTag(Long.toString(response.version())).body(response);
+  }
+
+  @GetMapping("/clients/{clientId}/orders")
+  public OrderPageResponse clientOrders(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID clientId,
+      @RequestParam(defaultValue = "0") @Min(0) int page,
+      @RequestParam(defaultValue = "25") @Min(1) @Max(100) int size,
+      @RequestParam(defaultValue = "updatedAt") String sort,
+      @RequestParam(defaultValue = "DESC") String direction,
+      @RequestParam(required = false) List<RentalOrderStatus> status,
+      @RequestParam(required = false) List<UUID> warehouseId,
+      @RequestParam(required = false)
+          @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
+          OffsetDateTime createdFrom,
+      @RequestParam(required = false)
+          @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
+          OffsetDateTime createdTo) {
+    return clients.orders(
+        access.readActor(jwt),
+        clientId,
+        page,
+        size,
+        sort,
+        direction,
+        status,
+        warehouseId,
+        createdFrom,
+        createdTo);
   }
 
   @PostMapping("/clients")

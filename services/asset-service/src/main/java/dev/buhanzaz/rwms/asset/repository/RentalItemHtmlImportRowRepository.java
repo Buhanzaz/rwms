@@ -9,6 +9,9 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/**
+ * Spring Data repository for service-local rental item html import row persistence.
+ */
 public interface RentalItemHtmlImportRowRepository
     extends JpaRepository<RentalItemHtmlImportRow, UUID> {
   Page<RentalItemHtmlImportRow> findAllByImportIdOrderBySourcePositionAscIdAsc(

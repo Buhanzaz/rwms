@@ -14,8 +14,12 @@ import (
 )
 
 const (
+	// AssetImportService is the only service identity authorized to call the
+	// private Yandex.Disk import API.
 	AssetImportService = "asset-service"
-	AssetImportScope   = "media.asset-import"
+	// AssetImportScope is the sole scope accepted with AssetImportService's
+	// service principal.
+	AssetImportScope = "media.asset-import"
 
 	// MaxSourcesPerJob bounds one durable import while accommodating the known
 	// 415-row legacy Yandex source set.
@@ -27,45 +31,69 @@ const (
 	// than MaxSourcesPerJob*MaxEntriesPerSource, so a large batch of full folders
 	// cannot turn into an unbounded database transaction or activation run.
 	MaxEntriesPerJob = 25_000
-	MaxAttempts      = 3
+	// MaxAttempts bounds transient work retries before a job becomes terminal.
+	MaxAttempts = 3
 )
 
+// Status identifies the durable lifecycle state of an asset-import job.
 type Status string
 
 const (
-	StatusPreflightPending  Status = "PREFLIGHT_PENDING"
-	StatusPreflightRunning  Status = "PREFLIGHT_RUNNING"
-	StatusPreflightReady    Status = "PREFLIGHT_READY"
+	// StatusPreflightPending waits for the worker to enumerate its sources.
+	StatusPreflightPending Status = "PREFLIGHT_PENDING"
+	// StatusPreflightRunning marks a job leased for source enumeration.
+	StatusPreflightRunning Status = "PREFLIGHT_RUNNING"
+	// StatusPreflightReady permits a caller to bind discovered sources to cabins.
+	StatusPreflightReady Status = "PREFLIGHT_READY"
+	// StatusActivationPending waits for the worker to download and ingest files.
 	StatusActivationPending Status = "ACTIVATION_PENDING"
+	// StatusActivationRunning marks a job leased for durable ingestion.
 	StatusActivationRunning Status = "ACTIVATION_RUNNING"
-	StatusCompleted         Status = "COMPLETED"
-	StatusFailed            Status = "FAILED"
+	// StatusCompleted means every accepted source has reached a terminal outcome.
+	StatusCompleted Status = "COMPLETED"
+	// StatusFailed identifies a terminal preflight or activation failure.
+	StatusFailed Status = "FAILED"
 )
 
+// Phase distinguishes durable preflight from activation work and failures.
 type Phase string
 
 const (
-	PhasePreflight  Phase = "PREFLIGHT"
+	// PhasePreflight enumerates remote public resources without downloading them.
+	PhasePreflight Phase = "PREFLIGHT"
+	// PhaseActivation downloads the approved entries into normal media ingress.
 	PhaseActivation Phase = "ACTIVATION"
 )
 
+// EntryStatus is the per-file import outcome within one durable job.
 type EntryStatus string
 
 const (
-	EntryPrepared    EntryStatus = "PREPARED"
+	// EntryPrepared awaits the activation worker.
+	EntryPrepared EntryStatus = "PREPARED"
+	// EntryDownloading is leased by the worker while it reads an external file.
 	EntryDownloading EntryStatus = "DOWNLOADING"
-	EntryImported    EntryStatus = "IMPORTED"
-	EntrySkipped     EntryStatus = "SKIPPED"
-	EntryFailed      EntryStatus = "FAILED"
+	// EntryImported has been durably accepted by normal media ingress.
+	EntryImported EntryStatus = "IMPORTED"
+	// EntrySkipped records a supported terminal warning without importing bytes.
+	EntrySkipped EntryStatus = "SKIPPED"
+	// EntryFailed records a terminal import failure for one discovered file.
+	EntryFailed EntryStatus = "FAILED"
 )
 
 var (
-	ErrNotFound            = errors.New("asset import job not found")
-	ErrConflict            = errors.New("asset import conflict")
+	// ErrNotFound indicates that no durable asset-import job has the requested ID.
+	ErrNotFound = errors.New("asset import job not found")
+	// ErrConflict indicates invalid lifecycle state, request shape, or bounds.
+	ErrConflict = errors.New("asset import conflict")
+	// ErrIdempotencyMismatch rejects reuse of an idempotency key with new input.
 	ErrIdempotencyMismatch = errors.New("asset import idempotency mismatch")
-	ErrOwnerProofMissing   = errors.New("asset import owner proof missing")
-	ErrOwnerMediaLimit     = errors.New("asset import owner media limit reached")
-	ErrLeaseLost           = errors.New("asset import lease lost")
+	// ErrOwnerProofMissing prevents import without a current CABIN owner proof.
+	ErrOwnerProofMissing = errors.New("asset import owner proof missing")
+	// ErrOwnerMediaLimit prevents a source from exceeding its owner's asset cap.
+	ErrOwnerMediaLimit = errors.New("asset import owner media limit reached")
+	// ErrLeaseLost indicates that another worker now owns the durable job lease.
+	ErrLeaseLost = errors.New("asset import lease lost")
 )
 
 // Source retains only the parsed public key. PublicUrl is intentionally not a
@@ -90,6 +118,8 @@ type Entry struct {
 	MediaID      *uuid.UUID
 }
 
+// Job is the private durable state and source/entry inventory for one asset
+// import. HTTP adapters must expose only its deliberately safe projection.
 type Job struct {
 	ID                 uuid.UUID
 	AssetImportID      uuid.UUID
@@ -105,6 +135,8 @@ type Job struct {
 	Entries            []Entry
 }
 
+// CreateCommand requests idempotent source preflight for one asset-service
+// import request.
 type CreateCommand struct {
 	JobID          uuid.UUID
 	AssetImportID  uuid.UUID
@@ -114,11 +146,13 @@ type CreateCommand struct {
 	Sources        []Source
 }
 
+// ActivationBinding assigns one preflight source row to its proven CABIN owner.
 type ActivationBinding struct {
 	SourceRowID uuid.UUID
 	CabinID     uuid.UUID
 }
 
+// ActivateCommand starts idempotent import of a preflight job's cabin bindings.
 type ActivateCommand struct {
 	JobID          uuid.UUID
 	IdempotencyKey uuid.UUID
@@ -126,6 +160,7 @@ type ActivateCommand struct {
 	Bindings       []ActivationBinding
 }
 
+// RetryCommand requests an idempotent retry of a terminal asset-import phase.
 type RetryCommand struct {
 	JobID          uuid.UUID
 	IdempotencyKey uuid.UUID
@@ -149,6 +184,7 @@ type ReplaceSourcesCommand struct {
 	Replacements   []SourceReplacement
 }
 
+// DiscoveredEntry is sanitized remote-file metadata returned by preflight.
 type DiscoveredEntry struct {
 	ID           uuid.UUID
 	SourceRowID  uuid.UUID
@@ -160,11 +196,14 @@ type DiscoveredEntry struct {
 	WarningCode  string
 }
 
+// Work pairs an owned durable job with the lease token required for mutations.
 type Work struct {
 	Job        Job
 	LeaseToken uuid.UUID
 }
 
+// ImportAssetCommand records one externally downloaded file through the normal
+// versioned media ingress and its owner-proof invariants.
 type ImportAssetCommand struct {
 	JobID           uuid.UUID
 	LeaseToken      uuid.UUID
@@ -182,6 +221,7 @@ type ImportAssetCommand struct {
 	CorrelationID   uuid.UUID
 }
 
+// ImportAssetResult identifies the logical media asset created for one entry.
 type ImportAssetResult struct {
 	MediaID uuid.UUID
 }
@@ -212,11 +252,15 @@ type YandexPublicResources interface {
 	DownloadArchive(context.Context, string) (io.ReadCloser, DownloadMetadata, error)
 }
 
+// DownloadMetadata describes a streamed external payload without retaining its
+// temporary URL.
 type DownloadMetadata struct {
 	ContentType   string
 	ContentLength int64
 }
 
+// ObjectStore is the narrow versioned-ingress dependency needed by the import
+// worker.
 type ObjectStore interface {
 	PutIngressVersion(context.Context, string, io.Reader, int64, string, string) (media.ObjectMetadata, error)
 }

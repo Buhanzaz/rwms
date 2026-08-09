@@ -5,6 +5,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/** Locks and finds durable worker-deletion reconciliation intents. */
 public interface WorkerDeletionIntentRepository extends JpaRepository<WorkerDeletionIntent, UUID> {
   Optional<WorkerDeletionIntent> findByWorkerId(UUID workerId);
 }

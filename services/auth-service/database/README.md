@@ -1,5 +1,7 @@
 # Auth database migration evidence
 
+[Русская версия](README.ru.md)
+
 Flyway is the active auth schema migration, version and checksum authority.
 The cumulative clean-install migration is
 `src/main/resources/db/migration/V2__auth_schema.sql`. An existing post-F1C

@@ -7,6 +7,10 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Component;
 
+/**
+ * Extracts a safe opaque actor reference from the authenticated JWT for maintenance event facts;
+ * unavailable or malformed identities are represented as no actor rather than token data.
+ */
 @Component
 public class MaintenanceActorReferenceProvider {
   public OpaqueActorReference current() {

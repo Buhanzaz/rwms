@@ -6,6 +6,9 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.MessageChannel;
 
+/**
+ * Declares the asset Kafka output channels used by the transactional-outbox relay.
+ */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")
 class AssetKafkaOutputChannelsConfiguration {

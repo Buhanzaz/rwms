@@ -38,8 +38,9 @@ channels:
   rentalInquiryFacts:
     address: rwms.logistics.rental-inquiry.events.v1
     description: >-
-      Minimal booking completion fact used to archive the matching assistant
-      conversation. The conversation UUID is the Kafka record key.
+      Canonical DomainEventEnvelopeV2 booking completion fact used to archive the matching
+      assistant conversation. The payload conversation UUID is the Kafka record key; eventId is
+      stable across at-least-once relay retries.
     messages:
       rentalInquiryBookedV1: { $ref: '#/components/messages/RentalInquiryBookedV1' }
   assetRentalItemFacts:

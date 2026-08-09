@@ -3,7 +3,6 @@ package dev.buhanzaz.rwms.logistics.service;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import java.util.Optional;
-import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -11,29 +10,34 @@ import org.springframework.stereotype.Service;
 @Service
 @RequiredArgsConstructor
 public class ReturnCompletionProcessor {
-  private static final int MAX_STEPS_PER_DRAIN = 500;
-
   private final ReturnCompletionWorkflowStore store;
+  private final LogisticsExternalAttemptClaimService claims;
   private final LogisticsDependencyGateway dependencies;
 
-  public int processUntilIdle(UUID documentId) {
-    if (documentId == null) throw new IllegalArgumentException("documentId is required");
-    int processed = 0;
-    while (processed < MAX_STEPS_PER_DRAIN) {
-      Optional<ReturnCompletionWorkflowStore.Work> work = store.nextWork(documentId);
-      if (work.isEmpty()) return processed;
-      process(work.get());
-      processed++;
+  /**
+   * Executes exactly one claimed completion operation after a short local preflight transaction.
+   * It deliberately returns after one dependency call so other owners retain fair worker access.
+   */
+  public void process(LogisticsExternalAttemptClaimService.Claim claim) {
+    try {
+      Optional<ReturnCompletionWorkflowStore.Work> work = store.workForClaim(claim);
+      if (work.isEmpty()) {
+        defer(claim);
+        return;
+      }
+      process(claim, work.get());
+    } catch (LogisticsExternalAttemptClaimService.StaleClaimException ignored) {
+      // A current claimant, not this worker, owns the result.
     }
-    throw new IllegalStateException("Return completion did not reach a stable local state");
   }
 
-  private void process(ReturnCompletionWorkflowStore.Work work) {
+  private void process(
+      LogisticsExternalAttemptClaimService.Claim claim, ReturnCompletionWorkflowStore.Work work) {
     try {
       switch (work.type()) {
         case MEDIA ->
             store.confirmMedia(
-                work.operationId(),
+                claim,
                 dependencies.validateMediaReferences(
                     LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_RETURN,
                     work.documentId(),
@@ -42,7 +46,7 @@ public class ReturnCompletionProcessor {
                     work.references()));
         case SETTLEMENT ->
             store.confirmSettlement(
-                work.operationId(),
+                claim,
                 dependencies.settleReturn(
                     work.operationId(),
                     work.assetId(),
@@ -55,7 +59,7 @@ public class ReturnCompletionProcessor {
                 work.estimate());
         case MAINTENANCE ->
             store.confirmMaintenance(
-                work.operationId(),
+                claim,
                 dependencies.upsertReturnEstimateSource(
                     work.documentId(),
                     work.lineId(),
@@ -66,7 +70,7 @@ public class ReturnCompletionProcessor {
                     work.references()));
         case RETURN_EQUIPMENT ->
             store.confirmAdditionalEquipmentReceipt(
-                work.operationId(),
+                claim,
                 dependencies.receiveReturnEquipment(
                     work.operationId(),
                     work.documentId(),
@@ -75,7 +79,7 @@ public class ReturnCompletionProcessor {
                     work.returnEquipment()));
         case LEASE_RELEASE ->
             store.confirmLeaseRelease(
-                work.operationId(),
+                claim,
                 dependencies.releaseOperationLease(
                     work.operationId(),
                     work.leaseId(),
@@ -85,15 +89,34 @@ public class ReturnCompletionProcessor {
                     work.documentId(),
                     work.lineId()));
       }
+    } catch (LogisticsExternalAttemptClaimService.StaleClaimException ignored) {
+      // A newer lease may have completed while the dependency call was in flight.
     } catch (LogisticsDependencyException exception) {
-      store.recordFailure(work.operationId(), exception);
+      recordFailure(claim, exception);
     } catch (RuntimeException exception) {
-      store.recordFailure(
-          work.operationId(),
+      recordFailure(
+          claim,
           new LogisticsDependencyException(
               LogisticsDependencyException.FailureKind.TRANSIENT,
               "Logistics dependency outcome is unknown",
               exception));
+    }
+  }
+
+  private void defer(LogisticsExternalAttemptClaimService.Claim claim) {
+    try {
+      claims.defer(claim);
+    } catch (LogisticsExternalAttemptClaimService.StaleClaimException ignored) {
+      // Expiry or a newer claimant determines the next attempt.
+    }
+  }
+
+  private void recordFailure(
+      LogisticsExternalAttemptClaimService.Claim claim, LogisticsDependencyException exception) {
+    try {
+      store.recordFailure(claim, exception);
+    } catch (LogisticsExternalAttemptClaimService.StaleClaimException ignored) {
+      // A stale worker must not replace another worker's terminal result.
     }
   }
 }

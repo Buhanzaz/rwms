@@ -1,5 +1,8 @@
 package dev.buhanzaz.rwms.logistics.eventing;
 
+/**
+ * Enumerates durable logistics event types used in the local event stream and outbox.
+ */
 public enum LogisticsEventType {
   RETURN_CREATED(LogisticsAggregateType.RETURN, "logistics.return.created.v1", "DRAFT"),
   RETURN_REGISTRATION_STARTED(

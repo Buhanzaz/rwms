@@ -21,6 +21,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 
+/**
+ * Warehouse-scoped operational worker profile and credential-workflow projection.
+ *
+ * <p>Authentication secrets and tokens remain auth-service-owned; this entity retains only the
+ * task-board state required for assignment and recoverable credential operations.
+ */
 @Entity
 @Table(
     name = "worker",

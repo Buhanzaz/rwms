@@ -7,6 +7,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/** Persists and locks group responsibility intervals used by KPI evidence generation. */
 public interface GroupKpiResponsibilitySegmentRepository
     extends JpaRepository<GroupKpiResponsibilitySegment, UUID> {
   Optional<GroupKpiResponsibilitySegment> findByQueueEntryIdAndWorkerGroupIdAndOutcome(

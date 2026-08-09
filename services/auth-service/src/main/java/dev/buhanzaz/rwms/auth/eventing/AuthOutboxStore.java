@@ -9,12 +9,27 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Persists and coordinates claims for auth's transactional-outbox records.
+ *
+ * <p>Claims use row locks, expiring leases, and a lease token. Publication is allowed only in
+ * aggregate-version order and only when the durable outbox envelope still exactly matches the
+ * authoritative domain event. This keeps the PostgreSQL event store authoritative while Kafka
+ * remains at-least-once transport.
+ */
 @Repository
 @RequiredArgsConstructor
 public class AuthOutboxStore {
 
     private final JdbcTemplate jdbc;
 
+    /**
+     * Atomically leases one ready record whose earlier aggregate versions have settled.
+     *
+     * @param owner relay instance acquiring the lease
+     * @param leaseDuration maximum time the lease remains valid
+     * @return the fenced claim, or empty when no eligible record exists
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Optional<Claim> claim(String owner, Duration leaseDuration) {
         UUID leaseToken = UUID.randomUUID();
@@ -63,6 +78,12 @@ public class AuthOutboxStore {
                 .findFirst();
     }
 
+    /**
+     * Verifies that the immediately preceding aggregate version is authoritative and settled.
+     *
+     * @param claim currently leased outbox record
+     * @return {@code true} for the first version or a published/baseline predecessor
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public boolean hasValidPredecessor(Claim claim) {
         if (claim.aggregateVersion() == 0) {
@@ -85,6 +106,12 @@ public class AuthOutboxStore {
         return count != null && count == 1;
     }
 
+    /**
+     * Verifies that a claimed outbox envelope is a canonical representation of its domain event.
+     *
+     * @param claim currently leased outbox record
+     * @return {@code true} only when all immutable event and envelope fields agree
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     public boolean hasAuthoritativeEnvelope(Claim claim) {
         Integer count = jdbc.queryForObject(
@@ -153,6 +180,13 @@ public class AuthOutboxStore {
         return count != null && count == 1;
     }
 
+    /**
+     * Marks a broker-acknowledged record published if the caller still owns its lease.
+     *
+     * @param eventId event identifier
+     * @param leaseToken token issued with the claim
+     * @return {@code true} when this settlement won the lease fence
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public boolean published(UUID eventId, UUID leaseToken) {
         return jdbc.update(
@@ -168,6 +202,14 @@ public class AuthOutboxStore {
                 == 1;
     }
 
+    /**
+     * Records a transient publication failure with bounded exponential retry.
+     *
+     * <p>After the fourth failed attempt the record transitions to {@code DLT}; before that it is
+     * returned to {@code PENDING} with a lease-fenced retry time.
+     *
+     * @param claim record whose owned lease failed to publish
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void transientFailure(Claim claim) {
         int failedAttempts = claim.attemptCount() + 1;
@@ -191,11 +233,25 @@ public class AuthOutboxStore {
                 claim.leaseToken());
     }
 
+    /**
+     * Moves a lease-owned record directly to {@code DLT} after validation rejects it.
+     *
+     * @param claim record whose claimed envelope failed validation
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void validationFailure(Claim claim) {
         dlt(claim, "VALIDATION_REJECTED");
     }
 
+    /**
+     * Fences and quarantines a record whose integrity or aggregate-order check failed.
+     *
+     * <p>Quarantine is distinct from retryable publication failure: it intentionally does not
+     * publish or automatically requeue the record.
+     *
+     * @param claim record that failed an authoritative integrity check
+     * @param code stable non-sensitive quarantine reason
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void quarantine(Claim claim, String code) {
         jdbc.update(
@@ -211,6 +267,13 @@ public class AuthOutboxStore {
                 claim.leaseToken());
     }
 
+    /**
+     * Requeues one DLT record after an operator uses its observed attempt count as a fence.
+     *
+     * @param eventId event to requeue
+     * @param expectedAttemptCount attempt count observed by the operator
+     * @return {@code true} only when the DLT record has not changed or been leased since observed
+     */
     @Transactional
     public boolean requeue(UUID eventId, int expectedAttemptCount) {
         return jdbc.update(
@@ -242,6 +305,20 @@ public class AuthOutboxStore {
                 claim.leaseToken());
     }
 
+    /**
+     * Immutable leased outbox record and the token required to settle its state safely.
+     *
+     * @param eventId authoritative event identifier
+     * @param aggregateType aggregate family name
+     * @param aggregateId aggregate identifier
+     * @param aggregateVersion per-aggregate stream version
+     * @param eventType versioned event type
+     * @param topic fixed producer destination
+     * @param envelopeBody canonical serialized event envelope
+     * @param envelopeSha256 checksum of the canonical envelope
+     * @param attemptCount failures recorded before this claim
+     * @param leaseToken token that fences settlement operations
+     */
     public record Claim(
             UUID eventId,
             String aggregateType,

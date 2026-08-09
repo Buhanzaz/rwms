@@ -33,6 +33,9 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Owns manager actions on completed presentation bookings, fenced by expected version and Idempotency-Key.
+ */
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
@@ -53,6 +56,15 @@ public class RentalBookingAlertService {
         .toList();
   }
 
+  /**
+   * Records one manager decision for a completed booking. The action is fenced by expected version
+   * and Idempotency-Key; an exact replay is a no-op while conflicting reuse is rejected.
+   *
+   * @param actor authenticated manager whose booking alert is being changed
+   * @param bookingId completed booking alert to decide
+   * @param idempotencyKey stable key for one manager action
+   * @param request requested action and expected version
+   */
   @Transactional
   public void act(
       OrderActor actor,

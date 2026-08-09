@@ -12,6 +12,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
+/**
+ * Issues and verifies HMAC-signed client presentation identities, including the presentation revision fence.
+ */
 @Component
 public class ClientPresentationTokenService {
   private final byte[] secret;
@@ -32,6 +35,13 @@ public class ClientPresentationTokenService {
     secret = value.getBytes(StandardCharsets.UTF_8);
   }
 
+  /**
+   * Issues a signed token bound to the exact client-presentation identifier and revision.
+   *
+   * @param presentationId presentation that the anonymous holder may resolve
+   * @param revision immutable presentation revision to fence stale links
+   * @return HMAC-signed presentation token
+   */
   public String issue(UUID presentationId, long revision) {
     if (presentationId == null || revision < 1) {
       throw new IllegalArgumentException("Presentation token identity is invalid");
@@ -44,6 +54,13 @@ public class ClientPresentationTokenService {
     return encoded + "." + sign(encoded);
   }
 
+  /**
+   * Validates token structure, HMAC signature and revision encoding before returning its immutable
+   * presentation identity; invalid input is rejected without a fallback identity.
+   *
+   * @param token untrusted token supplied by the public presentation route
+   * @return verified presentation identity and revision
+   */
   public TokenIdentity verify(String token) {
     String value = token == null ? "" : token.trim();
     int separator = value.indexOf('.');

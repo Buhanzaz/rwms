@@ -6,6 +6,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/** Warehouse-scoped queries for worker groups, qualifications, and availability. */
 public interface WorkerGroupRepository extends JpaRepository<WorkerGroup, UUID> {
   List<WorkerGroup> findAllByWarehouseIdOrderByNameAsc(UUID warehouseId);
 

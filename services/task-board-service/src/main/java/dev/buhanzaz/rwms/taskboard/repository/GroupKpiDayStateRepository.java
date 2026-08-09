@@ -8,6 +8,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/** Locks and reads per-group, per-local-date KPI accumulators. */
 public interface GroupKpiDayStateRepository extends JpaRepository<GroupKpiDayState, UUID> {
   Optional<GroupKpiDayState> findByWarehouseIdAndWorkerGroupIdAndLocalDate(
       UUID warehouseId, UUID workerGroupId, LocalDate localDate);

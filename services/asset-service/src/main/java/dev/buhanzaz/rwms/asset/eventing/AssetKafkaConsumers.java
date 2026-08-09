@@ -10,6 +10,10 @@ import org.springframework.kafka.listener.CommonErrorHandler;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.messaging.Message;
 
+/**
+ * Wires Kafka asset facts into the durable inbox and broadcasts realtime invalidations only as
+ * non-durable cache hints. Realtime validation failures must not stop the replica-local consumer.
+ */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")
 public class AssetKafkaConsumers {

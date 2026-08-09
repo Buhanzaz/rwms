@@ -6,6 +6,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.MessageChannel;
 
+/** Declares the service-local output channel named after the canonical warehouse topic. */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")
 class WarehouseKafkaOutputChannelsConfiguration {

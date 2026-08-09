@@ -8,6 +8,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+/** Claims one ordered task-board outbox row, publishes with broker acknowledgement, and finalizes its lease. */
 @Component
 @Slf4j
 @RequiredArgsConstructor

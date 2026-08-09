@@ -13,6 +13,12 @@ import jakarta.persistence.UniqueConstraint;
 import jakarta.validation.constraints.NotNull;
 import java.util.UUID;
 
+/**
+ * Durable proof that another domain currently references a global queue definition.
+ *
+ * <p>The reference prevents unsafe deletion without importing the external aggregate into this
+ * service.
+ */
 @Entity
 @Table(
     name = "queue_usage_reference",

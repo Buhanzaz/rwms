@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 
+/** Coordinates reviewed replay while preserving aggregate order, idempotency, and audit state. */
 @Service
 @RequiredArgsConstructor
 public class TaskBoardReplayCoordinator {

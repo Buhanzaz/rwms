@@ -9,6 +9,13 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Component;
 
+/**
+ * Guards the maintenance-only private queue-reference contract.
+ *
+ * <p>The credential must have matching {@code sub}/{@code client_id}, exactly the approved
+ * maintenance identity and an allow-listed scope set. This prevents a broadly scoped service token
+ * from pinning or unpinning global queue definitions.
+ */
 @Component
 public class QueueRegistryAuthorizer {
   private static final String MAINTENANCE_SERVICE = "maintenance-service";
@@ -36,6 +43,7 @@ public class QueueRegistryAuthorizer {
     }
   }
 
+  /** Requires the narrowly scoped maintenance-service credential. */
   public void requireAccess(Jwt jwt) {
     String clientId = jwt == null ? null : jwt.getClaimAsString("client_id");
     List<String> scopes = jwt == null ? List.of() : scopes(jwt);

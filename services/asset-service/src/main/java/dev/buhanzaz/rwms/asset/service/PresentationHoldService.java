@@ -34,12 +34,19 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Owns asset-side presentation holds and their fenced release or conversion into reservation work.
+ * It prevents a presentation retry from bypassing the asset availability and lease boundaries.
+ */
 @Service
 @RequiredArgsConstructor
 public class PresentationHoldService {
@@ -79,16 +86,109 @@ public class PresentationHoldService {
     List<RentalItem> available = availableItems(requiredWarehouseId, holdScopeId, timestamp);
     Map<UUID, CabinCompositionService.CabinComposition> compositions =
         cabinComposition.compositionsFor(available);
+    List<String> cabinTypes =
+        distinct(available, item -> name(compositions.get(item.getId()).rentalType()));
+    Map<String, Set<String>> dimensionsByType = new LinkedHashMap<>();
+    for (String cabinType : cabinTypes) {
+      dimensionsByType.put(cabinType, new LinkedHashSet<>());
+    }
+    for (RentalItem item : available) {
+      CabinCompositionService.CabinComposition composition = compositions.get(item.getId());
+      String cabinType = trimmedName(composition.rentalType());
+      String dimension = trimmedName(composition.dimensions());
+      if (cabinType != null && dimension != null) {
+        dimensionsByType.computeIfAbsent(cabinType, ignored -> new LinkedHashSet<>()).add(dimension);
+      }
+    }
     return new CabinFacetResponse(
         requiredWarehouseId,
-        distinct(available, item -> name(compositions.get(item.getId()).rentalType())),
+        cabinTypes,
         distinct(available, item -> name(compositions.get(item.getId()).finishing())),
         distinct(available, item -> name(compositions.get(item.getId()).dimensions())),
-        distinct(available, RentalItem::getCategory));
+        distinct(available, RentalItem::getCategory),
+        compositions.values().stream()
+            .flatMap(composition -> composition.characteristics().stream())
+            .map(PresentationHoldService::trimmedName)
+            .filter(Objects::nonNull)
+            .distinct()
+            .sorted(String.CASE_INSENSITIVE_ORDER)
+            .toList(),
+        dimensionsByType.entrySet().stream()
+            .filter(entry -> !entry.getValue().isEmpty())
+            .map(
+                entry ->
+                    new CabinTypeDimensions(
+                        entry.getKey(),
+                        entry.getValue().stream()
+                            .sorted(String.CASE_INSENSITIVE_ORDER)
+                            .toList()))
+            .toList());
   }
 
+  /**
+   * Reads facts for all warehouse cabins, regardless of current hold or operational availability.
+   * Text lookup covers number, type, finish, size, category and characteristics; a linoleum query
+   * additionally resolves the boolean passport characteristic. No expiry or hold is changed.
+   */
+  @Transactional(readOnly = true)
+  public CabinCatalogPage catalog(UUID warehouseId, String query, int page, int size) {
+    UUID requiredWarehouseId = Objects.requireNonNull(warehouseId, "warehouseId");
+    if (page < 0 || size < 1 || size > 100 || (query != null && query.length() > 255)) {
+      throw new IllegalArgumentException("Invalid cabin catalog page request");
+    }
+    String normalized = normalize(query);
+    if (normalized.contains("линолеум")) {
+      boolean requestedValue = !normalized.contains("без");
+      List<RentalItem> matches =
+          rentalItems.findAllByWarehouseIdOrderByNumber(requiredWarehouseId).stream()
+              .filter(item -> Boolean.valueOf(requestedValue).equals(item.getLinoleum()))
+              .toList();
+      long offset = (long) page * size;
+      int from = (int) Math.min(offset, matches.size());
+      int to = Math.min(from + size, matches.size());
+      long pages = matches.isEmpty() ? 0 : (matches.size() + (long) size - 1) / size;
+      return new CabinCatalogPage(
+          requiredWarehouseId,
+          matches.subList(from, to).stream().map(this::snapshot).toList(),
+          page,
+          size,
+          matches.size(),
+          pages);
+    }
+    Page<RentalItem> result =
+        rentalItems.findPublicPage(
+            requiredWarehouseId,
+            normalized.toUpperCase(Locale.ROOT),
+            PageRequest.of(page, size, Sort.by("number").ascending().and(Sort.by("id"))));
+    return new CabinCatalogPage(
+        requiredWarehouseId,
+        result.getContent().stream().map(this::snapshot).toList(),
+        result.getNumber(),
+        result.getSize(),
+        result.getTotalElements(),
+        result.getTotalPages());
+  }
+
+  /**
+   * Applies one subject-scoped search exactly once: its request hash, frozen status-200 response
+   * and resulting holds commit in the same asset transaction.
+   */
   @Transactional
-  public CabinSearchResponse search(CabinSearchRequest request) {
+  public AssetService.CreateResult<CabinSearchResponse> search(
+      UUID subjectId, UUID idempotencyKey, CabinSearchRequest request) {
+    Objects.requireNonNull(subjectId, "subjectId");
+    Objects.requireNonNull(idempotencyKey, "idempotencyKey");
+    String fingerprint = hash(request);
+    var replay =
+        idempotency.replay(
+            subjectId,
+            "logistics.cabin-search",
+            idempotencyKey,
+            fingerprint);
+    if (replay.isPresent()) {
+      return new AssetService.CreateResult<>(
+          read(replay.get(), CabinSearchResponse.class), true);
+    }
     OffsetDateTime timestamp = now();
     if (!request.expiresAt().isAfter(timestamp)
         || request.expiresAt().isAfter(timestamp.plusMinutes(MAX_CHAT_HOLD_MINUTES))) {
@@ -102,13 +202,20 @@ public class PresentationHoldService {
         new ArrayList<>(
             holds.findAllActiveForUpdate(
                 request.holdScopeId(), PresentationUnitHoldState.ACTIVE));
+    if (current.stream()
+        .anyMatch(hold -> !request.actorSubjectId().equals(hold.getCreatedBySubjectId()))) {
+      throw new AssetNotFoundException("Presentation holds were not found");
+    }
     Map<UUID, PresentationUnitHold> currentByItem =
         current.stream()
             .collect(
                 Collectors.toMap(
                     PresentationUnitHold::getRentalItemId, Function.identity()));
+    boolean append = "APPEND".equals(request.normalizedResultMode());
     List<RentalItem> available =
-        availableItems(request.warehouseId(), request.holdScopeId(), timestamp);
+        availableItems(request.warehouseId(), request.holdScopeId(), timestamp).stream()
+            .filter(item -> !append || !currentByItem.containsKey(item.getId()))
+            .toList();
     Map<UUID, CabinCompositionService.CabinComposition> compositions =
         cabinComposition.compositionsFor(available);
     Set<UUID> allocated = new HashSet<>();
@@ -137,6 +244,20 @@ public class PresentationHoldService {
       results.add(new CabinSearchGroupResult(group, cabins));
     }
     List<UUID> selectedIds = allocated.stream().sorted().toList();
+    if (append) {
+      for (PresentationUnitHold hold : current) {
+        if (hold.getExpiresAt().isBefore(request.expiresAt())
+            && hold.renew(request.expiresAt(), timestamp)) {
+          changedAvailability.add(hold.getRentalItemId());
+        }
+      }
+    } else {
+      for (PresentationUnitHold hold : current) {
+        if (!allocated.contains(hold.getRentalItemId()) && hold.release(timestamp)) {
+          changedAvailability.add(hold.getRentalItemId());
+        }
+      }
+    }
     if (!selectedIds.isEmpty()) {
       List<RentalItem> lockedItems = rentalItems.findAllByIdInForUpdate(selectedIds);
       if (lockedItems.size() != selectedIds.size()) {
@@ -188,17 +309,25 @@ public class PresentationHoldService {
           }
         }
       }
-      try {
-        holds.saveAllAndFlush(current);
-      } catch (DataIntegrityViolationException exception) {
-        throw conflict(
-            "UNIT_PRESENTATION_HELD", "Бытовка уже показана другому клиенту");
-      }
-      availabilityInvalidations.publishAfterCommit(
-          request.warehouseId(), changedAvailability);
     }
-    return new CabinSearchResponse(
+    try {
+      holds.saveAllAndFlush(current);
+    } catch (DataIntegrityViolationException exception) {
+      throw conflict(
+          "UNIT_PRESENTATION_HELD", "Бытовка уже показана другому клиенту");
+    }
+    availabilityInvalidations.publishAfterCommit(
+        request.warehouseId(), changedAvailability);
+    CabinSearchResponse response = new CabinSearchResponse(
         request.warehouseId(), request.expiresAt(), List.copyOf(results));
+    idempotency.store(
+        subjectId,
+        "logistics.cabin-search",
+        idempotencyKey,
+        fingerprint,
+        200,
+        response);
+    return new AssetService.CreateResult<>(response, false);
   }
 
   @Transactional
@@ -715,6 +844,13 @@ public class PresentationHoldService {
     return value == null ? null : value.name();
   }
 
+  private static String trimmedName(CabinCatalogValueResponse value) {
+    String name = name(value);
+    if (name == null) return null;
+    String trimmed = name.trim();
+    return trimmed.isEmpty() ? null : trimmed;
+  }
+
   private static String normalizeCharacteristics(String value) {
     return value == null
         ? ""
@@ -799,9 +935,12 @@ public class PresentationHoldService {
     }
   }
 
+  /** Fingerprinted full hold-replacement command. */
   private record ReplaceCommand(UUID presentationId, ReplacePresentationHoldsRequest request) {}
 
+  /** Fingerprinted presentation hold-release command. */
   private record ReleaseCommand(UUID presentationId, ActorInput request) {}
 
+  /** Fingerprinted hold-to-order conversion command. */
   private record ConvertCommand(UUID presentationId, ConvertPresentationHoldsRequest request) {}
 }

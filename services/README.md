@@ -1,5 +1,7 @@
 # RWMS Services
 
+[Русская версия](README.ru.md)
+
 This directory contains the current independently owned RWMS services. Product
 work is selected by the user's request; there is no active stage sequence or
 service-order gate.

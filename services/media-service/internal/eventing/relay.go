@@ -1,3 +1,5 @@
+// Package eventing relays exact persisted media facts from the transactional
+// outbox to Kafka without making Kafka the source of truth.
 package eventing
 
 import (
@@ -14,6 +16,7 @@ import (
 
 var errPermanentValidation = errors.New("permanent outbox validation failure")
 
+// Relay claims, validates, and publishes durable media outbox records.
 type Relay struct {
 	repository     *persistence.Repository
 	producer       *kgo.Client
@@ -23,6 +26,7 @@ type Relay struct {
 	topicOverrides map[string]string
 }
 
+// NewRelay creates the production outbox relay for one lease owner.
 func NewRelay(repository *persistence.Repository, producer *kgo.Client, owner string, logger *slog.Logger) *Relay {
 	return &Relay{repository: repository, producer: producer, owner: owner, logger: logger, wake: make(chan struct{}, 1)}
 }
@@ -46,6 +50,8 @@ func NewRelayForIsolatedTest(
 		wake: make(chan struct{}, 1), topicOverrides: overrides}
 }
 
+// NewProducer creates the Kafka producer with all-ISR acknowledgement and no
+// client-side retries, leaving durable retry ownership to the outbox.
 func NewProducer(brokers []string) (*kgo.Client, error) {
 	return kgo.NewClient(
 		kgo.SeedBrokers(brokers...),
@@ -56,6 +62,8 @@ func NewProducer(brokers []string) (*kgo.Client, error) {
 	)
 }
 
+// Wake asks the relay to check the outbox immediately without queuing
+// unbounded wake-up signals.
 func (relay *Relay) Wake() {
 	select {
 	case relay.wake <- struct{}{}:
@@ -63,6 +71,7 @@ func (relay *Relay) Wake() {
 	}
 }
 
+// Run continuously relays claimed outbox facts until ctx is canceled.
 func (relay *Relay) Run(ctx context.Context) error {
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
@@ -122,6 +131,8 @@ func (relay *Relay) publish(ctx context.Context, claim persistence.OutboxClaim) 
 	return relay.producer.ProduceSync(ctx, record).FirstErr()
 }
 
+// Close flushes and closes the producer, then releases this relay's outbox
+// leases for safe recovery by another instance.
 func (relay *Relay) Close(ctx context.Context) error {
 	relay.producer.Flush(ctx)
 	relay.producer.Close()

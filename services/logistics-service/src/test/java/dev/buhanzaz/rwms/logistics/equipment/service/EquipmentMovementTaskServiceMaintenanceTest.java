@@ -25,9 +25,11 @@ import dev.buhanzaz.rwms.logistics.equipment.repository.EquipmentMovementTaskRep
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsNotFoundException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionKind;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseOperationMarkStore;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -62,9 +64,10 @@ class EquipmentMovementTaskServiceMaintenanceTest {
       mock(LogisticsWarehouseLifecycle.class);
   private final LogisticsWarehouseOperationMarkStore warehouseOperationMarks =
       mock(LogisticsWarehouseOperationMarkStore.class);
+  private final LogisticsTransactionLock transactionLock = mock(LogisticsTransactionLock.class);
   private final EquipmentMovementTaskService service =
       new EquipmentMovementTaskService(
-          tasks, lines, mapper, warehouseLifecycle, warehouseOperationMarks);
+          tasks, lines, mapper, warehouseLifecycle, warehouseOperationMarks, transactionLock);
 
   @BeforeEach
   void admissionTicket() {
@@ -81,7 +84,12 @@ class EquipmentMovementTaskServiceMaintenanceTest {
                               AdmissionRequirement::warehouseId,
                               ignored -> at.toLocalDate()));
               return new AdmissionTicket(
-                  UUID.randomUUID(), requirements, at, dates, true);
+                  UUID.randomUUID(),
+                  requirements,
+                  at,
+                  dates,
+                  true,
+                  AdmissionKind.TEST_ONLY);
             });
   }
 

@@ -13,6 +13,7 @@ import jakarta.validation.constraints.Positive;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
+/** JPA warehouse-level settings for repair-place capacity and automatic refill timing. */
 @Entity
 @Table(name = "repair_capacity_settings")
 public class RepairCapacitySettings {

@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
+/** Maps analytics validation and authorization failures to the service's public Problem Details boundary. */
 @RestControllerAdvice
 public class AnalyticsProblemHandler {
   @ExceptionHandler({

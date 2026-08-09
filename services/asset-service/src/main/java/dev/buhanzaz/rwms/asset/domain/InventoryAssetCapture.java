@@ -11,6 +11,9 @@ import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
+/**
+ * JPA entity that persists inventory asset capture in the asset-owned database.
+ */
 @Entity
 @Table(name = "inventory_asset_capture")
 public class InventoryAssetCapture {

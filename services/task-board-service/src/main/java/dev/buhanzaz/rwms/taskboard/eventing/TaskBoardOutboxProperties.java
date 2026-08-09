@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.util.UUID;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+/** Validated relay cadence, lease duration, and instance identity for task-board outbox claims. */
 @ConfigurationProperties("rwms.task-board.eventing.outbox")
 public class TaskBoardOutboxProperties {
   private Duration relayDelay = Duration.ofSeconds(1);

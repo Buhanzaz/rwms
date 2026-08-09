@@ -9,6 +9,9 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data persistence boundary for logistics-owned Rental Settings Repository; it does not own cross-service workflow decisions.
+ */
 public interface RentalSettingsRepository extends JpaRepository<RentalSettings, UUID> {
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select settings from RentalSettings settings where settings.id = :id")

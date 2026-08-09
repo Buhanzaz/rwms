@@ -7,6 +7,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
+/**
+ * Normalizes imported rental-passport content before it becomes asset-owned state or an event payload.
+ */
 final class RentalPassportSanitizer {
   private static final String LEGACY_PREFIX = "legacy";
   private static final String OLD_PANEL_SOURCE = "old-panel-rental-items-v1";

@@ -1,3 +1,6 @@
+// Package testsupport provides isolated PostgreSQL, Kafka, and MinIO helpers
+// for media-service integration tests. It must never be imported by runtime
+// application code.
 package testsupport
 
 import (
@@ -19,16 +22,24 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
+// RealGateEnvironment makes tests fail rather than skip when a real dependency
+// environment is expected by CI.
 const RealGateEnvironment = "MEDIA_TASK1B_REAL_GATE"
 
+// Dependency identifies one external service required by an integration test.
 type Dependency string
 
 const (
+	// PostgreSQL requires an isolated PostgreSQL test database.
 	PostgreSQL Dependency = "postgresql"
-	Kafka      Dependency = "kafka"
-	MinIO      Dependency = "minio"
+	// Kafka requires the configured real Kafka test cluster.
+	Kafka Dependency = "kafka"
+	// MinIO requires the configured real versioned MinIO test bucket.
+	MinIO Dependency = "minio"
 )
 
+// RealEnvironment contains the externally supplied integration-test endpoints
+// and credentials after RequireRealEnvironment verifies them.
 type RealEnvironment struct {
 	DatabaseURL    string
 	KafkaBrokers   []string
@@ -238,6 +249,7 @@ func NewMigratedMediaDatabase(t testing.TB, baseURL string) string {
 		{"task board worker media", "V8__task_board_worker_media.sql", mediamigration.V8},
 		{"asset import worker", "V9__asset_import_worker.sql", mediamigration.V9},
 		{"canonical cabin photo library", "V10__canonical_cabin_photo_library.sql", mediamigration.V10},
+		{"bounded media processing recovery", "V11__bounded_media_processing_recovery.sql", mediamigration.V11},
 	}
 	for index, migration := range migrations {
 		started := time.Now()
@@ -247,7 +259,7 @@ func NewMigratedMediaDatabase(t testing.TB, baseURL string) string {
 		if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
 			installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
 		values ($1,$2,$3,'SQL',$4,$5,current_user,$6,true)`, index+1,
-			[]string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10"}[index],
+			[]string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11"}[index],
 			migration.description, migration.script, realFlywayChecksum(migration.body),
 			int(time.Since(started)/time.Millisecond)); err != nil {
 			t.Fatalf("record isolated media %s: %v", migration.script, err)
@@ -271,11 +283,15 @@ func realFlywayChecksum(contents []byte) int32 {
 	return int32(checksum.Sum32())
 }
 
+// UniqueKafkaName returns an isolated physical Kafka resource name with the
+// requested safe prefix.
 func UniqueKafkaName(prefix string) string {
 	prefix = strings.Trim(strings.ToLower(prefix), "-._")
 	return fmt.Sprintf("%s-%s", prefix, uuid.NewString())
 }
 
+// UniqueBucketName returns an isolated MinIO bucket name with the requested
+// safe prefix.
 func UniqueBucketName(prefix string) string {
 	prefix = strings.Trim(strings.ToLower(prefix), "-.")
 	return fmt.Sprintf("%s-%s", prefix, strings.ReplaceAll(uuid.NewString(), "-", ""))

@@ -17,6 +17,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.JdbcTypeCode;
 
+/** Audits one controlled rebuild of a target projection generation from the local source journal. */
 @Entity
 @Table(name = "dossier_replay_run")
 @Getter

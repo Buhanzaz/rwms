@@ -18,6 +18,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+/** Configures stateless resource-server protection for the analytics read API; warehouse authorization remains service-local. */
 @Configuration
 public class SecurityConfiguration {
   @Bean

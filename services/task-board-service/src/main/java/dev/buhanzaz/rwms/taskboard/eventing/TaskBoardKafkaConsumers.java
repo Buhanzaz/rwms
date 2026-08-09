@@ -8,6 +8,12 @@ import org.springframework.kafka.listener.CommonContainerStoppingErrorHandler;
 import org.springframework.kafka.listener.CommonErrorHandler;
 import org.springframework.messaging.Message;
 
+/**
+ * Declares task-board Kafka consumers with bounded processing retry and fail-closed container policy.
+ *
+ * <p>Validation and exhausted processing failures enqueue sanitized DLT metadata rather than raw
+ * source records.
+ */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")
 public class TaskBoardKafkaConsumers {

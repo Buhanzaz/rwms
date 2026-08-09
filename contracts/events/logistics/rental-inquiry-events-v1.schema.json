@@ -2,40 +2,68 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rwms.local/contracts/events/logistics/rental-inquiry-events-v1.schema.json",
   "title": "RWMS rental inquiry booking fact v1",
-  "description": "Minimal sanitized fact emitted after a client presentation is converted into a draft rental order.",
+  "description": "Strict DomainEventEnvelopeV2 fact emitted transactionally after a client presentation becomes a rental order.",
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "envelopeVersion",
     "eventId",
     "eventType",
+    "eventVersion",
     "occurredAt",
-    "rentalInquiryId",
-    "conversationId",
-    "orderId"
+    "recordedAt",
+    "producer",
+    "aggregateType",
+    "aggregateId",
+    "aggregateVersion",
+    "correlation",
+    "actorRef",
+    "payload"
   ],
   "properties": {
-    "eventId": {
-      "type": "string",
-      "format": "uuid"
+    "envelopeVersion": {"const": 2},
+    "eventId": {"type": "string", "format": "uuid"},
+    "eventType": {"const": "logistics.rental-inquiry.booked.v1"},
+    "eventVersion": {"const": 1},
+    "occurredAt": {"type": "string", "format": "date-time"},
+    "recordedAt": {"type": "string", "format": "date-time"},
+    "producer": {"const": "logistics-service"},
+    "aggregateType": {"const": "RENTAL_INQUIRY"},
+    "aggregateId": {"type": "string", "format": "uuid"},
+    "aggregateVersion": {"type": "integer", "minimum": 0},
+    "correlation": {"$ref": "#/$defs/correlationContext"},
+    "actorRef": {"$ref": "#/$defs/actorReference"},
+    "payload": {"$ref": "#/$defs/bookedPayload"}
+  },
+  "x-rwms-topics": ["rwms.logistics.rental-inquiry.events.v1"],
+  "$defs": {
+    "correlationContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["correlationId", "causationId"],
+      "properties": {
+        "correlationId": {"type": "string", "format": "uuid"},
+        "causationId": {"type": "string", "format": "uuid"}
+      }
     },
-    "eventType": {
-      "const": "logistics.rental-inquiry.booked.v1"
+    "actorReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subjectId", "principalType", "profileRevision"],
+      "properties": {
+        "subjectId": {"type": "string", "format": "uuid"},
+        "principalType": {"const": "USER"},
+        "profileRevision": {"type": "null"}
+      }
     },
-    "occurredAt": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "rentalInquiryId": {
-      "type": "string",
-      "format": "uuid"
-    },
-    "conversationId": {
-      "type": "string",
-      "format": "uuid"
-    },
-    "orderId": {
-      "type": "string",
-      "format": "uuid"
+    "bookedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["conversationId", "orderId"],
+      "properties": {
+        "conversationId": {"type": "string", "format": "uuid"},
+        "orderId": {"type": "string", "format": "uuid"}
+      }
     }
   }
 }

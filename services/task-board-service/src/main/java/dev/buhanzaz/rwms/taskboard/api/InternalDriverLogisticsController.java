@@ -18,6 +18,12 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * Private logistics-service read and move surface for the dedicated driver board.
+ *
+ * <p>Only logistics may call it, and it sees neither the general task board nor maintenance-owned
+ * routing administration. This preserves the driver queue as a bounded operational projection.
+ */
 @RestController
 @RequestMapping("/api/internal/task-board/v1/logistics")
 @RequiredArgsConstructor
@@ -25,6 +31,7 @@ public class InternalDriverLogisticsController {
   private final TaskBoardService service;
   private final TaskSyncAuthorizer access;
 
+  /** Returns the logistics-only board for one warehouse. */
   @GetMapping("/warehouses/{warehouseId}/board")
   public LogisticsBoardSnapshot board(
       @AuthenticationPrincipal Jwt jwt, @PathVariable UUID warehouseId) {
@@ -32,6 +39,7 @@ public class InternalDriverLogisticsController {
     return service.logisticsSnapshot(warehouseId);
   }
 
+  /** Moves a logistics-owned task in the driver lane under task and entry version fences. */
   @PostMapping("/tasks/{externalTaskId}/move")
   public BoardTaskRegistrationDto move(
       @AuthenticationPrincipal Jwt jwt,

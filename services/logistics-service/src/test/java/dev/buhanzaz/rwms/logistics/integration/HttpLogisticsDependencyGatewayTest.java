@@ -6,12 +6,13 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
-import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
 import java.net.URI;
 import java.time.Duration;
@@ -414,7 +415,9 @@ class HttpLogisticsDependencyGatewayTest {
                   "cabinTypes":["БК-1"],
                   "finishes":["ДВП"],
                   "dimensions":["6x2.4"],
-                  "categories":["Новая"]
+                  "categories":["Новая"],
+                  "characteristics":["Утеплённая","Электрика"],
+                  "typeDimensions":[{"cabinType":"БК-1","dimensions":["6x2.4"]}]
                 }
                 """
                     .formatted(warehouseId),
@@ -425,6 +428,67 @@ class HttpLogisticsDependencyGatewayTest {
 
     assertThat(facets.warehouseId()).isEqualTo(warehouseId);
     assertThat(facets.cabinTypes()).containsExactly("БК-1");
+    assertThat(facets.characteristics()).containsExactly("Утеплённая", "Электрика");
+    assertThat(facets.typeDimensions())
+        .containsExactly(
+            new LogisticsDependencyGateway.CabinTypeDimensionRelation(
+                "БК-1", List.of("6x2.4")));
+    server.verify();
+  }
+
+  @Test
+  void readsBoundedCabinCatalogFactsWithoutAWriteOrIdempotencyHeader() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    server
+        .expect(
+            requestTo(
+                "http://asset.test/api/internal/asset/v1/logistics/cabin-catalog"
+                    + "?warehouseId="
+                    + warehouseId
+                    + "&query=CAB-001&page=0&size=20"))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header("Authorization", "Bearer test-asset.logistics"))
+        .andRespond(
+            withSuccess(
+                """
+                {
+                  "warehouseId":"%s",
+                  "content":[{
+                    "id":"%s",
+                    "version":4,
+                    "warehouseId":"%s",
+                    "status":"RENTED",
+                    "number":"CAB-001",
+                    "rentalType":"БК-1",
+                    "dimensions":"6x2.4",
+                    "finishing":"ДВП",
+                    "category":"Обычная",
+                    "characteristics":"Электрика",
+                    "linoleum":true,
+                    "passport":{},
+                    "tags":[],
+                    "updatedAt":"2026-07-27T05:41:54Z"
+                  }],
+                  "page":0,
+                  "size":20,
+                  "totalElements":1,
+                  "totalPages":1
+                }
+                """
+                    .formatted(warehouseId, cabinId, warehouseId),
+                MediaType.APPLICATION_JSON));
+
+    LogisticsDependencyGateway.CabinCatalogPage page =
+        gateway.readCabinCatalog(warehouseId, "CAB-001", 0, 20);
+
+    assertThat(page.content()).singleElement()
+        .satisfies(
+            cabin -> {
+              assertThat(cabin.id()).isEqualTo(cabinId);
+              assertThat(cabin.status()).isEqualTo("RENTED");
+            });
+    assertThat(page.totalElements()).isOne();
     server.verify();
   }
 
@@ -434,17 +498,31 @@ class HttpLogisticsDependencyGatewayTest {
     UUID cabinId = UUID.randomUUID();
     UUID holdScopeId = UUID.randomUUID();
     UUID actorSubjectId = UUID.randomUUID();
+    UUID downstreamKey = UUID.randomUUID();
     OffsetDateTime expiresAt = OffsetDateTime.parse("2026-07-27T06:00:00Z");
+    String exactBody =
+        "{\"warehouseId\":\""
+            + warehouseId
+            + "\",\"holdScopeId\":\""
+            + holdScopeId
+            + "\",\"expiresAt\":\"2026-07-27T06:00:00Z\",\"actorSubjectId\":\""
+            + actorSubjectId
+            + "\",\"actorRole\":\"RENTAL_MANAGER\",\"resultMode\":\"REPLACE\",\"groups\":[{\"cabinType\":null,"
+            + "\"finish\":\"ДВП\",\"dimensions\":null,\"category\":\"Новая\","
+            + "\"characteristics\":null,\"linoleum\":null,\"quantity\":2}]}";
     server
-        .expect(
-            requestTo("http://asset.test/api/internal/asset/v1/logistics/cabin-searches"))
+        .expect(requestTo("http://asset.test/api/internal/asset/v1/logistics/cabin-searches"))
         .andExpect(method(HttpMethod.POST))
         .andExpect(header("Authorization", "Bearer test-asset.logistics"))
+        .andExpect(header("Idempotency-Key", downstreamKey.toString()))
+        .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+        .andExpect(content().string(exactBody))
         .andExpect(jsonPath("$.warehouseId").value(warehouseId.toString()))
         .andExpect(jsonPath("$.holdScopeId").value(holdScopeId.toString()))
         .andExpect(jsonPath("$.expiresAt").value("2026-07-27T06:00:00Z"))
         .andExpect(jsonPath("$.actorSubjectId").value(actorSubjectId.toString()))
         .andExpect(jsonPath("$.actorRole").value("RENTAL_MANAGER"))
+        .andExpect(jsonPath("$.resultMode").value("REPLACE"))
         .andExpect(jsonPath("$.groups[0].finish").value("ДВП"))
         .andExpect(jsonPath("$.groups[0].cabinType").doesNotExist())
         .andExpect(jsonPath("$.groups[0].dimensions").doesNotExist())
@@ -482,15 +560,7 @@ class HttpLogisticsDependencyGatewayTest {
                 MediaType.APPLICATION_JSON));
 
     LogisticsDependencyGateway.CabinSearchResult result =
-        gateway.searchAvailableCabins(
-            warehouseId,
-            holdScopeId,
-            expiresAt,
-            actorSubjectId,
-            "RENTAL_MANAGER",
-            List.of(
-                new LogisticsDependencyGateway.CabinSearchGroup(
-                    null, "ДВП", null, "Новая", null, null, 2)));
+        gateway.searchAvailableCabins(downstreamKey, exactBody);
 
     assertThat(result.expiresAt()).isEqualTo(expiresAt);
     assertThat(result.groups())
@@ -516,6 +586,7 @@ class HttpLogisticsDependencyGatewayTest {
     UUID secondCabinId = UUID.randomUUID();
     UUID holdScopeId = UUID.randomUUID();
     UUID actorSubjectId = UUID.randomUUID();
+    UUID downstreamKey = UUID.randomUUID();
     OffsetDateTime expiresAt = OffsetDateTime.parse("2026-07-27T06:00:00Z");
     LogisticsDependencyGateway.CabinSearchGroup first =
         new LogisticsDependencyGateway.CabinSearchGroup(
@@ -523,11 +594,28 @@ class HttpLogisticsDependencyGatewayTest {
     LogisticsDependencyGateway.CabinSearchGroup second =
         new LogisticsDependencyGateway.CabinSearchGroup(
             "БК-2", "OSB", "6x2.4", "ИТР", "С дополнительной вентиляцией", false, 6);
+    String exactBody =
+        "{\"warehouseId\":\""
+            + warehouseId
+            + "\",\"holdScopeId\":\""
+            + holdScopeId
+            + "\",\"expiresAt\":\"2026-07-27T06:00:00Z\",\"actorSubjectId\":\""
+            + actorSubjectId
+            + "\",\"actorRole\":\"RENTAL_MANAGER\",\"resultMode\":\"APPEND\",\"groups\":["
+            + "{\"cabinType\":\"БК-1\",\"finish\":\"ДВП\",\"dimensions\":\"6x2.4\","
+            + "\"category\":\"Новая\",\"characteristics\":\"Утеплённая с электрикой\","
+            + "\"linoleum\":true,\"quantity\":6},"
+            + "{\"cabinType\":\"БК-2\",\"finish\":\"OSB\",\"dimensions\":\"6x2.4\","
+            + "\"category\":\"ИТР\",\"characteristics\":\"С дополнительной вентиляцией\","
+            + "\"linoleum\":false,\"quantity\":6}]}";
     server
-        .expect(
-            requestTo("http://asset.test/api/internal/asset/v1/logistics/cabin-searches"))
+        .expect(requestTo("http://asset.test/api/internal/asset/v1/logistics/cabin-searches"))
         .andExpect(method(HttpMethod.POST))
         .andExpect(header("Authorization", "Bearer test-asset.logistics"))
+        .andExpect(header("Idempotency-Key", downstreamKey.toString()))
+        .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+        .andExpect(content().string(exactBody))
+        .andExpect(jsonPath("$.resultMode").value("APPEND"))
         .andExpect(jsonPath("$.groups[0].cabinType").value("БК-1"))
         .andExpect(jsonPath("$.groups[0].finish").value("ДВП"))
         .andExpect(jsonPath("$.groups[0].dimensions").value("6x2.4"))
@@ -539,8 +627,7 @@ class HttpLogisticsDependencyGatewayTest {
         .andExpect(jsonPath("$.groups[1].finish").value("OSB"))
         .andExpect(jsonPath("$.groups[1].dimensions").value("6x2.4"))
         .andExpect(jsonPath("$.groups[1].category").value("ИТР"))
-        .andExpect(
-            jsonPath("$.groups[1].characteristics").value("С дополнительной вентиляцией"))
+        .andExpect(jsonPath("$.groups[1].characteristics").value("С дополнительной вентиляцией"))
         .andExpect(jsonPath("$.groups[1].linoleum").value(false))
         .andExpect(jsonPath("$.groups[1].quantity").value(6))
         .andRespond(
@@ -607,17 +694,17 @@ class HttpLogisticsDependencyGatewayTest {
                   ]
                 }
                 """
-                    .formatted(warehouseId, expiresAt, firstCabinId, warehouseId, secondCabinId, warehouseId),
+                    .formatted(
+                        warehouseId,
+                        expiresAt,
+                        firstCabinId,
+                        warehouseId,
+                        secondCabinId,
+                        warehouseId),
                 MediaType.APPLICATION_JSON));
 
     LogisticsDependencyGateway.CabinSearchResult result =
-        gateway.searchAvailableCabins(
-            warehouseId,
-            holdScopeId,
-            expiresAt,
-            actorSubjectId,
-            "RENTAL_MANAGER",
-            List.of(first, second));
+        gateway.searchAvailableCabins(downstreamKey, exactBody);
 
     assertThat(result.groups())
         .extracting(LogisticsDependencyGateway.CabinSearchGroupResult::group)
@@ -705,10 +792,69 @@ class HttpLogisticsDependencyGatewayTest {
                     .formatted(holdScopeId),
                 MediaType.APPLICATION_JSON));
 
-    assertThat(
-            gateway.readPresentationHolds(
-                holdScopeId, actorSubjectId, "RENTAL_MANAGER"))
+    assertThat(gateway.readPresentationHolds(holdScopeId, actorSubjectId, "RENTAL_MANAGER"))
         .satisfies(result -> assertThat(result.holds()).isEmpty());
+    server.verify();
+  }
+
+  @Test
+  void sendsFrozenSelectionReplaceAndReleaseBodiesWithoutRebuildingThem() {
+    UUID inquiryId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    UUID actorSubjectId = UUID.randomUUID();
+    UUID replaceKey = UUID.randomUUID();
+    UUID releaseKey = UUID.randomUUID();
+    String replaceBody =
+        "{\"warehouseId\":\""
+            + warehouseId
+            + "\",\"rentalItemIds\":[\""
+            + cabinId
+            + "\"],\"expiresAt\":\"2026-08-09T12:30:00Z\",\"actorSubjectId\":\""
+            + actorSubjectId
+            + "\",\"actorRole\":\"RENTAL_MANAGER\",\"sourceHoldScopeId\":null}";
+    String releaseBody =
+        "{\"actorSubjectId\":\"" + actorSubjectId + "\",\"actorRole\":\"RENTAL_MANAGER\"}";
+    String holdsUri =
+        "http://asset.test/api/internal/asset/v1/logistics/presentations/" + inquiryId + "/holds";
+    server
+        .expect(requestTo(holdsUri))
+        .andExpect(method(HttpMethod.PUT))
+        .andExpect(header("Authorization", "Bearer test-asset.logistics"))
+        .andExpect(header("Idempotency-Key", replaceKey.toString()))
+        .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+        .andExpect(content().string(replaceBody))
+        .andRespond(
+            withSuccess(
+                """
+                {"presentationId":"%s","expiresAt":"2026-08-09T12:30:00Z","holds":[]}
+                """
+                    .formatted(inquiryId),
+                MediaType.APPLICATION_JSON));
+    server
+        .expect(requestTo(holdsUri + "/release"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(header("Authorization", "Bearer test-asset.logistics"))
+        .andExpect(header("Idempotency-Key", releaseKey.toString()))
+        .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+        .andExpect(content().string(releaseBody))
+        .andRespond(
+            withSuccess(
+                """
+                {"presentationId":"%s","expiresAt":null,"holds":[]}
+                """
+                    .formatted(inquiryId),
+                MediaType.APPLICATION_JSON));
+
+    LogisticsDependencyGateway.PresentationHolds replaced =
+        gateway.replacePresentationHoldsExact(replaceKey, inquiryId, replaceBody);
+    LogisticsDependencyGateway.PresentationHolds released =
+        gateway.releasePresentationHoldsExact(releaseKey, inquiryId, releaseBody);
+
+    assertThat(replaced.presentationId()).isEqualTo(inquiryId);
+    assertThat(replaced.expiresAt()).isEqualTo(OffsetDateTime.parse("2026-08-09T12:30:00Z"));
+    assertThat(released.presentationId()).isEqualTo(inquiryId);
+    assertThat(released.expiresAt()).isNull();
     server.verify();
   }
 
@@ -788,9 +934,7 @@ class HttpLogisticsDependencyGatewayTest {
     server
         .expect(
             requestTo(
-                "http://asset.test/api/internal/asset/v1/logistics/orders/"
-                    + orderId
-                    + "/units"))
+                "http://asset.test/api/internal/asset/v1/logistics/orders/" + orderId + "/units"))
         .andExpect(method(HttpMethod.POST))
         .andExpect(header("Authorization", "Bearer test-asset.logistics"))
         .andExpect(header("Idempotency-Key", key.toString()))
@@ -887,9 +1031,7 @@ class HttpLogisticsDependencyGatewayTest {
     server
         .expect(
             requestTo(
-                "http://asset.test/api/internal/asset/v1/logistics/orders/"
-                    + orderId
-                    + "/units"))
+                "http://asset.test/api/internal/asset/v1/logistics/orders/" + orderId + "/units"))
         .andRespond(
             withStatus(HttpStatus.CONFLICT)
                 .contentType(MediaType.APPLICATION_PROBLEM_JSON)
@@ -922,6 +1064,74 @@ class HttpLogisticsDependencyGatewayTest {
                   .isEqualTo("UNIT_ALREADY_RESERVED");
             });
     server.verify();
+  }
+
+  @Test
+  void cabinSearchRejectsOnlyClassifiedBadRequestOrConflictResponsesPermanently() {
+    assertCabinSearchFailure(
+        HttpStatus.BAD_REQUEST,
+        "{\"status\":400,\"code\":\"ASSET_VALIDATION_FAILED\"}",
+        LogisticsDependencyException.FailureKind.PERMANENT_REJECTION,
+        "ASSET_VALIDATION_FAILED");
+    assertCabinSearchFailure(
+        HttpStatus.CONFLICT,
+        "{\"status\":409,\"code\":\"UNIT_PRESENTATION_HELD\"}",
+        LogisticsDependencyException.FailureKind.PERMANENT_REJECTION,
+        "UNIT_PRESENTATION_HELD");
+    assertCabinSearchFailure(
+        HttpStatus.UNAUTHORIZED,
+        "{\"status\":401,\"code\":\"ASSET_UNAUTHORIZED\"}",
+        LogisticsDependencyException.FailureKind.TRANSIENT,
+        null);
+    assertCabinSearchFailure(
+        HttpStatus.FORBIDDEN,
+        "{\"status\":403,\"code\":\"ASSET_FORBIDDEN\"}",
+        LogisticsDependencyException.FailureKind.TRANSIENT,
+        null);
+    assertCabinSearchFailure(
+        HttpStatus.NOT_FOUND,
+        "{\"status\":404,\"code\":\"ASSET_NOT_FOUND\"}",
+        LogisticsDependencyException.FailureKind.TRANSIENT,
+        null);
+    assertCabinSearchFailure(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        "{\"status\":503,\"code\":\"ASSET_UNAVAILABLE\"}",
+        LogisticsDependencyException.FailureKind.TRANSIENT,
+        null);
+    server.verify();
+  }
+
+  /** Verifies one status-specific cabin-search outcome without retaining its Problem body. */
+  private void assertCabinSearchFailure(
+      HttpStatus status,
+      String body,
+      LogisticsDependencyException.FailureKind expectedKind,
+      String expectedCode) {
+    UUID downstreamKey = UUID.randomUUID();
+    String exactBody = "{\"probe\":\"" + downstreamKey + "\"}";
+    server
+        .expect(
+            requestTo("http://asset.test/api/internal/asset/v1/logistics/cabin-searches"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(header("Idempotency-Key", downstreamKey.toString()))
+        .andExpect(content().string(exactBody))
+        .andRespond(
+            withStatus(status)
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(body));
+
+    assertThatThrownBy(
+            () -> gateway.searchAvailableCabins(downstreamKey, exactBody))
+        .isInstanceOf(LogisticsDependencyException.class)
+        .satisfies(
+            exception -> {
+              LogisticsDependencyException dependency =
+                  (LogisticsDependencyException) exception;
+              assertThat(dependency.kind()).isEqualTo(expectedKind);
+              assertThat(dependency.dependencyCode()).isEqualTo(expectedCode);
+            });
+    server.verify();
+    server.reset();
   }
 
   @Test
@@ -1128,7 +1338,8 @@ class HttpLogisticsDependencyGatewayTest {
                 """
                 {"taskId":"%s","taskVersion":0,"warehouseId":"%s",
                  "externalTaskId":"%s","status":"ACTIVE","doneAt":null}
-                """.formatted(boardTaskId, warehouseId, movementId),
+                """
+                    .formatted(boardTaskId, warehouseId, movementId),
                 MediaType.APPLICATION_JSON));
 
     LogisticsDependencyGateway.EquipmentMovementBoardTask boardTask =
@@ -1187,12 +1398,7 @@ class HttpLogisticsDependencyGatewayTest {
                 }
                 """
                     .formatted(
-                        returnId,
-                        lineId,
-                        warehouseId,
-                        rentalItemId,
-                        estimateId,
-                        "a".repeat(64)),
+                        returnId, lineId, warehouseId, rentalItemId, estimateId, "a".repeat(64)),
                 MediaType.APPLICATION_JSON));
 
     LogisticsDependencyGateway.ReturnEstimateSource source =
@@ -1345,9 +1551,7 @@ class HttpLogisticsDependencyGatewayTest {
         .andExpect(method(HttpMethod.POST))
         .andExpect(header("Authorization", "Bearer test-task-board.logistics"))
         .andExpect(jsonPath("$.expectedTaskVersion").value(3))
-        .andExpect(
-            jsonPath("$.reason")
-                .value("Капитальный ремонт возвращён в отдельную очередь"))
+        .andExpect(jsonPath("$.reason").value("Капитальный ремонт возвращён в отдельную очередь"))
         .andRespond(
             withSuccess(
                 """
@@ -1360,9 +1564,7 @@ class HttpLogisticsDependencyGatewayTest {
                 MediaType.APPLICATION_JSON));
     server
         .expect(
-            requestTo(
-                "http://task-board.test/api/internal/task-board/v1/tasks/"
-                    + externalTaskId))
+            requestTo("http://task-board.test/api/internal/task-board/v1/tasks/" + externalTaskId))
         .andExpect(method(HttpMethod.GET))
         .andExpect(header("Authorization", "Bearer test-task-board.logistics"))
         .andRespond(
@@ -1385,12 +1587,7 @@ class HttpLogisticsDependencyGatewayTest {
                 }
                 """
                     .formatted(
-                        taskId,
-                        warehouseId,
-                        externalTaskId,
-                        entryId,
-                        queueDefinitionId,
-                        queueId),
+                        taskId, warehouseId, externalTaskId, entryId, queueDefinitionId, queueId),
                 MediaType.APPLICATION_JSON));
 
     LogisticsDependencyGateway.DriverBoardTask cancelled =

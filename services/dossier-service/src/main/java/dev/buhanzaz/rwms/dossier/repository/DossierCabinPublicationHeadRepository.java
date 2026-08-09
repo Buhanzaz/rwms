@@ -7,6 +7,7 @@ import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 
+/** Repository for cabin publication heads that fence duplicate outbound activity facts. */
 public interface DossierCabinPublicationHeadRepository
     extends JpaRepository<DossierCabinPublicationHead, UUID> {
   Optional<DossierCabinPublicationHead> findByCabinId(UUID cabinId);

@@ -1,5 +1,7 @@
 # Task-board Flyway adoption at version 4
 
+[Русская версия](README.ru.md)
+
 `V4__task_board_schema.sql` installs a new empty task-board database with the
 reviewed cumulative schema after historical releases `0001` through `0004`.
 Never run `baseline` for a new database: `migrate` applies V4 and creates

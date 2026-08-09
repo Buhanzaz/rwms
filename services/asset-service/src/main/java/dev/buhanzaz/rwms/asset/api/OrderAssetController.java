@@ -26,6 +26,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * HTTP adapter for order asset.
+ * It exposes the contract boundary without owning a persistence model or domain transition.
+ */
 @RestController
 @Validated
 @RequestMapping("/api/internal/asset/v1/logistics/orders")

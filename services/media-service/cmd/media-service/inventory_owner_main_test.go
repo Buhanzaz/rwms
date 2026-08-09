@@ -66,6 +66,7 @@ func TestInventoryOwnerRuntimeIsRequiredAndTerminalExitStopsAllProcesses(t *test
 			{name: "task-board-entry-owner-proof-consumer", run: peer},
 			{name: "asset-import-worker", run: peer},
 			{name: "http-server", run: peer},
+			{name: "metrics-server", run: peer},
 		}
 		shutdownCalled := make(chan struct{}, 1)
 		done := make(chan error, 1)
@@ -90,8 +91,8 @@ func TestInventoryOwnerRuntimeIsRequiredAndTerminalExitStopsAllProcesses(t *test
 		case <-time.After(5 * time.Second):
 			t.Fatal("supervisor did not stop after owner terminal error")
 		}
-		if peersCancelled.Load() != 6 {
-			t.Fatalf("cancelled peers = %d, want 6", peersCancelled.Load())
+		if peersCancelled.Load() != 7 {
+			t.Fatalf("cancelled peers = %d, want 7", peersCancelled.Load())
 		}
 		select {
 		case <-shutdownCalled:
@@ -204,8 +205,9 @@ func installMainResidualMigrations(t testing.TB, ctx context.Context, pool *pgxp
 		{"task board worker media", "V8__task_board_worker_media.sql", mediamigration.V8},
 		{"asset import worker", "V9__asset_import_worker.sql", mediamigration.V9},
 		{"canonical cabin photo library", "V10__canonical_cabin_photo_library.sql", mediamigration.V10},
+		{"bounded media processing recovery", "V11__bounded_media_processing_recovery.sql", mediamigration.V11},
 	}
-	versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10"}
+	versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11"}
 	for index, migration := range migrations {
 		if _, err := pool.Exec(ctx, string(migration.body)); err != nil {
 			t.Fatalf("apply command %s: %v", migration.script, err)

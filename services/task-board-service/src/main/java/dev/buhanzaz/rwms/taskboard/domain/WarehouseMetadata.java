@@ -7,6 +7,7 @@ import jakarta.validation.constraints.NotBlank;
 import java.time.ZoneId;
 import java.util.UUID;
 
+/** Version-checked local projection of warehouse timezone and admission-relevant activity. */
 @Entity
 @Table(name = "warehouse_metadata")
 public class WarehouseMetadata extends AbstractVersionedEntity {

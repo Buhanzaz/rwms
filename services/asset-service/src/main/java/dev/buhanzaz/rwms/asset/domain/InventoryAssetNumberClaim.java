@@ -11,6 +11,9 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
 
+/**
+ * JPA entity that persists inventory asset number claim in the asset-owned database.
+ */
 @Entity
 @Table(name = "inventory_asset_number_claim")
 public class InventoryAssetNumberClaim {

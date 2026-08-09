@@ -8,6 +8,7 @@ import com.sun.net.httpserver.HttpServer;
 import dev.buhanzaz.rwms.assistant.api.AssistantApiModels;
 import dev.buhanzaz.rwms.assistant.config.AssistantLogisticsProperties;
 import dev.buhanzaz.rwms.assistant.service.AssistantInquiryArchivedException;
+import dev.buhanzaz.rwms.assistant.service.AssistantUpstreamException;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -15,11 +16,13 @@ import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/** Verifies the private logistics wire contract and safe error mapping. */
 class HttpLogisticsClientTest {
   private final ObjectMapper mapper = new ObjectMapper();
   private HttpServer server;
@@ -52,7 +55,13 @@ class HttpLogisticsClientTest {
                 conversationId,
                 null,
                 new AssistantApiModels.NewClientRequest(
-                    "INDIVIDUAL", "Ada Client", "+7 900 000 00 00", null),
+                    "INDIVIDUAL",
+                    "Ada Client",
+                    "+7 900 000 00 00",
+                    null,
+                    null,
+                    null,
+                    null),
                 "current-user-bearer");
 
     assertThat(result)
@@ -72,9 +81,50 @@ class HttpLogisticsClientTest {
   }
 
   @Test
+  void forwardsEverySupportedSoleProprietorClientField() throws Exception {
+    UUID conversationId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID clientId = UUID.randomUUID();
+    List<RecordedRequest> received = new CopyOnWriteArrayList<>();
+    start(
+        exchange -> {
+          received.add(record(exchange));
+          reply(
+              exchange,
+              201,
+              """
+              {"id":"%s","state":"ACTIVE","client":{"id":"%s","type":"SOLE_PROPRIETOR","displayName":"ИП Север"}}
+              """
+                  .formatted(inquiryId, clientId));
+        });
+
+    client()
+        .createRentalInquiry(
+            conversationId,
+            null,
+            new AssistantApiModels.NewClientRequest(
+                "SOLE_PROPRIETOR",
+                "ИП Север",
+                "+79990000000",
+                "Иван Петров",
+                "client@example.test",
+                "Приоритетный клиент",
+                "Рекомендация"),
+            "current-user-bearer");
+
+    JsonNode newClient = received.getFirst().body().path("newClient");
+    assertThat(newClient.path("clientType").asText()).isEqualTo("SOLE_PROPRIETOR");
+    assertThat(newClient.path("contactPerson").asText()).isEqualTo("Иван Петров");
+    assertThat(newClient.path("email").asText()).isEqualTo("client@example.test");
+    assertThat(newClient.path("comment").asText()).isEqualTo("Приоритетный клиент");
+    assertThat(newClient.path("source").asText()).isEqualTo("Рекомендация");
+  }
+
+  @Test
   void forwardsOnlyBoundedFacetAndCabinSearchCalls() throws Exception {
     UUID inquiryId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
+    UUID searchKey = UUID.randomUUID();
     String exactDimensions = " 6x2.4 ";
     List<RecordedRequest> received = new CopyOnWriteArrayList<>();
     start(
@@ -102,6 +152,7 @@ class HttpLogisticsClientTest {
         client()
             .searchAvailableCabins(
                 inquiryId,
+                searchKey,
                 new LogisticsClient.CabinSearch(
                     List.of(
                         new LogisticsClient.CabinSearchGroup(
@@ -127,7 +178,9 @@ class HttpLogisticsClientTest {
     assertThat(received.get(1).method()).isEqualTo("POST");
     assertThat(received.get(1).path())
         .isEqualTo("/api/logistics/v1/rental-inquiries/" + inquiryId + "/cabin-searches");
+    assertThat(received.get(1).header("Idempotency-Key")).isEqualTo(searchKey.toString());
     assertThat(received.get(1).body().path("warehouseId").asText()).isEqualTo(warehouseId.toString());
+    assertThat(received.get(1).body().path("resultMode").asText()).isEqualTo("REPLACE");
     assertThat(received.get(1).body().path("groups").get(0).path("quantity").asInt()).isEqualTo(2);
     assertThat(received.get(1).body().path("groups").get(0).path("category").asText())
         .isEqualTo("Новая");
@@ -138,6 +191,118 @@ class HttpLogisticsClientTest {
         .isEqualTo("с тамбуром");
     assertThat(received.get(1).body().path("groups").get(0).path("linoleum").booleanValue())
         .isFalse();
+  }
+
+  @Test
+  void readsAndReplacesSelectionAndPerformsBoundedReadOnlyCatalogLookup() throws Exception {
+    UUID inquiryId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    UUID idempotencyKey = UUID.randomUUID();
+    List<RecordedRequest> received = new CopyOnWriteArrayList<>();
+    AtomicInteger selectionReads = new AtomicInteger();
+    start(
+        exchange -> {
+          RecordedRequest request = record(exchange);
+          received.add(request);
+          if (request.path().endsWith("/cabin-catalog")) {
+            reply(
+                exchange,
+                200,
+                """
+                {"warehouseId":"%s","content":[{"id":"%s","number":"CAB-1"}],
+                 "page":0,"size":20,"totalElements":1,"totalPages":1}
+                """
+                    .formatted(warehouseId, rentalItemId));
+          } else if (request.method().equals("GET") && selectionReads.getAndIncrement() == 0) {
+            reply(
+                exchange,
+                200,
+                """
+                {"inquiryId":"%s","warehouseId":null,"expiresAt":null,
+                 "rentalItemIds":[],"items":[]}
+                """
+                    .formatted(inquiryId));
+          } else {
+            reply(
+                exchange,
+                200,
+                """
+                {"inquiryId":"%s","warehouseId":"%s","expiresAt":"2030-08-09T12:00:00Z",
+                 "rentalItemIds":["%s"],"items":[{"id":"%s","version":0,
+                 "warehouseId":"%s","number":"CAB-1","status":"FREE",
+                 "updatedAt":"2030-08-09T11:00:00Z"}]}
+                """
+                    .formatted(
+                        inquiryId,
+                        warehouseId,
+                        rentalItemId,
+                        rentalItemId,
+                        warehouseId));
+          }
+        });
+    HttpLogisticsClient client = client();
+
+    LogisticsClient.CabinSelection empty =
+        client.readCabinSelection(inquiryId, "current-user-bearer");
+    LogisticsClient.CabinSelection replaced =
+        client.replaceCabinSelection(
+            inquiryId,
+            idempotencyKey,
+            warehouseId,
+            List.of(rentalItemId),
+            "current-user-bearer");
+    JsonNode catalog =
+        client.lookupCabinCatalog(
+            inquiryId, warehouseId, "CAB 1/Линолеум", 0, 20, "current-user-bearer");
+
+    assertThat(empty.warehouseId()).isNull();
+    assertThat(empty.rentalItemIds()).isEmpty();
+    assertThat(replaced.rentalItemIds()).containsExactly(rentalItemId);
+    assertThat(catalog.path("content").get(0).path("number").asText()).isEqualTo("CAB-1");
+    assertThat(received.get(1).method()).isEqualTo("PUT");
+    assertThat(received.get(1).header("Idempotency-Key")).isEqualTo(idempotencyKey.toString());
+    assertThat(received.get(1).body().path("warehouseId").asText())
+        .isEqualTo(warehouseId.toString());
+    assertThat(received.get(1).body().path("rentalItemIds"))
+        .extracting(JsonNode::asText)
+        .containsExactly(rentalItemId.toString());
+    assertThat(received.get(2).method()).isEqualTo("GET");
+    assertThat(received.get(2).rawQuery())
+        .contains(
+            "warehouseId=" + warehouseId,
+            "query=CAB+1%2F%D0%9B%D0%B8%D0%BD%D0%BE%D0%BB%D0%B5%D1%83%D0%BC",
+            "page=0",
+            "size=20");
+  }
+
+  @Test
+  void rejectsANonFreeCabinInTheAuthoritativeSelection() throws Exception {
+    UUID inquiryId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    start(
+        exchange ->
+            reply(
+                exchange,
+                200,
+                """
+                {"inquiryId":"%s","warehouseId":"%s","expiresAt":"2030-08-09T12:00:00Z",
+                 "rentalItemIds":["%s"],"items":[{"id":"%s","version":0,
+                 "warehouseId":"%s","number":"CAB-1","status":"RENTED",
+                 "updatedAt":"2030-08-09T11:00:00Z"}]}
+                """
+                    .formatted(
+                        inquiryId,
+                        warehouseId,
+                        rentalItemId,
+                        rentalItemId,
+                        warehouseId)));
+
+    assertThatThrownBy(
+            () -> client().readCabinSelection(inquiryId, "current-user-bearer"))
+        .isInstanceOf(AssistantUpstreamException.class)
+        .hasMessage("Logistics returned an invalid cabin selection");
   }
 
   @Test
@@ -195,6 +360,7 @@ class HttpLogisticsClientTest {
                 client()
                     .searchAvailableCabins(
                         inquiryId,
+                        UUID.randomUUID(),
                         new LogisticsClient.CabinSearch(
                             List.of(
                                 new LogisticsClient.CabinSearchGroup(
@@ -203,6 +369,44 @@ class HttpLogisticsClientTest {
                         "current-user-bearer"))
         .isInstanceOf(AssistantInquiryArchivedException.class)
         .hasMessage("The rental inquiry is archived");
+  }
+
+  @Test
+  void retriesOneLostResponseWithTheExactCallerKeyAndARecreatedClientReusesIt()
+      throws Exception {
+    UUID inquiryId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID callerKey = UUID.randomUUID();
+    AtomicInteger attempts = new AtomicInteger();
+    List<RecordedRequest> received = new CopyOnWriteArrayList<>();
+    start(
+        exchange -> {
+          received.add(record(exchange));
+          if (attempts.getAndIncrement() == 0) {
+            exchange.close();
+            return;
+          }
+          reply(exchange, 200, "{\"warehouseId\":\"" + warehouseId + "\",\"groups\":[]}");
+        });
+    LogisticsClient.CabinSearch request =
+        new LogisticsClient.CabinSearch(
+            List.of(
+                new LogisticsClient.CabinSearchGroup(
+                    "БК-1", null, null, null, null, null, 1)),
+            warehouseId);
+
+    client().searchAvailableCabins(inquiryId, callerKey, request, "current-user-bearer");
+    client().searchAvailableCabins(inquiryId, callerKey, request, "current-user-bearer");
+
+    assertThat(received).hasSize(3);
+    assertThat(received)
+        .allSatisfy(
+            recorded ->
+                assertThat(recorded.header("Idempotency-Key"))
+                    .isEqualTo(callerKey.toString()));
+    assertThat(received)
+        .extracting(RecordedRequest::body)
+        .allSatisfy(body -> assertThat(body).isEqualTo(received.getFirst().body()));
   }
 
   private HttpLogisticsClient client() {
@@ -225,6 +429,7 @@ class HttpLogisticsClientTest {
     return new RecordedRequest(
         exchange.getRequestMethod(),
         exchange.getRequestURI().getPath(),
+        exchange.getRequestURI().getRawQuery(),
         exchange.getRequestHeaders(),
         mapper.readTree(exchange.getRequestBody().readAllBytes()));
   }
@@ -237,14 +442,17 @@ class HttpLogisticsClientTest {
     exchange.close();
   }
 
+  /** Local HTTP exchange callback used by each wire-contract scenario. */
   @FunctionalInterface
   private interface ExchangeHandler {
     void handle(HttpExchange exchange) throws IOException;
   }
 
+  /** Captured request evidence including the raw encoded query string. */
   private record RecordedRequest(
       String method,
       String path,
+      String rawQuery,
       com.sun.net.httpserver.Headers headers,
       JsonNode body) {
     String header(String name) {

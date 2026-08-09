@@ -11,6 +11,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Appends logistics-local audit facts for rental-order transitions.
+ */
 @Service
 @RequiredArgsConstructor
 public class OrderAuditService {

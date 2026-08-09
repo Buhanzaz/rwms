@@ -6,6 +6,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/** Stores external queue-definition usage proofs that fence deletion. */
 public interface QueueUsageReferenceRepository extends JpaRepository<QueueUsageReference, UUID> {
   boolean existsByDefinitionId(UUID definitionId);
 

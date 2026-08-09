@@ -21,8 +21,11 @@ import org.springframework.util.ClassUtils;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
+import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
+import org.yaml.snakeyaml.constructor.SafeConstructor;
 
+/** Enforces strict canonical OpenAPI parsing and exact asset controller-path parity. */
 class AssetOpenApiParityTest {
   private static final String ASSET_PACKAGE = "dev.buhanzaz.rwms.asset";
   private static final Set<String> OPENAPI_METHODS = Set.of("get", "post", "put", "delete");
@@ -81,6 +84,7 @@ class AssetOpenApiParityTest {
         "/api/internal/asset/v1/logistics/orders/{orderId}/equipment-reservations",
         "/api/internal/asset/v1/logistics/orders/{orderId}/equipment-movement-plan",
         "/api/internal/asset/v1/logistics/rental-items/{rentalItemId}/furniture-movement-plan",
+        "/api/internal/asset/v1/logistics/cabin-catalog",
         "/api/internal/asset/v1/inventory/assets/{assetId}",
         "/api/internal/asset/v1/inventory/captures",
         "/api/internal/asset/v1/inventory/captures/{captureId}",
@@ -182,9 +186,27 @@ class AssetOpenApiParityTest {
         .containsEntry("maxItems", 20);
     assertThat(
             child(
+                child(child(schemas, "CabinSearchRequest"), "properties"),
+                "resultMode"))
+        .containsEntry("default", "REPLACE");
+    assertThat(
+            child(
                 child(child(schemas, "CabinSearchResponse"), "properties"),
                 "groups"))
         .containsEntry("maxItems", 20);
+    Map<String, Object> cabinSearch =
+        child(paths, "/api/internal/asset/v1/logistics/cabin-searches");
+    Map<String, Object> cabinSearchPost = child(cabinSearch, "post");
+    assertThat(list(cabinSearchPost.get("parameters")))
+        .singleElement()
+        .satisfies(
+            parameter ->
+                assertThat(map(parameter).get("$ref"))
+                    .isEqualTo("#/components/parameters/IdempotencyKey"));
+    assertThat(child(cabinSearchPost, "responses").keySet())
+        .containsExactlyInAnyOrder("200", "400", "403", "409");
+    assertThat(child(child(cabinSearchPost, "responses"), "200").toString())
+        .contains("Idempotency-Replayed", "true");
     Map<String, Object> cabinFacets =
         child(paths, "/api/internal/asset/v1/logistics/cabin-facets");
     List<Object> cabinFacetParameters = list(child(cabinFacets, "get").get("parameters"));
@@ -198,7 +220,22 @@ class AssetOpenApiParityTest {
         .containsEntry("type", "string")
         .containsEntry("format", "uuid");
     assertThat(list(child(schemas, "CabinFacetResponse").get("required")))
-        .contains("categories");
+        .contains("categories", "characteristics", "typeDimensions");
+    assertThat(child(schemas, "CabinTypeDimensions").toString())
+        .contains("cabinType", "dimensions", "uniqueItems");
+    Map<String, Object> cabinCatalog =
+        child(paths, "/api/internal/asset/v1/logistics/cabin-catalog");
+    assertThat(child(cabinCatalog, "get").get("operationId"))
+        .isEqualTo("readPresentationCabinCatalog");
+    assertThat(list(child(cabinCatalog, "get").get("parameters")))
+        .extracting(parameter -> map(parameter).getOrDefault("name", map(parameter).get("$ref")))
+        .containsExactly(
+            "#/components/parameters/WarehouseIdQuery", "query", "page", "size");
+    assertThat(map(list(child(cabinCatalog, "get").get("parameters")).get(1)))
+        .containsEntry("name", "query")
+        .containsEntry("required", true);
+    assertThat(list(child(schemas, "CabinCatalogPage").get("required")))
+        .containsExactly("warehouseId", "content", "page", "size", "totalElements", "totalPages");
     assertThat(list(child(schemas, "AvailableCabin").get("required")))
         .contains("status");
     assertThat(list(child(schemas, "OrderEquipmentRequirement").get("required")))
@@ -516,8 +553,10 @@ class AssetOpenApiParityTest {
 
   private Map<String, Object> openApi() throws Exception {
     Path contract = Path.of(System.getProperty("rwms.contracts.dir"), "openapi/asset-service.yaml");
+    LoaderOptions loaderOptions = new LoaderOptions();
+    loaderOptions.setAllowDuplicateKeys(false);
     try (InputStream input = Files.newInputStream(contract)) {
-      return new Yaml().load(input);
+      return new Yaml(new SafeConstructor(loaderOptions)).load(input);
     }
   }
 
@@ -577,5 +616,6 @@ class AssetOpenApiParityTest {
     return (List<Object>) value;
   }
 
+  /** One normalized HTTP method/path pair used by the parity comparison. */
   private record Endpoint(String path, String method) {}
 }

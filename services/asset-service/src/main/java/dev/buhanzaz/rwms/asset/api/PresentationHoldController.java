@@ -5,6 +5,9 @@ import static dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.*;
 import dev.buhanzaz.rwms.asset.security.AssetAuthorizer;
 import dev.buhanzaz.rwms.asset.service.PresentationHoldService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Size;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -21,6 +24,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * HTTP adapter for presentation hold.
+ * It exposes the contract boundary without owning a persistence model or domain transition.
+ */
 @RestController
 @Validated
 @RequestMapping("/api/internal/asset/v1/logistics")
@@ -38,11 +45,32 @@ public class PresentationHoldController {
     return service.facets(warehouseId, holdScopeId);
   }
 
-  @PostMapping("/cabin-searches")
-  public CabinSearchResponse search(
-      @AuthenticationPrincipal Jwt jwt, @Valid @RequestBody CabinSearchRequest request) {
+  /** Returns warehouse cabin facts without checking availability or creating a hold. */
+  @GetMapping("/cabin-catalog")
+  public CabinCatalogPage catalog(
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestParam UUID warehouseId,
+      @RequestParam @Size(max = 255) String query,
+      @RequestParam(defaultValue = "0") @Min(0) int page,
+      @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
     access.requireLogisticsAssetAccess(jwt);
-    return service.search(request);
+    return service.catalog(warehouseId, query, page, size);
+  }
+
+  /**
+   * Binds a logistics-only caller key to one exact cabin-search request and exposes frozen replay
+   * only through the response header defined by the internal contract.
+   */
+  @PostMapping("/cabin-searches")
+  public ResponseEntity<CabinSearchResponse> search(
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody CabinSearchRequest request) {
+    UUID subjectId = access.logisticsSubjectId(jwt);
+    var result = service.search(subjectId, idempotencyKey, request);
+    ResponseEntity.BodyBuilder response = ResponseEntity.ok();
+    if (result.replayed()) response.header("Idempotency-Replayed", "true");
+    return response.body(result.response());
   }
 
   @PostMapping("/cabin-availability")

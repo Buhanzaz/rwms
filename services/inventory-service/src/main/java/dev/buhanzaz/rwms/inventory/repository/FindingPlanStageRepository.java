@@ -8,6 +8,9 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data repository for service-local finding plan stage persistence.
+ */
 public interface FindingPlanStageRepository extends JpaRepository<FindingPlanStage, UUID> {
   @Query(
       """

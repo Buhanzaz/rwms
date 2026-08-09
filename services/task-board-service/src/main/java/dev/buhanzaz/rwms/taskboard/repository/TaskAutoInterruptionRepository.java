@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/** Stores unresolved and completed automatic task-interruption records. */
 public interface TaskAutoInterruptionRepository extends JpaRepository<TaskAutoInterruption, UUID> {
   List<TaskAutoInterruption> findAllByInterruptingEntryIdAndActiveTrue(UUID entryId);
 

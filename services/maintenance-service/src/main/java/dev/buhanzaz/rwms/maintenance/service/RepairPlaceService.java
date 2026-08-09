@@ -29,6 +29,7 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/** Application service for RepairPlaceService; it coordinates maintenance-owned state and durable effects. */
 @Service
 public class RepairPlaceService {
   private static final UUID LOGISTICS_SERVICE_SUBJECT =

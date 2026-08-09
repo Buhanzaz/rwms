@@ -5,6 +5,10 @@ import java.time.Instant;
 import java.util.Map;
 import org.springframework.stereotype.Component;
 
+/**
+ * Enqueues sanitized terminal-failure metadata for rejected asset messages. It stores a hash and
+ * failure code rather than copying the raw rejected payload into the dead-letter path.
+ */
 @Component
 public class AssetSanitizedDltPublisher {
   private final AssetSanitizedDltStore store;

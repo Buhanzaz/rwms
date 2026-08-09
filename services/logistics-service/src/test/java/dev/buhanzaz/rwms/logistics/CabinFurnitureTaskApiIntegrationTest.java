@@ -14,6 +14,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -74,7 +75,32 @@ class CabinFurnitureTaskApiIntegrationTest {
 
   @BeforeEach
   void resetState() {
-    jdbc.execute("truncate table equipment_movement_task_line, equipment_movement_task cascade");
+    jdbc.execute(
+        """
+        truncate table
+          logistics_warehouse_admission_intent,
+          warehouse_operation_mark_outbox,
+          equipment_movement_task_line,
+          equipment_movement_task
+        cascade
+        """);
+    when(dependencies.productionReady()).thenReturn(true);
+    when(
+            dependencies.warehouseAdmission(
+                WAREHOUSE,
+                LogisticsDependencyGateway.WarehouseOperationDirection.OUTGOING))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseOperationAdmission(
+                WAREHOUSE,
+                17,
+                LogisticsDependencyGateway.WarehouseLifecycleState.ACTIVE,
+                LogisticsDependencyGateway.WarehouseOperationDirection.OUTGOING,
+                true));
+    when(dependencies.warehouseTimeZoneAt(eq(WAREHOUSE), any(OffsetDateTime.class)))
+        .thenAnswer(
+            invocation ->
+                new LogisticsDependencyGateway.WarehouseTimeZone(
+                    WAREHOUSE, "UTC", invocation.getArgument(1)));
   }
 
   @Test
@@ -102,6 +128,16 @@ class CabinFurnitureTaskApiIntegrationTest {
     assertThat(
             jdbc.queryForObject("select count(*) from equipment_movement_task", Integer.class))
         .isOne();
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select admission_direction,admission_warehouse_version
+                  from warehouse_operation_mark_outbox
+                 where operation_id=(select id from equipment_movement_task) and warehouse_id=?
+                """,
+                WAREHOUSE))
+        .containsEntry("admission_direction", "OUTGOING")
+        .containsEntry("admission_warehouse_version", 17L);
     verify(dependencies)
         .planCabinFurnitureMovements(
             WAREHOUSE,

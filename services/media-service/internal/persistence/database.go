@@ -13,8 +13,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// ErrSchemaNotReady indicates that PostgreSQL does not have exactly the
+// approved immutable Flyway migration history.
 var ErrSchemaNotReady = errors.New("media schema is not at the approved Flyway version")
 
+// Database wraps the service-owned PostgreSQL pool and its schema readiness
+// gate.
 type Database struct {
 	Pool *pgxpool.Pool
 }
@@ -30,6 +34,8 @@ type approvedMigration struct {
 	contents                     []byte
 }
 
+// Open creates the media PostgreSQL pool and fails closed unless Flyway history
+// exactly matches the embedded approved migrations.
 func Open(ctx context.Context, databaseURL string) (*Database, error) {
 	configuration, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
@@ -50,12 +56,14 @@ func Open(ctx context.Context, databaseURL string) (*Database, error) {
 	return database, nil
 }
 
+// Close releases all database pool resources.
 func (database *Database) Close() {
 	if database != nil && database.Pool != nil {
 		database.Pool.Close()
 	}
 }
 
+// Ready verifies connectivity and the exact immutable migration history.
 func (database *Database) Ready(ctx context.Context) error {
 	if err := database.Pool.Ping(ctx); err != nil {
 		return err
@@ -63,6 +71,8 @@ func (database *Database) Ready(ctx context.Context) error {
 	return database.VerifyMigrations(ctx)
 }
 
+// VerifyMigrations checks Flyway versions, descriptions, SQL type, success,
+// and checksums against the approved V1–V11 sequence.
 func (database *Database) VerifyMigrations(ctx context.Context) error {
 	var historyTable *string
 	if err := database.Pool.QueryRow(ctx, "select to_regclass('public.flyway_schema_history')::text").Scan(&historyTable); err != nil {
@@ -107,9 +117,10 @@ func verifyMigrationHistory(history []migrationHistoryRow) error {
 		{"8", "task board worker media", "V8__task_board_worker_media.sql", mediamigration.V8},
 		{"9", "asset import worker", "V9__asset_import_worker.sql", mediamigration.V9},
 		{"10", "canonical cabin photo library", "V10__canonical_cabin_photo_library.sql", mediamigration.V10},
+		{"11", "bounded media processing recovery", "V11__bounded_media_processing_recovery.sql", mediamigration.V11},
 	}
 	if len(history) != len(expected) {
-		return fmt.Errorf("%w: expected the exact approved V1 through V10 history, found %d versioned rows", ErrSchemaNotReady, len(history))
+		return fmt.Errorf("%w: expected the exact approved V1 through V11 history, found %d versioned rows", ErrSchemaNotReady, len(history))
 	}
 	expectedByVersion := make(map[string]approvedMigration, len(expected))
 	for _, migration := range expected {

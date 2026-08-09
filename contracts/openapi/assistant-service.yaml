@@ -98,19 +98,14 @@ paths:
       operationId: streamAssistantTurn
       summary: Persist a user turn and stream the LLM-assisted reply
       description: |
-        Clients must request Accept: text/event-stream. The assistant provider
-        can choose list_available_cabin_facets, search_available_cabins, and,
-        only for a live unpublished selection,
-        request_search_merge_confirmation. Each cabin-search result is a bounded delegation to
-        logistics-service. Every user turn makes a fresh cabin-search attempt
-        before assistant text is accepted, except a merge-or-replace clarification
-        for a current live selection; a tool failure is reported as a
-        technical failure, never as an empty availability result. Each
-        cabin-search group filters FREE cabins by exact base facets, including
-        the independent category facet. If logistics reports
-        INQUIRY_ARCHIVED, the assistant persists a terminal explanation and
-        archives the local conversation so it cannot remain selected. The final
-        assistant text and tool records are persisted before turn.completed.
+        Clients must request Accept: text/event-stream and send exactly one free-text
+        message or exact persisted clarification answer. Availability selection requires
+        exact current cabinType and finish; ambiguous type/size relations create durable
+        button questions without acquiring a hold. Informational cabin catalog/help calls
+        are read-only. Search omission is REPLACE and APPEND must be explicit. If logistics
+        reports INQUIRY_ARCHIVED, the assistant persists a terminal explanation and archives
+        the local conversation. The final assistant text and tool records are persisted before
+        turn.completed.
       requestBody:
         required: true
         content:
@@ -152,9 +147,16 @@ paths:
                     result:
                       tool: search_available_cabins
                       resultMode: REPLACE
+                      filterSuggestions:
+                        cabinTypes: [Модуль]
+                        finishes: [ЛДСП]
+                        dimensions: [6x2.4]
+                        categories: []
+                        characteristics: [Линолеум]
                       notices: []
                       data:
                         warehouseId: 14a4087c-c21b-43d9-ab70-8bfa7610a1db
+                        expiresAt: 2030-08-09T12:10:00Z
                         groups: []
                 completed:
                   summary: Persisted final assistant message.
@@ -176,6 +178,34 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/ConversationNotFound"
+  /api/assistant/v1/conversations/{conversationId}/selection:
+    parameters:
+      - $ref: "#/components/parameters/ConversationId"
+      - $ref: "#/components/parameters/IdempotencyKey"
+    put:
+      operationId: replaceAssistantCabinSelection
+      summary: Keep exactly the selected cabin IDs and immediately release removed holds
+      description: >-
+        Delegates one owner-checked, idempotent replacement to logistics-service. An empty
+        rentalItemIds list releases the complete inquiry selection. Assistant-service stores no
+        independent availability or hold truth.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CabinSelectionRequest" }
+      responses:
+        "200":
+          description: Authoritative logistics-owned selection after replacement.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CabinSelection" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/ConversationNotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "502": { $ref: "#/components/responses/LogisticsUnavailable" }
 components:
   securitySchemes:
     bearerAuth:
@@ -187,6 +217,13 @@ components:
     ConversationId:
       name: conversationId
       in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
       required: true
       schema:
         type: string
@@ -253,10 +290,17 @@ components:
       type: object
       additionalProperties: false
       required: [clientType, displayName, phone]
+      oneOf:
+        - properties:
+            clientType: { const: INDIVIDUAL }
+        - required: [contactPerson]
+          properties:
+            clientType: { enum: [SOLE_PROPRIETOR, LEGAL_ENTITY] }
+            contactPerson: { type: string, minLength: 1, maxLength: 255 }
       properties:
         clientType:
           type: string
-          enum: [INDIVIDUAL, LEGAL_ENTITY]
+          enum: [INDIVIDUAL, SOLE_PROPRIETOR, LEGAL_ENTITY]
         displayName:
           type: string
           minLength: 1
@@ -265,10 +309,23 @@ components:
           type: string
           minLength: 1
           maxLength: 32
+          pattern: '^(?:\+|8)[0-9() .-]{6,31}$'
+        contactPerson:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 255
         email:
           type: [string, "null"]
           format: email
           maxLength: 320
+        comment:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 2000
+        source:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 255
     CreateConversationResponse:
       type: object
       additionalProperties: false
@@ -345,7 +402,7 @@ components:
     ConversationDetail:
       type: object
       additionalProperties: false
-      required: [conversation, messages, lastSearchResult]
+      required: [conversation, messages, lastSearchResult, clarifications, currentSelection]
       properties:
         conversation:
           $ref: "#/components/schemas/Conversation"
@@ -356,6 +413,13 @@ components:
         lastSearchResult:
           anyOf:
             - $ref: "#/components/schemas/CabinSearchToolResult"
+            - type: "null"
+        clarifications:
+          type: array
+          items: { $ref: "#/components/schemas/ClarificationQuestion" }
+        currentSelection:
+          oneOf:
+            - $ref: "#/components/schemas/CabinSelection"
             - type: "null"
     Message:
       type: object
@@ -379,20 +443,37 @@ components:
           items:
             $ref: "#/components/schemas/CabinSearchNotice"
     TurnRequest:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [message]
+          properties:
+            message:
+              type: string
+              minLength: 1
+              maxLength: 8000
+        - type: object
+          additionalProperties: false
+          required: [clarificationAnswer]
+          properties:
+            clarificationAnswer:
+              $ref: "#/components/schemas/ClarificationAnswer"
+    ClarificationAnswer:
       type: object
       additionalProperties: false
-      required: [message]
+      required: [questionId, optionId]
       properties:
-        message:
-          type: string
-          minLength: 1
-          maxLength: 8000
+        questionId: { type: string, format: uuid }
+        optionId: { type: string, format: uuid }
     TurnEvent:
       oneOf:
         - $ref: "#/components/schemas/TurnStartedEvent"
         - $ref: "#/components/schemas/AssistantDeltaEvent"
         - $ref: "#/components/schemas/ToolStartedEvent"
         - $ref: "#/components/schemas/SearchResultEvent"
+        - $ref: "#/components/schemas/ClarificationRequestedEvent"
+        - $ref: "#/components/schemas/ClarificationAnsweredEvent"
+        - $ref: "#/components/schemas/SelectionUpdatedEvent"
         - $ref: "#/components/schemas/ToolCompletedEvent"
         - $ref: "#/components/schemas/TurnCompletedEvent"
         - $ref: "#/components/schemas/TurnFailedEvent"
@@ -453,6 +534,36 @@ components:
           oneOf:
             - $ref: "#/components/schemas/CabinSearchToolResult"
             - $ref: "#/components/schemas/ToolFailureResult"
+    ClarificationRequestedEvent:
+      type: object
+      additionalProperties: false
+      required: [event, conversationId, toolCallId, clarification]
+      properties:
+        event: { const: clarification.requested }
+        conversationId: { type: string, format: uuid }
+        toolCallId: { type: string, format: uuid }
+        clarification: { $ref: "#/components/schemas/ClarificationQuestion" }
+    ClarificationAnsweredEvent:
+      type: object
+      additionalProperties: false
+      required: [event, conversationId, messageId, clarification]
+      properties:
+        event: { const: clarification.answered }
+        conversationId: { type: string, format: uuid }
+        messageId: { type: string, format: uuid }
+        clarification: { $ref: "#/components/schemas/ClarificationQuestion" }
+    SelectionUpdatedEvent:
+      type: object
+      additionalProperties: false
+      required: [event, conversationId, toolCallId, result]
+      properties:
+        event: { const: selection.updated }
+        conversationId: { type: string, format: uuid }
+        toolCallId: { type: string, format: uuid }
+        result:
+          oneOf:
+            - $ref: "#/components/schemas/RemoveSelectedCabinsToolResult"
+            - $ref: "#/components/schemas/ToolFailureResult"
     ToolCompletedEvent:
       type: object
       additionalProperties: false
@@ -505,7 +616,9 @@ components:
       oneOf:
         - $ref: "#/components/schemas/CabinFacetsToolResult"
         - $ref: "#/components/schemas/CabinSearchToolResult"
-        - $ref: "#/components/schemas/SearchMergeConfirmationToolResult"
+        - $ref: "#/components/schemas/CabinClarificationsToolResult"
+        - $ref: "#/components/schemas/CabinCatalogToolResult"
+        - $ref: "#/components/schemas/RemoveSelectedCabinsToolResult"
       discriminator:
         propertyName: tool
     CabinFacetsToolResult:
@@ -521,35 +634,88 @@ components:
     CabinSearchToolResult:
       type: object
       additionalProperties: false
-      required: [tool, resultMode, notices, data]
+      required: [tool, resultMode, filterSuggestions, notices, data]
       properties:
         tool:
           type: string
           const: search_available_cabins
         resultMode:
           $ref: "#/components/schemas/SearchResultMode"
+        filterSuggestions:
+          $ref: "#/components/schemas/CabinFilterSuggestions"
         notices:
           type: array
           items:
             $ref: "#/components/schemas/CabinSearchNotice"
         data:
           $ref: "#/components/schemas/CabinSearchProjection"
-    SearchMergeConfirmationToolResult:
+    CabinClarificationsToolResult:
       type: object
       additionalProperties: false
       required: [tool, data]
       properties:
         tool:
           type: string
-          const: request_search_merge_confirmation
+          const: request_cabin_clarifications
         data:
           type: object
           additionalProperties: false
-          required: [action]
+          required: [questions]
           properties:
-            action:
-              type: string
-              const: ASK_ADD_OR_REPLACE
+            questions:
+              type: array
+              minItems: 1
+              maxItems: 5
+              items: { $ref: "#/components/schemas/ClarificationQuestion" }
+    CabinCatalogToolResult:
+      type: object
+      additionalProperties: false
+      required: [tool, data]
+      properties:
+        tool: { type: string, const: lookup_cabin_catalog }
+        data:
+          type: object
+          additionalProperties: false
+          required: [facets]
+          properties:
+            facets: { $ref: "#/components/schemas/CabinFacetsProjection" }
+            catalog:
+              oneOf:
+                - $ref: "#/components/schemas/CabinCatalogPage"
+                - type: "null"
+    RemoveSelectedCabinsToolResult:
+      type: object
+      additionalProperties: false
+      required: [tool, data]
+      properties:
+        tool: { type: string, const: remove_selected_cabins }
+        data:
+          type: object
+          additionalProperties: false
+          required: [inquiryId, warehouseId, expiresAt, rentalItemIds, items, removedRentalItemIds]
+          properties:
+            inquiryId: { type: string, format: uuid }
+            warehouseId:
+              type: [string, "null"]
+              format: uuid
+            expiresAt:
+              type: [string, "null"]
+              format: date-time
+            rentalItemIds:
+              type: array
+              maxItems: 100
+              uniqueItems: true
+              items: { type: string, format: uuid }
+            items:
+              type: array
+              maxItems: 100
+              items: { $ref: "#/components/schemas/AvailableCabin" }
+            removedRentalItemIds:
+              type: array
+              minItems: 1
+              maxItems: 100
+              uniqueItems: true
+              items: { type: string, format: uuid }
     SearchResultMode:
       type: string
       enum: [APPEND, REPLACE]
@@ -577,7 +743,7 @@ components:
     CabinFacetWarehouse:
       type: object
       additionalProperties: false
-      required: [warehouseId, name, city, cabinTypes, finishes, dimensions, categories]
+      required: [warehouseId, name, city, cabinTypes, finishes, dimensions, categories, characteristics, typeDimensions]
       properties:
         warehouseId:
           type: string
@@ -602,6 +768,68 @@ components:
           type: array
           items:
             type: string
+        characteristics:
+          type: array
+          items:
+            type: string
+        typeDimensions:
+          type: array
+          items: { $ref: "#/components/schemas/CabinTypeDimensions" }
+    CabinTypeDimensions:
+      type: object
+      additionalProperties: false
+      required: [cabinType, dimensions]
+      properties:
+        cabinType: { type: string, minLength: 1, maxLength: 255 }
+        dimensions:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { type: string, minLength: 1, maxLength: 255 }
+    CabinFilterSuggestions:
+      type: object
+      additionalProperties: false
+      required: [cabinTypes, finishes, dimensions, categories, characteristics]
+      properties:
+        cabinTypes: { type: array, items: { type: string } }
+        finishes: { type: array, items: { type: string } }
+        dimensions: { type: array, items: { type: string } }
+        categories: { type: array, items: { type: string } }
+        characteristics: { type: array, items: { type: string } }
+    ClarificationQuestion:
+      type: object
+      additionalProperties: false
+      required: [id, branchKey, kind, prompt, status, options, answeredOptionId, createdAt, answeredAt]
+      properties:
+        id: { type: string, format: uuid }
+        branchKey: { type: string, minLength: 1, maxLength: 255 }
+        kind:
+          type: string
+          enum: [CABIN_TYPE, FINISH, DIMENSIONS, CATEGORY, SEARCH_MERGE]
+        prompt: { type: string, minLength: 1, maxLength: 2000 }
+        status:
+          type: string
+          enum: [PENDING, ANSWERED, SUPERSEDED]
+        options:
+          type: array
+          minItems: 2
+          maxItems: 30
+          items: { $ref: "#/components/schemas/ClarificationOption" }
+        answeredOptionId:
+          type: [string, "null"]
+          format: uuid
+        createdAt: { type: string, format: date-time }
+        answeredAt:
+          type: [string, "null"]
+          format: date-time
+    ClarificationOption:
+      type: object
+      additionalProperties: false
+      required: [id, label, value]
+      properties:
+        id: { type: string, format: uuid }
+        label: { type: string, minLength: 1, maxLength: 255 }
+        value: { type: string, minLength: 1, maxLength: 255 }
     CabinSearchProjection:
       type: object
       additionalProperties: false
@@ -775,6 +1003,75 @@ components:
         updatedAt:
           type: string
           format: date-time
+    CabinFact:
+      type: object
+      additionalProperties: false
+      required: [id, version, warehouseId, status, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        warehouseId: { type: string, format: uuid }
+        number: { type: [string, "null"] }
+        status: { type: string }
+        rentalType: { type: [string, "null"] }
+        dimensions: { type: [string, "null"] }
+        finishing: { type: [string, "null"] }
+        category: { type: [string, "null"] }
+        characteristics: { type: [string, "null"] }
+        linoleum: { type: [boolean, "null"] }
+        passport:
+          type: [object, "null"]
+          additionalProperties: true
+        tags:
+          type: [array, "null"]
+          items: { type: string }
+        updatedAt: { type: string, format: date-time }
+    CabinCatalogPage:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, content, page, size, totalElements, totalPages]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        content:
+          type: array
+          maxItems: 20
+          items: { $ref: "#/components/schemas/CabinFact" }
+        page: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 1, maximum: 100 }
+        totalElements: { type: integer, format: int64, minimum: 0 }
+        totalPages: { type: integer, minimum: 0 }
+    CabinSelectionRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, rentalItemIds]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        rentalItemIds:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+    CabinSelection:
+      type: object
+      additionalProperties: false
+      required: [inquiryId, warehouseId, expiresAt, rentalItemIds, items]
+      properties:
+        inquiryId: { type: string, format: uuid }
+        warehouseId:
+          type: [string, "null"]
+          format: uuid
+        expiresAt:
+          type: [string, "null"]
+          format: date-time
+        rentalItemIds:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/AvailableCabin" }
     Problem:
       type: object
       required: [type, title, status, detail, code]

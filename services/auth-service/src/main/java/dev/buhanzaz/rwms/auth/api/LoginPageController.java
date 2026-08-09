@@ -10,6 +10,12 @@ import org.springframework.stereotype.Controller;
 import org.springframework.web.util.UriComponentsBuilder;
 import org.springframework.web.bind.annotation.GetMapping;
 
+/**
+ * Selects the login-page surface for browser and worker Android authorization requests.
+ *
+ * <p>The controller preserves OAuth error/logout flags when it redirects a worker authorization
+ * request to the worker-specific login surface.
+ */
 @Controller
 public class LoginPageController {
     private static final String WORKER_CLIENT_ID = "rwms-worker-android";
@@ -18,6 +24,14 @@ public class LoginPageController {
 
     private final RequestCache requestCache = new HttpSessionRequestCache();
 
+    /**
+     * Serves the SPA login page, or redirects a saved worker authorization request to its dedicated
+     * login surface.
+     *
+     * @param request current browser request, including saved OAuth authorization context
+     * @param response current browser response used to resolve the saved request
+     * @return a redirect to the worker login surface or a forward to the SPA login page
+     */
     @GetMapping("/login")
     String loginPage(HttpServletRequest request, HttpServletResponse response) {
         if (isWorkerAuthorization(request, response)

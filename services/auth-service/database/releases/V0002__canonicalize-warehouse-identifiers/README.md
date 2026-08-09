@@ -1,5 +1,7 @@
 # V0002 warehouse identifier canonicalization
 
+[Русская версия](README.ru.md)
+
 This data release maps only the closed, reviewed aliases `spb` and `msk` to
 their canonical Warehouse Service UUIDs. Existing exact UUID text is normalized
 through PostgreSQL's UUID type. Whitespace-corrupted and all other opaque

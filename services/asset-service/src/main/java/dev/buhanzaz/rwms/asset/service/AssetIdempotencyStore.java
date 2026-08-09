@@ -11,6 +11,9 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Transaction-scoped asset idempotency store keyed by subject, command scope and request fingerprint.
+ */
 @Repository
 public class AssetIdempotencyStore {
   private final JdbcTemplate jdbc;
@@ -23,6 +26,10 @@ public class AssetIdempotencyStore {
     this.properties = properties;
   }
 
+  /**
+   * Looks up a prior response while holding the caller's transaction-scoped advisory lock for the
+   * subject, command scope and key. A reused key with another request fingerprint fails closed.
+   */
   @Transactional(propagation = Propagation.MANDATORY)
   public Optional<JsonNode> replay(UUID subjectId, String scope, UUID key, String requestHash) {
     lock(subjectId, scope, key);
@@ -43,6 +50,10 @@ public class AssetIdempotencyStore {
         });
   }
 
+  /**
+   * Persists the successful response in the caller's command transaction so a later identical
+   * retry can replay it only after the same domain change has committed.
+   */
   @Transactional(propagation = Propagation.MANDATORY)
   public void store(UUID subjectId, String scope, UUID key, String requestHash, int responseStatus, Object response) {
     try {

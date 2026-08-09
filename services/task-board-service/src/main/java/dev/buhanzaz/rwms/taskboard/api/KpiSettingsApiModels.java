@@ -15,6 +15,12 @@ import java.time.LocalTime;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * Transport models for versioned per-warehouse KPI appearance and work-schedule configuration.
+ *
+ * <p>Schedules are expressed in the warehouse's authoritative timezone and become active only
+ * through the dedicated idempotent activation command.
+ */
 public final class KpiSettingsApiModels {
   private KpiSettingsApiModels() {}
 
@@ -23,6 +29,13 @@ public final class KpiSettingsApiModels {
       @Min(0) @Max(100) int toPercent,
       @NotBlank @Pattern(regexp = "^#[0-9A-Fa-f]{6}$") String color) {}
 
+  /**
+   * Version-fenced palette replacement with contiguous percentage ranges and an overdue color.
+   *
+   * @param expectedVersion observed settings version
+   * @param ranges ordered non-overlapping percentage ranges
+   * @param overdueColor hexadecimal color used for overdue work
+   */
   public record SaveKpiPaletteRequest(
       @Min(0) long expectedVersion,
       @NotEmpty @Size(max = 6) List<@Valid KpiPaletteRangeRequest> ranges,
@@ -36,6 +49,16 @@ public final class KpiSettingsApiModels {
       @NotNull @JsonFormat(pattern = "HH:mm") LocalTime start,
       @NotNull @JsonFormat(pattern = "HH:mm") LocalTime end) {}
 
+  /**
+   * Version-fenced future-effective warehouse work schedule.
+   *
+   * @param expectedVersion observed settings version
+   * @param effectiveFrom local date when the schedule takes effect
+   * @param shiftStart local working-shift start
+   * @param shiftEnd local working-shift end
+   * @param daysOff ISO weekday numbers excluded from work time
+   * @param breaks local break intervals within the shift
+   */
   public record SaveWorkScheduleRequest(
       @Min(0) long expectedVersion,
       @NotNull LocalDate effectiveFrom,
@@ -49,6 +72,11 @@ public final class KpiSettingsApiModels {
     }
   }
 
+  /**
+   * Version fence for the idempotent pending-schedule activation command.
+   *
+   * @param expectedVersion observed settings version
+   */
   public record ActivateKpiSettingsRequest(@Min(0) long expectedVersion) {}
 
   public record KpiPaletteRangeDto(int fromPercent, int toPercent, String color) {}
@@ -69,6 +97,18 @@ public final class KpiSettingsApiModels {
       List<Integer> daysOff,
       List<KpiWorkBreakDto> breaks) {}
 
+  /**
+   * Active and pending KPI configuration returned for one warehouse.
+   *
+   * @param warehouseId warehouse that owns the settings
+   * @param timeZone authoritative warehouse IANA timezone
+   * @param status settings lifecycle state
+   * @param version current settings version
+   * @param dataAvailableFrom earliest date with KPI data
+   * @param palette current display palette
+   * @param activeSchedule active working-time schedule, if configured
+   * @param pendingSchedule next future-effective schedule, if configured
+   */
   public record WarehouseKpiSettingsResponse(
       UUID warehouseId,
       String timeZone,

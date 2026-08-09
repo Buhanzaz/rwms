@@ -17,6 +17,10 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Owns transaction-scoped claims and confirmations of driver workflow state. It performs no
+ * dependency calls, so DriverTaskProcessor executes remote effects outside local write transactions.
+ */
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)

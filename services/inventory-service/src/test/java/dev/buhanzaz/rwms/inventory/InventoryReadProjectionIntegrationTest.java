@@ -167,6 +167,24 @@ class InventoryReadProjectionIntegrationTest {
     jdbc.execute("truncate table inventory_session restart identity cascade");
   }
 
+  @Test
+  void frozenPlanFingerprintUsesTheV12PostgresJsonbUtf8Rule() {
+    String serialized =
+        """
+        {"z":"late","a":{"b":true,"a":null},"items":[2,1]}
+        """;
+    JsonNode snapshot = mapper.readTree(serialized);
+    String expected =
+        jdbc.queryForObject(
+            """
+            select encode(sha256(convert_to((?::jsonb)::text, 'UTF8')), 'hex')
+            """,
+            String.class,
+            serialized);
+
+    assertThat(frozenPlanFingerprint.sha256(snapshot)).isEqualTo(expected);
+  }
+
   @AfterAll
   static void stopDatabase() {
     POSTGRES.stop();

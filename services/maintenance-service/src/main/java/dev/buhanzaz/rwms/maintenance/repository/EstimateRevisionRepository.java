@@ -6,6 +6,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/** Spring Data persistence boundary for EstimateRevision; business transitions remain in the owning service. */
 public interface EstimateRevisionRepository extends JpaRepository<EstimateRevision, UUID> {
   Optional<EstimateRevision> findByEstimateIdAndRevision(UUID estimateId, int revision);
   List<EstimateRevision> findAllByEstimateIdOrderByRevision(UUID estimateId);

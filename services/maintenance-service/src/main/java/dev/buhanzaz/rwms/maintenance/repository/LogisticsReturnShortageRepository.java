@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/** Spring Data persistence boundary for LogisticsReturnShortage; business transitions remain in the owning service. */
 public interface LogisticsReturnShortageRepository
     extends JpaRepository<LogisticsReturnShortage, LogisticsReturnShortageId> {
   List<LogisticsReturnShortage> findAllById_ReturnIdAndWarehouseIdOrderById_LineId(

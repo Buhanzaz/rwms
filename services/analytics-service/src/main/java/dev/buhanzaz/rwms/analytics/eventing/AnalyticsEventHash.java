@@ -5,6 +5,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
+/** Computes stable SHA-256 identities used to compare event bodies without retaining unsafe raw failure data. */
 public final class AnalyticsEventHash {
   private AnalyticsEventHash() {}
 

@@ -21,6 +21,14 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Creates or validates the mandatory system-administrator subject during application startup.
+ *
+ * <p>The bootstrap path is transactional: a new subject is written through the projection writer
+ * and its authorization event stream is initialized together. For an existing account it verifies
+ * the principal type, role, credential state, and stream/projection version instead of silently
+ * repairing inconsistent authorization data.</p>
+ */
 @Component
 @RequiredArgsConstructor
 public class AuthSubjectBootstrap implements ApplicationRunner {
@@ -36,6 +44,16 @@ public class AuthSubjectBootstrap implements ApplicationRunner {
     private final AuthInvariantGuard invariantGuard;
     private final AuthSubjectCredentialStore credentials;
 
+    /**
+     * Ensures that exactly the configured bootstrap administrator is valid before the service accepts
+     * authentication traffic.
+     *
+     * <p>Outside development/test the username and password are required configuration and the
+     * password must satisfy the minimum length check. The bootstrap invariant lock serializes this
+     * initialization with concurrent authorization changes.</p>
+     *
+     * @param args startup arguments; they do not influence bootstrap semantics
+     */
     @Override
     @Transactional
     public void run(ApplicationArguments args) {

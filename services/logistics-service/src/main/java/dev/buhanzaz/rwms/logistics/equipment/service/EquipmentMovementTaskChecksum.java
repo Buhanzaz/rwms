@@ -6,6 +6,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.List;
 
+/** Produces length-delimited fingerprints for idempotent equipment-movement task commands. */
 final class EquipmentMovementTaskChecksum {
   private EquipmentMovementTaskChecksum() {}
 

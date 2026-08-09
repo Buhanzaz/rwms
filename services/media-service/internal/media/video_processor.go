@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+// VideoProcessRequest names one immutable video ingress object and generation
+// to validate and copy as an original-only media asset.
 type VideoProcessRequest struct {
 	MediaID string
 	// SourceObjectKey is the immutable ingress original.
@@ -21,10 +23,13 @@ type VideoProcessRequest struct {
 	Generation      int
 }
 
+// VideoProcessResult contains the validated, version-pinned original video.
 type VideoProcessResult struct {
 	Original ProcessedVariant
 }
 
+// VideoProcessor validates an immutable ingress object with a VideoProbe and
+// copies the accepted original without producing image-style derivatives.
 type VideoProcessor struct {
 	Store         ObjectStore
 	Probe         VideoProbe
@@ -33,6 +38,8 @@ type VideoProcessor struct {
 	Limits        ProcessingLimits
 }
 
+// Process validates the configured video duration, codec, and container before
+// copying its exact content to an immutable generation original.
 func (processor VideoProcessor) Process(ctx context.Context, request VideoProcessRequest) (VideoProcessResult, error) {
 	if processor.Store == nil || processor.Probe == nil {
 		return VideoProcessResult{}, fmt.Errorf("video processor is not configured")

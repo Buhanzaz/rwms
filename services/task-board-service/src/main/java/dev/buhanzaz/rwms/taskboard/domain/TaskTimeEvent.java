@@ -12,6 +12,7 @@ import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
+/** Append-only execution-time transition used to reconstruct task and KPI timing. */
 @Entity
 @Table(name = "task_time_event")
 public class TaskTimeEvent extends AbstractVersionedEntity {

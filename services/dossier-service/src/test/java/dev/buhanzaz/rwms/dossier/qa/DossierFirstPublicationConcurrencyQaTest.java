@@ -203,7 +203,7 @@ class DossierFirstPublicationConcurrencyQaTest {
   private DossierValidatedEvent repair(UUID repairId, UUID cabinId, long offset) {
     String payload =
         """
-        {"repairId":"%s","rootRepairId":"%s","sourceRepairId":null,"estimateId":null,"warehouseId":"%s","rentalItemId":"%s","origin":"DIRECT_REPAIR","kind":"PRIMARY","executionState":"DRAFT","acceptanceState":"NOT_READY","dispatchDate":"2026-07-18","stages":[]}
+        {"repairId":"%s","rootRepairId":"%s","sourceRepairId":null,"estimateId":null,"warehouseId":"%s","rentalItemId":"%s","origin":"DIRECT_REPAIR","kind":"PRIMARY","executionState":"DRAFT","acceptanceState":"NOT_READY","dispatchDate":"2026-07-18","priority":3,"stages":[]}
         """
             .formatted(repairId, repairId, WAREHOUSE_ID, cabinId);
     return validate(

@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/** Verifies replayed task-board history and projection parity before a recovery is accepted. */
 @Service
 @RequiredArgsConstructor
 public class TaskBoardReplayVerifier {

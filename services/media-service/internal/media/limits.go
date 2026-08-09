@@ -12,6 +12,8 @@ type ProcessingLimits struct {
 	Timeout             time.Duration
 }
 
+// Valid reports whether every processing resource bound is explicit and
+// positive.
 func (limits ProcessingLimits) Valid() bool {
 	return limits.MaxImageBytes > 0 &&
 		limits.MaxImageOutputBytes > 0 &&

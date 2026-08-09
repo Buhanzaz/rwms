@@ -7,6 +7,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 
+/** Boot entry point for the stateful assistant service and its explicitly bound LLM, logistics and SSE configuration. */
 @SpringBootApplication
 @EnableConfigurationProperties({
   AssistantLlmProperties.class,

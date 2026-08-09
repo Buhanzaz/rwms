@@ -15,6 +15,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.JdbcTypeCode;
 
+/** Stores an event identity and processing decision as the transactional analytics consumer inbox. */
 @Entity
 @Table(name = "analytics_inbox")
 @Getter

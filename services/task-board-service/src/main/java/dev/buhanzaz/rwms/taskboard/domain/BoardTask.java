@@ -14,6 +14,12 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 import org.hibernate.annotations.Check;
 
+/**
+ * Task-board-owned operational task aggregate.
+ *
+ * <p>It retains the stable source identity, scheduling lane, priority, terminal state, and route
+ * entries while the source domain continues to own the business reason for the work.
+ */
 @Entity
 @Table(
     name = "board_task",

@@ -8,6 +8,8 @@ import (
 	"github.com/google/uuid"
 )
 
+// ErrReferenceNotReady hides whether a media reference is absent, misowned, or
+// unavailable at the requested current generation.
 var ErrReferenceNotReady = errors.New("media reference is absent, incorrectly owned, or not ready at the requested generation")
 
 const (
@@ -16,11 +18,15 @@ const (
 	OwnerTypeLogisticsTransfer = "LOGISTICS_TRANSFER"
 )
 
+// ReadyMediaReference names one opaque media generation validated for a
+// logistics document line.
 type ReadyMediaReference struct {
 	MediaID    uuid.UUID
 	Generation int
 }
 
+// ValidateLogisticsReferencesCommand asks for read-only validation of a small
+// set of ready media references within one proven logistics scope.
 type ValidateLogisticsReferencesCommand struct {
 	OwnerType   string
 	OwnerID     string
@@ -28,6 +34,8 @@ type ValidateLogisticsReferencesCommand struct {
 	References  []ReadyMediaReference
 }
 
+// IsLogisticsOwnerType reports whether ownerType is one of the supported
+// return, shipment, or transfer scopes.
 func IsLogisticsOwnerType(ownerType string) bool {
 	switch ownerType {
 	case OwnerTypeLogisticsReturn, OwnerTypeLogisticsShipment, OwnerTypeLogisticsTransfer:
@@ -37,6 +45,7 @@ func IsLogisticsOwnerType(ownerType string) bool {
 	}
 }
 
+// LogisticsOwnerID returns the canonical opaque documentId:lineId owner key.
 func LogisticsOwnerID(documentID, lineID uuid.UUID) string {
 	return documentID.String() + ":" + lineID.String()
 }

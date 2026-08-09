@@ -34,6 +34,12 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Reconstructs sanitized fact payloads from authoritative task-board state for baseline and replay.
+ *
+ * <p>It centralizes payload meaning so live publication and recovery do not produce competing
+ * representations of the same aggregate version.
+ */
 @Service
 @RequiredArgsConstructor
 public class TaskBoardEventFactFactory {

@@ -15,6 +15,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
+/** Writes canonical maintenance authentication and authorization problem responses. */
 @Component
 public class MaintenanceSecurityProblemWriter {
   private final ObjectMapper objectMapper;

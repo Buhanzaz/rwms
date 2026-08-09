@@ -184,6 +184,8 @@ components:
         maintenance.repair.stage-completed.v1: REPAIR_STAGE_COMPLETED
         maintenance.repair.pending-acceptance.v1: REPAIR_PENDING_ACCEPTANCE
         maintenance.repair.rework-created.v1: REPAIR_REWORK_CREATED
+        maintenance.repair.transfer-prepared.v1: REPAIR_TRANSFER_PREPARED
+        maintenance.repair.transferred.v1: REPAIR_TRANSFERRED
         maintenance.repair.accepted.v1: REPAIR_ACCEPTED
         maintenance.repair.written-off.v1: REPAIR_WRITTEN_OFF
     InventoryFindingFactV1:
@@ -336,6 +338,8 @@ components:
             - maintenance.repair.stage-completed.v1
             - maintenance.repair.pending-acceptance.v1
             - maintenance.repair.rework-created.v1
+            - maintenance.repair.transfer-prepared.v1
+            - maintenance.repair.transferred.v1
             - maintenance.repair.accepted.v1
             - maintenance.repair.written-off.v1
         eventVersion: { const: 1 }

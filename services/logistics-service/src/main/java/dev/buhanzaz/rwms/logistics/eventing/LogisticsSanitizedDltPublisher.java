@@ -3,6 +3,9 @@ package dev.buhanzaz.rwms.logistics.eventing;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+/**
+ * Persists sanitized dead-letter records for failed logistics outbox processing without exposing event payloads.
+ */
 @Component
 @RequiredArgsConstructor
 public class LogisticsSanitizedDltPublisher {

@@ -6,6 +6,9 @@ import java.io.Serializable;
 import java.util.Objects;
 import java.util.UUID;
 
+/**
+ * JPA composite identifier for inventory asset source id.
+ */
 @Embeddable
 public class InventoryAssetSourceId implements Serializable {
   @Column(name = "inventory_id", nullable = false)

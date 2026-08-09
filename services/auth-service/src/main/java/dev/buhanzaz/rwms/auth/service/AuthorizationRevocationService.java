@@ -4,12 +4,24 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+/**
+ * Removes persisted Spring Authorization Server authorizations and consents after a credential or
+ * access-right transition.
+ *
+ * <p>This invalidates stored authorization state. Self-contained access tokens remain valid until
+ * their configured short expiry.
+ */
 @Service
 @RequiredArgsConstructor
 public class AuthorizationRevocationService {
 
     private final JdbcTemplate jdbc;
 
+    /**
+     * Revokes every persisted authorization and consent for one principal across all OAuth clients.
+     *
+     * @param principalName authorization-server principal name to revoke
+     */
     public void revokePrincipal(String principalName) {
         requirePrincipalName(principalName);
         jdbc.update(
@@ -26,6 +38,13 @@ public class AuthorizationRevocationService {
                 principalName);
     }
 
+    /**
+     * Revokes persisted authorization and consent for one principal only at the named OAuth
+     * client. This limits a client-specific access revocation to its proper audience.
+     *
+     * @param principalName authorization-server principal name to revoke
+     * @param clientId public OAuth client identifier whose authorization is revoked
+     */
     public void revokePrincipalClient(String principalName, String clientId) {
         requirePrincipalName(principalName);
         if (clientId == null || clientId.isBlank()) {
@@ -54,6 +73,7 @@ public class AuthorizationRevocationService {
                 clientId);
     }
 
+    /** Rejects an empty principal name before it can produce an unsafe broad database operation. */
     private void requirePrincipalName(String principalName) {
         if (principalName == null || principalName.isBlank()) {
             throw new IllegalArgumentException(

@@ -11,6 +11,14 @@ import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Enforces the allow-listed, privacy-safe schemas for auth event payloads.
+ *
+ * <p>Validation is deliberately strict: each event family accepts only its matching typed fact,
+ * exact field set, aggregate identity, and semantic invariants. It rejects profile, credential,
+ * session, and other sensitive values before the payload can enter the event store, outbox, or
+ * inbox projection.
+ */
 @Component
 public class AuthEventPayloadPolicy {
 
@@ -49,10 +57,23 @@ public class AuthEventPayloadPolicy {
 
     private final ObjectMapper objectMapper;
 
+    /**
+     * Creates the policy with the service's JSON mapper.
+     *
+     * @param objectMapper mapper used for typed conversion and semantic validation
+     */
     public AuthEventPayloadPolicy(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
     }
 
+    /**
+     * Converts an approved typed fact to JSON and validates its complete event schema.
+     *
+     * @param eventType supported auth event type
+     * @param payload exact safe fact instance for that event family
+     * @return validated JSON payload ready for canonical persistence
+     * @throws IllegalArgumentException when type, schema, or values are not allowed
+     */
     public JsonNode validateAndConvert(String eventType, Object payload) {
         if (!AuthEventTypes.ALL.contains(eventType)) {
             throw new IllegalArgumentException("Unsupported auth event type");
@@ -68,6 +89,16 @@ public class AuthEventPayloadPolicy {
         return node;
     }
 
+    /**
+     * Validates an already parsed auth fact against its versioned schema and semantic type.
+     *
+     * <p>The compatibility allowance for legacy user facts is limited to the absence of
+     * {@code mobileAppAccess}; all other fields remain exact and allow-listed.
+     *
+     * @param eventType supported auth event type
+     * @param payload JSON object to validate
+     * @throws IllegalArgumentException when the node is not a safe fact for the event type
+     */
     public void validateNode(String eventType, JsonNode payload) {
         if (!AuthEventTypes.ALL.contains(eventType)) {
             throw new IllegalArgumentException("Unsupported auth event type");
@@ -94,6 +125,13 @@ public class AuthEventPayloadPolicy {
         }
     }
 
+    /**
+     * Requires the payload subject identifier to equal the enclosing event aggregate identifier.
+     *
+     * @param payload validated or candidate payload
+     * @param aggregateId aggregate identity carried by the event envelope
+     * @throws IllegalArgumentException when the identity is absent, malformed, or mismatched
+     */
     public void requireAggregateIdentity(JsonNode payload, UUID aggregateId) {
         JsonNode subjectId = payload == null ? null : payload.get("subjectId");
         if (subjectId == null || !subjectId.isTextual()) {
@@ -104,6 +142,13 @@ public class AuthEventPayloadPolicy {
         }
     }
 
+    /**
+     * Requires an event type to belong to the supplied aggregate family.
+     *
+     * @param eventType supported auth event type
+     * @param aggregateType family named by the event stream or Kafka topic
+     * @throws IllegalArgumentException when the event type crosses aggregate-family boundaries
+     */
     public void requireAggregateType(String eventType, AuthAggregateType aggregateType) {
         boolean valid = aggregateType == AuthAggregateType.USER_AUTHORIZATION
                 ? AuthEventTypes.USER_FACTS.contains(eventType)

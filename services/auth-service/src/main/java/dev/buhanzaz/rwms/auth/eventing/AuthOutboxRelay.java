@@ -8,6 +8,14 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+/**
+ * Delivers authoritative auth facts from the transactional outbox to Kafka.
+ *
+ * <p>A claimed record is independently checked for canonical checksum, event-store authority,
+ * and aggregate predecessor publication before it is sent. Broker acknowledgement is then fenced
+ * by the lease token, preserving at-least-once transport without treating Kafka as the source of
+ * truth.
+ */
 @Component
 @Slf4j
 @RequiredArgsConstructor
@@ -19,6 +27,7 @@ public class AuthOutboxRelay {
     private final RwmsKafkaOutboundEventPublisher publisher;
     private final AuthEventingMetrics metrics;
 
+    /** Runs one bounded outbox relay attempt on the configured schedule. */
     @Scheduled(
             fixedDelayString = "${rwms.auth.eventing.outbox.relay-delay:1s}",
             initialDelayString = "${rwms.auth.eventing.outbox.relay-initial-delay:1s}")
@@ -26,6 +35,11 @@ public class AuthOutboxRelay {
         relayOne();
     }
 
+    /**
+     * Claims, validates, publishes, and settles at most one authoritative outbox record.
+     *
+     * @return {@code true} only when a claimed record was acknowledged and marked published
+     */
     public boolean relayOne() {
         var claimed = store.claim(properties.instanceId(), properties.leaseDuration());
         if (claimed.isEmpty()) {

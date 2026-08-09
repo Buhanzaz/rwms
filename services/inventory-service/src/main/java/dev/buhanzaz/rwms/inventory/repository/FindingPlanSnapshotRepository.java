@@ -9,6 +9,9 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data repository for service-local finding plan snapshot persistence.
+ */
 public interface FindingPlanSnapshotRepository
     extends JpaRepository<FindingPlanSnapshot, FindingPlanSnapshot.Key> {
   Optional<FindingPlanSnapshot> findByFindingIdAndFindingRevision(

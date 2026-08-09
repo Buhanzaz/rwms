@@ -16,6 +16,7 @@ import org.hibernate.proxy.HibernateProxy;
 import org.hibernate.type.SqlTypes;
 import tools.jackson.databind.JsonNode;
 
+/** Persists one provider-requested allow-listed tool invocation and its safe completion or failure result. */
 @Entity
 @Table(name = "assistant_tool_call")
 public class AssistantToolCall {

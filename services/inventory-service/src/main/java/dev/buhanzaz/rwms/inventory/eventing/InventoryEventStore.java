@@ -21,6 +21,9 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Appends inventory-owned facts and their transactional event/outbox records in the local database.
+ */
 @Repository
 public class InventoryEventStore {
   private static final Set<String> FORBIDDEN_KEYS =

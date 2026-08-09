@@ -3,7 +3,6 @@ package dev.buhanzaz.rwms.logistics.service;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import java.util.Optional;
-import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,36 +12,42 @@ import org.springframework.stereotype.Service;
 @Service
 @RequiredArgsConstructor
 public class TransferProcessor {
-  private static final int MAX_STEPS_PER_DRAIN = 1_000;
   private static final Logger log = LoggerFactory.getLogger(TransferProcessor.class);
 
   private final TransferWorkflowStore store;
+  private final LogisticsExternalAttemptClaimService claims;
   private final LogisticsDependencyGateway dependencies;
 
-  public int processUntilIdle(UUID documentId) {
-    if (documentId == null) throw new IllegalArgumentException("documentId is required");
-    int processed = 0;
-    while (processed < MAX_STEPS_PER_DRAIN) {
-      Optional<TransferWorkflowStore.Work> work = store.nextWork(documentId);
-      if (work.isEmpty()) return processed;
-      process(work.get());
-      processed++;
+  /**
+   * Executes one exact transfer claim and yields to the bounded worker pool after that one remote
+   * operation, preserving fair recovery across owners and replicas.
+   */
+  public void process(LogisticsExternalAttemptClaimService.Claim claim) {
+    try {
+      Optional<TransferWorkflowStore.Work> work = store.workForClaim(claim);
+      if (work.isEmpty()) {
+        defer(claim);
+        return;
+      }
+      process(claim, work.get());
+    } catch (LogisticsExternalAttemptClaimService.StaleClaimException ignored) {
+      // A newer lease owns the durable decision.
     }
-    throw new IllegalStateException("Transfer workflow did not reach a stable local state");
   }
 
-  private void process(TransferWorkflowStore.Work work) {
+  private void process(
+      LogisticsExternalAttemptClaimService.Claim claim, TransferWorkflowStore.Work work) {
     try {
       switch (work.type()) {
         case WAREHOUSE ->
             store.confirmWarehouse(
-                work.operationId(), dependencies.readWarehouseIdentity(work.warehouseId()));
+                claim, dependencies.readWarehouseIdentity(work.warehouseId()));
         case SNAPSHOT ->
             store.confirmSnapshot(
-                work.operationId(), dependencies.readRentalItemSnapshot(work.assetId()));
+                claim, dependencies.readRentalItemSnapshot(work.assetId()));
         case LEASE ->
             store.confirmLease(
-                work.operationId(),
+                claim,
                 dependencies.acquireOperationLease(
                     work.operationId(),
                     LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_TRANSFER,
@@ -52,7 +57,7 @@ public class TransferProcessor {
                     work.lineId()));
         case MEDIA ->
             store.confirmMedia(
-                work.operationId(),
+                claim,
                 dependencies.validateMediaReferences(
                     LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_TRANSFER,
                     work.documentId(),
@@ -61,7 +66,7 @@ public class TransferProcessor {
                     work.references()));
         case EFFECT ->
             store.confirmFencedEffect(
-                work.operationId(),
+                claim,
                 dependencies.applyFencedEffect(
                     work.operationId(),
                     work.assetEffect(),
@@ -76,7 +81,7 @@ public class TransferProcessor {
                     work.transferAssetStatus()));
         case LEASE_RELEASE ->
             store.confirmLeaseRelease(
-                work.operationId(),
+                claim,
                 dependencies.releaseOperationLease(
                     work.operationId(),
                     work.leaseId(),
@@ -87,7 +92,7 @@ public class TransferProcessor {
                     work.lineId()));
         case MAINTENANCE_PREPARE ->
             store.confirmMaintenanceDeparture(
-                work.operationId(),
+                claim,
                 dependencies.prepareTransferDeparture(
                     work.operationId(),
                     work.documentId(),
@@ -97,7 +102,7 @@ public class TransferProcessor {
                     work.warehouseId()));
         case MAINTENANCE_COMPLETE ->
             store.confirmMaintenanceArrival(
-                work.operationId(),
+                claim,
                 dependencies.completeTransferArrival(
                     work.operationId(),
                     work.documentId(),
@@ -108,16 +113,35 @@ public class TransferProcessor {
                     work.warehouseId(),
                     work.priority()));
       }
+    } catch (LogisticsExternalAttemptClaimService.StaleClaimException ignored) {
+      // A response from a stale lease must never mutate the workflow.
     } catch (LogisticsDependencyException exception) {
-      store.recordFailure(work.operationId(), exception);
+      recordFailure(claim, exception);
     } catch (RuntimeException exception) {
       log.warn("Transfer dependency attempt {} produced an unexpected local error", work.operationId(), exception);
-      store.recordFailure(
-          work.operationId(),
+      recordFailure(
+          claim,
           new LogisticsDependencyException(
               LogisticsDependencyException.FailureKind.TRANSIENT,
               "Logistics dependency outcome is unknown",
               exception));
+    }
+  }
+
+  private void defer(LogisticsExternalAttemptClaimService.Claim claim) {
+    try {
+      claims.defer(claim);
+    } catch (LogisticsExternalAttemptClaimService.StaleClaimException ignored) {
+      // The subsequent owner controls recovery.
+    }
+  }
+
+  private void recordFailure(
+      LogisticsExternalAttemptClaimService.Claim claim, LogisticsDependencyException exception) {
+    try {
+      store.recordFailure(claim, exception);
+    } catch (LogisticsExternalAttemptClaimService.StaleClaimException ignored) {
+      // Never write retry state through an obsolete lease capability.
     }
   }
 }

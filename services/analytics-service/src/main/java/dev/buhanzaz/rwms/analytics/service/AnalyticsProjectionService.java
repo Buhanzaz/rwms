@@ -6,6 +6,7 @@ import dev.buhanzaz.rwms.analytics.repository.GroupKpiDayEvidenceRepository;
 import java.time.OffsetDateTime;
 import org.springframework.stereotype.Service;
 
+/** Projects a contiguous validated KPI fact into daily evidence without taking ownership of task-board truth. */
 @Service
 public class AnalyticsProjectionService {
   private final GroupKpiDayEvidenceRepository evidence;

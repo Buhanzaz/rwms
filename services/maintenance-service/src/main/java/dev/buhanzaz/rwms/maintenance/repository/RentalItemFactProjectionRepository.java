@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/** Spring Data persistence boundary for RentalItemFactProjection; business transitions remain in the owning service. */
 public interface RentalItemFactProjectionRepository
     extends JpaRepository<RentalItemFactProjection, UUID> {
   @Lock(LockModeType.PESSIMISTIC_WRITE)

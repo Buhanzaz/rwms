@@ -12,6 +12,7 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/** Stores or configures idempotent maintenance command replay for the owning workflow. */
 @Repository
 public class MaintenanceIdempotencyStore {
   private final JdbcTemplate jdbc;

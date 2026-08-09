@@ -7,6 +7,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+/** Applies the configured bounded rollover policy to eligible maintenance-owned task routes. */
 @Component
 @ConditionalOnProperty(
     prefix = "rwms.task-board.rollover",

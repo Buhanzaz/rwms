@@ -9,6 +9,7 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+/** Persists immutable audit evidence for reviewed task-board replay and reconciliation operations. */
 @Repository
 @RequiredArgsConstructor
 public class TaskBoardReplayAuditStore {

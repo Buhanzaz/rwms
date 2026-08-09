@@ -4,6 +4,7 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
+/** Immutable normalized result of strict schema, envelope, payload and Kafka-key validation for one KPI source record. */
 public record AnalyticsValidatedEvent(
     String topic,
     int partition,

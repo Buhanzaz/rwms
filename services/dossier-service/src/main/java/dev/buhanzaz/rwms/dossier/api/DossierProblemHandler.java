@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
+/** Maps invalid queries and safe service failures to the canonical dossier Problem Details responses. */
 @RestControllerAdvice
 public class DossierProblemHandler {
   @ExceptionHandler(DossierQueryException.class)

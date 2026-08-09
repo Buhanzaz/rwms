@@ -8,6 +8,7 @@ import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.util.EnumSet;
@@ -46,6 +47,7 @@ public class MaintenanceDriverTaskCompensationService {
 
   private final DriverLogisticsTaskRepository tasks;
   private final LogisticsDependencyGateway dependencies;
+  private final LogisticsTransactionLock transactionLock;
 
   public MaintenanceDriverTaskCompensationResponse lookup(UUID repairId, DriverTaskKind kind) {
     requireCompensableTarget(repairId, kind);
@@ -67,7 +69,7 @@ public class MaintenanceDriverTaskCompensationService {
     if (idempotencyKey == null) {
       throw new IllegalArgumentException("Maintenance compensation Idempotency-Key is required");
     }
-    tasks.acquireTransactionLock("maintenance-driver-compensation:" + repairId + ":" + kind);
+    transactionLock.acquire("maintenance-driver-compensation:" + repairId + ":" + kind);
     DriverLogisticsTask task =
         tasks.findByRepairIdAndKindForUpdate(repairId, kind).stream().findFirst().orElse(null);
     if (task == null) return absent(repairId, kind);

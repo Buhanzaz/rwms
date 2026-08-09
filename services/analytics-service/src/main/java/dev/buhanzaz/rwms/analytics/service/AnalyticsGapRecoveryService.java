@@ -12,6 +12,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/** Performs bounded local retry of held aggregate gaps and records terminal failures; it does not initiate producer replay or reconciliation. */
 @Service
 public class AnalyticsGapRecoveryService {
   private final AnalyticsAggregateCheckpointRepository checkpoints;
@@ -39,6 +40,10 @@ public class AnalyticsGapRecoveryService {
     this.maximumAttempts = maximumAttempts;
   }
 
+  /**
+   * Retries locally journaled aggregate-version gaps. After the configured bound it terminally
+   * dead-letters held facts; this recovery does not request producer replay or reconciliation.
+   */
   @Scheduled(fixedDelayString = "${rwms.analytics.gap.retry-delay:30s}")
   @Transactional
   public void retryOpenGaps() {

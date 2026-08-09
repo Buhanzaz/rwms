@@ -13,6 +13,7 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+/** Maintains the publication head needed to emit a stable sanitized cabin-activity stream from this projection. */
 @Entity
 @Table(name = "dossier_cabin_publication_head")
 @Getter

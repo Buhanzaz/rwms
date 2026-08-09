@@ -11,6 +11,7 @@ import org.springframework.beans.factory.support.BeanDefinitionRegistryPostProce
 import org.springframework.scheduling.annotation.EnableScheduling;
 import tools.jackson.databind.JsonNode;
 
+/** Enables task-board scheduling and registers exact payload-safety policy for Kafka publication. */
 @Configuration
 @EnableScheduling
 @EnableConfigurationProperties({TaskBoardOutboxProperties.class, RwmsKafkaProperties.class})
@@ -34,6 +35,7 @@ public class TaskBoardEventingConfiguration {
   }
 }
 
+/** Rejects serialized task-board payloads that do not match their declared aggregate family. */
 final class TaskBoardPayloadSafetyValidator implements RwmsKafkaPayloadSafetyValidator {
   private final String eventType;
   private final TaskBoardAggregateType aggregateType;

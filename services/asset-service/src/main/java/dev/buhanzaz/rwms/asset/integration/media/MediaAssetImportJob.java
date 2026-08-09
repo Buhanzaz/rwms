@@ -3,6 +3,9 @@ package dev.buhanzaz.rwms.asset.integration.media;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * Private asset integration type for media asset import job.
+ */
 public record MediaAssetImportJob(
     UUID jobId,
     UUID assetImportId,

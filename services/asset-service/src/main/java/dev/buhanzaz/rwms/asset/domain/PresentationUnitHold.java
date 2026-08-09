@@ -17,6 +17,9 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.proxy.HibernateProxy;
 
+/**
+ * JPA entity that persists presentation unit hold in the asset-owned database.
+ */
 @Entity
 @Table(name = "presentation_unit_hold")
 @Getter

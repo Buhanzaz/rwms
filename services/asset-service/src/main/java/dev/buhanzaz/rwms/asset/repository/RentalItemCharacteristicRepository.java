@@ -6,6 +6,9 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/**
+ * Spring Data repository for service-local rental item characteristic persistence.
+ */
 public interface RentalItemCharacteristicRepository
     extends JpaRepository<RentalItemCharacteristic, UUID> {
   boolean existsByCharacteristicId(UUID characteristicId);

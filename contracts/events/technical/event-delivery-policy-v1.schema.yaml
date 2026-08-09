@@ -8,7 +8,7 @@ properties:
   topic:
     type: string
     maxLength: 249
-    pattern: "^rwms\\.[a-z0-9]+(?:-[a-z0-9]+)*\\.[a-z0-9]+(?:-[a-z0-9]+)*\\.v[1-9][0-9]*$"
+    pattern: "^rwms\\.[a-z0-9]+(?:-[a-z0-9]+)*\\.[a-z0-9]+(?:-[a-z0-9]+)*(?:\\.events)?\\.v[1-9][0-9]*$"
   consumerGroup:
     type: string
     maxLength: 128

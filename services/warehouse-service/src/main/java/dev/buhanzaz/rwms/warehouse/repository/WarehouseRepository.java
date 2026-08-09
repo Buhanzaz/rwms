@@ -11,6 +11,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/** Persistence boundary for warehouse identity, metadata and lifecycle aggregates. */
 public interface WarehouseRepository extends JpaRepository<Warehouse, UUID> {
   List<Warehouse> findAllByLifecycleState(WarehouseLifecycleState lifecycleState);
 

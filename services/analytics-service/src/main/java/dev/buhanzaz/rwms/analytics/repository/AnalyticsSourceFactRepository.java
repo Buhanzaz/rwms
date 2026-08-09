@@ -6,6 +6,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/** Repository for immutable validated source facts and their source-coordinate identity. */
 public interface AnalyticsSourceFactRepository extends JpaRepository<AnalyticsSourceFact, UUID> {
   Optional<AnalyticsSourceFact> findByEventId(UUID eventId);
 

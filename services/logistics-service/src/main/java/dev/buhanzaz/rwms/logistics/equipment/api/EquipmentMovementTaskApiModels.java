@@ -15,6 +15,9 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * Defines transport models for equipment-movement task HTTP responses and commands.
+ */
 public final class EquipmentMovementTaskApiModels {
   private EquipmentMovementTaskApiModels() {}
 

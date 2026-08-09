@@ -9,6 +9,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.Environment;
 
+/** Fails unsafe JPA schema-mutation configuration before an EntityManagerFactory can alter a managed database. */
 @AutoConfiguration
 @ConditionalOnClass(name = "jakarta.persistence.EntityManager")
 public class RwmsJpaSafetyAutoConfiguration {

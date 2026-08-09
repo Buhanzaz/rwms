@@ -23,6 +23,13 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Appends authoritative auth facts and their transactional-outbox envelopes in one database unit.
+ *
+ * <p>Every accepted fact is schema-validated, canonically serialized, checksummed, and written to
+ * the domain event stream, outbox, and live-projection checkpoint together. Aggregate stream heads
+ * enforce optimistic versioning; Kafka publication happens later through {@link AuthOutboxRelay}.
+ */
 @Service
 @RequiredArgsConstructor
 public class AuthEventStore {
@@ -35,6 +42,18 @@ public class AuthEventStore {
     private final AuthEventPayloadPolicy payloadPolicy;
     private final AuthCorrelationContextProvider correlations;
 
+    /**
+     * Creates a new aggregate event stream and writes its first authoritative fact.
+     *
+     * @param aggregateType aggregate family and fixed Kafka destination
+     * @param aggregateId opaque aggregate identifier
+     * @param projectionVersion current version supplied by the newly created live projection
+     * @param eventType supported fact type for the aggregate family
+     * @param payload exact safe fact payload
+     * @param actorRef optional opaque actor reference
+     * @return the initialized stream version
+     * @throws org.springframework.dao.OptimisticLockingFailureException when the stream exists
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public long initialize(
             AuthAggregateType aggregateType,
@@ -74,6 +93,21 @@ public class AuthEventStore {
         return projectionVersion;
     }
 
+    /**
+     * Appends one validated fact if the aggregate stream is still at the expected version.
+     *
+     * <p>The fact, canonical envelope, outbox row, and live checkpoint are persisted atomically in
+     * the caller's transaction. A later outbox relay provides at-least-once broker transport.
+     *
+     * @param aggregateType aggregate family and fixed Kafka destination
+     * @param aggregateId opaque aggregate identifier
+     * @param expectedVersion optimistic version fence
+     * @param eventType supported fact type for the aggregate family
+     * @param payload exact safe fact payload
+     * @param actorRef optional opaque actor reference
+     * @return the next aggregate stream version
+     * @throws org.springframework.dao.OptimisticLockingFailureException on a version conflict
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public long append(
             AuthAggregateType aggregateType,
@@ -107,6 +141,17 @@ public class AuthEventStore {
         return nextVersion;
     }
 
+    /**
+     * Locks and returns the current version of an existing aggregate stream.
+     *
+     * <p>Callers use this within their domain transaction when a transition needs a serialized
+     * event-stream view rather than a compare-and-swap append.
+     *
+     * @param aggregateType aggregate family
+     * @param aggregateId opaque aggregate identifier
+     * @return locked current stream version
+     * @throws org.springframework.dao.OptimisticLockingFailureException when the stream is absent
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public long lockCurrentVersion(AuthAggregateType aggregateType, UUID aggregateId) {
         Long version = jdbc.queryForObject(
@@ -288,6 +333,12 @@ public class AuthEventStore {
         return canonical;
     }
 
+    /**
+     * Computes the lowercase SHA-256 checksum used to verify canonical local event material.
+     *
+     * @param value canonical bytes to checksum
+     * @return hexadecimal SHA-256 digest
+     */
     static String sha256(byte[] value) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value));

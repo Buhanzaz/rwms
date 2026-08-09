@@ -6,6 +6,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/** Warehouse-scoped worker queries, including login uniqueness and locked credential workflows. */
 public interface WorkerRepository extends JpaRepository<Worker, UUID> {
   List<Worker> findAllByWarehouseIdOrderByDisplayNameAsc(UUID warehouseId);
 

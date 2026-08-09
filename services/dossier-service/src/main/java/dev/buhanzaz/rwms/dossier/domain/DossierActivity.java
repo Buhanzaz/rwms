@@ -14,6 +14,7 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+/** Immutable activity row in one projection generation, retaining only the contract-defined cabin and source snapshot. */
 @Entity
 @Table(name = "dossier_activity")
 @Getter

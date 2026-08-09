@@ -13,6 +13,7 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+/** Tracks locally processed offsets for one Kafka topic partition independently from per-aggregate ordering. */
 @Entity
 @Table(name = "dossier_partition_checkpoint")
 @Getter

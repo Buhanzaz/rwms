@@ -13,6 +13,7 @@ import org.springframework.cloud.stream.function.StreamBridge;
 import org.springframework.context.annotation.Bean;
 import tools.jackson.databind.ObjectMapper;
 
+/** Creates the guarded canonical Kafka publisher only for services that explicitly enable platform Kafka publishing. */
 @AutoConfiguration
 @ConditionalOnClass({StreamBridge.class, ObjectMapper.class})
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")

@@ -7,6 +7,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
 
+/** Produces stable order-command fingerprints and scoped derivative idempotency keys. */
 final class OrderCommandChecksum {
   private OrderCommandChecksum() {}
 

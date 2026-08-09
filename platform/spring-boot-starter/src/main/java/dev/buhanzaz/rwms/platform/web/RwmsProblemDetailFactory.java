@@ -6,6 +6,7 @@ import java.net.URI;
 import java.util.List;
 import org.springframework.http.HttpStatusCode;
 
+/** Builds the optional immutable ApiProblem transport record without installing controller exception handling. */
 public final class RwmsProblemDetailFactory {
 
     public ApiProblem create(

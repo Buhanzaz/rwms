@@ -11,6 +11,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
+/** Writes safe unauthenticated and forbidden Problem Details responses before analytics controllers are reached. */
 @Component
 final class AnalyticsSecurityProblemWriter {
   private final ObjectMapper mapper;

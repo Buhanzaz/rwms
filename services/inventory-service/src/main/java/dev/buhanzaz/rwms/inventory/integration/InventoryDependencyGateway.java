@@ -6,6 +6,9 @@ import java.util.Optional;
 import java.util.UUID;
 import tools.jackson.databind.JsonNode;
 
+/**
+ * Private integration boundary from inventory workflow to warehouse, asset and maintenance owners.
+ */
 public interface InventoryDependencyGateway {
   WarehouseOperation beginWarehouseOperation(
       UUID warehouseId,

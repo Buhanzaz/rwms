@@ -10,6 +10,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 
+/** Repository for active-generation cabin activity queries with authorization and cursor specifications supplied by the service layer. */
 public interface DossierActivityRepository
     extends JpaRepository<DossierActivity, UUID>, JpaSpecificationExecutor<DossierActivity> {
   Optional<DossierActivity> findByActivityIdAndGenerationId(UUID activityId, UUID generationId);

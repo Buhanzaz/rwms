@@ -9,6 +9,7 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateShipmentRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentLineRequest;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionEvidence;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseOperationMarkStore;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
@@ -96,7 +97,16 @@ class LogisticsServiceIntegrationTest {
             () ->
                 new TransactionTemplate(transactionManager)
                     .executeWithoutResult(
-                        ignored -> warehouseLifecycleStore.consume(operationId, requirements, false)))
+                        ignored ->
+                            warehouseLifecycleStore.consume(
+                                operationId,
+                                requirements,
+                                List.of(
+                                    new AdmissionEvidence(
+                                        warehouseId,
+                                        WarehouseOperationDirection.OUTGOING,
+                                        7)),
+                                false)))
         .isInstanceOf(LogisticsConflictException.class)
         .hasMessageContaining("expired");
 
@@ -175,12 +185,15 @@ class LogisticsServiceIntegrationTest {
     jdbc.update(
         """
         insert into order_client(
-          id,version,client_type,display_name,normalized_name,created_by_subject_id,
+          id,version,client_type,display_name,normalized_name,phone,normalized_phone,
+          contact_person,responsible_manager_id,responsible_manager_display_name,created_by_subject_id,
           creation_idempotency_key,creation_request_sha256,created_at,updated_at)
-        values (?,0,'LEGAL_ENTITY','Клиент','клиент',?,?,?,clock_timestamp(),clock_timestamp())
+        values (?,0,'LEGAL_ENTITY','Клиент','клиент','+79990000000','+79990000000',
+                'Представитель',?,'Управляющий',?,?,?,clock_timestamp(),clock_timestamp())
         """,
         clientId,
-        UUID.randomUUID(),
+        SUBJECT,
+        SUBJECT,
         UUID.randomUUID(),
         "a".repeat(64));
     jdbc.update(

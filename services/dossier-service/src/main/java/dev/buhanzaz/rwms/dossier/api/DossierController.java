@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+/** Read-only HTTP adapter for one cabin dossier; authorization and projection visibility remain in the query service. */
 @RestController
 public class DossierController {
   private final DossierQueryService queries;

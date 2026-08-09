@@ -1,5 +1,8 @@
 package dev.buhanzaz.rwms.asset.domain;
 
+/**
+ * Enumerates permitted asset event type values in the asset persistent workflow state.
+ */
 public enum AssetEventType {
   RENTAL_ITEM_CREATED("asset.rental-item.created.v1"),
   RENTAL_ITEM_PASSPORT_CHANGED("asset.rental-item.passport-changed.v1"),

@@ -5,7 +5,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.net.URI;
 import java.util.List;
+import java.util.function.Consumer;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.mock.env.MockEnvironment;
 
 class GatewayProductionSafetyValidatorTest {
@@ -30,18 +34,11 @@ class GatewayProductionSafetyValidatorTest {
   }
 
   @Test
-  void rejectsUnsafeRouteShapesPublicAuthTargetAndWildcardCors() {
+  void rejectsUnsafeRouteShapesAndWildcardCors() {
     GatewayProperties path = validProperties();
     path.getRoutes().setAuthUri(URI.create("https://auth.internal/base"));
     assertThatThrownBy(() -> new GatewayProductionSafetyValidator(path, new MockEnvironment()).validate())
         .isInstanceOf(IllegalStateException.class);
-
-    GatewayProperties publicAuthTarget = validProperties();
-    publicAuthTarget.getRoutes().setAuthUri(URI.create("https://panel.example"));
-    assertThatThrownBy(
-            () -> new GatewayProductionSafetyValidator(publicAuthTarget, new MockEnvironment()).validate())
-        .isInstanceOf(IllegalStateException.class)
-        .hasMessageContaining("public gateway host");
 
     GatewayProperties wildcard = validProperties();
     wildcard.getCors().setAllowedOrigins(List.of("https://*.example"));
@@ -50,7 +47,7 @@ class GatewayProductionSafetyValidatorTest {
   }
 
   @Test
-  void productionRequiresHttpsPublicBoundaryAndRejectsLoopbackTargets() {
+  void productionRequiresHttpsPublicBoundary() {
     MockEnvironment production = new MockEnvironment().withProperty("spring.profiles.active", "prod");
     production.setActiveProfiles("prod");
     GatewayProperties insecurePublic = validProperties();
@@ -60,18 +57,32 @@ class GatewayProductionSafetyValidatorTest {
             () -> new GatewayProductionSafetyValidator(insecurePublic, production).validate())
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("HTTPS");
+  }
 
-    GatewayProperties loopback = validProperties();
-    loopback.getRoutes().setDossierUri(URI.create("http://127.0.0.1:8091"));
-    assertThatThrownBy(() -> new GatewayProductionSafetyValidator(loopback, production).validate())
-        .isInstanceOf(IllegalStateException.class)
-        .hasMessageContaining("loopback");
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("downstreamRouteSetters")
+  void rejectsPublicGatewayHostForEveryDownstream(DownstreamRouteCase routeCase) {
+    GatewayProperties properties = validProperties();
+    routeCase.publicHostSetter().accept(properties.getRoutes());
 
-    GatewayProperties analyticsLoopback = validProperties();
-    analyticsLoopback.getRoutes().setAnalyticsUri(URI.create("http://127.0.0.1:8080"));
     assertThatThrownBy(
-            () -> new GatewayProductionSafetyValidator(analyticsLoopback, production).validate())
+            () -> new GatewayProductionSafetyValidator(properties, new MockEnvironment()).validate())
         .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining(routeCase.label())
+        .hasMessageContaining("public gateway host");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("downstreamRouteSetters")
+  void productionRejectsLoopbackForEveryDownstream(DownstreamRouteCase routeCase) {
+    MockEnvironment production = new MockEnvironment();
+    production.setActiveProfiles("prod");
+    GatewayProperties properties = validProperties();
+    routeCase.loopbackSetter().accept(properties.getRoutes());
+
+    assertThatThrownBy(() -> new GatewayProductionSafetyValidator(properties, production).validate())
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining(routeCase.label())
         .hasMessageContaining("loopback");
   }
 
@@ -112,5 +123,74 @@ class GatewayProductionSafetyValidatorTest {
                 "AA:01:02:03:04:05:06:07:08:09:0A:0B:0C:0D:0E:0F:"
                     + "10:11:12:13:14:15:16:17:18:19:1A:1B:1C:1D:1E:1F"));
     return properties;
+  }
+
+  private static Stream<DownstreamRouteCase> downstreamRouteSetters() {
+    URI publicHost = URI.create("https://panel.example:9443");
+    URI loopback = URI.create("http://127.0.0.1:8999");
+    return Stream.of(
+        routeCase(
+            "auth target",
+            routes -> routes.setAuthUri(publicHost),
+            routes -> routes.setAuthUri(loopback)),
+        routeCase(
+            "task-board target",
+            routes -> routes.setTaskBoardUri(publicHost),
+            routes -> routes.setTaskBoardUri(loopback)),
+        routeCase(
+            "warehouse target",
+            routes -> routes.setWarehouseUri(publicHost),
+            routes -> routes.setWarehouseUri(loopback)),
+        routeCase(
+            "asset target",
+            routes -> routes.setAssetUri(publicHost),
+            routes -> routes.setAssetUri(loopback)),
+        routeCase(
+            "maintenance target",
+            routes -> routes.setMaintenanceUri(publicHost),
+            routes -> routes.setMaintenanceUri(loopback)),
+        routeCase(
+            "media target",
+            routes -> routes.setMediaUri(publicHost),
+            routes -> routes.setMediaUri(loopback)),
+        routeCase(
+            "inventory target",
+            routes -> routes.setInventoryUri(publicHost),
+            routes -> routes.setInventoryUri(loopback)),
+        routeCase(
+            "logistics target",
+            routes -> routes.setLogisticsUri(publicHost),
+            routes -> routes.setLogisticsUri(loopback)),
+        routeCase(
+            "dossier target",
+            routes -> routes.setDossierUri(publicHost),
+            routes -> routes.setDossierUri(loopback)),
+        routeCase(
+            "analytics target",
+            routes -> routes.setAnalyticsUri(publicHost),
+            routes -> routes.setAnalyticsUri(loopback)),
+        routeCase(
+            "assistant target",
+            routes -> routes.setAssistantUri(publicHost),
+            routes -> routes.setAssistantUri(loopback)));
+  }
+
+  private static DownstreamRouteCase routeCase(
+      String label,
+      Consumer<GatewayProperties.Routes> publicHostSetter,
+      Consumer<GatewayProperties.Routes> loopbackSetter) {
+    return new DownstreamRouteCase(label, publicHostSetter, loopbackSetter);
+  }
+
+  /** Route mutations used to apply the same public-host and loopback policy to every target. */
+  private record DownstreamRouteCase(
+      String label,
+      Consumer<GatewayProperties.Routes> publicHostSetter,
+      Consumer<GatewayProperties.Routes> loopbackSetter) {
+
+    @Override
+    public String toString() {
+      return label;
+    }
   }
 }

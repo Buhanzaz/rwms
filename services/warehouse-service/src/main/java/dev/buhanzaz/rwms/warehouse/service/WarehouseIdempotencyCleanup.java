@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.warehouse.service;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+/** Deletes expired create-command replay records in bounded scheduled batches. */
 @Component
 public class WarehouseIdempotencyCleanup {
   private final WarehouseIdempotencyStore store;

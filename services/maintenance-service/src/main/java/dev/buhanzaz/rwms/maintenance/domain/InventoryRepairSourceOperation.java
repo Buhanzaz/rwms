@@ -7,6 +7,7 @@ import jakarta.persistence.Table;
 import jakarta.persistence.Version;
 import java.time.OffsetDateTime;
 
+/** JPA reconciliation fact linking an inventory source operation to a maintenance repair decision. */
 @Entity
 @Table(name = "inventory_repair_source_operation")
 public class InventoryRepairSourceOperation {

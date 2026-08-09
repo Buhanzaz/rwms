@@ -15,6 +15,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
 
+/** JPA aggregate for a warehouse maintenance catalog version and its draft/active lifecycle. */
 @Entity
 @Table(name = "catalog_version")
 public class CatalogVersion {

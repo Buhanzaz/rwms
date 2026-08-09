@@ -1,8 +1,8 @@
 package dev.buhanzaz.rwms.inventory.service;
 
 import dev.buhanzaz.rwms.inventory.eventing.InventoryEventChecksum;
+import dev.buhanzaz.rwms.inventory.persistence.InventoryPostgresJsonbCanonicalizer;
 import java.nio.charset.StandardCharsets;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
@@ -17,17 +17,24 @@ import tools.jackson.databind.ObjectMapper;
 @Component
 public class InventoryFrozenPlanFingerprint {
   private final ObjectMapper mapper;
-  private final JdbcTemplate jdbc;
+  private final InventoryPostgresJsonbCanonicalizer jsonb;
 
-  public InventoryFrozenPlanFingerprint(ObjectMapper mapper, JdbcTemplate jdbc) {
+  public InventoryFrozenPlanFingerprint(
+      ObjectMapper mapper, InventoryPostgresJsonbCanonicalizer jsonb) {
     this.mapper = mapper;
-    this.jdbc = jdbc;
+    this.jsonb = jsonb;
   }
 
+  /**
+   * Hashes the exact PostgreSQL {@code jsonb::text} bytes used by the V12 frozen-plan rewrite.
+   *
+   * <p>Changing the serializer alone cannot alter the fingerprint because PostgreSQL first
+   * canonicalizes object key order and representation before the UTF-8 SHA-256 is calculated.
+   */
   public String sha256(Object value) {
     try {
       String serialized = mapper.writeValueAsString(value);
-      String canonical = jdbc.queryForObject("select (?::jsonb)::text", String.class, serialized);
+      String canonical = jsonb.canonicalize(serialized);
       if (canonical == null) {
         throw new IllegalStateException("PostgreSQL did not canonicalize frozen inventory plan");
       }

@@ -4,6 +4,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
+/** Computes lowercase SHA-256 checksums used to fence durable warehouse records and envelopes. */
 public final class WarehouseChecksum {
   private WarehouseChecksum() {}
 

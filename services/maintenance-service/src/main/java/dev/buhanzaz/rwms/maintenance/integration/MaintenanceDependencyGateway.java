@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
+/** Private transport boundary for maintenance dependencies; user credentials never cross it. */
 public interface MaintenanceDependencyGateway {
   default boolean productionReady() { return true; }
 

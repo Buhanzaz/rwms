@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.analytics.domain;
 
 import java.util.UUID;
 
+/** Centralizes defensive validation shared by analytics persistence records so malformed transport facts never become projection state. */
 final class AnalyticsDomainRules {
   private AnalyticsDomainRules() {}
 

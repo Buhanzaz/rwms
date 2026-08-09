@@ -31,6 +31,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/** Builds the read-only, warehouse-scoped cabin dossier from the active local projection generation. */
 @Service
 public class DossierQueryService {
   private final DossierActiveGenerationRepository activeGenerations;
@@ -61,6 +62,12 @@ public class DossierQueryService {
     this.mediaMapper = mediaMapper;
   }
 
+  /**
+   * Reads the currently active generation only after producing a fail-closed warehouse scope.
+   * The cursor is bound to the cabin and filter set, and inaccessible rows resolve as not found
+   * instead of disclosing their existence. PARTIAL includes only hidden rows or unresolved
+   * evidence scoped to this cabin and generation; global operational evidence is excluded.
+   */
   @Transactional(readOnly = true)
   public DossierApiModels.CabinDossierResponse get(
       UUID cabinId, Query query, Jwt jwt) {
@@ -131,8 +138,13 @@ public class DossierQueryService {
     boolean partial =
         hidden
             || media.count(baseMedia) > media.count(visibleMedia)
-            || unlinked.countByGenerationIdAndResolvedAtIsNull(generationId) > 0
-            || deadLetters.countBySourceEventIdIsNotNull() > 0;
+            || unlinked.countByGenerationIdAndSubjectCabinIdAndResolvedAtIsNull(
+                    generationId, cabinId)
+                > 0
+            || deadLetters
+                    .countByCoverageGenerationIdAndCoverageSubjectCabinIdAndCoverageResolvedAtIsNull(
+                        generationId, cabinId)
+                > 0;
     return new DossierApiModels.CabinDossierResponse(
         cabinId,
         responseRows,

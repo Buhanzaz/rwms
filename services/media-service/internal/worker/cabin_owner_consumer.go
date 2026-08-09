@@ -19,6 +19,8 @@ import (
 
 const cabinOwnerRecordLimit = 1 << 20
 
+// CabinOwnerConsumer materializes CABIN ownership from canonical asset
+// rental-item facts before public cabin media operations are authorized.
 type CabinOwnerConsumer struct {
 	repository  cabinOwnerPersistence
 	client      kafkaConsumerClient
@@ -32,6 +34,8 @@ type cabinOwnerPersistence interface {
 	RecordCabinOwnerDLT(context.Context, persistence.CabinOwnerDeadLetter) error
 }
 
+// NewCabinOwnerKafkaConsumer creates a manual-commit client only for the
+// canonical asset rental-item topic and CABIN owner consumer group.
 func NewCabinOwnerKafkaConsumer(brokers []string, group, topic string) (*kgo.Client, error) {
 	if len(brokers) == 0 || group != persistence.CabinOwnerConsumerGroup ||
 		topic != persistence.AssetRentalItemTopic {
@@ -40,6 +44,8 @@ func NewCabinOwnerKafkaConsumer(brokers []string, group, topic string) (*kgo.Cli
 	return newCabinOwnerKafkaClient(brokers, group, topic)
 }
 
+// NewCabinOwnerKafkaConsumerForIsolatedTest binds unique physical Kafka
+// resources while leaving the parsed CABIN owner contract canonical.
 func NewCabinOwnerKafkaConsumerForIsolatedTest(
 	brokers []string,
 	group string,
@@ -66,6 +72,7 @@ func newCabinOwnerKafkaClient(brokers []string, group, topic string) (*kgo.Clien
 	)
 }
 
+// NewCabinOwnerConsumer constructs the production CABIN owner-proof consumer.
 func NewCabinOwnerConsumer(
 	repository *persistence.Repository,
 	client *kgo.Client,
@@ -89,6 +96,8 @@ func newCabinOwnerConsumer(
 	}
 }
 
+// Run validates, persists, and acknowledges CABIN owner facts until ctx is
+// canceled or a dependency failure stops this runtime process.
 func (consumer *CabinOwnerConsumer) Run(ctx context.Context) error {
 	for {
 		fetches, pollTimedOut := pollKafkaFetches(ctx, consumer.client, consumer.pollTimeout)
@@ -141,6 +150,7 @@ func (consumer *CabinOwnerConsumer) handle(ctx context.Context, record *kgo.Reco
 	return err
 }
 
+// Close stops the underlying CABIN owner Kafka client.
 func (consumer *CabinOwnerConsumer) Close() {
 	consumer.client.Close()
 }

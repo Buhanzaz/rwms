@@ -6,6 +6,7 @@ import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
+/** Fails production startup when private database, Kafka, OIDC, CORS, cursor and schema-safety requirements are incomplete. */
 @Component
 public final class DossierProductionSafetyValidator implements SmartInitializingSingleton {
   private static final String DEV_CURSOR_SECRET = "dev-only-dossier-cursor-secret-change-me";

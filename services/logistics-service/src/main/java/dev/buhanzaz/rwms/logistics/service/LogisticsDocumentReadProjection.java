@@ -1,0 +1,93 @@
+package dev.buhanzaz.rwms.logistics.service;
+
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.LogisticsDocumentSummary;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.LogisticsDocumentView;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
+import dev.buhanzaz.rwms.logistics.mapper.LogisticsDocumentResponseMapper;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
+import java.util.List;
+import java.util.UUID;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+
+/**
+ * Materializes logistics-document read views and validates document/line identity lookups. It is
+ * read-only infrastructure; document state machines retain their own mutation dependencies.
+ */
+@Service
+@RequiredArgsConstructor
+class LogisticsDocumentReadProjection {
+  private final LogisticsDocumentRepository documentRepository;
+  private final LogisticsDocumentLineRepository lineRepository;
+  private final LogisticsDocumentResponseMapper responseMapper;
+
+  LogisticsDocumentView view(LogisticsDocument document) {
+    LogisticsDocumentSummary summary = responseMapper.toSummary(document);
+    return new LogisticsDocumentView(
+        summary.id(),
+        summary.version(),
+        summary.documentType(),
+        summary.state(),
+        summary.warehouseId(),
+        summary.destinationWarehouseId(),
+        summary.partySnapshot(),
+        summary.driverSnapshot(),
+        summary.clientId(),
+        summary.equipmentMovementTaskId(),
+        summary.scheduledDate(),
+        summary.scheduledAt(),
+        summary.rentalOrderId(),
+        summary.rentalShipmentId(),
+        responseMapper.toLineViews(lineRepository.findAllByDocument_IdOrderByLineNumber(summary.id())),
+        summary.createdAt(),
+        summary.updatedAt());
+  }
+
+  LogisticsDocument document(UUID id, LogisticsDocumentType type) {
+    return documentRepository
+        .findByIdAndDocumentType(id, type)
+        .orElseThrow(LogisticsNotFoundException::new);
+  }
+
+  List<LogisticsDocumentLine> linesRequired(UUID documentId) {
+    List<LogisticsDocumentLine> lines =
+        lineRepository.findAllByDocument_IdOrderByLineNumber(documentId);
+    if (lines.isEmpty()) throw new IllegalStateException("Logistics document has no lines");
+    return lines;
+  }
+
+  LogisticsDocumentLine transferLine(LogisticsDocument document, UUID lineId) {
+    LogisticsDocumentLine line =
+        lineRepository.findById(lineId).orElseThrow(LogisticsNotFoundException::new);
+    if (!document.getId().equals(line.getDocument().getId())) {
+      throw new LogisticsNotFoundException();
+    }
+    return line;
+  }
+
+  List<LogisticsDocumentView> list(LogisticsDocumentType type, UUID warehouseId) {
+    if (warehouseId == null) throw new IllegalArgumentException("warehouseId is required");
+    return documentRepository
+        .findAllByDocumentTypeAndWarehouseIdOrderByCreatedAtDescIdDesc(type, warehouseId)
+        .stream()
+        .map(this::view)
+        .toList();
+  }
+
+  boolean isRentalShipmentShipped(UUID shipmentId) {
+    if (shipmentId == null) return false;
+    return documentRepository
+        .findByIdAndDocumentType(shipmentId, LogisticsDocumentType.SHIPMENT)
+        .map(document -> document.getState() == LogisticsDocumentState.SHIPPED)
+        .orElse(false);
+  }
+
+  boolean isRentalOrderUnitAssignedToShipment(UUID orderId, UUID unitId) {
+    if (orderId == null || unitId == null) return false;
+    return !lineRepository.findAssignedRentalShipmentAssetIds(orderId, List.of(unitId)).isEmpty();
+  }
+}

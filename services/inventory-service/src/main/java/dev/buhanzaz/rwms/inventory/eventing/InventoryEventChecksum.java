@@ -5,6 +5,9 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
+/**
+ * SHA-256 helper for inventory event-body identity and integrity checks.
+ */
 public final class InventoryEventChecksum {
   private InventoryEventChecksum() {}
 

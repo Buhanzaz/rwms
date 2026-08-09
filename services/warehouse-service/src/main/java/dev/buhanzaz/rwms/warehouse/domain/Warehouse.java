@@ -24,6 +24,7 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 import org.hibernate.proxy.HibernateProxy;
 
+/** Owns warehouse identity, normalized metadata and one-way lifecycle/version transitions. */
 @Entity
 @Table(
     name = "warehouse",

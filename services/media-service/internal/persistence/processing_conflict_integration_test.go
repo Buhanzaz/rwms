@@ -67,7 +67,7 @@ func TestProcessingConflictResolutionUsesAuthoritativeStateIntegration(t *testin
 		assertNoProcessingTerminalState(t, ctx, database, message.EventID)
 
 		claim, err := repository.ClaimProcessingJob(ctx, message, "live-lease-worker", 2*time.Minute)
-		if err != nil || claim.Duplicate || claim.Job.Attempt != 1 {
+		if err != nil || claim.Duplicate || claim.Job.Attempt != 1 || claim.Job.AttemptInCycle != 1 {
 			t.Fatalf("live processing claim = %#v, %v", claim, err)
 		}
 		if _, err := repository.ClaimProcessingJob(ctx, message, "competing-worker", time.Minute); !errors.Is(err, ErrConflict) {
@@ -84,7 +84,7 @@ func TestProcessingConflictResolutionUsesAuthoritativeStateIntegration(t *testin
 			t.Fatalf("release live processing lease: %v", err)
 		}
 		claim, err = repository.ClaimProcessingJob(ctx, message, "retry-worker", time.Minute)
-		if err != nil || claim.Duplicate || claim.Job.Attempt != 2 {
+		if err != nil || claim.Duplicate || claim.Job.Attempt != 2 || claim.Job.AttemptInCycle != 2 {
 			t.Fatalf("retry processing claim = %#v, %v", claim, err)
 		}
 		delay, terminal, err := repository.RecordProcessingFailure(

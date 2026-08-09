@@ -3,6 +3,9 @@ package dev.buhanzaz.rwms.logistics.order.security;
 import java.util.Set;
 import java.util.UUID;
 
+/**
+ * Normalized authenticated actor used to apply rental-order authorization and warehouse scope checks.
+ */
 public record OrderActor(
     UUID subjectId,
     String role,

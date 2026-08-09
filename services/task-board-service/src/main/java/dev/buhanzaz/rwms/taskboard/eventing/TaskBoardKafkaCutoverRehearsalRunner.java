@@ -8,6 +8,12 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
+/**
+ * Optional startup runner for the retained historical Rabbit-to-Kafka rehearsal path.
+ *
+ * <p>This is not a supported product workflow. It remains disabled unless explicitly configured
+ * and is tracked for reviewed removal once historical evidence requirements are resolved.
+ */
 @Component
 @Slf4j
 @RequiredArgsConstructor

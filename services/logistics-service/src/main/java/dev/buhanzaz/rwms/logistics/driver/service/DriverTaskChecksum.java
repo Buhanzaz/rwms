@@ -6,6 +6,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.List;
 
+/** Produces length-delimited command fingerprints for idempotent driver-task effects. */
 final class DriverTaskChecksum {
   private DriverTaskChecksum() {}
 

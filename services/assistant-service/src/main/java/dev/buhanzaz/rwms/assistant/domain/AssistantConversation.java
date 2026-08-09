@@ -13,6 +13,7 @@ import java.util.Objects;
 import java.util.UUID;
 import org.hibernate.proxy.HibernateProxy;
 
+/** Service-owned conversation aggregate record that links one rental user and one logistics-owned inquiry without copying inquiry state. */
 @Entity
 @Table(name = "assistant_conversation")
 public class AssistantConversation {

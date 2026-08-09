@@ -8,6 +8,13 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Component;
 
+/**
+ * Enforces public user and worker-token boundaries for task-board resources.
+ *
+ * <p>Warehouse access is checked against immutable JWT claims locally. A worker token can act only
+ * in its own warehouse; a user token must hold the requested access level unless it has an
+ * administration role. The development bypass is constrained to the {@code dev} profile.
+ */
 @Component
 public class WarehouseAccessAuthorizer {
   private final boolean developmentAuthBypass;
@@ -20,12 +27,14 @@ public class WarehouseAccessAuthorizer {
         developmentAuthBypass && environment.matchesProfiles("dev") && !production;
   }
 
+  /** Requires a user principal carrying the supplied public scope. */
   public void requireUserScope(Jwt jwt, String scope) {
     if (developmentAuthBypass) return;
     if (!"USER".equals(jwt.getClaimAsString("principal_type")) || !hasScope(jwt, scope))
       throw new AccessDeniedException("Required USER scope is missing");
   }
 
+  /** Requires task read/write authority for a user or a worker token. */
   public void requireTaskScope(Jwt jwt, boolean write) {
     if (developmentAuthBypass) return;
     String type = jwt.getClaimAsString("principal_type");
@@ -34,6 +43,12 @@ public class WarehouseAccessAuthorizer {
       throw new AccessDeniedException("Required task scope is missing");
   }
 
+  /**
+   * Requires the requested warehouse access level.
+   *
+   * <p>When workers are allowed, their {@code warehouse_id} JWT claim is the only accepted
+   * warehouse binding; request data cannot substitute it.
+   */
   public void requireWarehouse(
       Jwt jwt, UUID warehouseId, AccessLevel required, boolean allowWorker) {
     if (developmentAuthBypass) return;
@@ -65,6 +80,7 @@ public class WarehouseAccessAuthorizer {
     throw new AccessDeniedException("Insufficient warehouse access");
   }
 
+  /** Requires a global system or WMS administrator for catalog administration. */
   public void requireGlobalManagement(Jwt jwt) {
     if (developmentAuthBypass) return;
     String role = jwt.getClaimAsString("global_role");
@@ -73,6 +89,7 @@ public class WarehouseAccessAuthorizer {
       throw new AccessDeniedException("Global management role required");
   }
 
+  /** Returns a worker identity only for a valid worker token; user callers have no worker identity. */
   public UUID workerId(Jwt jwt) {
     if (developmentAuthBypass) return null;
     String type = jwt.getClaimAsString("principal_type");

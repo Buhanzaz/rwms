@@ -10,6 +10,9 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data persistence boundary for logistics-owned Rental Inquiry Repository; it does not own cross-service workflow decisions.
+ */
 public interface RentalInquiryRepository extends JpaRepository<RentalInquiry, UUID> {
   @EntityGraph(attributePaths = "client")
   Optional<RentalInquiry> findByConversationId(UUID conversationId);
@@ -23,9 +26,4 @@ public interface RentalInquiryRepository extends JpaRepository<RentalInquiry, UU
   @Query("select inquiry from RentalInquiry inquiry where inquiry.id = :id")
   Optional<RentalInquiry> findForUpdate(@Param("id") UUID id);
 
-  @Query(
-      value =
-          "select 1 from pg_advisory_xact_lock(hashtextextended(cast(:lockKey as text), 0))",
-      nativeQuery = true)
-  Integer acquireTransactionLock(@Param("lockKey") String lockKey);
 }

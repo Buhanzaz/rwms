@@ -3,7 +3,6 @@ package dev.buhanzaz.rwms.logistics.service;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import java.util.Optional;
-import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -15,35 +14,40 @@ import org.springframework.stereotype.Service;
 @Service
 @RequiredArgsConstructor
 public class ReturnRegistrationProcessor {
-  private static final int MAX_STEPS_PER_DRAIN = 500;
-
   private final ReturnRegistrationWorkflowStore store;
+  private final LogisticsExternalAttemptClaimService claims;
   private final LogisticsDependencyGateway dependencies;
 
-  public int processUntilIdle(UUID documentId) {
-    if (documentId == null) throw new IllegalArgumentException("documentId is required");
-    int processed = 0;
-    while (processed < MAX_STEPS_PER_DRAIN) {
-      Optional<ReturnRegistrationWorkflowStore.Work> work = store.nextWork(documentId);
-      if (work.isEmpty()) return processed;
-      process(work.get());
-      processed++;
+  /**
+   * Executes exactly one already-claimed operation. Both local preparation and completion verify
+   * the same immutable lease capability, while dependency I/O occurs with no transaction open.
+   */
+  public void process(LogisticsExternalAttemptClaimService.Claim claim) {
+    try {
+      Optional<ReturnRegistrationWorkflowStore.Work> work = store.workForClaim(claim);
+      if (work.isEmpty()) {
+        defer(claim);
+        return;
+      }
+      process(claim, work.get());
+    } catch (LogisticsExternalAttemptClaimService.StaleClaimException ignored) {
+      // A newer claim owns the row; it alone may complete or defer it.
     }
-    throw new IllegalStateException("Return registration did not reach a stable local state");
   }
 
-  private void process(ReturnRegistrationWorkflowStore.Work work) {
+  private void process(
+      LogisticsExternalAttemptClaimService.Claim claim, ReturnRegistrationWorkflowStore.Work work) {
     try {
       switch (work.type()) {
         case WAREHOUSE_IDENTITY ->
             store.confirmWarehouse(
-                work.operationId(), dependencies.readWarehouseIdentity(work.warehouseId()));
+                claim, dependencies.readWarehouseIdentity(work.warehouseId()));
         case ASSET_SNAPSHOT ->
             store.confirmAssetSnapshot(
-                work.operationId(), dependencies.readRentalItemSnapshot(work.assetId()));
+                claim, dependencies.readRentalItemSnapshot(work.assetId()));
         case ASSET_LEASE ->
             store.confirmLease(
-                work.operationId(),
+                claim,
                 work.rentalOrderId() == null
                     ? dependencies.acquireReturnLease(
                         work.operationId(),
@@ -60,7 +64,7 @@ public class ReturnRegistrationProcessor {
                         work.rentalOrderId()));
         case ASSET_RETURN_INTAKE ->
             store.confirmReturnIntake(
-                work.operationId(),
+                claim,
                 dependencies.applyReturnIntake(
                     work.operationId(),
                     work.assetId(),
@@ -70,15 +74,34 @@ public class ReturnRegistrationProcessor {
                     work.documentId(),
                     work.lineId()));
       }
+    } catch (LogisticsExternalAttemptClaimService.StaleClaimException ignored) {
+      // A newer lease won while the remote call was in flight.
     } catch (LogisticsDependencyException exception) {
-      store.recordFailure(work.operationId(), exception);
+      recordFailure(claim, exception);
     } catch (RuntimeException exception) {
-      store.recordFailure(
-          work.operationId(),
+      recordFailure(
+          claim,
           new LogisticsDependencyException(
               LogisticsDependencyException.FailureKind.TRANSIENT,
               "Logistics dependency outcome is unknown",
               exception));
+    }
+  }
+
+  private void defer(LogisticsExternalAttemptClaimService.Claim claim) {
+    try {
+      claims.defer(claim);
+    } catch (LogisticsExternalAttemptClaimService.StaleClaimException ignored) {
+      // The expiry or a newer claimant owns the next decision.
+    }
+  }
+
+  private void recordFailure(
+      LogisticsExternalAttemptClaimService.Claim claim, LogisticsDependencyException exception) {
+    try {
+      store.recordFailure(claim, exception);
+    } catch (LogisticsExternalAttemptClaimService.StaleClaimException ignored) {
+      // Never overwrite the outcome of a newer fenced lease.
     }
   }
 }

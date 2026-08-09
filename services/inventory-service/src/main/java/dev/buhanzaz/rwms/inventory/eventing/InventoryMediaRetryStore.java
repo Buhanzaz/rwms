@@ -10,6 +10,9 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Persistence boundary for retrying inventory inbox records without losing their identity.
+ */
 @Repository
 public class InventoryMediaRetryStore {
   private static final String CONSUMER = "inventory-service-media-inbox-v1";

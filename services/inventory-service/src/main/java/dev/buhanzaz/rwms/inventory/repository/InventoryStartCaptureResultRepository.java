@@ -6,6 +6,9 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/**
+ * Spring Data repository for service-local inventory start capture result persistence.
+ */
 public interface InventoryStartCaptureResultRepository
     extends JpaRepository<InventoryStartCaptureResult, InventoryStartCaptureResult.Key> {
   Optional<InventoryStartCaptureResult>

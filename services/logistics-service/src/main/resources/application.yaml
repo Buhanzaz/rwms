@@ -75,9 +75,9 @@ spring:
             delivery.timeout.ms: 15000
             max.block.ms: 5000
             metadata.recovery.rebootstrap.trigger.ms: 1000
-      default:
-        producer:
-          sync: true
+        default:
+          producer:
+            sync: true
   security:
     oauth2:
       resourceserver:
@@ -88,11 +88,12 @@ spring:
 rwms:
   platform:
     kafka:
-      enabled: ${LOGISTICS_KAFKA_ENABLED:false}
+      enabled: ${LOGISTICS_KAFKA_ENABLED}
       destinations:
         - rwms.logistics.return.v1
         - rwms.logistics.shipment.v1
         - rwms.logistics.transfer.v1
+        - rwms.logistics.rental-inquiry.events.v1
   logistics:
     idempotency:
       retention: ${LOGISTICS_IDEMPOTENCY_RETENTION:7d}
@@ -128,6 +129,18 @@ rwms:
       relay-enabled: ${LOGISTICS_OWNER_PROOF_RELAY_ENABLED:true}
       relay-delay: ${LOGISTICS_OWNER_PROOF_RELAY_DELAY:1s}
       relay-initial-delay: ${LOGISTICS_OWNER_PROOF_RELAY_INITIAL_DELAY:1s}
+    external-attempt-claim:
+      lease-duration: ${LOGISTICS_EXTERNAL_ATTEMPT_LEASE_DURATION:30s}
+      maximum-page-size: ${LOGISTICS_EXTERNAL_ATTEMPT_MAXIMUM_PAGE_SIZE:64}
+      blocked-work-delay: ${LOGISTICS_EXTERNAL_ATTEMPT_BLOCKED_WORK_DELAY:1s}
+      worker-pool-size: ${LOGISTICS_EXTERNAL_ATTEMPT_WORKER_POOL_SIZE:8}
+      worker-queue-capacity: ${LOGISTICS_EXTERNAL_ATTEMPT_WORKER_QUEUE_CAPACITY:32}
+      worker-shutdown-timeout: ${LOGISTICS_EXTERNAL_ATTEMPT_WORKER_SHUTDOWN_TIMEOUT:30s}
+      return-registration-budget: ${LOGISTICS_RETURN_REGISTRATION_WORKER_BUDGET:4}
+      return-completion-budget: ${LOGISTICS_RETURN_COMPLETION_WORKER_BUDGET:4}
+      shipment-budget: ${LOGISTICS_SHIPMENT_WORKER_BUDGET:4}
+      transfer-budget: ${LOGISTICS_TRANSFER_WORKER_BUDGET:4}
+      media-owner-proof-budget: ${LOGISTICS_MEDIA_OWNER_PROOF_WORKER_BUDGET:2}
     equipment-movement:
       relay-enabled: ${LOGISTICS_EQUIPMENT_MOVEMENT_RELAY_ENABLED:true}
       relay-delay: ${LOGISTICS_EQUIPMENT_MOVEMENT_RELAY_DELAY:1s}
@@ -142,7 +155,7 @@ rwms:
         lease-duration: ${LOGISTICS_KAFKA_OUTBOX_LEASE_DURATION:30s}
         instance-id: ${LOGISTICS_KAFKA_INSTANCE_ID:logistics-service}
     security:
-      dev-auth-bypass: false
+      dev-auth-bypass: ${LOGISTICS_DEV_AUTH_BYPASS:false}
     client-presentation:
       token-secret: ${CLIENT_PRESENTATION_TOKEN_SECRET:rwms-local-client-presentation-secret-change-me}
     rental-inquiry:

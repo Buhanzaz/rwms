@@ -65,7 +65,7 @@ class DossierFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndPassesJpaValidation() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(2);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(4);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -133,7 +133,7 @@ class DossierFlywayMigrationIntegrationTest {
     insertLegacyMediaProjection(cabinId, warehouseId, firstMediaId, 0);
     insertLegacyMediaProjection(cabinId, warehouseId, secondMediaId, 1);
 
-    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isOne();
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(3);
     assertThat(
             jdbc.queryForObject(
                 "select folder_id from dossier_media_projection where media_id=?",
@@ -152,6 +152,134 @@ class DossierFlywayMigrationIntegrationTest {
                 Long.class,
                 cabinId))
         .isEqualTo(2L);
+  }
+
+  @Test
+  void v3BackfillsOnlyExactActiveCabinEvidenceAndAddsLookupIndex() {
+    Flyway throughV2 =
+        Flyway.configure()
+            .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+            .locations(MIGRATIONS)
+            .target("2")
+            .baselineOnMigrate(false)
+            .validateOnMigrate(true)
+            .validateMigrationNaming(true)
+            .cleanDisabled(true)
+            .outOfOrder(false)
+            .load();
+    assertThat(throughV2.migrate().migrationsExecuted).isEqualTo(2);
+
+    UUID activeGeneration =
+        UUID.fromString("00000000-0000-0000-0000-000000000901");
+    UUID inactiveGeneration = UUID.randomUUID();
+    jdbc.update(
+        "insert into dossier_projection_generation(id,state,created_at) values (?,'BUILDING',clock_timestamp())",
+        inactiveGeneration);
+    UUID unresolvedEvent = UUID.randomUUID();
+    UUID resolvedEvent = UUID.randomUUID();
+    UUID globalEvent = UUID.randomUUID();
+    UUID inactiveEvent = UUID.randomUUID();
+    UUID unresolvedCabin = UUID.randomUUID();
+    UUID resolvedCabin = UUID.randomUUID();
+    UUID inactiveCabin = UUID.randomUUID();
+    OffsetDateTime resolvedAt = OffsetDateTime.parse("2026-08-09T10:15:30Z");
+    insertV2VisibilityEvidence(
+        unresolvedEvent, activeGeneration, unresolvedCabin, null, 700L);
+    insertV2VisibilityEvidence(
+        resolvedEvent, activeGeneration, resolvedCabin, resolvedAt, 701L);
+    insertV2VisibilityEvidence(globalEvent, activeGeneration, null, null, 702L);
+    insertV2VisibilityEvidence(
+        inactiveEvent, inactiveGeneration, inactiveCabin, null, 703L);
+    UUID unresolvedFailure = insertV2DeadLetter(unresolvedEvent, 700L);
+    UUID resolvedFailure = insertV2DeadLetter(resolvedEvent, 701L);
+    UUID globalFailure = insertV2DeadLetter(globalEvent, 702L);
+    UUID inactiveFailure = insertV2DeadLetter(inactiveEvent, 703L);
+    UUID validationFailure = insertV2DeadLetter(null, 704L);
+    UUID validationFailureWithEventId = insertV2DeadLetter(unresolvedEvent, 705L);
+    jdbc.update(
+        "update dossier_sanitized_dead_letter set failure_code='INVALID_ENVELOPE' where id=?",
+        validationFailureWithEventId);
+
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(2);
+
+    assertThat(
+            jdbc.queryForObject(
+                "select coverage_generation_id from dossier_sanitized_dead_letter where id=?",
+                UUID.class,
+                unresolvedFailure))
+        .isEqualTo(activeGeneration);
+    assertThat(
+            jdbc.queryForObject(
+                "select coverage_subject_cabin_id from dossier_sanitized_dead_letter where id=?",
+                UUID.class,
+                unresolvedFailure))
+        .isEqualTo(unresolvedCabin);
+    assertThat(
+            jdbc.queryForObject(
+                "select coverage_resolved_at from dossier_sanitized_dead_letter where id=?",
+                OffsetDateTime.class,
+                resolvedFailure))
+        .isEqualTo(resolvedAt);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from dossier_sanitized_dead_letter
+                where id in (?,?,?,?)
+                  and coverage_generation_id is null
+                  and coverage_subject_cabin_id is null
+                  and coverage_resolved_at is null
+                """,
+                Long.class,
+                globalFailure,
+                inactiveFailure,
+                validationFailure,
+                validationFailureWithEventId))
+        .isEqualTo(4L);
+    assertThat(
+            jdbc.queryForObject(
+                    "select indexdef from pg_indexes where schemaname='public' and indexname='idx_dossier_dead_letter_unresolved_coverage'",
+                    String.class)
+                .toLowerCase(java.util.Locale.ROOT))
+        .contains("(coverage_generation_id, coverage_subject_cabin_id)")
+        .contains("where (coverage_resolved_at is null)");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update dossier_sanitized_dead_letter set coverage_generation_id=? where id=?",
+                    activeGeneration,
+                    validationFailure))
+        .isInstanceOf(DataIntegrityViolationException.class);
+  }
+
+  @Test
+  void v4AddsOnlyTheCanonicalRepairTransferActivityCodes() {
+    Flyway throughV3 =
+        Flyway.configure()
+            .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+            .locations(MIGRATIONS)
+            .target("3")
+            .baselineOnMigrate(false)
+            .validateOnMigrate(true)
+            .validateMigrationNaming(true)
+            .cleanDisabled(true)
+            .outOfOrder(false)
+            .load();
+    assertThat(throughV3.migrate().migrationsExecuted).isEqualTo(3);
+
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isOne();
+
+    String definition =
+        jdbc.queryForObject(
+            """
+            select pg_get_constraintdef(oid)
+            from pg_constraint
+            where conrelid='public.dossier_activity'::regclass
+              and conname='ck_dossier_activity_code'
+            """,
+            String.class);
+    assertThat(definition)
+        .contains("REPAIR_TRANSFER_PREPARED", "REPAIR_TRANSFERRED", "CABIN_CREATED")
+        .doesNotContain("REPAIR_TRANSFER_FAILED");
   }
 
   @Test
@@ -327,6 +455,71 @@ class DossierFlywayMigrationIntegrationTest {
         .cleanDisabled(true)
         .outOfOrder(false)
         .load();
+  }
+
+  private void insertV2VisibilityEvidence(
+      UUID eventId,
+      UUID generationId,
+      UUID subjectCabinId,
+      OffsetDateTime resolvedAt,
+      long sourceOffset) {
+    UUID aggregateId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into dossier_source_fact(
+          id,event_id,producer,source_topic,source_partition,source_offset,kafka_key,
+          aggregate_type,aggregate_id,aggregate_version,event_type,event_version,payload_sha256,
+          canonical_envelope,recorded_at,correlation_id,subject_cabin_id,
+          subject_warehouse_id,ingested_at)
+        values (?,?,'ASSET','rwms.asset.rental-item.v1',7,?,?,'RENTAL_ITEM',?,0,
+          'asset.rental-item.created.v1',1,?,cast(? as jsonb),clock_timestamp(),?,?,?,clock_timestamp())
+        """,
+        UUID.randomUUID(),
+        eventId,
+        sourceOffset,
+        aggregateId,
+        aggregateId,
+        "d".repeat(64),
+        "{}",
+        UUID.randomUUID(),
+        subjectCabinId,
+        subjectCabinId == null ? null : UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into dossier_unlinked_fact(
+          id,generation_id,source_event_id,subject_cabin_id,reason,source_producer,
+          source_aggregate_type,source_aggregate_id,payload_sha256,recorded_at,resolved_at)
+        values (?,?,?,?,'AGGREGATE_QUARANTINED','ASSET','RENTAL_ITEM',?,?,clock_timestamp(),?)
+        """,
+        UUID.randomUUID(),
+        generationId,
+        eventId,
+        subjectCabinId,
+        aggregateId,
+        "d".repeat(64),
+        resolvedAt);
+  }
+
+  private UUID insertV2DeadLetter(UUID sourceEventId, long sourceOffset) {
+    UUID id = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into dossier_sanitized_dead_letter(
+          id,source_event_id,source_aggregate_id,source_topic,source_partition,source_offset,
+          destination,record_key_sha256,message_sha256,failure_code,status,attempt_count,
+          next_attempt_at,failed_at)
+        values (?,?,?,'rwms.asset.rental-item.v1',7,?,
+          'rwms.asset.rental-item.v1.dossier-projection-v1.dlt',?,?,?,'PENDING',0,
+          clock_timestamp(),clock_timestamp())
+        """,
+        id,
+        sourceEventId,
+        sourceEventId,
+        sourceOffset,
+        "e".repeat(64),
+        "f".repeat(64),
+        sourceEventId == null ? "INVALID_ENVELOPE" : "PROCESSING_FAILED");
+    return id;
   }
 
   private void insertLegacyMediaProjection(
@@ -618,6 +811,8 @@ class DossierFlywayMigrationIntegrationTest {
             "e".repeat(64),
             "f".repeat(64),
             DossierDltFailureCode.INVALID_PAYLOAD,
+            null,
+            null,
             now);
     DossierSanitizedDeadLetter repeated =
         DossierSanitizedDeadLetter.pending(
@@ -629,6 +824,8 @@ class DossierFlywayMigrationIntegrationTest {
             "e".repeat(64),
             "f".repeat(64),
             DossierDltFailureCode.INVALID_PAYLOAD,
+            null,
+            null,
             now.plusSeconds(1));
 
     repository.saveAndFlush(first);

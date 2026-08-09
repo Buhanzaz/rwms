@@ -9,6 +9,9 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data repository for service-local inventory final plan persistence.
+ */
 public interface InventoryFinalPlanRepository extends JpaRepository<InventoryFinalPlan, UUID> {
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select plan from InventoryFinalPlan plan where plan.inventoryId = :inventoryId")

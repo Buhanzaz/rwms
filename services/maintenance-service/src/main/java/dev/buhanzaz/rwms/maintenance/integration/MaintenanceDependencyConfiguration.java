@@ -16,6 +16,10 @@ import org.springframework.security.oauth2.client.registration.InMemoryClientReg
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.web.client.RestClient;
 
+/**
+ * Selects the maintenance private dependency gateway: a no-op implementation is limited to disabled
+ * dev/test profiles, while enabled deployments use client-credentials HTTP clients.
+ */
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(MaintenanceDependencyProperties.class)
 class MaintenanceDependencyConfiguration {

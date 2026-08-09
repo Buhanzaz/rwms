@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.maintenance.domain;
 
+/** Enumerates MaintenanceAggregateType values used by maintenance-owned domain state. */
 public enum MaintenanceAggregateType {
   CATALOG_VERSION("rwms.maintenance.catalog-version.v1"),
   ESTIMATE("rwms.maintenance.estimate.v1"),

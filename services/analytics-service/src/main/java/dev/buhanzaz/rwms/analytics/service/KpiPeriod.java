@@ -5,6 +5,7 @@ import java.time.DateTimeException;
 import java.time.LocalDate;
 import java.time.YearMonth;
 
+/** Represents one validated calendar period selected by the public KPI query contract. */
 public record KpiPeriod(PeriodType type, LocalDate start, LocalDate end) {
   public static KpiPeriod resolve(
       PeriodType type, Integer year, Integer month, Integer day, Integer quarter) {

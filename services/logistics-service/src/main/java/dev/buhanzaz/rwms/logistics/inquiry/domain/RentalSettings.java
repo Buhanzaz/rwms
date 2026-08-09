@@ -12,6 +12,9 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+/**
+ * JPA persistence model for Rental Settings in the logistics-owned database.
+ */
 @Entity
 @Table(name = "rental_settings")
 @Getter

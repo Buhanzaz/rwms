@@ -10,6 +10,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+/**
+ * Drains durable driver-task work items and records remote dependency outcomes for retryable recovery.
+ */
 @Service
 @RequiredArgsConstructor
 public class DriverTaskProcessor {
@@ -19,6 +22,13 @@ public class DriverTaskProcessor {
   private final DriverTaskWorkflowStore store;
   private final LogisticsDependencyGateway dependencies;
 
+  /**
+   * Performs a bounded sequence of due work for one task. Remote effects are confirmed through
+   * DriverTaskWorkflowStore; recoverable dependency failures are recorded for a later relay pass.
+   *
+   * @param taskId durable logistics task identity
+   * @return number of work items processed before the task became idle or required another pass
+   */
   public int processUntilIdle(UUID taskId) {
     if (taskId == null) throw new IllegalArgumentException("taskId is required");
     int processed = 0;

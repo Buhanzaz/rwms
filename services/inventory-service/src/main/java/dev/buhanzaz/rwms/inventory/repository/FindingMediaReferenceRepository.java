@@ -6,6 +6,9 @@ import java.util.Set;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/**
+ * Spring Data repository for service-local finding media reference persistence.
+ */
 public interface FindingMediaReferenceRepository
     extends JpaRepository<FindingMediaReference, FindingMediaReference.Key> {
   List<FindingMediaReference> findAllByFindingIdAndFindingRevisionOrderByMediaIdAscGenerationAsc(

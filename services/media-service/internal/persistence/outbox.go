@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// OutboxClaim is a fenced exact-byte media fact leased to the Kafka relay.
 type OutboxClaim struct {
 	EventID    uuid.UUID
 	Topic      string
@@ -20,6 +21,8 @@ type OutboxClaim struct {
 	LeaseFence int64
 }
 
+// ClaimOutbox leases the next publishable fact while preserving per-aggregate
+// order and dependency ordering.
 func (repository *Repository) ClaimOutbox(ctx context.Context, owner string, leaseDuration time.Duration) (*OutboxClaim, error) {
 	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
@@ -72,6 +75,7 @@ func (repository *Repository) ClaimOutbox(ctx context.Context, owner string, lea
 	return claim, nil
 }
 
+// MarkOutboxPublished confirms broker delivery for the exact fenced claim.
 func (repository *Repository) MarkOutboxPublished(ctx context.Context, claim OutboxClaim) error {
 	command, err := repository.pool.Exec(ctx, `
 		update media_transport_outbox set event_status='PUBLISHED',published_at=clock_timestamp(),
@@ -87,6 +91,8 @@ func (repository *Repository) MarkOutboxPublished(ctx context.Context, claim Out
 	return nil
 }
 
+// MarkOutboxFailed releases a transiently failed claim with bounded durable
+// exponential backoff.
 func (repository *Repository) MarkOutboxFailed(ctx context.Context, claim OutboxClaim, failureCode string) error {
 	delay := time.Second * time.Duration(1<<min(claim.Attempt-1, 4))
 	if delay > 30*time.Second {
@@ -112,6 +118,8 @@ func (repository *Repository) MarkOutboxFailed(ctx context.Context, claim Outbox
 	return tx.Commit(ctx)
 }
 
+// MarkOutboxPermanent terminally fails a corrupt exact-byte claim and writes a
+// sanitized relay dead-letter record.
 func (repository *Repository) MarkOutboxPermanent(ctx context.Context, claim OutboxClaim, failureCode string) error {
 	tx, err := repository.pool.Begin(ctx)
 	if err != nil {
@@ -142,6 +150,8 @@ func (repository *Repository) MarkOutboxPermanent(ctx context.Context, claim Out
 	return tx.Commit(ctx)
 }
 
+// ReleaseOutboxLeases returns every claim held by a stopping relay to durable
+// recovery.
 func (repository *Repository) ReleaseOutboxLeases(ctx context.Context, owner string) error {
 	_, err := repository.pool.Exec(ctx, `update media_transport_outbox
 		set event_status='PENDING',lease_owner=null,lease_token=null,lease_until=null

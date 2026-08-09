@@ -6,10 +6,15 @@ import dev.buhanzaz.rwms.assistant.service.AssistantInquiryArchivedException;
 import dev.buhanzaz.rwms.assistant.service.AssistantUpstreamException;
 import java.io.IOException;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.time.Duration;
+import java.nio.charset.StandardCharsets;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Component;
@@ -57,9 +62,12 @@ public class HttpLogisticsClient implements LogisticsClient {
       client.put("clientType", newClient.clientType());
       client.put("displayName", newClient.displayName());
       client.put("phone", newClient.phone());
+      putOptional(client, "contactPerson", newClient.contactPerson());
       if (newClient.email() != null && !newClient.email().isBlank()) {
         client.put("email", newClient.email().trim());
       }
+      putOptional(client, "comment", newClient.comment());
+      putOptional(client, "source", newClient.source());
     }
     JsonNode response =
         exchange(
@@ -78,7 +86,9 @@ public class HttpLogisticsClient implements LogisticsClient {
             response.path("client").path("id"),
             response.path("clientId"),
             clientId == null ? null : JsonNodeFactory.instance.textNode(clientId.toString()));
-    if (inquiryId == null || resolvedClientId == null) {
+    if (inquiryId == null
+        || resolvedClientId == null
+        || (clientId != null && !clientId.equals(resolvedClientId))) {
       throw new AssistantUpstreamException("Logistics returned an invalid rental inquiry response");
     }
     return new InquiryBootstrap(
@@ -104,7 +114,13 @@ public class HttpLogisticsClient implements LogisticsClient {
 
   @Override
   public JsonNode searchAvailableCabins(
-      UUID rentalInquiryId, CabinSearch search, String bearerToken) {
+      UUID rentalInquiryId,
+      UUID idempotencyKey,
+      CabinSearch search,
+      String bearerToken) {
+    if (idempotencyKey == null) {
+      throw new IllegalArgumentException("idempotencyKey is required for a cabin search");
+    }
     ObjectNode request = JsonNodeFactory.instance.objectNode();
     ArrayNode groups = request.putArray("groups");
     for (CabinSearchGroup group : search.groups()) {
@@ -122,12 +138,81 @@ public class HttpLogisticsClient implements LogisticsClient {
     if (search.warehouseId() != null) {
       request.put("warehouseId", search.warehouseId().toString());
     }
+    request.put("resultMode", search.resultMode().name());
     return exchange(
         "POST",
         "/api/logistics/v1/rental-inquiries/" + rentalInquiryId + "/cabin-searches",
         request,
         bearerToken,
-        UUID.randomUUID().toString());
+        idempotencyKey.toString(),
+        false,
+        true);
+  }
+
+  @Override
+  public CabinSelection readCabinSelection(UUID rentalInquiryId, String bearerToken) {
+    JsonNode response =
+        exchange(
+            "GET",
+            "/api/logistics/v1/rental-inquiries/" + rentalInquiryId + "/cabin-selection",
+            null,
+            bearerToken,
+            null);
+    return cabinSelection(response, rentalInquiryId);
+  }
+
+  @Override
+  public CabinSelection replaceCabinSelection(
+      UUID rentalInquiryId,
+      UUID idempotencyKey,
+      UUID warehouseId,
+      List<UUID> rentalItemIds,
+      String bearerToken) {
+    if (idempotencyKey == null || warehouseId == null || rentalItemIds == null) {
+      throw new IllegalArgumentException("Cabin selection command is incomplete");
+    }
+    ObjectNode request = JsonNodeFactory.instance.objectNode();
+    request.put("warehouseId", warehouseId.toString());
+    ArrayNode ids = request.putArray("rentalItemIds");
+    rentalItemIds.forEach(id -> ids.add(id.toString()));
+    JsonNode response =
+        exchange(
+            "PUT",
+            "/api/logistics/v1/rental-inquiries/" + rentalInquiryId + "/cabin-selection",
+            request,
+            bearerToken,
+            idempotencyKey.toString(),
+            false,
+            true);
+    return cabinSelection(response, rentalInquiryId);
+  }
+
+  @Override
+  public JsonNode lookupCabinCatalog(
+      UUID rentalInquiryId,
+      UUID warehouseId,
+      String query,
+      int page,
+      int size,
+      String bearerToken) {
+    if (warehouseId == null || query == null || query.isBlank() || query.length() > 255) {
+      throw new IllegalArgumentException("A bounded cabin catalog query is required");
+    }
+    if (page < 0 || size < 1 || size > 100) {
+      throw new IllegalArgumentException("Cabin catalog page is invalid");
+    }
+    String path =
+        "/api/logistics/v1/rental-inquiries/"
+            + rentalInquiryId
+            + "/cabin-catalog?warehouseId="
+            + warehouseId
+            + "&query="
+            + URLEncoder.encode(query, StandardCharsets.UTF_8)
+            + "&page="
+            + page
+            + "&size="
+            + size;
+    return exchange("GET", path, null, bearerToken, null);
   }
 
   @Override
@@ -165,7 +250,7 @@ public class HttpLogisticsClient implements LogisticsClient {
       JsonNode payload,
       String bearerToken,
       String idempotencyKey) {
-    return exchange(method, path, payload, bearerToken, idempotencyKey, false);
+    return exchange(method, path, payload, bearerToken, idempotencyKey, false, false);
   }
 
   /** A 404 is a normal answer only for an inquiry that has not published a presentation yet. */
@@ -176,6 +261,22 @@ public class HttpLogisticsClient implements LogisticsClient {
       String bearerToken,
       String idempotencyKey,
       boolean notFoundIsEmpty) {
+    return exchange(
+        method, path, payload, bearerToken, idempotencyKey, notFoundIsEmpty, false);
+  }
+
+  /**
+   * A cabin-search lost-response retry re-sends the same immutable request and caller key once;
+   * status responses, validation failures and interruption are never retried.
+   */
+  private JsonNode exchange(
+      String method,
+      String path,
+      JsonNode payload,
+      String bearerToken,
+      String idempotencyKey,
+      boolean notFoundIsEmpty,
+      boolean retryLostResponseOnce) {
     if (bearerToken == null || bearerToken.isBlank()) {
       throw new AssistantUpstreamException("Current bearer token is required for logistics");
     }
@@ -188,13 +289,23 @@ public class HttpLogisticsClient implements LogisticsClient {
       if (idempotencyKey != null) request.header("Idempotency-Key", idempotencyKey);
       if ("GET".equals(method)) {
         request.GET();
+      } else if ("PUT".equals(method)) {
+        request
+            .header("Content-Type", "application/json")
+            .PUT(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload)));
       } else {
         request
             .header("Content-Type", "application/json")
             .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload)));
       }
-      HttpResponse<String> response =
-          client.send(request.build(), HttpResponse.BodyHandlers.ofString());
+      HttpRequest immutableRequest = request.build();
+      HttpResponse<String> response;
+      try {
+        response = client.send(immutableRequest, HttpResponse.BodyHandlers.ofString());
+      } catch (IOException firstLostResponse) {
+        if (!retryLostResponseOnce) throw firstLostResponse;
+        response = client.send(immutableRequest, HttpResponse.BodyHandlers.ofString());
+      }
       if (response.statusCode() < 200 || response.statusCode() >= 300) {
         if (notFoundIsEmpty && response.statusCode() == 404) {
           return JsonNodeFactory.instance.nullNode();
@@ -217,6 +328,64 @@ public class HttpLogisticsClient implements LogisticsClient {
     String base = properties.baseUrl();
     if (base.endsWith("/")) base = base.substring(0, base.length() - 1);
     return URI.create(base + path);
+  }
+
+  private static CabinSelection cabinSelection(JsonNode response, UUID expectedInquiryId) {
+    if (response == null || !response.isObject()) {
+      throw new AssistantUpstreamException("Logistics returned an invalid cabin selection");
+    }
+    UUID inquiryId = firstUuid(response.path("inquiryId"));
+    UUID warehouseId = firstUuid(response.path("warehouseId"));
+    OffsetDateTime expiresAt = optionalDateTime(response.get("expiresAt"));
+    JsonNode idsNode = response.path("rentalItemIds");
+    JsonNode itemsNode = response.path("items");
+    if (!expectedInquiryId.equals(inquiryId)
+        || !idsNode.isArray()
+        || !itemsNode.isArray()
+        || idsNode.size() != itemsNode.size()
+        || (!idsNode.isEmpty() && warehouseId == null)) {
+      throw new AssistantUpstreamException("Logistics returned an invalid cabin selection");
+    }
+    List<UUID> ids = new ArrayList<>();
+    List<JsonNode> items = new ArrayList<>();
+    for (int index = 0; index < idsNode.size(); index++) {
+      UUID id = firstUuid(idsNode.get(index));
+      JsonNode item = itemsNode.get(index);
+      if (id == null
+          || !item.isObject()
+          || !id.toString().equals(item.path("id").asText())
+          || !"FREE".equals(item.path("status").asText())
+          || warehouseId == null
+          || !warehouseId.toString().equals(item.path("warehouseId").asText())
+          || ids.contains(id)) {
+        throw new AssistantUpstreamException("Logistics returned an invalid cabin selection");
+      }
+      ids.add(id);
+      items.add(item.deepCopy());
+    }
+    try {
+      return new CabinSelection(inquiryId, warehouseId, expiresAt, ids, items);
+    } catch (IllegalArgumentException invalid) {
+      throw new AssistantUpstreamException(
+          "Logistics returned an invalid cabin selection", invalid);
+    }
+  }
+
+  private static OffsetDateTime optionalDateTime(JsonNode value) {
+    if (value == null || value.isNull()) return null;
+    if (!value.isTextual()) {
+      throw new AssistantUpstreamException("Logistics returned an invalid cabin selection");
+    }
+    try {
+      return OffsetDateTime.parse(value.asText());
+    } catch (DateTimeParseException invalid) {
+      throw new AssistantUpstreamException(
+          "Logistics returned an invalid cabin selection", invalid);
+    }
+  }
+
+  private static void putOptional(ObjectNode target, String field, String value) {
+    if (value != null && !value.isBlank()) target.put(field, value.trim());
   }
 
   /** Never surface an upstream problem body, but retain this one safe lifecycle code. */

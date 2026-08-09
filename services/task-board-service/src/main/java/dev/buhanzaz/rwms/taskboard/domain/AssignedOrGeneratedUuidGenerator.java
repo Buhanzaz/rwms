@@ -7,6 +7,7 @@ import org.hibernate.generator.BeforeExecutionGenerator;
 import org.hibernate.generator.EventType;
 import org.hibernate.generator.EventTypeSets;
 
+/** Preserves a caller-assigned UUID for idempotent creates or generates one before first insert. */
 public final class AssignedOrGeneratedUuidGenerator implements BeforeExecutionGenerator {
   @Override
   public Object generate(

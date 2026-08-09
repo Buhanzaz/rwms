@@ -23,6 +23,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+/**
+ * Owns worker application credentials and their worker-access event stream.
+ *
+ * <p>Each mutation keeps the credential vault, authorization projection, and event stream at the
+ * same version, and revokes persisted authorizations whenever existing access is invalidated.
+ */
 @Service
 @RequiredArgsConstructor
 public class WorkerCredentialService {
@@ -39,6 +45,14 @@ public class WorkerCredentialService {
     private final AuthResponseMapper responseMapper;
     private final AuthorizationRevocationService authorizationRevocations;
 
+    /**
+     * Creates or reconfigures a worker credential, with exact retries returning the existing state
+     * without a duplicate event.
+     *
+     * @param workerId external worker identifier
+     * @param request requested warehouse, application login, and password
+     * @return current worker credential status
+     */
     @Transactional
     public WorkerCredentialResponse configure(String workerId, WorkerCredentialRequest request) {
         String normalizedWorkerId = required(workerId, "workerId");
@@ -104,6 +118,13 @@ public class WorkerCredentialService {
         return response(updated);
     }
 
+    /**
+     * Replaces a worker password and revokes existing persisted authorizations before emitting the
+     * password-reset event. Supplying the current password is an idempotent no-op after revocation.
+     *
+     * @param workerId external worker identifier
+     * @param password new worker password
+     */
     @Transactional
     public void resetPassword(String workerId, String password) {
         AuthSubject subject = worker(workerId);
@@ -122,6 +143,12 @@ public class WorkerCredentialService {
                 null);
     }
 
+    /**
+     * Disables a worker credential and makes the operation idempotent for an already disabled
+     * consistent projection.
+     *
+     * @param workerId external worker identifier
+     */
     @Transactional
     public void disable(String workerId) {
         AuthSubject subject = findWorker(workerId);
@@ -147,6 +174,12 @@ public class WorkerCredentialService {
                 null);
     }
 
+    /**
+     * Re-enables a worker only when its credential vault and authorization projection agree on the
+     * disabled state.
+     *
+     * @param workerId external worker identifier
+     */
     @Transactional
     public void enable(String workerId) {
         AuthSubject subject = worker(workerId);
@@ -173,6 +206,12 @@ public class WorkerCredentialService {
                 null);
     }
 
+    /**
+     * Removes a worker credential through a terminal event and projection deletion; a missing
+     * worker is treated as an idempotent completed delete.
+     *
+     * @param workerId external worker identifier
+     */
     @Transactional
     public void delete(String workerId) {
         AuthSubject subject = findWorker(workerId);
@@ -192,11 +231,18 @@ public class WorkerCredentialService {
         projectionWriter.deleteWorker(finalProjection);
     }
 
+    /**
+     * Reads the consistent public status of one worker credential.
+     *
+     * @param workerId external worker identifier
+     * @return current credential state without any secret material
+     */
     @Transactional(readOnly = true)
     public WorkerCredentialResponse status(String workerId) {
         return response(worker(workerId));
     }
 
+    /** Loads one worker or maps its absence to the worker credential API's not-found response. */
     private AuthSubject worker(String workerId) {
         AuthSubject subject = findWorker(workerId);
         if (subject == null) {
@@ -205,6 +251,7 @@ public class WorkerCredentialService {
         return subject;
     }
 
+    /** Finds a worker subject by external identifier without interpreting a missing record as an error. */
     private AuthSubject findWorker(String workerId) {
         return profiles.findSubjectIdByExternalWorkerId(required(workerId, "workerId"))
                 .flatMap(subjects::findById)
@@ -212,6 +259,7 @@ public class WorkerCredentialService {
                 .orElse(null);
     }
 
+    /** Locks the event stream and rejects a projection that is not at the locked stream version. */
     private long lockConsistentStream(AuthSubject subject) {
         long streamVersion = eventStore.lockCurrentVersion(AuthAggregateType.WORKER_ACCESS, subject.getId());
         if (streamVersion != subject.getVersion()) {
@@ -220,6 +268,10 @@ public class WorkerCredentialService {
         return streamVersion;
     }
 
+    /**
+     * Builds the outward worker status only after checking that the credential vault and
+     * authorization projection agree.
+     */
     private WorkerCredentialResponse response(AuthSubject subject) {
         var profile = profiles.require(subject.getId());
         var credential = credentials.require(subject.getId());
@@ -234,6 +286,7 @@ public class WorkerCredentialService {
                 active ? WorkerCredentialStatus.ACTIVE : WorkerCredentialStatus.DISABLED);
     }
 
+    /** Normalizes a required command field and maps an absent value to a client error. */
     private String required(String value, String field) {
         if (value == null || value.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, field + " обязателен");
@@ -241,6 +294,7 @@ public class WorkerCredentialService {
         return value.trim();
     }
 
+    /** Builds a uniform conflict response for semantic worker-credential violations. */
     private ResponseStatusException conflict(String message) {
         return new ResponseStatusException(HttpStatus.CONFLICT, message);
     }

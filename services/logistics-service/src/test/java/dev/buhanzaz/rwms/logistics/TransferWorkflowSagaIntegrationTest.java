@@ -27,6 +27,7 @@ import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskServic
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
+import dev.buhanzaz.rwms.logistics.service.LogisticsExternalAttemptClaimService;
 import dev.buhanzaz.rwms.logistics.service.TransferProcessor;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -79,6 +80,7 @@ class TransferWorkflowSagaIntegrationTest {
   static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
   @Autowired LogisticsDocumentService documents;
+  @Autowired LogisticsExternalAttemptClaimService claims;
   @Autowired TransferProcessor processor;
   @Autowired EquipmentMovementTaskService equipmentTasks;
   @Autowired MockMvc mvc;
@@ -131,7 +133,7 @@ class TransferWorkflowSagaIntegrationTest {
 
     assertThat(departure.response().state()).isEqualTo(LogisticsDocumentState.DEPARTING);
     assertThat(departureReplay.replayed()).isTrue();
-    processor.processUntilIdle(fixture.documentId());
+    LogisticsExternalAttemptTestClaims.drainTransfer(claims, processor, jdbc);
 
     var inTransit = documents.get(fixture.documentId(), LogisticsDocumentType.TRANSFER);
     assertThat(inTransit.state()).isEqualTo(LogisticsDocumentState.IN_TRANSIT);
@@ -201,7 +203,7 @@ class TransferWorkflowSagaIntegrationTest {
 
     assertThat(arrival.response().state()).isEqualTo(LogisticsDocumentState.ARRIVING);
     assertThat(arrivalReplay.replayed()).isTrue();
-    processor.processUntilIdle(fixture.documentId());
+    LogisticsExternalAttemptTestClaims.drainTransfer(claims, processor, jdbc);
 
     var completed = documents.get(fixture.documentId(), LogisticsDocumentType.TRANSFER);
     assertThat(completed.state()).isEqualTo(LogisticsDocumentState.COMPLETED);
@@ -248,7 +250,7 @@ class TransferWorkflowSagaIntegrationTest {
         fixture.lineId(),
         fixture.documentVersion(),
         fixture.lineVersion());
-    processor.processUntilIdle(fixture.documentId());
+    LogisticsExternalAttemptTestClaims.drainTransfer(claims, processor, jdbc);
     var inTransit = documents.get(fixture.documentId(), LogisticsDocumentType.TRANSFER);
     assertThat(inTransit.state()).isEqualTo(LogisticsDocumentState.IN_TRANSIT);
     assertThat(
@@ -334,7 +336,7 @@ class TransferWorkflowSagaIntegrationTest {
         inTransit.lines().getFirst().version(),
         new ArriveTransferLineRequest(
             List.of(new MediaReferenceInput(mediaId, 4)), 2));
-    processor.processUntilIdle(fixture.documentId());
+    LogisticsExternalAttemptTestClaims.drainTransfer(claims, processor, jdbc);
 
     var completed = documents.get(fixture.documentId(), LogisticsDocumentType.TRANSFER);
     assertThat(completed.state()).isEqualTo(LogisticsDocumentState.COMPLETED);
@@ -371,7 +373,7 @@ class TransferWorkflowSagaIntegrationTest {
         fixture.lineId(),
         fixture.documentVersion(),
         fixture.lineVersion());
-    processor.processUntilIdle(fixture.documentId());
+    LogisticsExternalAttemptTestClaims.drainTransfer(claims, processor, jdbc);
     var inTransit = documents.get(fixture.documentId(), LogisticsDocumentType.TRANSFER);
     UUID missingQueue = UUID.randomUUID();
     when(dependencies.preflightTransferArrival(
@@ -421,7 +423,7 @@ class TransferWorkflowSagaIntegrationTest {
         fixture.lineId(),
         fixture.documentVersion(),
         fixture.lineVersion());
-    processor.processUntilIdle(fixture.documentId());
+    LogisticsExternalAttemptTestClaims.drainTransfer(claims, processor, jdbc);
     var inTransit = documents.get(fixture.documentId(), LogisticsDocumentType.TRANSFER);
     when(dependencies.preflightTransferArrival(
             fixture.documentId(), fixture.lineId(), ASSET, ORIGIN, DESTINATION))
@@ -487,7 +489,7 @@ class TransferWorkflowSagaIntegrationTest {
         fixture.lineId(),
         fixture.documentVersion(),
         fixture.lineVersion());
-    processor.processUntilIdle(fixture.documentId());
+    LogisticsExternalAttemptTestClaims.drainTransfer(claims, processor, jdbc);
     var inTransit = documents.get(fixture.documentId(), LogisticsDocumentType.TRANSFER);
     UUID mediaId = UUID.randomUUID();
     when(dependencies.readRentalItemSnapshot(ASSET)).thenReturn(snapshot(8, ORIGIN, "IN_TRANSFER", 3));
@@ -510,7 +512,7 @@ class TransferWorkflowSagaIntegrationTest {
         inTransit.lines().getFirst().version(),
         new ArriveTransferLineRequest(
             List.of(new MediaReferenceInput(mediaId, 1)), null));
-    processor.processUntilIdle(fixture.documentId());
+    LogisticsExternalAttemptTestClaims.drainTransfer(claims, processor, jdbc);
 
     assertThat(documents.get(fixture.documentId(), LogisticsDocumentType.TRANSFER).state())
         .isEqualTo(LogisticsDocumentState.CONFLICT);

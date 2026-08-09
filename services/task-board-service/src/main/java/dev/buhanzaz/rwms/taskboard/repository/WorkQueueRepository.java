@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/** Queries physical queues by warehouse, definition, visibility, and operational order. */
 public interface WorkQueueRepository extends JpaRepository<WorkQueue, UUID> {
   @EntityGraph(attributePaths = "definition")
   @Query(

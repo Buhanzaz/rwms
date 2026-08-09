@@ -28,6 +28,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
+/** Converts warehouse API, validation and concurrency failures to the canonical Problem Details shape. */
 @RestControllerAdvice
 public class WarehouseApiExceptionHandler {
   private static final String PREFIX = "urn:rwms:problem:warehouse:";

@@ -22,6 +22,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+/**
+ * Owns the presentation booking lifecycle and its local versioned state transitions.
+ */
 @Service
 @RequiredArgsConstructor
 public class PresentationBookingService {
@@ -73,7 +76,15 @@ public class PresentationBookingService {
             rentalOrders.create(
                 actor,
                 context.booking().getId(),
-                new CreateOrderRequest(context.inquiry().getClient().getId(), null));
+                new CreateOrderRequest(
+                    context.inquiry().getClient().getId(),
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    List.of()));
         OrderDetailResponse order = created.response();
         orderId = order.id();
         if (order.warehouseId() == null) {

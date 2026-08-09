@@ -6,9 +6,10 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data persistence boundary for logistics-owned Order Client Repository; it does not own cross-service workflow decisions.
+ */
 public interface OrderClientRepository
     extends JpaRepository<OrderClient, UUID>, JpaSpecificationExecutor<OrderClient> {
   Optional<OrderClient> findByClientTypeAndNormalizedName(
@@ -20,9 +21,4 @@ public interface OrderClientRepository
   Optional<OrderClient> findByCreatedBySubjectIdAndCreationIdempotencyKey(
       UUID createdBySubjectId, UUID creationIdempotencyKey);
 
-  @Query(
-      value =
-          "select 1 from pg_advisory_xact_lock(hashtextextended(cast(:lockKey as text), 0))",
-      nativeQuery = true)
-  Integer acquireTransactionLock(@Param("lockKey") String lockKey);
 }

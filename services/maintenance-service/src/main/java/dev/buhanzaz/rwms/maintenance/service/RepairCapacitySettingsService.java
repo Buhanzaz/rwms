@@ -9,6 +9,7 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/** Application service for RepairCapacitySettingsService; it coordinates maintenance-owned state and durable effects. */
 @Service
 public class RepairCapacitySettingsService {
   private final RepairCapacitySettingsRepository repository;

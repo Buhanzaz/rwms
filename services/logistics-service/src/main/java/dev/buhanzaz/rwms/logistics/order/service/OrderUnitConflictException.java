@@ -3,6 +3,9 @@ package dev.buhanzaz.rwms.logistics.order.service;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 
+/**
+ * Signals a rental-order unit conflict that prevents the requested transition.
+ */
 public class OrderUnitConflictException extends OrderProblemException {
   private final UUID orderId;
   private final UUID unitId;

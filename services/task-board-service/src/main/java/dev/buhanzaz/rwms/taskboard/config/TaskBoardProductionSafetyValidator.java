@@ -15,6 +15,13 @@ import org.springframework.core.annotation.Order;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
+/**
+ * Fails startup outside dev/test when task-board security, private endpoints, or Kafka guarantees
+ * are incomplete.
+ *
+ * <p>The validator keeps topic allow-lists, bounded consumer retry, synchronous acknowledgements,
+ * and publish timeouts consistent with the outbox lease before HTTP traffic is accepted.
+ */
 @Component
 @RequiredArgsConstructor
 @Order(Ordered.HIGHEST_PRECEDENCE)

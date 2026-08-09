@@ -6,6 +6,9 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/**
+ * Spring Data persistence boundary for logistics-owned Logistics Media Reference Repository; it does not own cross-service workflow decisions.
+ */
 public interface LogisticsMediaReferenceRepository
     extends JpaRepository<LogisticsMediaReference, UUID> {
   List<LogisticsMediaReference> findAllByDocument_IdAndPurposeOrderByCreatedAtAsc(

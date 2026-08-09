@@ -15,6 +15,7 @@ import org.springframework.util.MimeTypeUtils;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.SerializationFeature;
 
+/** Schedules safe publication of analytics-owned sanitized DLT records after their local transaction commits. */
 @Component
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")
 public class AnalyticsDltRelay {

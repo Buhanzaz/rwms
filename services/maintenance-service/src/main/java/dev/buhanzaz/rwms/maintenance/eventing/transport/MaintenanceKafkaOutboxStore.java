@@ -8,6 +8,10 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Lease-based store for maintenance outbox events. It preserves aggregate-version ordering and
+ * makes expired delivery leases reclaimable before broker publication.
+ */
 @Repository
 public class MaintenanceKafkaOutboxStore {
   private final JdbcTemplate jdbc;

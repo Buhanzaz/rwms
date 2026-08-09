@@ -11,17 +11,15 @@ import tools.jackson.databind.node.ObjectNode;
 public class AssistantToolDefinitions {
   public static final String LIST_AVAILABLE_CABIN_FACETS = "list_available_cabin_facets";
   public static final String SEARCH_AVAILABLE_CABINS = "search_available_cabins";
-  public static final String REQUEST_SEARCH_MERGE_CONFIRMATION =
-      "request_search_merge_confirmation";
+  public static final String REQUEST_CABIN_CLARIFICATIONS = "request_cabin_clarifications";
+  public static final String LOOKUP_CABIN_CATALOG = "lookup_cabin_catalog";
+  public static final String REMOVE_SELECTED_CABINS = "remove_selected_cabins";
 
   public List<ChatCompletionClient.ToolDefinition> definitions() {
     return definitions(true);
   }
 
-  /**
-   * The merge-question tool is deliberately omitted when the current inquiry has no live
-   * carousel. This keeps the model from asking about a selection that has already expired.
-   */
+  /** Removes the selection-mutation tool when logistics reports no live held selection. */
   public List<ChatCompletionClient.ToolDefinition> definitions(boolean hasActiveSearchResult) {
     List<ChatCompletionClient.ToolDefinition> base =
         List.of(
@@ -39,10 +37,17 @@ public class AssistantToolDefinitions {
                 "Search cabins for the current rental inquiry using one to five logical structured "
                     + "groups. "
                     + "warehouseId is required and must be an exact warehouse ID returned by "
-                    + "list_available_cabin_facets. cabinType, finish, dimensions and category must "
-                    + "use exact facet values; never transform dimensions. characteristics forwards "
-                    + "only the characteristic text requested by the user: do not invent, normalize, "
-                    + "or infer it. Set linoleum=true when the user requests linoleum and "
+                    + "list_available_cabin_facets. Every group must resolve both exact cabinType and "
+                    + "exact finish before any availability result or hold is created. When either is "
+                    + "missing the service creates exact interactive choices instead of searching. "
+                    + "dimensions must belong to the selected type. A missing sole related dimension "
+                    + "is resolved by the service; several related dimensions become buttons. The "
+                    + "only supported approximate dimension is an unambiguous six-metre request, "
+                    + "resolved through current type-dimension relations to an exact "
+                    + "6x2.4-equivalent facet; when type is missing, only compatible types may be "
+                    + "offered. "
+                    + "characteristics must use an exact returned characteristic. Set linoleum=true "
+                    + "when the user requests linoleum and "
                     + "linoleum=false only when the user explicitly requests no linoleum; otherwise "
                     + "omit linoleum. Every result contains only FREE cabins. Omit category for "
                     + "default, all, show, free, available, \"все\", "
@@ -50,7 +55,7 @@ public class AssistantToolDefinitions {
                     + "\"Новая\" whenever the user explicitly requests new cabins, including "
                     + "\"новые\", \"покажи новые\", and \"только новые\"; \"новая\" is a category, "
                     + "not a status. Preserve the applicable category, as well as filters and quantity, "
-                    + "in follow-up and alternative searches. A group may use category for one exact category, "
+                    + "in follow-up searches. A group may use category for one exact category, "
                     + "or categories for exact OR category options. Do not put both fields in one group. "
                     + "When the user asks for multiple categories for one cabin type, use one logical group "
                     + "with categories so that one cabin-type result is returned. Use the exact user quantity, "
@@ -69,28 +74,40 @@ public class AssistantToolDefinitions {
                     + "is quoting a historical search. resultMode defaults to REPLACE. Use APPEND "
                     + "only after the manager explicitly confirms that this new request should be "
                     + "added to the active unpublished selection; use REPLACE for a replacement. "
+                    + "APPEND requires at most one exact category and an explicit quantity in every group; "
+                    + "never use categories or totalQuantity with APPEND. "
                     + "Requests to repeat, retry, refresh, recheck, "
                     + "show, or search for cabins always require a new call to this tool in the same "
-                    + "turn. If an exact search is empty, do not answer yet: call this tool once more "
-                    + "with alternative groups formed by removing one filter at a time, and label "
-                    + "those results as broader alternatives.",
-                searchSchema()));
+                    + "turn. Never remove type or finish to broaden an empty result. Explain the "
+                    + "exact result and offer only filter suggestions returned by the service.",
+                searchSchema()),
+            new ChatCompletionClient.ToolDefinition(
+                REQUEST_CABIN_CLARIFICATIONS,
+                "Create one to five independent button questions. Use exact current facet values "
+                    + "only. Each question has a stable branchKey so ОСБ and ЛДСП choices remain "
+                    + "independently answerable in any order. DIMENSIONS options must be related to "
+                    + "the supplied exact cabinType. SEARCH_MERGE options are exactly APPEND and "
+                    + "REPLACE. The service persists and validates every option.",
+                clarificationSchema()),
+            new ChatCompletionClient.ToolDefinition(
+                LOOKUP_CABIN_CATALOG,
+                "Read cabin facts without creating or renewing holds. It returns current exact "
+                    + "facets, type-dimension relations and, when query is supplied, a bounded first "
+                    + "catalog page searchable by exact cabin number or text. Use this for reference "
+                    + "questions about types, finishes, dimensions, characteristics, linoleum and "
+                    + "relations; do not call availability search for an informational question.",
+                catalogLookupSchema()));
     if (!hasActiveSearchResult) return base;
-    return List.of(
-        base.getFirst(),
-        base.getLast(),
+    List<ChatCompletionClient.ToolDefinition> withRemoval = new java.util.ArrayList<>(base);
+    withRemoval.add(
         new ChatCompletionClient.ToolDefinition(
-            REQUEST_SEARCH_MERGE_CONFIRMATION,
-            "Ask the manager whether a new cabin request must be added to the active, "
-                + "unpublished selection or replace it. This tool has no logistics or "
-                + "business-state effect. Use it only when an active selection exists and the "
-                + "current request introduces an additional new group/type/set and does not "
-                + "explicitly say add/append or replace. Do not use it for refresh, retry, "
-                + "show-all, or a refinement of the current request. After this "
-                + "tool, ask one concise question: \"Добавить к текущей подборке или заменить её?\". "
-                + "After a later affirmative/add answer, make a fresh search_available_cabins "
-                + "call with resultMode APPEND; after replace, use resultMode REPLACE.",
-            emptyObjectSchema()));
+            REMOVE_SELECTED_CABINS,
+            "Remove cabins only from the current logistics-owned selection by exact persisted UUID "
+                + "or unique exact cabin number. The service derives the retained IDs itself and "
+                + "releases removed holds immediately; this tool cannot supply arbitrary replacement "
+                + "state.",
+            removeSelectionSchema()));
+    return List.copyOf(withRemoval);
   }
 
   private static ObjectNode emptyObjectSchema() {
@@ -143,6 +160,76 @@ public class AssistantToolDefinitions {
         .put("minimum", 1)
         .put("maximum", 30);
     properties.putObject("warehouseId").put("type", "string").put("format", "uuid");
+    return schema;
+  }
+
+  private static ObjectNode clarificationSchema() {
+    ObjectNode schema = JsonNodeFactory.instance.objectNode();
+    schema.put("type", "object");
+    schema.put("additionalProperties", false);
+    schema.putArray("required").add("warehouseId").add("questions");
+    ObjectNode properties = schema.putObject("properties");
+    properties.putObject("warehouseId").put("type", "string").put("format", "uuid");
+    ObjectNode questions = properties.putObject("questions");
+    questions.put("type", "array");
+    questions.put("minItems", 1);
+    questions.put("maxItems", 5);
+    ObjectNode question = questions.putObject("items");
+    question.put("type", "object");
+    question.put("additionalProperties", false);
+    question.putArray("required").add("branchKey").add("kind").add("prompt").add("options");
+    ObjectNode questionProperties = question.putObject("properties");
+    questionProperties.putObject("branchKey").put("type", "string").put("maxLength", 255);
+    ObjectNode kind = questionProperties.putObject("kind");
+    kind.put("type", "string");
+    kind.putArray("enum")
+        .add("CABIN_TYPE")
+        .add("FINISH")
+        .add("DIMENSIONS")
+        .add("CATEGORY")
+        .add("SEARCH_MERGE");
+    questionProperties.putObject("prompt").put("type", "string").put("maxLength", 2000);
+    questionProperties.putObject("cabinType").put("type", "string").put("maxLength", 255);
+    ObjectNode options = questionProperties.putObject("options");
+    options.put("type", "array");
+    options.put("minItems", 2);
+    options.put("maxItems", 30);
+    options.put("uniqueItems", true);
+    options.putObject("items").put("type", "string").put("maxLength", 255);
+    return schema;
+  }
+
+  private static ObjectNode catalogLookupSchema() {
+    ObjectNode schema = JsonNodeFactory.instance.objectNode();
+    schema.put("type", "object");
+    schema.put("additionalProperties", false);
+    schema.putArray("required").add("warehouseId");
+    ObjectNode properties = schema.putObject("properties");
+    properties.putObject("warehouseId").put("type", "string").put("format", "uuid");
+    properties.putObject("query").put("type", "string").put("maxLength", 255);
+    return schema;
+  }
+
+  private static ObjectNode removeSelectionSchema() {
+    ObjectNode schema = JsonNodeFactory.instance.objectNode();
+    schema.put("type", "object");
+    schema.put("additionalProperties", false);
+    ObjectNode properties = schema.putObject("properties");
+    ObjectNode ids = properties.putObject("rentalItemIds");
+    ids.put("type", "array");
+    ids.put("minItems", 1);
+    ids.put("maxItems", 100);
+    ids.put("uniqueItems", true);
+    ids.putObject("items").put("type", "string").put("format", "uuid");
+    ObjectNode numbers = properties.putObject("numbers");
+    numbers.put("type", "array");
+    numbers.put("minItems", 1);
+    numbers.put("maxItems", 100);
+    numbers.put("uniqueItems", true);
+    numbers.putObject("items").put("type", "string").put("maxLength", 128);
+    var anyOf = schema.putArray("anyOf");
+    anyOf.addObject().putArray("required").add("rentalItemIds");
+    anyOf.addObject().putArray("required").add("numbers");
     return schema;
   }
 }

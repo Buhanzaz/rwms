@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.dossier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.buhanzaz.rwms.dossier.domain.DossierDltFailureCode;
 import dev.buhanzaz.rwms.dossier.domain.DossierSanitizedDeadLetter;
@@ -20,6 +21,26 @@ class DossierSanitizedDeadLetterTest {
     assertThat(repeated.getMessageSha256()).isEqualTo(first.getMessageSha256());
   }
 
+  @Test
+  void coverageRequiresAnExactPairAndResolvesWithoutChangingTransportState() {
+    DossierSanitizedDeadLetter failure = pending(UUID.randomUUID());
+    UUID generationId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    OffsetDateTime resolvedAt = OffsetDateTime.now();
+
+    assertThatThrownBy(() -> failure.markCoverageUnresolved(generationId, null))
+        .isInstanceOf(IllegalArgumentException.class);
+
+    failure.markCoverageUnresolved(generationId, cabinId);
+    failure.resolveCoverage(resolvedAt);
+
+    assertThat(failure.getCoverageGenerationId()).isEqualTo(generationId);
+    assertThat(failure.getCoverageSubjectCabinId()).isEqualTo(cabinId);
+    assertThat(failure.getCoverageResolvedAt()).isEqualTo(resolvedAt);
+    assertThat(failure.getStatus())
+        .isEqualTo(dev.buhanzaz.rwms.dossier.domain.DossierOutboxState.PENDING);
+  }
+
   private static DossierSanitizedDeadLetter pending(UUID eventId) {
     return DossierSanitizedDeadLetter.pending(
         eventId,
@@ -30,6 +51,8 @@ class DossierSanitizedDeadLetterTest {
         "e".repeat(64),
         "f".repeat(64),
         DossierDltFailureCode.INVALID_PAYLOAD,
+        null,
+        null,
         OffsetDateTime.now());
   }
 }

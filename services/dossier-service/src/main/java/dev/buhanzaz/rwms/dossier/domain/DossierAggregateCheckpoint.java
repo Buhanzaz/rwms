@@ -15,6 +15,7 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+/** Persists per-source-aggregate version progress and a block reason so the projection never fabricates missing order. */
 @Entity
 @Table(name = "dossier_aggregate_checkpoint")
 @Getter

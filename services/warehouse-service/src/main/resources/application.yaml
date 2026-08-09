@@ -60,9 +60,9 @@ spring:
             delivery.timeout.ms: 15000
             max.block.ms: 5000
             metadata.recovery.rebootstrap.trigger.ms: 1000
-      default:
-        producer:
-          sync: true
+        default:
+          producer:
+            sync: true
   security:
     oauth2:
       resourceserver:
@@ -73,7 +73,7 @@ spring:
 rwms:
   platform:
     kafka:
-      enabled: ${WAREHOUSE_KAFKA_ENABLED:false}
+      enabled: ${WAREHOUSE_KAFKA_ENABLED}
       destinations:
         - rwms.warehouse.warehouse.v1
   warehouse:

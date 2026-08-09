@@ -15,6 +15,7 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
+import dev.buhanzaz.rwms.logistics.service.LogisticsExternalAttemptClaimService;
 import dev.buhanzaz.rwms.logistics.service.ReturnRegistrationProcessor;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -57,6 +58,7 @@ class ReturnRegistrationSagaIntegrationTest {
   static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
   @Autowired LogisticsDocumentService documents;
+  @Autowired LogisticsExternalAttemptClaimService claims;
   @Autowired ReturnRegistrationProcessor processor;
   @Autowired JdbcTemplate jdbc;
 
@@ -142,7 +144,7 @@ class ReturnRegistrationSagaIntegrationTest {
     assertThat(replayed.replayed()).isTrue();
     assertThat(started.response().state()).isEqualTo(LogisticsDocumentState.REGISTERING);
 
-    processor.processUntilIdle(documentId);
+    LogisticsExternalAttemptTestClaims.drainReturnRegistration(claims, processor);
 
     assertThat(documents.get(documentId, LogisticsDocumentType.RETURN).state())
         .isEqualTo(LogisticsDocumentState.INSPECTION_REQUIRED);
@@ -208,7 +210,7 @@ class ReturnRegistrationSagaIntegrationTest {
         0,
         new ReturnPickupRequest(
             "Driver snapshot", LocalDate.parse("2026-07-01")));
-    processor.processUntilIdle(documentId);
+    LogisticsExternalAttemptTestClaims.drainReturnRegistration(claims, processor);
 
     assertThat(documents.get(documentId, LogisticsDocumentType.RETURN).state())
         .isEqualTo(LogisticsDocumentState.CONFLICT);
@@ -273,7 +275,7 @@ class ReturnRegistrationSagaIntegrationTest {
         0,
         new ReturnPickupRequest(
             "Driver snapshot", LocalDate.parse("2026-07-01")));
-    processor.processUntilIdle(documentId);
+    LogisticsExternalAttemptTestClaims.drainReturnRegistration(claims, processor);
     UUID persistedKey =
         jdbc.queryForObject(
             "select operation_id from logistics_external_attempt where operation_type='RETURN_ASSET_INTAKE'",
@@ -282,7 +284,7 @@ class ReturnRegistrationSagaIntegrationTest {
         "update logistics_external_attempt set next_attempt_at=clock_timestamp() where operation_id=?",
         persistedKey);
 
-    processor.processUntilIdle(documentId);
+    LogisticsExternalAttemptTestClaims.drainReturnRegistration(claims, processor);
 
     ArgumentCaptor<UUID> keys = ArgumentCaptor.forClass(UUID.class);
     verify(dependencies, org.mockito.Mockito.times(2))

@@ -10,6 +10,13 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+/**
+ * Publishes observability metrics for auth's event store, relays, inbox, and replay controls.
+ *
+ * <p>Counters describe completed attempts; gauges query durable local state so a process restart
+ * does not erase operator-visible backlog, retry, or quarantine information. Database failures
+ * produce {@link Double#NaN} instead of making metric collection affect application traffic.
+ */
 @Component
 @RequiredArgsConstructor
 public class AuthEventingMetrics {
@@ -27,6 +34,7 @@ public class AuthEventingMetrics {
     private Counter sanitizedDltPublished;
     private Counter shadowReconciliations;
 
+    /** Registers counters and database-backed gauges once the component is fully constructed. */
     @PostConstruct
     void register() {
         replayAttempts = counter("rwms.auth.replay.attempts", "Authoritative auth replay attempts");
@@ -66,38 +74,47 @@ public class AuthEventingMetrics {
                 .register(registry);
     }
 
+    /** Increments the count of authoritative-stream replay verifications attempted. */
     public void replayAttempted() {
         replayAttempts.increment();
     }
 
+    /** Increments the count of replay verifications that ended in failure. */
     public void replayFailed() {
         replayFailures.increment();
     }
 
+    /** Increments the count of outbox records durably marked published after broker acknowledgement. */
     public void outboxPublished() {
         outboxPublished.increment();
     }
 
+    /** Increments the count of failed, quarantined, or lost-lease outbox publish attempts. */
     public void outboxPublishFailed() {
         outboxPublishFailures.increment();
     }
 
+    /** Increments the count of inbox records accepted as processed, including safe duplicates. */
     public void inboxProcessed() {
         inboxProcessed.increment();
     }
 
+    /** Increments the count of inbox records quarantined for a blocked aggregate or version gap. */
     public void inboxQuarantined() {
         inboxQuarantined.increment();
     }
 
+    /** Increments the count of safe DLT metadata records durably queued for delivery. */
     public void sanitizedDltEnqueued() {
         sanitizedDltEnqueued.increment();
     }
 
+    /** Increments the count of sanitized DLT records acknowledged and marked published. */
     public void sanitizedDltPublished() {
         sanitizedDltPublished.increment();
     }
 
+    /** Increments the count of operator-approved aggregate shadow reconciliations completed. */
     public void shadowReconciled() {
         shadowReconciliations.increment();
     }

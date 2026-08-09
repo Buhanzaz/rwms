@@ -66,11 +66,15 @@ class LogisticsContractFoundationTest {
             "/api/logistics/v1/orders/{orderId}/units",
             "/api/logistics/v1/orders/{orderId}/units/{unitId}/desired-equipment",
             "/api/logistics/v1/clients",
+            "/api/logistics/v1/clients/{clientId}",
+            "/api/logistics/v1/clients/{clientId}/orders",
             "/api/logistics/v1/manual-booking-drafts/{draftId}/holds",
             "/api/logistics/v1/rental-inquiries",
             "/api/logistics/v1/rental-inquiries/{inquiryId}",
             "/api/logistics/v1/rental-inquiries/{inquiryId}/cabin-facets",
             "/api/logistics/v1/rental-inquiries/{inquiryId}/cabin-searches",
+            "/api/logistics/v1/rental-inquiries/{inquiryId}/cabin-selection",
+            "/api/logistics/v1/rental-inquiries/{inquiryId}/cabin-catalog",
             "/api/logistics/v1/rental-inquiries/{inquiryId}/cabin-availability",
             "/api/logistics/v1/rental-inquiries/{inquiryId}/client-presentation",
             "/api/logistics/v1/settings/rental",
@@ -113,6 +117,8 @@ class LogisticsContractFoundationTest {
             "OrderRentalTermExtensionInput",
             "ExtendOrderRentalTermsRequest",
             "CreateOrderRentalShipmentRequest",
+            "OrderMovement",
+            "OrderMovementCabin",
             "OrderDesiredEquipment",
             "SetOrderUnitDesiredEquipmentRequest",
             "OrderHistoryEvent",
@@ -121,6 +127,10 @@ class LogisticsContractFoundationTest {
             "CabinFacets",
             "CabinSearchRequest",
             "CabinSearchResponse",
+            "CabinTypeDimensionRelation",
+            "ReplaceCabinSelectionRequest",
+            "CabinSelectionResponse",
+            "CabinCatalogPage",
             "PublishClientPresentationRequest",
             "ManualBookingDraftHoldsRequest",
             "ManualBookingDraftHolds",
@@ -142,8 +152,19 @@ class LogisticsContractFoundationTest {
                 child(child(schemas, "CabinSearchResponse"), "properties"),
                 "groups"))
         .containsEntry("maxItems", 20);
-    Map<String, Object> idempotencyKey =
-        child(child(document, "components"), "parameters");
+    assertThat(child(child(child(schemas, "CabinSearchRequest"), "properties"), "resultMode"))
+        .containsEntry("default", "REPLACE")
+        .containsEntry("enum", List.of("APPEND", "REPLACE"));
+    assertThat(child(child(schemas, "CabinFacetWarehouse"), "properties"))
+        .containsKeys("characteristics", "typeDimensions");
+    Map<String, Object> selectionItems =
+        child(
+            child(child(child(schemas, "CabinSelectionResponse"), "properties"), "items"), "items");
+    List<?> selectionItemBranches = (List<?>) selectionItems.get("allOf");
+    assertThat(selectionItemBranches).hasSize(2);
+    assertThat(child(child(objectMap(selectionItemBranches.get(1)), "properties"), "status"))
+        .containsEntry("const", "FREE");
+    Map<String, Object> idempotencyKey = child(child(document, "components"), "parameters");
     assertThat(idempotencyKey.get("IdempotencyKey"))
         .isInstanceOfSatisfying(
             Map.class,
@@ -151,6 +172,22 @@ class LogisticsContractFoundationTest {
               assertThat(parameter.get("in")).isEqualTo("header");
               assertThat(parameter.get("required")).isEqualTo(true);
             });
+
+    Map<String, Object> cabinSearch =
+        child(
+            child(
+                child(document, "paths"),
+                "/api/logistics/v1/rental-inquiries/{inquiryId}/cabin-searches"),
+            "post");
+    assertThat((List<?>) cabinSearch.get("parameters"))
+        .anySatisfy(
+            parameter ->
+                assertThat(parameter)
+                    .isEqualTo(Map.of("$ref", "#/components/parameters/IdempotencyKey")));
+    Map<String, Object> cabinSearchResponses = child(cabinSearch, "responses");
+    assertThat(cabinSearchResponses).containsKeys("200", "409", "503");
+    assertThat(child(child(child(cabinSearchResponses, "200"), "headers"), "Idempotency-Replayed"))
+        .containsEntry("required", false);
   }
 
   @Test
@@ -226,6 +263,8 @@ class LogisticsContractFoundationTest {
             "createOrderRentalShipment",
             "searchOrderClients",
             "createOrderClient",
+            "getOrderClient",
+            "listOrderClientOrders",
             "selectOrderWarehouse",
             "listOrderUnitCandidates",
             "addOrderUnit",
@@ -238,6 +277,9 @@ class LogisticsContractFoundationTest {
             "getRentalInquiry",
             "getRentalInquiryCabinFacets",
             "searchRentalInquiryCabins",
+            "getRentalInquiryCabinSelection",
+            "replaceRentalInquiryCabinSelection",
+            "searchRentalInquiryCabinCatalog",
             "checkRentalInquiryCabinAvailability",
             "getRentalInquiryClientPresentation",
             "publishRentalInquiryClientPresentation",
@@ -262,7 +304,8 @@ class LogisticsContractFoundationTest {
   void maintenanceCompensationContractFreezesTheGuardedCancellationSemantics() throws Exception {
     Map<String, Object> paths = child(openApi(), "paths");
     Map<String, Object> endpoint =
-        child(paths, "/api/internal/logistics/v1/maintenance/driver-tasks/repairs/{repairId}/cancel");
+        child(
+            paths, "/api/internal/logistics/v1/maintenance/driver-tasks/repairs/{repairId}/cancel");
     Map<String, Object> post = child(endpoint, "post");
 
     assertThat(post.get("operationId")).isEqualTo("cancelMaintenanceDriverTaskCompensation");
@@ -384,7 +427,8 @@ class LogisticsContractFoundationTest {
                                     Map.class,
                                     parameter ->
                                         assertThat(parameter.get("$ref"))
-                                            .isEqualTo("#/components/parameters/ExpectedVersion"))));
+                                            .isEqualTo(
+                                                "#/components/parameters/ExpectedVersion"))));
   }
 
   @Test
@@ -449,10 +493,54 @@ class LogisticsContractFoundationTest {
     Map<String, Object> schemas = child(child(openApi(), "components"), "schemas");
     Map<String, Object> createOrder = child(schemas, "CreateOrderRequest");
     assertThat(child(createOrder, "properties"))
-        .containsOnlyKeys("clientId", "newClient")
+        .containsOnlyKeys(
+            "clientId",
+            "newClient",
+            "deliveryAddress",
+            "latitude",
+            "longitude",
+            "contactPhone",
+            "comment",
+            "acceptableDeliveryDates")
         .doesNotContainKey("managerId");
+    Map<String, Object> updateOrder = child(schemas, "UpdateOrderRequest");
+    assertThat(child(child(createOrder, "properties"), "contactPhone").get("pattern"))
+        .isEqualTo("^(?:\\+|8)[0-9() .-]{6,31}$");
+    assertThat(child(child(updateOrder, "properties"), "contactPhone").get("pattern"))
+        .isEqualTo("^(?:\\+|8)[0-9() .-]{6,31}$");
+    assertThat(child(child(schemas, "OrderSummary"), "properties"))
+        .extractingByKey("contactPhone")
+        .isInstanceOfSatisfying(
+            Map.class,
+            phone -> assertThat(phone.get("pattern")).isEqualTo("^\\+[1-9][0-9]{6,14}$"));
+    assertThat(child(child(schemas, "OrderDetail"), "properties"))
+        .extractingByKey("contactPhone")
+        .isInstanceOfSatisfying(
+            Map.class,
+            phone -> assertThat(phone.get("pattern")).isEqualTo("^\\+[1-9][0-9]{6,14}$"));
     assertThat(child(schemas, "ClientType").get("enum"))
-        .isEqualTo(List.of("INDIVIDUAL", "LEGAL_ENTITY"));
+        .isEqualTo(List.of("INDIVIDUAL", "SOLE_PROPRIETOR", "LEGAL_ENTITY"));
+    assertThat(child(child(schemas, "CreateClientRequest"), "properties"))
+        .containsKeys("contactPerson", "email", "comment", "source")
+        .doesNotContainKeys(
+            "responsibleManagerId", "responsibleManagerDisplayName", "electronicDocuments");
+    assertThat(
+            child(
+                    child(child(schemas, "CreateClientRequest"), "properties"),
+                    "phone")
+                .get("pattern"))
+        .isEqualTo("^(?:\\+|8)[0-9() .-]{6,31}$");
+    assertThat(child(child(schemas, "OrderClient"), "properties"))
+        .containsKeys(
+            "contactPerson",
+            "responsibleManagerId",
+            "responsibleManagerDisplayName",
+            "comment",
+            "source");
+    assertThat(
+            child(child(child(schemas, "OrderClient"), "properties"), "phone")
+                .get("pattern"))
+        .isEqualTo("^\\+[1-9][0-9]{6,14}$");
     Map<String, Object> paths = child(openApi(), "paths");
     Map<String, Object> createOrderResponses =
         child(child(child(paths, "/api/logistics/v1/orders"), "post"), "responses");
@@ -484,7 +572,8 @@ class LogisticsContractFoundationTest {
             "rwms.logistics.return.v1",
             "rwms.logistics.shipment.v1",
             "rwms.logistics.transfer.v1");
-    assertThat(schema.at("/properties/producer/const").stringValue()).isEqualTo("logistics-service");
+    assertThat(schema.at("/properties/producer/const").stringValue())
+        .isEqualTo("logistics-service");
     assertThat(strings(schema.at("/properties/aggregateType/enum")))
         .containsExactlyInAnyOrder("RETURN", "SHIPMENT", "TRANSFER");
     assertThat(fieldNames(schema.at("/$defs/logisticsFact/properties")))
@@ -500,25 +589,68 @@ class LogisticsContractFoundationTest {
   }
 
   @Test
-  void rentalInquiryBookingFactHasADeclaredMinimalContractAndConversationKey() throws Exception {
+  void rentalInquiryBookingFactHasAnExactCanonicalV2ContractAndConversationKey()
+      throws Exception {
     JsonNode schema =
         objectMapper.readTree(Files.readString(rentalInquiryEventSchemaPath()));
+    assertThat(schema.path("additionalProperties").booleanValue()).isFalse();
     assertThat(strings(schema.get("required")))
         .containsExactlyInAnyOrder(
+            "envelopeVersion",
             "eventId",
             "eventType",
+            "eventVersion",
             "occurredAt",
-            "rentalInquiryId",
-            "conversationId",
-            "orderId");
+            "recordedAt",
+            "producer",
+            "aggregateType",
+            "aggregateId",
+            "aggregateVersion",
+            "correlation",
+            "actorRef",
+            "payload");
     assertThat(fieldNames(schema.get("properties")))
         .containsExactlyInAnyOrder(
+            "envelopeVersion",
             "eventId",
             "eventType",
+            "eventVersion",
             "occurredAt",
-            "rentalInquiryId",
-            "conversationId",
-            "orderId");
+            "recordedAt",
+            "producer",
+            "aggregateType",
+            "aggregateId",
+            "aggregateVersion",
+            "correlation",
+            "actorRef",
+            "payload")
+        .doesNotContain("rentalInquiryId");
+    assertThat(schema.at("/properties/envelopeVersion/const").intValue()).isEqualTo(2);
+    assertThat(schema.at("/properties/eventVersion/const").intValue()).isEqualTo(1);
+    assertThat(schema.at("/properties/producer/const").stringValue())
+        .isEqualTo("logistics-service");
+    assertThat(schema.at("/properties/aggregateType/const").stringValue())
+        .isEqualTo("RENTAL_INQUIRY");
+    assertThat(fieldNames(schema.at("/$defs/bookedPayload/properties")))
+        .containsExactlyInAnyOrder("conversationId", "orderId");
+    assertThat(strings(schema.at("/$defs/bookedPayload/required")))
+        .containsExactlyInAnyOrder("conversationId", "orderId");
+    assertThat(schema.at("/$defs/bookedPayload/additionalProperties").booleanValue()).isFalse();
+    assertThat(fieldNames(schema.at("/$defs/correlationContext/properties")))
+        .containsExactlyInAnyOrder("correlationId", "causationId");
+    assertThat(strings(schema.at("/$defs/correlationContext/required")))
+        .containsExactlyInAnyOrder("correlationId", "causationId");
+    assertThat(schema.at("/$defs/correlationContext/additionalProperties").booleanValue())
+        .isFalse();
+    assertThat(fieldNames(schema.at("/$defs/actorReference/properties")))
+        .containsExactlyInAnyOrder("subjectId", "principalType", "profileRevision");
+    assertThat(strings(schema.at("/$defs/actorReference/required")))
+        .containsExactlyInAnyOrder("subjectId", "principalType", "profileRevision");
+    assertThat(schema.at("/$defs/actorReference/additionalProperties").booleanValue()).isFalse();
+    assertThat(schema.at("/$defs/actorReference/properties/principalType/const").stringValue())
+        .isEqualTo("USER");
+    assertThat(schema.at("/$defs/actorReference/properties/profileRevision/type").stringValue())
+        .isEqualTo("null");
 
     Map<String, Object> contract = eventContract();
     Map<String, Object> channel = child(child(contract, "channels"), "rentalInquiryFacts");
@@ -566,7 +698,8 @@ class LogisticsContractFoundationTest {
 
   @SuppressWarnings("unchecked")
   private Map<String, Object> openApi() throws Exception {
-    Path contract = Path.of(System.getProperty("rwms.contracts.dir"), "openapi/logistics-service.yaml");
+    Path contract =
+        Path.of(System.getProperty("rwms.contracts.dir"), "openapi/logistics-service.yaml");
     try (InputStream input = Files.newInputStream(contract)) {
       return new Yaml().load(input);
     }
@@ -574,7 +707,8 @@ class LogisticsContractFoundationTest {
 
   private Path eventSchemaPath() {
     return Path.of(
-        System.getProperty("rwms.contracts.dir"), "events/logistics/logistics-events-v1.schema.json");
+        System.getProperty("rwms.contracts.dir"),
+        "events/logistics/logistics-events-v1.schema.json");
   }
 
   private Path rentalInquiryEventSchemaPath() {
@@ -585,7 +719,8 @@ class LogisticsContractFoundationTest {
 
   @SuppressWarnings("unchecked")
   private Map<String, Object> eventContract() throws Exception {
-    Path contract = Path.of(System.getProperty("rwms.contracts.dir"), "events/logistics-events.yaml");
+    Path contract =
+        Path.of(System.getProperty("rwms.contracts.dir"), "events/logistics-events.yaml");
     try (InputStream input = Files.newInputStream(contract)) {
       return new Yaml().load(input);
     }
@@ -632,4 +767,8 @@ class LogisticsContractFoundationTest {
     return (Map<String, Object>) map.get(name);
   }
 
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> objectMap(Object value) {
+    return (Map<String, Object>) value;
+  }
 }

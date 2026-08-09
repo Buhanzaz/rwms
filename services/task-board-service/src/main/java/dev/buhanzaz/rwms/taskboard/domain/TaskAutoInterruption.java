@@ -10,6 +10,9 @@ import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import java.time.OffsetDateTime;
 
+/**
+ * Recoverable record of an automatic interruption applied when operational responsibility moves.
+ */
 @Entity
 @Table(
     name = "task_auto_interruption",

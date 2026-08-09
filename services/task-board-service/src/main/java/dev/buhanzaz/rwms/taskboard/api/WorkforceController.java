@@ -17,6 +17,13 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
+/**
+ * Public warehouse-scoped administration API for workers and worker groups.
+ *
+ * <p>Workers, memberships and their operational availability are task-board-owned. Credential
+ * provisioning crosses the explicit auth boundary, but its eventual outcome is reflected in the
+ * worker response instead of being assumed successful by the caller.
+ */
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/warehouses/{warehouseId}")
@@ -26,12 +33,14 @@ public class WorkforceController {
   private final WorkerGroupAvailabilityService groupAvailability;
   private final WarehouseAccessAuthorizer access;
 
+  /** Lists workers registered in the selected warehouse. */
   @GetMapping("/workers")
   public List<WorkerDto> workers(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID warehouseId) {
     read(jwt, warehouseId);
     return service.listWorkers(warehouseId);
   }
 
+  /** Creates a worker profile and starts requested credential provisioning. */
   @PostMapping("/workers")
   @ResponseStatus(HttpStatus.CREATED)
   public WorkerDto createWorker(
@@ -42,6 +51,7 @@ public class WorkforceController {
     return service.createWorker(warehouseId, request);
   }
 
+  /** Replaces a version-fenced worker profile, qualifications and optional credentials. */
   @PutMapping("/workers/{id}")
   public WorkerDto updateWorker(
       @AuthenticationPrincipal Jwt jwt,
@@ -52,6 +62,7 @@ public class WorkforceController {
     return service.updateWorker(warehouseId, id, request);
   }
 
+  /** Changes a worker's current group under the worker version fence. */
   @PutMapping("/workers/{id}/current-group")
   public WorkerDto setCurrentGroup(
       @AuthenticationPrincipal Jwt jwt,
@@ -62,6 +73,7 @@ public class WorkforceController {
     return service.setCurrentGroup(warehouseId, id, request);
   }
 
+  /** Replaces a worker credential through the credential-operation boundary. */
   @PostMapping("/workers/{id}/credentials/reset")
   public WorkerDto reset(
       @AuthenticationPrincipal Jwt jwt,
@@ -72,6 +84,7 @@ public class WorkforceController {
     return service.resetPassword(warehouseId, id, request.expectedVersion(), request.password());
   }
 
+  /** Starts version-fenced credential disabling for a worker. */
   @PostMapping("/workers/{id}/credentials/disable")
   public WorkerDto disable(
       @AuthenticationPrincipal Jwt jwt,
@@ -82,6 +95,7 @@ public class WorkforceController {
     return service.disableCredentials(warehouseId, id, request.expectedVersion());
   }
 
+  /** Starts version-fenced credential enabling for a worker. */
   @PostMapping("/workers/{id}/credentials/enable")
   public WorkerDto enable(
       @AuthenticationPrincipal Jwt jwt,
@@ -92,6 +106,7 @@ public class WorkforceController {
     return service.enableCredentials(warehouseId, id, request.expectedVersion());
   }
 
+  /** Reconciles a previously requested credential-disable operation after an external failure. */
   @PostMapping("/workers/{id}/credentials/reconcile-disable")
   public WorkerDto reconcileDisable(
       @AuthenticationPrincipal Jwt jwt,
@@ -102,6 +117,7 @@ public class WorkforceController {
     return service.reconcileDisableCredentials(warehouseId, id, request.expectedVersion());
   }
 
+  /** Deletes an unreferenced worker under the supplied version fence. */
   @DeleteMapping("/workers/{id}")
   @ResponseStatus(HttpStatus.NO_CONTENT)
   public void deleteWorker(
@@ -113,6 +129,7 @@ public class WorkforceController {
     service.deleteWorker(warehouseId, id, expectedVersion);
   }
 
+  /** Replays worker-deletion reconciliation after the cross-service credential step is settled. */
   @PostMapping("/workers/{id}/deletion/reconcile")
   @ResponseStatus(HttpStatus.NO_CONTENT)
   public void reconcileWorkerDeletion(
@@ -124,6 +141,7 @@ public class WorkforceController {
     service.deleteWorker(warehouseId, id, request.expectedVersion());
   }
 
+  /** Lists worker groups in the selected warehouse. */
   @GetMapping("/worker-groups")
   public List<WorkerGroupDto> groups(
       @AuthenticationPrincipal Jwt jwt, @PathVariable UUID warehouseId) {
@@ -131,6 +149,7 @@ public class WorkforceController {
     return service.listGroups(warehouseId);
   }
 
+  /** Creates a warehouse worker group with its class and active members. */
   @PostMapping("/worker-groups")
   @ResponseStatus(HttpStatus.CREATED)
   public WorkerGroupDto createGroup(
@@ -141,6 +160,7 @@ public class WorkforceController {
     return service.createGroup(warehouseId, request);
   }
 
+  /** Replaces a version-fenced worker group and its membership declaration. */
   @PutMapping("/worker-groups/{id}")
   public WorkerGroupDto updateGroup(
       @AuthenticationPrincipal Jwt jwt,
@@ -151,6 +171,7 @@ public class WorkforceController {
     return service.updateGroup(warehouseId, id, request);
   }
 
+  /** Marks a group operationally unavailable without deleting its historic membership. */
   @PostMapping("/worker-groups/{id}/disable")
   public WorkerGroupDto disableGroup(
       @AuthenticationPrincipal Jwt jwt,
@@ -161,6 +182,7 @@ public class WorkforceController {
     return groupAvailability.disable(warehouseId, id, request);
   }
 
+  /** Restores an operationally unavailable group under its observed version. */
   @PostMapping("/worker-groups/{id}/enable")
   public WorkerGroupDto enableGroup(
       @AuthenticationPrincipal Jwt jwt,
@@ -171,6 +193,7 @@ public class WorkforceController {
     return groupAvailability.enable(warehouseId, id, request);
   }
 
+  /** Deletes an unused worker group under the supplied version fence. */
   @DeleteMapping("/worker-groups/{id}")
   @ResponseStatus(HttpStatus.NO_CONTENT)
   public void deleteGroup(

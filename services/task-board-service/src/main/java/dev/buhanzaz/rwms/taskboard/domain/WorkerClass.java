@@ -7,6 +7,7 @@ import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import jakarta.validation.constraints.NotBlank;
 
+/** Global qualification class used by queues, groups, and worker eligibility. */
 @Entity
 @Table(name = "worker_class")
 public class WorkerClass extends AbstractVersionedEntity {

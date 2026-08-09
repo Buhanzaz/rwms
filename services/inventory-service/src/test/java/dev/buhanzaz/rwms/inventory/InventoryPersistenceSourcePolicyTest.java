@@ -18,12 +18,11 @@ class InventoryPersistenceSourcePolicyTest {
           "eventing/InventoryDeadLetterRelay.java",
           "eventing/InventoryDeadLetterStore.java",
           "eventing/InventoryEventStore.java",
-          "eventing/InventoryAssetInboxProcessor.java",
-          "eventing/InventoryAssetRetryStore.java",
+          "eventing/InventoryAssetInboxStore.java",
           "eventing/InventoryMediaInboxProcessor.java",
           "eventing/InventoryMediaRetryStore.java",
           "eventing/InventoryOutboxStore.java",
-          "service/InventoryFrozenPlanFingerprint.java");
+          "persistence/InventoryPostgresJsonbCanonicalizer.java");
   private static final Pattern BUSINESS_TABLE_SQL =
       Pattern.compile(
           "(?is)\\b(?:from|join|into|update|delete\\s+from|merge\\s+into)\\s+(?:public\\.)?"

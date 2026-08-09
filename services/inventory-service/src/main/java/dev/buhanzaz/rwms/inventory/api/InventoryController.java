@@ -36,6 +36,10 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.WebRequest;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * HTTP adapter for inventory.
+ * It exposes the contract boundary without owning a persistence model or domain transition.
+ */
 @RestController
 @Validated
 @RequestMapping("/api/inventory/v1")

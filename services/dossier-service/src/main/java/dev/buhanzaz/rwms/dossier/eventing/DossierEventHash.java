@@ -5,6 +5,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
+/** Computes stable hashes used to compare source identity and build sanitized DLT metadata without storing unsafe failures. */
 public final class DossierEventHash {
   private DossierEventHash() {}
 

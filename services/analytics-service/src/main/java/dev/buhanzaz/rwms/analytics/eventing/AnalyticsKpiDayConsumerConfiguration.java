@@ -10,6 +10,7 @@ import org.springframework.kafka.listener.CommonErrorHandler;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.messaging.Message;
 
+/** Binds the contract-defined KPI topic to strict validation, bounded local retries and fail-closed consumer handling. */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")
 public class AnalyticsKpiDayConsumerConfiguration {

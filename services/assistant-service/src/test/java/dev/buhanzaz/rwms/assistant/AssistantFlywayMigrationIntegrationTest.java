@@ -1,7 +1,9 @@
 package dev.buhanzaz.rwms.assistant;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.Map;
 import java.util.UUID;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.MigrationVersion;
@@ -13,6 +15,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
+/** Validates clean assistant schema creation and supported Flyway upgrade paths through V5. */
 @Testcontainers
 class AssistantFlywayMigrationIntegrationTest {
   @Container static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
@@ -112,7 +115,7 @@ class AssistantFlywayMigrationIntegrationTest {
         }
         """);
 
-    assertThat(flyway().load().migrate().migrationsExecuted).isEqualTo(2);
+    assertThat(flyway().load().migrate().migrationsExecuted).isEqualTo(4);
 
     String result =
         jdbc.queryForObject(
@@ -210,7 +213,7 @@ class AssistantFlywayMigrationIntegrationTest {
         {"code":"LOGISTICS_UNAVAILABLE"}
         """);
 
-    assertThat(flyway().load().migrate().migrationsExecuted).isEqualTo(1);
+    assertThat(flyway().load().migrate().migrationsExecuted).isEqualTo(3);
 
     String facets =
         jdbc.queryForObject(
@@ -222,6 +225,133 @@ class AssistantFlywayMigrationIntegrationTest {
             "select result_payload::text from assistant_tool_call where provider_call_id='call-failure'",
             String.class);
     assertThat(failure).contains("\"code\"", "LOGISTICS_UNAVAILABLE");
+  }
+
+  @Test
+  void upgradePreservesLegacyInboxAsUnknownHashAndCreatesSanitizedRecoverySchema() {
+    flyway().target(MigrationVersion.fromVersion("3")).load().migrate();
+    UUID eventId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into assistant_event_inbox(
+          event_id,event_type,occurred_at,rental_inquiry_id,conversation_id,
+          order_id,received_at,payload)
+        values (?,'logistics.rental-inquiry.booked.v1',clock_timestamp(),?,?,?,
+          clock_timestamp(),'{}'::jsonb)
+        """,
+        eventId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID());
+
+    assertThat(flyway().load().migrate().migrationsExecuted).isEqualTo(2);
+
+    Map<String, Object> legacy =
+        jdbc.queryForMap(
+            """
+            select processing_state,canonical_envelope_sha256,source_topic,
+                   attempt_count,processed_at
+            from assistant_event_inbox where event_id=?
+            """,
+            eventId);
+    assertThat(legacy)
+        .containsEntry("processing_state", "LEGACY_PROCESSED")
+        .containsEntry("attempt_count", 0);
+    assertThat(legacy.get("canonical_envelope_sha256")).isNull();
+    assertThat(legacy.get("source_topic")).isNull();
+    assertThat(legacy.get("processed_at")).isNotNull();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from information_schema.tables
+                where table_schema='public' and table_name='assistant_event_dead_letter'
+                """,
+                Integer.class))
+        .isOne();
+  }
+
+  @Test
+  void upgradeFromV4CreatesDurableIndependentClarificationState() {
+    flyway().target(MigrationVersion.fromVersion("4")).load().migrate();
+    UUID conversationId = UUID.randomUUID();
+    UUID messageId = UUID.randomUUID();
+    UUID toolCallId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into assistant_conversation(
+          id,version,owner_subject_id,client_id,rental_inquiry_id,archived,
+          created_at,updated_at)
+        values (?,0,?,?,?,false,clock_timestamp(),clock_timestamp())
+        """,
+        conversationId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into assistant_message(id,conversation_id,role,content,created_at)
+        values (?,?,'USER','Нужны ОСБ и ЛДСП',clock_timestamp())
+        """,
+        messageId,
+        conversationId);
+    jdbc.update(
+        """
+        insert into assistant_tool_call(
+          id,conversation_id,turn_message_id,provider_call_id,tool_name,
+          arguments_payload,status,created_at)
+        values (?,?,?,'questions','request_cabin_clarifications','{}'::jsonb,
+          'STARTED',clock_timestamp())
+        """,
+        toolCallId,
+        conversationId,
+        messageId);
+
+    assertThat(flyway().load().migrate().migrationsExecuted).isOne();
+    UUID firstQuestionId = UUID.randomUUID();
+    String options =
+        """
+        [{"id":"%s","label":"Модуль","value":"Модуль"},
+         {"id":"%s","label":"Пост охраны","value":"Пост охраны"}]
+        """
+            .formatted(UUID.randomUUID(), UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into assistant_clarification_question(
+          id,version,conversation_id,turn_message_id,tool_call_id,branch_key,kind,
+          prompt,warehouse_id,options_payload,status,created_at)
+        values (?,0,?,?,?,'finish:osb','CABIN_TYPE','Выберите тип',?,?::jsonb,
+          'PENDING',clock_timestamp())
+        """,
+        firstQuestionId,
+        conversationId,
+        messageId,
+        toolCallId,
+        UUID.randomUUID(),
+        options);
+
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    insert into assistant_clarification_question(
+                      id,version,conversation_id,turn_message_id,tool_call_id,branch_key,kind,
+                      prompt,warehouse_id,options_payload,status,created_at)
+                    values (?,0,?,?,?,'finish:osb','CABIN_TYPE','Другой вопрос',?,?::jsonb,
+                      'PENDING',clock_timestamp())
+                    """,
+                    UUID.randomUUID(),
+                    conversationId,
+                    messageId,
+                    toolCallId,
+                    UUID.randomUUID(),
+                    options))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from assistant_clarification_question where conversation_id=?",
+                Integer.class,
+                conversationId))
+        .isOne();
   }
 
   private org.flywaydb.core.api.configuration.FluentConfiguration flyway() {

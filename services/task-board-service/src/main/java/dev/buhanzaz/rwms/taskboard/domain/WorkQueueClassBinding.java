@@ -11,6 +11,7 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 
+/** Ordered worker-class eligibility binding for a physical work queue. */
 @Entity
 @Table(
     name = "work_queue_class_binding",

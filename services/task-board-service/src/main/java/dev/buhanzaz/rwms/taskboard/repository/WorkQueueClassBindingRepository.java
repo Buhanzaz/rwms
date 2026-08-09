@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/** Persists worker-class participation and ordering policy for warehouse work queues. */
 public interface WorkQueueClassBindingRepository
     extends JpaRepository<WorkQueueClassBinding, UUID> {
   List<WorkQueueClassBinding> findAllByQueueId(UUID queueId);

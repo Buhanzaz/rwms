@@ -8,6 +8,9 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data repository for service-local inventory expected item persistence.
+ */
 public interface InventoryExpectedItemRepository extends JpaRepository<InventoryExpectedItem, UUID> {
   List<InventoryExpectedItem> findAllByFindingIdInOrderByFindingId(Set<UUID> findingIds);
 

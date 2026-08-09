@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
+/** Fences create retries by subject, key and request hash and replays the original response. */
 @Repository
 public class WarehouseIdempotencyStore {
   private final JdbcTemplate jdbc;

@@ -38,6 +38,14 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Transactional application boundary for warehouse identity, lifecycle and operational time.
+ *
+ * <p>This service owns metadata changes, one-way lifecycle transitions, effective-dated timezone
+ * history, operation evidence and the corresponding transactional-outbox facts. HTTP controllers
+ * authorize callers before reaching this class; it enforces the business and concurrency invariants
+ * independently of the transport.
+ */
 @Service
 public class WarehouseService {
   private static final Comparator<Warehouse> ORDER =
@@ -55,6 +63,19 @@ public class WarehouseService {
   private final WarehouseLifecycleAuditStore lifecycleAudit;
   private final ObjectMapper objectMapper;
 
+  /**
+   * Creates the transactional application boundary.
+   *
+   * @param warehouses repository for the warehouse aggregate
+   * @param responses mapper for transport projections
+   * @param outbox transactional publisher for warehouse facts
+   * @param idempotency caller-scoped create idempotency store
+   * @param timeZones effective-dated timezone history boundary
+   * @param operationMarkers durable operation-evidence boundary
+   * @param lifecycleReadiness immutable lifecycle-readiness boundary
+   * @param lifecycleAudit append-only lifecycle audit boundary
+   * @param objectMapper serializer used to derive the create-command fingerprint
+   */
   public WarehouseService(
       WarehouseRepository warehouses,
       WarehouseResponseMapper responses,
@@ -76,6 +97,15 @@ public class WarehouseService {
     this.objectMapper = objectMapper;
   }
 
+  /**
+   * Returns the canonical directory ordered by sort order, name and UUID.
+   *
+   * <p>Normal directory reads exclude terminal warehouses, while administrators may request the
+   * historical inactive entries explicitly.
+   *
+   * @param includeInactive whether terminal historical warehouses should be included
+   * @return canonical ordered warehouse directory
+   */
   @Transactional(readOnly = true)
   public List<WarehouseResponse> list(boolean includeInactive) {
     OffsetDateTime now = timeZones.databaseNow();
@@ -93,11 +123,29 @@ public class WarehouseService {
         .toList();
   }
 
+  /**
+   * Returns one warehouse, including a terminal historical warehouse when its UUID is known.
+   *
+   * @param id stable warehouse identity
+   * @return canonical public warehouse projection
+   */
   @Transactional(readOnly = true)
   public WarehouseResponse get(UUID id) {
     return response(require(id), timeZones.databaseNow());
   }
 
+  /**
+   * Creates a warehouse and records the successful response against a caller-scoped idempotency
+   * key.
+   *
+   * <p>The same subject, key and semantic request replay the saved response. Reusing a key for a
+   * different request fails before any second warehouse is written.
+   *
+   * @param subjectId authenticated user who owns the idempotency key
+   * @param idempotencyKey caller-generated retry identity
+   * @param request validated warehouse creation data
+   * @return newly created or exact replay response
+   */
   @Transactional
   public CreateResult create(UUID subjectId, UUID idempotencyKey, CreateWarehouseRequest request) {
     Warehouse candidate = newWarehouse(request);
@@ -125,6 +173,10 @@ public class WarehouseService {
   /**
    * A timezone in PUT is an immediate correction only. Once the durable operation marker exists,
    * callers must use the effective-dated scheduling command instead of rewriting history.
+   *
+   * @param id stable warehouse identity
+   * @param request version-fenced replacement data
+   * @return current warehouse projection after the replacement or semantic no-op
    */
   @Transactional
   public WarehouseResponse replace(UUID id, ReplaceWarehouseRequest request) {
@@ -158,6 +210,16 @@ public class WarehouseService {
     return response(persisted, now);
   }
 
+  /**
+   * Appends a future-effective timezone decision for a warehouse that has already operated.
+   *
+   * <p>Historical operation timestamps continue to resolve their former timezone. An unused
+   * warehouse must use {@link #replace(UUID, ReplaceWarehouseRequest)} for an immediate correction.
+   *
+   * @param id stable warehouse identity
+   * @param request version-fenced future timezone decision
+   * @return appended immutable timezone decision
+   */
   @Transactional
   public WarehouseTimeZoneChangeResponse scheduleTimeZone(
       UUID id, ScheduleWarehouseTimeZoneRequest request) {
@@ -191,6 +253,16 @@ public class WarehouseService {
         persisted.getId(), persisted.getVersion(), scheduled.getTimeZone(), scheduled.getEffectiveFrom());
   }
 
+  /**
+   * Changes lifecycle from {@code ACTIVE} to {@code DRAINING} under an optimistic version fence.
+   *
+   * <p>The transition is one-way: it blocks incoming work but preserves outgoing admission until
+   * the distributed readiness protocol finishes.
+   *
+   * @param id stable warehouse identity
+   * @param request version-fenced lifecycle command
+   * @return warehouse projection in {@code DRAINING}
+   */
   @Transactional
   public WarehouseResponse startDraining(UUID id, WarehouseLifecycleTransitionRequest request) {
     Warehouse warehouse = requireForUpdate(id);
@@ -208,6 +280,16 @@ public class WarehouseService {
     return response(persisted, now);
   }
 
+  /**
+   * Completes the terminal {@code DRAINING -> INACTIVE} transition only after every owner is ready.
+   *
+   * <p>Readiness is immutable evidence from asset, inventory, logistics, maintenance and task-board
+   * owners; it is not inferred from a timeout or an empty transient query.
+   *
+   * @param id stable warehouse identity
+   * @param request version-fenced lifecycle command
+   * @return terminal warehouse projection
+   */
   @Transactional
   public WarehouseResponse completeInactivation(UUID id, WarehouseLifecycleTransitionRequest request) {
     Warehouse warehouse = requireForUpdate(id);
@@ -234,6 +316,17 @@ public class WarehouseService {
     return response(persisted, now);
   }
 
+  /**
+   * Records immutable lifecycle readiness for the authenticated owner.
+   *
+   * <p>The owner record is the effect identity. Thus, an exact retry after a lost response returns
+   * the existing acknowledgement even if the aggregate version has subsequently advanced.
+   *
+   * @param id stable warehouse identity
+   * @param owner lifecycle owner inferred from the credential
+   * @param request version observed before the first confirmation attempt
+   * @return immutable readiness confirmation
+   */
   @Transactional
   public WarehouseLifecycleReadinessConfirmationResponse confirmLifecycleReadiness(
       UUID id,
@@ -264,6 +357,17 @@ public class WarehouseService {
     return readinessResponse(persisted, confirmation);
   }
 
+  /**
+   * Returns durable reconciliation work still owed by one lifecycle owner.
+   *
+   * <p>The keyset page supports recovery after missed events and is not a one-shot notification
+   * stream.
+   *
+   * @param owner authenticated lifecycle owner whose work is requested
+   * @param after optional UUID cursor from a previous page
+   * @param limit maximum number of work items
+   * @return durable owner-scoped work page
+   */
   @Transactional(readOnly = true)
   public WarehouseLifecycleReadinessWorkPageResponse lifecycleReadinessWork(
       WarehouseLifecycleReadinessOwner owner, UUID after, int limit) {
@@ -280,6 +384,17 @@ public class WarehouseService {
         work.nextAfter());
   }
 
+  /**
+   * Records durable, source-scoped evidence that a warehouse-bound operation occurred.
+   *
+   * <p>One operation ID can be replayed only with the same source and timestamp. The first mark
+   * permanently switches timezone changes from direct correction to effective-dated scheduling.
+   *
+   * @param id stable warehouse identity
+   * @param source operation owner inferred from the credential
+   * @param request immutable operation evidence
+   * @return true when a new mark was recorded; false for an exact idempotent replay
+   */
   @Transactional
   public boolean markOperation(
       UUID id, WarehouseOperationSource source, WarehouseOperationMarkRequest request) {
@@ -288,6 +403,13 @@ public class WarehouseService {
         warehouse, source, request.operationId(), request.occurredAt(), timeZones.databaseNow());
   }
 
+  /**
+   * Resolves the immutable timezone decision effective at a supplied operation timestamp.
+   *
+   * @param id stable warehouse identity
+   * @param at operation timestamp to resolve
+   * @return effective timezone decision
+   */
   @Transactional(readOnly = true)
   public WarehouseTimeZoneAtResponse timeZoneAt(UUID id, OffsetDateTime at) {
     require(id);
@@ -296,6 +418,12 @@ public class WarehouseService {
         id, effective.getTimeZone(), effective.getEffectiveFrom());
   }
 
+  /**
+   * Returns the minimal existence projection used by narrow internal validation contracts.
+   *
+   * @param id stable warehouse identity
+   * @return minimal existence projection
+   */
   @Transactional(readOnly = true)
   public InternalWarehouseExistenceResponse existence(UUID id) {
     Warehouse warehouse = require(id);
@@ -303,6 +431,15 @@ public class WarehouseService {
         warehouse.getId(), warehouse.getVersion(), warehouse.isActive());
   }
 
+  /**
+   * Returns active-only metadata for inventory.
+   *
+   * <p>Hiding draining and inactive warehouses prevents the caller from creating new inventory
+   * work after incoming admission has closed.
+   *
+   * @param id stable warehouse identity
+   * @return active-only inventory metadata
+   */
   @Transactional(readOnly = true)
   public InventoryWarehouseMetadataResponse inventoryMetadata(UUID id) {
     Warehouse warehouse = require(id);
@@ -314,11 +451,22 @@ public class WarehouseService {
         timeZones.currentTimeZone(warehouse.getId(), timeZones.databaseNow()));
   }
 
+  /**
+   * Returns a historical-compatible identity projection for one logistics lookup.
+   *
+   * @param id stable warehouse identity
+   * @return least-privilege logistics identity
+   */
   @Transactional(readOnly = true)
   public LogisticsWarehouseIdentityResponse logisticsIdentity(UUID id) {
     return logisticsResponse(require(id), timeZones.databaseNow());
   }
 
+  /**
+   * Returns only active identity projections for logistics availability selection.
+   *
+   * @return active logistics identities in canonical order
+   */
   @Transactional(readOnly = true)
   public List<LogisticsWarehouseIdentityResponse> logisticsIdentities() {
     OffsetDateTime now = timeZones.databaseNow();
@@ -336,6 +484,16 @@ public class WarehouseService {
         .toList();
   }
 
+  /**
+   * Decides whether one operation direction is admitted by the current lifecycle state.
+   *
+   * <p>The result must be used instead of the legacy {@code active} projection when an owner needs
+   * to distinguish outgoing draining work from new incoming work.
+   *
+   * @param id stable warehouse identity
+   * @param direction proposed operation direction
+   * @return exact directional admission decision
+   */
   @Transactional(readOnly = true)
   public WarehouseOperationAdmissionResponse admission(UUID id, WarehouseOperationDirection direction) {
     if (direction == null) throw new IllegalArgumentException("operation direction is required");
@@ -416,6 +574,12 @@ public class WarehouseService {
     }
   }
 
+  /**
+   * Outcome of the warehouse-create idempotency boundary.
+   *
+   * @param response newly created or previously stored response
+   * @param replayed whether the response came from an exact idempotent replay
+   */
   public record CreateResult(WarehouseResponse response, boolean replayed) {}
 
   private record CreateFingerprint(

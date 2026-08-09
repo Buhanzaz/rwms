@@ -8,6 +8,9 @@ import java.util.Set;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/**
+ * Spring Data repository for service-local inventory publication intent persistence.
+ */
 public interface InventoryPublicationIntentRepository
     extends JpaRepository<InventoryPublicationIntent, UUID> {
   Optional<InventoryPublicationIntent> findByInventoryIdAndFindingId(

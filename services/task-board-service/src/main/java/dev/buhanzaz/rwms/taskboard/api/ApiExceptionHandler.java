@@ -28,11 +28,23 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
+/**
+ * Maps task-board failures to the canonical typed {@link ApiProblem} envelope.
+ *
+ * <p>Clients can distinguish validation, authorization, missing resource, stale state and a
+ * dependency outage without parsing localized exception text. Correlation is supplied by the
+ * shared platform request context.
+ */
 @RestControllerAdvice
 public class ApiExceptionHandler {
   private static final String PROBLEM_PREFIX = "urn:rwms:problem:task-board:";
   private final RwmsProblemDetailFactory problems;
 
+  /**
+   * Creates the API error boundary with the shared canonical problem factory.
+   *
+   * @param problems shared factory that supplies correlation-aware Problem Details
+   */
   public ApiExceptionHandler(RwmsProblemDetailFactory problems) {
     this.problems = problems;
   }

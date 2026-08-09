@@ -7,6 +7,7 @@ import dev.buhanzaz.rwms.maintenance.repository.RepairComplexityColorsRepository
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/** Application service for RepairComplexityColorsService; it coordinates maintenance-owned state and durable effects. */
 @Service
 public class RepairComplexityColorsService {
   private final RepairComplexityColorsRepository repository;

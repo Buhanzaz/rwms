@@ -1,5 +1,7 @@
 # Integration Event Contracts
 
+[Русская версия](README.ru.md)
+
 This directory contains canonical schemas for asynchronous RWMS integration
 events. Events communicate facts already committed by one owning service; they
 are not remote commands disguised as events.

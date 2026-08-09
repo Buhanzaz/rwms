@@ -15,11 +15,19 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+/**
+ * Holds worker-scoped SSE connections and sends invalidation signals.
+ *
+ * <p>An event never grants data access or transports a complete task projection. The worker app
+ * must reload the authorized feed after receiving it, which preserves authorization and avoids
+ * stale task details in a long-lived stream.
+ */
 @Component
 public class WorkerInvalidationHub {
   private static final long STREAM_TIMEOUT_MILLIS = Duration.ofMinutes(30).toMillis();
   private final Map<UUID, Set<SseEmitter>> emitters = new ConcurrentHashMap<>();
 
+  /** Opens a bounded stream and immediately emits the current feed revision. */
   public SseEmitter subscribe(UUID workerId, long revision) {
     SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MILLIS);
     emitters.computeIfAbsent(workerId, ignored -> new CopyOnWriteArraySet<>()).add(emitter);
@@ -38,10 +46,12 @@ public class WorkerInvalidationHub {
     return emitter;
   }
 
+  /** Broadcasts an action invalidation, preserving a narrower signal for the acting worker. */
   public void actionApplied(UUID actorWorkerId, UUID entryId, long revision) {
     actionApplied(actorWorkerId, entryId, revision, Set.of());
   }
 
+  /** Broadcasts an action invalidation and marks workers eligible to join the task. */
   public void actionApplied(
       UUID actorWorkerId,
       UUID entryId,

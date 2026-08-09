@@ -1,5 +1,7 @@
 # Task-board database releases
 
+[Русская версия](README.ru.md)
+
 Flyway is the sole active schema/version/checksum mechanism. New databases
 install cumulative `src/main/resources/db/migration/V4__task_board_schema.sql`;
 an existing verified database is explicitly baselined at version 4 using

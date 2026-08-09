@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// CabinPhotoTopic carries canonical CABIN photo-library change facts.
 const CabinPhotoTopic = "rwms.media.cabin-photo.v1"
 
 func associateCabinImageUpload(
@@ -34,6 +35,8 @@ func associateCabinImageUpload(
 	return translateConstraint(err)
 }
 
+// SetCabinCoverFromTaskEvidenceCommand atomically attaches proven task-board
+// image evidence to a CABIN and makes it the single canonical cover.
 type SetCabinCoverFromTaskEvidenceCommand struct {
 	CabinID          uuid.UUID
 	TaskBoardEntryID uuid.UUID
@@ -43,6 +46,7 @@ type SetCabinCoverFromTaskEvidenceCommand struct {
 	CorrelationID    uuid.UUID
 }
 
+// CabinCoverChangeRecord is the immutable result of a CABIN cover transition.
 type CabinCoverChangeRecord struct {
 	CabinID          uuid.UUID
 	WarehouseID      uuid.UUID
@@ -53,6 +57,8 @@ type CabinCoverChangeRecord struct {
 	ChangedAt        time.Time
 }
 
+// SetCabinCoverFromTaskEvidence validates current CABIN and task-board proofs,
+// attaches existing READY image evidence, and replaces the cover atomically.
 func (repository *Repository) SetCabinCoverFromTaskEvidence(
 	ctx context.Context,
 	command SetCabinCoverFromTaskEvidenceCommand,
@@ -497,6 +503,8 @@ func readCabinPhotoAssets(
 	return records, nil
 }
 
+// ReadCabinPhotoVariant reads one current, READY CABIN image derivative while
+// share-locking owner evidence through consume.
 func (repository *Repository) ReadCabinPhotoVariant(
 	ctx context.Context,
 	cabinID, warehouseID, mediaID uuid.UUID,

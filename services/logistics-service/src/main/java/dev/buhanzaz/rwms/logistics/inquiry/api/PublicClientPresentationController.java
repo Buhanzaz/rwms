@@ -24,6 +24,9 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * Public presentation endpoint protected by a signed presentation token rather than a bearer-user session.
+ */
 @RestController
 @Validated
 @RequestMapping("/api/logistics/public/v1/client-presentations")

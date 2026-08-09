@@ -24,6 +24,9 @@ class AuthFlywayConfigurationTest {
         assertThat(source.getProperty("spring.flyway.out-of-order")).isEqualTo(false);
         assertThat(source.getProperty("spring.flyway.validate-migration-naming")).isEqualTo(true);
         assertThat(source.getProperty("spring.jpa.hibernate.ddl-auto")).isEqualTo("validate");
+        assertThat(source.getProperty("spring.datasource.url")).isEqualTo("${AUTH_DB_URL:}");
+        assertThat(source.getProperty("spring.datasource.username")).isEqualTo("${AUTH_DB_USERNAME:}");
+        assertThat(source.getProperty("spring.datasource.password")).isEqualTo("${AUTH_DB_PASSWORD:}");
     }
 
     @Test
@@ -31,6 +34,12 @@ class AuthFlywayConfigurationTest {
         PropertySource<?> source = load("application-dev.yaml");
 
         assertThat(source.getProperty("spring.jpa.hibernate.ddl-auto")).isEqualTo("validate");
+        assertThat(source.getProperty("spring.datasource.url"))
+                .isEqualTo("${AUTH_DB_URL:jdbc:postgresql://127.0.0.1:5433/rwms_auth}");
+        assertThat(source.getProperty("spring.datasource.username"))
+                .isEqualTo("${AUTH_DB_USERNAME:rwms_auth}");
+        assertThat(source.getProperty("spring.datasource.password"))
+                .isEqualTo("${AUTH_DB_PASSWORD:rwms_auth}");
     }
 
     @Test

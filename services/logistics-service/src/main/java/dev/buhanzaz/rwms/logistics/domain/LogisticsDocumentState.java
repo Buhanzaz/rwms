@@ -1,5 +1,8 @@
 package dev.buhanzaz.rwms.logistics.domain;
 
+/**
+ * Enumerates Logistics Document State values used by logistics-owned persisted workflow state.
+ */
 public enum LogisticsDocumentState {
   DRAFT,
   REGISTERING,

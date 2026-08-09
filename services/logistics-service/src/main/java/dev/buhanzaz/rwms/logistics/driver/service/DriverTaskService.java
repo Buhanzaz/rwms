@@ -16,16 +16,18 @@ import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseOperationMarkStore;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Owns driver-task commands and persists their local workflow before processor-driven external effects.
+ */
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
@@ -41,6 +43,7 @@ public class DriverTaskService {
   private final LogisticsDependencyGateway dependencies;
   private final LogisticsWarehouseLifecycle warehouseLifecycle;
   private final LogisticsWarehouseOperationMarkStore warehouseOperationMarks;
+  private final LogisticsTransactionLock transactionLock;
 
   public DriverTaskResponse get(UUID taskId) {
     return mapper.toResponse(required(taskId));
@@ -158,7 +161,7 @@ public class DriverTaskService {
         UUID.nameUUIDFromBytes(
             ("driver-removal:" + warehouseId + ":" + repairId)
                 .getBytes(StandardCharsets.UTF_8));
-    tasks.acquireTransactionLock(
+    transactionLock.acquire(
         "driver-task:create:"
             + DriverTaskSourceType.REPAIR_PLACE
             + ":"
@@ -315,28 +318,25 @@ public class DriverTaskService {
         admission);
   }
 
+  /**
+   * Resolves an existing immutable task before applying today's warehouse-local date gate. Replay
+   * uses the task's persisted scheduled date, while only a fresh create derives AUTO scheduling
+   * from a remote admission ticket.
+   */
   private CreateResult createInternal(
       UUID actorSubjectId,
       UUID idempotencyKey,
       CreateDriverTaskRequest request,
       AdmissionTicket admission) {
     validateSource(request);
+    validatePlanning(request);
     List<AdmissionRequirement> expectedAdmission = admissionRequirements(request);
     if (admission == null || !expectedAdmission.equals(admission.requirements())) {
       throw new LogisticsConflictException(
           "Warehouse admission ticket does not match the driver task");
     }
-    LocalDate today = admission.localDate(request.warehouseId());
-    LocalDate scheduledDate =
-        request.planningMode() == DriverTaskPlanningMode.AUTO
-            ? today
-            : request.scheduledDate();
-    if (scheduledDate == null || scheduledDate.isBefore(today)) {
-      throw new IllegalArgumentException(
-          "Дата логистического задания не может быть в прошлом");
-    }
 
-    tasks.acquireTransactionLock(
+    transactionLock.acquire(
         "driver-task:create:"
             + request.sourceType()
             + ":"
@@ -353,10 +353,15 @@ public class DriverTaskService {
               .orElse(null);
     }
     if (replay != null) {
+      if (request.planningMode() == DriverTaskPlanningMode.FIXED_DATE
+          && !request.scheduledDate().equals(replay.getScheduledDate())) {
+        throw new LogisticsConflictException(
+            "Источник или Idempotency-Key уже использован для другого логистического задания");
+      }
       String replayChecksum =
           checksum(
               request,
-              scheduledDate,
+              replay.getScheduledDate(),
               replay.getUnitNumber(),
               replay.getDriverQueueDefinitionId());
       if (!replay.matchesRequest(replayChecksum)) {
@@ -364,6 +369,16 @@ public class DriverTaskService {
             "Источник или Idempotency-Key уже использован для другого логистического задания");
       }
       return new CreateResult(mapper.toResponse(replay), true, request.activateNow());
+    }
+
+    LocalDate today = admission.localDate(request.warehouseId());
+    LocalDate scheduledDate =
+        request.planningMode() == DriverTaskPlanningMode.AUTO
+            ? today
+            : request.scheduledDate();
+    if (scheduledDate.isBefore(today)) {
+      throw new IllegalArgumentException(
+          "Дата логистического задания не может быть в прошлом");
     }
 
     LogisticsDependencyGateway.WarehouseDriverQueue queue =
@@ -400,7 +415,10 @@ public class DriverTaskService {
                 idempotencyKey,
                 checksum));
     warehouseOperationMarks.enqueue(
-        task.getWarehouseId(), task.getId(), admission.occurredAt());
+        task.getWarehouseId(),
+        task.getId(),
+        admission.occurredAt(),
+        admission.evidenceFor(task.getWarehouseId()).orElse(null));
     return new CreateResult(mapper.toResponse(task), false, request.activateNow());
   }
 
@@ -445,6 +463,20 @@ public class DriverTaskService {
         && request.sourceType() == DriverTaskSourceType.CAPITAL_REPAIR) {
       throw new IllegalArgumentException(
           "Капитальный ремонт не занимает обычное ремонтное место");
+    }
+  }
+
+  /** Validates planning shape without applying a time-relative fresh-create decision. */
+  private static void validatePlanning(CreateDriverTaskRequest request) {
+    if (request.planningMode() == null) {
+      throw new IllegalArgumentException(
+          "scheduledDate must be set only for FIXED_DATE planning");
+    }
+    boolean fixedDate = request.planningMode() == DriverTaskPlanningMode.FIXED_DATE;
+    if ((fixedDate && request.scheduledDate() == null)
+        || (!fixedDate && request.scheduledDate() != null)) {
+      throw new IllegalArgumentException(
+          "scheduledDate must be set only for FIXED_DATE planning");
     }
   }
 

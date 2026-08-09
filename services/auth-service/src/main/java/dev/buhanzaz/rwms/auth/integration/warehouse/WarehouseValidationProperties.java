@@ -4,6 +4,22 @@ import java.net.URI;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+/**
+ * Configuration for optional, synchronous validation of warehouse identifiers against Warehouse
+ * Service.
+ *
+ * <p>Secrets are intentionally omitted from {@link #toString()}. The enabled configuration is
+ * converted to {@link Validated} only after its private endpoints, client identity, and timeouts
+ * have passed fail-closed checks.
+ *
+ * @param enabled whether the remote Warehouse Service check is active
+ * @param baseUrl private Warehouse Service base URI when enabled
+ * @param tokenUri private OAuth token URI when enabled
+ * @param clientId fixed OAuth client identifier for the integration
+ * @param clientSecret secret for the private OAuth client, never suitable for logging
+ * @param connectTimeout bounded time allowed to establish a remote connection
+ * @param readTimeout bounded time allowed for each remote response
+ */
 @ConfigurationProperties("rwms.auth.warehouse-validation")
 public record WarehouseValidationProperties(
         boolean enabled,
@@ -14,12 +30,20 @@ public record WarehouseValidationProperties(
         Duration connectTimeout,
         Duration readTimeout) {
 
+    /** Applies safe defaults that keep the disabled integration free of required endpoint values. */
     public WarehouseValidationProperties {
         clientId = clientId == null || clientId.isBlank() ? "auth-service" : clientId.trim();
         connectTimeout = connectTimeout == null ? Duration.ofSeconds(2) : connectTimeout;
         readTimeout = readTimeout == null ? Duration.ofSeconds(3) : readTimeout;
     }
 
+    /**
+     * Verifies every property needed for the enabled remote integration and returns the normalized
+     * value object used by the adapter.
+     *
+     * @return safe, enabled-only warehouse integration settings
+     * @throws IllegalStateException when an enabled deployment has an unsafe or incomplete setting
+     */
     public Validated validateEnabledConfiguration() {
         if (!enabled) {
             throw new IllegalStateException("Warehouse validation configuration is disabled");
@@ -46,6 +70,7 @@ public record WarehouseValidationProperties(
                 readTimeout);
     }
 
+    /** Parses and normalizes a private HTTP(S) URI, rejecting credentials and ambiguous components. */
     private static URI safeUri(String value, boolean base, String property) {
         try {
             URI uri = URI.create(value == null ? "" : value.trim());
@@ -74,6 +99,7 @@ public record WarehouseValidationProperties(
         }
     }
 
+    /** Ensures that integration timeouts remain positive and bounded to protect request capacity. */
     private static void requireBoundedTimeout(Duration timeout, String property) {
         if (timeout == null
                 || timeout.isZero()
@@ -84,6 +110,18 @@ public record WarehouseValidationProperties(
         }
     }
 
+    /**
+     * Fully validated remote-integration settings that can safely be handed to the HTTP adapter.
+     *
+     * <p>The secret is deliberately excluded from {@link #toString()}.
+     *
+     * @param baseUrl normalized private Warehouse Service base URI
+     * @param tokenUri normalized private OAuth token URI
+     * @param clientId fixed OAuth client identifier
+     * @param clientSecret OAuth client secret, never suitable for logging
+     * @param connectTimeout validated bounded connection timeout
+     * @param readTimeout validated bounded response timeout
+     */
     public record Validated(
             URI baseUrl,
             URI tokenUri,
@@ -92,12 +130,14 @@ public record WarehouseValidationProperties(
             Duration connectTimeout,
             Duration readTimeout) {
 
+        /** Returns a diagnostic representation without the client secret. */
         @Override
         public String toString() {
             return "Validated[baseUrl=" + baseUrl + ", tokenUri=" + tokenUri + ", clientId=" + clientId + "]";
         }
     }
 
+    /** Returns a diagnostic representation without endpoint credentials or the client secret. */
     @Override
     public String toString() {
         return "WarehouseValidationProperties[enabled=" + enabled + ", clientId=" + clientId + "]";

@@ -1,5 +1,8 @@
 package dev.buhanzaz.rwms.asset.service;
 
+/**
+ * Signals a asset workflow failure that the HTTP boundary maps to a stable response.
+ */
 public class OrderUnitReservationConflictException extends RuntimeException {
   private final String code;
 

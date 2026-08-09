@@ -14,9 +14,14 @@ import dev.buhanzaz.rwms.dossier.domain.DossierAggregateBlockReason;
 import dev.buhanzaz.rwms.dossier.domain.DossierDltFailureCode;
 import dev.buhanzaz.rwms.dossier.domain.DossierInboxDecision;
 import dev.buhanzaz.rwms.dossier.domain.DossierMediaState;
+import dev.buhanzaz.rwms.dossier.domain.DossierOutboxState;
 import dev.buhanzaz.rwms.dossier.domain.DossierProducer;
 import dev.buhanzaz.rwms.dossier.domain.DossierReplayState;
+import dev.buhanzaz.rwms.dossier.domain.DossierSanitizedDeadLetter;
+import dev.buhanzaz.rwms.dossier.domain.DossierSourceFact;
+import dev.buhanzaz.rwms.dossier.domain.DossierUnlinkedFact;
 import dev.buhanzaz.rwms.dossier.domain.DossierUnlinkedReason;
+import dev.buhanzaz.rwms.dossier.eventing.DossierDeadLetterService;
 import dev.buhanzaz.rwms.dossier.eventing.DossierEnvelopeValidator;
 import dev.buhanzaz.rwms.dossier.eventing.DossierValidatedEvent;
 import dev.buhanzaz.rwms.dossier.repository.DossierActiveGenerationRepository;
@@ -32,6 +37,7 @@ import dev.buhanzaz.rwms.dossier.repository.DossierSourceFactRepository;
 import dev.buhanzaz.rwms.dossier.repository.DossierUnlinkedFactRepository;
 import dev.buhanzaz.rwms.dossier.service.DossierInboxProcessor;
 import dev.buhanzaz.rwms.dossier.service.DossierReplayTransactions;
+import jakarta.persistence.EntityManager;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -125,8 +131,10 @@ class DossierRuntimeIntegrationQaTest {
   @Autowired DossierActiveGenerationRepository activeGenerations;
   @Autowired DossierReplayRunRepository replayRuns;
   @Autowired DossierSanitizedDeadLetterRepository deadLetters;
+  @Autowired DossierDeadLetterService deadLetterService;
   @Autowired DossierSourceFactRepository sourceFacts;
   @Autowired DossierReplayTransactions replay;
+  @Autowired EntityManager entityManager;
   @Autowired MockMvc mvc;
 
   @Test
@@ -180,6 +188,67 @@ class DossierRuntimeIntegrationQaTest {
                 .orElseThrow()
                 .getLastAcceptedOffset())
         .isEqualTo(21);
+  }
+
+  @Test
+  void maintenanceRepairTransferFactsProjectAtTheirImmutableWarehouseSnapshots() {
+    UUID repairId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    DossierValidatedEvent created =
+        repair(
+            repairId,
+            cabinId,
+            WAREHOUSE_A,
+            0,
+            30,
+            "maintenance.repair.created.v1");
+    DossierValidatedEvent prepared =
+        repair(
+            repairId,
+            cabinId,
+            WAREHOUSE_A,
+            1,
+            31,
+            "maintenance.repair.transfer-prepared.v1");
+    DossierValidatedEvent transferred =
+        repair(
+            repairId,
+            cabinId,
+            WAREHOUSE_B,
+            2,
+            32,
+            "maintenance.repair.transferred.v1");
+
+    assertThat(
+            List.of(
+                processor.process(created),
+                processor.process(prepared),
+                processor.process(transferred)))
+        .containsOnly(DossierInboxProcessor.Outcome.PROCESSED);
+
+    List<DossierActivity> history =
+        activities.findAllByCabinIdAndGenerationIdOrderByOccurredAtDescRecordedAtDescSourceEventIdDesc(
+            cabinId,
+            activeGeneration(),
+            org.springframework.data.domain.Pageable.unpaged());
+    assertThat(history)
+        .extracting(DossierActivity::getActivityCode)
+        .containsExactlyInAnyOrder(
+            DossierActivityCode.REPAIR_CREATED,
+            DossierActivityCode.REPAIR_TRANSFER_PREPARED,
+            DossierActivityCode.REPAIR_TRANSFERRED);
+    assertThat(history)
+        .filteredOn(
+            value ->
+                value.getActivityCode() == DossierActivityCode.REPAIR_TRANSFER_PREPARED)
+        .extracting(DossierActivity::getWarehouseId)
+        .containsExactly(WAREHOUSE_A);
+    assertThat(history)
+        .filteredOn(value -> value.getActivityCode() == DossierActivityCode.REPAIR_TRANSFERRED)
+        .extracting(DossierActivity::getWarehouseId)
+        .containsExactly(WAREHOUSE_B);
+    assertThat(outbox.findAll()).hasSize(3);
+    assertThat(deadLetters.findAll()).isEmpty();
   }
 
   @Test
@@ -276,7 +345,7 @@ class DossierRuntimeIntegrationQaTest {
     createDatabase(databaseName);
     try {
       migrateAssetDatabase(databaseName);
-      assertAssetV5GlobalNumbering(databaseName);
+      assertAssetMigrationsWarehouseScopedNumbering(databaseName);
       List<AssetOutboxWire> wires = readAssetV5Wires(databaseName);
       assertThat(wires)
           .extracting(
@@ -292,7 +361,8 @@ class DossierRuntimeIntegrationQaTest {
               V5_SPB_CABIN + ":2:asset.rental-item.general-comment-changed.v1",
               V5_MOSCOW_CABIN + ":0:asset.rental-item.created.v1",
               V5_MOSCOW_CABIN + ":1:asset.rental-item.status-changed.v1",
-              V5_MOSCOW_CABIN + ":2:asset.rental-item.general-comment-changed.v1");
+              V5_MOSCOW_CABIN + ":2:asset.rental-item.general-comment-changed.v1",
+              V5_MOSCOW_CABIN + ":3:asset.rental-item.passport-changed.v1");
 
       long offset = 300;
       for (AssetOutboxWire wire : wires) {
@@ -307,8 +377,21 @@ class DossierRuntimeIntegrationQaTest {
       }
 
       UUID sourceGeneration = activeGeneration();
-      assertV5CabinHistory(V5_SPB_CABIN, V5_SPB_WAREHOUSE, sourceGeneration);
-      assertV5CabinHistory(V5_MOSCOW_CABIN, V5_MOSCOW_WAREHOUSE, sourceGeneration);
+      assertV5CabinHistory(
+          V5_SPB_CABIN,
+          V5_SPB_WAREHOUSE,
+          sourceGeneration,
+          DossierActivityCode.CABIN_CREATED,
+          DossierActivityCode.CABIN_STATUS_CHANGED,
+          DossierActivityCode.CABIN_COMMENT_REVISION_CHANGED);
+      assertV5CabinHistory(
+          V5_MOSCOW_CABIN,
+          V5_MOSCOW_WAREHOUSE,
+          sourceGeneration,
+          DossierActivityCode.CABIN_CREATED,
+          DossierActivityCode.CABIN_STATUS_CHANGED,
+          DossierActivityCode.CABIN_COMMENT_REVISION_CHANGED,
+          DossierActivityCode.CABIN_PASSPORT_CHANGED);
       for (UUID cabin : List.of(V5_SPB_CABIN, V5_MOSCOW_CABIN)) {
         var commentFact =
             sourceFacts.findAll().stream()
@@ -333,8 +416,21 @@ class DossierRuntimeIntegrationQaTest {
       replay.tailVerifyAndActivate(claim.runId());
       UUID replayGeneration = activeGeneration();
       assertThat(replayGeneration).isNotEqualTo(sourceGeneration);
-      assertV5CabinHistory(V5_SPB_CABIN, V5_SPB_WAREHOUSE, replayGeneration);
-      assertV5CabinHistory(V5_MOSCOW_CABIN, V5_MOSCOW_WAREHOUSE, replayGeneration);
+      assertV5CabinHistory(
+          V5_SPB_CABIN,
+          V5_SPB_WAREHOUSE,
+          replayGeneration,
+          DossierActivityCode.CABIN_CREATED,
+          DossierActivityCode.CABIN_STATUS_CHANGED,
+          DossierActivityCode.CABIN_COMMENT_REVISION_CHANGED);
+      assertV5CabinHistory(
+          V5_MOSCOW_CABIN,
+          V5_MOSCOW_WAREHOUSE,
+          replayGeneration,
+          DossierActivityCode.CABIN_CREATED,
+          DossierActivityCode.CABIN_STATUS_CHANGED,
+          DossierActivityCode.CABIN_COMMENT_REVISION_CHANGED,
+          DossierActivityCode.CABIN_PASSPORT_CHANGED);
     } finally {
       dropDatabase(databaseName);
     }
@@ -824,13 +920,23 @@ class DossierRuntimeIntegrationQaTest {
     assertThat(blocked.getExpectedVersion()).isNull();
     assertThat(blocked.getObservedVersion()).isNull();
     var persistedUploadedFact = sourceFacts.findByEventId(uploaded.eventId()).orElseThrow();
+    UUID processingFailureId =
+        deadLetters.findAll().stream()
+            .filter(value -> uploaded.eventId().equals(value.getSourceEventId()))
+            .findFirst()
+            .orElseThrow()
+            .getId();
     assertThat(deadLetters.findAll())
         .filteredOn(value -> uploaded.eventId().equals(value.getSourceEventId()))
         .singleElement()
         .satisfies(
-            value ->
-                assertThat(value.getFailureCode())
-                    .isEqualTo(DossierDltFailureCode.PROCESSING_FAILED));
+            value -> {
+              assertThat(value.getFailureCode())
+                  .isEqualTo(DossierDltFailureCode.PROCESSING_FAILED);
+              assertThat(value.getCoverageGenerationId()).isEqualTo(activeGeneration());
+              assertThat(value.getCoverageSubjectCabinId()).isEqualTo(cabinId);
+              assertThat(value.getCoverageResolvedAt()).isNull();
+            });
 
     DossierValidatedEvent replayedUploaded =
         validator.validate(
@@ -907,9 +1013,13 @@ class DossierRuntimeIntegrationQaTest {
         .filteredOn(value -> uploaded.eventId().equals(value.getSourceEventId()))
         .singleElement()
         .satisfies(
-            value ->
-                assertThat(value.getFailureCode())
-                    .isEqualTo(DossierDltFailureCode.PROCESSING_FAILED));
+            value -> {
+              assertThat(value.getId()).isEqualTo(processingFailureId);
+              assertThat(value.getFailureCode())
+                  .isEqualTo(DossierDltFailureCode.PROCESSING_FAILED);
+              assertThat(value.getCoverageResolvedAt()).isNotNull();
+              assertThat(value.getStatus()).isEqualTo(DossierOutboxState.PENDING);
+            });
 
     var recovered = mediaCheckpoint(mediaId);
     assertThat(recovered.getAppliedVersion()).isEqualTo(3);
@@ -931,6 +1041,218 @@ class DossierRuntimeIntegrationQaTest {
                     org.springframework.data.domain.Pageable.unpaged()))
         .filteredOn(value -> value.getActivityCode() == DossierActivityCode.MEDIA_READY)
         .hasSize(1);
+  }
+
+  @Test
+  @Transactional(propagation = Propagation.NOT_SUPPORTED)
+  void visibilityUsesOnlyRequestedCabinCoverageAndExplicitRecovery() throws Exception {
+    UUID failedCabin = UUID.randomUUID();
+    UUID unaffectedCabin = UUID.randomUUID();
+    UUID globalEventId = UUID.randomUUID();
+    UUID mediaId = UUID.randomUUID();
+    DossierValidatedEvent failedCabinTemplate =
+        asset(
+            failedCabin,
+            WAREHOUSE_A,
+            0,
+            0,
+            "asset.rental-item.created.v1",
+            true);
+    DossierValidatedEvent unaffectedCabinTemplate =
+        asset(
+            unaffectedCabin,
+            WAREHOUSE_A,
+            0,
+            1,
+            "asset.rental-item.created.v1",
+            true);
+    DossierValidatedEvent uploadedTemplate =
+        cabinMediaFact(
+            mediaId,
+            UUID.randomUUID(),
+            failedCabin,
+            WAREHOUSE_A,
+            2,
+            0,
+            "media.media.uploaded.v1",
+            "PROCESSING",
+            UUID.randomUUID(),
+            null);
+    DossierValidatedEvent uploaded =
+        validator.validate(
+            uploadedTemplate.topic(),
+            42,
+            0,
+            mediaId.toString(),
+            uploadedTemplate.canonicalEnvelope().getBytes(StandardCharsets.UTF_8));
+    try {
+      assertThat(
+              processor.process(
+                  validator.validate(
+                      failedCabinTemplate.topic(),
+                      41,
+                      0,
+                      failedCabin.toString(),
+                      failedCabinTemplate.canonicalEnvelope().getBytes(StandardCharsets.UTF_8))))
+          .isEqualTo(DossierInboxProcessor.Outcome.PROCESSED);
+      assertThat(
+              processor.process(
+                  validator.validate(
+                      unaffectedCabinTemplate.topic(),
+                      41,
+                      1,
+                      unaffectedCabin.toString(),
+                      unaffectedCabinTemplate.canonicalEnvelope()
+                          .getBytes(StandardCharsets.UTF_8))))
+          .isEqualTo(DossierInboxProcessor.Outcome.PROCESSED);
+
+      UUID generationId = activeGeneration();
+      OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+      UUID globalAggregateId = UUID.randomUUID();
+      sourceFacts.saveAndFlush(
+          DossierSourceFact.record(
+              globalEventId,
+              DossierProducer.LOGISTICS,
+              "rwms.logistics.return.v1",
+              44,
+              0,
+              globalAggregateId,
+              "RETURN",
+              globalAggregateId,
+              0,
+              "logistics.return.created.v1",
+              1,
+              "9".repeat(64),
+              "{}",
+              null,
+              now,
+              null,
+              null,
+              null,
+              UUID.randomUUID(),
+              null,
+              null,
+              null,
+              globalAggregateId,
+              null,
+              now));
+      unlinked.saveAndFlush(
+          DossierUnlinkedFact.record(
+              generationId,
+              globalEventId,
+              null,
+              DossierUnlinkedReason.SUBJECT_NOT_PROVIDED,
+              DossierProducer.LOGISTICS,
+              "RETURN",
+              globalAggregateId,
+              "9".repeat(64),
+              now));
+      deadLetterService.validationFailure(
+          "rwms.asset.rental-item.v1",
+          43,
+          0,
+          null,
+          "invalid".getBytes(StandardCharsets.UTF_8),
+          "SOURCE_RECORD_INVALID");
+
+      assertThat(
+              deadLetters.findAll().stream()
+                  .filter(
+                      value -> value.getSourcePartition() == 43 && value.getSourceOffset() == 0)
+                  .findFirst())
+          .get()
+          .satisfies(
+              value -> {
+                assertThat(value.getSourceEventId()).isNull();
+                assertThat(value.getCoverageGenerationId()).isNull();
+                assertThat(value.getCoverageSubjectCabinId()).isNull();
+              });
+      assertVisibility(failedCabin, "COMPLETE");
+      assertVisibility(unaffectedCabin, "COMPLETE");
+
+      processor.deadLetterAfterRetries(uploaded, mediaId);
+
+      var processingFailure =
+          deadLetters.findAll().stream()
+              .filter(value -> uploaded.eventId().equals(value.getSourceEventId()))
+              .findFirst()
+              .orElseThrow();
+      assertThat(processingFailure.getCoverageGenerationId()).isEqualTo(generationId);
+      assertThat(processingFailure.getCoverageSubjectCabinId()).isEqualTo(failedCabin);
+      assertThat(processingFailure.getCoverageResolvedAt()).isNull();
+      assertVisibility(failedCabin, "PARTIAL");
+      assertVisibility(unaffectedCabin, "COMPLETE");
+
+      DossierValidatedEvent recovered =
+          validator.validate(
+              uploaded.topic(),
+              uploaded.partition(),
+              1,
+              mediaId.toString(),
+              uploaded.canonicalEnvelope().getBytes(StandardCharsets.UTF_8));
+      assertThat(processor.process(recovered)).isEqualTo(DossierInboxProcessor.Outcome.PROCESSED);
+
+      assertThat(
+              deadLetters
+                  .findById(processingFailure.getId())
+                  .orElseThrow()
+                  .getCoverageResolvedAt())
+          .isNotNull();
+      assertVisibility(failedCabin, "COMPLETE");
+      assertVisibility(unaffectedCabin, "COMPLETE");
+    } finally {
+      cleanupVisibilityEvidence(globalEventId, uploaded.eventId());
+    }
+  }
+
+  @Test
+  void processedCabinScopedUnlinkedEvidenceIsRebuiltIntoActivatedGeneration()
+      throws Exception {
+    UUID cabinId = UUID.randomUUID();
+    UUID mediaId = UUID.randomUUID();
+    assertThat(
+            processor.process(
+                estimateAt(
+                    UUID.randomUUID(),
+                    cabinId,
+                    900,
+                    UUID.randomUUID(),
+                    "2026-07-18T10:00:00Z",
+                    "2026-07-18T12:00:00Z")))
+        .isEqualTo(DossierInboxProcessor.Outcome.PROCESSED);
+    DossierValidatedEvent deferredMedia =
+        cabinMediaFact(
+            mediaId,
+            UUID.randomUUID(),
+            cabinId,
+            WAREHOUSE_A,
+            2,
+            901,
+            "media.media.uploaded.v1",
+            "PROCESSING",
+            UUID.randomUUID(),
+            null);
+    assertThat(processor.process(deferredMedia))
+        .isEqualTo(DossierInboxProcessor.Outcome.PROCESSED);
+
+    UUID sourceGeneration = activeGeneration();
+    assertThat(
+            unlinked.countByGenerationIdAndSubjectCabinIdAndResolvedAtIsNull(
+                sourceGeneration, cabinId))
+        .isOne();
+    assertVisibility(cabinId, "PARTIAL");
+
+    DossierReplayTransactions.ReplayClaim claim = replay.start();
+    replay.build(claim.runId());
+    UUID targetGeneration = replayRuns.findById(claim.runId()).orElseThrow().getTargetGenerationId();
+    replay.tailVerifyAndActivate(claim.runId());
+
+    assertThat(activeGeneration()).isEqualTo(targetGeneration).isNotEqualTo(sourceGeneration);
+    assertThat(
+            unlinked.countByGenerationIdAndSubjectCabinIdAndResolvedAtIsNull(
+                targetGeneration, cabinId))
+        .isOne();
+    assertVisibility(cabinId, "PARTIAL");
   }
 
   @Test
@@ -1173,10 +1495,31 @@ class DossierRuntimeIntegrationQaTest {
               assertThat(value.getFailureCode())
                   .isEqualTo(DossierDltFailureCode.MEDIA_GENERATION_CONFLICT);
             });
+    var conflictFailure =
+        deadLetters.findAll().stream()
+            .filter(value -> conflictingGeneration.eventId().equals(value.getSourceEventId()))
+            .findFirst()
+            .orElseThrow();
+    UUID conflictFailureId = conflictFailure.getId();
+    DossierOutboxState conflictTransportState = conflictFailure.getStatus();
+    assertThat(conflictFailure.getCoverageGenerationId()).isEqualTo(sourceGeneration);
+    assertThat(conflictFailure.getCoverageSubjectCabinId()).isEqualTo(cabin);
+    assertThat(conflictFailure.getCoverageResolvedAt()).isNull();
 
     DossierReplayTransactions.ReplayClaim claim = replay.start();
     replay.build(claim.runId());
+    UUID buildingGeneration =
+        replayRuns.findById(claim.runId()).orElseThrow().getTargetGenerationId();
+    assertThat(deadLetters.findById(conflictFailureId).orElseThrow().getCoverageGenerationId())
+        .isEqualTo(sourceGeneration);
+    assertThat(
+            deadLetters
+                .countByCoverageGenerationIdAndCoverageSubjectCabinIdAndCoverageResolvedAtIsNull(
+                    buildingGeneration, cabin))
+        .isZero();
     replay.tailVerifyAndActivate(claim.runId());
+    entityManager.flush();
+    entityManager.clear();
     UUID targetGeneration = activeGeneration();
 
     assertThat(targetGeneration).isNotEqualTo(sourceGeneration);
@@ -1190,6 +1533,17 @@ class DossierRuntimeIntegrationQaTest {
             failedMedia + ":0:FAILED");
     assertThat(activities.countByGenerationId(targetGeneration))
         .isEqualTo(activities.countByGenerationId(sourceGeneration));
+    assertThat(deadLetters.findAll())
+        .filteredOn(value -> conflictingGeneration.eventId().equals(value.getSourceEventId()))
+        .singleElement()
+        .satisfies(
+            value -> {
+              assertThat(value.getId()).isEqualTo(conflictFailureId);
+              assertThat(value.getCoverageGenerationId()).isEqualTo(targetGeneration);
+              assertThat(value.getCoverageSubjectCabinId()).isEqualTo(cabin);
+              assertThat(value.getCoverageResolvedAt()).isNull();
+              assertThat(value.getStatus()).isEqualTo(conflictTransportState);
+            });
 
     JsonNode response =
         new ObjectMapper()
@@ -1392,10 +1746,24 @@ class DossierRuntimeIntegrationQaTest {
     UUID cabin = UUID.fromString("35000000-0000-0000-0000-000000000001");
     processor.process(asset(cabin, WAREHOUSE_A, 0, 60, "asset.rental-item.created.v1", true));
     UUID sourceGeneration = activeGeneration();
+    var source = sourceFacts.findAll().getFirst();
+    DossierSanitizedDeadLetter coverage =
+        DossierSanitizedDeadLetter.pending(
+            source.getEventId(),
+            source.getAggregateId(),
+            source.getSourceTopic(),
+            45,
+            0,
+            "7".repeat(64),
+            source.getPayloadSha256(),
+            DossierDltFailureCode.PROCESSING_FAILED,
+            sourceGeneration,
+            cabin,
+            OffsetDateTime.now(ZoneOffset.UTC));
+    deadLetters.saveAndFlush(coverage);
     DossierReplayTransactions.ReplayClaim claim = replay.start();
     replay.build(claim.runId());
     UUID targetGeneration = replayRuns.findById(claim.runId()).orElseThrow().getTargetGenerationId();
-    var source = sourceFacts.findAll().getFirst();
     activities.saveAndFlush(
         DossierActivity.project(
             UUID.randomUUID(),
@@ -1422,6 +1790,19 @@ class DossierRuntimeIntegrationQaTest {
     assertThat(activeGeneration()).isEqualTo(sourceGeneration);
     assertThat(replayRuns.findById(claim.runId()).orElseThrow().getState())
         .isEqualTo(DossierReplayState.REJECTED);
+    assertThat(deadLetters.findById(coverage.getId()).orElseThrow())
+        .satisfies(
+            value -> {
+              assertThat(value.getCoverageGenerationId()).isEqualTo(sourceGeneration);
+              assertThat(value.getCoverageSubjectCabinId()).isEqualTo(cabin);
+              assertThat(value.getCoverageResolvedAt()).isNull();
+              assertThat(value.getStatus()).isEqualTo(DossierOutboxState.PENDING);
+            });
+    assertThat(
+            deadLetters
+                .countByCoverageGenerationIdAndCoverageSubjectCabinIdAndCoverageResolvedAtIsNull(
+                    targetGeneration, cabin))
+        .isZero();
   }
 
   @Test
@@ -1811,6 +2192,34 @@ class DossierRuntimeIntegrationQaTest {
             recordedAt));
   }
 
+  private DossierValidatedEvent repair(
+      UUID repairId,
+      UUID cabinId,
+      UUID warehouseId,
+      long version,
+      long offset,
+      String eventType) {
+    String executionState =
+        "maintenance.repair.created.v1".equals(eventType) ? "DRAFT" : "QUEUED";
+    String payload =
+        """
+        {"repairId":"%s","rootRepairId":"%s","sourceRepairId":null,"estimateId":null,"warehouseId":"%s","rentalItemId":"%s","origin":"DIRECT_REPAIR","kind":"PRIMARY","executionState":"%s","acceptanceState":"NOT_READY","dispatchDate":"2026-07-18","priority":3,"stages":[]}
+        """
+            .formatted(repairId, repairId, warehouseId, cabinId, executionState);
+    return validate(
+        "rwms.maintenance.repair.v1",
+        offset,
+        repairId,
+        envelope(
+            eventType,
+            "maintenance-service",
+            "REPAIR",
+            repairId,
+            version,
+            payload,
+            true));
+  }
+
   private DossierValidatedEvent findingAt(
       UUID findingId,
       UUID cabin,
@@ -1903,16 +2312,17 @@ class DossierRuntimeIntegrationQaTest {
             payload.strip());
   }
 
-  private void assertV5CabinHistory(UUID cabin, UUID warehouse, UUID generation) {
+  private void assertV5CabinHistory(
+      UUID cabin,
+      UUID warehouse,
+      UUID generation,
+      DossierActivityCode... expectedActivityCodes) {
     List<DossierActivity> history =
         activities.findAllByCabinIdAndGenerationIdOrderByOccurredAtDescRecordedAtDescSourceEventIdDesc(
             cabin, generation, org.springframework.data.domain.Pageable.unpaged());
     assertThat(history)
         .extracting(DossierActivity::getActivityCode)
-        .containsExactlyInAnyOrder(
-            DossierActivityCode.CABIN_CREATED,
-            DossierActivityCode.CABIN_STATUS_CHANGED,
-            DossierActivityCode.CABIN_COMMENT_REVISION_CHANGED);
+        .containsExactlyInAnyOrder(expectedActivityCodes);
     assertThat(history).extracting(DossierActivity::getWarehouseId).containsOnly(warehouse);
   }
 
@@ -1971,7 +2381,8 @@ class DossierRuntimeIntegrationQaTest {
     return wires;
   }
 
-  private static void assertAssetV5GlobalNumbering(String databaseName) throws Exception {
+  private static void assertAssetMigrationsWarehouseScopedNumbering(String databaseName)
+      throws Exception {
     try (Connection connection =
         DriverManager.getConnection(
             databaseJdbcUrl(databaseName), POSTGRES.getUsername(), POSTGRES.getPassword())) {
@@ -1981,10 +2392,10 @@ class DossierRuntimeIntegrationQaTest {
                   "SELECT count(*), count(DISTINCT display_canonical_number) FROM public.rental_item")) {
         assertThat(result.next()).isTrue();
         assertThat(result.getLong(1)).isEqualTo(195);
-        assertThat(result.getLong(2)).isEqualTo(195);
+        assertThat(result.getLong(2)).isEqualTo(120);
       }
       assertAssetV5WarehouseNumberRange(connection, V5_SPB_WAREHOUSE, 120, 1, 120);
-      assertAssetV5WarehouseNumberRange(connection, V5_MOSCOW_WAREHOUSE, 75, 121, 195);
+      assertAssetV5WarehouseNumberRange(connection, V5_MOSCOW_WAREHOUSE, 75, 1, 75);
     }
   }
 
@@ -2039,6 +2450,38 @@ class DossierRuntimeIntegrationQaTest {
         .findByPointerName(DossierActiveGeneration.POINTER_NAME)
         .orElseThrow()
         .getGenerationId();
+  }
+
+  private void assertVisibility(UUID cabinId, String visibility) throws Exception {
+    mvc.perform(
+            get("/api/dossier/v1/cabins/{cabinId}", cabinId)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer read-a"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.visibility").value(visibility));
+  }
+
+  private void cleanupVisibilityEvidence(UUID globalEventId, UUID processingEventId) {
+    List<UUID> failureIds =
+        deadLetters.findAll().stream()
+            .filter(
+                value ->
+                    processingEventId.equals(value.getSourceEventId())
+                        || (value.getSourceEventId() == null
+                            && value.getSourcePartition() == 43
+                            && value.getSourceOffset() == 0))
+            .map(DossierSanitizedDeadLetter::getId)
+            .toList();
+    deadLetters.deleteAllById(failureIds);
+    List<UUID> unlinkedIds =
+        unlinked.findAll().stream()
+            .filter(
+                value ->
+                    globalEventId.equals(value.getSourceEventId())
+                        || processingEventId.equals(value.getSourceEventId()))
+            .map(DossierUnlinkedFact::getId)
+            .toList();
+    unlinked.deleteAllById(unlinkedIds);
+    sourceFacts.findByEventId(globalEventId).ifPresent(sourceFacts::delete);
   }
 
   private dev.buhanzaz.rwms.dossier.domain.DossierAggregateCheckpoint inventoryCheckpoint(

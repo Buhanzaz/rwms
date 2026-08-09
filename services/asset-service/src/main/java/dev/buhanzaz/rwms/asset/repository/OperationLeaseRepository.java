@@ -13,6 +13,9 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data repository for service-local operation lease persistence.
+ */
 public interface OperationLeaseRepository extends JpaRepository<OperationLease, UUID> {
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select lease from OperationLease lease where lease.id = :id")

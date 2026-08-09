@@ -1,65 +1,73 @@
 package dev.buhanzaz.rwms.logistics.service;
 
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionEvidence;
+import dev.buhanzaz.rwms.logistics.service.persistence.LogisticsWarehouseOperationMarkPersistence;
+import dev.buhanzaz.rwms.logistics.service.persistence.LogisticsWarehouseOperationMarkPersistence.MarkIdentity;
+import dev.buhanzaz.rwms.logistics.service.persistence.LogisticsWarehouseOperationMarkPersistence.Pending;
+import dev.buhanzaz.rwms.logistics.service.persistence.LogisticsWarehouseOperationMarkPersistence.RecoveryRow;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Transactional outbox for immutable warehouse operated-boundary marks. */
+/** Transactional outbox for immutable warehouse operation-boundary marks and replay evidence. */
 @Repository
 public class LogisticsWarehouseOperationMarkStore {
   static final int MAX_ATTEMPTS = 8;
 
-  private final JdbcTemplate jdbc;
+  private final LogisticsWarehouseOperationMarkPersistence persistence;
 
-  public LogisticsWarehouseOperationMarkStore(JdbcTemplate jdbc) {
-    this.jdbc = jdbc;
+  public LogisticsWarehouseOperationMarkStore(LogisticsWarehouseOperationMarkPersistence persistence) {
+    this.persistence = persistence;
   }
 
+  /**
+   * Commits an immutable operation-boundary mark together with optional exact remote-admission
+   * evidence. A null evidence value is deliberate for test-only and parent-owned continuations
+   * and can never authorize dependency-free replay.
+   */
   @Transactional(propagation = Propagation.MANDATORY)
-  public void enqueue(UUID warehouseId, UUID operationId, OffsetDateTime occurredAt) {
+  public void enqueue(
+      UUID warehouseId,
+      UUID operationId,
+      OffsetDateTime occurredAt,
+      AdmissionEvidence admissionEvidence) {
     if (warehouseId == null || operationId == null || occurredAt == null) {
       throw new IllegalArgumentException("Warehouse operation mark identity is required");
+    }
+    if (admissionEvidence != null && !warehouseId.equals(admissionEvidence.warehouseId())) {
+      throw new IllegalArgumentException(
+          "Warehouse operation mark admission evidence belongs to another warehouse");
     }
     OffsetDateTime canonical =
         occurredAt.withOffsetSameInstant(ZoneOffset.UTC).truncatedTo(ChronoUnit.MICROS);
     OffsetDateTime now = now();
-    jdbc.update(
-        """
-        insert into warehouse_operation_mark_outbox(
-          operation_id,warehouse_id,occurred_at,state,attempt_count,next_attempt_at,created_at,updated_at)
-        values (?,? ,?,'PENDING',0,?,?,?)
-        on conflict (warehouse_id,operation_id) do nothing
-        """,
-        operationId,
+    String admissionDirection =
+        admissionEvidence == null ? null : admissionEvidence.direction().name();
+    Long admissionWarehouseVersion =
+        admissionEvidence == null ? null : admissionEvidence.warehouseVersion();
+    persistence.insertIfAbsent(
         warehouseId,
+        operationId,
         canonical,
-        now,
-        now,
+        admissionDirection,
+        admissionWarehouseVersion,
         now);
     MarkIdentity stored =
-        jdbc.queryForObject(
-            """
-            select warehouse_id,occurred_at from warehouse_operation_mark_outbox
-             where warehouse_id=? and operation_id=? for update
-            """,
-            (rs, ignored) ->
-                new MarkIdentity(
-                    rs.getObject("warehouse_id", UUID.class),
-                    rs.getObject("occurred_at", OffsetDateTime.class)),
-            warehouseId,
-            operationId);
+        persistence.markIdentityForUpdate(warehouseId, operationId);
     if (stored == null
         || !warehouseId.equals(stored.warehouseId())
-        || !canonical.toInstant().equals(stored.occurredAt().toInstant())) {
+        || !canonical.toInstant().equals(stored.occurredAt().toInstant())
+        || !Objects.equals(admissionDirection, stored.admissionDirection())
+        || !Objects.equals(admissionWarehouseVersion, stored.admissionWarehouseVersion())) {
       throw new LogisticsConflictException(
-          "Warehouse operation ID is bound to another immutable occurrence");
+          "Warehouse operation ID is bound to another immutable occurrence or admission");
     }
   }
 
@@ -73,47 +81,11 @@ public class LogisticsWarehouseOperationMarkStore {
     }
     OffsetDateTime claimedAt = now();
     Pending pending =
-        jdbc.query(
-                """
-                select operation_id,warehouse_id,occurred_at,attempt_count,state
-                  from warehouse_operation_mark_outbox
-                 where attempt_count < ?
-                   and ((state in ('PENDING','RETRY_PENDING') and next_attempt_at <= ?)
-                     or (state='IN_FLIGHT' and claim_until <= ?))
-                 order by case when state='IN_FLIGHT' then claim_until else next_attempt_at end,
-                          warehouse_id,operation_id
-                 for update skip locked limit 1
-                """,
-                (rs, ignored) ->
-                    new Pending(
-                        rs.getObject("operation_id", UUID.class),
-                        rs.getObject("warehouse_id", UUID.class),
-                        rs.getObject("occurred_at", OffsetDateTime.class),
-                        rs.getInt("attempt_count"),
-                        rs.getString("state")),
-                MAX_ATTEMPTS,
-                claimedAt,
-                claimedAt)
-            .stream()
-            .findFirst()
-            .orElse(null);
+        persistence.dueForClaim(MAX_ATTEMPTS, claimedAt).orElse(null);
     if (pending == null) return Optional.empty();
     UUID claimToken = UUID.randomUUID();
     OffsetDateTime claimUntil = claimedAt.plus(lease);
-    int changed =
-        jdbc.update(
-            """
-            update warehouse_operation_mark_outbox
-               set state='IN_FLIGHT',claim_token=?,claim_until=?,updated_at=?
-             where warehouse_id=? and operation_id=? and state=? and attempt_count=?
-            """,
-            claimToken,
-            claimUntil,
-            claimedAt,
-            pending.warehouseId(),
-            pending.operationId(),
-            pending.state(),
-            pending.attemptCount());
+    int changed = persistence.claim(pending, claimToken, claimUntil, claimedAt);
     if (changed != 1) throw changed();
     return Optional.of(
         new WorkItem(
@@ -128,19 +100,12 @@ public class LogisticsWarehouseOperationMarkStore {
   public void confirmed(WorkItem work) {
     requireWork(work);
     int changed =
-        jdbc.update(
-            """
-            update warehouse_operation_mark_outbox
-               set state='CONFIRMED',attempt_count=attempt_count+1,
-                   claim_token=null,claim_until=null,last_error_code=null,updated_at=?
-             where warehouse_id=? and operation_id=? and state='IN_FLIGHT'
-               and claim_token=? and attempt_count=?
-            """,
-            now(),
+        persistence.confirm(
             work.warehouseId(),
             work.operationId(),
             work.claimToken(),
-            work.attemptCount());
+            work.attemptCount(),
+            now());
     if (changed != 1) throw changed();
   }
 
@@ -154,23 +119,16 @@ public class LogisticsWarehouseOperationMarkStore {
     boolean quarantined = attempt >= MAX_ATTEMPTS;
     OffsetDateTime now = now();
     int changed =
-        jdbc.update(
-            """
-            update warehouse_operation_mark_outbox
-               set state=?,attempt_count=?,next_attempt_at=?,claim_token=null,claim_until=null,
-                   last_error_code=?,updated_at=?
-             where warehouse_id=? and operation_id=? and state='IN_FLIGHT'
-               and claim_token=? and attempt_count=?
-            """,
+        persistence.fail(
+            work.warehouseId(),
+            work.operationId(),
+            work.claimToken(),
+            work.attemptCount(),
             quarantined ? "QUARANTINED" : "RETRY_PENDING",
             attempt,
             now.plusSeconds(1L << Math.min(work.attemptCount(), 6)),
             safeErrorCode,
-            now,
-            work.warehouseId(),
-            work.operationId(),
-            work.claimToken(),
-            work.attemptCount());
+            now);
     if (changed != 1) throw changed();
     return quarantined;
   }
@@ -194,27 +152,8 @@ public class LogisticsWarehouseOperationMarkStore {
     }
     String normalizedReason = reason.trim();
     RecoveryRow row =
-        jdbc.query(
-                """
-                select state,attempt_count,last_error_code,recovery_version,
-                       recovered_by_subject_id,recovery_reason,recovered_at
-                  from warehouse_operation_mark_outbox
-                 where warehouse_id=? and operation_id=?
-                 for update
-                """,
-                (rs, ignored) ->
-                    new RecoveryRow(
-                        rs.getString("state"),
-                        rs.getInt("attempt_count"),
-                        rs.getString("last_error_code"),
-                        rs.getLong("recovery_version"),
-                        rs.getObject("recovered_by_subject_id", UUID.class),
-                        rs.getString("recovery_reason"),
-                        rs.getObject("recovered_at", OffsetDateTime.class)),
-                warehouseId,
-                operationId)
-            .stream()
-            .findFirst()
+        persistence
+            .recoveryForUpdate(warehouseId, operationId)
             .orElseThrow(LogisticsNotFoundException::new);
     if (row.recoveryVersion() == Math.addExact(expectedRecoveryVersion, 1)) {
       if (reviewedBySubjectId.equals(row.recoveredBySubjectId())
@@ -234,12 +173,7 @@ public class LogisticsWarehouseOperationMarkStore {
 
     long nextRecoveryVersion = Math.addExact(row.recoveryVersion(), 1);
     OffsetDateTime recoveredAt = now();
-    jdbc.update(
-        """
-        insert into warehouse_operation_mark_recovery_audit(
-          id,warehouse_id,operation_id,recovery_version,reviewed_by_subject_id,reason,reviewed_at)
-        values (?,?,?,?,?,?,?)
-        """,
+    persistence.appendRecoveryAudit(
         UUID.randomUUID(),
         warehouseId,
         operationId,
@@ -248,24 +182,14 @@ public class LogisticsWarehouseOperationMarkStore {
         normalizedReason,
         recoveredAt);
     int changed =
-        jdbc.update(
-            """
-            update warehouse_operation_mark_outbox
-               set state='PENDING',attempt_count=0,next_attempt_at=?,
-                   claim_token=null,claim_until=null,recovery_version=?,
-                   recovered_by_subject_id=?,recovery_reason=?,recovered_at=?,updated_at=?
-             where warehouse_id=? and operation_id=?
-               and state='QUARANTINED' and recovery_version=?
-            """,
-            recoveredAt,
+        persistence.resetRecovered(
+            warehouseId,
+            operationId,
+            expectedRecoveryVersion,
             nextRecoveryVersion,
             reviewedBySubjectId,
             normalizedReason,
-            recoveredAt,
-            recoveredAt,
-            warehouseId,
-            operationId,
-            expectedRecoveryVersion);
+            recoveredAt);
     if (changed != 1) throw changed();
     return new RecoveryResult(
         warehouseId,
@@ -296,9 +220,7 @@ public class LogisticsWarehouseOperationMarkStore {
   }
 
   private OffsetDateTime now() {
-    OffsetDateTime value = jdbc.queryForObject("select clock_timestamp()", OffsetDateTime.class);
-    if (value == null) throw new IllegalStateException("Database clock returned null");
-    return value.withOffsetSameInstant(ZoneOffset.UTC);
+    return persistence.databaseNow();
   }
 
   private static void requireWork(WorkItem work) {
@@ -316,6 +238,7 @@ public class LogisticsWarehouseOperationMarkStore {
     return new LogisticsConflictException("Warehouse operation mark claim changed concurrently");
   }
 
+  /** Fenced short-lived capability returned only after a successful operation-mark lease claim. */
   public record WorkItem(
       UUID operationId,
       UUID warehouseId,
@@ -323,24 +246,7 @@ public class LogisticsWarehouseOperationMarkStore {
       int attemptCount,
       UUID claimToken) {}
 
-  private record Pending(
-      UUID operationId,
-      UUID warehouseId,
-      OffsetDateTime occurredAt,
-      int attemptCount,
-      String state) {}
-
-  private record MarkIdentity(UUID warehouseId, OffsetDateTime occurredAt) {}
-
-  private record RecoveryRow(
-      String state,
-      int attemptCount,
-      String lastErrorCode,
-      long recoveryVersion,
-      UUID recoveredBySubjectId,
-      String recoveryReason,
-      OffsetDateTime recoveredAt) {}
-
+  /** Reviewed recovery state returned after a version-fenced quarantine reset or replay. */
   public record RecoveryResult(
       UUID warehouseId,
       UUID operationId,

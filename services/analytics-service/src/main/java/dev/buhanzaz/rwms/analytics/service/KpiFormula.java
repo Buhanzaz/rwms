@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.analytics.service;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 
+/** Pure KPI arithmetic over raw seconds and counts; callers round only after aggregating the selected period. */
 public final class KpiFormula {
   private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
   private static final int INTERNAL_SCALE = 12;

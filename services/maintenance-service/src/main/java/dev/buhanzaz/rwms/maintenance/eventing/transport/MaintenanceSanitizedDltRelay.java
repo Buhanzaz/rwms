@@ -11,6 +11,10 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MimeTypeUtils;
 
+/**
+ * Publishes a leased sanitized dead-letter record after its local transaction committed; an
+ * uncertain broker outcome leaves the durable record available for a later retry.
+ */
 @Component
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")
 public class MaintenanceSanitizedDltRelay {

@@ -8,6 +8,9 @@ import java.time.OffsetDateTime;
 import java.util.Objects;
 import java.util.UUID;
 
+/**
+ * JPA entity that persists inventory capture release in the inventory-owned database.
+ */
 @Entity
 @Table(name = "inventory_capture_release")
 public class InventoryCaptureRelease {

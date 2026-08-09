@@ -9,6 +9,10 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+/**
+ * Publishes a leased, committed maintenance outbox event only after its envelope is revalidated;
+ * broker acknowledgement is required before the local record is marked delivered.
+ */
 @Component
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")
 public class MaintenanceKafkaOutboxRelay {
@@ -74,11 +78,13 @@ public class MaintenanceKafkaOutboxRelay {
     }
   }
 
+  /** Maps every maintenance aggregate to its canonical owner topic before publication. */
   private static String expectedTopic(String aggregateType) {
     return switch (aggregateType) {
       case "CATALOG_VERSION" -> MaintenanceTransportTopics.CATALOG;
       case "ESTIMATE" -> MaintenanceTransportTopics.ESTIMATE;
       case "REPAIR" -> MaintenanceTransportTopics.REPAIR;
+      case "PROPERTY_DISPOSITION" -> MaintenanceTransportTopics.PROPERTY_DISPOSITION;
       default -> throw new IllegalArgumentException("Unsupported maintenance aggregate type");
     };
   }

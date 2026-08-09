@@ -12,6 +12,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MimeTypeUtils;
 
+/**
+ * Scheduled relay that publishes verified inventory outbox envelopes and records delivery outcomes.
+ */
 @Component
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")
 public class InventoryOutboxRelay {

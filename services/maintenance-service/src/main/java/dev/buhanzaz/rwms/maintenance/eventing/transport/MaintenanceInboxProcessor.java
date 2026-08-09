@@ -7,6 +7,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.JsonNode;
 
+/**
+ * Deduplicates inbound maintenance events and enforces aggregate-version checkpoints before local
+ * effects are applied, preserving gaps and failures in recoverable inbox state.
+ */
 @Service
 public class MaintenanceInboxProcessor {
   private final JdbcTemplate jdbc;

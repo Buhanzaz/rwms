@@ -7,6 +7,9 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.messaging.Message;
 
+/**
+ * Declares the inventory consumer binding for asset facts.
+ */
 @Configuration(proxyBeanMethods = false)
 class InventoryAssetConsumerConfiguration {
   @Bean

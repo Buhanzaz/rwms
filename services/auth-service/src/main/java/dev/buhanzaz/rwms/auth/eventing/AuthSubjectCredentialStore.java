@@ -9,12 +9,25 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Stores private credential state separately from the auth aggregate event payloads.
+ *
+ * <p>Event facts use only the safe active/disabled state. This store does not expose a credential
+ * representation to Kafka or to event payload builders.
+ */
 @Service
 @RequiredArgsConstructor
 public class AuthSubjectCredentialStore {
 
     private final JdbcTemplate jdbc;
 
+    /**
+     * Replaces the private credential representation and derives its active status.
+     *
+     * @param subjectId auth-subject identifier
+     * @param passwordHash already encoded credential representation
+     * @param active whether the credential should be usable
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public void replace(UUID subjectId, String passwordHash, boolean active) {
         OffsetDateTime now = databaseNow();
@@ -38,6 +51,13 @@ public class AuthSubjectCredentialStore {
                 now);
     }
 
+    /**
+     * Changes only the credential availability state and creates a new revision.
+     *
+     * @param subjectId auth-subject identifier
+     * @param active whether the credential should be usable
+     * @throws IllegalStateException when no private credential entry exists
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public void changeStatus(UUID subjectId, boolean active) {
         int changed = jdbc.update(
@@ -55,6 +75,13 @@ public class AuthSubjectCredentialStore {
         }
     }
 
+    /**
+     * Returns the private credential vault entry required for an internal auth operation.
+     *
+     * @param subjectId auth-subject identifier
+     * @return the credential entry
+     * @throws IllegalStateException when no entry exists
+     */
     @Transactional(readOnly = true)
     public Credential require(UUID subjectId) {
         return jdbc.query(
@@ -79,5 +106,13 @@ public class AuthSubjectCredentialStore {
         return value == null ? OffsetDateTime.now(ZoneOffset.UTC) : value;
     }
 
+    /**
+     * Internal credential-vault row used only by auth service code.
+     *
+     * @param subjectId auth-subject identifier
+     * @param passwordHash private encoded credential representation
+     * @param status availability state
+     * @param revision opaque revision for internal consistency checks
+     */
     public record Credential(UUID subjectId, String passwordHash, String status, UUID revision) {}
 }

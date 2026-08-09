@@ -8,6 +8,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/** Persistence boundary for the globally ordered task-board queue standard. */
 public interface QueueDefinitionRepository extends JpaRepository<QueueDefinition, UUID> {
   List<QueueDefinition> findAllByPurposeOrderBySortOrderAscNameAscTypeAscIdAsc(
       QueuePurpose purpose);

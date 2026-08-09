@@ -4,6 +4,9 @@ import java.net.URI;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+/**
+ * Binds private dependency endpoint configuration for logistics; clients do not use the public gateway.
+ */
 @ConfigurationProperties("rwms.logistics.dependencies")
 public record LogisticsDependencyProperties(
     boolean enabled,

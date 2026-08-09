@@ -17,8 +17,10 @@ import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateStatusRequest;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.CabinSearchGroup;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.CabinSearchRequest;
+import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.CabinSearchResponse;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.CabinAvailabilityRequest;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.ConvertPresentationHoldsRequest;
+import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.PresentationHoldView;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.ReplacePresentationHoldsRequest;
 import dev.buhanzaz.rwms.asset.domain.OperationLease;
 import dev.buhanzaz.rwms.asset.domain.OrderUnitReservationState;
@@ -29,16 +31,21 @@ import dev.buhanzaz.rwms.asset.repository.OperationLeaseRepository;
 import dev.buhanzaz.rwms.asset.repository.OrderUnitReservationRepository;
 import dev.buhanzaz.rwms.asset.repository.PresentationUnitHoldRepository;
 import dev.buhanzaz.rwms.asset.service.AssetService;
+import dev.buhanzaz.rwms.asset.service.AssetConflictException;
 import dev.buhanzaz.rwms.asset.service.AssetInvalidationHub;
 import dev.buhanzaz.rwms.asset.service.AssetNotFoundException;
 import dev.buhanzaz.rwms.asset.service.OrderUnitReservationConflictException;
 import dev.buhanzaz.rwms.asset.service.PresentationHoldService;
 import dev.buhanzaz.rwms.asset.service.RentalAvailabilityInvalidationPublisher;
+import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -50,6 +57,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
+/** Proves asset-owned cabin search, hold mutation, expiry and facts lookup semantics. */
 @SpringBootTest(
     properties = {
       "spring.jpa.hibernate.ddl-auto=validate",
@@ -60,6 +68,8 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
     })
 @ActiveProfiles("test")
 class PresentationHoldServiceIntegrationTest {
+  private static final UUID LOGISTICS_SUBJECT =
+      UUID.nameUUIDFromBytes("service:logistics-service".getBytes(StandardCharsets.UTF_8));
   private static final PostgreSQLContainer POSTGRES =
       new PostgreSQLContainer("postgres:17-alpine");
 
@@ -100,7 +110,7 @@ class PresentationHoldServiceIntegrationTest {
     CabinSearchRequest search =
         matchingSearch(warehouseId, presentationId, actorSubjectId);
 
-    var searchResult = presentationHolds.search(search);
+    var searchResult = search(search);
     assertThat(searchResult.expiresAt()).isEqualTo(search.expiresAt());
     assertThat(searchResult.groups())
         .singleElement()
@@ -121,7 +131,7 @@ class PresentationHoldServiceIntegrationTest {
     assertThat(acquired.replayed()).isFalse();
     assertThat(replay.replayed()).isTrue();
     assertThat(replay.response()).isEqualTo(acquired.response());
-    assertThat(presentationHolds.search(search).groups())
+    assertThat(search(search).groups())
         .singleElement()
         .satisfies(
             group ->
@@ -129,8 +139,7 @@ class PresentationHoldServiceIntegrationTest {
                     .extracting(cabin -> cabin.id())
                     .containsExactly(first.id()));
     assertThat(
-            presentationHolds
-                .search(
+            search(
                     matchingSearch(
                         warehouseId, UUID.randomUUID(), UUID.randomUUID()))
                 .groups())
@@ -163,6 +172,134 @@ class PresentationHoldServiceIntegrationTest {
         .isEqualTo(second.id());
     assertThat(holdRepository.findById(firstHoldId).orElseThrow().getState())
         .isEqualTo(PresentationUnitHoldState.RELEASED);
+  }
+
+  @Test
+  void cabinSearchReplaysFrozenResponseAndRejectsChangedFingerprint() {
+    UUID actorSubjectId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID holdScopeId = UUID.randomUUID();
+    UUID key = UUID.randomUUID();
+    freeRental(actorSubjectId, warehouseId, "IDEMPOTENT");
+    CabinSearchRequest request =
+        matchingSearch(warehouseId, holdScopeId, actorSubjectId, 1);
+
+    var created = presentationHolds.search(LOGISTICS_SUBJECT, key, request);
+    var replayed = presentationHolds.search(LOGISTICS_SUBJECT, key, request);
+
+    assertThat(created.replayed()).isFalse();
+    assertThat(replayed.replayed()).isTrue();
+    assertThat(replayed.response()).isEqualTo(created.response());
+    assertThatThrownBy(
+            () ->
+                presentationHolds.search(
+                    LOGISTICS_SUBJECT,
+                    key,
+                    matchingSearch(warehouseId, holdScopeId, actorSubjectId, 2)))
+        .isInstanceOf(AssetConflictException.class);
+    assertThat(presentationHolds.holds(holdScopeId).holds()).hasSize(1);
+  }
+
+  @Test
+  void cabinSearchAppendPreservesAndRenewsWhileReplaceReleasesIncludingAnEmptyResult() {
+    UUID actorSubjectId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID holdScopeId = UUID.randomUUID();
+    freeRental(actorSubjectId, warehouseId, "MODE-FIRST");
+    freeRental(actorSubjectId, warehouseId, "MODE-SECOND");
+    freeRental(actorSubjectId, warehouseId, "MODE-THIRD");
+
+    OffsetDateTime firstExpiry = OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(2);
+    CabinSearchGroup matching =
+        new CabinSearchGroup("БК-1", "ДВП", "2.4x6", null, null, null, 1);
+    search(
+        new CabinSearchRequest(
+            warehouseId,
+            holdScopeId,
+            firstExpiry,
+            actorSubjectId,
+            "RENTAL_MANAGER",
+            List.of(matching),
+            "REPLACE"));
+    List<PresentationHoldView> firstHolds = presentationHolds.holds(holdScopeId).holds();
+    assertThat(firstHolds).hasSize(1);
+
+    OffsetDateTime appendExpiry = OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(20);
+    CabinSearchResponse appended =
+        search(
+            new CabinSearchRequest(
+                warehouseId,
+                holdScopeId,
+                appendExpiry,
+                actorSubjectId,
+                "RENTAL_MANAGER",
+                List.of(matching),
+                "APPEND"));
+    assertThat(appended.groups().getFirst().cabins())
+        .singleElement()
+        .satisfies(
+            cabin ->
+                assertThat(cabin.id())
+                    .isNotEqualTo(firstHolds.getFirst().rentalItemId()));
+    assertThat(presentationHolds.holds(holdScopeId).holds())
+        .hasSize(2)
+        .allSatisfy(hold -> assertThat(hold.expiresAt()).isAfter(firstExpiry));
+
+    search(
+        new CabinSearchRequest(
+            warehouseId,
+            holdScopeId,
+            OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(10),
+            actorSubjectId,
+            "RENTAL_MANAGER",
+            List.of(matching),
+            null));
+    assertThat(presentationHolds.holds(holdScopeId).holds()).hasSize(1);
+
+    CabinSearchGroup noMatch =
+        new CabinSearchGroup("НЕСУЩЕСТВУЮЩИЙ ТИП", "ДВП", "2.4x6", null, null, null, 1);
+    CabinSearchResponse empty =
+        search(
+            new CabinSearchRequest(
+                warehouseId,
+                holdScopeId,
+                OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(10),
+                actorSubjectId,
+                "RENTAL_MANAGER",
+                List.of(noMatch),
+                "REPLACE"));
+    assertThat(empty.groups().getFirst().cabins()).isEmpty();
+    assertThat(presentationHolds.holds(holdScopeId).holds()).isEmpty();
+  }
+
+  @Test
+  void concurrentCabinSearchRetryCreatesOneFrozenResult() {
+    UUID actorSubjectId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID holdScopeId = UUID.randomUUID();
+    UUID key = UUID.randomUUID();
+    freeRental(actorSubjectId, warehouseId, "CONCURRENT-IDEMPOTENT");
+    CabinSearchRequest request =
+        matchingSearch(warehouseId, holdScopeId, actorSubjectId, 1);
+    CountDownLatch start = new CountDownLatch(1);
+    var executor = Executors.newFixedThreadPool(2);
+    try {
+      var first =
+          CompletableFuture.supplyAsync(
+              () -> concurrentSearch(start, key, request), executor);
+      var second =
+          CompletableFuture.supplyAsync(
+              () -> concurrentSearch(start, key, request), executor);
+      start.countDown();
+
+      var results = List.of(first.join(), second.join());
+      assertThat(results).extracting(AssetService.CreateResult::replayed)
+          .containsExactlyInAnyOrder(false, true);
+      assertThat(results.get(0).response()).isEqualTo(results.get(1).response());
+      assertThat(presentationHolds.holds(holdScopeId).holds()).hasSize(1);
+    } finally {
+      executor.shutdownNow();
+    }
   }
 
   @Test
@@ -236,6 +373,43 @@ class PresentationHoldServiceIntegrationTest {
   }
 
   @Test
+  void factsOnlyCatalogSearchesNumberTypeCharacteristicsAndLinoleumWithoutHolds() {
+    UUID actorSubjectId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    RentalItemResponse linoleum =
+        freeRental(
+            actorSubjectId,
+            warehouseId,
+            "CATALOG-LINO",
+            CATEGORY_NEW,
+            List.of(CHARACTERISTIC_ELECTRICS_KK),
+            true);
+    RentalItemResponse sale =
+        freeRental(actorSubjectId, warehouseId, "CATALOG-SALE", CATEGORY_ORDINARY);
+    assets.updateStatus(sale.id(), new UpdateStatusRequest(sale.version(), RentalItemStatus.SALE));
+
+    var byNumber = presentationHolds.catalog(warehouseId, linoleum.number(), 0, 20);
+    assertThat(byNumber.content())
+        .singleElement()
+        .satisfies(
+            cabin -> {
+              assertThat(cabin.id()).isEqualTo(linoleum.id());
+              assertThat(cabin.linoleum()).isTrue();
+              assertThat(cabin.characteristics()).isNotBlank();
+            });
+    assertThat(presentationHolds.catalog(warehouseId, "БК-1", 0, 20).content())
+        .extracting(cabin -> cabin.id())
+        .containsExactlyInAnyOrder(linoleum.id(), sale.id());
+    assertThat(presentationHolds.catalog(warehouseId, "Линолеум", 0, 20).content())
+        .extracting(cabin -> cabin.id())
+        .containsExactly(linoleum.id());
+    assertThat(presentationHolds.catalog(warehouseId, "без линолеума", 0, 20).content())
+        .extracting(cabin -> cabin.id())
+        .containsExactly(sale.id());
+    assertThat(presentationHolds.holds(UUID.randomUUID()).holds()).isEmpty();
+  }
+
+  @Test
   void replacingPresentationSelectionPublishesAvailabilityForReleasedAndAcquiredCabins() {
     UUID actorSubjectId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
@@ -285,7 +459,7 @@ class PresentationHoldServiceIntegrationTest {
     UUID firstActor = UUID.randomUUID();
     RentalItemResponse cabin = freeRental(firstActor, warehouseId, "EXPIRING");
 
-    presentationHolds.search(matchingSearch(warehouseId, firstScope, firstActor));
+    search(matchingSearch(warehouseId, firstScope, firstActor));
     UUID holdId =
         presentationHolds.holds(firstScope).holds().getFirst().holdId();
     jdbc.update(
@@ -293,7 +467,7 @@ class PresentationHoldServiceIntegrationTest {
         holdId);
 
     var next =
-        presentationHolds.search(
+        search(
             matchingSearch(warehouseId, UUID.randomUUID(), UUID.randomUUID()));
 
     assertThat(next.groups())
@@ -319,7 +493,7 @@ class PresentationHoldServiceIntegrationTest {
         .containsExactly("Новая", "Обычная");
 
     var all =
-        presentationHolds.search(
+        search(
             matchingSearch(
                 allWarehouseId,
                 UUID.randomUUID(),
@@ -338,7 +512,7 @@ class PresentationHoldServiceIntegrationTest {
     RentalItemResponse newCategory =
         freeRental(actorSubjectId, newCategoryWarehouseId, "NEW-CATEGORY-NEW", "Новая");
     var onlyNew =
-        presentationHolds.search(
+        search(
             matchingSearch(
                 newCategoryWarehouseId,
                 UUID.randomUUID(),
@@ -363,14 +537,21 @@ class PresentationHoldServiceIntegrationTest {
     freeRental(actorSubjectId, warehouseId, "OWN-FACET", CATEGORY_NEW);
     freeRental(actorSubjectId, warehouseId, "OTHER-FACET", CATEGORY_ORDINARY);
 
-    presentationHolds.search(
+    search(
         matchingSearch(warehouseId, ownHoldScopeId, actorSubjectId, 1, CATEGORY_NEW));
-    presentationHolds.search(
+    search(
         matchingSearch(
             warehouseId, UUID.randomUUID(), actorSubjectId, 1, CATEGORY_ORDINARY));
 
     assertThat(presentationHolds.facets(warehouseId, ownHoldScopeId).categories())
         .containsExactly(CATEGORY_NEW);
+    assertThat(presentationHolds.facets(warehouseId, ownHoldScopeId).typeDimensions())
+        .singleElement()
+        .satisfies(
+            relation -> {
+              assertThat(relation.cabinType()).isEqualTo("БК-1");
+              assertThat(relation.dimensions()).containsExactly("2.4x6");
+            });
     assertThat(presentationHolds.facets(warehouseId).categories()).isEmpty();
   }
 
@@ -378,6 +559,7 @@ class PresentationHoldServiceIntegrationTest {
   void searchFiltersCharacteristicsAndLinoleumPerGroupWithoutDuplicateCabins() {
     UUID actorSubjectId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
+    UUID holdScopeId = UUID.randomUUID();
     RentalItemResponse first =
         freeRental(
             actorSubjectId,
@@ -423,14 +605,15 @@ class PresentationHoldServiceIntegrationTest {
         new CabinSearchGroup("БК-1", "ДВП", "2.4x6", "Новая", "ПЛАСТИКОВОЕ", true, 2);
 
     var searched =
-        presentationHolds.search(
+        search(
             new CabinSearchRequest(
                 warehouseId,
-                UUID.randomUUID(),
+                holdScopeId,
                 OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(10),
                 actorSubjectId,
                 "RENTAL_MANAGER",
-                List.of(detailed, broader)));
+                List.of(detailed, broader),
+                null));
 
     assertThat(searched.groups()).hasSize(2);
     assertThat(searched.groups().get(0).group()).isEqualTo(detailed);
@@ -441,6 +624,8 @@ class PresentationHoldServiceIntegrationTest {
     assertThat(searched.groups().get(1).cabins())
         .hasSize(2)
         .allSatisfy(cabin -> assertThat(cabin.linoleum()).isEqualTo(true));
+    assertThat(presentationHolds.facets(warehouseId, holdScopeId).characteristics())
+        .contains("Пластиковое окно");
     List<UUID> selectedIds =
         searched.groups().stream()
             .flatMap(group -> group.cabins().stream())
@@ -457,7 +642,7 @@ class PresentationHoldServiceIntegrationTest {
     RentalItemResponse first = freeRental(actorSubjectId, warehouseId, "PUBLISH-FIRST");
     RentalItemResponse second = freeRental(actorSubjectId, warehouseId, "PUBLISH-SECOND");
     var searched =
-        presentationHolds.search(
+        search(
             matchingSearch(warehouseId, inquiryId, actorSubjectId, 2));
     assertThat(searched.groups().getFirst().cabins()).hasSize(2);
     UUID secondHoldId =
@@ -482,8 +667,7 @@ class PresentationHoldServiceIntegrationTest {
     assertThat(holdRepository.findById(secondHoldId).orElseThrow().getState())
         .isEqualTo(PresentationUnitHoldState.RELEASED);
     assertThat(
-            presentationHolds
-                .search(
+            search(
                     matchingSearch(
                         warehouseId, UUID.randomUUID(), UUID.randomUUID()))
                 .groups()
@@ -619,6 +803,23 @@ class PresentationHoldServiceIntegrationTest {
     return freeRental(actorSubjectId, warehouseId, suffix, null, null, false);
   }
 
+  private CabinSearchResponse search(CabinSearchRequest request) {
+    return presentationHolds
+        .search(LOGISTICS_SUBJECT, UUID.randomUUID(), request)
+        .response();
+  }
+
+  private AssetService.CreateResult<CabinSearchResponse> concurrentSearch(
+      CountDownLatch start, UUID key, CabinSearchRequest request) {
+    try {
+      start.await();
+      return presentationHolds.search(LOGISTICS_SUBJECT, key, request);
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("Concurrent search test was interrupted", interrupted);
+    }
+  }
+
   private RentalItemResponse freeRental(
       UUID actorSubjectId, UUID warehouseId, String suffix, String category) {
     return freeRental(actorSubjectId, warehouseId, suffix, category, null, false);
@@ -679,7 +880,8 @@ class PresentationHoldServiceIntegrationTest {
         "RENTAL_MANAGER",
         List.of(
             new CabinSearchGroup(
-                "БК-1", "ДВП", "2.4x6", category, null, null, quantity)));
+                "БК-1", "ДВП", "2.4x6", category, null, null, quantity)),
+        null);
   }
 
   private static ReplacePresentationHoldsRequest replaceRequest(

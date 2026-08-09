@@ -39,6 +39,7 @@ public class DossierInboxProcessor {
   private final DossierPartitionCheckpointRepository partitions;
   private final DossierAggregateCheckpointRepository aggregates;
   private final DossierUnlinkedFactRepository unlinked;
+  private final DossierVisibilityCoverageResolver visibilityCoverage;
   private final DossierProjectionService projections;
   private final DossierDeadLetterService deadLetters;
   private final DossierEnvelopeValidator validator;
@@ -50,6 +51,7 @@ public class DossierInboxProcessor {
       DossierPartitionCheckpointRepository partitions,
       DossierAggregateCheckpointRepository aggregates,
       DossierUnlinkedFactRepository unlinked,
+      DossierVisibilityCoverageResolver visibilityCoverage,
       DossierProjectionService projections,
       DossierDeadLetterService deadLetters,
       DossierEnvelopeValidator validator,
@@ -59,12 +61,19 @@ public class DossierInboxProcessor {
     this.partitions = partitions;
     this.aggregates = aggregates;
     this.unlinked = unlinked;
+    this.visibilityCoverage = visibilityCoverage;
     this.projections = projections;
     this.deadLetters = deadLetters;
     this.validator = validator;
     this.transactions = new TransactionTemplate(transactionManager);
   }
 
+  /**
+   * Applies a validated source record with bounded retries for local uniqueness and optimistic
+   * races, keeping journal identity, aggregate ordering, projection state and checkpoints in one
+   * transaction. The same transaction holds the active-generation shared lock while creating
+   * projection state or failure coverage.
+   */
   public Outcome process(DossierValidatedEvent event) {
     for (int attempt = 0; attempt < 4; attempt++) {
       try {
@@ -82,14 +91,21 @@ public class DossierInboxProcessor {
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
     DossierProducer producer = producer(event.producerCode());
     DossierPartitionCheckpoint partition = partition(event, now);
+    UUID generationId = projections.activeGeneration(now);
 
     Optional<DossierInbox> existingInbox = inboxes.findById(event.eventId());
     DossierInbox inbox;
     if (existingInbox.isPresent()) {
       inbox = existingInbox.orElseThrow();
       if (!inbox.hasSamePayload(event.payloadSha256())) {
+        UUID subjectCabinId =
+            visibilityCoverage.provenSubjectCabin(event, producer, generationId);
         deadLetters.processingFailure(
-            event, event.aggregateId(), DossierDltFailureCode.EVENT_IDENTITY_CONFLICT);
+            event,
+            event.aggregateId(),
+            DossierDltFailureCode.EVENT_IDENTITY_CONFLICT,
+            generationId,
+            subjectCabinId);
         aggregate(event, producer, now)
             .blockConflict(DossierAggregateBlockReason.EVENT_IDENTITY_CONFLICT, now);
         partition.advance(event.offset(), now);
@@ -109,8 +125,13 @@ public class DossierInboxProcessor {
         sourceFacts.findBySourceTopicAndSourcePartitionAndSourceOffset(
             event.topic(), event.partition(), event.offset());
     if (offsetFact.isPresent() && !offsetFact.orElseThrow().getEventId().equals(event.eventId())) {
+      UUID subjectCabinId = visibilityCoverage.provenSubjectCabin(event, producer, generationId);
       deadLetters.processingFailure(
-          event, event.aggregateId(), DossierDltFailureCode.EVENT_IDENTITY_CONFLICT);
+          event,
+          event.aggregateId(),
+          DossierDltFailureCode.EVENT_IDENTITY_CONFLICT,
+          generationId,
+          subjectCabinId);
       aggregate(event, producer, now)
           .blockConflict(DossierAggregateBlockReason.EVENT_IDENTITY_CONFLICT, now);
       decide(event.eventId(), DossierInboxDecision.DLT, now);
@@ -123,12 +144,17 @@ public class DossierInboxProcessor {
     }
 
     DossierAggregateCheckpoint aggregate = aggregate(event, producer, now);
-    UUID generationId = projections.activeGeneration(now);
     if (inbox.getDecision() == DossierInboxDecision.DLT) {
       if (persistedFact.isPresent()
           && !hasSameSourceIdentity(persistedFact.orElseThrow(), event, producer)) {
+        UUID subjectCabinId =
+            visibilityCoverage.provenSubjectCabin(event, producer, generationId);
         deadLetters.processingFailure(
-            event, event.aggregateId(), DossierDltFailureCode.EVENT_IDENTITY_CONFLICT);
+            event,
+            event.aggregateId(),
+            DossierDltFailureCode.EVENT_IDENTITY_CONFLICT,
+            generationId,
+            subjectCabinId);
         aggregate.blockConflict(DossierAggregateBlockReason.EVENT_IDENTITY_CONFLICT, now);
         partition.advance(event.offset(), now);
         return Outcome.EVENT_IDENTITY_CONFLICT;
@@ -141,6 +167,7 @@ public class DossierInboxProcessor {
         unlinked
             .findBySourceEventIdAndGenerationId(event.eventId(), generationId)
             .ifPresent(value -> value.resolve(now));
+        deadLetters.resolveProcessingCoverage(event.eventId(), generationId, now);
         inbox.recoverProcessingFailure(now);
         drainQuarantined(event, producer, aggregate, generationId, now);
         partition.advance(event.offset(), now);
@@ -165,7 +192,13 @@ public class DossierInboxProcessor {
         partition.advance(event.offset(), now);
         return Outcome.PROCESSED;
       }
-      recordUnlinked(event, producer, generationId, DossierUnlinkedReason.AGGREGATE_QUARANTINED);
+      UUID subjectCabinId = visibilityCoverage.provenSubjectCabin(event, producer, generationId);
+      recordUnlinked(
+          event,
+          producer,
+          generationId,
+          DossierUnlinkedReason.AGGREGATE_QUARANTINED,
+          subjectCabinId);
       decide(event.eventId(), DossierInboxDecision.QUARANTINED, now);
       partition.advance(event.offset(), now);
       return Outcome.BLOCKED;
@@ -178,7 +211,13 @@ public class DossierInboxProcessor {
     }
     if (event.aggregateVersion() > expected) {
       aggregate.blockGap(event.aggregateVersion(), now);
-      recordUnlinked(event, producer, generationId, DossierUnlinkedReason.MISSING_PREFIX);
+      UUID subjectCabinId = visibilityCoverage.provenSubjectCabin(event, producer, generationId);
+      recordUnlinked(
+          event,
+          producer,
+          generationId,
+          DossierUnlinkedReason.MISSING_PREFIX,
+          subjectCabinId);
       decide(event.eventId(), DossierInboxDecision.QUARANTINED, now);
       partition.advance(event.offset(), now);
       return Outcome.VERSION_GAP;
@@ -190,10 +229,17 @@ public class DossierInboxProcessor {
       DossierAggregateBlockReason reason = conflictReason(exception);
       if (reason == null) throw exception;
       DossierDltFailureCode failureCode = failureCode(reason);
+      UUID subjectCabinId = visibilityCoverage.provenSubjectCabin(event, producer, generationId);
       aggregate.blockConflict(reason, now);
-      recordUnlinked(event, producer, generationId, DossierUnlinkedReason.AGGREGATE_QUARANTINED);
+      recordUnlinked(
+          event,
+          producer,
+          generationId,
+          DossierUnlinkedReason.AGGREGATE_QUARANTINED,
+          subjectCabinId);
       decide(event.eventId(), DossierInboxDecision.DLT, now);
-      deadLetters.processingFailure(event, event.aggregateId(), failureCode);
+      deadLetters.processingFailure(
+          event, event.aggregateId(), failureCode, generationId, subjectCabinId);
       partition.advance(event.offset(), now);
       return reason == DossierAggregateBlockReason.MEDIA_GENERATION_CONFLICT
           ? Outcome.MEDIA_GENERATION_CONFLICT
@@ -209,13 +255,15 @@ public class DossierInboxProcessor {
   /**
    * Makes the final bounded-retry outcome durable before Kafka may commit the source offset. Any
    * database failure escapes this method so the fail-closed container error handler stops the
-   * consumer and leaves the offset uncommitted.
+   * consumer and leaves the offset uncommitted. The active-generation shared lock fences the
+   * unlinked and DLT coverage rows against replay activation.
    */
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public void deadLetterAfterRetries(DossierValidatedEvent event, Object recordKey) {
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
     DossierProducer producer = producer(event.producerCode());
     DossierPartitionCheckpoint partition = partition(event, now);
+    UUID generationId = projections.activeGeneration(now);
     DossierInbox inbox =
         inboxes
             .findById(event.eventId())
@@ -224,10 +272,15 @@ public class DossierInboxProcessor {
                     inboxes.save(
                         DossierInbox.receive(event.eventId(), event.payloadSha256(), now)));
     if (!inbox.hasSamePayload(event.payloadSha256())) {
+      UUID subjectCabinId = visibilityCoverage.provenSubjectCabin(event, producer, generationId);
       aggregate(event, producer, now)
           .blockConflict(DossierAggregateBlockReason.EVENT_IDENTITY_CONFLICT, now);
       deadLetters.processingFailure(
-          event, recordKey, DossierDltFailureCode.EVENT_IDENTITY_CONFLICT);
+          event,
+          recordKey,
+          DossierDltFailureCode.EVENT_IDENTITY_CONFLICT,
+          generationId,
+          subjectCabinId);
       partition.advance(event.offset(), now);
       return;
     }
@@ -241,11 +294,16 @@ public class DossierInboxProcessor {
             event.topic(), event.partition(), event.offset());
     if (coordinate.isPresent()
         && !coordinate.orElseThrow().getEventId().equals(event.eventId())) {
+      UUID subjectCabinId = visibilityCoverage.provenSubjectCabin(event, producer, generationId);
       aggregate(event, producer, now)
           .blockConflict(DossierAggregateBlockReason.EVENT_IDENTITY_CONFLICT, now);
       inbox.decide(DossierInboxDecision.DLT, now);
       deadLetters.processingFailure(
-          event, recordKey, DossierDltFailureCode.EVENT_IDENTITY_CONFLICT);
+          event,
+          recordKey,
+          DossierDltFailureCode.EVENT_IDENTITY_CONFLICT,
+          generationId,
+          subjectCabinId);
       partition.advance(event.offset(), now);
       return;
     }
@@ -253,12 +311,22 @@ public class DossierInboxProcessor {
       sourceFacts.save(sourceFact(event, producer, now));
     }
 
-    UUID generationId = projections.activeGeneration(now);
+    UUID subjectCabinId = visibilityCoverage.provenSubjectCabin(event, producer, generationId);
     aggregate(event, producer, now)
         .blockConflict(DossierAggregateBlockReason.PROCESSING_FAILED, now);
-    recordUnlinked(event, producer, generationId, DossierUnlinkedReason.AGGREGATE_QUARANTINED);
+    recordUnlinked(
+        event,
+        producer,
+        generationId,
+        DossierUnlinkedReason.AGGREGATE_QUARANTINED,
+        subjectCabinId);
     inbox.decide(DossierInboxDecision.DLT, now);
-    deadLetters.processingFailure(event, recordKey, DossierDltFailureCode.PROCESSING_FAILED);
+    deadLetters.processingFailure(
+        event,
+        recordKey,
+        DossierDltFailureCode.PROCESSING_FAILED,
+        generationId,
+        subjectCabinId);
     partition.advance(event.offset(), now);
   }
 
@@ -294,9 +362,16 @@ public class DossierInboxProcessor {
       } catch (IllegalStateException exception) {
         DossierAggregateBlockReason reason = conflictReason(exception);
         if (reason == null) throw exception;
+        UUID subjectCabinId =
+            visibilityCoverage.provenSubjectCabin(recovered, producer, generationId);
         inbox.deadLetterQuarantined(now);
         checkpoint.blockConflict(reason, now);
-        deadLetters.processingFailure(recovered, recovered.aggregateId(), failureCode(reason));
+        deadLetters.processingFailure(
+            recovered,
+            recovered.aggregateId(),
+            failureCode(reason),
+            generationId,
+            subjectCabinId);
         return;
       }
       unlinked
@@ -351,13 +426,14 @@ public class DossierInboxProcessor {
       DossierValidatedEvent event,
       DossierProducer producer,
       UUID generationId,
-      DossierUnlinkedReason reason) {
+      DossierUnlinkedReason reason,
+      UUID subjectCabinId) {
     if (unlinked.findBySourceEventIdAndGenerationId(event.eventId(), generationId).isEmpty()) {
       unlinked.save(
           DossierUnlinkedFact.record(
               generationId,
               event.eventId(),
-              event.cabinId(),
+              subjectCabinId,
               reason,
               producer,
               event.aggregateType(),

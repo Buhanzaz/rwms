@@ -9,11 +9,18 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Lease-based persistence boundary for ordered asset transactional-outbox delivery and recovery.
+ */
 @Repository
 public class AssetKafkaOutboxStore {
   private final JdbcTemplate jdbc;
   public AssetKafkaOutboxStore(JdbcTemplate jdbc) { this.jdbc = jdbc; }
 
+  /**
+   * Claims one publishable aggregate head in an independent transaction. The lease token and
+   * predecessor check prevent concurrent relays from publishing an aggregate out of order.
+   */
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public Optional<Claim> claim(String owner, Duration lease) {
     UUID token = UUID.randomUUID();
@@ -37,6 +44,10 @@ public class AssetKafkaOutboxStore {
         owner, token, lease.toMillis()).stream().findFirst();
   }
 
+  /**
+   * Marks a claim published only when the relay still owns its lease token after broker
+   * acknowledgement; a lost or expired claim is not silently finalized.
+   */
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public boolean published(UUID eventId, UUID leaseToken) {
     return jdbc.update("update outbox_event set status='PUBLISHED',published_at=clock_timestamp(),lease_owner=null,lease_token=null,lease_until=null,last_error_code=null where event_id=? and status='IN_FLIGHT' and lease_token=?", eventId, leaseToken) == 1;

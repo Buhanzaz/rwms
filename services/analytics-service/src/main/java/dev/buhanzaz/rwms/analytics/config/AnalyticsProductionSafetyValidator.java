@@ -8,6 +8,7 @@ import org.springframework.core.annotation.Order;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
+/** Fails startup outside local profiles when the analytics projection's Kafka and DLT configuration diverges from its contract. */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public final class AnalyticsProductionSafetyValidator implements ApplicationRunner {

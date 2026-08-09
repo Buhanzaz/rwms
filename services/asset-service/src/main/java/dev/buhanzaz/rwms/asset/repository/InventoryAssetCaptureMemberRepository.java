@@ -9,6 +9,9 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data repository for service-local inventory asset capture member persistence.
+ */
 public interface InventoryAssetCaptureMemberRepository
     extends JpaRepository<InventoryAssetCaptureMember, InventoryAssetCaptureMemberId> {
   @Query("""

@@ -11,6 +11,7 @@ import java.util.UUID;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+/** JPA line of a maintenance estimate; estimate transitions own its revision and total semantics. */
 @Entity
 @Table(name = "estimate_line")
 public class EstimateLine {

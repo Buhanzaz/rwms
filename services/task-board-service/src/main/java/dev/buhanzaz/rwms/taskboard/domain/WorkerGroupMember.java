@@ -9,6 +9,7 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 
+/** Historical membership link between a worker group and a worker. */
 @Entity
 @Table(
     name = "worker_group_member",

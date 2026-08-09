@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/** Persistence boundary for current and historical task route assignments. */
 public interface TaskAssignmentRepository extends JpaRepository<TaskAssignment, UUID> {
   List<TaskAssignment> findAllByQueueEntryId(UUID entryId);
 

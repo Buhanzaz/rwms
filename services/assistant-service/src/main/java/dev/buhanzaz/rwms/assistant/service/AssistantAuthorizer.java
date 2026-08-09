@@ -5,8 +5,13 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Component;
 
+/** Requires the rental-access claim and UUID subject before a conversation operation can use owner-scoped state. */
 @Component
 public class AssistantAuthorizer {
+  /**
+   * Converts a bearer token to the conversation owner only after its rental-access claim and UUID
+   * subject are validated; malformed or absent claims fail closed.
+   */
   public UUID requireRentalUser(Jwt jwt) {
     if (jwt == null || !rentalAccess(jwt)) {
       throw new AccessDeniedException("rentalAccess=true is required");

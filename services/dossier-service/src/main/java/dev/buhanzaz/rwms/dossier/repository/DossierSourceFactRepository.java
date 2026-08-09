@@ -8,6 +8,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/** Repository for immutable validated source facts, source coordinates and replay ordering. */
 public interface DossierSourceFactRepository extends JpaRepository<DossierSourceFact, UUID> {
   Optional<DossierSourceFact> findByEventId(UUID eventId);
 

@@ -19,6 +19,9 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+/**
+ * Defines the module stateless JWT resource-server, CORS and correlation-ID security boundary.
+ */
 @Configuration
 @EnableMethodSecurity
 public class SecurityConfiguration {

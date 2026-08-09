@@ -5,6 +5,10 @@ import java.util.Set;
 import java.util.UUID;
 import tools.jackson.databind.JsonNode;
 
+/**
+ * Enforces the fixed safe shape and lifecycle correlation of logistics producer payloads before
+ * they are enclosed in a transport event.
+ */
 final class LogisticsPayloadSafetyValidator implements RwmsKafkaPayloadSafetyValidator {
   private static final Set<String> FIELDS =
       Set.of(

@@ -21,6 +21,7 @@ import dev.buhanzaz.rwms.dossier.repository.DossierPartitionCheckpointRepository
 import dev.buhanzaz.rwms.dossier.repository.DossierProjectionGenerationRepository;
 import dev.buhanzaz.rwms.dossier.repository.DossierReplayPartitionHighWaterRepository;
 import dev.buhanzaz.rwms.dossier.repository.DossierReplayRunRepository;
+import dev.buhanzaz.rwms.dossier.repository.DossierSanitizedDeadLetterRepository;
 import dev.buhanzaz.rwms.dossier.repository.DossierSourceFactRepository;
 import dev.buhanzaz.rwms.dossier.service.DossierProjectionService;
 import dev.buhanzaz.rwms.dossier.service.DossierReplayService;
@@ -103,6 +104,7 @@ class DossierReplayFailureQaTest {
         mock(DossierReplayPartitionHighWaterRepository.class),
         mock(DossierActivityRepository.class),
         mock(DossierMediaProjectionRepository.class),
+        mock(DossierSanitizedDeadLetterRepository.class),
         mock(DossierProjectionService.class),
         mock(DossierEnvelopeValidator.class),
         new ObjectMapper());

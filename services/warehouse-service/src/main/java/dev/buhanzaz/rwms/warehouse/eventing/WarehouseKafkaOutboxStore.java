@@ -8,6 +8,7 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+/** Owns leased outbox state transitions, checksum fencing, retry backoff and terminal quarantine. */
 @Repository
 public class WarehouseKafkaOutboxStore {
   private final JdbcTemplate jdbc;
@@ -184,6 +185,7 @@ public class WarehouseKafkaOutboxStore {
         claim.leaseToken());
   }
 
+  /** Immutable leased envelope and fencing token returned to one relay instance. */
   public record Claim(
       UUID eventId,
       String aggregateType,

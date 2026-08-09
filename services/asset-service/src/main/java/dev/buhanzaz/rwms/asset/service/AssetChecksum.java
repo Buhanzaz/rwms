@@ -4,6 +4,9 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
+/**
+ * SHA-256 helper for asset envelope, recovery and idempotency fingerprints.
+ */
 public final class AssetChecksum {
   private AssetChecksum() {}
 

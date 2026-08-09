@@ -15,6 +15,7 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+/** Read-model media row attached to a cabin activity generation; it is never the media-service source of truth. */
 @Entity
 @Table(name = "dossier_media_projection")
 @Getter

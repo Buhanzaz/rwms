@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.taskboard.eventing;
 import java.util.Map;
 import java.util.Set;
 
+/** Stable names and major versions for facts emitted by task-board-service. */
 public final class TaskBoardEventTypes {
   public static final String WORKER_CLASS_CREATED = "task-board.worker-class.created.v1";
   public static final String WORKER_CLASS_CHANGED = "task-board.worker-class.changed.v1";

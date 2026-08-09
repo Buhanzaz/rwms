@@ -18,6 +18,9 @@ import java.util.UUID;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+/**
+ * JPA entity that persists inventory session in the inventory-owned database.
+ */
 @Entity
 @Table(name = "inventory_session")
 public class InventorySession {

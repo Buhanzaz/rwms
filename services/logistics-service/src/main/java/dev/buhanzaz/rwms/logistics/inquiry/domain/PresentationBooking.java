@@ -19,6 +19,9 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 import org.hibernate.proxy.HibernateProxy;
 
+/**
+ * JPA persistence model for Presentation Booking in the logistics-owned database.
+ */
 @Entity
 @Table(name = "presentation_booking")
 @Getter

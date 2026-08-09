@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/** Resolves append-only effective-dated timezone decisions for one or many warehouses. */
 public interface WarehouseTimeZoneHistoryRepository
     extends JpaRepository<WarehouseTimeZoneHistory, UUID> {
   Optional<WarehouseTimeZoneHistory>

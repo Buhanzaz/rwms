@@ -18,6 +18,7 @@ import java.util.UUID;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+/** JPA aggregate for a rental-item repair and its versioned maintenance lifecycle. */
 @Entity
 @Table(name = "maintenance_repair")
 public class MaintenanceRepair {

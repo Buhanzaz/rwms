@@ -13,6 +13,7 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+/** Tracks the highest locally handled source offset for one topic partition without replacing aggregate ordering checks. */
 @Entity
 @Table(name = "analytics_partition_checkpoint")
 @Getter

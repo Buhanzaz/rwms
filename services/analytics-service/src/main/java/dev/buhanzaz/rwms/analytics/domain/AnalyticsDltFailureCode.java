@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.analytics.domain;
 
+/** Enumerates safe, stable reasons why analytics quarantines a source record instead of projecting it. */
 public enum AnalyticsDltFailureCode {
   INVALID_ENVELOPE,
   INVALID_PAYLOAD,

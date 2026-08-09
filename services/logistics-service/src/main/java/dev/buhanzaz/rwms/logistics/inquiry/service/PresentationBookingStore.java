@@ -25,6 +25,9 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Coordinates local booking persistence and idempotency records used by presentation booking commands.
+ */
 @Service
 @RequiredArgsConstructor
 public class PresentationBookingStore {
@@ -172,7 +175,14 @@ public class PresentationBookingStore {
     bookings.saveAndFlush(booking);
     presentations.saveAndFlush(presentation);
     inquiries.saveAndFlush(inquiry);
-    outbox.append(inquiry.getId(), inquiry.getConversationId(), booking.getOrderId());
+    outbox.append(
+        inquiry.getId(),
+        inquiry.getVersion(),
+        inquiry.getConversationId(),
+        booking.getId(),
+        booking.getOrderId(),
+        inquiry.getManagerId(),
+        timestamp);
   }
 
   @Transactional(readOnly = true)

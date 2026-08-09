@@ -11,6 +11,7 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/** Owns locked selection and state transitions for analytics DLT rows while the relay communicates with Kafka. */
 @Service
 public class AnalyticsDltRelayTransactions {
   private static final int MAXIMUM_ATTEMPTS = 8;

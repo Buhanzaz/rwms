@@ -8,6 +8,9 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data repository for service-local administrative asset correction persistence.
+ */
 public interface AdministrativeAssetCorrectionRepository
     extends JpaRepository<AdministrativeAssetCorrection, UUID> {
   @Lock(LockModeType.PESSIMISTIC_WRITE)

@@ -22,6 +22,7 @@ import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseOperationMarkStore;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -50,6 +51,7 @@ public class EquipmentMovementTaskService {
   private final EquipmentMovementTaskResponseMapper mapper;
   private final LogisticsWarehouseLifecycle warehouseLifecycle;
   private final LogisticsWarehouseOperationMarkStore warehouseOperationMarks;
+  private final LogisticsTransactionLock transactionLock;
 
   public EquipmentMovementTaskResponse get(UUID taskId) {
     EquipmentMovementTask task = required(taskId);
@@ -173,7 +175,7 @@ public class EquipmentMovementTaskService {
     validateRequest(request);
     String checksum = creationChecksum(request, ownerType, ownerId);
     if (ownerType == EquipmentMovementTaskOwnerType.MAINTENANCE_DISPOSITION) {
-      tasks.acquireTransactionLock("equipment-movement:maintenance-disposition:" + ownerId);
+      transactionLock.acquire("equipment-movement:maintenance-disposition:" + ownerId);
       EquipmentMovementTask owned = tasks.findByOwnerTypeAndOwnerId(ownerType, ownerId).orElse(null);
       if (owned != null) {
         if (!owned.matchesRequest(checksum)) {
@@ -184,7 +186,7 @@ public class EquipmentMovementTaskService {
             response(owned, lines.findAllByTask_IdOrderByLineNumberAsc(owned.getId())), true);
       }
     }
-    tasks.acquireTransactionLock("equipment-movement:create:" + actorSubjectId + ":" + idempotencyKey);
+    transactionLock.acquire("equipment-movement:create:" + actorSubjectId + ":" + idempotencyKey);
     EquipmentMovementTask replay =
         tasks.findByCreatedBySubjectIdAndIdempotencyKey(actorSubjectId, idempotencyKey).orElse(null);
     if (replay != null) {
@@ -235,10 +237,16 @@ public class EquipmentMovementTaskService {
     }
     List<EquipmentMovementTaskLine> savedLines = lines.saveAllAndFlush(planned);
     warehouseOperationMarks.enqueue(
-        request.warehouseId(), task.getId(), admission.occurredAt());
+        request.warehouseId(),
+        task.getId(),
+        admission.occurredAt(),
+        admission.evidenceFor(request.warehouseId()).orElse(null));
     if (!request.warehouseId().equals(targetWarehouseId)) {
       warehouseOperationMarks.enqueue(
-          targetWarehouseId, task.getId(), admission.occurredAt());
+          targetWarehouseId,
+          task.getId(),
+          admission.occurredAt(),
+          admission.evidenceFor(targetWarehouseId).orElse(null));
     }
     return new CreateResult(response(task, savedLines), false);
   }
@@ -256,7 +264,7 @@ public class EquipmentMovementTaskService {
         EquipmentMovementTaskChecksum.sha256(
             CANCEL_OPERATION,
             List.of(taskId.toString(), Long.toString(request.expectedVersion())));
-    tasks.acquireTransactionLock("equipment-movement:cancel:" + actorSubjectId + ":" + idempotencyKey);
+    transactionLock.acquire("equipment-movement:cancel:" + actorSubjectId + ":" + idempotencyKey);
     EquipmentMovementTask task =
         tasks
             .findForUpdate(taskId)

@@ -13,19 +13,7 @@ import dev.buhanzaz.rwms.maintenance.domain.RepairKind;
 import dev.buhanzaz.rwms.maintenance.domain.RepairOrigin;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStage;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStageKind;
-import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventFactFactory;
-import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventStore;
-import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceJsonbCanonicalizer;
-import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceProjectionSnapshotFactory;
-import dev.buhanzaz.rwms.maintenance.integration.MaintenanceDependencyGateway;
-import dev.buhanzaz.rwms.maintenance.repository.CatalogNodeRepository;
-import dev.buhanzaz.rwms.maintenance.repository.CatalogLinkRepository;
-import dev.buhanzaz.rwms.maintenance.repository.CatalogVersionRepository;
-import dev.buhanzaz.rwms.maintenance.repository.InventoryRepairSourceOperationRepository;
-import dev.buhanzaz.rwms.maintenance.repository.InventoryRepairSourceRepository;
 import dev.buhanzaz.rwms.maintenance.repository.MaintenanceRepairRepository;
-import dev.buhanzaz.rwms.maintenance.repository.MediaFactProjectionRepository;
-import dev.buhanzaz.rwms.maintenance.repository.RentalItemFactProjectionRepository;
 import dev.buhanzaz.rwms.maintenance.repository.RepairStageRepository;
 import java.util.List;
 import java.util.UUID;
@@ -52,29 +40,13 @@ class InventoryRepairSnapshotServiceTest {
 
   private final MaintenanceRepairRepository repairs = mock(MaintenanceRepairRepository.class);
   private final RepairStageRepository stages = mock(RepairStageRepository.class);
-  private InventoryMaintenanceService service;
+  private InventoryMaintenanceSnapshotProjection service;
 
   @BeforeEach
   void createService() {
-    service = new InventoryMaintenanceService(
-        mock(CatalogVersionRepository.class),
-        mock(CatalogNodeRepository.class),
-        mock(CatalogLinkRepository.class),
-        mock(InventoryRepairSourceOperationRepository.class),
-        mock(InventoryRepairSourceRepository.class),
-        mock(RentalItemFactProjectionRepository.class),
-        mock(MediaFactProjectionRepository.class),
+    service = new InventoryMaintenanceSnapshotProjection(
         repairs,
         stages,
-        mock(MaintenanceEventStore.class),
-        mock(MaintenanceEventFactFactory.class),
-        mock(MaintenanceProjectionSnapshotFactory.class),
-        mock(InventoryRepairReconciliationWriter.class),
-        mock(MaintenanceReconciliationStore.class),
-        mock(InventoryRepairSourceOperationRegistrar.class),
-        mock(MaintenanceDependencyGateway.class),
-        mock(WarehouseLifecycleOperations.class),
-        mock(MaintenanceJsonbCanonicalizer.class),
         JsonMapper.builder().findAndAddModules().build());
   }
 

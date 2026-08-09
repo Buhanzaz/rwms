@@ -7,6 +7,14 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Resolves an operator-approved version-gap quarantine in the auth Kafka shadow projection.
+ *
+ * <p>Reconciliation locks the blocked checkpoint and authoritative stream head, replays the
+ * authoritative stream for verification, records the authoritative tail in the shadow checkpoint,
+ * resolves the matching quarantine, and finally unblocks the aggregate. It never invents missing
+ * events or changes the authoritative stream.
+ */
 @Service
 @RequiredArgsConstructor
 public class AuthShadowReconciler {
@@ -17,6 +25,17 @@ public class AuthShadowReconciler {
     private final AuthReplayVerifier replayVerifier;
     private final AuthEventingMetrics metrics;
 
+    /**
+     * Reconciles one expected blocked checkpoint after a documented operator decision.
+     *
+     * @param aggregateType aggregate family to reconcile
+     * @param aggregateId aggregate whose shadow checkpoint is blocked
+     * @param expectedCheckpointVersion version observed when the quarantine was opened
+     * @param reason bounded operator explanation for the resolution
+     * @param resolvedBySubjectId operator who approved the reconciliation
+     * @return authoritative tail and number of resolved quarantine rows
+     * @throws OptimisticLockingFailureException when the checkpoint or quarantine changed
+     */
     @Transactional
     public Result reconcile(
             AuthAggregateType aggregateType,
@@ -167,6 +186,15 @@ public class AuthShadowReconciler {
 
     private record Tail(UUID eventId, long version, String payloadSha256) {}
 
+    /**
+     * Result of a completed guarded shadow reconciliation.
+     *
+     * @param aggregateType reconciled aggregate family
+     * @param aggregateId reconciled aggregate identifier
+     * @param version restored authoritative tail version
+     * @param lastEventId restored authoritative tail event identifier
+     * @param resolvedQuarantines number of version-gap quarantine rows resolved
+     */
     public record Result(
             AuthAggregateType aggregateType,
             UUID aggregateId,

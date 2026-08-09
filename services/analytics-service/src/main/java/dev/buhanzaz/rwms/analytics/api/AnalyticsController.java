@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+/** Read-only HTTP adapter for warehouse group KPI queries; all authorization and formula semantics remain in application services. */
 @RestController
 public class AnalyticsController {
   private final AnalyticsQueryService queries;

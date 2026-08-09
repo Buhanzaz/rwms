@@ -16,6 +16,9 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * Defines transport models for logistics HTTP endpoints; these values are not persistence entities.
+ */
 public final class LogisticsApiModels {
   private LogisticsApiModels() {}
 

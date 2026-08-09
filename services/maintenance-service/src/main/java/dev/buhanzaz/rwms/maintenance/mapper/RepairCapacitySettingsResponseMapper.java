@@ -7,6 +7,7 @@ import org.mapstruct.Mapper;
 import org.mapstruct.MappingConstants;
 import org.mapstruct.ReportingPolicy;
 
+/** Maps RepairCapacitySettingsResponse at the maintenance boundary without applying a domain transition. */
 @Mapper(
     componentModel = MappingConstants.ComponentModel.SPRING,
     injectionStrategy = InjectionStrategy.CONSTRUCTOR,

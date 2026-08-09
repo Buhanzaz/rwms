@@ -30,6 +30,13 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+/**
+ * Public worker-token API for the worker Android application.
+ *
+ * <p>The authenticated JWT fixes both worker and warehouse identity. The app never chooses those
+ * identifiers in a request, which prevents a worker from reading or acting on another worker's
+ * task feed.
+ */
 @RestController
 @Validated
 @RequestMapping("/api/worker/v1")
@@ -47,12 +54,19 @@ public class WorkerTaskBoardController {
     this.access = access;
   }
 
+  /** Returns identity, qualifications, queue categories, clock data and a short-lived offline lease. */
   @GetMapping("/context")
   public WorkerContext context(@AuthenticationPrincipal Jwt jwt) {
     WorkerPrincipal principal = principal(jwt, false);
     return service.context(principal.workerId(), principal.warehouseId());
   }
 
+  /**
+   * Returns one cursor page of the authorized worker feed.
+   *
+   * <p>Pages are tied to a feed revision. A changed revision produces a conflict instead of mixing
+   * results from two snapshots; an unchanged first page can return {@code 304} via its ETag.
+   */
   @GetMapping("/feed")
   public ResponseEntity<WorkerFeed> feed(
       @AuthenticationPrincipal Jwt jwt,
@@ -68,6 +82,7 @@ public class WorkerTaskBoardController {
     return ResponseEntity.ok().eTag(page.etag()).body(page.feed());
   }
 
+  /** Returns task detail only when the worker is authorized to see the entry. */
   @GetMapping("/entries/{entryId}")
   public WorkerTaskDetail detail(
       @AuthenticationPrincipal Jwt jwt, @PathVariable UUID entryId) {
@@ -75,6 +90,11 @@ public class WorkerTaskBoardController {
     return service.detail(principal.workerId(), principal.warehouseId(), entryId);
   }
 
+  /**
+   * Opens a worker-scoped SSE invalidation stream.
+   *
+   * <p>Events are signals to refresh the authorized feed, not a substitute for task data.
+   */
   @GetMapping(path = "/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
   public SseEmitter events(
       @AuthenticationPrincipal Jwt jwt,
@@ -83,6 +103,7 @@ public class WorkerTaskBoardController {
     return invalidations.subscribe(principal.workerId(), service.revision());
   }
 
+  /** Applies an idempotent worker action using the issued offline lease and observed entry version. */
   @PostMapping("/entries/{entryId}/actions")
   public WorkerActionAppliedResult action(
       @AuthenticationPrincipal Jwt jwt,
@@ -98,6 +119,7 @@ public class WorkerTaskBoardController {
         request);
   }
 
+  /** Reserves an idempotent evidence upload slot before media-service receives the bytes. */
   @PostMapping("/entries/{entryId}/evidence-reservations")
   public ResponseEntity<TaskEvidence> reserveEvidence(
       @AuthenticationPrincipal Jwt jwt,
@@ -115,6 +137,7 @@ public class WorkerTaskBoardController {
                 request));
   }
 
+  /** Registers or replaces this worker's push-notification device installation. */
   @PutMapping("/devices/{installationId}")
   public ResponseEntity<WorkerDeviceRegistration> registerDevice(
       @AuthenticationPrincipal Jwt jwt,
@@ -128,6 +151,7 @@ public class WorkerTaskBoardController {
         .body(result.registration());
   }
 
+  /** Removes only the authenticated worker's device installation binding. */
   @DeleteMapping("/devices/{installationId}")
   public ResponseEntity<Void> unregisterDevice(
       @AuthenticationPrincipal Jwt jwt, @PathVariable String installationId) {

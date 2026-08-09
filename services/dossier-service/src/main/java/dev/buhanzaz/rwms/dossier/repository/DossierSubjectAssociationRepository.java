@@ -9,6 +9,7 @@ import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 
+/** Repository for proven source-subject to cabin relations used when materializing activities. */
 public interface DossierSubjectAssociationRepository
     extends JpaRepository<DossierSubjectAssociation, UUID> {
   Optional<DossierSubjectAssociation> findByProducerAndSourceTypeAndSourceIdAndGenerationId(

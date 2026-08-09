@@ -4,6 +4,7 @@ import jakarta.annotation.PostConstruct;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.UnknownHostException;
+import java.util.List;
 import java.util.Locale;
 
 import lombok.RequiredArgsConstructor;
@@ -29,37 +30,8 @@ public class GatewayProductionSafetyValidator {
   @PostConstruct
   void validate() {
     URI publicBase = requireOrigin("rwms.gateway.public-base-uri", properties.getPublicBaseUri());
-    URI authTarget = requireOrigin("rwms.gateway.routes.auth-uri", properties.getRoutes().getAuthUri());
-    if (sharesHost(publicBase, authTarget)) {
-      throw new IllegalStateException(
-          "Gateway auth target must not use the public gateway host");
-    }
-    URI taskBoardTarget =
-        requireOrigin("rwms.gateway.routes.task-board-uri", properties.getRoutes().getTaskBoardUri());
-    URI warehouseTarget =
-        requireOrigin("rwms.gateway.routes.warehouse-uri", properties.getRoutes().getWarehouseUri());
-    URI assetTarget =
-        requireOrigin("rwms.gateway.routes.asset-uri", properties.getRoutes().getAssetUri());
-    URI maintenanceTarget =
-        requireOrigin(
-            "rwms.gateway.routes.maintenance-uri", properties.getRoutes().getMaintenanceUri());
-    URI mediaTarget =
-        requireOrigin("rwms.gateway.routes.media-uri", properties.getRoutes().getMediaUri());
-    URI inventoryTarget =
-        requireOrigin(
-            "rwms.gateway.routes.inventory-uri", properties.getRoutes().getInventoryUri());
-    URI logisticsTarget =
-        requireOrigin(
-            "rwms.gateway.routes.logistics-uri", properties.getRoutes().getLogisticsUri());
-    URI dossierTarget =
-        requireOrigin(
-            "rwms.gateway.routes.dossier-uri", properties.getRoutes().getDossierUri());
-    URI analyticsTarget =
-        requireOrigin(
-            "rwms.gateway.routes.analytics-uri", properties.getRoutes().getAnalyticsUri());
-    URI assistantTarget =
-        requireOrigin(
-            "rwms.gateway.routes.assistant-uri", properties.getRoutes().getAssistantUri());
+    List<DownstreamTarget> downstreamTargets = requireDownstreamTargets();
+    downstreamTargets.forEach(target -> forbidPublicGatewayHost(publicBase, target));
     URI issuer = requireHttpUri("rwms.gateway.security.issuer", URI.create(properties.getSecurity().getIssuer()));
     String expectedIssuer = trimSlash(publicBase.toString()) + "/auth";
     if (!expectedIssuer.equals(trimSlash(issuer.toString()))) {
@@ -78,17 +50,51 @@ public class GatewayProductionSafetyValidator {
       requireHttps("gateway public base", publicBase);
       requireHttps("gateway issuer", issuer);
       properties.getCors().getAllowedOrigins().forEach(origin -> requireHttps("CORS origin", URI.create(origin)));
-      forbidLoopback("auth target", authTarget);
-      forbidLoopback("task-board target", taskBoardTarget);
-      forbidLoopback("warehouse target", warehouseTarget);
-      forbidLoopback("asset target", assetTarget);
-      forbidLoopback("maintenance target", maintenanceTarget);
-      forbidLoopback("media target", mediaTarget);
-      forbidLoopback("inventory target", inventoryTarget);
-      forbidLoopback("logistics target", logisticsTarget);
-      forbidLoopback("dossier target", dossierTarget);
-      forbidLoopback("analytics target", analyticsTarget);
-      forbidLoopback("assistant target", assistantTarget);
+      downstreamTargets.forEach(target -> forbidLoopback(target.label(), target.origin()));
+    }
+  }
+
+  /** Builds the complete validated private target inventory from the route configuration. */
+  private List<DownstreamTarget> requireDownstreamTargets() {
+    GatewayProperties.Routes routes = properties.getRoutes();
+    return List.of(
+        downstreamTarget("auth target", "rwms.gateway.routes.auth-uri", routes.getAuthUri()),
+        downstreamTarget(
+            "task-board target",
+            "rwms.gateway.routes.task-board-uri",
+            routes.getTaskBoardUri()),
+        downstreamTarget(
+            "warehouse target", "rwms.gateway.routes.warehouse-uri", routes.getWarehouseUri()),
+        downstreamTarget("asset target", "rwms.gateway.routes.asset-uri", routes.getAssetUri()),
+        downstreamTarget(
+            "maintenance target",
+            "rwms.gateway.routes.maintenance-uri",
+            routes.getMaintenanceUri()),
+        downstreamTarget("media target", "rwms.gateway.routes.media-uri", routes.getMediaUri()),
+        downstreamTarget(
+            "inventory target",
+            "rwms.gateway.routes.inventory-uri",
+            routes.getInventoryUri()),
+        downstreamTarget(
+            "logistics target",
+            "rwms.gateway.routes.logistics-uri",
+            routes.getLogisticsUri()),
+        downstreamTarget(
+            "dossier target", "rwms.gateway.routes.dossier-uri", routes.getDossierUri()),
+        downstreamTarget(
+            "analytics target", "rwms.gateway.routes.analytics-uri", routes.getAnalyticsUri()),
+        downstreamTarget(
+            "assistant target", "rwms.gateway.routes.assistant-uri", routes.getAssistantUri()));
+  }
+
+  private static DownstreamTarget downstreamTarget(String label, String property, URI uri) {
+    return new DownstreamTarget(label, requireOrigin(property, uri));
+  }
+
+  private static void forbidPublicGatewayHost(URI publicBase, DownstreamTarget target) {
+    if (sharesHost(publicBase, target.origin())) {
+      throw new IllegalStateException(
+          "Gateway " + target.label() + " must not use the public gateway host");
     }
   }
 
@@ -140,4 +146,7 @@ public class GatewayProductionSafetyValidator {
   private static String trimSlash(String value) {
     return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
   }
+
+  /** A validated downstream label and origin governed by the same private-target policy. */
+  private record DownstreamTarget(String label, URI origin) {}
 }

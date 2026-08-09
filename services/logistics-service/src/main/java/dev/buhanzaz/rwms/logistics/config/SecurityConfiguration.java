@@ -19,6 +19,9 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+/**
+ * Configures local bearer-JWT authentication and endpoint authorization for logistics HTTP routes.
+ */
 @Configuration
 @EnableMethodSecurity
 public class SecurityConfiguration {

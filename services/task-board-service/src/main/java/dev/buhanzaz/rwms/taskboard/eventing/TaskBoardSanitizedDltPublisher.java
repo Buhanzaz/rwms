@@ -5,6 +5,7 @@ import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+/** Reduces a rejected record to checksum/failure metadata and enqueues it for the exact sanitized DLT. */
 @Component
 @RequiredArgsConstructor
 public class TaskBoardSanitizedDltPublisher {

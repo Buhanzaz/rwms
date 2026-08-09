@@ -1,3 +1,6 @@
+// Command media-service runs RWMS's stateful media boundary. It owns the
+// HTTP API, private versioned object storage integration, durable media facts,
+// and the workers that process and reconcile media-related Kafka streams.
 package main
 
 import (
@@ -19,6 +22,7 @@ import (
 	"dev.buhanzaz.rwms/media-service/internal/config"
 	"dev.buhanzaz.rwms/media-service/internal/eventing"
 	"dev.buhanzaz.rwms/media-service/internal/media"
+	"dev.buhanzaz.rwms/media-service/internal/observability"
 	"dev.buhanzaz.rwms/media-service/internal/persistence"
 	"dev.buhanzaz.rwms/media-service/internal/storage"
 	"dev.buhanzaz.rwms/media-service/internal/worker"
@@ -156,14 +160,26 @@ func run(logger *slog.Logger) error {
 		producer.Close()
 		return err
 	}
+	processingMetrics := observability.NewProcessingMetrics()
+	managementMetrics, err := newManagementMetricsRuntime(configuration.ManagementAddress, processingMetrics.Handler())
+	if err != nil {
+		taskBoardOwnerProofConsumerClient.Close()
+		cabinOwnerConsumerClient.Close()
+		ownerConsumerClient.Close()
+		consumerClient.Close()
+		producer.Close()
+		return err
+	}
 	processingConsumer.SetInvalidationPublisher(apiServer.Invalidations())
+	processingConsumer.AddRecoveryObserver(processingMetrics)
 	httpServer := &http.Server{
 		Addr: configuration.HTTPAddress, Handler: apiServer.Handler(),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
 		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second,
 		MaxHeaderBytes: 32 << 10, ErrorLog: log.New(io.Discard, "", 0),
 	}
-	logger.Info("media service started", "address", configuration.HTTPAddress)
+	logger.Info("media service started", "address", configuration.HTTPAddress,
+		"managementAddress", configuration.ManagementAddress)
 	signalContext, stopSignal := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stopSignal()
 	processes := []mediaRuntimeProcess{
@@ -180,11 +196,15 @@ func run(logger *slog.Logger) error {
 			}
 			return err
 		}},
+		{name: "metrics-server", run: managementMetrics.Run},
 	}
 	err = superviseMediaRuntime(signalContext, 20*time.Second, processes,
 		func(shutdownContext context.Context) error {
 			var shutdownError error
 			if closeErr := httpServer.Shutdown(shutdownContext); closeErr != nil {
+				shutdownError = closeErr
+			}
+			if closeErr := managementMetrics.Shutdown(shutdownContext); closeErr != nil && shutdownError == nil {
 				shutdownError = closeErr
 			}
 			if closeErr := processingConsumer.Close(shutdownContext); closeErr != nil && shutdownError == nil {
@@ -224,6 +244,7 @@ func superviseMediaRuntime(
 		"task-board-entry-owner-proof-consumer": false,
 		"asset-import-worker":                   false,
 		"http-server":                           false,
+		"metrics-server":                        false,
 	}
 	if signalContext == nil || shutdownTimeout <= 0 || shutdown == nil || len(processes) != len(required) {
 		return errors.New("media runtime requires all required supervised processes")

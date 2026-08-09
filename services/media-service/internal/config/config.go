@@ -1,7 +1,9 @@
+// Package config loads the fail-closed runtime configuration for media-service.
 package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -9,9 +11,13 @@ import (
 	"time"
 )
 
+// Config is the validated configuration required to start the public media
+// HTTP boundary, private loopback management listener, storage, Kafka,
+// processing, and owner-proof workers.
 type Config struct {
 	RuntimeProfile                string
 	HTTPAddress                   string
+	ManagementAddress             string
 	DatabaseURL                   string
 	Issuer                        string
 	Audience                      string
@@ -43,23 +49,27 @@ type Config struct {
 	InstanceID                    string
 }
 
+// Load reads environment variables and rejects incomplete, unsafe, or
+// non-canonical runtime configuration before the service starts accepting
+// requests.
 func Load() (Config, error) {
 	configuration := Config{
-		RuntimeProfile:  strings.TrimSpace(os.Getenv("MEDIA_RUNTIME_PROFILE")),
-		HTTPAddress:     value("MEDIA_HTTP_ADDRESS", ":8085"),
-		DatabaseURL:     os.Getenv("MEDIA_DATABASE_URL"),
-		Issuer:          os.Getenv("MEDIA_AUTH_ISSUER"),
-		Audience:        value("MEDIA_AUTH_AUDIENCE", "rwms-services"),
-		JWKSURL:         os.Getenv("MEDIA_AUTH_JWKS_URL"),
-		MinIOEndpoint:   os.Getenv("MEDIA_MINIO_ENDPOINT"),
-		MinIOAccessKey:  os.Getenv("MEDIA_MINIO_ACCESS_KEY"),
-		MinIOSecretKey:  os.Getenv("MEDIA_MINIO_SECRET_KEY"),
-		MinIOBucket:     os.Getenv("MEDIA_MINIO_BUCKET"),
-		KafkaBrokers:    split(os.Getenv("MEDIA_KAFKA_BROKERS")),
-		MediaTopic:      value("MEDIA_KAFKA_MEDIA_TOPIC", "rwms.media.media.v1"),
-		ProcessingTopic: value("MEDIA_KAFKA_PROCESSING_TOPIC", "rwms.media.processing.v1"),
-		ProcessingGroup: value("MEDIA_KAFKA_PROCESSING_GROUP", "media-service-processing-v1"),
-		InventoryTopic:  value("MEDIA_KAFKA_INVENTORY_TOPIC", "rwms.inventory.session.v1"),
+		RuntimeProfile:    strings.TrimSpace(os.Getenv("MEDIA_RUNTIME_PROFILE")),
+		HTTPAddress:       value("MEDIA_HTTP_ADDRESS", ":8085"),
+		ManagementAddress: value("MEDIA_MANAGEMENT_ADDRESS", "127.0.0.1:9095"),
+		DatabaseURL:       os.Getenv("MEDIA_DATABASE_URL"),
+		Issuer:            os.Getenv("MEDIA_AUTH_ISSUER"),
+		Audience:          value("MEDIA_AUTH_AUDIENCE", "rwms-services"),
+		JWKSURL:           os.Getenv("MEDIA_AUTH_JWKS_URL"),
+		MinIOEndpoint:     os.Getenv("MEDIA_MINIO_ENDPOINT"),
+		MinIOAccessKey:    os.Getenv("MEDIA_MINIO_ACCESS_KEY"),
+		MinIOSecretKey:    os.Getenv("MEDIA_MINIO_SECRET_KEY"),
+		MinIOBucket:       os.Getenv("MEDIA_MINIO_BUCKET"),
+		KafkaBrokers:      split(os.Getenv("MEDIA_KAFKA_BROKERS")),
+		MediaTopic:        value("MEDIA_KAFKA_MEDIA_TOPIC", "rwms.media.media.v1"),
+		ProcessingTopic:   value("MEDIA_KAFKA_PROCESSING_TOPIC", "rwms.media.processing.v1"),
+		ProcessingGroup:   value("MEDIA_KAFKA_PROCESSING_GROUP", "media-service-processing-v1"),
+		InventoryTopic:    value("MEDIA_KAFKA_INVENTORY_TOPIC", "rwms.inventory.session.v1"),
 		InventoryOwnerGroup: value(
 			"MEDIA_KAFKA_INVENTORY_OWNER_GROUP", "media-service-inventory-owner-v1"),
 		InventoryOwnerDLT: value("MEDIA_KAFKA_INVENTORY_OWNER_DLT_TOPIC",
@@ -92,6 +102,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if configuration.ProcessingTimeout, err = requiredPositiveDuration("MEDIA_PROCESSING_TIMEOUT"); err != nil {
+		return Config{}, err
+	}
+	if err := validateLoopbackTCPAddress("MEDIA_MANAGEMENT_ADDRESS", configuration.ManagementAddress); err != nil {
 		return Config{}, err
 	}
 	configuration.AllowedMIMETypes, err = allowedMIMETypes(os.Getenv("MEDIA_ALLOWED_MIME_TYPES"))
@@ -236,6 +249,26 @@ func validateHTTPURL(name, raw string, requireHTTPS bool) error {
 	}
 	if requireHTTPS && parsed.Scheme != "https" {
 		return fmt.Errorf("%s must use HTTPS in production", name)
+	}
+	return nil
+}
+
+// validateLoopbackTCPAddress accepts only an explicit numeric IPv4 or IPv6
+// loopback host with a non-zero numeric TCP port. Rejecting hostnames and wildcards
+// prevents DNS, interface, or public-address configuration from exposing the
+// management listener outside the local process boundary.
+func validateLoopbackTCPAddress(name, address string) error {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || host == "" {
+		return fmt.Errorf("%s must be an IP-literal loopback TCP address", name)
+	}
+	parsedPort, err := strconv.ParseUint(port, 10, 16)
+	if err != nil || parsedPort == 0 {
+		return fmt.Errorf("%s must be an IP-literal loopback TCP address", name)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("%s must be an IP-literal loopback TCP address", name)
 	}
 	return nil
 }

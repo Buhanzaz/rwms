@@ -92,17 +92,17 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 		}
 	})
 
-	t.Run("clean V1 through V10 repeat and checksum drift", func(t *testing.T) {
+	t.Run("clean V1 through V11 repeat and checksum drift", func(t *testing.T) {
 		databaseURL := testsupport.NewIsolatedPostgresDatabase(t, environment.DatabaseURL)
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		pool := openResidualPool(t, ctx, databaseURL)
-		installResidualMigrations(t, ctx, pool, 12)
+		installResidualMigrations(t, ctx, pool, 13)
 		pool.Close()
 
 		first, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("open clean V1 through V10 database: %v", err)
+			t.Fatalf("open clean V1 through V11 database: %v", err)
 		}
 		assertTaskBoardV8ConstraintsValidated(t, ctx, first.Pool)
 		first.Close()
@@ -162,10 +162,12 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 			"V9__asset_import_worker.sql", mediamigration.V9)
 		applyResidualMigration(t, ctx, pool, 12, "10", "canonical cabin photo library",
 			"V10__canonical_cabin_photo_library.sql", mediamigration.V10)
+		applyResidualMigration(t, ctx, pool, 13, "11", "bounded media processing recovery",
+			"V11__bounded_media_processing_recovery.sql", mediamigration.V11)
 		pool.Close()
 		database, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("open upgraded V10 database: %v", err)
+			t.Fatalf("open upgraded V11 database: %v", err)
 		}
 		defer database.Close()
 		assertTaskBoardV8ConstraintsValidated(t, ctx, database.Pool)
@@ -239,7 +241,7 @@ func TestInventoryOwnerResidualStreamAndReconciliationGateReal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	pool := openResidualPool(t, ctx, databaseURL)
-	installResidualMigrations(t, ctx, pool, 12)
+	installResidualMigrations(t, ctx, pool, 13)
 	pool.Close()
 	database, err := Open(ctx, databaseURL)
 	if err != nil {
@@ -517,10 +519,11 @@ func installResidualMigrations(t testing.TB, ctx context.Context, pool *pgxpool.
 		{"task board worker media", "V8__task_board_worker_media.sql", mediamigration.V8},
 		{"asset import worker", "V9__asset_import_worker.sql", mediamigration.V9},
 		{"canonical cabin photo library", "V10__canonical_cabin_photo_library.sql", mediamigration.V10},
+		{"bounded media processing recovery", "V11__bounded_media_processing_recovery.sql", mediamigration.V11},
 	}
 	for index := 0; index < through; index++ {
 		migration := migrations[index]
-		versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10"}
+		versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11"}
 		applyResidualMigration(t, ctx, pool, index+1, versions[index], migration.description,
 			migration.script, migration.body)
 	}

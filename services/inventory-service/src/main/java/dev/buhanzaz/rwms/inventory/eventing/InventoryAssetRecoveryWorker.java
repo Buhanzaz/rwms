@@ -3,6 +3,9 @@ package dev.buhanzaz.rwms.inventory.eventing;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+/**
+ * Scheduled worker that retries due inventory inbox records through their durable retry store.
+ */
 @Component
 public class InventoryAssetRecoveryWorker {
   private final InventoryAssetRetryStore retries;

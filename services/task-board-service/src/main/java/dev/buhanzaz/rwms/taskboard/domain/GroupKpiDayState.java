@@ -10,6 +10,12 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
+/**
+ * Mutable accumulator for one worker group's KPI evidence on one warehouse-local date.
+ *
+ * <p>Published daily facts are derived from this task-board-owned state; analytics consumes those
+ * facts as a read projection and does not recalculate task execution.
+ */
 @Entity
 @Table(
     name = "group_kpi_day_state",

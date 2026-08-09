@@ -7,6 +7,7 @@ import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 
+/** Repository for source-partition checkpoints locked during transactional consumer processing. */
 public interface DossierPartitionCheckpointRepository
     extends JpaRepository<DossierPartitionCheckpoint, UUID> {
   Optional<DossierPartitionCheckpoint> findByConsumerGroupAndSourceTopicAndSourcePartition(

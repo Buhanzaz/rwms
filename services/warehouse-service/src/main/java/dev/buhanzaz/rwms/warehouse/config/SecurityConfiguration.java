@@ -19,6 +19,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+/** Enforces JWT authentication and the strictly dev-only bypass for warehouse HTTP routes. */
 @Configuration
 @EnableMethodSecurity
 public class SecurityConfiguration {

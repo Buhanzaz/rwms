@@ -11,6 +11,10 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Component;
 
+/**
+ * Authorizes user and service callers for asset-owned operations.
+ * It enforces warehouse grants, administrator-only actions and exact private-service scopes.
+ */
 @Component
 public class AssetAuthorizer {
   private static final UUID DEV_SUBJECT = UUID.fromString("00000000-0000-0000-0000-0000000000d5");

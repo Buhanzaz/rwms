@@ -12,6 +12,7 @@ import org.springframework.util.MimeTypeUtils;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.SerializationFeature;
 
+/** Schedules publication of committed dossier activity outbox records and leaves unacknowledged rows recoverable. */
 @Component
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")
 public class DossierOutboxRelay {

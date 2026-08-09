@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.maintenance.service;
 import dev.buhanzaz.rwms.platform.contracts.FieldViolation;
 import java.util.List;
 
+/** Signals a maintenance service-boundary failure for MaintenanceCatalogValidation. */
 public class MaintenanceCatalogValidationException extends RuntimeException {
   private final List<FieldViolation> violations;
 

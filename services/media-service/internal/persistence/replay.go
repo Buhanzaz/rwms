@@ -13,8 +13,12 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// ErrReplayParity indicates a corrupt, discontinuous, or mismatched event
+// stream, snapshot, or live aggregate projection.
 var ErrReplayParity = errors.New("media event replay does not match the live projection")
 
+// ReplayedAggregate is the exact latest full-state snapshot reconstructed from
+// the append-only media event stream.
 type ReplayedAggregate struct {
 	AggregateID uuid.UUID
 	Version     int64
@@ -94,6 +98,8 @@ func (repository *Repository) RebuildShadowProjection(ctx context.Context, aggre
 	return result, nil
 }
 
+// VerifyReplayParity proves that the live aggregate's full state exactly equals
+// the contiguous replayed event and snapshot state.
 func (repository *Repository) VerifyReplayParity(ctx context.Context, aggregateID uuid.UUID) error {
 	replayed, err := repository.RebuildShadowProjection(ctx, aggregateID)
 	if err != nil {

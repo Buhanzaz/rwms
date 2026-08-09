@@ -13,6 +13,12 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Links terminal media facts to reserved worker evidence under exact worker, warehouse, and entry checks.
+ *
+ * <p>Missing evidence remains pending for reconciliation; an owner mismatch is rejected rather than
+ * attaching another worker's media.
+ */
 @Service
 @RequiredArgsConstructor
 public class WorkerMediaEventProcessor {

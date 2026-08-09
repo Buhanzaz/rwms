@@ -13,6 +13,9 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
+/**
+ * Defines transport models for authenticated driver-task commands and views.
+ */
 public final class DriverTaskApiModels {
   private DriverTaskApiModels() {}
 

@@ -17,6 +17,7 @@ import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
 import dev.buhanzaz.rwms.logistics.driver.mapper.DriverTaskResponseMapper;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseOperationMarkStore;
@@ -35,9 +36,10 @@ class DriverTaskServiceTest {
       mock(LogisticsWarehouseLifecycle.class);
   private final LogisticsWarehouseOperationMarkStore warehouseOperationMarks =
       mock(LogisticsWarehouseOperationMarkStore.class);
+  private final LogisticsTransactionLock transactionLock = mock(LogisticsTransactionLock.class);
   private final DriverTaskService service =
       new DriverTaskService(
-          tasks, mapper, dependencies, warehouseLifecycle, warehouseOperationMarks);
+          tasks, mapper, dependencies, warehouseLifecycle, warehouseOperationMarks, transactionLock);
 
   @Test
   void rediscoveryReusesExistingCurrentRemovalDespiteChecksumDrift() {
@@ -56,9 +58,8 @@ class DriverTaskServiceTest {
     assertThat(result.replayed()).isTrue();
     assertThat(result.activateNow()).isFalse();
     assertThat(result.response()).isSameAs(response);
-    verify(tasks)
-        .acquireTransactionLock(
-            "driver-task:create:REPAIR_PLACE:" + repairId + ":REMOVE_FROM_REPAIR");
+    verify(transactionLock)
+        .acquire("driver-task:create:REPAIR_PLACE:" + repairId + ":REMOVE_FROM_REPAIR");
     verify(tasks, never())
         .findActiveBySourceTypeAndSourceIdAndKind(
             DriverTaskSourceType.REPAIR_PLACE, repairId, DriverTaskKind.REMOVE_FROM_REPAIR);

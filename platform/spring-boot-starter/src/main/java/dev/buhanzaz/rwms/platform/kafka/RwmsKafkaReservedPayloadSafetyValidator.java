@@ -5,6 +5,7 @@ import java.util.Locale;
 import java.util.Set;
 import tools.jackson.databind.JsonNode;
 
+/** Rejects reserved envelope names and sensitive technical values from a canonical event payload before publication. */
 final class RwmsKafkaReservedPayloadSafetyValidator {
 
     private static final Set<String> RESERVED_KEYS = Set.of(

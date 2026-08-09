@@ -26,6 +26,13 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Owns versioned KPI palette and work-schedule settings for one warehouse.
+ *
+ * <p>Working time is interpreted in the warehouse's authoritative timezone. A future schedule is
+ * stored as pending and activated through a replay-safe operation receipt, preserving a clear
+ * effective configuration history for timer and KPI calculations.
+ */
 @Service
 @RequiredArgsConstructor
 public class KpiSettingsService {
@@ -39,6 +46,7 @@ public class KpiSettingsService {
   private final JdbcTemplate jdbc;
   private final WarehouseTimeZoneGateway timeZones;
 
+  /** Returns settings, creating an in-memory default representation when none has been persisted. */
   @Transactional
   public WarehouseKpiSettingsResponse get(UUID warehouseId) {
     WarehouseMetadata warehouse = warehouse(warehouseId);
@@ -52,6 +60,7 @@ public class KpiSettingsService {
     return response(settings);
   }
 
+  /** Replaces the palette under the observed settings version. */
   @Transactional
   public WarehouseKpiSettingsResponse savePalette(
       UUID warehouseId, SaveKpiPaletteRequest request) {
@@ -71,6 +80,7 @@ public class KpiSettingsService {
     return response(settings);
   }
 
+  /** Saves a validated future work schedule as the single pending revision. */
   @Transactional
   public WarehouseKpiSettingsResponse saveWorkSchedule(
       UUID warehouseId, SaveWorkScheduleRequest request) {
@@ -100,6 +110,7 @@ public class KpiSettingsService {
     return response(settings);
   }
 
+  /** Deletes the pending schedule under the observed settings version. */
   @Transactional
   public void deletePendingWorkSchedule(UUID warehouseId, long expectedVersion) {
     WarehouseKpiSettings settings = requireSettings(warehouseId);
@@ -113,6 +124,7 @@ public class KpiSettingsService {
     settingsRepository.saveAndFlush(settings);
   }
 
+  /** Activates the pending schedule exactly once for the stable operation ID. */
   @Transactional
   public WarehouseKpiSettingsResponse activate(
       UUID warehouseId, UUID operationId, ActivateKpiSettingsRequest request) {

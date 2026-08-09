@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/** Stores active worker qualification assignments and supports eligibility checks. */
 public interface WorkerClassAssignmentRepository
     extends JpaRepository<WorkerClassAssignment, UUID> {
   List<WorkerClassAssignment> findAllByWorkerId(UUID workerId);

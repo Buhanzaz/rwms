@@ -101,6 +101,15 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+/**
+ * Configures auth-service as the RWMS OAuth/OIDC authorization server and as the protected API
+ * resource server for its own management endpoints.
+ *
+ * <p>Ordered filter chains isolate authorization-server protocol endpoints, CSRF bootstrap, bearer
+ * token API access, and interactive web pages. Token issuance is kept bound to configured clients,
+ * authenticated subject state, and least-privilege service scopes rather than trusting request
+ * parameters supplied by a caller.</p>
+ */
 @Configuration
 @EnableMethodSecurity
 @EnableConfigurationProperties({AuthProperties.class, OAuthClientProperties.class})
@@ -118,11 +127,26 @@ public class AuthorizationServerConfiguration {
                     "warehouse.lifecycle.read",
                     "warehouse.lifecycle.confirm");
 
+    /**
+     * Supplies the application's delegating password encoder.
+     *
+     * <p>Stored credential hashes retain an algorithm identifier, allowing secure verification of
+     * existing hashes and controlled upgrades without persisting plaintext passwords.</p>
+     *
+     * @return password encoder used for human and confidential-client credentials
+     */
     @Bean
     PasswordEncoder passwordEncoder() {
         return PasswordEncoderFactories.createDelegatingPasswordEncoder();
     }
 
+    /**
+     * Creates DAO authentication for the interactive login form.
+     *
+     * @param userDetailsService auth-specific subject lookup service
+     * @param passwordEncoder encoder used to verify stored password hashes
+     * @return provider that authenticates eligible auth subjects
+     */
     @Bean
     AuthenticationProvider authenticationProvider(
             dev.buhanzaz.rwms.auth.security.AuthUserDetailsService userDetailsService,
@@ -132,11 +156,24 @@ public class AuthorizationServerConfiguration {
         return provider;
     }
 
+    /**
+     * Exposes the raw JDBC registered-client repository for startup reconciliation.
+     *
+     * @param jdbcTemplate authorization-server database access
+     * @return persistent repository without runtime enablement filtering
+     */
     @Bean
     JdbcRegisteredClientRepository jdbcRegisteredClientRepository(JdbcTemplate jdbcTemplate) {
         return new JdbcRegisteredClientRepository(jdbcTemplate);
     }
 
+    /**
+     * Exposes the runtime registered-client repository that hides disabled declarative clients.
+     *
+     * @param delegate raw persistent registered-client repository
+     * @param properties declarative client policy
+     * @return repository used by protocol endpoints
+     */
     @Bean
     @Primary
     RegisteredClientRepository registeredClientRepository(
@@ -144,6 +181,16 @@ public class AuthorizationServerConfiguration {
         return new ConfiguredRegisteredClientRepository(delegate, properties);
     }
 
+    /**
+     * Persists OAuth authorizations with a constrained JSON mapper for historical authorization data.
+     *
+     * <p>The mapper permits only the precise immutable collection shapes needed by existing rows,
+     * avoiding unrestricted polymorphic deserialization from database content.</p>
+     *
+     * @param jdbcTemplate authorization-server database access
+     * @param clients runtime client repository used to reconstruct authorization rows
+     * @return JDBC-backed authorization service
+     */
     @Bean
     OAuth2AuthorizationService authorizationService(
             JdbcTemplate jdbcTemplate, RegisteredClientRepository clients) {
@@ -169,12 +216,33 @@ public class AuthorizationServerConfiguration {
                 .build();
     }
 
+    /**
+     * Persists user consent decisions for OAuth clients.
+     *
+     * @param jdbcTemplate authorization-server database access
+     * @param clients runtime client repository used when loading consent
+     * @return JDBC-backed consent service
+     */
     @Bean
     OAuth2AuthorizationConsentService authorizationConsentService(
             JdbcTemplate jdbcTemplate, RegisteredClientRepository clients) {
         return new JdbcOAuth2AuthorizationConsentService(jdbcTemplate, clients);
     }
 
+    /**
+     * Secures OAuth/OIDC protocol endpoints before all other application filter chains.
+     *
+     * <p>The chain adds secretless public-PKCE refresh/revocation authentication, enforces Android
+     * S256 PKCE at the authorization endpoint, constrains service-client credentials requests, and
+     * delegates browser login to the local login page. JWT resource-server support lets protocol
+     * endpoints authenticate their own protected requests without introducing server-side token
+     * sessions.</p>
+     *
+     * @param http security builder for authorization-server endpoints
+     * @param clients runtime client repository
+     * @return highest-priority protocol security filter chain
+     * @throws Exception when Spring Security cannot build the chain
+     */
     @Bean
     @Order(Ordered.HIGHEST_PRECEDENCE)
     SecurityFilterChain authorizationServerChain(
@@ -213,6 +281,16 @@ public class AuthorizationServerConfiguration {
         });
     }
 
+    /**
+     * Requires the Android public clients to use the S256 PKCE transformation.
+     *
+     * <p>Plain PKCE is intentionally not accepted for these clients: S256 prevents a party that
+     * observes an authorization request from recovering the verifier needed at token exchange.</p>
+     *
+     * @param context authorization-code request validation context
+     * @throws OAuth2AuthorizationCodeRequestAuthenticationException when an Android client omits
+     *     S256
+     */
     static void validateWorkerPkceS256(
             OAuth2AuthorizationCodeRequestAuthenticationContext context) {
         String clientId = context.getRegisteredClient().getClientId();
@@ -251,6 +329,16 @@ public class AuthorizationServerConfiguration {
         });
     }
 
+    /**
+     * Limits maintenance-service to one approved downstream scope per client-credentials token.
+     *
+     * <p>Requiring one scope makes the intended inter-service action explicit and avoids issuing a
+     * broad token simply because the client is entitled to several independent maintenance actions.</p>
+     *
+     * @param context client-credentials validation context
+     * @throws OAuth2AuthenticationException when the request asks for an unapproved or combined
+     *     scope
+     */
     static void validateMaintenanceDownstreamScope(OAuth2ClientCredentialsAuthenticationContext context) {
         if (!MAINTENANCE_CLIENT_ID.equals(context.getRegisteredClient().getClientId())) {
             return;
@@ -266,6 +354,13 @@ public class AuthorizationServerConfiguration {
         }
     }
 
+    /**
+     * Enforces the exact machine-token request contract for asset-service.
+     *
+     * @param context client-credentials validation context
+     * @throws OAuth2AuthenticationException when a request attempts to override asset-service
+     *     identity, audience, or approved scope
+     */
     static void validateAssetDownstreamRequest(OAuth2ClientCredentialsAuthenticationContext context) {
         validateExactDownstreamRequest(
                 context,
@@ -274,6 +369,13 @@ public class AuthorizationServerConfiguration {
                 OAuthClientProperties.ASSET_AUDIENCE);
     }
 
+    /**
+     * Enforces the exact machine-token request contract for inventory-service.
+     *
+     * @param context client-credentials validation context
+     * @throws OAuth2AuthenticationException when a request attempts to override inventory-service
+     *     identity, audience, or approved scope
+     */
     static void validateInventoryDownstreamRequest(OAuth2ClientCredentialsAuthenticationContext context) {
         validateExactDownstreamRequest(
                 context,
@@ -282,6 +384,13 @@ public class AuthorizationServerConfiguration {
                 OAuthClientProperties.INVENTORY_AUDIENCE);
     }
 
+    /**
+     * Enforces the exact machine-token request contract for logistics-service.
+     *
+     * @param context client-credentials validation context
+     * @throws OAuth2AuthenticationException when a request attempts to override logistics-service
+     *     identity, audience, or approved scope
+     */
     static void validateLogisticsDownstreamRequest(OAuth2ClientCredentialsAuthenticationContext context) {
         validateExactDownstreamRequest(
                 context,
@@ -290,6 +399,13 @@ public class AuthorizationServerConfiguration {
                 OAuthClientProperties.LOGISTICS_AUDIENCE);
     }
 
+    /**
+     * Enforces the exact machine-token request contract for task-board-service.
+     *
+     * @param context client-credentials validation context
+     * @throws OAuth2AuthenticationException when a request attempts to override task-board-service
+     *     identity, audience, or approved scope
+     */
     static void validateTaskBoardDownstreamRequest(
             OAuth2ClientCredentialsAuthenticationContext context) {
         validateExactDownstreamRequest(
@@ -337,6 +453,14 @@ public class AuthorizationServerConfiguration {
         }
     }
 
+    /**
+     * Serves a readable CSRF token cookie for same-origin browser clients before state-changing form
+     * or logout traffic.
+     *
+     * @param http security builder for the CSRF bootstrap endpoint
+     * @return dedicated CSRF bootstrap filter chain
+     * @throws Exception when Spring Security cannot build the chain
+     */
     @Bean
     @Order(2)
     SecurityFilterChain csrfBootstrapChain(HttpSecurity http) throws Exception {
@@ -349,6 +473,19 @@ public class AuthorizationServerConfiguration {
         return http.build();
     }
 
+    /**
+     * Protects auth-service management APIs with locally validated bearer JWTs.
+     *
+     * <p>The chain is stateless. It maps claims to authorities, applies the narrowly scoped internal
+     * worker-credential policy, reserves administration routes for the appropriate roles, and
+     * denies unmatched API paths.</p>
+     *
+     * @param http security builder for {@code /api/**}
+     * @param jwtConverter converter from JWT claims to Spring authorities
+     * @param resourceServerJwtDecoder decoder that also requires the service audience
+     * @return API security filter chain
+     * @throws Exception when Spring Security cannot build the chain
+     */
     @Bean
     @Order(3)
     SecurityFilterChain applicationChain(
@@ -386,6 +523,17 @@ public class AuthorizationServerConfiguration {
         return http.build();
     }
 
+    /**
+     * Secures the interactive login surface, static assets, and local operational probes.
+     *
+     * <p>Actuator requests forwarded through the public {@code /auth} gateway prefix are denied so
+     * health and metrics remain local/private. Browser pages retain CSRF protection and use the
+     * login form rather than a token-bearing session API.</p>
+     *
+     * @param http security builder for non-protocol web requests
+     * @return web security filter chain
+     * @throws Exception when Spring Security cannot build the chain
+     */
     @Bean
     @Order(4)
     SecurityFilterChain webChain(HttpSecurity http) throws Exception {
@@ -436,6 +584,15 @@ public class AuthorizationServerConfiguration {
                         || path.startsWith("/auth/actuator/"));
     }
 
+    /**
+     * Converts validated JWT claims into the authority model used by auth-service APIs.
+     *
+     * <p>OAuth scopes retain Spring's {@code SCOPE_} form. Global role, principal type, and client
+     * identifier claims become explicit role/client authorities so endpoint policy can require both
+     * a scope and the correct machine principal where necessary.</p>
+     *
+     * @return JWT authentication converter for the resource-server API chain
+     */
     @Bean
     JwtAuthenticationConverter jwtAuthenticationConverter() {
         var scopeConverter = new JwtGrantedAuthoritiesConverter();
@@ -460,6 +617,21 @@ public class AuthorizationServerConfiguration {
         return converter;
     }
 
+    /**
+     * Adds authoritative RWMS identity and access claims to access and ID tokens.
+     *
+     * <p>For service tokens the registered client becomes the service principal. For public
+     * authorization-code and refresh flows the customizer reloads the subject, profile, credential
+     * state, and warehouse access from auth-owned storage. It therefore refuses disabled subjects or
+     * clients and cannot be tricked into issuing another principal's claims by request parameters.</p>
+     *
+     * @param subjects authoritative auth-subject repository
+     * @param accesses active warehouse-access repository for user claims
+     * @param profiles profile projection used to resolve usernames
+     * @param credentials credential-state store used to reject inactive credentials
+     * @param oauthClients declarative enabled-client and principal-type policy
+     * @return JWT claim customizer for access and ID tokens
+     */
     @Bean
     OAuth2TokenCustomizer<JwtEncodingContext> tokenCustomizer(
             AuthSubjectRepository subjects,
@@ -551,6 +723,14 @@ public class AuthorizationServerConfiguration {
         };
     }
 
+    /**
+     * Composes signed JWT access/ID tokens, the standard access-token generator, and the restricted
+     * public-PKCE refresh-token generator.
+     *
+     * @param jwkSource RSA signing-key source
+     * @param tokenCustomizer authoritative claim customizer
+     * @return authorization-server token generator chain
+     */
     @Bean
     OAuth2TokenGenerator<?> tokenGenerator(
             JWKSource<SecurityContext> jwkSource,
@@ -563,12 +743,25 @@ public class AuthorizationServerConfiguration {
                 new PublicPkceRefreshTokenGenerator());
     }
 
+    /**
+     * Publishes the RSA signing key as an immutable JWK source for token signing and JWKS exposure.
+     *
+     * @param properties signing-key configuration
+     * @return JWK source backed by the configured key or a development-only ephemeral key
+     */
     @Bean
     JWKSource<SecurityContext> jwkSource(AuthProperties properties) {
         RSAKey rsaKey = loadOrCreateRsaKey(properties);
         return new ImmutableJWKSet<>(new JWKSet(rsaKey));
     }
 
+    /**
+     * Decodes tokens issued by this authorization server using issuer validation.
+     *
+     * @param jwkSource local RSA key source
+     * @param properties expected public issuer
+     * @return primary JWT decoder for authorization-server protocol support
+     */
     @Bean
     @Primary
     JwtDecoder jwtDecoder(JWKSource<SecurityContext> jwkSource, AuthProperties properties) {
@@ -577,6 +770,16 @@ public class AuthorizationServerConfiguration {
         return decoder;
     }
 
+    /**
+     * Decodes bearer tokens for auth-service's own APIs and requires the RWMS service audience.
+     *
+     * <p>The separate decoder prevents a valid token intended for another audience from becoming an
+     * authorization credential for this service.</p>
+     *
+     * @param jwkSource local RSA key source
+     * @param properties expected public issuer
+     * @return API resource-server JWT decoder
+     */
     @Bean
     JwtDecoder resourceServerJwtDecoder(JWKSource<SecurityContext> jwkSource, AuthProperties properties) {
         NimbusJwtDecoder decoder = newJwtDecoder(jwkSource);
@@ -593,11 +796,26 @@ public class AuthorizationServerConfiguration {
         return (NimbusJwtDecoder) OAuth2AuthorizationServerConfiguration.jwtDecoder(jwkSource);
     }
 
+    /**
+     * Sets the canonical public issuer used by OIDC discovery and issued-token validation.
+     *
+     * @param properties auth-service public identity configuration
+     * @return authorization-server endpoint settings
+     */
     @Bean
     AuthorizationServerSettings authorizationServerSettings(AuthProperties properties) {
         return AuthorizationServerSettings.builder().issuer(properties.issuer()).build();
     }
 
+    /**
+     * Builds CORS policy only from origins declared by enabled OAuth clients.
+     *
+     * <p>There is no wildcard origin: credentialed browser requests can originate only from an
+     * explicit, currently enabled client origin.</p>
+     *
+     * @param oauthClients declarative OAuth client configuration
+     * @return global CORS configuration source
+     */
     @Bean
     CorsConfigurationSource corsConfigurationSource(OAuthClientProperties oauthClients) {
         var configuration = new CorsConfiguration();
@@ -655,6 +873,18 @@ public class AuthorizationServerConfiguration {
         }
     }
 
+    /**
+     * Rejects token issuance when the authenticated subject type is not authorized for the client.
+     *
+     * <p>This is checked after loading the authoritative subject, so a caller cannot use a client
+     * intended for workers with a human principal, or vice versa.</p>
+     *
+     * @param clientId registered OAuth client identifier
+     * @param principalType authoritative authenticated subject type
+     * @param oauthClients declarative client/principal-type policy
+     * @throws OAuth2AuthenticationException when the client is absent, disabled, or incompatible
+     *     with the subject type
+     */
     void validateClientPrincipal(
             String clientId, PrincipalType principalType, OAuthClientProperties oauthClients) {
         PrincipalType allowed = oauthClients.find(clientId)

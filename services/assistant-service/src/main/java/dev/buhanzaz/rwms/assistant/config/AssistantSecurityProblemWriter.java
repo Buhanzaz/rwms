@@ -10,6 +10,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
+/** Writes correlation-aware security Problem Details before an unauthenticated request reaches assistant controllers. */
 @Component
 final class AssistantSecurityProblemWriter {
   private final ObjectMapper mapper;

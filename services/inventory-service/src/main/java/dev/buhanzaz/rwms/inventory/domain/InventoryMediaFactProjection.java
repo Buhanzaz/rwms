@@ -12,6 +12,9 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
+/**
+ * JPA entity that persists inventory media fact projection in the inventory-owned database.
+ */
 @Entity
 @Table(name = "inventory_media_fact_projection")
 @IdClass(InventoryMediaFactProjection.Key.class)

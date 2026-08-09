@@ -12,6 +12,13 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Service;
 
+/**
+ * Loads login credentials for Spring Security from the canonical authorization subject and its
+ * profile and credential projections.
+ *
+ * <p>The lookup fails closed when the projections are missing or their active state disagrees
+ * with the subject aggregate.
+ */
 @Service
 @RequiredArgsConstructor
 public class AuthUserDetailsService implements UserDetailsService {
@@ -20,6 +27,14 @@ public class AuthUserDetailsService implements UserDetailsService {
     private final AuthSubjectProfileStore profiles;
     private final AuthSubjectCredentialStore credentials;
 
+    /**
+     * Resolves a login name to Spring Security credentials and one role authority.
+     *
+     * @param username login name supplied by the authentication flow
+     * @return Spring Security user details for a consistent active account
+     * @throws UsernameNotFoundException when the account is missing or its authorization state is
+     *     inconsistent
+     */
     @Override
     public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
         var profile = profiles.findSubjectIdByUsername(username)

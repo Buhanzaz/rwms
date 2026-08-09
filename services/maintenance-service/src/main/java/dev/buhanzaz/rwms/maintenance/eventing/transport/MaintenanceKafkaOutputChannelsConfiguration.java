@@ -6,6 +6,9 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.MessageChannel;
 
+/**
+ * Creates all five maintenance Kafka output channels only when transport is explicitly enabled.
+ */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")
 class MaintenanceKafkaOutputChannelsConfiguration {
@@ -21,6 +24,12 @@ class MaintenanceKafkaOutputChannelsConfiguration {
 
   @Bean(name = MaintenanceTransportTopics.REPAIR)
   MessageChannel repair() {
+    return new DirectWithAttributesChannel();
+  }
+
+  /** Creates the canonical property-disposition owner channel used by the ordered output binder. */
+  @Bean(name = MaintenanceTransportTopics.PROPERTY_DISPOSITION)
+  MessageChannel propertyDisposition() {
     return new DirectWithAttributesChannel();
   }
 

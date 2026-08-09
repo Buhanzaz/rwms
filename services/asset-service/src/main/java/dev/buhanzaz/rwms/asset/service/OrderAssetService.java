@@ -45,6 +45,10 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Owns the asset-side unit and equipment reservation effects requested by a logistics order.
+ * It retains asset reservations and fencing locally rather than owning logistics order state.
+ */
 @Service
 @RequiredArgsConstructor
 public class OrderAssetService {

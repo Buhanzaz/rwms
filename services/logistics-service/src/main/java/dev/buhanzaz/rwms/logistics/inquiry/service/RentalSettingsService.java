@@ -15,6 +15,9 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Owns logistics-local rental settings used while validating rental inquiry and order workflows.
+ */
 @Service
 @RequiredArgsConstructor
 public class RentalSettingsService {

@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+/** HTTP controller for RepairPlace; it authorizes the request and delegates the business transition. */
 @RestController
 @RequestMapping("/api/maintenance/v1/repair-places")
 public class RepairPlaceController {

@@ -11,6 +11,10 @@ import org.mapstruct.Mapping;
 import org.mapstruct.MappingConstants;
 import org.mapstruct.ReportingPolicy;
 
+/**
+ * MapStruct mapper for cabin catalog item boundary representations.
+ * It maps data without performing a domain transition.
+ */
 @Mapper(
     componentModel = MappingConstants.ComponentModel.SPRING,
     injectionStrategy = InjectionStrategy.CONSTRUCTOR,

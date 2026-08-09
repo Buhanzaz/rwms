@@ -7,6 +7,9 @@ import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.util.UUID;
 
+/**
+ * JPA entity that persists finding plan line in the inventory-owned database.
+ */
 @Entity
 @Table(name = "finding_plan_line")
 public class FindingPlanLine {

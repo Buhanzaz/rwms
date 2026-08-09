@@ -6,6 +6,13 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Component;
 
+/**
+ * Guards private task synchronization and logistics-only task operations.
+ *
+ * <p>The returned source client ID is derived from a credential with matching subject and client
+ * ID. Application services use it to scope external-task ownership rather than trusting a body
+ * field supplied by another service.
+ */
 @Component
 public class TaskSyncAuthorizer {
   private static final String REQUIRED_SCOPE = "task-board.task-sync";
@@ -13,6 +20,11 @@ public class TaskSyncAuthorizer {
   private static final String LOGISTICS_SCOPE = "task-board.logistics";
   private static final String LOGISTICS_SERVICE = "logistics-service";
 
+  /**
+   * Requires the exact maintenance or logistics task-sync credential.
+   *
+   * @return authenticated source client ID used to scope the external task namespace
+   */
   public String requireTaskSync(Jwt jwt) {
     String clientId = jwt == null ? null : jwt.getClaimAsString("client_id");
     boolean validService =
@@ -33,7 +45,9 @@ public class TaskSyncAuthorizer {
     return clientId;
   }
 
-  /** Stage 8 can create, read and cancel only its dedicated task surface. */
+  /**
+   * Requires the exact logistics-only credential for dedicated driver and equipment-movement work.
+   */
   public void requireLogisticsTaskAccess(Jwt jwt) {
     String clientId = jwt == null ? null : jwt.getClaimAsString("client_id");
     if (jwt == null

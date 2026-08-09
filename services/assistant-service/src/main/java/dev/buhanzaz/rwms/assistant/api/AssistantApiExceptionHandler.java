@@ -11,6 +11,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+/** Maps assistant domain and dependency failures to safe public Problem Details responses. */
 @RestControllerAdvice
 public class AssistantApiExceptionHandler {
   @ExceptionHandler(AssistantNotFoundException.class)

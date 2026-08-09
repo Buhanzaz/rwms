@@ -12,6 +12,7 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/** Spring Data persistence boundary for RepairStage; business transitions remain in the owning service. */
 public interface RepairStageRepository extends JpaRepository<RepairStage, UUID> {
   List<RepairStage> findAllByRepairIdOrderByStageNo(UUID repairId);
   @Query(

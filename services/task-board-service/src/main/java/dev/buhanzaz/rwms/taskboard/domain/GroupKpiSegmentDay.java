@@ -6,6 +6,7 @@ import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import java.util.UUID;
 
+/** Allocates a responsibility segment across one warehouse-local KPI date. */
 @Entity
 @Table(
     name = "group_kpi_segment_day",

@@ -1,0 +1,330 @@
+# Сервис логистики RWMS
+
+[English version](README.md)
+
+## Назначение и владение
+
+`logistics-service` владеет заявками на аренду, клиентскими презентациями, заказами аренды,
+возвратами, отгрузками, перемещениями, работой водителей и логистической оркестрацией. Он владеет
+document/workflow state, но не агрегатами кабин, оборудования, ремонта или склада. Effects для этих
+владельцев используют узкие private APIs и durable logistics recovery work.
+
+Авторитетные HTTP- и event-контракты находятся в
+[`contracts/openapi/logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml) и
+[`contracts/events/logistics-events.yaml`](../../contracts/events/logistics-events.yaml).
+Начните с [`docs/project-knowledge/domain-logic.md`](../../docs/project-knowledge/domain-logic.md),
+затем проверьте ownership и invariants по текущему коду и контрактам.
+
+## Публичная и внутренняя HTTP-граница
+
+Аутентифицированные операции версионированы под `/api/logistics/v1/**`. Здесь находятся возвраты,
+отгрузки, перемещения, equipment movements, driver board/tasks, orders и rental inquiries. Команды
+используют определённые контрактом `Idempotency-Key` и expected-version field/parameter; callers
+должны обработать канонический конфликт, а не отправлять изменившийся retry.
+
+`POST /api/logistics/v1/rental-inquiries/{inquiryId}/cabin-searches` является write-authorized
+командой и требует `Idempotency-Key`. Короткая PREPARE transaction блокирует inquiry, повторно
+проверяет текущие ownership/state и warehouse-edit authority, затем сохраняет digest запроса по
+subject/operation/key, domain-separated downstream UUID, неизменяемый actor snapshot, hold expiry и
+точный текст asset JSON вместе с его digest. Warehouse- и asset-HTTP-вызовы после этого выполняются
+без local transaction. Короткая COMPLETE transaction повторяет текущие authorization checks,
+выбирает склад inquiry только после asset success и замораживает response; идентичный завершённый
+retry возвращает его с `Idempotency-Replayed: true` без remote call. Изменившийся запрос или другой
+живой key дают `409`. Только inactive warehouse и sanitized коды domain rejection от asset `400`/
+`409` переходят в `REJECTED`; OAuth/configuration/transport/timeout, asset `401`/`403`/`404` и `5xx`,
+а также lost response остаются `PREPARED` для точного retry. `EXPIRED` освобождает единственный
+PREPARED slot inquiry только после сохранённого hold expiry, а сам истёкший public key остаётся
+terminal.
+
+При отсутствии `resultMode` поиск бытовок использует `REPLACE`: asset-service атомарно освобождает
+предыдущие chat holds заявки перед установкой нового результата. `APPEND` принимается только при
+явном запросе caller. Facets содержат доступные значения characteristics и точные связи
+тип-размер. `GET .../cabin-catalog` — ограниченный facts-only lookup без побочного эффекта hold.
+`GET .../cabin-selection` читает авторитетный asset-owned набор holds; идемпотентный
+`PUT .../cabin-selection` заменяет точный полный список cabin IDs со сроком
+`chatSelectionHoldMinutes`, а пустой список немедленно освобождает все holds inquiry. Короткая
+PREPARE transaction сохраняет digest запроса owner/key, точный replace-or-release JSON, non-null
+command deadline и nullable public hold expiry до asset call; для replace deadlines совпадают, а у
+release public expiry остаётся null. Короткая COMPLETE transaction повторно проверяет текущие
+ownership/state inquiry и warehouse authority перед заморозкой validated response. Повтор с тем же
+key и запросом использует те же bytes и deadlines, а изменившийся повтор или другой live key дают
+`409`; transport failure или lost response остаются `PREPARED` для этого точного retry только до
+сохранённого command deadline, после которого slot снова доступен. Remote calls выполняются вне
+local transactions, а receipt является evidence эффекта/replay, а не дубликатом авторитетной
+asset-owned selection.
+
+`POST /api/logistics/v1/clients` создаёт rental client логистики типа `INDIVIDUAL`,
+`SOLE_PROPRIETOR` или `LEGAL_ENTITY`. Name/FIO и основной телефон обязательны; для ИП и юридических
+лиц обязательно также контактное лицо. Email, комментарий и источник необязательны, а identity и
+display-name snapshot ответственного менеджера берутся только из authenticated write actor.
+Исторические клиенты сохраняют правдивый UUID subject создателя как manager identity и могут не
+иметь display-name snapshot. Поиск/detail клиента и paged route `/clients/{clientId}/orders`
+используют обычные visible-order rules и не раскрывают недоступные identities.
+
+Draft заказа аренды можно создать с заранее выбранным клиентом и редактировать с idempotency и
+expected version. В заказе хранятся delivery address, пара координат, контактный телефон,
+необязательный комментарий и до 31 уникальной конкретной acceptable date. Address, coordinates,
+phone и непустой список дат обязательны до save; дата новой shipment должна входить в этот список,
+если он настроен. Request может передавать человекочитаемый телефон с международным `+` или
+российским префиксом `8`; domain проверяет цифры и сохраняет/возвращает только canonical E.164.
+Detail заказа содержит принадлежащие logistics timeline facts shipment/return и
+cabin lines. Maintenance estimates и repair history остаются dossier/maintenance reads и здесь не
+копируются и не сохраняются.
+
+Интерактивные panel и Android-клиенты обращаются к этому namespace только через публичный маршрут
+`/api/logistics/**` в `api-gateway-service`. Им нельзя напрямую вызывать host этого модуля или
+маршрут `/api/internal/**`.
+
+`/api/internal/logistics/v1/maintenance/**` — узкая private boundary для maintenance-owned repair
+work, которому нужна logistics driver/equipment orchestration. Она использует service credentials и
+не является client route.
+
+`/api/logistics/public/v1/client-presentations/**` намеренно anonymous, но доступ ограничивают
+signed presentation token, его revision и current viewability. Media access также проверяет, что
+запрошенный item/generation/variant принадлежит этой presentation; это не общий media proxy.
+
+## Внутренняя структура приложения
+
+`HttpLogisticsDependencyGateway` — стабильная реализация private dependency
+port. Его неизменённый constructor собирает шесть owner clients, а facade
+делегирует каждую операцию интерфейса:
+
+| Owner client | Private boundary |
+| --- | --- |
+| `LogisticsWarehouseDependencyClient` | Warehouse identity, admission, timezone и lifecycle |
+| `LogisticsAssetOperationsDependencyClient` | Rental snapshots, leases, fenced effects, equipment holds и movements |
+| `LogisticsAssetOrderPresentationDependencyClient` | Order units, reservations, cabin availability/search и presentation holds |
+| `LogisticsMaintenanceDependencyClient` | Transfer repair, estimate source, capital repair и repair-place calls |
+| `LogisticsMediaDependencyClient` | Media validation, owner proof, evidence, snapshots и binary presentation media |
+| `LogisticsTaskBoardDependencyClient` | Movement tasks, driver queue/task, board и completion calls |
+| `LogisticsOAuthHttpTransport` | Только exact-scope client credentials, HTTP exchange и существующий dependency error mapping |
+| `RentalInquiryCabinSearchService` | Non-transactional последовательность warehouse/asset calls над одной frozen downstream command |
+| `RentalInquiryCabinSearchStore` | Locked PREPARE/COMPLETE/REJECTED/EXPIRED receipt transactions и frozen-response replay |
+| `RentalInquiryCabinSelectionService` | Owner-scoped чтение authoritative holds и exact full-selection replace/release calls вне local transactions |
+| `RentalInquiryCabinSelectionStore` | Locked PREPARE/COMPLETE/REJECTED/EXPIRED transactions selection receipt, exact-byte retry и frozen-response replay |
+| `RentalInquiryCabinCatalogService` | Ограниченный facts-only cabin lookup с authorization inquiry, warehouse и owner |
+| `LogisticsDocumentService` | Стабильный facade return/shipment/transfer и rental-order hooks над семью точными owners |
+| Coordinators документов return, shipment и transfer | Независимые document state machines с исходным порядком transaction и recovery |
+| Coordinators rental-order shipment/completion и reconciliation | Document hooks для rental shipment, terminal return и команды reconciliation request |
+| Политики document admission, idempotency, attempts, reads и binding | Узкие leaves warehouse, replay, external-attempt, projection и active-order |
+| `RentalOrderService` | Стабильный order facade над reads, creation, lifecycle, reservations, terms и shipment hand-off |
+| Rental-order command store, editability и problem/outcome leaves | Row/receipt replay, saved-draft synchronization и canonical local problem mapping; `LogisticsTransactionLock` владеет узким transaction advisory-lock access |
+
+Owner clients зависят только от общего transport и настроенного private base
+URL; они не зависят от peers и не ссылаются обратно на facade. Domain- и
+saga-решения остаются в logistics application services и durable stores, а не
+в transport layer.
+
+Document facade сохраняет каждый controller/order-facing method и внешнюю
+transaction annotation. Coordinators return, shipment и transfer не вызывают
+друг друга; rental-order shipment/completion и reconciliation являются
+отдельными owners. Общие leaves содержат только warehouse admission,
+idempotency records, external-attempt writes, read projection или active-order
+binding и не ссылаются обратно на facade.
+
+Rental-order facade сохраняет полный controller/presentation API и внешние
+transaction annotations. Read projection, creation, lifecycle клиента/склада,
+reservations/equipment, rental terms и shipment hand-off имеют отдельных
+owners. Command store является единственным владельцем order-row/receipt/
+advisory-lock, а только editability координирует saved document-draft lock; ни
+один owner не вызывает facade обратно.
+
+## Изоляция складов, fencing и оркестрация
+
+Пользовательское действие требует соответствующего warehouse grant. Новая физическая logistics
+operation сначала получает warehouse admission и local date через private warehouse boundary, затем
+фиксирует только local logistics state. Asset, equipment-hold и task-board effects используют stable
+operation IDs, expected versions и owner-side fencing: uncertain remote result повторяется, а не
+угадывается.
+
+Warehouse admission работает fail closed. Disabled или unavailable dependencies возвращают
+существующий ответ `503 LOGISTICS_DEPENDENCY_UNAVAILABLE` до записи document, domain event, outbox
+event или operation mark. Warehouse-service отклоняет incoming operation для `DRAINING` или
+`INACTIVE`, а logistics после такого отказа не оставляет reserved intent или domain write.
+
+Каждый свежий remote-admission ticket несёт точные direction и неотрицательную warehouse lifecycle
+version, которые вернулись для каждого отсортированного requirement. Owning transaction документа,
+equipment или driver сохраняет этот vector в постоянных warehouse operation marks вместе с новой
+domain work; rollback не оставляет ни work, ни admission evidence. Если после admission теряется
+timezone response, logistics повторно читает те же версии admitted intent, а не просит
+warehouse-service допустить другую версию.
+
+До любого remote dependency call повтор public create может получить ticket
+`EVIDENCED_REPLAY_CANDIDATE`, только если local SQL находит живую durable domain identity и полный
+точный набор operation marks с evidence. Для document candidate требуется живой неистёкший receipt
+subject/operation/key, который по-прежнему ссылается на свой document; для equipment и driver нужен
+соответствующий domain row actor/key. SQL восстанавливает сохранённый vector warehouse/direction из
+этого domain row, затем требует постоянные marks с теми же warehouses и directions,
+неотрицательными versions, без пропущенных или дополнительных warehouses. Такой candidate не
+доказывает идентичность incoming payload. Owning create path остаётся checksum authority: изменение
+warehouse/direction или любое другое изменение payload возвращает существующий `409` без dependency
+call или mutation, а exact match возвращает сохранённую operation до consume ticket. Replay
+candidate отклоняется, если достигает любого new-create consume path. Driver replay checksum
+использует сохранённую scheduled date до любого current warehouse-local date gate; только свежая
+driver task выводит `AUTO` date из remote ticket.
+
+Historical marks намеренно остаются unproven: migration `V39` не выполняет backfill evidence. Legacy
+null evidence, истёкший document receipt, отсутствующий domain row или mark, subset, superset и
+несовпадение direction/version никогда не разрешают dependency-free replay. Test-only и parent-owned
+continuation marks также сохраняют null evidence. Если candidate evidence отсутствует, retry следует
+свежему remote-admission path и возвращает `503 LOGISTICS_DEPENDENCY_UNAVAILABLE`, когда dependency
+не ready; точный owner-verified candidate replay не вызывает warehouse admission/timezone и не
+создаёт короткий admission intent.
+
+Пользовательский JWT не пересекает `LogisticsDependencyGateway`. Gateway получает
+client-credential tokens для asset, warehouse, task-board, maintenance и media. Remote effects
+становятся durable attempts и relay запускает их после local commit; нельзя выполнять cross-service
+calls внутри owning database transaction.
+
+## Хранение, события и восстановление
+
+Flyway migrations в `src/main/resources/db/migration/` владеют logistics schema. JPA использует
+`ddl-auto=validate`; service databases изолированы, а cross-service foreign keys/JPA entities
+запрещены.
+
+Migration
+[`V42__clients_order_delivery_and_acceptable_dates.sql`](src/main/resources/db/migration/V42__clients_order_delivery_and_acceptable_dates.sql)
+добавляет тип клиента ИП, client fields contact/manager/comment/source, order delivery facts и
+ordered unique collection приемлемых дат, а также durable exact-command receipts для cabin
+selection inquiry. Она backfill только правдивый UUID ответственного менеджера из
+`created_by_subject_id` и не выдумывает historical display name. Legacy строки без phone/contact
+остаются читаемыми, новые writes ограничены constraints, а V39-V41 неизменяемы.
+
+Logistics вместе фиксирует facts, projection checkpoints и transactional outbox. Kafka delivery —
+at-least-once: aggregate IDs являются record keys, event IDs — dedupe identities, а consumers хранят
+local replay/version-gap handling. Durable stores и relays восстанавливают external attempts, owner
+proofs, warehouse operation marks, driver task work и sanitized failure paths.
+
+Producer события rental-inquiry booked сохраняет строгий `DomainEventEnvelopeV2` в booking
+transaction: aggregate identity/version берутся из inquiry после flush, correlation — conversation
+с booking как causation, actorRef — USER reference менеджера, а payload содержит ровно
+`conversationId` и `orderId`. Kafka по-прежнему использует точный UUID conversation как record key;
+сгенерированный eventId и сохранённый JSON не меняются между relay retries. Migration
+[`V41__rental_inquiry_search_receipts_and_booked_envelope_v2.sql`](src/main/resources/db/migration/V41__rental_inquiry_search_receipts_and_booked_envelope_v2.sql)
+канонизирует и pending, и уже published legacy rows без изменения event IDs, keys или delivery
+statuses; published rows никогда не становятся relayable снова.
+
+Provider-specific persistence ограничен
+[`RentalInquiryBookedOutboxStore`](src/main/java/dev/buhanzaz/rwms/logistics/inquiry/eventing/RentalInquiryBookedOutboxStore.java)
+и узкими warehouse-адаптерами
+[`admission`](src/main/java/dev/buhanzaz/rwms/logistics/service/persistence/LogisticsWarehouseAdmissionPersistence.java),
+[`single-statement blocker`](src/main/java/dev/buhanzaz/rwms/logistics/service/persistence/LogisticsWarehouseLifecycleBlockerReader.java)
+и [`operation-mark`](src/main/java/dev/buhanzaz/rwms/logistics/service/persistence/LogisticsWarehouseOperationMarkPersistence.java).
+Они сохраняют PostgreSQL transaction time, conflict-safe insert, one-statement blocker snapshot,
+`FOR UPDATE SKIP LOCKED` и conditional fencing writes; все business decisions остаются в lifecycle
+stores. [`LogisticsTransactionLock`](src/main/java/dev/buhanzaz/rwms/logistics/repository/LogisticsTransactionLock.java)
+— единственный application caller одобренного transaction advisory-lock query.
+
+[`LogisticsRecoveryObservationStore`](src/main/java/dev/buhanzaz/rwms/logistics/eventing/LogisticsRecoveryObservationStore.java)
+— отдельный read-only technical SQL adapter для recovery-метрик. Он читает только scalar counts и
+oldest timestamps из принадлежащих logistics таблиц outbox, DLT, warehouse marks и inbound gaps;
+он никогда не выполняет claim, retry, publish или resolve и не возвращает identifier, payload, topic
+или error text.
+
+[`LogisticsExternalAttemptClaimService`](src/main/java/dev/buhanzaz/rwms/logistics/service/LogisticsExternalAttemptClaimService.java)
+выдаёт lease ровно одному due external attempt через стабильную ограниченную pessimistic skip-locked
+страницу. PostgreSQL transaction time определяет проверки due и expiry; claim transaction завершается
+до любого remote call. Неизменяемый claim без payload несёт IDs attempt/operation, lease token и
+fence, claimed row version и request digest. Каждый workflow store блокирует и проверяет именно эту
+capability перед записью completion или failure, поэтому истёкший или duplicate worker не может
+перезаписать более новый result. [`V40__bounded_logistics_external_attempt_claims.sql`](src/main/resources/db/migration/V40__bounded_logistics_external_attempt_claims.sql)
+хранит fence, token и expiry и добавляет due и expired-lease indexes.
+
+Пять owner relay используют один лёгкий trigger scheduler и передают только разрешённую в данный
+момент work в отдельный bounded remote-call executor. `LOGISTICS_EXTERNAL_ATTEMPT_LEASE_DURATION`,
+`LOGISTICS_EXTERNAL_ATTEMPT_MAXIMUM_PAGE_SIZE`, переменные worker pool/queue/shutdown и пять
+переменных `*_WORKER_BUDGET` из `application.yaml` ограничивают recovery capacity; budget каждого
+owner должен оставаться меньше worker pool, чтобы сохранить remote-call slot другого owner.
+Fixed-name gauges показывают backlog/oldest/terminal для main outbox, sanitized DLT и warehouse
+marks; backlog/oldest для rental-inquiry outbox; open/oldest inbound gaps и blocked checkpoints; а
+также active/oldest/max-retry/reconciliation-required external attempts и active/queue состояние
+executor. Empty state и future age дают zero, а ошибка доступа к базе — `NaN`. Claim counters и
+latency timers используют только закрытые labels `owner` и `state`; ни одна метрика не содержит
+attempt IDs, topics, payloads или free-form exceptions. Rental-inquiry outbox сейчас имеет только
+`PENDING` и `PUBLISHED`: у него всё ещё нет terminal/reviewed recovery state, и это остаётся
+follow-up work, а не выдуманным terminal gauge.
+
+Base-конфигурация требует явное значение `LOGISTICS_KAFKA_ENABLED`; только профиль `dev` сохраняет
+явный optional default `false`. Canonical primary outputs упорядочены строго как return, shipment,
+transfer и `rwms.logistics.rental-inquiry.events.v1`; sanitized DLT bindings остаются отдельным
+точным набором. Вне явных `dev`/`test` startup требует включённую Kafka, explicit non-loopback
+brokers, отключённое topic auto-creation, synchronous `acks=all`, producer idempotence, положительные
+request/delivery/max-block timeouts, где delivery не короче request, сумма max-block и delivery
+короче outbox lease, включённый rental-inquiry outbox и все beans main-outbox, sanitized-DLT,
+rental-inquiry и output-binding. Профиль `prod` или `production` имеет приоритет над одновременно
+активным local profile и дополнительно требует валидные private dependency URLs и client
+credentials, готовый dependency gateway и `LOGISTICS_DEV_AUTH_BYPASS=false`.
+Disabled mode `LOGISTICS_DEPENDENCIES_ENABLED` остаётся ограничен isolated local/test work. Свежие и
+unproven warehouse-bound creates тогда завершаются `503`; без dependency может пройти только точный
+replay, подтверждённый durable evidence. Direct fixtures под `test` могут получить test-only ticket,
+но его marks с null evidence никогда не разрешают public replay.
+
+## Runtime-конфигурация
+
+Порт HTTP по умолчанию — `8090`. Настройте logistics database, `AUTH_ISSUER`, CORS origin,
+client-presentation token secret, а для real integrations — token URI, client ID/secret и private
+base URLs. Точные variable names находятся в `src/main/resources/application.yaml`; нельзя
+коммитить live credentials или presentation secrets. Startup guard совместно проверяет non-local
+Kafka settings и, в production, `LOGISTICS_DEPENDENCIES_ENABLED` с
+`LOGISTICS_DEV_AUTH_BYPASS`, не включая configured secrets в failures.
+
+Секрет presentation token должен иметь не менее 32 символов, а production отклоняет известный local
+default. Основной API использует stateless OAuth2/JWT; dev auth bypass ограничен профилем `dev`.
+
+## Наблюдаемость и эксплуатация
+
+Actuator предоставляет `health`, `info` и `prometheus`. Логи используют ECS, tracing sampling
+задаёт `LOGISTICS_TRACING_SAMPLING_PROBABILITY`. Recovery gauges регистрируются без dynamic labels;
+существующий common tag `application=logistics-service` добавляется runtime-конфигурацией. Для
+delayed work проверьте document, external-attempt/recovery record, outbox status и correlation ID до
+ручного retry effect. Нельзя исправлять состояние другого сервиса напрямую из logistics.
+
+## Локальная разработка
+
+Из корня репозитория:
+
+```bash
+./gradlew :services:logistics-service:bootRun
+```
+
+Используйте disabled dependencies только для isolated development/test scenarios; свежие и
+unproven warehouse-bound public creates в этом режиме намеренно недоступны. Live integrations
+используют private URLs и service credentials, но не public gateway и не browser token.
+
+## Исполняемый parity маршрутов и безопасности
+
+[`LogisticsRouteSecurityParityTest`](src/test/java/dev/buhanzaz/rwms/logistics/config/LogisticsRouteSecurityParityTest.java)
+разбирает канонический OpenAPI-инвентарь операций, находит все активные mapping из
+`@RestController` через merged-аннотации Spring и требует точного равенства множеств method/path без
+дубликатов. Нормализуются только имена placeholders и необязательный завершающий slash. Этот же тест
+исполняет реальную owner security filter chain с отключённым dev auth bypass: Bearer-операции должны
+отклонять неаутентифицированный запрос, а анонимно могут проходить только четыре контрактные операции
+под `/api/logistics/public/v1/client-presentations/**`.
+
+Запуск focused gate из корня репозитория:
+
+```bash
+bash ./gradlew :services:logistics-service:test --tests 'dev.buhanzaz.rwms.logistics.config.LogisticsRouteSecurityParityTest'
+```
+
+## Правила безопасного изменения
+
+- Меняйте OpenAPI/AsyncAPI boundary и всех затронутых producers/consumers одновременно.
+- Храните return, shipment, transfer, order и driver workflow state в logistics, но не в UI/gateway saga.
+- Сохраняйте expected-version fencing, stable idempotency keys, outbox/inbox dedupe и durable recovery.
+- Добавляйте immutable service-local Flyway migrations и проверяйте затронутые JPA mappings.
+- Тестируйте success, conflict, timeout/retry и replay paths для изменённой owner boundary.
+
+## Основные исходные материалы
+
+- `src/main/java/dev/buhanzaz/rwms/logistics/service/LogisticsDocumentService.java`
+- `src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderService.java`
+- `src/main/java/dev/buhanzaz/rwms/logistics/service/LogisticsWarehouseLifecycle.java`
+- `src/main/java/dev/buhanzaz/rwms/logistics/repository/LogisticsTransactionLock.java`
+- `src/main/java/dev/buhanzaz/rwms/logistics/service/persistence/LogisticsWarehouseAdmissionPersistence.java`
+- `src/main/java/dev/buhanzaz/rwms/logistics/service/persistence/LogisticsWarehouseLifecycleBlockerReader.java`
+- `src/main/java/dev/buhanzaz/rwms/logistics/service/persistence/LogisticsWarehouseOperationMarkPersistence.java`
+- `src/main/java/dev/buhanzaz/rwms/logistics/eventing/LogisticsEventStore.java`
+- `src/main/java/dev/buhanzaz/rwms/logistics/integration/LogisticsDependencyGateway.java`
+- `src/main/java/dev/buhanzaz/rwms/logistics/integration/HttpLogisticsDependencyGateway.java`
+- `src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/ClientPresentationService.java`

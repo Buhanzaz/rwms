@@ -17,6 +17,9 @@ import java.util.Objects;
 import java.util.UUID;
 import org.hibernate.proxy.HibernateProxy;
 
+/**
+ * JPA entity that persists rental item html import in the asset-owned database.
+ */
 @Entity
 @Table(name = "rental_item_html_import")
 public class RentalItemHtmlImport {

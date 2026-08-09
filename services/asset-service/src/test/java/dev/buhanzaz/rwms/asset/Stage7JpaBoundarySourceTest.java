@@ -16,7 +16,13 @@ class Stage7JpaBoundarySourceTest {
     List<Path> sources = List.of(
         sourceRoot.resolve("api/InventoryAssetController.java"),
         sourceRoot.resolve("service/InventoryAssetService.java"),
-        sourceRoot.resolve("service/InventoryAssetBoundaryRegistrar.java"));
+        sourceRoot.resolve("service/InventoryAssetBoundaryRegistrar.java"),
+        sourceRoot.resolve("service/InventoryAssetCaptureService.java"),
+        sourceRoot.resolve("service/InventoryAssetProjectionService.java"),
+        sourceRoot.resolve("service/InventoryFurnitureReconciliationService.java"),
+        sourceRoot.resolve("service/InventoryAssetSourceService.java"));
+    Path snapshotTransaction =
+        sourceRoot.resolve("service/InventoryAssetSnapshotTransaction.java");
 
     for (Path source : sources) {
       assertThat(Files.readString(source))
@@ -29,12 +35,19 @@ class Stage7JpaBoundarySourceTest {
               "pg_advisory");
     }
 
-    assertThat(Files.readString(sourceRoot.resolve("service/InventoryAssetService.java")))
+    assertThat(Files.readString(snapshotTransaction))
         .contains(
             "TransactionDefinition.PROPAGATION_REQUIRES_NEW",
             "TransactionDefinition.ISOLATION_REPEATABLE_READ",
             "captureSnapshotTransaction.setReadOnly(true)")
-        .doesNotContain("nativeQuery", "createNativeQuery", "JdbcTemplate", "lock table");
+        .doesNotContain(
+            "org.springframework.jdbc",
+            "JdbcTemplate",
+            "EntityManager",
+            "createNativeQuery",
+            "pg_advisory",
+            "nativeQuery",
+            "lock table");
   }
 
   private static Path projectRoot() {

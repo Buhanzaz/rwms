@@ -10,6 +10,9 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Component;
 
+/**
+ * Authorization boundary for logistics document APIs, enforcing authenticated role and warehouse scope.
+ */
 @Component
 public class LogisticsAuthorizer {
   private static final UUID DEVELOPMENT_SUBJECT =

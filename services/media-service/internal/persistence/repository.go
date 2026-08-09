@@ -1,3 +1,5 @@
+// Package persistence owns media-service's PostgreSQL state, transactional
+// event/outbox records, owner projections, and replay verification.
 package persistence
 
 import (
@@ -16,28 +18,46 @@ import (
 )
 
 var (
-	ErrNotFound            = errors.New("not found")
-	ErrConflict            = errors.New("conflict")
-	ErrOwnerProofMissing   = errors.New("owner proof is absent, stale, inactive, or mismatched")
+	// ErrNotFound indicates that the requested scoped media record is absent.
+	ErrNotFound = errors.New("not found")
+	// ErrConflict indicates an invalid media transition or optimistic conflict.
+	ErrConflict = errors.New("conflict")
+	// ErrOwnerProofMissing indicates absent, stale, inactive, or mismatched
+	// authoritative ownership evidence.
+	ErrOwnerProofMissing = errors.New("owner proof is absent, stale, inactive, or mismatched")
+	// ErrIdempotencyMismatch rejects an idempotency key reused with new input.
 	ErrIdempotencyMismatch = errors.New("idempotency key payload mismatch")
-	ErrLeaseLost           = errors.New("lease or fencing token was lost")
+	// ErrLeaseLost indicates that a fenced worker or relay may no longer mutate
+	// the claimed record.
+	ErrLeaseLost = errors.New("lease or fencing token was lost")
 )
 
 const (
+	// OwnerTypeInventoryFinding identifies inventory-finding owned media.
 	OwnerTypeInventoryFinding = "INVENTORY_FINDING"
-	OwnerTypeCabin            = "CABIN"
-	ViewerContextInspection   = "INSPECTION"
-	ViewerContextWarehouse    = "WAREHOUSE"
-	MediaTopic                = "rwms.media.media.v1"
-	ProcessingTopic           = "rwms.media.processing.v1"
-	ProcessingDLTTopic        = "rwms.media.processing.v1.media-service-processing-v1.dlt"
+	// OwnerTypeCabin identifies CABIN owned media.
+	OwnerTypeCabin = "CABIN"
+	// ViewerContextInspection is the public read context for an inventory finding.
+	ViewerContextInspection = "INSPECTION"
+	// ViewerContextWarehouse is the public read context for a CABIN.
+	ViewerContextWarehouse = "WAREHOUSE"
+	// MediaTopic carries sanitized media facts to Kafka.
+	MediaTopic = "rwms.media.media.v1"
+	// ProcessingTopic carries media processing requests to Kafka.
+	ProcessingTopic = "rwms.media.processing.v1"
+	// ProcessingDLTTopic carries terminal sanitized processing failures.
+	ProcessingDLTTopic = "rwms.media.processing.v1.media-service-processing-v1.dlt"
 )
 
+// Repository is the media-service PostgreSQL boundary. It implements all
+// aggregate transitions, owner checks, inbox/outbox, and read projections.
 type Repository struct {
 	pool *pgxpool.Pool
 	now  func() time.Time
 }
 
+// NewRepository binds media persistence operations to the provided PostgreSQL
+// connection pool.
 func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool, now: time.Now}
 }
@@ -118,6 +138,8 @@ func (repository *Repository) AcquireUploadSessionContentLock(
 	}, nil
 }
 
+// AssetRecord is the persisted logical media asset, its upload session, and
+// the current immutable source-generation metadata.
 type AssetRecord struct {
 	ID                uuid.UUID
 	FolderID          uuid.UUID
@@ -148,7 +170,9 @@ type AssetRecord struct {
 }
 
 const (
-	PrincipalTypeUser   = "USER"
+	// PrincipalTypeUser identifies a USER actor in media facts.
+	PrincipalTypeUser = "USER"
+	// PrincipalTypeWorker identifies a task-board worker actor in media facts.
 	PrincipalTypeWorker = "WORKER"
 )
 
@@ -161,6 +185,7 @@ type ActorReference struct {
 	PrincipalType string
 }
 
+// VariantRecord describes one persisted immutable original or derivative.
 type VariantRecord struct {
 	Variant         media.Variant
 	ObjectKey       string
@@ -172,11 +197,13 @@ type VariantRecord struct {
 	Checksum        string
 }
 
+// AssetWithVariants pairs a scoped logical asset with its safe variants.
 type AssetWithVariants struct {
 	Asset    AssetRecord
 	Variants []VariantRecord
 }
 
+// CabinCoverRecord is a bounded CABIN cover projection with preview metadata.
 type CabinCoverRecord struct {
 	CabinID    uuid.UUID
 	PhotoCount int64
@@ -186,12 +213,15 @@ type CabinCoverRecord struct {
 	Previews   []CabinPreviewRecord
 }
 
+// CabinPreviewRecord names one ordered READY image preview for a CABIN.
 type CabinPreviewRecord struct {
 	MediaID    uuid.UUID
 	Generation int
 	Variant    VariantRecord
 }
 
+// CreateUploadCommand contains all validated data needed to create or replay a
+// constrained upload session for one logical media asset.
 type CreateUploadCommand struct {
 	MediaID           uuid.UUID
 	FolderID          uuid.UUID
@@ -217,6 +247,8 @@ type CreateUploadCommand struct {
 	CorrelationID     uuid.UUID
 }
 
+// CreateUpload creates one upload session or returns a safe exact idempotent
+// replay, including a replacement session after pre-content expiry.
 func (repository *Repository) CreateUpload(ctx context.Context, command CreateUploadCommand) (AssetRecord, bool, error) {
 	actor, err := normalizeActor(command.SubjectID, command.PrincipalType, command.Actor)
 	if err != nil {
@@ -628,6 +660,8 @@ func sameTaskBoardEvidenceRequest(asset AssetRecord, command CreateUploadCommand
 		command.ClientReferenceID != nil && *asset.ClientReferenceID == *command.ClientReferenceID
 }
 
+// UploadSessionForSubject returns an upload session only when the USER subject
+// that created it still owns the session.
 func (repository *Repository) UploadSessionForSubject(
 	ctx context.Context,
 	sessionID, subjectID uuid.UUID,
@@ -635,6 +669,8 @@ func (repository *Repository) UploadSessionForSubject(
 	return repository.UploadSessionForPrincipal(ctx, sessionID, subjectID, PrincipalTypeUser)
 }
 
+// UploadSessionForPrincipal returns an upload session only for its original
+// principal subject and principal type.
 func (repository *Repository) UploadSessionForPrincipal(
 	ctx context.Context,
 	sessionID, subjectID uuid.UUID,
@@ -652,6 +688,8 @@ func (repository *Repository) UploadSessionForPrincipal(
 	return asset, err
 }
 
+// FinalizeCommand confirms one pinned ingress object for an authorized upload
+// session and its idempotent completion request.
 type FinalizeCommand struct {
 	SessionID       uuid.UUID
 	SubjectID       uuid.UUID
@@ -668,6 +706,8 @@ type FinalizeCommand struct {
 	CorrelationID   uuid.UUID
 }
 
+// FinalizeUpload confirms a version-pinned upload and atomically enqueues its
+// media-processing request, or returns an exact idempotent replay.
 func (repository *Repository) FinalizeUpload(ctx context.Context, command FinalizeCommand) (AssetRecord, bool, error) {
 	actor, err := normalizeActor(command.SubjectID, command.PrincipalType, command.Actor)
 	if err != nil {
@@ -847,6 +887,7 @@ func requireFinalizeWorkerAccess(ctx context.Context, tx pgx.Tx, asset AssetReco
 	return RequireTaskBoardEntryWorkerAccess(ctx, tx, entryID, asset.WarehouseID, *command.WorkerID)
 }
 
+// ListOwner returns a bounded page of owner-scoped assets in presentation order.
 func (repository *Repository) ListOwner(
 	ctx context.Context,
 	ownerType, ownerID string,
@@ -870,6 +911,8 @@ func (repository *Repository) ListOwner(
 // callback prepares every public metadata and signed-variant response. A
 // concurrent revocation either waits for this read to finish or wins the row
 // lock first, in which case this statement returns no authorization inputs.
+// ReadOwnerAssets share-locks current owner proof and streams a bounded scoped
+// asset page to consume.
 func (repository *Repository) ReadOwnerAssets(
 	ctx context.Context,
 	ownerType, ownerID string,
@@ -920,6 +963,8 @@ func (repository *Repository) ReadOwnerAssets(
 // be used instead of AuthorizeTaskBoardEntryWorker followed by ReadOwnerAssets:
 // a proof update between those transactions could otherwise expose a result
 // asset after the worker has been removed or the entry has been revoked.
+// ReadTaskBoardEntryAssetsForWorker returns a bounded task-board asset page
+// only when the current owner proof permits the specified worker.
 func (repository *Repository) ReadTaskBoardEntryAssetsForWorker(
 	ctx context.Context,
 	entryID, warehouseID, workerID uuid.UUID,
@@ -1220,6 +1265,8 @@ func readOwnerAssets(
 // per READY image and are bounded by the owner media limit. Cabin bindings are
 // share-locked for the complete projection callback so a concurrent owner
 // revocation cannot race the read.
+// ReadCabinCovers returns bounded ready-image cover and preview projections
+// for CABINs with current, non-quarantined owner bindings.
 func (repository *Repository) ReadCabinCovers(
 	ctx context.Context,
 	warehouseID uuid.UUID,
@@ -1378,6 +1425,7 @@ func (repository *Repository) ReadCabinCovers(
 	return tx.Commit(ctx)
 }
 
+// GetAsset reads one logical asset by ID without authorizing a public scope.
 func (repository *Repository) GetAsset(ctx context.Context, mediaID uuid.UUID) (AssetRecord, error) {
 	asset, err := scanAsset(repository.pool.QueryRow(ctx, assetSQL+`
 		join media_owner_binding binding on binding.owner_type=a.owner_type
@@ -1401,6 +1449,7 @@ func (repository *Repository) GetAsset(ctx context.Context, mediaID uuid.UUID) (
 	return asset, nil
 }
 
+// GetAssetScoped reads an asset only when its owner tuple exactly matches.
 func (repository *Repository) GetAssetScoped(ctx context.Context, mediaID uuid.UUID, ownerType, ownerID string, warehouseID uuid.UUID) (AssetRecord, error) {
 	asset, err := scanAsset(repository.pool.QueryRow(ctx, assetSQL+`
 		join media_owner_binding binding on binding.owner_type=a.owner_type
@@ -1431,6 +1480,8 @@ func (repository *Repository) GetAssetScoped(ctx context.Context, mediaID uuid.U
 // original with one authorization-bearing SQL statement. TASK_BOARD_ENTRY
 // source reads additionally require the proof-pinned generation supplied by
 // the public handler.
+// ReadOriginal authorizes and provides one immutable original to consume while
+// holding the owner binding share lock.
 func (repository *Repository) ReadOriginal(
 	ctx context.Context,
 	mediaID uuid.UUID,
@@ -1550,6 +1601,8 @@ func (repository *Repository) readTaskBoardEntryOriginalForUser(
 // generation is still current, except for a TASK_BOARD_ENTRY source generation
 // pinned by its authoritative proof. Owner mismatch, revoked proof and stale
 // generation remain indistinguishable from an absent media resource.
+// ReadCurrentVariant authorizes and provides one requested current derivative
+// while holding the owner binding share lock.
 func (repository *Repository) ReadCurrentVariant(
 	ctx context.Context,
 	mediaID uuid.UUID,
@@ -1688,6 +1741,8 @@ func (repository *Repository) readTaskBoardEntryVariantForUser(
 // owned directly by the entry or to one exact source media generation named in
 // the current entry proof. The latter intentionally does not grant a general
 // read capability for the source asset's own owner scope.
+// ReadTaskBoardEntryOriginalForWorker provides a task-board original only when
+// the current proof explicitly authorizes the worker and requested generation.
 func (repository *Repository) ReadTaskBoardEntryOriginalForWorker(
 	ctx context.Context,
 	entryID, warehouseID, workerID, mediaID uuid.UUID,
@@ -1724,6 +1779,8 @@ func (repository *Repository) ReadTaskBoardEntryOriginalForWorker(
 	return tx.Commit(ctx)
 }
 
+// ReadTaskBoardEntryVariantForWorker provides a task-board derivative only
+// when the current proof explicitly authorizes the worker and generation.
 func (repository *Repository) ReadTaskBoardEntryVariantForWorker(
 	ctx context.Context,
 	entryID, warehouseID, workerID, mediaID uuid.UUID,
@@ -1871,6 +1928,8 @@ func readTaskBoardWorkerVariant(ctx context.Context, tx pgx.Tx, fromAndWhere str
 	return asset, nil, true, nil
 }
 
+// Variants returns persisted variants for one exact media generation, optionally
+// including the canonical original.
 func (repository *Repository) Variants(ctx context.Context, mediaID uuid.UUID, generation int, includeOriginal bool) ([]VariantRecord, error) {
 	rows, err := repository.pool.Query(ctx, `select (variant.media_id is not null),
 		coalesce(variant.variant,''),coalesce(variant.object_key,''),

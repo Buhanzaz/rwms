@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import org.springframework.stereotype.Component;
 
+/** Validates the sanitized analytics DLT payload before it may leave the service-owned outbox. */
 @Component
 public final class AnalyticsOutboundSchemaValidator {
   private static final String RESOURCE =

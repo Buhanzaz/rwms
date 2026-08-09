@@ -40,6 +40,9 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Owns client presentation snapshots derived from a rental inquiry and its available rental items.
+ */
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)

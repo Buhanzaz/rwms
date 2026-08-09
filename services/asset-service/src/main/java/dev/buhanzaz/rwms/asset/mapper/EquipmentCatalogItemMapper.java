@@ -7,6 +7,10 @@ import org.mapstruct.Mapper;
 import org.mapstruct.MappingConstants;
 import org.mapstruct.ReportingPolicy;
 
+/**
+ * MapStruct mapper for equipment catalog item boundary representations.
+ * It maps data without performing a domain transition.
+ */
 @Mapper(
     componentModel = MappingConstants.ComponentModel.SPRING,
     injectionStrategy = InjectionStrategy.CONSTRUCTOR,

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
@@ -12,6 +13,7 @@ class DossierEnvelopeValidatorTest {
   private static final UUID EVENT_ID = UUID.fromString("10000000-0000-0000-0000-000000000001");
   private static final UUID CABIN_ID = UUID.fromString("20000000-0000-0000-0000-000000000001");
   private static final UUID WAREHOUSE_ID = UUID.fromString("30000000-0000-0000-0000-000000000001");
+  private static final UUID REPAIR_ID = UUID.fromString("40000000-0000-0000-0000-000000000001");
   private final DossierEnvelopeValidator validator =
       new DossierEnvelopeValidator(new ObjectMapper(), new DossierProducerSchemaValidator());
 
@@ -133,6 +135,29 @@ class DossierEnvelopeValidatorTest {
   }
 
   @Test
+  void mapsCanonicalRepairTransferFactsToPublicActivitiesAtTheirEventWarehouse() {
+    Map.of(
+            "maintenance.repair.transfer-prepared.v1", "REPAIR_TRANSFER_PREPARED",
+            "maintenance.repair.transferred.v1", "REPAIR_TRANSFERRED")
+        .forEach(
+            (eventType, activityCode) -> {
+              DossierValidatedEvent event =
+                  validator.validate(
+                      "rwms.maintenance.repair.v1",
+                      0,
+                      21,
+                      REPAIR_ID.toString(),
+                      repairFact(eventType).getBytes(StandardCharsets.UTF_8));
+
+              assertThat(event.activityCode()).isEqualTo(activityCode);
+              assertThat(event.aggregateId()).isEqualTo(REPAIR_ID);
+              assertThat(event.cabinId()).isEqualTo(CABIN_ID);
+              assertThat(event.warehouseId()).isEqualTo(WAREHOUSE_ID);
+              assertThat(event.payload().required("priority").intValue()).isEqualTo(3);
+            });
+  }
+
+  @Test
   void acceptsCanonicalUploadedVersionTwoWithFolderAndActor() {
     UUID mediaId = UUID.fromString("40000000-0000-0000-0000-000000000005");
     UUID folderId = UUID.fromString("40000000-0000-0000-0000-000000000006");
@@ -230,6 +255,18 @@ class DossierEnvelopeValidatorTest {
         {"rentalItemId":"%s","warehouseId":"%s","status":"AVAILABLE","numberSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
         """
             .formatted(CABIN_ID, WAREHOUSE_ID));
+  }
+
+  private static String repairFact(String eventType) {
+    return envelope(
+        eventType,
+        "maintenance-service",
+        "REPAIR",
+        REPAIR_ID,
+        """
+        {"repairId":"%s","rootRepairId":"%s","sourceRepairId":null,"estimateId":null,"warehouseId":"%s","rentalItemId":"%s","origin":"DIRECT_REPAIR","kind":"PRIMARY","executionState":"QUEUED","acceptanceState":"NOT_READY","dispatchDate":"2026-07-18","priority":3,"stages":[]}
+        """
+            .formatted(REPAIR_ID, REPAIR_ID, WAREHOUSE_ID, CABIN_ID));
   }
 
   private static String envelope(

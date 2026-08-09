@@ -29,8 +29,10 @@ import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderUnitTermRepository;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
+import dev.buhanzaz.rwms.logistics.service.LogisticsExternalAttemptClaimService;
 import dev.buhanzaz.rwms.logistics.service.ShipmentFurnitureTaskService;
 import dev.buhanzaz.rwms.logistics.service.ShipmentProcessor;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -74,6 +76,7 @@ class ShipmentWorkflowSagaIntegrationTest {
   static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
   @Autowired LogisticsDocumentService documents;
+  @Autowired LogisticsExternalAttemptClaimService claims;
   @Autowired ShipmentProcessor processor;
   @Autowired JdbcTemplate jdbc;
   @Autowired OrderClientRepository clients;
@@ -135,7 +138,7 @@ class ShipmentWorkflowSagaIntegrationTest {
 
     assertThat(created.response().state()).isEqualTo(LogisticsDocumentState.PREPARING);
 
-    processor.processUntilIdle(documentId);
+    LogisticsExternalAttemptTestClaims.drainShipment(claims, processor);
     long awaitingVersion = documents.get(documentId, LogisticsDocumentType.SHIPMENT).version();
     assertThat(
             jdbc.queryForList(
@@ -190,7 +193,7 @@ class ShipmentWorkflowSagaIntegrationTest {
 
     documents.confirmShipmentPreparation(
         SUBJECT, UUID.randomUUID(), CORRELATION, documentId, awaitingVersion);
-    processor.processUntilIdle(documentId);
+    LogisticsExternalAttemptTestClaims.drainShipment(claims, processor);
 
     assertThat(documents.get(documentId, LogisticsDocumentType.SHIPMENT).state())
         .isEqualTo(LogisticsDocumentState.SHIPPED);
@@ -232,6 +235,11 @@ class ShipmentWorkflowSagaIntegrationTest {
                 "+79990000002",
                 null,
                 null,
+                "Party contact",
+                SUBJECT,
+                "Dispatcher",
+                null,
+                null,
                 SUBJECT,
                 UUID.randomUUID(),
                 "0".repeat(64)));
@@ -244,6 +252,12 @@ class ShipmentWorkflowSagaIntegrationTest {
             SUBJECT,
             "Dispatcher",
             "RENTAL_MANAGER",
+            "Moscow, linked address",
+            new BigDecimal("55.750000"),
+            new BigDecimal("37.620000"),
+            "+79990000002",
+            null,
+            List.of(LocalDate.now().plusDays(1)),
             UUID.randomUUID(),
             "1".repeat(64));
     order.selectWarehouse(WAREHOUSE);
@@ -299,7 +313,7 @@ class ShipmentWorkflowSagaIntegrationTest {
         documentId,
         created.version(),
         new ShipmentPlanRequest("Driver linked", plannedShipmentDate));
-    processor.processUntilIdle(documentId);
+    LogisticsExternalAttemptTestClaims.drainShipment(claims, processor);
     long awaitingVersion = documents.get(documentId, LogisticsDocumentType.SHIPMENT).version();
 
     when(dependencies.applyFencedEffect(
@@ -334,7 +348,7 @@ class ShipmentWorkflowSagaIntegrationTest {
 
     documents.confirmShipmentPreparation(
         SUBJECT, UUID.randomUUID(), CORRELATION, documentId, awaitingVersion, true);
-    processor.processUntilIdle(documentId);
+    LogisticsExternalAttemptTestClaims.drainShipment(claims, processor);
 
     assertThat(
             jdbc.queryForObject(
@@ -388,6 +402,11 @@ class ShipmentWorkflowSagaIntegrationTest {
                 "+79990000003",
                 null,
                 null,
+                "Furniture contact",
+                SUBJECT,
+                "Dispatcher",
+                null,
+                null,
                 SUBJECT,
                 UUID.randomUUID(),
                 "2".repeat(64)));
@@ -400,6 +419,12 @@ class ShipmentWorkflowSagaIntegrationTest {
             SUBJECT,
             "Dispatcher",
             "RENTAL_MANAGER",
+            "Moscow, furniture address",
+            new BigDecimal("55.750000"),
+            new BigDecimal("37.620000"),
+            "+79990000003",
+            null,
+            List.of(LocalDate.now()),
             UUID.randomUUID(),
             "3".repeat(64));
     order.selectWarehouse(WAREHOUSE);
@@ -516,7 +541,7 @@ class ShipmentWorkflowSagaIntegrationTest {
 
     when(dependencies.readRentalItemSnapshot(ASSET)).thenReturn(snapshot(7, "BOOKED"));
 
-    processor.processUntilIdle(created.response().id());
+    LogisticsExternalAttemptTestClaims.drainShipment(claims, processor);
 
     assertThat(documents.get(created.response().id(), LogisticsDocumentType.SHIPMENT).state())
         .isEqualTo(LogisticsDocumentState.CONFLICT);

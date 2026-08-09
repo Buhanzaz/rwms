@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.dossier.service;
 
 import org.springframework.http.HttpStatus;
 
+/** Signals a client-visible invalid dossier query without exposing persistence or authorization internals. */
 public final class DossierQueryException extends RuntimeException {
   private final HttpStatus status;
   private final String code;

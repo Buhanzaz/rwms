@@ -113,6 +113,12 @@ val verifyApprovedDependencyVersions by tasks.registering {
     }
 }
 
+val verifyCanonicalContracts by tasks.registering {
+    group = "verification"
+    description = "Runs the deterministic canonical OpenAPI, event catalog and JSON Schema integrity gate"
+    dependsOn(":platform:architecture-tests:canonicalContractIntegrityTest")
+}
+
 subprojects {
     pluginManager.withPlugin("rwms.java25") {
         rootProject.tasks.named("verifyApprovedDependencyVersions").configure {

@@ -57,33 +57,36 @@ class TransferWorkflowStore {
   private final LogisticsDocumentRepository documentRepository;
   private final LogisticsDocumentLineRepository lineRepository;
   private final LogisticsExternalAttemptRepository attemptRepository;
+  private final LogisticsExternalAttemptClaimService claims;
   private final LogisticsGuardRepository guardRepository;
   private final LogisticsMediaReferenceRepository mediaReferenceRepository;
   private final LogisticsReconciliationRepository reconciliationRepository;
   private final LogisticsEventStore eventStore;
 
-  Optional<Work> nextWork(UUID documentId) {
-    if (documentId == null) return Optional.empty();
-    OffsetDateTime now = now();
-    for (LogisticsExternalAttempt attempt :
-        attemptRepository.findAllByDocument_IdOrderByCreatedAtAsc(documentId)) {
-      LogisticsDocument document = attempt.getDocument();
-      if (!isTransferWorkState(document.getState()) || !attempt.isDue(now)) continue;
-      LogisticsDocumentLine line = requiredLine(attempt);
-      Optional<Work> work =
-          switch (document.getState()) {
-            case DEPARTING -> departureWork(attempt, document, line);
-            case ARRIVING -> arrivalWork(attempt, document, line);
-            default -> Optional.empty();
-          };
-      if (work.isPresent()) return work;
-    }
-    return Optional.empty();
+  /**
+   * Builds local transfer request data for one exact lease. A claimed operation that is not yet the
+   * current workflow transition is deferred by the processor without scanning unrelated attempts.
+   */
+  @Transactional
+  public Optional<Work> workForClaim(LogisticsExternalAttemptClaimService.Claim claim) {
+    LogisticsExternalAttempt attempt = claims.requireCurrentAttempt(claim);
+    LogisticsDocument document = attempt.getDocument();
+    if (!isTransferWorkState(document.getState())) return Optional.empty();
+    LogisticsDocumentLine line = attempt.getLine();
+    if (line == null) return Optional.empty();
+    return switch (document.getState()) {
+      case DEPARTING -> departureWork(attempt, document, line);
+      case ARRIVING -> arrivalWork(attempt, document, line);
+      default -> Optional.empty();
+    };
   }
 
+  /** Records warehouse validation only if the supplied lease is still exact and current. */
   @Transactional
-  public void confirmWarehouse(UUID operationId, LogisticsDependencyGateway.WarehouseIdentity identity) {
-    LogisticsExternalAttempt attempt = identityAttempt(operationId);
+  public void confirmWarehouse(
+      LogisticsExternalAttemptClaimService.Claim claim,
+      LogisticsDependencyGateway.WarehouseIdentity identity) {
+    LogisticsExternalAttempt attempt = identityAttempt(claim);
     if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
     LogisticsDocument document = attempt.getDocument();
     LogisticsDocumentLine line = requiredLine(attempt);
@@ -95,13 +98,14 @@ class TransferWorkflowStore {
     attempt.confirm(identityDigest(operation + "_RESPONSE", identity), now());
   }
 
+  /** Records departure maintenance completion only if the supplied lease is still exact and current. */
   @Transactional
   public void confirmMaintenanceDeparture(
-      UUID operationId,
+      LogisticsExternalAttemptClaimService.Claim claim,
       LogisticsDependencyGateway.TransferRepairDeparture preparation) {
     LogisticsExternalAttempt attempt =
         attempt(
-            operationId,
+            claim,
             LogisticsDocumentService.TRANSFER_MAINTENANCE_PREPARE_DEPARTURE);
     if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
     LogisticsDocument document = attempt.getDocument();
@@ -122,13 +126,14 @@ class TransferWorkflowStore {
         completedAt);
   }
 
+  /** Records arrival maintenance completion only if the supplied lease is still exact and current. */
   @Transactional
   public void confirmMaintenanceArrival(
-      UUID operationId,
+      LogisticsExternalAttemptClaimService.Claim claim,
       LogisticsDependencyGateway.TransferRepairArrivalCompletion completion) {
     LogisticsExternalAttempt attempt =
         attempt(
-            operationId,
+            claim,
             LogisticsDocumentService.TRANSFER_MAINTENANCE_COMPLETE_ARRIVAL);
     if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
     LogisticsDocument document = attempt.getDocument();
@@ -145,9 +150,12 @@ class TransferWorkflowStore {
     finishLineArrival(document, line);
   }
 
+  /** Records an asset snapshot only if the supplied lease is still exact and current. */
   @Transactional
-  public void confirmSnapshot(UUID operationId, LogisticsDependencyGateway.RentalItemSnapshot snapshot) {
-    LogisticsExternalAttempt attempt = snapshotAttempt(operationId);
+  public void confirmSnapshot(
+      LogisticsExternalAttemptClaimService.Claim claim,
+      LogisticsDependencyGateway.RentalItemSnapshot snapshot) {
+    LogisticsExternalAttempt attempt = snapshotAttempt(claim);
     if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
     LogisticsDocument document = attempt.getDocument();
     LogisticsDocumentLine line = requiredLine(attempt);
@@ -189,10 +197,13 @@ class TransferWorkflowStore {
         completedAt);
   }
 
+  /** Records asset lease acquisition only if the supplied lease is still exact and current. */
   @Transactional
-  public void confirmLease(UUID operationId, LogisticsDependencyGateway.OperationLease lease) {
+  public void confirmLease(
+      LogisticsExternalAttemptClaimService.Claim claim,
+      LogisticsDependencyGateway.OperationLease lease) {
     LogisticsExternalAttempt attempt =
-        attempt(operationId, LogisticsDocumentService.TRANSFER_ASSET_LEASE_ACQUIRE);
+        attempt(claim, LogisticsDocumentService.TRANSFER_ASSET_LEASE_ACQUIRE);
     if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
     LogisticsDocument document = attempt.getDocument();
     LogisticsDocumentLine line = requiredLine(attempt);
@@ -238,10 +249,13 @@ class TransferWorkflowStore {
         completedAt);
   }
 
+  /** Records media validation only if the supplied lease is still exact and current. */
   @Transactional
-  public void confirmMedia(UUID operationId, LogisticsDependencyGateway.MediaValidation validation) {
+  public void confirmMedia(
+      LogisticsExternalAttemptClaimService.Claim claim,
+      LogisticsDependencyGateway.MediaValidation validation) {
     LogisticsExternalAttempt attempt =
-        attempt(operationId, LogisticsDocumentService.TRANSFER_MEDIA_VALIDATE);
+        attempt(claim, LogisticsDocumentService.TRANSFER_MEDIA_VALIDATE);
     if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
     LogisticsDocument document = attempt.getDocument();
     LogisticsDocumentLine line = requiredLine(attempt);
@@ -268,10 +282,12 @@ class TransferWorkflowStore {
         completedAt);
   }
 
+  /** Records a fenced asset effect only if the supplied lease is still exact and current. */
   @Transactional
   public void confirmFencedEffect(
-      UUID operationId, LogisticsDependencyGateway.RentalItemSnapshot snapshot) {
-    LogisticsExternalAttempt attempt = effectAttempt(operationId);
+      LogisticsExternalAttemptClaimService.Claim claim,
+      LogisticsDependencyGateway.RentalItemSnapshot snapshot) {
+    LogisticsExternalAttempt attempt = effectAttempt(claim);
     if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
     LogisticsDocument document = attempt.getDocument();
     LogisticsDocumentLine line = requiredLine(attempt);
@@ -307,10 +323,13 @@ class TransferWorkflowStore {
     createLeaseReleaseAttempt(document, line, guard, completedAt);
   }
 
+  /** Records asset lease release only if the supplied lease is still exact and current. */
   @Transactional
-  public void confirmLeaseRelease(UUID operationId, LogisticsDependencyGateway.OperationLease lease) {
+  public void confirmLeaseRelease(
+      LogisticsExternalAttemptClaimService.Claim claim,
+      LogisticsDependencyGateway.OperationLease lease) {
     LogisticsExternalAttempt attempt =
-        attempt(operationId, LogisticsDocumentService.TRANSFER_ASSET_LEASE_RELEASE);
+        attempt(claim, LogisticsDocumentService.TRANSFER_ASSET_LEASE_RELEASE);
     if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
     LogisticsDocument document = attempt.getDocument();
     LogisticsDocumentLine line = requiredLine(attempt);
@@ -366,12 +385,11 @@ class TransferWorkflowStore {
     }
   }
 
+  /** Records a dependency failure only if the supplied lease is still exact and current. */
   @Transactional
-  public void recordFailure(UUID operationId, LogisticsDependencyException exception) {
-    LogisticsExternalAttempt attempt =
-        attemptRepository
-            .findByOperationId(operationId)
-            .orElseThrow(() -> new IllegalArgumentException("External attempt is missing"));
+  public void recordFailure(
+      LogisticsExternalAttemptClaimService.Claim claim, LogisticsDependencyException exception) {
+    LogisticsExternalAttempt attempt = claims.requireCurrentAttempt(claim);
     if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
     LogisticsDocument document = attempt.getDocument();
     if (!isTransferWorkState(document.getState())) return;
@@ -634,22 +652,16 @@ class TransferWorkflowStore {
     return true;
   }
 
-  private LogisticsExternalAttempt identityAttempt(UUID operationId) {
-    LogisticsExternalAttempt attempt =
-        attemptRepository
-            .findByOperationId(operationId)
-            .orElseThrow(() -> new IllegalArgumentException("External attempt is missing"));
+  private LogisticsExternalAttempt identityAttempt(LogisticsExternalAttemptClaimService.Claim claim) {
+    LogisticsExternalAttempt attempt = claims.requireCurrentAttempt(claim);
     if (!isIdentityOperation(attempt.getOperationType())) {
       throw new IllegalArgumentException("External attempt type is invalid");
     }
     return attempt;
   }
 
-  private LogisticsExternalAttempt snapshotAttempt(UUID operationId) {
-    LogisticsExternalAttempt attempt =
-        attemptRepository
-            .findByOperationId(operationId)
-            .orElseThrow(() -> new IllegalArgumentException("External attempt is missing"));
+  private LogisticsExternalAttempt snapshotAttempt(LogisticsExternalAttemptClaimService.Claim claim) {
+    LogisticsExternalAttempt attempt = claims.requireCurrentAttempt(claim);
     if (!LogisticsDocumentService.TRANSFER_ASSET_SNAPSHOT.equals(attempt.getOperationType())
         && !LogisticsDocumentService.TRANSFER_ASSET_ARRIVAL_SNAPSHOT.equals(attempt.getOperationType())) {
       throw new IllegalArgumentException("External attempt type is invalid");
@@ -657,11 +669,8 @@ class TransferWorkflowStore {
     return attempt;
   }
 
-  private LogisticsExternalAttempt effectAttempt(UUID operationId) {
-    LogisticsExternalAttempt attempt =
-        attemptRepository
-            .findByOperationId(operationId)
-            .orElseThrow(() -> new IllegalArgumentException("External attempt is missing"));
+  private LogisticsExternalAttempt effectAttempt(LogisticsExternalAttemptClaimService.Claim claim) {
+    LogisticsExternalAttempt attempt = claims.requireCurrentAttempt(claim);
     if (!LogisticsDocumentService.TRANSFER_ASSET_DEPART.equals(attempt.getOperationType())
         && !LogisticsDocumentService.TRANSFER_ASSET_ARRIVE.equals(attempt.getOperationType())) {
       throw new IllegalArgumentException("External attempt type is invalid");
@@ -669,11 +678,9 @@ class TransferWorkflowStore {
     return attempt;
   }
 
-  private LogisticsExternalAttempt attempt(UUID operationId, String operationType) {
-    LogisticsExternalAttempt attempt =
-        attemptRepository
-            .findByOperationId(operationId)
-            .orElseThrow(() -> new IllegalArgumentException("External attempt is missing"));
+  private LogisticsExternalAttempt attempt(
+      LogisticsExternalAttemptClaimService.Claim claim, String operationType) {
+    LogisticsExternalAttempt attempt = claims.requireCurrentAttempt(claim);
     if (!operationType.equals(attempt.getOperationType())) {
       throw new IllegalArgumentException("External attempt type is invalid");
     }

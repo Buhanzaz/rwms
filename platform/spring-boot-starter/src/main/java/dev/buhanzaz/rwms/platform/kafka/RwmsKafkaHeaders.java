@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.platform.kafka;
 
+/** Names the non-PII technical Kafka headers emitted by the platform publisher. */
 public final class RwmsKafkaHeaders {
 
     public static final String ENVELOPE_VERSION = "rwms-envelope-version";

@@ -13,6 +13,7 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+/** Single-pointer record selecting the verified dossier projection generation served by public queries. */
 @Entity
 @Table(name = "dossier_active_generation")
 @Getter

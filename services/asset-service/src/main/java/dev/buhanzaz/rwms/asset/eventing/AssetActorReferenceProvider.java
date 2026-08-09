@@ -7,6 +7,10 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Component;
 
+/**
+ * Extracts an opaque actor reference for asset events only when the current JWT has a valid UUID
+ * subject. Missing, anonymous or malformed authentication deliberately produces no actor record.
+ */
 @Component
 public class AssetActorReferenceProvider {
   public OpaqueActorReference current() {

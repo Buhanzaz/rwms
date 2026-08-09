@@ -8,6 +8,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.util.UUID;
 
+/** JPA directed link between two nodes in one maintenance catalog version. */
 @Entity
 @Table(name = "catalog_link")
 public class CatalogLink {

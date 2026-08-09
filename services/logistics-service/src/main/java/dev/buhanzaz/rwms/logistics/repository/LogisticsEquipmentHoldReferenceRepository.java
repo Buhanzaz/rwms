@@ -6,6 +6,9 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/**
+ * Spring Data persistence boundary for logistics-owned Logistics Equipment Hold Reference Repository; it does not own cross-service workflow decisions.
+ */
 public interface LogisticsEquipmentHoldReferenceRepository
     extends JpaRepository<LogisticsEquipmentHoldReference, UUID> {
   List<LogisticsEquipmentHoldReference> findAllByDocument_IdOrderByCreatedAtAsc(UUID documentId);

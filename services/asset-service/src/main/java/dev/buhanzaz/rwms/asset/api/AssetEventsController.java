@@ -15,6 +15,10 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+/**
+ * HTTP adapter for asset events.
+ * It exposes the contract boundary without owning a persistence model or domain transition.
+ */
 @RestController
 @RequestMapping("/api/asset/v1")
 @RequiredArgsConstructor

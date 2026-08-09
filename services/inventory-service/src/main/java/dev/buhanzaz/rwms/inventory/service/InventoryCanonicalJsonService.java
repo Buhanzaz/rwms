@@ -7,6 +7,9 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.SerializationFeature;
 
+/**
+ * Canonical JSON implementation used to compare idempotent inventory command requests.
+ */
 @Service
 public class InventoryCanonicalJsonService implements InventoryCanonicalJsonPort {
   private final ObjectMapper mapper;

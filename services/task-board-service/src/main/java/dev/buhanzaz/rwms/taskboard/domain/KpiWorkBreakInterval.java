@@ -5,6 +5,7 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.Table;
 import java.time.LocalTime;
 
+/** One unpaid or non-working interval in an effective warehouse work schedule revision. */
 @Entity
 @Table(name = "kpi_work_break")
 public class KpiWorkBreakInterval extends AbstractVersionedEntity {

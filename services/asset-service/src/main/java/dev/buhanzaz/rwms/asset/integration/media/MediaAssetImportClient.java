@@ -3,6 +3,9 @@ package dev.buhanzaz.rwms.asset.integration.media;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * Private asset boundary for importing supported source media into media-service.
+ */
 public interface MediaAssetImportClient {
   int MAX_SOURCES = 500;
 

@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/** Reads append-only execution timing facts in deterministic task order. */
 public interface TaskTimeEventRepository extends JpaRepository<TaskTimeEvent, UUID> {
   boolean existsByWorkerId(UUID workerId);
 

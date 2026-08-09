@@ -3,7 +3,6 @@ package dev.buhanzaz.rwms.logistics.service;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import java.util.Optional;
-import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,33 +12,39 @@ import org.springframework.stereotype.Service;
 @Service
 @RequiredArgsConstructor
 public class ShipmentProcessor {
-  private static final int MAX_STEPS_PER_DRAIN = 1_000;
   private static final Logger log = LoggerFactory.getLogger(ShipmentProcessor.class);
 
   private final ShipmentWorkflowStore store;
+  private final LogisticsExternalAttemptClaimService claims;
   private final LogisticsDependencyGateway dependencies;
 
-  public int processUntilIdle(UUID documentId) {
-    if (documentId == null) throw new IllegalArgumentException("documentId is required");
-    int processed = 0;
-    while (processed < MAX_STEPS_PER_DRAIN) {
-      Optional<ShipmentWorkflowStore.Work> work = store.nextWork(documentId);
-      if (work.isEmpty()) return processed;
-      process(work.get());
-      processed++;
+  /**
+   * Executes one exact shipment claim. The processor does not scan a document or retain a database
+   * transaction while the target dependency is running.
+   */
+  public void process(LogisticsExternalAttemptClaimService.Claim claim) {
+    try {
+      Optional<ShipmentWorkflowStore.Work> work = store.workForClaim(claim);
+      if (work.isEmpty()) {
+        defer(claim);
+        return;
+      }
+      process(claim, work.get());
+    } catch (LogisticsExternalAttemptClaimService.StaleClaimException ignored) {
+      // The row is now controlled by a newer lease.
     }
-    throw new IllegalStateException("Shipment workflow did not reach a stable local state");
   }
 
-  private void process(ShipmentWorkflowStore.Work work) {
+  private void process(
+      LogisticsExternalAttemptClaimService.Claim claim, ShipmentWorkflowStore.Work work) {
     try {
       switch (work.type()) {
         case SNAPSHOT ->
             store.confirmSnapshot(
-                work.operationId(), dependencies.readRentalItemSnapshot(work.assetId()));
+                claim, dependencies.readRentalItemSnapshot(work.assetId()));
         case LEASE ->
             store.confirmLease(
-                work.operationId(),
+                claim,
                 work.rentalOrderId() == null
                     ? dependencies.acquireOperationLease(
                         work.operationId(),
@@ -58,7 +63,7 @@ public class ShipmentProcessor {
                         work.rentalOrderId()));
         case HOLD_ACQUIRE ->
             store.confirmHoldAcquire(
-                work.operationId(),
+                claim,
                 dependencies.acquireEquipmentHold(
                     work.operationId(),
                     work.equipmentId(),
@@ -68,10 +73,10 @@ public class ShipmentProcessor {
                     work.quantity(),
                     work.expectedStockVersion()));
         case HOLD_COMMAND ->
-            confirmHoldCommand(work);
+            confirmHoldCommand(claim, work);
         case EFFECT ->
             store.confirmShipmentEffect(
-                work.operationId(),
+                claim,
                 dependencies.applyFencedEffect(
                     work.operationId(),
                     work.assetEffect(),
@@ -85,7 +90,7 @@ public class ShipmentProcessor {
                     work.warehouseId()));
         case LEASE_RELEASE ->
             store.confirmLeaseRelease(
-                work.operationId(),
+                claim,
                 dependencies.releaseOperationLease(
                     work.operationId(),
                     work.leaseId(),
@@ -95,12 +100,14 @@ public class ShipmentProcessor {
                     work.documentId(),
                     work.lineId()));
       }
+    } catch (LogisticsExternalAttemptClaimService.StaleClaimException ignored) {
+      // Do not let an expired worker overwrite a newer lease's outcome.
     } catch (LogisticsDependencyException exception) {
-      store.recordFailure(work.operationId(), exception);
+      recordFailure(claim, exception);
     } catch (RuntimeException exception) {
       log.warn("Shipment dependency attempt {} produced an unexpected local error", work.operationId(), exception);
-      store.recordFailure(
-          work.operationId(),
+      recordFailure(
+          claim,
           new LogisticsDependencyException(
               LogisticsDependencyException.FailureKind.TRANSIENT,
               "Logistics dependency outcome is unknown",
@@ -108,7 +115,8 @@ public class ShipmentProcessor {
     }
   }
 
-  private void confirmHoldCommand(ShipmentWorkflowStore.Work work) {
+  private void confirmHoldCommand(
+      LogisticsExternalAttemptClaimService.Claim claim, ShipmentWorkflowStore.Work work) {
     LogisticsDependencyGateway.EquipmentHold result =
         dependencies.commandEquipmentHold(
             work.operationId(),
@@ -118,9 +126,26 @@ public class ShipmentProcessor {
             work.documentId(),
             work.lineId());
     if (work.holdAction() == LogisticsDependencyGateway.EquipmentHoldAction.COMMIT) {
-      store.confirmHoldCommit(work.operationId(), result);
+      store.confirmHoldCommit(claim, result);
     } else {
-      store.confirmHoldRelease(work.operationId(), result);
+      store.confirmHoldRelease(claim, result);
+    }
+  }
+
+  private void defer(LogisticsExternalAttemptClaimService.Claim claim) {
+    try {
+      claims.defer(claim);
+    } catch (LogisticsExternalAttemptClaimService.StaleClaimException ignored) {
+      // The current owner decides whether the row stays deferred.
+    }
+  }
+
+  private void recordFailure(
+      LogisticsExternalAttemptClaimService.Claim claim, LogisticsDependencyException exception) {
+    try {
+      store.recordFailure(claim, exception);
+    } catch (LogisticsExternalAttemptClaimService.StaleClaimException ignored) {
+      // The exact row version/fence prevents a stale failure from winning.
     }
   }
 }

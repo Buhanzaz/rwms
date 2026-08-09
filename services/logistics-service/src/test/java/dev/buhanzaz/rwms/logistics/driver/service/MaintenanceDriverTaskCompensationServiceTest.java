@@ -21,6 +21,7 @@ import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -37,8 +38,9 @@ class MaintenanceDriverTaskCompensationServiceTest {
 
   private final DriverLogisticsTaskRepository tasks = mock(DriverLogisticsTaskRepository.class);
   private final LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
+  private final LogisticsTransactionLock transactionLock = mock(LogisticsTransactionLock.class);
   private final MaintenanceDriverTaskCompensationService service =
-      new MaintenanceDriverTaskCompensationService(tasks, dependencies);
+      new MaintenanceDriverTaskCompensationService(tasks, dependencies, transactionLock);
 
   @Test
   void cancelsOnlyAnUnregisteredLocalIntentAndPreventsProcessorRegistration() {
@@ -53,7 +55,8 @@ class MaintenanceDriverTaskCompensationServiceTest {
     assertThat(result.outcome()).isEqualTo(MaintenanceDriverTaskCompensationOutcome.CANCELLED);
     assertThat(result.state()).isEqualTo(DriverTaskState.CANCELLED);
     assertThat(task.getState()).isEqualTo(DriverTaskState.CANCELLED);
-    verify(tasks).acquireTransactionLock("maintenance-driver-compensation:" + repairId + ":DELIVER_TO_REPAIR");
+    verify(transactionLock)
+        .acquire("maintenance-driver-compensation:" + repairId + ":DELIVER_TO_REPAIR");
     verify(tasks).saveAndFlush(task);
     verifyNoInteractions(dependencies);
   }

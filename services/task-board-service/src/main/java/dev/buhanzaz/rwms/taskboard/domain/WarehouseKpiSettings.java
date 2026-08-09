@@ -15,6 +15,9 @@ import jakarta.validation.constraints.NotNull;
 import java.time.LocalDate;
 import java.util.UUID;
 
+/**
+ * Warehouse-level pointer and lifecycle state for palette and effective work-schedule revisions.
+ */
 @Entity
 @Table(
     name = "warehouse_kpi_settings",

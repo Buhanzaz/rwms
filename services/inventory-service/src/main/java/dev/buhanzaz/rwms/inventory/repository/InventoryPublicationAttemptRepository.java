@@ -5,6 +5,9 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/**
+ * Spring Data repository for service-local inventory publication attempt persistence.
+ */
 public interface InventoryPublicationAttemptRepository
     extends JpaRepository<InventoryPublicationAttempt, UUID> {
   Optional<InventoryPublicationAttempt> findByPublicationIntentIdAndAttemptNo(

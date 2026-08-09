@@ -8,6 +8,9 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
 
+/**
+ * JPA entity that persists inventory publication attempt in the inventory-owned database.
+ */
 @Entity
 @Table(name = "inventory_publication_attempt")
 public class InventoryPublicationAttempt {

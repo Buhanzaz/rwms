@@ -142,8 +142,10 @@ Endpoint добавляется в эту таблицу только после
   Доменные сервисы всё равно принимают собственные решения авторизации.
 - CORS использует явный allow-list origin, явный набор методов/заголовков и
   credentials там, где они нужны. Wildcard origin отклоняется startup-проверкой.
-- Production-проверка требует разделения public/private адресов, HTTPS для
-  публичных значений и запрещает localhost/loopback для внутренних target.
+- Production-проверка применяет одну policy ко всем downstream: каждый target
+  является HTTP(S) origin без path, не может повторять публичный host gateway и
+  не может использовать localhost или loopback-адрес. Публичные значения
+  обязаны использовать HTTPS.
 
 Это разделение принципиально: edge аутентифицирует и защищает публичную
 поверхность, а сервис-владелец авторизует бизнес-операцию. Если перенести всю
@@ -214,6 +216,24 @@ warehouse target на `8083`, получают JWKS с внутреннего au
 проксирует `/auth` и `/api` на `8088`, сохраняя `/auth/callback` в SPA. В
 production нет localhost- или secret-bearing-defaults: должны быть заданы все
 target, public issuer/base URI и разрешённый panel origin.
+
+## Исполняемый parity маршрутов и безопасности
+
+[`GatewayRouteSecurityParityTest`](src/test/java/dev/buhanzaz/rwms/gateway/config/GatewayRouteSecurityParityTest.java)
+разбирает каждый канонический service OpenAPI и исполняет реальные упорядоченные router functions.
+Его domain-инвентарь содержит каждую каноническую публичную операцию `/api/**`; операции auth-service,
+делегированные под `/auth/**`, и локальные для media-service probes `/health/**` образуют явные
+отдельные разделы. Gate проверяет owner-specific rewrite путей task-board и analytics, приоритет
+специализированных SSE/upload/import/assistant routes, нулевую маршрутизацию каждой канонической
+internal-операции и зарезервированного private/internal alias, а также реальную edge security
+classification. Все публичные domain-операции требуют Bearer-аутентификацию, кроме четырёх явно
+анонимных logistics client-presentation операций.
+
+Запуск focused gate из корня репозитория:
+
+```bash
+bash ./gradlew :services:api-gateway-service:test --tests 'dev.buhanzaz.rwms.gateway.config.GatewayRouteSecurityParityTest'
+```
 
 ## Правила безопасного изменения
 

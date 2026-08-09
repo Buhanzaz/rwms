@@ -29,6 +29,9 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Appends asset-owned facts and their transactional event/outbox records in the local database.
+ */
 @Service
 public class AssetEventStore {
   private static final String PRODUCER = "asset-service";

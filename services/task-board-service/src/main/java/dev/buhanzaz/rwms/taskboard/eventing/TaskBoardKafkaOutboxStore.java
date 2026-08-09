@@ -9,6 +9,12 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Owns leased, aggregate-ordered task-board outbox state transitions.
+ *
+ * <p>Claim, publish, retry, quarantine, and terminal handling are fenced so concurrent relays
+ * cannot acknowledge the same row under different leases.
+ */
 @Repository
 @RequiredArgsConstructor
 public class TaskBoardKafkaOutboxStore {

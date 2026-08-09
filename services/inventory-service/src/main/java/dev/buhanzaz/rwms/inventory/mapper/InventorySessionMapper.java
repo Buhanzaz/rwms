@@ -9,6 +9,10 @@ import org.mapstruct.Mapping;
 import org.mapstruct.MappingConstants;
 import org.mapstruct.ReportingPolicy;
 
+/**
+ * MapStruct mapper for inventory session boundary representations.
+ * It maps data without performing a domain transition.
+ */
 @Mapper(
     unmappedTargetPolicy = ReportingPolicy.ERROR,
     componentModel = MappingConstants.ComponentModel.SPRING)

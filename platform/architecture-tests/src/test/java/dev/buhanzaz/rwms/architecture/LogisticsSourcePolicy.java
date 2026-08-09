@@ -5,6 +5,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -41,17 +42,48 @@ final class LogisticsSourcePolicy {
               + "nativeQuery\\s*=\\s*true\\s*\\)");
   private static final String ADVISORY_LOCK_REPOSITORY =
       "dev/buhanzaz/rwms/logistics/repository/LogisticsIdempotencyRecordRepository.java";
+  private static final String OAUTH_HTTP_TRANSPORT =
+      "src/main/java/dev/buhanzaz/rwms/logistics/integration/LogisticsOAuthHttpTransport.java";
+  private static final String SINGLETON_TOKEN_SCOPE_INVARIANT =
+      "getAccessToken().getScopes().equals(Set.of(requiredScope))";
+  private static final Pattern SCOPE_DECLARATION =
+      Pattern.compile(
+          "(?m)private\\s+static\\s+final\\s+String\\s+[A-Z_]*_SCOPE\\s*=\\s*\\\"([^\\\"]+)\\\"");
+  private static final Map<String, Set<String>> REQUIRED_OWNER_SCOPES =
+      Map.of(
+          "src/main/java/dev/buhanzaz/rwms/logistics/integration/LogisticsWarehouseDependencyClient.java",
+          Set.of(
+              "warehouse.logistics",
+              "warehouse.timezone.read",
+              "warehouse.operation.mark",
+              "warehouse.lifecycle.read",
+              "warehouse.lifecycle.confirm"),
+          "src/main/java/dev/buhanzaz/rwms/logistics/integration/LogisticsAssetOperationsDependencyClient.java",
+          Set.of("asset.logistics"),
+          "src/main/java/dev/buhanzaz/rwms/logistics/integration/LogisticsAssetOrderPresentationDependencyClient.java",
+          Set.of("asset.logistics"),
+          "src/main/java/dev/buhanzaz/rwms/logistics/integration/LogisticsMaintenanceDependencyClient.java",
+          Set.of("maintenance.logistics"),
+          "src/main/java/dev/buhanzaz/rwms/logistics/integration/LogisticsMediaDependencyClient.java",
+          Set.of("media.logistics"),
+          "src/main/java/dev/buhanzaz/rwms/logistics/integration/LogisticsTaskBoardDependencyClient.java",
+          Set.of("task-board.logistics"));
   private static final Set<String> LOW_LEVEL_SQL_ADAPTERS =
       Set.of(
           "dev/buhanzaz/rwms/logistics/eventing/LogisticsEventStore.java",
           "dev/buhanzaz/rwms/logistics/eventing/LogisticsOutboxStore.java",
+          "dev/buhanzaz/rwms/logistics/eventing/LogisticsRecoveryObservationStore.java",
           "dev/buhanzaz/rwms/logistics/eventing/LogisticsReplayVerifier.java",
           "dev/buhanzaz/rwms/logistics/eventing/LogisticsSanitizedDltStore.java",
           "dev/buhanzaz/rwms/logistics/eventing/inbound/LogisticsInboxProcessor.java",
           "dev/buhanzaz/rwms/logistics/eventing/inbound/LogisticsInboundStagingStore.java",
           "dev/buhanzaz/rwms/logistics/eventing/inbound/LogisticsInboundObservationStore.java",
           "dev/buhanzaz/rwms/logistics/eventing/inbound/LogisticsInboundGapRecoveryService.java",
-          "dev/buhanzaz/rwms/logistics/eventing/inbound/LogisticsKafkaConsumerRecoveryMonitor.java");
+          "dev/buhanzaz/rwms/logistics/eventing/inbound/LogisticsKafkaConsumerRecoveryMonitor.java",
+          "dev/buhanzaz/rwms/logistics/inquiry/eventing/RentalInquiryBookedOutboxStore.java",
+          "dev/buhanzaz/rwms/logistics/service/persistence/LogisticsWarehouseAdmissionPersistence.java",
+          "dev/buhanzaz/rwms/logistics/service/persistence/LogisticsWarehouseLifecycleBlockerReader.java",
+          "dev/buhanzaz/rwms/logistics/service/persistence/LogisticsWarehouseOperationMarkPersistence.java");
   private static final Set<String> REQUIRED_INFRASTRUCTURE_SOURCES =
       Set.of(
           "src/main/java/dev/buhanzaz/rwms/logistics/eventing/LogisticsEventStore.java",
@@ -98,17 +130,7 @@ final class LogisticsSourcePolicy {
       }
     }
 
-    Path client =
-        serviceRoot.resolve(
-            "src/main/java/dev/buhanzaz/rwms/logistics/integration/HttpLogisticsDependencyGateway.java");
-    if (Files.isRegularFile(client)) {
-      String source = read(client);
-      if (!source.contains("\"warehouse.logistics\"")
-          || !source.contains("\"asset.logistics\"")
-          || !source.contains("getAccessToken().getScopes().equals(Set.of(requiredScope))")) {
-        violations.add(client + ": direct callers must demand and verify one exact receiver scope");
-      }
-    }
+    assertExactDependencyScopes(serviceRoot, violations);
 
     failIfNeeded(violations);
   }
@@ -156,7 +178,8 @@ final class LogisticsSourcePolicy {
     if (LOW_LEVEL_SQL.matcher(source).find() && !LOW_LEVEL_SQL_ADAPTERS.contains(relative)) {
       violations.add(
           path
-              + ": low-level SQL is restricted to technical event-store, outbox, inbox, recovery and DLT adapters");
+              + ": low-level SQL is restricted to exact technical event/recovery-observation, "
+              + "inquiry-outbox, warehouse-admission, warehouse-blocker and warehouse-mark adapters");
     }
     long nativeQueries = NATIVE_JPA_QUERY.matcher(source).results().count();
     if (nativeQueries > 0
@@ -183,6 +206,41 @@ final class LogisticsSourcePolicy {
     } catch (IOException exception) {
       throw new IllegalStateException("Cannot read " + path, exception);
     }
+  }
+
+  private static void assertExactDependencyScopes(Path serviceRoot, List<String> violations) {
+    Path transport = serviceRoot.resolve(OAUTH_HTTP_TRANSPORT);
+    if (!Files.isRegularFile(transport)) {
+      violations.add(transport + ": singleton-token transport is absent");
+    } else if (!read(transport).contains(SINGLETON_TOKEN_SCOPE_INVARIANT)) {
+      violations.add(transport + ": transport must verify one exact receiver scope per token");
+    }
+
+    for (Map.Entry<String, Set<String>> owner : REQUIRED_OWNER_SCOPES.entrySet()) {
+      Path source = serviceRoot.resolve(owner.getKey());
+      if (!Files.isRegularFile(source)) {
+        violations.add(source + ": exact dependency-owner client is absent");
+        continue;
+      }
+      Set<String> actualScopes = declaredScopes(read(source));
+      if (!owner.getValue().equals(actualScopes)) {
+        violations.add(
+            source
+                + ": declared dependency scopes must equal "
+                + owner.getValue()
+                + " but were "
+                + actualScopes);
+      }
+    }
+  }
+
+  private static Set<String> declaredScopes(String source) {
+    var scopes = new java.util.HashSet<String>();
+    var matcher = SCOPE_DECLARATION.matcher(source);
+    while (matcher.find()) {
+      scopes.add(matcher.group(1));
+    }
+    return Set.copyOf(scopes);
   }
 
   private static void failIfNeeded(List<String> violations) {

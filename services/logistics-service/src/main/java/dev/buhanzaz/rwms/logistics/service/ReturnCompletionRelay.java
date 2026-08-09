@@ -1,17 +1,12 @@
 package dev.buhanzaz.rwms.logistics.service;
 
-import dev.buhanzaz.rwms.logistics.domain.LogisticsExternalAttemptResult;
-import dev.buhanzaz.rwms.logistics.repository.LogisticsExternalAttemptRepository;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 import java.util.List;
-import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-/** Bounded recovery loop for committed acceptance and estimate work. */
+/** Schedules bounded, fenced recovery for committed acceptance and estimate operations. */
 @Component
 @RequiredArgsConstructor
 @ConditionalOnProperty(
@@ -19,21 +14,33 @@ import org.springframework.stereotype.Component;
     name = "relay-enabled",
     havingValue = "true")
 class ReturnCompletionRelay {
-  private final LogisticsExternalAttemptRepository attempts;
+  private static final List<String> OPERATION_TYPES =
+      List.of(
+          LogisticsDocumentService.RETURN_MEDIA_VALIDATE,
+          LogisticsDocumentService.RETURN_ASSET_SETTLE_FREE,
+          LogisticsDocumentService.RETURN_ASSET_SETTLE_ESTIMATE,
+          LogisticsDocumentService.RETURN_MAINTENANCE_ESTIMATE_SOURCE_UPSERT,
+          LogisticsDocumentService.RETURN_ASSET_ADDITIONAL_EQUIPMENT_RECEIVE,
+          LogisticsDocumentService.RETURN_ASSET_LEASE_RELEASE);
+
+  private final LogisticsExternalAttemptClaimService claims;
+  private final LogisticsExternalAttemptRelayExecutor relayExecutor;
   private final ReturnCompletionProcessor processor;
 
   @Scheduled(
       fixedDelayString = "${rwms.logistics.return-completion.relay-delay:1s}",
-      initialDelayString = "${rwms.logistics.return-completion.relay-initial-delay:1s}")
+      initialDelayString = "${rwms.logistics.return-completion.relay-initial-delay:1s}",
+      scheduler = "logisticsExternalAttemptTriggerScheduler")
   void relayDueAttempts() {
-    List<UUID> documentIds =
-        attempts.findDueDocumentIds(
-            List.of(
-                LogisticsExternalAttemptResult.PENDING,
-                LogisticsExternalAttemptResult.RETRY),
-            OffsetDateTime.now(ZoneOffset.UTC));
-    for (UUID documentId : documentIds) {
-      processor.processUntilIdle(documentId);
+    LogisticsExternalAttemptClaimService.Owner owner =
+        LogisticsExternalAttemptClaimService.Owner.RETURN_COMPLETION;
+    int permits = relayExecutor.availablePermits(owner);
+    for (int index = 0; index < permits; index++) {
+      var claim = claims.claimNext(owner, OPERATION_TYPES);
+      if (claim.isEmpty()) return;
+      if (!relayExecutor.submit(owner, () -> processor.process(claim.get()))) {
+        claims.defer(claim.get());
+      }
     }
   }
 }

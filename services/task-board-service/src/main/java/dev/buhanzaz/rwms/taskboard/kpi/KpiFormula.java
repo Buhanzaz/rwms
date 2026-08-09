@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.MathContext;
 import java.math.RoundingMode;
 
+/** Deterministic, side-effect-free KPI calculation from normalized time-accounting components. */
 public final class KpiFormula {
   public static final String VERSION = "kpi-v1";
   private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);

@@ -21,6 +21,8 @@ type ObjectStore interface {
 	PutVersion(context.Context, string, io.Reader, int64, string) (ObjectMetadata, error)
 }
 
+// ObjectMetadata is the immutable storage metadata verified by media
+// processing and persisted with a media generation.
 type ObjectMetadata struct {
 	SizeBytes    int64
 	ContentType  string
@@ -29,6 +31,8 @@ type ObjectMetadata struct {
 	UserMetadata map[string]string
 }
 
+// ImageProcessRequest names one immutable ingress object and the generation
+// for which its canonical image and WebP variants must be built.
 type ImageProcessRequest struct {
 	MediaID string
 	// SourceObjectKey is always the immutable ingress object.
@@ -38,6 +42,8 @@ type ImageProcessRequest struct {
 	Variants        VariantConfiguration
 }
 
+// ProcessedVariant describes one version-pinned output object without carrying
+// its media bytes.
 type ProcessedVariant struct {
 	Variant         Variant
 	ObjectKey       string
@@ -56,16 +62,22 @@ type generatedObject struct {
 	data    []byte
 }
 
+// ImageProcessResult contains the canonical original and all WebP derivatives
+// created from one image ingress object.
 type ImageProcessResult struct {
 	Original ProcessedVariant
 	Variants []ProcessedVariant
 }
 
+// ImageProcessor builds canonical JPEG originals and bounded WebP variants
+// while preserving the pixels' supplied orientation.
 type ImageProcessor struct {
 	Store  ObjectStore
 	Limits ProcessingLimits
 }
 
+// Process reads one pinned image ingress version, validates its bounds, and
+// writes the canonical original plus SMALL, MEDIUM, and LARGE WebP variants.
 func (processor ImageProcessor) Process(ctx context.Context, request ImageProcessRequest) (ImageProcessResult, error) {
 	if processor.Store == nil {
 		return ImageProcessResult{}, fmt.Errorf("image processor has no object store")

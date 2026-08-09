@@ -21,6 +21,9 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.proxy.HibernateProxy;
 
+/**
+ * JPA persistence model for Rental Inquiry in the logistics-owned database.
+ */
 @Entity
 @Table(name = "rental_inquiry")
 @Getter

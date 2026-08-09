@@ -88,11 +88,13 @@ spring:
 rwms:
   platform:
     kafka:
-      enabled: ${MAINTENANCE_KAFKA_ENABLED:false}
+      enabled: ${MAINTENANCE_KAFKA_ENABLED}
       destinations:
         - rwms.maintenance.catalog-version.v1
         - rwms.maintenance.estimate.v1
         - rwms.maintenance.repair.v1
+        - rwms.maintenance.property-disposition.v1
+        - rwms.maintenance.dlt.v1
   maintenance:
     idempotency:
       retention: ${MAINTENANCE_IDEMPOTENCY_RETENTION:7d}

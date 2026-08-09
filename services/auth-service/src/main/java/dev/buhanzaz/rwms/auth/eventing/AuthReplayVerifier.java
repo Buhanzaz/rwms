@@ -15,6 +15,14 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Verifies authoritative auth event streams and rebuilds a separate replay shadow checkpoint.
+ *
+ * <p>Verification checks stream continuity, canonical payload checksums, safe event schemas,
+ * stream-head alignment, and parity with the live auth projection. A rebuild locks all stream
+ * heads, requires canonical outbox coverage, writes only the replay projection, and records a
+ * canonical parity checksum; it never changes domain facts or business aggregates.
+ */
 @Service
 @RequiredArgsConstructor
 public class AuthReplayVerifier {
@@ -29,6 +37,13 @@ public class AuthReplayVerifier {
     private final AuthEventingMetrics metrics;
     private final AuthReplayAuditStore replayAudit;
 
+    /**
+     * Replays and validates one authoritative aggregate stream against its live projection.
+     *
+     * @param aggregateType aggregate family to verify
+     * @param aggregateId aggregate identifier
+     * @return verified stream tail and live-projection presence
+     */
     @Transactional(readOnly = true)
     public ReplayResult verify(AuthAggregateType aggregateType, UUID aggregateId) {
         metrics.replayAttempted();
@@ -40,11 +55,26 @@ public class AuthReplayVerifier {
         }
     }
 
+    /**
+     * Summarizes all current authoritative stream tails without modifying them.
+     *
+     * @return aggregate count, version sum, and checksum used to fence a controlled replay
+     */
     @Transactional(readOnly = true)
     public AuthReplayAuditStore.Summary authoritativeSummary() {
         return summary(loadStreamIdentities(false));
     }
 
+    /**
+     * Rebuilds the replay shadow checkpoint from locked authoritative stream heads.
+     *
+     * <p>The supplied audit operation's before-summary must still match the locked heads. On
+     * success, every replay checkpoint matches its canonical event tail and the audit operation is
+     * completed in the same transaction.
+     *
+     * @param operation started replay audit operation
+     * @return payload-free parity result for the rebuilt shadow projection
+     */
     @Transactional
     public ReplayParityResult rebuildShadowProjection(AuthReplayAuditStore.Operation operation) {
         List<StreamIdentity> streams = jdbc.query(
@@ -389,6 +419,15 @@ public class AuthReplayVerifier {
 
     private record TailHash(String payloadSha256) {}
 
+    /**
+     * Verified state of one authoritative stream.
+     *
+     * @param aggregateType verified aggregate family
+     * @param aggregateId verified aggregate identifier
+     * @param version canonical stream-tail version
+     * @param factCount number of stored facts examined
+     * @param liveProjectionPresent whether the live aggregate still exists
+     */
     public record ReplayResult(
             AuthAggregateType aggregateType,
             UUID aggregateId,
@@ -396,5 +435,12 @@ public class AuthReplayVerifier {
             int factCount,
             boolean liveProjectionPresent) {}
 
+    /**
+     * Payload-free parity summary for a completed replay shadow rebuild.
+     *
+     * @param aggregateCount number of rebuilt streams
+     * @param versionSum sum of rebuilt stream versions
+     * @param canonicalChecksum checksum of canonical stream-tail material
+     */
     public record ReplayParityResult(int aggregateCount, long versionSum, String canonicalChecksum) {}
 }

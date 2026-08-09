@@ -20,6 +20,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+/**
+ * HTTP transport model container for rental item html import.
+ * Its records are boundary representations, not persistence entities.
+ */
 public final class RentalItemHtmlImportApiModels {
   private RentalItemHtmlImportApiModels() {}
 

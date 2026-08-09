@@ -13,10 +13,8 @@ import dev.buhanzaz.rwms.logistics.repository.LogisticsExternalAttemptRepository
 import dev.buhanzaz.rwms.logistics.repository.LogisticsReconciliationRepository;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -38,35 +36,24 @@ class MediaOwnerProofWorkflowStore {
           LogisticsDocumentService.TRANSFER_MEDIA_OWNER_PROOF_DEACTIVATE);
 
   private final LogisticsExternalAttemptRepository attemptRepository;
+  private final LogisticsExternalAttemptClaimService claims;
   private final LogisticsReconciliationRepository reconciliationRepository;
 
-  Optional<Work> nextWork(UUID documentId) {
-    if (documentId == null) return Optional.empty();
-    OffsetDateTime now = now();
-    Set<UUID> blockedLines = new HashSet<>();
-    for (LogisticsExternalAttempt attempt :
-        attemptRepository.findAllByDocument_IdOrderByCreatedAtAsc(documentId)) {
-      if (!OPERATIONS.contains(attempt.getOperationType())) continue;
-      LogisticsDocumentLine line = requiredLine(attempt);
-      if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) continue;
-      if (blockedLines.contains(line.getId())) continue;
-      if (LogisticsDocumentService.TRANSFER_MEDIA_OWNER_PROOF_DEACTIVATE.equals(
-              attempt.getOperationType())
-          && !transferRegistrationConfirmed(attempt.getDocument(), line)) {
-        continue;
-      }
-      if (attempt.getResult() != LogisticsExternalAttemptResult.PENDING
-          && attempt.getResult() != LogisticsExternalAttemptResult.RETRY) {
-        blockedLines.add(line.getId());
-        continue;
-      }
-      if (!attempt.isDue(now)) {
-        blockedLines.add(line.getId());
-        continue;
-      }
-      return Optional.of(work(attempt));
+  /**
+   * Builds an owner-proof request only for the exact leased operation. Transfer deactivation stays
+   * deferred until the corresponding registration proof is confirmed, without scanning other rows.
+   */
+  @Transactional
+  public Optional<Work> workForClaim(LogisticsExternalAttemptClaimService.Claim claim) {
+    LogisticsExternalAttempt attempt = claims.requireCurrentAttempt(claim);
+    if (!OPERATIONS.contains(attempt.getOperationType())) return Optional.empty();
+    LogisticsDocumentLine line = requiredLine(attempt);
+    if (LogisticsDocumentService.TRANSFER_MEDIA_OWNER_PROOF_DEACTIVATE.equals(
+            attempt.getOperationType())
+        && !transferRegistrationConfirmed(attempt.getDocument(), line)) {
+      return Optional.empty();
     }
-    return Optional.empty();
+    return Optional.of(work(attempt));
   }
 
   private boolean transferRegistrationConfirmed(
@@ -80,18 +67,23 @@ class MediaOwnerProofWorkflowStore {
         .orElse(false);
   }
 
+  /** Records the proof response only if the supplied lease is still exact and current. */
   @Transactional
-  public void confirm(UUID operationId, LogisticsDependencyGateway.MediaOwnerProof proof) {
-    LogisticsExternalAttempt attempt = attempt(operationId);
+  public void confirm(
+      LogisticsExternalAttemptClaimService.Claim claim,
+      LogisticsDependencyGateway.MediaOwnerProof proof) {
+    LogisticsExternalAttempt attempt = attempt(claim);
     if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
     Work expected = work(attempt);
     requireExactProof(expected, proof);
     attempt.confirm(responseDigest(attempt.getOperationType(), proof), now());
   }
 
+  /** Records proof failure only if the supplied lease is still exact and current. */
   @Transactional
-  public void recordFailure(UUID operationId, LogisticsDependencyException exception) {
-    LogisticsExternalAttempt attempt = attempt(operationId);
+  public void recordFailure(
+      LogisticsExternalAttemptClaimService.Claim claim, LogisticsDependencyException exception) {
+    LogisticsExternalAttempt attempt = attempt(claim);
     if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
     OffsetDateTime failedAt = now();
     if (exception.kind() == LogisticsDependencyException.FailureKind.TRANSIENT) {
@@ -115,11 +107,8 @@ class MediaOwnerProofWorkflowStore {
     }
   }
 
-  private LogisticsExternalAttempt attempt(UUID operationId) {
-    LogisticsExternalAttempt attempt =
-        attemptRepository
-            .findByOperationId(operationId)
-            .orElseThrow(() -> new IllegalArgumentException("External attempt is missing"));
+  private LogisticsExternalAttempt attempt(LogisticsExternalAttemptClaimService.Claim claim) {
+    LogisticsExternalAttempt attempt = claims.requireCurrentAttempt(claim);
     if (!OPERATIONS.contains(attempt.getOperationType())) {
       throw new IllegalArgumentException("External attempt type is invalid");
     }

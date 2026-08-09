@@ -16,6 +16,9 @@ import jakarta.validation.constraints.NotNull;
 import java.util.UUID;
 import java.time.OffsetDateTime;
 
+/**
+ * Warehouse-scoped operational group with qualification, availability, and audience identity.
+ */
 @Entity
 @Table(
     name = "worker_group",

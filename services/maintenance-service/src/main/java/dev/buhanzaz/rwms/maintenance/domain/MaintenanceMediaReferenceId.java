@@ -4,6 +4,7 @@ import java.io.Serializable;
 import java.util.Objects;
 import java.util.UUID;
 
+/** Composite persistence identity for MaintenanceMediaReferenceId. */
 public class MaintenanceMediaReferenceId implements Serializable {
   private String aggregateType;
   private UUID aggregateId;

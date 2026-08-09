@@ -12,6 +12,13 @@ import org.springframework.context.annotation.DependsOn;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.stereotype.Component;
 
+/**
+ * Binds auth's fixed producer channels only after application singletons are ready.
+ *
+ * <p>It binds both authoritative fact and sanitized-DLT destinations for each aggregate family,
+ * then releases them in reverse order at shutdown. This keeps broker lifecycle work outside the
+ * transactional outbox writer.
+ */
 @Component
 @DependsOn("authProductionSafetyValidator")
 @RequiredArgsConstructor
@@ -22,6 +29,7 @@ public class AuthKafkaOutputBindingInitializer implements SmartInitializingSingl
     private final ApplicationContext applicationContext;
     private final List<String> boundDestinations = new ArrayList<>();
 
+    /** Binds all destinations declared by every supported auth aggregate family. */
     @Override
     public void afterSingletonsInstantiated() {
         for (AuthAggregateType aggregateType : AuthAggregateType.values()) {
@@ -35,6 +43,7 @@ public class AuthKafkaOutputBindingInitializer implements SmartInitializingSingl
         boundDestinations.add(destination);
     }
 
+    /** Releases every producer binding acquired during application initialization. */
     @Override
     public void destroy() {
         for (int index = boundDestinations.size() - 1; index >= 0; index--) {

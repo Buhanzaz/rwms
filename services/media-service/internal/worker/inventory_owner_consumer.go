@@ -20,6 +20,8 @@ import (
 
 const inventoryRecordLimit = 1 << 20
 
+// InventoryOwnerConsumer materializes and validates inventory finding owner
+// proofs so public media operations can fail closed on invalid source streams.
 type InventoryOwnerConsumer struct {
 	repository  inventoryOwnerPersistence
 	client      kafkaConsumerClient
@@ -40,12 +42,16 @@ type inventoryOwnerPersistence interface {
 	ClearInventoryOwnerRetry(context.Context, uuid.UUID) error
 }
 
+// InventoryOwnerConsumerOptions permits isolated tests to substitute a
+// physical topic, bounded retry delays, and waiting behavior.
 type InventoryOwnerConsumerOptions struct {
 	SourceTopic string
 	RetryDelays []time.Duration
 	Sleep       func(context.Context, time.Duration) error
 }
 
+// NewInventoryOwnerKafkaConsumer creates a manual-commit client only for the
+// canonical inventory owner-proof topic and group.
 func NewInventoryOwnerKafkaConsumer(brokers []string, group, topic string) (*kgo.Client, error) {
 	if len(brokers) == 0 || group != persistence.InventoryOwnerConsumerGroup ||
 		topic != persistence.InventorySessionTopic {
@@ -87,6 +93,8 @@ func NewInventoryOwnerKafkaConsumerForIsolatedTest(
 	)
 }
 
+// NewInventoryOwnerConsumer constructs the production inventory owner-proof
+// consumer with its canonical topic and retry policy.
 func NewInventoryOwnerConsumer(
 	repository *persistence.Repository,
 	client *kgo.Client,
@@ -95,6 +103,8 @@ func NewInventoryOwnerConsumer(
 	return NewInventoryOwnerConsumerWithOptions(repository, client, logger, InventoryOwnerConsumerOptions{})
 }
 
+// NewInventoryOwnerConsumerWithOptions constructs an inventory owner consumer
+// with explicit test-only delivery and retry collaborators.
 func NewInventoryOwnerConsumerWithOptions(
 	repository inventoryOwnerPersistence,
 	client *kgo.Client,
@@ -126,6 +136,8 @@ func NewInventoryOwnerConsumerWithOptions(
 	}
 }
 
+// Run validates, persists, and acknowledges inventory facts until ctx is
+// canceled or a dependency failure stops this runtime process.
 func (consumer *InventoryOwnerConsumer) Run(ctx context.Context) error {
 	for {
 		fetches, pollTimedOut := pollKafkaFetches(ctx, consumer.client, consumer.pollTimeout)
@@ -236,6 +248,7 @@ func inventoryOwnerMessageDLT(
 	}
 }
 
+// Close stops the underlying inventory Kafka client.
 func (consumer *InventoryOwnerConsumer) Close() {
 	consumer.client.Close()
 }

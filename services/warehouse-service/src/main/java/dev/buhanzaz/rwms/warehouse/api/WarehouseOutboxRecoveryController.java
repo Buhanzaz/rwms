@@ -17,7 +17,13 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/** Public, reviewed recovery boundary. It never permits editing the stored event envelope. */
+/**
+ * Public, reviewed recovery boundary for terminal outbox events.
+ *
+ * <p>It never permits editing the stored event envelope. Recovery merely returns a validated,
+ * ordered terminal event to the existing bounded relay and records an immutable administrator
+ * audit entry.
+ */
 @RestController
 @Validated
 @RequestMapping("/api/warehouse/v1/admin/outbox-events")
@@ -25,12 +31,29 @@ public class WarehouseOutboxRecoveryController {
   private final WarehouseOutboxRecoveryService recovery;
   private final WarehouseOutboxRecoveryAccessAuthorizer access;
 
+  /**
+   * Creates the reviewed outbox-recovery controller.
+   *
+   * @param recovery application boundary that requeues a validated immutable envelope
+   * @param access authorization boundary for recovery administrators
+   */
   public WarehouseOutboxRecoveryController(
       WarehouseOutboxRecoveryService recovery, WarehouseOutboxRecoveryAccessAuthorizer access) {
     this.recovery = recovery;
     this.access = access;
   }
 
+  /**
+   * Requeues a recoverable terminal event under a review-version fence.
+   *
+   * <p>Only an exact retry by the same reviewer with the same reason is replayed. A stale or
+   * materially different review is rejected without appending another audit record.
+   *
+   * @param jwt authenticated recovery administrator
+   * @param eventId immutable outbox event identity
+   * @param request review-version-fenced recovery data
+   * @return recovery outcome, including exact replay acknowledgement when applicable
+   */
   @PostMapping("/{eventId}/recovery")
   public ResponseEntity<WarehouseOutboxRecoveryResponse> recover(
       @AuthenticationPrincipal Jwt jwt,

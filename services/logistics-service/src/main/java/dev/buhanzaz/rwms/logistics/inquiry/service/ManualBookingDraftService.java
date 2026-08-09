@@ -18,6 +18,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
+/**
+ * Owns manager-scoped manual booking drafts associated with a client presentation.
+ */
 @Service
 @RequiredArgsConstructor
 public class ManualBookingDraftService {

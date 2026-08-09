@@ -20,6 +20,13 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+/**
+ * Restricted operational API for recovering the authorization service's event delivery and
+ * rebuilding its read-side authorization shadow.
+ *
+ * <p>The endpoints use expected recovery versions and canonical operator identity to prevent
+ * accidental replay or recovery against a stale row.
+ */
 @RestController
 @RequestMapping("/api/admin/eventing")
 @RequiredArgsConstructor
@@ -31,6 +38,13 @@ public class AuthEventingAdminController {
     private final AuthReplayCoordinator replayCoordinator;
     private final AuthSubjectProfileStore profiles;
 
+    /**
+     * Requeues an eligible authorization outbox row at the caller's expected attempt count.
+     *
+     * @param eventId outbox event identifier
+     * @param request recovery command fenced by attempt count
+     * @return {@code 204 No Content} when the row is eligible for requeueing
+     */
     @PostMapping("/outbox/{eventId}/requeue")
     public ResponseEntity<Void> requeue(
             @PathVariable UUID eventId, @Valid @RequestBody RequeueOutboxRequest request) {
@@ -41,6 +55,13 @@ public class AuthEventingAdminController {
         return ResponseEntity.noContent().build();
     }
 
+    /**
+     * Requeues an eligible sanitized dead-letter row at the caller's expected attempt count.
+     *
+     * @param dltId sanitized dead-letter identifier
+     * @param request recovery command fenced by attempt count
+     * @return {@code 204 No Content} when the row is eligible for requeueing
+     */
     @PostMapping("/sanitized-dlt/{dltId}/requeue")
     public ResponseEntity<Void> requeueDeadLetter(
             @PathVariable UUID dltId, @Valid @RequestBody RequeueOutboxRequest request) {
@@ -51,6 +72,15 @@ public class AuthEventingAdminController {
         return ResponseEntity.noContent().build();
     }
 
+    /**
+     * Reconciles one authorization aggregate's shadow projection from its canonical event stream.
+     *
+     * @param aggregateType aggregate stream family to reconcile
+     * @param aggregateId aggregate identifier to reconcile
+     * @param request recovery checkpoint and audit reason
+     * @param authentication authenticated recovery operator
+     * @return reconciliation result recorded by the shadow coordinator
+     */
     @PostMapping("/shadow/{aggregateType}/{aggregateId}/reconcile")
     public AuthShadowReconciler.Result reconcileShadow(
             @PathVariable AuthAggregateType aggregateType,
@@ -68,6 +98,13 @@ public class AuthEventingAdminController {
                 actorId);
     }
 
+    /**
+     * Rebuilds the authorization shadow under a recorded recovery operation identifier.
+     *
+     * @param request durable recovery-operation identifier and audit reason
+     * @param authentication authenticated recovery operator
+     * @return replay-parity result for the rebuilt shadow
+     */
     @PostMapping("/shadow/rebuild")
     public AuthReplayVerifier.ReplayParityResult rebuildShadow(
             @Valid @RequestBody ReplayAuthShadowRequest request,

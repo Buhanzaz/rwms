@@ -4,7 +4,22 @@ import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
 import org.junit.jupiter.api.Test;
 
+/** Runs the central architecture policy against every active Java service and shared contract. */
 class PlatformArchitectureTest {
+  private static final String[] ACTIVE_JAVA_SERVICE_PACKAGES = {
+    "dev.buhanzaz.rwms.auth",
+    "dev.buhanzaz.rwms.taskboard",
+    "dev.buhanzaz.rwms.warehouse",
+    "dev.buhanzaz.rwms.asset",
+    "dev.buhanzaz.rwms.maintenance",
+    "dev.buhanzaz.rwms.inventory",
+    "dev.buhanzaz.rwms.logistics",
+    "dev.buhanzaz.rwms.dossier",
+    "dev.buhanzaz.rwms.assistant",
+    "dev.buhanzaz.rwms.analytics",
+    "dev.buhanzaz.rwms.gateway"
+  };
+
   private final ClassFileImporter importer =
       new ClassFileImporter().withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS);
 
@@ -19,16 +34,7 @@ class PlatformArchitectureTest {
 
   @Test
   void productionMappersStayInsideTheApprovedBoundary() {
-    var classes =
-        importer.importPackages(
-            "dev.buhanzaz.rwms.asset",
-            "dev.buhanzaz.rwms.auth",
-            "dev.buhanzaz.rwms.taskboard",
-            "dev.buhanzaz.rwms.warehouse",
-            "dev.buhanzaz.rwms.maintenance",
-            "dev.buhanzaz.rwms.inventory",
-            "dev.buhanzaz.rwms.logistics",
-            "dev.buhanzaz.rwms.dossier");
+    var classes = importer.importPackages(ACTIVE_JAVA_SERVICE_PACKAGES);
 
     ArchitectureRules.MAPPERS_LIVE_IN_MAPPING_PACKAGES.check(classes);
     ArchitectureRules.MAPPERS_DO_NOT_MUTATE_ENTITIES_FROM_COMMANDS.check(classes);
@@ -36,22 +42,39 @@ class PlatformArchitectureTest {
   }
 
   @Test
-  void servicesUseConstructorInjectionAndOwnTheirModels() {
-    var classes =
-        importer.importPackages(
-            "dev.buhanzaz.rwms.auth",
-            "dev.buhanzaz.rwms.taskboard",
-            "dev.buhanzaz.rwms.warehouse",
-            "dev.buhanzaz.rwms.asset",
-            "dev.buhanzaz.rwms.maintenance",
-            "dev.buhanzaz.rwms.inventory",
-            "dev.buhanzaz.rwms.logistics",
-            "dev.buhanzaz.rwms.dossier");
+  void activeJavaServicesUseConstructorInjection() {
+    var classes = importer.importPackages(ACTIVE_JAVA_SERVICE_PACKAGES);
 
     ArchitectureRules.SERVICES_DO_NOT_USE_FIELD_INJECTION.check(classes);
     ArchitectureRules.SERVICES_DO_NOT_USE_METHOD_INJECTION.check(classes);
+  }
+
+  @Test
+  void statefulServicesOwnTheirModels() {
+    var classes = importer.importPackages(ACTIVE_JAVA_SERVICE_PACKAGES);
+
     ArchitectureRules.INVENTORY_DOES_NOT_DEPEND_ON_OTHER_SERVICES.check(classes);
     ArchitectureRules.LOGISTICS_DOES_NOT_DEPEND_ON_OTHER_SERVICES.check(classes);
     ArchitectureRules.DOSSIER_DOES_NOT_DEPEND_ON_OTHER_SERVICES.check(classes);
+    ArchitectureRules.ASSISTANT_DOES_NOT_DEPEND_ON_OTHER_SERVICE_MODELS.check(classes);
+    ArchitectureRules.ANALYTICS_DOES_NOT_DEPEND_ON_OTHER_SERVICE_MODELS.check(classes);
+  }
+
+  @Test
+  void gatewayRemainsAStatelessTransportBoundary() {
+    var classes = importer.importPackages("dev.buhanzaz.rwms.gateway");
+
+    ArchitectureRules.GATEWAY_DOES_NOT_DEPEND_ON_SERVICE_PACKAGES.check(classes);
+    ArchitectureRules.GATEWAY_DOES_NOT_DEPEND_ON_STATEFUL_INFRASTRUCTURE.check(classes);
+    ArchitectureRules.GATEWAY_DECLARES_NO_PERSISTENCE_TYPES.check(classes);
+  }
+
+  @Test
+  void readModelsExposeQueriesOnly() {
+    var classes =
+        importer.importPackages(
+            "dev.buhanzaz.rwms.analytics", "dev.buhanzaz.rwms.dossier");
+
+    ArchitectureRules.READ_MODEL_HTTP_BOUNDARIES_ARE_READ_ONLY.check(classes);
   }
 }

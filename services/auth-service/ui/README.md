@@ -1,5 +1,7 @@
 # Auth service login UI
 
+[Русская версия](README.ru.md)
+
 The Vite application implements the `login-04`-based page used by Spring
 Security form login. Build it with:
 

@@ -15,12 +15,15 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+/** Public gateway-facing HTTP and SSE adapter for owner-scoped assistant conversations; it contains no rental workflow logic. */
 @RestController
 @RequestMapping("/api/assistant/v1/conversations")
 public class AssistantConversationController {
@@ -59,7 +62,8 @@ public class AssistantConversationController {
   @GetMapping(value = "/{conversationId}", produces = MediaType.APPLICATION_JSON_VALUE)
   public AssistantApiModels.ConversationDetailResponse detail(
       @AuthenticationPrincipal Jwt jwt, @PathVariable UUID conversationId) {
-    return conversations.detail(authorizer.requireRentalUser(jwt), conversationId);
+    return conversations.detail(
+        authorizer.requireRentalUser(jwt), conversationId, jwt.getTokenValue());
   }
 
   @DeleteMapping("/{conversationId}")
@@ -78,7 +82,25 @@ public class AssistantConversationController {
       @Valid @RequestBody AssistantApiModels.TurnRequest request) {
     UUID owner = authorizer.requireRentalUser(jwt);
     SseEmitter emitter = new SseEmitter(sse.timeout().toMillis());
-    turns.stream(owner, conversationId, request.message(), jwt.getTokenValue(), emitter);
+    turns.stream(owner, conversationId, request, jwt.getTokenValue(), emitter);
     return emitter;
+  }
+
+  /** Keeps exactly the selected cabin IDs and releases every removed hold immediately. */
+  @PutMapping(
+      value = "/{conversationId}/selection",
+      consumes = MediaType.APPLICATION_JSON_VALUE,
+      produces = MediaType.APPLICATION_JSON_VALUE)
+  public AssistantApiModels.CabinSelectionResponse replaceSelection(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID conversationId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody AssistantApiModels.CabinSelectionRequest request) {
+    return conversations.replaceSelection(
+        authorizer.requireRentalUser(jwt),
+        conversationId,
+        idempotencyKey,
+        request,
+        jwt.getTokenValue());
   }
 }

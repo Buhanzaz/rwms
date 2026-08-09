@@ -1,5 +1,7 @@
 # F0 database migration safety tooling
 
+[Русская версия](README.ru.md)
+
 This directory captures read-only evidence from the existing Compose PostgreSQL
 databases and proves that each custom-format dump restores into a disposable,
 network-isolated PostgreSQL container.

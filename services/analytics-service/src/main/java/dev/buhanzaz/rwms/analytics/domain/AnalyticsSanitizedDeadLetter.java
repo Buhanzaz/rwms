@@ -17,6 +17,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.JdbcTypeCode;
 
+/** Persists a hash-only consumer failure for controlled publication to the analytics-owned DLT. */
 @Entity
 @Table(name = "analytics_sanitized_dead_letter")
 @Getter

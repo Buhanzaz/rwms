@@ -13,6 +13,7 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/** Persistence queries for task-board tasks and their stable external source identities. */
 public interface BoardTaskRepository extends JpaRepository<BoardTask, UUID> {
   List<BoardTask> findAllByWarehouseIdAndStatusIn(
       UUID warehouseId, Collection<TaskStatus> statuses);

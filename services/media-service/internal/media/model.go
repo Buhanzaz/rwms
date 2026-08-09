@@ -1,3 +1,5 @@
+// Package media contains the immutable media lifecycle, transformation
+// primitives, and object naming rules used by media-service.
 package media
 
 import (
@@ -6,35 +8,51 @@ import (
 	"strings"
 )
 
+// Kind classifies uploaded content as an image or video.
 type Kind string
 
 const (
+	// KindImage is still-image media with canonical and WebP derivatives.
 	KindImage Kind = "IMAGE"
+	// KindVideo is video media whose validated original is retained as-is.
 	KindVideo Kind = "VIDEO"
 )
 
+// Status is the lifecycle state of one logical media asset.
 type Status string
 
 const (
-	StatusUploading  Status = "UPLOADING"
+	// StatusUploading awaits immutable source content finalization.
+	StatusUploading Status = "UPLOADING"
+	// StatusProcessing has a durable processing generation in flight.
 	StatusProcessing Status = "PROCESSING"
-	StatusReady      Status = "READY"
-	StatusFailed     Status = "FAILED"
-	StatusDeleted    Status = "DELETED"
+	// StatusReady has a current immutable generation available for scoped reads.
+	StatusReady Status = "READY"
+	// StatusFailed has no usable current generation after processing failed.
+	StatusFailed Status = "FAILED"
+	// StatusDeleted is a logical deletion that retains object provenance.
+	StatusDeleted Status = "DELETED"
 )
 
+// ProcessingKind classifies a durable transformation job.
 type ProcessingKind string
 
 const (
+	// ProcessingInitial builds the first canonical generation for an upload.
 	ProcessingInitial ProcessingKind = "INITIAL"
 )
 
+// Variant identifies an original object or an image derivative.
 type Variant string
 
 const (
-	VariantSmall    Variant = "SMALL"
-	VariantMedium   Variant = "MEDIUM"
-	VariantLarge    Variant = "LARGE"
+	// VariantSmall is the smallest presentation WebP derivative.
+	VariantSmall Variant = "SMALL"
+	// VariantMedium is the medium presentation WebP derivative.
+	VariantMedium Variant = "MEDIUM"
+	// VariantLarge is the largest presentation WebP derivative.
+	VariantLarge Variant = "LARGE"
+	// VariantOriginal is the immutable canonical source-generation object.
 	VariantOriginal Variant = "ORIGINAL"
 )
 
@@ -42,8 +60,11 @@ const (
 // always physically oriented by the client and uses Rotation0.
 type Rotation int16
 
+// Rotation0 is the only supported orientation for new media processing.
 const Rotation0 Rotation = 0
 
+// KindForContentType maps an allowed image or video media type to its media
+// kind after stripping parameters and normalizing case.
 func KindForContentType(contentType string) (Kind, bool) {
 	normalized := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
 	switch {
@@ -56,6 +77,7 @@ func KindForContentType(contentType string) (Kind, bool) {
 	}
 }
 
+// Asset is the in-memory state machine for one logical media aggregate.
 type Asset struct {
 	ID                string
 	OwnerType         string
@@ -77,6 +99,7 @@ type Asset struct {
 	CreatedAtUnix     int64
 }
 
+// ProcessingJob identifies the exact pending media generation to process.
 type ProcessingJob struct {
 	MediaID    string
 	Generation int
@@ -84,6 +107,8 @@ type ProcessingJob struct {
 	Kind       ProcessingKind
 }
 
+// QueueInitialProcessing reserves the next immutable generation for an upload
+// that has completed ingress.
 func (asset *Asset) QueueInitialProcessing() (ProcessingJob, error) {
 	if asset.Status != StatusUploading {
 		return ProcessingJob{}, fmt.Errorf("media %s cannot begin processing from %s", asset.ID, asset.Status)
@@ -94,6 +119,8 @@ func (asset *Asset) QueueInitialProcessing() (ProcessingJob, error) {
 	return asset.queueProcessing(asset.allocateGeneration())
 }
 
+// CompleteProcessing promotes the matching pending generation to current READY
+// state after all required objects were durably written.
 func (asset *Asset) CompleteProcessing(job ProcessingJob) error {
 	if err := asset.validatePendingJob(job); err != nil {
 		return err
@@ -108,6 +135,8 @@ func (asset *Asset) CompleteProcessing(job ProcessingJob) error {
 	return nil
 }
 
+// FailProcessing records the matching generation failure without reusing its
+// object-key generation or invalidating a previously verified generation.
 func (asset *Asset) FailProcessing(job ProcessingJob, reason string) error {
 	if err := asset.validatePendingJob(job); err != nil {
 		return err
@@ -181,18 +210,23 @@ func SortForPresentation(assets []Asset) {
 	})
 }
 
+// VariantSpec defines the long edge and quality for one derived image variant.
 type VariantSpec struct {
 	Variant  Variant
 	LongEdge int
 	Quality  int
 }
 
+// VariantConfiguration optionally overrides the default long edges used to
+// create SMALL, MEDIUM, and LARGE WebP derivatives.
 type VariantConfiguration struct {
 	SmallLongEdge  int
 	MediumLongEdge int
 	LargeLongEdge  int
 }
 
+// ImageVariants returns the three required image derivative specifications in
+// presentation order, applying safe defaults to non-positive overrides.
 func (configuration VariantConfiguration) ImageVariants() []VariantSpec {
 	return []VariantSpec{
 		{Variant: VariantSmall, LongEdge: positiveOr(configuration.SmallLongEdge, 480), Quality: 78},

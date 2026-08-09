@@ -18,6 +18,7 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+/** Stores one worker-group, warehouse and local-day KPI evidence row with raw components rather than rounded aggregates. */
 @Entity
 @Table(name = "analytics_group_kpi_day")
 @Getter

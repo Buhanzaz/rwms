@@ -137,6 +137,9 @@ func TestMediaProcessingDLTSchemaValidatesSanitizedFixtures(t *testing.T) {
 		"recordedAt":    "2026-07-17T12:34:56Z",
 	}
 	assertSchemaAccepts(t, schema, valid)
+	exhausted := cloneFixture(t, valid)
+	exhausted["failureCode"] = "PROCESSING_ATTEMPT_EXHAUSTED"
+	assertSchemaAccepts(t, schema, exhausted)
 
 	tests := map[string]func(map[string]any){
 		"owner leakage": func(value map[string]any) { value["ownerId"] = "d96d49c9-9e30-4d7c-b298-1687acb06a08" },

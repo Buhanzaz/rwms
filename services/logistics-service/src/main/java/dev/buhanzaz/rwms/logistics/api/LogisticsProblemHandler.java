@@ -30,6 +30,9 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
+/**
+ * Maps logistics application failures to canonical HTTP Problem Details responses.
+ */
 @RestControllerAdvice
 public class LogisticsProblemHandler {
   private static final String PREFIX = "urn:rwms:problem:logistics:";

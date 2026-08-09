@@ -7,6 +7,9 @@ import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.util.UUID;
 
+/**
+ * JPA entity that persists inventory statistics line in the inventory-owned database.
+ */
 @Entity
 @Table(name = "inventory_statistics_line")
 public class InventoryStatisticsLine {

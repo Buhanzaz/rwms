@@ -7,6 +7,7 @@ import jakarta.persistence.EntityManagerFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
@@ -88,7 +89,10 @@ class LogisticsFlywayMigrationIntegrationTest {
             "presentation_booking",
             "rental_inquiry",
             "rental_inquiry_outbox",
+            "rental_inquiry_search_attempt",
+            "rental_inquiry_selection_receipt",
             "rental_order",
+            "rental_order_acceptable_delivery_date",
             "rental_order_audit_event",
             "rental_order_command_receipt",
             "rental_order_unit_term",
@@ -99,6 +103,7 @@ class LogisticsFlywayMigrationIntegrationTest {
             "version_gap_quarantine")
         .doesNotContain("warehouse", "rental_item", "inventory_session", "reservation");
     assertThat(toRegclass("databasechangelog")).isNull();
+    assertJpaValidationStarts();
   }
 
   @Test
@@ -1459,6 +1464,410 @@ class LogisticsFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void v39KeepsLegacyMarksUnprovenAndConstrainsExactAdmissionEvidence() {
+    Flyway beforeV39 = configuration(MIGRATIONS).target("38").load();
+    assertThat(beforeV39.migrate().migrationsExecuted).isEqualTo(38);
+    UUID legacyOperationId = UUID.randomUUID();
+    UUID legacyWarehouseId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into warehouse_operation_mark_outbox(
+          operation_id,warehouse_id,occurred_at,state,attempt_count,next_attempt_at,
+          created_at,updated_at)
+        values (?, ?, clock_timestamp(),'PENDING',0,clock_timestamp(),
+          clock_timestamp(),clock_timestamp())
+        """,
+        legacyOperationId,
+        legacyWarehouseId);
+
+    Flyway upgraded = configuration(MIGRATIONS).target("39").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select admission_direction,admission_warehouse_version
+                  from warehouse_operation_mark_outbox
+                 where warehouse_id=? and operation_id=?
+                """,
+                legacyWarehouseId,
+                legacyOperationId))
+        .containsEntry("admission_direction", null)
+        .containsEntry("admission_warehouse_version", null);
+    assertThat(
+            warehouseOperationMarkConstraintDefinition(
+                "ck_warehouse_operation_mark_admission_evidence"))
+        .contains("INCOMING", "OUTGOING", "admission_warehouse_version >= 0")
+        .contains("admission_direction IS NULL", "admission_warehouse_version IS NULL");
+    assertThat(toRegclass("idx_warehouse_operation_mark_operation")).isNotNull();
+
+    jdbc.update(
+        """
+        insert into warehouse_operation_mark_outbox(
+          operation_id,warehouse_id,occurred_at,admission_direction,
+          admission_warehouse_version,state,attempt_count,next_attempt_at,created_at,updated_at)
+        values (?, ?, clock_timestamp(),'INCOMING',7,'PENDING',0,clock_timestamp(),
+          clock_timestamp(),clock_timestamp())
+        """,
+        UUID.randomUUID(),
+        UUID.randomUUID());
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    insert into warehouse_operation_mark_outbox(
+                      operation_id,warehouse_id,occurred_at,admission_direction,
+                      admission_warehouse_version,state,attempt_count,next_attempt_at,
+                      created_at,updated_at)
+                    values (?, ?, clock_timestamp(),'OUTGOING',null,'PENDING',0,
+                      clock_timestamp(),clock_timestamp(),clock_timestamp())
+                    """,
+                    UUID.randomUUID(),
+                    UUID.randomUUID()))
+        .hasMessageContaining("ck_warehouse_operation_mark_admission_evidence");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    insert into warehouse_operation_mark_outbox(
+                      operation_id,warehouse_id,occurred_at,admission_direction,
+                      admission_warehouse_version,state,attempt_count,next_attempt_at,
+                      created_at,updated_at)
+                    values (?, ?, clock_timestamp(),null,5,'PENDING',0,
+                      clock_timestamp(),clock_timestamp(),clock_timestamp())
+                    """,
+                    UUID.randomUUID(),
+                    UUID.randomUUID()))
+        .hasMessageContaining("ck_warehouse_operation_mark_admission_evidence");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    insert into warehouse_operation_mark_outbox(
+                      operation_id,warehouse_id,occurred_at,admission_direction,
+                      admission_warehouse_version,state,attempt_count,next_attempt_at,
+                      created_at,updated_at)
+                    values (?, ?, clock_timestamp(),'SIDEWAYS',5,'PENDING',0,
+                      clock_timestamp(),clock_timestamp(),clock_timestamp())
+                    """,
+                    UUID.randomUUID(),
+                    UUID.randomUUID()))
+        .hasMessageContaining("ck_warehouse_operation_mark_admission_evidence");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    insert into warehouse_operation_mark_outbox(
+                      operation_id,warehouse_id,occurred_at,admission_direction,
+                      admission_warehouse_version,state,attempt_count,next_attempt_at,
+                      created_at,updated_at)
+                    values (?, ?, clock_timestamp(),'INCOMING',-1,'PENDING',0,
+                      clock_timestamp(),clock_timestamp(),clock_timestamp())
+                    """,
+                    UUID.randomUUID(),
+                    UUID.randomUUID()))
+        .hasMessageContaining("ck_warehouse_operation_mark_admission_evidence");
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v40UpgradesHistoricalAttemptsToUnleasedFencedClaimsAndValidatesJpa() {
+    Flyway beforeV40 = configuration(MIGRATIONS).target("39").load();
+    assertThat(beforeV40.migrate().migrationsExecuted).isEqualTo(39);
+    UUID documentId = UUID.randomUUID();
+    UUID attemptId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into logistics_document(
+          id,version,document_type,state,warehouse_id,requested_by_subject_id,correlation_id,
+          created_at,updated_at)
+        values (?,0,'RETURN','REGISTERING',?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        documentId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into logistics_external_attempt(
+          id,document_id,operation_id,target_service,operation_type,request_sha256,result,
+          retry_count,next_attempt_at,correlation_id,created_at)
+        values (?,? ,?,'ASSET','RETURN_WAREHOUSE_IDENTITY',?,'PENDING',0,clock_timestamp(),
+          ?,clock_timestamp())
+        """,
+        attemptId,
+        documentId,
+        UUID.randomUUID(),
+        "a".repeat(64),
+        UUID.randomUUID());
+
+    Flyway upgraded = configuration(MIGRATIONS).target("40").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select lease_token,lease_fence,lease_expires_at
+                from logistics_external_attempt where id=?
+                """,
+                attemptId))
+        .containsEntry("lease_token", null)
+        .containsEntry("lease_fence", 0L)
+        .containsEntry("lease_expires_at", null);
+    assertThat(toRegclass("idx_logistics_external_attempt_due_claim")).isNotNull();
+    assertThat(toRegclass("idx_logistics_external_attempt_expired_lease_claim")).isNotNull();
+    assertThat(externalAttemptConstraintDefinition("ck_logistics_external_attempt_lease_fence"))
+        .contains("lease_fence >= 0");
+    assertThat(externalAttemptConstraintDefinition("ck_logistics_external_attempt_lease_pair"))
+        .contains("lease_token IS NULL", "lease_expires_at IS NULL");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update logistics_external_attempt set lease_fence=-1 where id=?", attemptId))
+        .hasMessageContaining("ck_logistics_external_attempt_lease_fence");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    update logistics_external_attempt
+                    set lease_token=?, lease_expires_at=null where id=?
+                    """,
+                    UUID.randomUUID(),
+                    attemptId))
+        .hasMessageContaining("ck_logistics_external_attempt_lease_pair");
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v41AddsSearchReceiptsAndCanonicalizesPendingAndPublishedBookingFacts() {
+    Flyway beforeV41 = configuration(MIGRATIONS).target("40").load();
+    assertThat(beforeV41.migrate().migrationsExecuted).isEqualTo(40);
+    UUID[] pending = insertLegacyBookingOutbox("PENDING");
+    UUID[] published = insertLegacyBookingOutbox("PUBLISHED");
+    String pendingPayloadBefore =
+        jdbc.queryForObject(
+            "select payload::text from rental_inquiry_outbox where event_id=?",
+            String.class,
+            pending[0]);
+
+    Flyway upgraded = configuration(MIGRATIONS).target("41").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(toRegclass("rental_inquiry_search_attempt")).isNotNull();
+    assertThat(toRegclass("uk_rental_inquiry_search_attempt_one_prepared")).isNotNull();
+    Map<String, Object> pendingEnvelope = bookedEnvelope(pending[0]);
+    assertThat(pendingEnvelope)
+        .containsEntry("status", "PENDING")
+        .containsEntry("event_id", pending[0].toString())
+        .containsEntry("envelope_version", "2")
+        .containsEntry("event_type", "logistics.rental-inquiry.booked.v1")
+        .containsEntry("event_version", "1")
+        .containsEntry("producer", "logistics-service")
+        .containsEntry("aggregate_type", "RENTAL_INQUIRY")
+        .containsEntry("aggregate_id", pending[1].toString())
+        .containsEntry("aggregate_version", "8")
+        .containsEntry("correlation_id", pending[2].toString())
+        .containsEntry("causation_id", pending[3].toString())
+        .containsEntry("actor_subject_id", pending[5].toString())
+        .containsEntry("principal_type", "USER")
+        .containsEntry("profile_revision_type", "null")
+        .containsEntry("payload_conversation_id", pending[2].toString())
+        .containsEntry("payload_order_id", pending[4].toString())
+        .containsEntry("root_field_count", 13L)
+        .containsEntry("payload_field_count", 2L);
+    assertThat(
+            jdbc.queryForMap(
+                "select status,published_at from rental_inquiry_outbox where event_id=?",
+                published[0]))
+        .containsEntry("status", "PUBLISHED")
+        .doesNotContainEntry("published_at", null);
+    assertThat(bookedEnvelope(published[0]))
+        .containsEntry("event_id", published[0].toString())
+        .containsEntry("correlation_id", published[2].toString())
+        .containsEntry("causation_id", published[3].toString())
+        .containsEntry("payload_order_id", published[4].toString());
+    assertThat(
+            jdbc.queryForObject(
+                "select payload::text from rental_inquiry_outbox where event_id=?",
+                String.class,
+                pending[0]))
+        .isNotEqualTo(pendingPayloadBefore);
+
+    String pendingPayloadAfter =
+        jdbc.queryForObject(
+            "select payload::text from rental_inquiry_outbox where event_id=?",
+            String.class,
+            pending[0]);
+    assertThat(upgraded.migrate().migrationsExecuted).isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select payload::text from rental_inquiry_outbox where event_id=?",
+                String.class,
+                pending[0]))
+        .isEqualTo(pendingPayloadAfter);
+
+    UUID firstAttempt = UUID.randomUUID();
+    insertPreparedSearchAttempt(firstAttempt, pending[1], UUID.randomUUID());
+    assertThatThrownBy(
+            () ->
+                insertPreparedSearchAttempt(
+                    UUID.randomUUID(), pending[1], UUID.randomUUID()))
+        .hasMessageContaining("uk_rental_inquiry_search_attempt_one_prepared");
+    jdbc.update(
+        """
+        update rental_inquiry_search_attempt
+        set state='COMPLETED',response_body='{}',terminal_at=clock_timestamp(),
+            updated_at=clock_timestamp()
+        where id=?
+        """,
+        firstAttempt);
+    insertPreparedSearchAttempt(UUID.randomUUID(), pending[1], UUID.randomUUID());
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v42BackfillsTruthfulClientManagerAndAddsDeliveryFactsWithoutRewritingLegacyRows() {
+    Flyway beforeV42 = configuration(MIGRATIONS).target("41").load();
+    assertThat(beforeV42.migrate().migrationsExecuted).isEqualTo(41);
+    UUID creatorId = UUID.randomUUID();
+    UUID legacyClientId = UUID.randomUUID();
+    UUID legacyOrderId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into order_client(
+          id,version,client_type,display_name,normalized_name,
+          created_by_subject_id,creation_idempotency_key,creation_request_sha256,
+          created_at,updated_at)
+        values (?,0,'LEGAL_ENTITY','ООО История','ооо история',?,?,?,
+          clock_timestamp(),clock_timestamp())
+        """,
+        legacyClientId,
+        creatorId,
+        UUID.randomUUID(),
+        "a".repeat(64));
+    jdbc.update(
+        """
+        insert into rental_order(
+          id,version,order_number,status,client_id,manager_id,manager_display_name,
+          created_by_subject_id,created_by_display_name,created_by_role,
+          creation_idempotency_key,creation_request_sha256,created_at,updated_at)
+        values (?,0,'ORD-420001','DRAFT',?,?,'Исторический менеджер',
+          ?,'Исторический менеджер','RENTAL_MANAGER',?,?,clock_timestamp(),clock_timestamp())
+        """,
+        legacyOrderId,
+        legacyClientId,
+        creatorId,
+        creatorId,
+        UUID.randomUUID(),
+        "b".repeat(64));
+
+    Flyway upgraded = configuration(MIGRATIONS).target("42").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select responsible_manager_id,responsible_manager_display_name,
+                       contact_person,comment,source
+                from order_client where id=?
+                """,
+                legacyClientId))
+        .containsEntry("responsible_manager_id", creatorId)
+        .containsEntry("responsible_manager_display_name", null)
+        .containsEntry("contact_person", null)
+        .containsEntry("comment", null)
+        .containsEntry("source", null);
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select delivery_address,latitude,longitude,contact_phone,comment
+                from rental_order where id=?
+                """,
+                legacyOrderId))
+        .containsEntry("delivery_address", null)
+        .containsEntry("latitude", null)
+        .containsEntry("longitude", null)
+        .containsEntry("contact_phone", null)
+        .containsEntry("comment", null);
+    assertThat(toRegclass("rental_order_acceptable_delivery_date")).isNotNull();
+    assertThat(toRegclass("rental_inquiry_selection_receipt")).isNotNull();
+    assertThat(toRegclass("uq_rental_inquiry_selection_receipt_prepared")).isNotNull();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select is_nullable
+                from information_schema.columns
+                where table_schema='public'
+                  and table_name='rental_inquiry_selection_receipt'
+                  and column_name='command_expires_at'
+                """,
+                String.class))
+        .isEqualTo("NO");
+
+    UUID proprietorId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into order_client(
+          id,version,client_type,display_name,normalized_name,phone,normalized_phone,
+          contact_person,responsible_manager_id,responsible_manager_display_name,
+          created_by_subject_id,creation_idempotency_key,creation_request_sha256,
+          created_at,updated_at)
+        values (?,0,'SOLE_PROPRIETOR','ИП Новый','ип новый','+79990000001','+79990000001',
+          'Иван Новый',?,'Менеджер',?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        proprietorId,
+        creatorId,
+        creatorId,
+        UUID.randomUUID(),
+        "c".repeat(64));
+    assertThat(
+            jdbc.queryForObject(
+                "select client_type from order_client where id=?", String.class, proprietorId))
+        .isEqualTo("SOLE_PROPRIETOR");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    insert into order_client(
+                      id,version,client_type,display_name,normalized_name,phone,normalized_phone,
+                      responsible_manager_id,created_by_subject_id,creation_idempotency_key,
+                      creation_request_sha256,created_at,updated_at)
+                    values (?,0,'LEGAL_ENTITY','ООО Без контакта','ооо без контакта',
+                      '+79990000002','+79990000002',?,?,?, ?,clock_timestamp(),clock_timestamp())
+                    """,
+                    UUID.randomUUID(),
+                    creatorId,
+                    creatorId,
+                    UUID.randomUUID(),
+                    "d".repeat(64)))
+        .hasMessageContaining("ck_order_client_contact_person");
+
+    LocalDate deliveryDate = LocalDate.of(2026, 8, 10);
+    jdbc.update(
+        """
+        insert into rental_order_acceptable_delivery_date(order_id,position,delivery_date)
+        values (?,0,?)
+        """,
+        legacyOrderId,
+        deliveryDate);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    insert into rental_order_acceptable_delivery_date(order_id,position,delivery_date)
+                    values (?,1,?)
+                    """,
+                    legacyOrderId,
+                    deliveryDate))
+        .hasMessageContaining("uq_rental_order_acceptable_delivery_date");
+    assertJpaValidationStarts();
+  }
+
+  @Test
   void modifiedAppliedMigrationIsRejectedByChecksumValidation(@TempDir Path directory)
       throws IOException {
     Path migration = directory.resolve("V1__logistics_schema.sql");
@@ -1524,6 +1933,176 @@ class LogisticsFlywayMigrationIntegrationTest {
         """,
         String.class,
         constraintName);
+  }
+
+  private String warehouseOperationMarkConstraintDefinition(String constraintName) {
+    return jdbc.queryForObject(
+        """
+        select pg_get_constraintdef(c.oid)
+        from pg_constraint c
+        join pg_class relation on relation.oid=c.conrelid
+        join pg_namespace namespace on namespace.oid=relation.relnamespace
+        where namespace.nspname='public' and relation.relname='warehouse_operation_mark_outbox'
+          and c.conname=?
+        """,
+        String.class,
+        constraintName);
+  }
+
+  private String externalAttemptConstraintDefinition(String constraintName) {
+    return jdbc.queryForObject(
+        """
+        select pg_get_constraintdef(c.oid)
+        from pg_constraint c
+        join pg_class relation on relation.oid=c.conrelid
+        join pg_namespace namespace on namespace.oid=relation.relnamespace
+        where namespace.nspname='public' and relation.relname='logistics_external_attempt'
+          and c.conname=?
+        """,
+        String.class,
+        constraintName);
+  }
+
+  private UUID[] insertLegacyBookingOutbox(String status) {
+    UUID eventId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID conversationId = UUID.randomUUID();
+    UUID bookingId = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
+    UUID managerSubjectId = UUID.randomUUID();
+    UUID clientId = UUID.randomUUID();
+    UUID presentationId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into order_client(
+          id,version,client_type,display_name,normalized_name,created_by_subject_id,
+          creation_idempotency_key,creation_request_sha256,created_at,updated_at)
+        values (?,0,'INDIVIDUAL','Migration client',?,?,?, ?,clock_timestamp(),clock_timestamp())
+        """,
+        clientId,
+        "migration-" + clientId,
+        managerSubjectId,
+        UUID.randomUUID(),
+        "a".repeat(64));
+    jdbc.update(
+        """
+        insert into rental_inquiry(
+          id,version,conversation_id,client_id,manager_id,manager_display_name,manager_role,
+          warehouse_id,state,booked_order_id,created_at,updated_at,booked_at)
+        values (?,8,?,?,?,'Migration manager','RENTAL_MANAGER',?,'BOOKED',?,
+          clock_timestamp() - interval '1 hour',clock_timestamp(),clock_timestamp())
+        """,
+        inquiryId,
+        conversationId,
+        clientId,
+        managerSubjectId,
+        UUID.randomUUID(),
+        orderId);
+    jdbc.update(
+        """
+        insert into client_presentation(
+          id,version,inquiry_id,revision,warehouse_id,state,expires_at,view_until,
+          booked_order_id,last_publish_idempotency_key,last_publish_request_sha256,
+          created_at,updated_at,booked_at)
+        select ?,3,?,1,warehouse_id,'BOOKED',clock_timestamp() + interval '1 hour',
+          clock_timestamp() + interval '2 hours',?, ?,?,clock_timestamp(),clock_timestamp(),
+          clock_timestamp()
+        from rental_inquiry where id=?
+        """,
+        presentationId,
+        inquiryId,
+        orderId,
+        UUID.randomUUID(),
+        "b".repeat(64),
+        inquiryId);
+    jdbc.update(
+        """
+        insert into presentation_booking(
+          id,version,presentation_id,presentation_revision,idempotency_key,order_id,
+          selected_item_ids_json,state,attempt_count,created_at,updated_at,completed_at)
+        values (?,5,?,1,?,?,'[\"00000000-0000-0000-0000-000000000001\"]'::jsonb,
+          'COMPLETED',1,clock_timestamp(),clock_timestamp(),clock_timestamp())
+        """,
+        bookingId,
+        presentationId,
+        UUID.randomUUID(),
+        orderId);
+    jdbc.update(
+        """
+        insert into rental_inquiry_outbox(
+          event_id,event_type,inquiry_id,conversation_id,order_id,payload,status,
+          attempt_count,next_attempt_at,created_at,published_at)
+        values (?,'logistics.rental-inquiry.booked.v1',?,?,?,?::jsonb,?,0,
+          clock_timestamp(),clock_timestamp(),
+          case when ?='PUBLISHED' then clock_timestamp() else null end)
+        """,
+        eventId,
+        inquiryId,
+        conversationId,
+        orderId,
+        "{\"eventId\":\""
+            + eventId
+            + "\",\"eventType\":\"logistics.rental-inquiry.booked.v1\","
+            + "\"occurredAt\":\"2026-08-09T09:00:00Z\",\"rentalInquiryId\":\""
+            + inquiryId
+            + "\",\"conversationId\":\""
+            + conversationId
+            + "\",\"orderId\":\""
+            + orderId
+            + "\"}",
+        status,
+        status);
+    return new UUID[] {
+      eventId, inquiryId, conversationId, bookingId, orderId, managerSubjectId
+    };
+  }
+
+  private Map<String, Object> bookedEnvelope(UUID eventId) {
+    return jdbc.queryForMap(
+        """
+        select status,
+          payload->>'eventId' as event_id,
+          payload->>'envelopeVersion' as envelope_version,
+          payload->>'eventType' as event_type,
+          payload->>'eventVersion' as event_version,
+          payload->>'producer' as producer,
+          payload->>'aggregateType' as aggregate_type,
+          payload->>'aggregateId' as aggregate_id,
+          payload->>'aggregateVersion' as aggregate_version,
+          payload#>>'{correlation,correlationId}' as correlation_id,
+          payload#>>'{correlation,causationId}' as causation_id,
+          payload#>>'{actorRef,subjectId}' as actor_subject_id,
+          payload#>>'{actorRef,principalType}' as principal_type,
+          jsonb_typeof(payload#>'{actorRef,profileRevision}') as profile_revision_type,
+          payload#>>'{payload,conversationId}' as payload_conversation_id,
+          payload#>>'{payload,orderId}' as payload_order_id,
+          (select count(*) from jsonb_object_keys(payload)) as root_field_count,
+          (select count(*) from jsonb_object_keys(payload->'payload')) as payload_field_count
+        from rental_inquiry_outbox where event_id=?
+        """,
+        eventId);
+  }
+
+  private void insertPreparedSearchAttempt(UUID id, UUID inquiryId, UUID subjectId) {
+    UUID publicKey = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into rental_inquiry_search_attempt(
+          id,version,inquiry_id,subject_id,operation_name,public_idempotency_key,
+          request_sha256,warehouse_id,downstream_idempotency_key,downstream_request_body,
+          downstream_request_sha256,actor_role,hold_expires_at,state,created_at,updated_at)
+        values (?,0,?,?,'RENTAL_INQUIRY_CABIN_SEARCH',?,?,?,?,'{}',?,
+          'RENTAL_MANAGER',clock_timestamp() + interval '10 minutes','PREPARED',
+          clock_timestamp(),clock_timestamp())
+        """,
+        id,
+        inquiryId,
+        subjectId,
+        publicKey,
+        "c".repeat(64),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "d".repeat(64));
   }
 
   private java.net.URL requireResource(String path) {

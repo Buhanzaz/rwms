@@ -21,6 +21,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/** Authorizes and aggregates service-owned daily evidence into the public warehouse group KPI read model. */
 @Service
 public class AnalyticsQueryService {
   public static final String FORMULA_VERSION = "kpi-v1";
@@ -41,6 +42,11 @@ public class AnalyticsQueryService {
     this.clock = clock;
   }
 
+  /**
+   * Authorizes the requested warehouse before aggregating its evidence. Current-day values are
+   * evaluated at one query timestamp, while returned coverage distinguishes absent, partial and
+   * still-provisional evidence rather than fabricating a complete KPI.
+   */
   @Transactional(readOnly = true)
   public AnalyticsApiModels.GroupKpiResponse get(
       UUID warehouseId,

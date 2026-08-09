@@ -11,6 +11,14 @@ import org.springframework.security.oauth2.server.authorization.token.OAuth2Refr
 import org.springframework.security.oauth2.server.authorization.token.OAuth2TokenContext;
 import org.springframework.security.oauth2.server.authorization.token.OAuth2TokenGenerator;
 
+/**
+ * Issues refresh tokens for public authorization-code clients that satisfy the RWMS PKCE
+ * contract.
+ *
+ * <p>The standard generator remains the first choice. This fallback exists because public clients
+ * authenticate with {@code none}; it generates a cryptographically random URL-safe token only for
+ * an authorization-code flow with PKCE, {@code refresh_token}, and {@code offline_access}.</p>
+ */
 final class PublicPkceRefreshTokenGenerator
         implements OAuth2TokenGenerator<OAuth2RefreshToken> {
 
@@ -19,6 +27,13 @@ final class PublicPkceRefreshTokenGenerator
 
     private final OAuth2RefreshTokenGenerator delegate = new OAuth2RefreshTokenGenerator();
 
+    /**
+     * Produces a refresh token only for an eligible public PKCE authorization-code grant.
+     *
+     * @param context authorization-server token issuance context
+     * @return a standard generated token, an eligible public-client token, or {@code null} when no
+     *     refresh token may be issued
+     */
     @Override
     public OAuth2RefreshToken generate(OAuth2TokenContext context) {
         OAuth2RefreshToken generated = delegate.generate(context);

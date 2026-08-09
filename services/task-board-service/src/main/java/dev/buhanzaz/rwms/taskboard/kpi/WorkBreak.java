@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.taskboard.kpi;
 import java.time.LocalTime;
 import java.util.Objects;
 
+/** One validated local-time break interval within a warehouse work schedule. */
 public record WorkBreak(LocalTime start, LocalTime end) {
   public WorkBreak {
     Objects.requireNonNull(start, "Break start is required");

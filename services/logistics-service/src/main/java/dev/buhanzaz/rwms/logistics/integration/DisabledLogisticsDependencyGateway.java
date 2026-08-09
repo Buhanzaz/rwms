@@ -2,9 +2,13 @@ package dev.buhanzaz.rwms.logistics.integration;
 
 import java.util.UUID;
 
-/** Fail-closed development default until exact service credentials are configured. */
+/**
+ * Fail-closed local/test dependency adapter. It never supplies warehouse admission or another
+ * fabricated owner response, and production startup rejects this adapter through its readiness
+ * signal.
+ */
 final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGateway {
-  private static final String MESSAGE = "Logistics private dependencies are not configured";
+  private static final String MESSAGE = "Logistics private dependencies are disabled";
 
   @Override
   public WarehouseIdentity readWarehouseIdentity(UUID warehouseId) {

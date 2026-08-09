@@ -14,6 +14,7 @@ import jakarta.persistence.Version;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
+/** JPA allocation of a repair to a warehouse repair place, coordinated with the repair lifecycle. */
 @Entity
 @Table(name = "repair_place_allocation")
 public class RepairPlaceAllocation {

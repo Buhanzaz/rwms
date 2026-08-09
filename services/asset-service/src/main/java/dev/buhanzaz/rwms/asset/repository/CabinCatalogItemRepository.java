@@ -8,6 +8,9 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/**
+ * Spring Data repository for service-local cabin catalog item persistence.
+ */
 public interface CabinCatalogItemRepository extends JpaRepository<CabinCatalogItem, UUID> {
   List<CabinCatalogItem> findAllByKindOrderByNameAscIdAsc(CabinCatalogKind kind);
 

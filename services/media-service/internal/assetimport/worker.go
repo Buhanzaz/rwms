@@ -30,6 +30,8 @@ const (
 	maxArchiveBytesPerSource int64 = 256 << 20
 )
 
+// Worker leases durable import jobs, preflights public Yandex.Disk resources,
+// and ingests approved image files through the normal media pipeline.
 type Worker struct {
 	repository   Repository
 	yandex       YandexPublicResources
@@ -42,6 +44,7 @@ type Worker struct {
 	logger       *slog.Logger
 }
 
+// NewWorker validates and creates the durable asset-import worker.
 func NewWorker(repository Repository, yandex YandexPublicResources, store ObjectStore, instanceID string, maxBytes int64, logger *slog.Logger) (*Worker, error) {
 	if repository == nil || yandex == nil || store == nil || strings.TrimSpace(instanceID) == "" || maxBytes <= 0 || logger == nil {
 		return nil, fmt.Errorf("asset import worker dependencies are required")
@@ -53,6 +56,8 @@ func NewWorker(repository Repository, yandex YandexPublicResources, store Object
 	}, nil
 }
 
+// Run polls and processes asset-import jobs until ctx is canceled. Individual
+// failures are recorded in durable state and do not stop the worker loop.
 func (worker *Worker) Run(ctx context.Context) error {
 	if worker == nil || worker.repository == nil || worker.yandex == nil || worker.store == nil || worker.pollInterval <= 0 || worker.lease <= 0 {
 		return errors.New("asset import worker is not configured")

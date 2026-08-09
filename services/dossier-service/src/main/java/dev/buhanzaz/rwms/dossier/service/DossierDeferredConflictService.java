@@ -24,22 +24,30 @@ public class DossierDeferredConflictService {
   private final DossierInboxRepository inboxes;
   private final DossierAggregateCheckpointRepository aggregates;
   private final DossierUnlinkedFactRepository unlinked;
+  private final DossierVisibilityCoverageResolver visibilityCoverage;
   private final DossierDeadLetterService deadLetters;
 
   public DossierDeferredConflictService(
       DossierInboxRepository inboxes,
       DossierAggregateCheckpointRepository aggregates,
       DossierUnlinkedFactRepository unlinked,
+      DossierVisibilityCoverageResolver visibilityCoverage,
       DossierDeadLetterService deadLetters) {
     this.inboxes = inboxes;
     this.aggregates = aggregates;
     this.unlinked = unlinked;
+    this.visibilityCoverage = visibilityCoverage;
     this.deadLetters = deadLetters;
   }
 
+  /**
+   * Terminalizes deferred evidence inside the caller's active-generation shared lock, retaining
+   * exact cabin coverage when an existing subject association proves it.
+   */
   public void identityConflict(
       DossierValidatedEvent event, UUID generationId, OffsetDateTime now) {
     DossierProducer producer = producer(event.producerCode());
+    UUID subjectCabinId = visibilityCoverage.provenSubjectCabin(event, producer, generationId);
     var inbox = inboxes.findById(event.eventId()).orElseThrow();
     if (inbox.getDecision() == dev.buhanzaz.rwms.dossier.domain.DossierInboxDecision.DLT) return;
     inbox.deadLetterProcessedConflict(now);
@@ -58,7 +66,7 @@ public class DossierDeferredConflictService {
           DossierUnlinkedFact.record(
               generationId,
               event.eventId(),
-              event.cabinId(),
+              subjectCabinId,
               DossierUnlinkedReason.AGGREGATE_QUARANTINED,
               producer,
               event.aggregateType(),
@@ -67,7 +75,11 @@ public class DossierDeferredConflictService {
               OffsetDateTime.ofInstant(event.recordedAt(), ZoneOffset.UTC)));
     }
     deadLetters.processingFailure(
-        event, event.aggregateId(), DossierDltFailureCode.EVENT_IDENTITY_CONFLICT);
+        event,
+        event.aggregateId(),
+        DossierDltFailureCode.EVENT_IDENTITY_CONFLICT,
+        generationId,
+        subjectCabinId);
   }
 
   private static DossierProducer producer(String producerCode) {

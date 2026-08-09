@@ -3,6 +3,9 @@ package dev.buhanzaz.rwms.asset.eventing;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+/**
+ * Configuration value for the asset transactional-outbox relay lease.
+ */
 @ConfigurationProperties("rwms.asset.eventing.outbox")
 public class AssetOutboxProperties {
   private Duration relayDelay = Duration.ofSeconds(1);

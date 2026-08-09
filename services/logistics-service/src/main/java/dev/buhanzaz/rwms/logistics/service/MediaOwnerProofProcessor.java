@@ -3,7 +3,6 @@ package dev.buhanzaz.rwms.logistics.service;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import java.util.Optional;
-import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -11,27 +10,32 @@ import org.springframework.stereotype.Service;
 @Service
 @RequiredArgsConstructor
 public class MediaOwnerProofProcessor {
-  private static final int MAX_STEPS_PER_DRAIN = 500;
-
   private final MediaOwnerProofWorkflowStore store;
+  private final LogisticsExternalAttemptClaimService claims;
   private final LogisticsDependencyGateway dependencies;
 
-  public int processUntilIdle(UUID documentId) {
-    if (documentId == null) throw new IllegalArgumentException("documentId is required");
-    int processed = 0;
-    while (processed < MAX_STEPS_PER_DRAIN) {
-      Optional<MediaOwnerProofWorkflowStore.Work> work = store.nextWork(documentId);
-      if (work.isEmpty()) return processed;
-      process(work.get());
-      processed++;
+  /**
+   * Delivers one claimed proof only after validating the current local owner state. A stale proof
+   * is discarded rather than being allowed to overwrite a later owner revision.
+   */
+  public void process(LogisticsExternalAttemptClaimService.Claim claim) {
+    try {
+      Optional<MediaOwnerProofWorkflowStore.Work> work = store.workForClaim(claim);
+      if (work.isEmpty()) {
+        defer(claim);
+        return;
+      }
+      process(claim, work.get());
+    } catch (LogisticsExternalAttemptClaimService.StaleClaimException ignored) {
+      // A newer lease owns the outcome.
     }
-    throw new IllegalStateException("Media owner proofs did not reach a stable local state");
   }
 
-  private void process(MediaOwnerProofWorkflowStore.Work work) {
+  private void process(
+      LogisticsExternalAttemptClaimService.Claim claim, MediaOwnerProofWorkflowStore.Work work) {
     try {
       store.confirm(
-          work.operationId(),
+          claim,
           dependencies.upsertMediaOwnerProof(
               work.ownerType(),
               work.documentId(),
@@ -41,15 +45,34 @@ public class MediaOwnerProofProcessor {
               work.aggregateVersion(),
               work.operationId(),
               work.active()));
+    } catch (LogisticsExternalAttemptClaimService.StaleClaimException ignored) {
+      // The remote result belongs to an expired or superseded local lease.
     } catch (LogisticsDependencyException exception) {
-      store.recordFailure(work.operationId(), exception);
+      recordFailure(claim, exception);
     } catch (RuntimeException exception) {
-      store.recordFailure(
-          work.operationId(),
+      recordFailure(
+          claim,
           new LogisticsDependencyException(
               LogisticsDependencyException.FailureKind.TRANSIENT,
               "Media owner-proof outcome is unknown",
               exception));
+    }
+  }
+
+  private void defer(LogisticsExternalAttemptClaimService.Claim claim) {
+    try {
+      claims.defer(claim);
+    } catch (LogisticsExternalAttemptClaimService.StaleClaimException ignored) {
+      // Another worker controls the next eligible time.
+    }
+  }
+
+  private void recordFailure(
+      LogisticsExternalAttemptClaimService.Claim claim, LogisticsDependencyException exception) {
+    try {
+      store.recordFailure(claim, exception);
+    } catch (LogisticsExternalAttemptClaimService.StaleClaimException ignored) {
+      // A stale error must not overwrite the current owner's decision.
     }
   }
 }

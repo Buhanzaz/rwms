@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Lock;
 
+/** Repository for generation-scoped media rows that are filtered with the same warehouse scope as dossier activities. */
 public interface DossierMediaProjectionRepository
     extends JpaRepository<DossierMediaProjection, UUID>,
         JpaSpecificationExecutor<DossierMediaProjection> {

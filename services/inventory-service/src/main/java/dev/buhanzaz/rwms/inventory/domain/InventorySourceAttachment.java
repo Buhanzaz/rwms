@@ -10,6 +10,9 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
 
+/**
+ * JPA entity that persists inventory source attachment in the inventory-owned database.
+ */
 @Entity
 @Table(name = "inventory_source_attachment")
 public class InventorySourceAttachment {

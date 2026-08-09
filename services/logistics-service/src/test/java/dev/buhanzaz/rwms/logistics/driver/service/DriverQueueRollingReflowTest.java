@@ -18,6 +18,7 @@ import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -37,8 +38,9 @@ class DriverQueueRollingReflowTest {
   private final DriverTaskWorkflowStore store = mock(DriverTaskWorkflowStore.class);
   private final DriverTaskProcessor processor = mock(DriverTaskProcessor.class);
   private final LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
+  private final LogisticsTransactionLock transactionLock = mock(LogisticsTransactionLock.class);
   private final DriverQueueScheduler scheduler =
-      new DriverQueueScheduler(tasks, taskService, store, processor, dependencies);
+      new DriverQueueScheduler(tasks, taskService, store, processor, dependencies, transactionLock);
 
   @BeforeEach
   void warehouseClock() {

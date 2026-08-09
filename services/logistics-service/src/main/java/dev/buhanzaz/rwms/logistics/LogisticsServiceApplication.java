@@ -5,6 +5,9 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
+/**
+ * Bootstraps the logistics service and its locally owned Spring components.
+ */
 @SpringBootApplication
 @ConfigurationPropertiesScan
 @EnableScheduling

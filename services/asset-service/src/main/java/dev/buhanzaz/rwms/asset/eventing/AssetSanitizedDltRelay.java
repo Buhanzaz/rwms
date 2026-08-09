@@ -10,6 +10,10 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MimeTypeUtils;
 
+/**
+ * Leased relay for sanitized asset dead-letter metadata. It verifies the persisted safe body
+ * before broker delivery and records the claim outcome without retrying a raw source message.
+ */
 @Component
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")
 public class AssetSanitizedDltRelay {

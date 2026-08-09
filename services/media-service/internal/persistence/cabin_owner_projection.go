@@ -28,6 +28,8 @@ const (
 	cabinNoteEvent            = "asset.rental-item.manual-note-added.v1"
 )
 
+// CabinOwnerProof is the authoritative asset rental-item state that binds a
+// CABIN to a warehouse and active owner revision.
 type CabinOwnerProof struct {
 	WarehouseID   uuid.UUID
 	Status        string
@@ -35,6 +37,8 @@ type CabinOwnerProof struct {
 	Active        bool
 }
 
+// CabinOwnerMessage is the strictly parsed asset rental-item fact used to
+// advance the local CABIN owner projection.
 type CabinOwnerMessage struct {
 	EventID          uuid.UUID
 	BodySHA256       string
@@ -50,16 +54,22 @@ type CabinOwnerMessage struct {
 	Proof            *CabinOwnerProof
 }
 
+// CabinOwnerApplyResult reports an exact replay or a newly quarantined CABIN
+// owner aggregate after applying one fact.
 type CabinOwnerApplyResult struct {
 	Duplicate   bool
 	Quarantined bool
 }
 
+// CabinOwnerDeadLetter is the minimal sanitized identity retained for an
+// invalid CABIN owner fact.
 type CabinOwnerDeadLetter struct {
 	EventID    uuid.UUID
 	BodySHA256 string
 }
 
+// ApplyCabinOwnerMessage advances one CABIN owner stream atomically with
+// deduplication, continuity checks, and quarantine handling.
 func (repository *Repository) ApplyCabinOwnerMessage(
 	ctx context.Context,
 	message CabinOwnerMessage,
@@ -444,6 +454,8 @@ func validRentalItemStatus(status string) bool {
 	}
 }
 
+// RecordCabinOwnerDLT persists a sanitized dead-letter identity for an invalid
+// CABIN owner fact.
 func (repository *Repository) RecordCabinOwnerDLT(
 	ctx context.Context,
 	message CabinOwnerDeadLetter,

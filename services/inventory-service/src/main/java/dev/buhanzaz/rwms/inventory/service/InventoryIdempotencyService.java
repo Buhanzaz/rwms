@@ -31,6 +31,10 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Durable inventory command and start/capture idempotency boundary.
+ * It reserves stable keys before side effects and keeps recovery state for uncertain captures.
+ */
 @Service
 public class InventoryIdempotencyService
     implements InventoryIdempotencyPort, InventoryStartPersistencePort {
@@ -76,6 +80,10 @@ public class InventoryIdempotencyService
     this.idempotencyLease = idempotencyLease;
   }
 
+  /**
+   * Executes a mutable inventory command once for its subject, scope and idempotency key. The
+   * request fingerprint fences changed retries, while the completed response is retained for replay.
+   */
   @Override
   public <T> T execute(
       UUID subjectId,
@@ -139,6 +147,10 @@ public class InventoryIdempotencyService
     }
   }
 
+  /**
+   * Reserves the stable identity of a multi-step inventory start before a remote asset capture.
+   * A concurrent winner with the same key is read back and must prove the same request and warehouse.
+   */
   @Override
   public StartOperation reserve(
       UUID subjectId, UUID idempotencyKey, String requestHash, UUID warehouseId) {
@@ -197,6 +209,10 @@ public class InventoryIdempotencyService
                 .orElse(null));
   }
 
+  /**
+   * Starts or reuses a durable technical capture attempt. The request fingerprint prevents a
+   * recovery worker from attaching a different capture command to the same start operation.
+   */
   @Override
   public long beginCaptureAttempt(UUID operationId, String requestFingerprint) {
     requireOperationAndHash(operationId, requestFingerprint);

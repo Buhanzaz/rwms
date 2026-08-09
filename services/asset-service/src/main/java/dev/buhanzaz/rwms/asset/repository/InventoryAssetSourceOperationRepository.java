@@ -9,6 +9,9 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data repository for service-local inventory asset source operation persistence.
+ */
 public interface InventoryAssetSourceOperationRepository
     extends JpaRepository<InventoryAssetSourceOperation, InventoryAssetSourceId> {
   @Query("select value.requestFingerprint from InventoryAssetSourceOperation value where value.id = :id")

@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
+/** Applies worker credential commands to auth-service with client credentials and bounded timeouts. */
 @Component
 public class OAuthWorkerCredentialGateway implements WorkerCredentialGateway {
   private final RestClient client;

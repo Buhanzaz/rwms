@@ -1,12 +1,19 @@
 package dev.buhanzaz.rwms.logistics.service;
 
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionEvidence;
+import dev.buhanzaz.rwms.logistics.service.persistence.LogisticsWarehouseAdmissionPersistence;
+import dev.buhanzaz.rwms.logistics.service.persistence.LogisticsWarehouseAdmissionPersistence.AdmissionRow;
+import dev.buhanzaz.rwms.logistics.service.persistence.LogisticsWarehouseAdmissionPersistence.MarkAdmissionRow;
+import dev.buhanzaz.rwms.logistics.service.persistence.LogisticsWarehouseAdmissionPersistence.ReadinessRow;
+import dev.buhanzaz.rwms.logistics.service.persistence.LogisticsWarehouseAdmissionPersistence.StoredRequirementRow;
+import dev.buhanzaz.rwms.logistics.service.persistence.LogisticsWarehouseLifecycleBlockerReader;
 import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,67 +23,118 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>Short-lived admission intents close the gap between the remote admission read and the local
  * aggregate commit. Readiness uses the same per-warehouse advisory lock, so it can never promise
- * an empty owner while an admitted operation is about to commit.
+ * an empty owner while an admitted operation is about to commit. Exact live domain joins to
+ * permanent evidenced marks are the only local source of a dependency-free replay candidate. The
+ * owning command still compares its stored request checksum before returning a replay.
  */
 @Repository
 public class LogisticsWarehouseLifecycleStore {
   private static final int ADMISSION_TTL_SECONDS = 120;
+  private final LogisticsWarehouseAdmissionPersistence persistence;
+  private final LogisticsWarehouseLifecycleBlockerReader blockerReader;
+  private final LogisticsTransactionLock transactionLock;
 
-  private final JdbcTemplate jdbc;
-
-  public LogisticsWarehouseLifecycleStore(JdbcTemplate jdbc) {
-    this.jdbc = jdbc;
+  public LogisticsWarehouseLifecycleStore(
+      LogisticsWarehouseAdmissionPersistence persistence,
+      LogisticsWarehouseLifecycleBlockerReader blockerReader,
+      LogisticsTransactionLock transactionLock) {
+    this.persistence = persistence;
+    this.blockerReader = blockerReader;
+    this.transactionLock = transactionLock;
   }
 
-  public boolean hasLiveDocumentReplay(
+  /**
+   * Finds a document replay candidate from its live idempotency tuple, referenced domain row and
+   * complete permanent admission-mark set. This does not prove payload equality; the document owner
+   * remains the checksum authority. Expired receipts and legacy unproven marks are not evidence.
+   */
+  public Optional<List<AdmissionEvidence>> evidencedDocumentReplay(
       UUID subjectId, String operationName, UUID idempotencyKey) {
-    if (subjectId == null || operationName == null || idempotencyKey == null) return false;
-    Boolean replay =
-        jdbc.queryForObject(
-            """
-            select exists (
-              select 1 from logistics_idempotency_record
-               where subject_id=? and operation_name=? and idempotency_key=?
-                 and expires_at > clock_timestamp()
-            )
-            """,
-            Boolean.class,
-            subjectId,
-            operationName,
-            idempotencyKey);
-    return Boolean.TRUE.equals(replay);
+    if (subjectId == null
+        || operationName == null
+        || operationName.isBlank()
+        || idempotencyKey == null) {
+      return Optional.empty();
+    }
+    List<StoredRequirementRow> requirements =
+        persistence.documentReplayRequirements(subjectId, operationName, idempotencyKey);
+    return storedReplayEvidence(requirements);
   }
 
-  public boolean hasEquipmentMovementReplay(UUID actorSubjectId, UUID idempotencyKey) {
-    if (actorSubjectId == null || idempotencyKey == null) return false;
-    Boolean replay =
-        jdbc.queryForObject(
-            """
-            select exists (
-              select 1 from equipment_movement_task
-               where created_by_subject_id=? and idempotency_key=?
-            )
-            """,
-            Boolean.class,
-            actorSubjectId,
-            idempotencyKey);
-    return Boolean.TRUE.equals(replay);
+  /** Finds an equipment replay candidate from its actor/key task and exact admitted mark set. */
+  public Optional<List<AdmissionEvidence>> evidencedEquipmentMovementReplay(
+      UUID actorSubjectId, UUID idempotencyKey) {
+    if (actorSubjectId == null || idempotencyKey == null) return Optional.empty();
+    List<StoredRequirementRow> requirements =
+        persistence.equipmentMovementReplayRequirements(actorSubjectId, idempotencyKey);
+    return storedReplayEvidence(requirements);
   }
 
-  public boolean hasDriverTaskReplay(UUID actorSubjectId, UUID idempotencyKey) {
-    if (actorSubjectId == null || idempotencyKey == null) return false;
-    Boolean replay =
-        jdbc.queryForObject(
-            """
-            select exists (
-              select 1 from driver_logistics_task
-               where created_by_subject_id=? and idempotency_key=?
-            )
-            """,
-            Boolean.class,
-            actorSubjectId,
-            idempotencyKey);
-    return Boolean.TRUE.equals(replay);
+  /** Finds a driver replay candidate from its actor/key task and exact admitted mark set. */
+  public Optional<List<AdmissionEvidence>> evidencedDriverTaskReplay(
+      UUID actorSubjectId, UUID idempotencyKey) {
+    if (actorSubjectId == null || idempotencyKey == null) return Optional.empty();
+    List<StoredRequirementRow> requirements =
+        persistence.driverTaskReplayRequirements(actorSubjectId, idempotencyKey);
+    return storedReplayEvidence(requirements);
+  }
+
+  /**
+   * Reconstructs the original requirement vector from its domain row, then accepts only the exact
+   * complete mark set. Incoming request requirements are deliberately not used: their owner must
+   * return the canonical 409 when they differ from this stored candidate.
+   */
+  private Optional<List<AdmissionEvidence>> storedReplayEvidence(
+      List<StoredRequirementRow> storedRequirements) {
+    if (storedRequirements.isEmpty()) return Optional.empty();
+    UUID operationId = storedRequirements.getFirst().operationId();
+    java.util.ArrayList<AdmissionRequirement> requirements =
+        new java.util.ArrayList<>(storedRequirements.size());
+    try {
+      for (StoredRequirementRow stored : storedRequirements) {
+        if (operationId == null
+            || !operationId.equals(stored.operationId())
+            || stored.warehouseId() == null
+            || stored.direction() == null) {
+          return Optional.empty();
+        }
+        requirements.add(
+            new AdmissionRequirement(
+                stored.warehouseId(), WarehouseOperationDirection.valueOf(stored.direction())));
+      }
+      List<AdmissionRequirement> normalized = normalizedRequirements(requirements);
+      List<MarkAdmissionRow> marks = persistence.operationMarkAdmissions(operationId);
+      return replayEvidence(marks, normalized);
+    } catch (IllegalArgumentException invalidStoredIdentity) {
+      return Optional.empty();
+    }
+  }
+
+  private Optional<List<AdmissionEvidence>> replayEvidence(
+      List<MarkAdmissionRow> rows, List<AdmissionRequirement> requirements) {
+    List<AdmissionRequirement> normalized = normalizedRequirements(requirements);
+    if (rows.size() != normalized.size()) return Optional.empty();
+    java.util.HashMap<UUID, MarkAdmissionRow> rowsByWarehouse = new java.util.HashMap<>();
+    for (MarkAdmissionRow row : rows) {
+      if (row.warehouseId() == null || rowsByWarehouse.put(row.warehouseId(), row) != null) {
+        return Optional.empty();
+      }
+    }
+
+    java.util.ArrayList<AdmissionEvidence> evidence = new java.util.ArrayList<>(rows.size());
+    for (AdmissionRequirement requirement : normalized) {
+      MarkAdmissionRow row = rowsByWarehouse.get(requirement.warehouseId());
+      if (row == null
+          || !requirement.direction().name().equals(row.direction())
+          || row.warehouseVersion() == null
+          || row.warehouseVersion() < 0) {
+        return Optional.empty();
+      }
+      evidence.add(
+          new AdmissionEvidence(
+              row.warehouseId(), requirement.direction(), row.warehouseVersion()));
+    }
+    return Optional.of(List.copyOf(evidence));
   }
 
   /** Parent-owned child work is legal only while this owner has not promised readiness. */
@@ -98,22 +156,15 @@ public class LogisticsWarehouseLifecycleStore {
     for (AdmissionRequirement requirement : normalized) {
       requireOpen(requirement.warehouseId());
       OffsetDateTime expiresAt = now.plusSeconds(ADMISSION_TTL_SECONDS);
-      jdbc.update(
-          """
-          insert into logistics_warehouse_admission_intent(
-            operation_id,warehouse_id,direction,state,warehouse_version,expires_at,created_at,updated_at)
-          values (?, ?, ?, 'RESERVED', null, ?, ?, ?)
-          on conflict (operation_id,warehouse_id) do nothing
-          """,
+      persistence.insertReservedIfAbsent(
           operationId,
           requirement.warehouseId(),
           requirement.direction().name(),
           expiresAt,
-          now,
           now);
       AdmissionRow stored = admission(operationId, requirement.warehouseId());
       if (stored == null
-          || stored.direction() != requirement.direction()
+          || !requirement.direction().name().equals(stored.direction())
           || !stored.expiresAt().isAfter(now)) {
         throw new LogisticsConflictException(
             "Warehouse admission operation is bound to another immutable request");
@@ -147,7 +198,7 @@ public class LogisticsWarehouseLifecycleStore {
       requireOpen(requirement.warehouseId());
       AdmissionRow row = admission(operationId, requirement.warehouseId());
       if (row == null
-          || row.direction() != requirement.direction()
+          || !requirement.direction().name().equals(row.direction())
           || !row.expiresAt().isAfter(now)) {
         throw new LogisticsConflictException("Warehouse admission intent expired or changed");
       }
@@ -159,18 +210,11 @@ public class LogisticsWarehouseLifecycleStore {
         continue;
       }
       int changed =
-          jdbc.update(
-              """
-              update logistics_warehouse_admission_intent
-                 set state='ADMITTED',warehouse_version=?,updated_at=?
-               where operation_id=? and warehouse_id=? and state='RESERVED'
-                 and direction=? and expires_at > ?
-              """,
-              warehouseVersion,
-              now,
+          persistence.admitReserved(
               operationId,
               requirement.warehouseId(),
               requirement.direction().name(),
+              warehouseVersion,
               now);
       if (changed != 1) {
         throw new LogisticsConflictException("Warehouse admission intent changed concurrently");
@@ -178,45 +222,74 @@ public class LogisticsWarehouseLifecycleStore {
     }
   }
 
+  /**
+   * Re-reads the immutable versions of an already admitted intent. This is the lost-timezone-
+   * response recovery path: it must carry exactly the versions originally returned by
+   * warehouse-service rather than making another admission call.
+   */
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
+  public List<AdmissionEvidence> admittedEvidence(
+      UUID operationId, List<AdmissionRequirement> requirements) {
+    List<AdmissionRequirement> normalized = normalized(operationId, requirements);
+    lockWarehouses(normalized);
+    OffsetDateTime now = databaseNow();
+    java.util.ArrayList<AdmissionEvidence> evidence =
+        new java.util.ArrayList<>(normalized.size());
+    for (AdmissionRequirement requirement : normalized) {
+      AdmissionRow row = admission(operationId, requirement.warehouseId());
+      if (row == null
+          || !"ADMITTED".equals(row.state())
+          || !requirement.direction().name().equals(row.direction())
+          || row.warehouseVersion() == null
+          || row.warehouseVersion() < 0
+          || !row.expiresAt().isAfter(now)) {
+        throw new LogisticsConflictException(
+            "Warehouse lifecycle admission is missing or expired; retry the command");
+      }
+      evidence.add(
+          new AdmissionEvidence(
+              requirement.warehouseId(), requirement.direction(), row.warehouseVersion()));
+    }
+    return List.copyOf(evidence);
+  }
+
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public void cancelReserved(UUID operationId, List<AdmissionRequirement> requirements) {
     List<AdmissionRequirement> normalized = normalized(operationId, requirements);
     lockWarehouses(normalized);
     for (AdmissionRequirement requirement : normalized) {
-      jdbc.update(
-          """
-          delete from logistics_warehouse_admission_intent
-           where operation_id=? and warehouse_id=? and state='RESERVED' and direction=?
-          """,
-          operationId,
-          requirement.warehouseId(),
-          requirement.direction().name());
+      persistence.deleteReserved(
+          operationId, requirement.warehouseId(), requirement.direction().name());
     }
   }
 
   @Transactional(propagation = Propagation.MANDATORY)
   public void consume(
-      UUID operationId, List<AdmissionRequirement> requirements, boolean bypassed) {
+      UUID operationId,
+      List<AdmissionRequirement> requirements,
+      List<AdmissionEvidence> evidence,
+      boolean bypassed) {
     if (bypassed) return;
     List<AdmissionRequirement> normalized = normalized(operationId, requirements);
+    List<AdmissionEvidence> normalizedEvidence = normalizedEvidence(normalized, evidence);
     lockWarehouses(normalized);
     OffsetDateTime now = databaseNow();
-    for (AdmissionRequirement requirement : normalized) {
+    for (int index = 0; index < normalized.size(); index++) {
+      AdmissionRequirement requirement = normalized.get(index);
+      AdmissionEvidence expected = normalizedEvidence.get(index);
       AdmissionRow row = admission(operationId, requirement.warehouseId());
       if (row == null
           || !"ADMITTED".equals(row.state())
-          || row.direction() != requirement.direction()
+          || !requirement.direction().name().equals(row.direction())
           || row.warehouseVersion() == null
+          || row.warehouseVersion() != expected.warehouseVersion()
           || !row.expiresAt().isAfter(now)) {
         throw new LogisticsConflictException(
             "Warehouse lifecycle admission is missing or expired; retry the command");
       }
     }
     for (AdmissionRequirement requirement : normalized) {
-      jdbc.update(
-          "delete from logistics_warehouse_admission_intent where operation_id=? and warehouse_id=?",
-          operationId,
-          requirement.warehouseId());
+      persistence.deleteAdmission(operationId, requirement.warehouseId());
     }
   }
 
@@ -227,10 +300,7 @@ public class LogisticsWarehouseLifecycleStore {
     }
     lockWarehouse(warehouseId);
     OffsetDateTime now = databaseNow();
-    jdbc.update(
-        "delete from logistics_warehouse_admission_intent where warehouse_id=? and expires_at <= ?",
-        warehouseId,
-        now);
+    persistence.deleteExpired(warehouseId, now);
     ReadinessRow existing = readiness(warehouseId);
     if (existing != null) {
       return new ReadinessAttempt(
@@ -239,31 +309,14 @@ public class LogisticsWarehouseLifecycleStore {
     if (hasLocalBlockers(warehouseId)) {
       return new ReadinessAttempt(warehouseId, warehouseVersion, false, false);
     }
-    jdbc.update(
-        """
-        insert into logistics_warehouse_readiness_fence(
-          warehouse_id,warehouse_version,state,created_at,updated_at)
-        values (?,?,'CONFIRMING',?,?)
-        """,
-        warehouseId,
-        warehouseVersion,
-        now,
-        now);
+    persistence.insertConfirmingReadiness(warehouseId, warehouseVersion, now);
     return new ReadinessAttempt(warehouseId, warehouseVersion, false, true);
   }
 
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public void sealReadiness(UUID warehouseId, long attemptedVersion) {
     lockWarehouse(warehouseId);
-    int changed =
-        jdbc.update(
-            """
-            update logistics_warehouse_readiness_fence
-               set state='SEALED',updated_at=clock_timestamp()
-             where warehouse_id=? and warehouse_version=? and state='CONFIRMING'
-            """,
-            warehouseId,
-            attemptedVersion);
+    int changed = persistence.sealReadiness(warehouseId, attemptedVersion);
     if (changed == 0) {
       ReadinessRow row = readiness(warehouseId);
       if (row == null
@@ -277,89 +330,11 @@ public class LogisticsWarehouseLifecycleStore {
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public void releaseReadiness(UUID warehouseId, long attemptedVersion) {
     lockWarehouse(warehouseId);
-    jdbc.update(
-        """
-        delete from logistics_warehouse_readiness_fence
-         where warehouse_id=? and warehouse_version=? and state='CONFIRMING'
-        """,
-        warehouseId,
-        attemptedVersion);
+    persistence.releaseReadiness(warehouseId, attemptedVersion);
   }
 
   boolean hasLocalBlockers(UUID warehouseId) {
-    Boolean blocked =
-        jdbc.queryForObject(
-            """
-            select exists (
-              select 1 from logistics_warehouse_admission_intent
-               where warehouse_id=? and expires_at > clock_timestamp()
-              union all
-              select 1 from warehouse_operation_mark_outbox
-               where warehouse_id=? and state <> 'CONFIRMED'
-              union all
-              select 1 from logistics_document d
-               where (d.warehouse_id=? or d.destination_warehouse_id=?)
-                 and not (
-                   (d.document_type='RETURN' and d.state in ('ACCEPTED','ESTIMATE_REQUESTED','CANCELLED'))
-                   or (d.document_type='SHIPMENT' and d.state in ('SHIPPED','CANCELLED'))
-                   or (d.document_type='TRANSFER' and d.state in ('COMPLETED','CANCELLED'))
-                 )
-              union all
-              select 1 from equipment_movement_task t
-               where t.warehouse_id=?
-                 and t.state not in ('COMPLETED','CANCELLED','EXPIRED')
-              union all
-              select 1 from equipment_movement_task_line l
-                join equipment_movement_task t on t.id=l.task_id
-               where (l.source_warehouse_id=? or l.target_warehouse_id=?)
-                 and t.state not in ('COMPLETED','CANCELLED','EXPIRED')
-              union all
-              select 1 from driver_logistics_task
-               where warehouse_id=? and state not in ('COMPLETED','CANCELLED')
-              union all
-              select 1 from rental_order
-               where warehouse_id=? and status not in ('CLOSED','CANCELLED')
-              union all
-              select 1 from rental_inquiry
-               where warehouse_id=? and state <> 'ARCHIVED'
-              union all
-              select 1 from client_presentation
-               where warehouse_id=? and state in ('ACTIVE','BOOKING_PENDING','BOOKED')
-              union all
-              select 1 from logistics_guard g
-                join logistics_document d on d.id=g.document_id
-               where (d.warehouse_id=? or d.destination_warehouse_id=?)
-                 and g.guard_state <> 'RELEASED'
-              union all
-              select 1 from logistics_equipment_hold_reference h
-                join logistics_document d on d.id=h.document_id
-               where (d.warehouse_id=? or d.destination_warehouse_id=?)
-                 and h.hold_state <> 'RELEASED'
-              union all
-              select 1 from logistics_reconciliation r
-                join logistics_document d on d.id=r.document_id
-               where (d.warehouse_id=? or d.destination_warehouse_id=?) and r.state='OPEN'
-            )
-            """,
-            Boolean.class,
-            warehouseId,
-            warehouseId,
-            warehouseId,
-            warehouseId,
-            warehouseId,
-            warehouseId,
-            warehouseId,
-            warehouseId,
-            warehouseId,
-            warehouseId,
-            warehouseId,
-            warehouseId,
-            warehouseId,
-            warehouseId,
-            warehouseId,
-            warehouseId,
-            warehouseId);
-    return Boolean.TRUE.equals(blocked);
+    return blockerReader.hasLocalBlockers(warehouseId);
   }
 
   private void requireOpen(UUID warehouseId) {
@@ -371,46 +346,16 @@ public class LogisticsWarehouseLifecycleStore {
   }
 
   private AdmissionRow admission(UUID operationId, UUID warehouseId) {
-    return jdbc.query(
-            """
-            select direction,state,warehouse_version,expires_at
-              from logistics_warehouse_admission_intent
-             where operation_id=? and warehouse_id=?
-             for update
-            """,
-            (rs, ignored) ->
-                new AdmissionRow(
-                    WarehouseOperationDirection.valueOf(rs.getString("direction")),
-                    rs.getString("state"),
-                    rs.getObject("warehouse_version", Long.class),
-                    rs.getObject("expires_at", OffsetDateTime.class)),
-            operationId,
-            warehouseId)
-        .stream()
-        .findFirst()
-        .orElse(null);
+    return persistence.admissionForUpdate(operationId, warehouseId);
   }
 
   private ReadinessRow readiness(UUID warehouseId) {
-    return jdbc.query(
-            """
-            select warehouse_version,state from logistics_warehouse_readiness_fence
-             where warehouse_id=? for update
-            """,
-            (rs, ignored) ->
-                new ReadinessRow(rs.getLong("warehouse_version"), rs.getString("state")),
-            warehouseId)
-        .stream()
-        .findFirst()
-        .orElse(null);
+    return persistence.readinessForUpdate(warehouseId);
   }
 
   private void deleteExpired(List<AdmissionRequirement> requirements, OffsetDateTime now) {
     for (AdmissionRequirement requirement : requirements) {
-      jdbc.update(
-          "delete from logistics_warehouse_admission_intent where warehouse_id=? and expires_at <= ?",
-          requirement.warehouseId(),
-          now);
+      persistence.deleteExpired(requirement.warehouseId(), now);
     }
   }
 
@@ -423,21 +368,24 @@ public class LogisticsWarehouseLifecycleStore {
   }
 
   private void lockWarehouse(UUID warehouseId) {
-    jdbc.queryForObject(
-        "select pg_advisory_xact_lock(hashtextextended(?, 0))",
-        Object.class,
-        "warehouse-lifecycle:logistics:" + warehouseId);
+    transactionLock.acquire("warehouse-lifecycle:logistics:" + warehouseId);
   }
 
   private OffsetDateTime databaseNow() {
-    OffsetDateTime now = jdbc.queryForObject("select clock_timestamp()", OffsetDateTime.class);
-    if (now == null) throw new IllegalStateException("Database clock returned null");
-    return now.withOffsetSameInstant(ZoneOffset.UTC);
+    return persistence.databaseNow();
   }
 
   private static List<AdmissionRequirement> normalized(
       UUID operationId, List<AdmissionRequirement> requirements) {
-    if (operationId == null || requirements == null || requirements.isEmpty()) {
+    if (operationId == null) {
+      throw new IllegalArgumentException("Warehouse admission requirements are incomplete");
+    }
+    return normalizedRequirements(requirements);
+  }
+
+  private static List<AdmissionRequirement> normalizedRequirements(
+      List<AdmissionRequirement> requirements) {
+    if (requirements == null || requirements.isEmpty()) {
       throw new IllegalArgumentException("Warehouse admission requirements are incomplete");
     }
     List<AdmissionRequirement> normalized =
@@ -451,6 +399,28 @@ public class LogisticsWarehouseLifecycleStore {
     return normalized;
   }
 
+  private static List<AdmissionEvidence> normalizedEvidence(
+      List<AdmissionRequirement> requirements, List<AdmissionEvidence> evidence) {
+    if (evidence == null || evidence.size() != requirements.size()) {
+      throw new IllegalArgumentException("Warehouse admission evidence is incomplete");
+    }
+    List<AdmissionEvidence> normalized =
+        evidence.stream()
+            .sorted(Comparator.comparing(AdmissionEvidence::warehouseId))
+            .toList();
+    for (int index = 0; index < requirements.size(); index++) {
+      AdmissionRequirement requirement = requirements.get(index);
+      AdmissionEvidence item = normalized.get(index);
+      if (!requirement.warehouseId().equals(item.warehouseId())
+          || requirement.direction() != item.direction()) {
+        throw new IllegalArgumentException(
+            "Warehouse admission evidence does not match its requirements");
+      }
+    }
+    return normalized;
+  }
+
+  /** One immutable warehouse-direction requirement sorted and locked by the lifecycle protocol. */
   public record AdmissionRequirement(
       UUID warehouseId, WarehouseOperationDirection direction) {
     public AdmissionRequirement {
@@ -460,14 +430,8 @@ public class LogisticsWarehouseLifecycleStore {
     }
   }
 
+  /** Result of a locally serialized readiness attempt before warehouse-service confirmation. */
   public record ReadinessAttempt(
       UUID warehouseId, long warehouseVersion, boolean sealed, boolean shouldConfirm) {}
 
-  private record AdmissionRow(
-      WarehouseOperationDirection direction,
-      String state,
-      Long warehouseVersion,
-      OffsetDateTime expiresAt) {}
-
-  private record ReadinessRow(long warehouseVersion, String state) {}
 }

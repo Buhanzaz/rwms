@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.logistics;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
@@ -83,7 +84,15 @@ class EquipmentMovementTaskIntegrationTest {
 
   @BeforeEach
   void resetState() {
-    jdbc.execute("truncate table equipment_movement_task_line, equipment_movement_task cascade");
+    jdbc.execute(
+        """
+        truncate table
+          logistics_warehouse_admission_intent,
+          warehouse_operation_mark_outbox,
+          equipment_movement_task_line,
+          equipment_movement_task
+        cascade
+        """);
     reset(dependencies);
     workerDone.set(false);
     workerDoneAt.set(null);
@@ -91,6 +100,23 @@ class EquipmentMovementTaskIntegrationTest {
     boardTaskId = UUID.randomUUID();
     sourceBalanceId = UUID.randomUUID();
 
+    when(dependencies.productionReady()).thenReturn(true);
+    when(
+            dependencies.warehouseAdmission(
+                WAREHOUSE,
+                LogisticsDependencyGateway.WarehouseOperationDirection.OUTGOING))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseOperationAdmission(
+                WAREHOUSE,
+                19,
+                LogisticsDependencyGateway.WarehouseLifecycleState.ACTIVE,
+                LogisticsDependencyGateway.WarehouseOperationDirection.OUTGOING,
+                true));
+    when(dependencies.warehouseTimeZoneAt(eq(WAREHOUSE), any(OffsetDateTime.class)))
+        .thenAnswer(
+            invocation ->
+                new LogisticsDependencyGateway.WarehouseTimeZone(
+                    WAREHOUSE, "UTC", invocation.getArgument(1)));
     when(
             dependencies.acquireEquipmentMovementReservation(
                 any(),
@@ -229,6 +255,73 @@ class EquipmentMovementTaskIntegrationTest {
   }
 
   @Test
+  void exactCreateReplaySucceedsWithoutAdmissionDependencyAndAlteredPayloadConflicts()
+      throws Exception {
+    UUID idempotencyKey = UUID.randomUUID();
+    OffsetDateTime deadline = OffsetDateTime.now(ZoneOffset.UTC).plusHours(2);
+    String request = taskBody(deadline, 15);
+    MvcResult created =
+        mvc.perform(
+                post("/api/logistics/v1/equipment-movement-tasks")
+                    .header("Idempotency-Key", idempotencyKey)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(request)
+                    .with(actor()))
+            .andExpect(status().isCreated())
+            .andReturn();
+    UUID taskId = UUID.fromString(json(created).get("id").stringValue());
+
+    when(dependencies.productionReady()).thenReturn(false);
+
+    mvc.perform(
+            post("/api/logistics/v1/equipment-movement-tasks")
+                .header("Idempotency-Key", idempotencyKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(request)
+                .with(actor()))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.id").value(taskId.toString()));
+    mvc.perform(
+            post("/api/logistics/v1/equipment-movement-tasks")
+                .header("Idempotency-Key", idempotencyKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(taskBody(deadline, 16))
+                .with(actor()))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("LOGISTICS_CONFLICT"));
+
+    assertThat(jdbc.queryForObject("select count(*) from equipment_movement_task", Long.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select admission_direction,admission_warehouse_version
+                  from warehouse_operation_mark_outbox
+                 where operation_id=? and warehouse_id=?
+                """,
+                taskId,
+                WAREHOUSE))
+        .containsEntry("admission_direction", "OUTGOING")
+        .containsEntry("admission_warehouse_version", 19L);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from warehouse_operation_mark_outbox where operation_id=?",
+                Long.class,
+                taskId))
+        .isOne();
+    verify(dependencies)
+        .warehouseAdmission(
+            WAREHOUSE,
+            LogisticsDependencyGateway.WarehouseOperationDirection.OUTGOING);
+    verify(dependencies).warehouseTimeZoneAt(eq(WAREHOUSE), any(OffsetDateTime.class));
+    verify(dependencies)
+        .acquireEquipmentMovementReservation(
+            any(), any(), any(), any(), any(), any(), any(), anyLong(), anyLong(), any(), any());
+    verify(dependencies).registerEquipmentMovementTask(any(), any(), any(), any(), any(), any());
+  }
+
+  @Test
   void rejectsAnExecutableMovementWithoutAPositiveDuration() throws Exception {
     OffsetDateTime deadline = OffsetDateTime.now(ZoneOffset.UTC).plusHours(2);
 
@@ -336,6 +429,17 @@ class EquipmentMovementTaskIntegrationTest {
         .andExpect(header().exists("ETag"))
         .andExpect(jsonPath("$.lines[0].quantity").value(2))
         .andReturn();
+  }
+
+  private static String taskBody(OffsetDateTime deadline, int plannedDurationMinutes) {
+    return """
+        {"warehouseId":"%s","unitNumber":"CAB-701","plannedDurationMinutes":%d,
+        "deadlineAt":"%s","lines":[{"equipmentId":"%s","sourceRentalItemId":null,
+        "sourceLocationKind":"STOCK","expectedSourceBalanceVersion":4,
+        "targetRentalItemId":"%s","targetLocationKind":"CABIN_NON_RENTED","quantity":2}]}
+        """
+        .formatted(
+            WAREHOUSE, plannedDurationMinutes, deadline, EQUIPMENT, CABIN);
   }
 
   private static JwtRequestPostProcessor actor() {

@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.assistant.config;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+/** Binds the maximum lifetime of a streamed assistant turn. */
 @ConfigurationProperties(prefix = "rwms.assistant.sse")
 public record AssistantSseProperties(Duration timeout) {
   public AssistantSseProperties {

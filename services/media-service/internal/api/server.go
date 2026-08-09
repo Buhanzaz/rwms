@@ -1,3 +1,5 @@
+// Package api implements the authenticated HTTP boundary for media upload,
+// read, ownership-proof, import, and logistics presentation operations.
 package api
 
 import (
@@ -33,6 +35,8 @@ var checksumPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 const maxStoredGeneration = int64(1<<31 - 1)
 
+// Configuration contains the ingress limits and collaborators required by a
+// Server. The caller must provide an explicit MIME allowlist and upload expiry.
 type Configuration struct {
 	MaxUploadBytes   int64
 	AllowedMIMETypes map[string]struct{}
@@ -137,6 +141,7 @@ type boundedUploadReader struct {
 	underflow bool
 }
 
+// Read enforces the declared upload length and detects an early end of the request body.
 func (reader *boundedUploadReader) Read(buffer []byte) (int, error) {
 	if len(buffer) == 0 {
 		return 0, nil
@@ -156,6 +161,8 @@ func (reader *boundedUploadReader) Read(buffer []byte) (int, error) {
 	return read, err
 }
 
+// Server exposes the media HTTP contract while delegating durable state and
+// authorization decisions to its injected dependencies.
 type Server struct {
 	repository    repository
 	database      readiness
@@ -173,6 +180,8 @@ type invalidationStream interface {
 	ServeHTTP(http.ResponseWriter, *http.Request, uuid.UUID)
 }
 
+// NewServer validates dependencies and constructs a Server with every media
+// and private service route registered on its internal multiplexer.
 func NewServer(repository repository, database readiness, validator tokenValidator, store objectStore, configuration Configuration, logger *slog.Logger) (*Server, error) {
 	if repository == nil || database == nil || validator == nil || store == nil || logger == nil {
 		return nil, fmt.Errorf("media API dependencies are required")
@@ -185,6 +194,8 @@ func NewServer(repository repository, database readiness, validator tokenValidat
 	return server, nil
 }
 
+// Handler returns the HTTP handler with correlation and panic-recovery
+// middleware applied around the registered media routes.
 func (server *Server) Handler() http.Handler {
 	return server.correlation(server.recover(server.mux))
 }

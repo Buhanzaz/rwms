@@ -7,6 +7,10 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
+/**
+ * Configures maintenance transport properties, scheduling and fail-closed defaults for missing
+ * inbound effects or retry-delay implementations.
+ */
 @Configuration(proxyBeanMethods = false)
 @EnableScheduling
 @EnableConfigurationProperties({MaintenanceOutboxProperties.class, RwmsKafkaProperties.class})

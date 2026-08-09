@@ -16,6 +16,12 @@ import java.util.UUID;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+/**
+ * One ordered, versioned execution step in a task route.
+ *
+ * <p>The entry owns queue placement, execution budget, worker-facing snapshots, pause state, and
+ * completion timing; transitions are performed by task-board services under optimistic fencing.
+ */
 @Entity
 @Table(
     name = "queue_entry",

@@ -6,6 +6,9 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/**
+ * Spring Data persistence boundary for logistics-owned Order Audit Event Repository; it does not own cross-service workflow decisions.
+ */
 public interface OrderAuditEventRepository extends JpaRepository<OrderAuditEvent, UUID> {
   List<OrderAuditEvent> findAllByOrderIdOrderByOccurredAtAscIdAsc(UUID orderId);
 

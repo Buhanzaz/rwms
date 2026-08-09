@@ -4,4 +4,5 @@ import dev.buhanzaz.rwms.taskboard.domain.KpiPalette;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/** Persistence boundary for immutable KPI palette revisions. */
 public interface KpiPaletteRepository extends JpaRepository<KpiPalette, UUID> {}

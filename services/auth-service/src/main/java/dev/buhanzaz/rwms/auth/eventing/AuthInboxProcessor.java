@@ -13,6 +13,15 @@ import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Applies auth's own Kafka facts to a read-only shadow checkpoint with inbox deduplication.
+ *
+ * <p>The processor accepts only a strict, canonical envelope that exactly matches a local
+ * authoritative outbox and domain-event record. It records every delivery in an inbox, preserves
+ * per-aggregate version order, treats already-applied earlier versions as idempotent, and blocks
+ * an aggregate for operator reconciliation when it observes a gap. It owns no domain command or
+ * live aggregate mutation.
+ */
 @Service
 public class AuthInboxProcessor {
 
@@ -25,6 +34,14 @@ public class AuthInboxProcessor {
     private final AuthEventPayloadPolicy payloadPolicy;
     private final AuthEventingMetrics metrics;
 
+    /**
+     * Creates the processor and a strict mapper that rejects duplicate and unknown JSON fields.
+     *
+     * @param jdbc database access for inbox and shadow checkpoints
+     * @param objectMapper service JSON mapper from which the strict mapper is derived
+     * @param payloadPolicy authoritative safe-payload validator
+     * @param metrics eventing metrics recorder
+     */
     public AuthInboxProcessor(
             JdbcTemplate jdbc,
             ObjectMapper objectMapper,
@@ -41,6 +58,18 @@ public class AuthInboxProcessor {
         this.metrics = metrics;
     }
 
+    /**
+     * Validates and processes one serialized Kafka envelope for its expected aggregate family.
+     *
+     * <p>Processing is transactional: authority validation, deduplication, checkpoint changes,
+     * and inbox status settle together. A version gap quarantines the inbox row and blocks that
+     * aggregate; duplicate or older versions are safely recorded as processed without regressing
+     * the shadow projection.
+     *
+     * @param serializedEnvelope raw Kafka message bytes
+     * @param expectedAggregateType aggregate family bound to the consuming topic
+     * @throws AuthEventValidationException when strict or authoritative validation fails
+     */
     @Transactional
     public void process(byte[] serializedEnvelope, AuthAggregateType expectedAggregateType) {
         DomainEventEnvelopeV2<Map<String, Object>> envelope =

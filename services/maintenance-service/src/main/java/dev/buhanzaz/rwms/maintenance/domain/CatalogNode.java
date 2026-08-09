@@ -8,6 +8,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.util.UUID;
 
+/** JPA node in a maintenance catalog version; catalog commands own its position and references. */
 @Entity
 @Table(name = "catalog_node")
 public class CatalogNode {

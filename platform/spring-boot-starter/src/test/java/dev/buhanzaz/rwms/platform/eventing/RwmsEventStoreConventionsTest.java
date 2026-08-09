@@ -164,6 +164,43 @@ class RwmsEventStoreConventionsTest {
                 .isThrownBy(() -> YAML.readTree("$schema: [unterminated"));
     }
 
+    @Test
+    void deliveryTopicAllowsOnlyTheCanonicalOptionalEventsSegment() throws IOException {
+        assertDeliveryTopicAccepted("rwms.task-board.board-task.v1");
+        assertDeliveryTopicAccepted("rwms.logistics.rental-inquiry.events.v1");
+
+        assertDeliveryTopicRejected("rwms.logistics.rental-inquiry.audit.v1");
+        assertDeliveryTopicRejected("rwms.logistics.*.v1");
+        assertDeliveryTopicRejected("rwms.logistics.rental-inquiry.events.v1.assistant.dlt");
+    }
+
+    private static void assertDeliveryTopicAccepted(String topic) throws IOException {
+        assertThat(deliveryPolicySchema().validate(deliveryPolicy(topic)))
+                .as("canonical delivery topic %s", topic)
+                .isEmpty();
+    }
+
+    private static void assertDeliveryTopicRejected(String topic) throws IOException {
+        assertThat(deliveryPolicySchema().validate(deliveryPolicy(topic)))
+                .as("noncanonical delivery topic %s", topic)
+                .isNotEmpty();
+    }
+
+    private static com.networknt.schema.JsonSchema deliveryPolicySchema() throws IOException {
+        JsonNode schemaDocument =
+                YAML.readTree(Files.readString(findContract("event-delivery-policy-v1.schema.yaml")));
+        return JSON_SCHEMA_FACTORY.getSchema(schemaDocument);
+    }
+
+    private static JsonNode deliveryPolicy(String topic) {
+        var document = JSON.createObjectNode();
+        document.put("topic", topic);
+        document.put("consumerGroup", "assistant-booking-archive");
+        document.put("failureCategory", "VALIDATION");
+        document.put("failedDeliveryAttempt", 1);
+        return document;
+    }
+
     private static void assertSchemaAccepts(String fileName, String representativeDocument) throws IOException {
         JsonNode schemaDocument = YAML.readTree(Files.readString(findContract(fileName)));
         var schema = JSON_SCHEMA_FACTORY.getSchema(schemaDocument);

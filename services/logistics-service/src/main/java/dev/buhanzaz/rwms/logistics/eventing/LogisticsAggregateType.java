@@ -2,6 +2,9 @@ package dev.buhanzaz.rwms.logistics.eventing;
 
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 
+/**
+ * Enumerates aggregate families whose domain events are owned and published by logistics.
+ */
 public enum LogisticsAggregateType {
   RETURN(LogisticsDocumentType.RETURN, "rwms.logistics.return.v1"),
   SHIPMENT(LogisticsDocumentType.SHIPMENT, "rwms.logistics.shipment.v1"),

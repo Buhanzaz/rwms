@@ -10,6 +10,9 @@ import java.util.UUID;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+/**
+ * JPA entity that persists finding plan stage in the inventory-owned database.
+ */
 @Entity
 @Table(name = "finding_plan_stage")
 public class FindingPlanStage {

@@ -16,6 +16,7 @@ import lombok.NoArgsConstructor;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+/** Keeps the validated immutable source fact needed for deduplication, ordering evidence and gap recovery. */
 @Entity
 @Table(name = "analytics_source_fact")
 @Getter

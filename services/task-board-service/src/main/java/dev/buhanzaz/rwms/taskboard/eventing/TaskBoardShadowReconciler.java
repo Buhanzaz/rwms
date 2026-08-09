@@ -7,6 +7,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/** Reconciles the task-board Kafka shadow projection against authoritative local event history. */
 @Service
 @RequiredArgsConstructor
 public class TaskBoardShadowReconciler {

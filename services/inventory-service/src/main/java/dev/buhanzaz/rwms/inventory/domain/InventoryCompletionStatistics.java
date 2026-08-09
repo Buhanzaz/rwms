@@ -9,6 +9,9 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
 
+/**
+ * JPA entity that persists inventory completion statistics in the inventory-owned database.
+ */
 @Entity
 @Table(name = "inventory_completion_statistics")
 public class InventoryCompletionStatistics {

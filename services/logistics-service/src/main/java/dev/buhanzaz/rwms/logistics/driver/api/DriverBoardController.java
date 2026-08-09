@@ -35,6 +35,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * HTTP boundary for an authenticated driver board; it delegates scoped reads to the driver workflow services.
+ */
 @RestController
 @Validated
 @RequiredArgsConstructor

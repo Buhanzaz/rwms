@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.warehouse.service;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+/** Configures create-command replay retention and bounded cleanup cadence. */
 @ConfigurationProperties("rwms.warehouse.idempotency")
 public class WarehouseIdempotencyProperties {
   private Duration retention = Duration.ofDays(7);

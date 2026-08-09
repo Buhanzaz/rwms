@@ -1,5 +1,7 @@
 # RWMS Spring Boot Starter
 
+[Русская версия](README.ru.md)
+
 Technical auto-configuration shared by RWMS Spring services. The starter exposes
 `platform:technical-contracts`, but it does not contain domain DTOs, persistence
 models, repositories, security chains, outbox/inbox entities, secrets, or service
@@ -26,10 +28,10 @@ defined one. It does not add Actuator, a tracer, exporters, sampling, or naming
 policy. During HTTP processing the UUID correlation ID is available under the
 `correlationId` MDC key and is restored or cleared in a `finally` block.
 
-HTTP errors use the single `platform:technical-contracts` `ApiProblem` wire
-shape. Correlation metadata remains nested as `correlation`, and validation
-violations use the canonical immutable list; the starter does not emit a second
-flat Spring `ProblemDetail` payload.
+The optional RwmsProblemDetailFactory produces the
+`platform:technical-contracts` ApiProblem wire shape with nested correlation
+metadata and immutable validation violations. The starter does not install an
+exception handler or force a service's public error serialization.
 
 Production JPA safety cannot be disabled. With a `prod` or `production` profile,
 `spring.jpa.hibernate.ddl-auto` must be `validate`. Schema-mutating modes are
@@ -37,30 +39,16 @@ accepted only with an explicit `dev`, `development`, or `test` profile.
 The guard is classpath-conditional and remains absent from stateless applications
 that do not include Jakarta Persistence.
 
-## RabbitMQ retirement
+## RabbitMQ compatibility boundary
 
 The target Spring starter has no Spring AMQP dependency, auto-configuration,
 topology factory, listener policy, or Rabbit test runtime. New and existing
 Spring services use the Kafka/Cloud Stream integration below.
 
-RabbitMQ remains available only through the explicit Compose `media-compat-rabbit`
-profile for the unchanged legacy Go photo worker until its Stage 4 cutover. The
-broker retains the `rabbitmq` network alias expected by the worker, but no target
-Spring service depends on that compatibility service. It is not a reusable
-business-integration path.
-
-Start only that compatibility broker with:
-
-```shell
-docker compose --profile media-compat-rabbit up -d media-compat-rabbitmq
-```
-
-The unchanged worker connects with
-`PHOTO_RABBITMQ_URL=amqp://rwms:rwms_dev@rabbitmq:5672/`, consumes
-`PHOTO_PROCESS_QUEUE=repair.media.process`, and publishes results to
-`PHOTO_RESULT_QUEUE=repair.media.processed`. Credentials shown here are local
-Compose defaults only; managed environments supply external secrets. The worker
-itself remains legacy evidence and is not started by the root Compose file.
+An explicit Compose media compatibility profile may run a broker for the
+historical Go photo-worker evidence. No target Spring service depends on that
+profile, and it is not a reusable business-integration path. Its local runtime
+values belong in local environment configuration, never in source or a README.
 
 ## Kafka and Cloud Stream opt-in
 
@@ -102,3 +90,13 @@ unpublished in either case.
 Local Kafka runs from the Compose `core` profile as a single-node Kafka 4.3.1
 KRaft broker. Topic auto-creation is a local-development convenience only and
 must be disabled in managed environments.
+
+## Verification and safe changes
+
+    bash ./gradlew :platform:spring-boot-starter:test
+    bash ./gradlew :platform:spring-boot-starter:compileJava
+
+Do not add business-domain ownership to the starter. When changing an event
+publishing or security convention, update the canonical contract and focused
+owning-service tests; the service continues to own outbox, inbox, authorization,
+retry and recovery behavior.

@@ -17,6 +17,7 @@ import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskPlanningMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -39,9 +40,10 @@ class DriverBoardServiceTest {
   private final DriverTaskProcessor processor = mock(DriverTaskProcessor.class);
   private final DriverQueueScheduler scheduler = mock(DriverQueueScheduler.class);
   private final DriverTaskService driverTaskService = mock(DriverTaskService.class);
+  private final LogisticsTransactionLock transactionLock = mock(LogisticsTransactionLock.class);
   private final DriverBoardService service =
       new DriverBoardService(
-          tasks, dependencies, workflowStore, processor, scheduler, driverTaskService);
+          tasks, dependencies, workflowStore, processor, scheduler, driverTaskService, transactionLock);
 
   @BeforeEach
   void warehouseClock() {

@@ -4,6 +4,7 @@ import java.net.URI;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+/** Validated configuration for the maintenance private dependency boundary. */
 @ConfigurationProperties("rwms.maintenance.dependencies")
 public record MaintenanceDependencyProperties(
     boolean enabled,

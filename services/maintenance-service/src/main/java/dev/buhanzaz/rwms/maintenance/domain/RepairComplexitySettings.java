@@ -10,6 +10,7 @@ import jakarta.persistence.Version;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
+/** JPA warehouse-level thresholds that map repair complexity to planned duration. */
 @Entity
 @Table(name = "repair_complexity_settings")
 public class RepairComplexitySettings {

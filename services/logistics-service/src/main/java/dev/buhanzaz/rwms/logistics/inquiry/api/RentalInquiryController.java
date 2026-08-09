@@ -5,10 +5,17 @@ import static dev.buhanzaz.rwms.logistics.inquiry.api.RentalInquiryApiModels.*;
 import dev.buhanzaz.rwms.logistics.inquiry.service.ClientPresentationService;
 import dev.buhanzaz.rwms.logistics.inquiry.service.ManualBookingDraftService;
 import dev.buhanzaz.rwms.logistics.inquiry.service.RentalBookingAlertService;
+import dev.buhanzaz.rwms.logistics.inquiry.service.RentalInquiryCabinCatalogService;
+import dev.buhanzaz.rwms.logistics.inquiry.service.RentalInquiryCabinSearchService;
+import dev.buhanzaz.rwms.logistics.inquiry.service.RentalInquiryCabinSearchService.CabinSearchOutcome;
+import dev.buhanzaz.rwms.logistics.inquiry.service.RentalInquiryCabinSelectionService;
 import dev.buhanzaz.rwms.logistics.inquiry.service.RentalInquiryService;
 import dev.buhanzaz.rwms.logistics.inquiry.service.RentalSettingsService;
 import dev.buhanzaz.rwms.logistics.order.security.OrderAuthorizer;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Size;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -27,12 +34,18 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * HTTP boundary for authenticated rental-inquiry and manager booking operations.
+ */
 @RestController
 @Validated
 @RequestMapping("/api/logistics/v1")
 @RequiredArgsConstructor
 public class RentalInquiryController {
   private final RentalInquiryService inquiries;
+  private final RentalInquiryCabinSearchService cabinSearches;
+  private final RentalInquiryCabinCatalogService cabinCatalog;
+  private final RentalInquiryCabinSelectionService cabinSelections;
   private final ClientPresentationService presentations;
   private final RentalBookingAlertService bookingAlerts;
   private final RentalSettingsService settings;
@@ -60,12 +73,49 @@ public class RentalInquiryController {
     return inquiries.facets(access.readActor(jwt), inquiryId);
   }
 
+  /**
+   * Starts or resumes a write-authorized cabin search under a subject-scoped public idempotency
+   * key. Only a frozen completed receipt is marked as replayed.
+   */
   @PostMapping("/rental-inquiries/{inquiryId}/cabin-searches")
-  public CabinSearchResponse search(
+  public ResponseEntity<CabinSearchResponse> search(
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID inquiryId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody CabinSearchRequest request) {
-    return inquiries.search(access.readActor(jwt), inquiryId, request);
+    CabinSearchOutcome result =
+        cabinSearches.search(access.writeActor(jwt), inquiryId, idempotencyKey, request);
+    ResponseEntity.BodyBuilder response = ResponseEntity.ok();
+    if (result.replayed()) response.header("Idempotency-Replayed", "true");
+    return response.body(result.response());
+  }
+
+  @GetMapping("/rental-inquiries/{inquiryId}/cabin-selection")
+  public CabinSelectionResponse selection(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID inquiryId) {
+    return cabinSelections.get(access.readActor(jwt), inquiryId);
+  }
+
+  @PutMapping("/rental-inquiries/{inquiryId}/cabin-selection")
+  public CabinSelectionResponse replaceSelection(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID inquiryId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody CabinSelectionRequest request) {
+    return cabinSelections.replace(
+        access.writeActor(jwt), inquiryId, idempotencyKey, request);
+  }
+
+  @GetMapping("/rental-inquiries/{inquiryId}/cabin-catalog")
+  public CabinCatalogResponse cabinCatalog(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID inquiryId,
+      @RequestParam UUID warehouseId,
+      @RequestParam(defaultValue = "") @Size(max = 255) String query,
+      @RequestParam(defaultValue = "0") @Min(0) int page,
+      @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+    return cabinCatalog.search(
+        access.readActor(jwt), inquiryId, warehouseId, query, page, size);
   }
 
   @PostMapping("/rental-inquiries/{inquiryId}/cabin-availability")

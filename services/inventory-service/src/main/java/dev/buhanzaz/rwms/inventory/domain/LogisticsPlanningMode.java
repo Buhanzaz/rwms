@@ -2,6 +2,9 @@ package dev.buhanzaz.rwms.inventory.domain;
 
 import java.time.LocalDate;
 
+/**
+ * Enumerates permitted logistics planning mode values in the inventory persistent workflow state.
+ */
 public enum LogisticsPlanningMode {
   AUTO,
   FIXED_DATE;

@@ -13,6 +13,7 @@ import java.time.OffsetDateTime;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+/** JPA repair-plan stage retained in the ordered plan of a maintenance estimate. */
 @Entity
 @Table(name = "estimate_plan_stage")
 public class EstimatePlanStage {

@@ -15,6 +15,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
+/** Writes authentication and authorization failures in the same Problem Details form as controllers. */
 @Component
 public class WarehouseSecurityProblemWriter {
   private final ObjectMapper objectMapper;

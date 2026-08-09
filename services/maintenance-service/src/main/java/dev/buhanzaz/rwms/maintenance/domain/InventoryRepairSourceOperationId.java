@@ -6,6 +6,7 @@ import java.io.Serializable;
 import java.util.Objects;
 import java.util.UUID;
 
+/** Composite persistence identity for InventoryRepairSourceOperationId. */
 @Embeddable
 public class InventoryRepairSourceOperationId implements Serializable {
   @Column(name = "inventory_id", nullable = false)

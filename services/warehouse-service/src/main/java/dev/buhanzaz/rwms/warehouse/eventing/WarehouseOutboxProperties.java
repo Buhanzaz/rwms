@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.util.UUID;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+/** Configures relay cadence, lease fencing and the outbox relay instance identity. */
 @ConfigurationProperties("rwms.warehouse.eventing.outbox")
 public class WarehouseOutboxProperties {
   private Duration relayDelay = Duration.ofSeconds(1);

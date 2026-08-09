@@ -8,6 +8,9 @@ import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.ReportingPolicy;
 
+/**
+ * Maps equipment-movement task persistence state to transport responses without applying a transition.
+ */
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface EquipmentMovementTaskResponseMapper {
   @Mapping(target = "lines", ignore = true)

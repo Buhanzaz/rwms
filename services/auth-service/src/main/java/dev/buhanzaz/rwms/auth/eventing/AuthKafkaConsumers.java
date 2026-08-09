@@ -8,17 +8,36 @@ import org.springframework.messaging.Message;
 import org.springframework.kafka.listener.CommonErrorHandler;
 import org.springframework.kafka.listener.CommonContainerStoppingErrorHandler;
 
+/**
+ * Declares fail-closed Kafka consumers for auth's own authoritative fact topics.
+ *
+ * <p>Consumers use a bounded local retry for transient processing failures. Invalid input and
+ * exhausted attempts become sanitized DLT metadata; this component never exposes a rejected
+ * source record through the DLT path.
+ */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")
 public class AuthKafkaConsumers {
 
     private static final long[] BACKOFF_MILLIS = {0, 1_000, 2_000, 4_000};
 
+    /**
+     * Stops a Kafka container for failures that escape the consumer function.
+     *
+     * @return fail-closed error handler
+     */
     @Bean
     CommonErrorHandler authFailClosedConsumerErrorHandler() {
         return new CommonContainerStoppingErrorHandler();
     }
 
+    /**
+     * Creates the consumer for user-authorization fact records.
+     *
+     * @param processor authoritative inbox processor
+     * @param dlt publisher of sanitized rejection metadata
+     * @return bounded-retry user-authorization consumer
+     */
     @Bean
     Consumer<Message<byte[]>> authUserAuthorizationEvents(
             AuthInboxProcessor processor, AuthSanitizedDltPublisher dlt) {
@@ -26,6 +45,13 @@ public class AuthKafkaConsumers {
                 message.getPayload(), AuthAggregateType.USER_AUTHORIZATION, processor, dlt);
     }
 
+    /**
+     * Creates the consumer for worker-access fact records.
+     *
+     * @param processor authoritative inbox processor
+     * @param dlt publisher of sanitized rejection metadata
+     * @return bounded-retry worker-access consumer
+     */
     @Bean
     Consumer<Message<byte[]>> authWorkerAccessEvents(
             AuthInboxProcessor processor, AuthSanitizedDltPublisher dlt) {

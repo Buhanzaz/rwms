@@ -8,6 +8,9 @@ import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
+/**
+ * Immutable-ended interval that attributes an entry budget and active time to one worker group.
+ */
 @Entity
 @Table(name = "group_kpi_responsibility_segment")
 public class GroupKpiResponsibilitySegment extends AbstractVersionedEntity {

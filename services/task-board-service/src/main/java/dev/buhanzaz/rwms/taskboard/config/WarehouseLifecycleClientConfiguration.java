@@ -7,6 +7,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
+/** Configures the private client used for warehouse admission, timezone, and readiness calls. */
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(WarehouseLifecycleClientProperties.class)
 public class WarehouseLifecycleClientConfiguration {

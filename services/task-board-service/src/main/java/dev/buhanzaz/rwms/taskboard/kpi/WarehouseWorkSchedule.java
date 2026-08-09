@@ -13,6 +13,9 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
+/**
+ * Immutable effective warehouse schedule used to split and measure working time in its timezone.
+ */
 public final class WarehouseWorkSchedule {
   private final ZoneId zoneId;
   private final LocalTime shiftStart;

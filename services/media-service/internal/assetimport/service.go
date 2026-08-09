@@ -19,6 +19,8 @@ type Service struct {
 	repository Repository
 }
 
+// NewService creates the command-side import boundary over one durable
+// repository.
 func NewService(repository Repository) (*Service, error) {
 	if repository == nil {
 		return nil, fmt.Errorf("asset import repository is required")
@@ -26,6 +28,8 @@ func NewService(repository Repository) (*Service, error) {
 	return &Service{repository: repository}, nil
 }
 
+// Preflight validates, canonicalizes, and idempotently stores a remote-source
+// enumeration request without fetching the remote bytes.
 func (service *Service) Preflight(ctx context.Context, command CreateCommand) (Job, bool, error) {
 	if err := validateCreateCommand(command); err != nil {
 		return Job{}, false, err
@@ -34,6 +38,7 @@ func (service *Service) Preflight(ctx context.Context, command CreateCommand) (J
 	return service.repository.CreateAssetImport(ctx, command)
 }
 
+// Get returns the private durable state of one asset-import job.
 func (service *Service) Get(ctx context.Context, jobID uuid.UUID) (Job, error) {
 	if jobID == uuid.Nil {
 		return Job{}, ErrNotFound
@@ -41,6 +46,8 @@ func (service *Service) Get(ctx context.Context, jobID uuid.UUID) (Job, error) {
 	return service.repository.GetAssetImport(ctx, jobID)
 }
 
+// Activate validates CABIN bindings and idempotently queues their files for
+// durable worker ingestion.
 func (service *Service) Activate(ctx context.Context, command ActivateCommand) (Job, bool, error) {
 	if err := validateActivateCommand(command); err != nil {
 		return Job{}, false, err
@@ -49,6 +56,7 @@ func (service *Service) Activate(ctx context.Context, command ActivateCommand) (
 	return service.repository.ActivateAssetImport(ctx, command)
 }
 
+// Retry idempotently requeues a permitted terminal import phase.
 func (service *Service) Retry(ctx context.Context, command RetryCommand) (Job, bool, error) {
 	if command.JobID == uuid.Nil || command.IdempotencyKey == uuid.Nil || !validSHA256(command.RequestSHA256) {
 		return Job{}, false, ErrConflict
@@ -94,6 +102,8 @@ func ParsePublicURL(raw string) (string, error) {
 	return key, nil
 }
 
+// CanonicalPreflightSHA returns the stable request fingerprint for a source
+// preflight command, independent of source ordering.
 func CanonicalPreflightSHA(assetImportID, warehouseID uuid.UUID, sources []Source) string {
 	canonical := canonicalSources(sources)
 	value := make([]string, 0, len(canonical)+2)
@@ -104,6 +114,8 @@ func CanonicalPreflightSHA(assetImportID, warehouseID uuid.UUID, sources []Sourc
 	return fingerprint(strings.Join(value, "\n"))
 }
 
+// CanonicalActivationSHA returns the stable request fingerprint for CABIN
+// bindings, independent of their input ordering.
 func CanonicalActivationSHA(jobID uuid.UUID, bindings []ActivationBinding) string {
 	canonical := canonicalBindings(bindings)
 	value := make([]string, 0, len(canonical)+1)
@@ -114,10 +126,13 @@ func CanonicalActivationSHA(jobID uuid.UUID, bindings []ActivationBinding) strin
 	return fingerprint(strings.Join(value, "\n"))
 }
 
+// CanonicalRetrySHA returns the stable request fingerprint for one retry key.
 func CanonicalRetrySHA(jobID, key uuid.UUID) string {
 	return fingerprint(jobID.String() + "\n" + key.String())
 }
 
+// CanonicalReplaceSourcesSHA returns the stable fingerprint for selected
+// source-key replacements, independent of input ordering.
 func CanonicalReplaceSourcesSHA(jobID uuid.UUID, replacements []SourceReplacement) string {
 	canonical := canonicalReplacements(replacements)
 	value := make([]string, 0, len(canonical)+1)
@@ -215,6 +230,8 @@ func canonicalReplacements(replacements []SourceReplacement) []SourceReplacement
 	return result
 }
 
+// ValidYandexPublicKey reports whether value is a safe 14-character public
+// Yandex.Disk key accepted for private persistence.
 func ValidYandexPublicKey(value string) bool {
 	if len(value) != 14 {
 		return false

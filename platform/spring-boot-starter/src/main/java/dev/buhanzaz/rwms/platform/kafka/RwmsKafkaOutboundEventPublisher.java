@@ -20,6 +20,7 @@ import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/** Publishes an already committed canonical V2 outbox fact with strict envelope/payload safety and broker acknowledgement. */
 public class RwmsKafkaOutboundEventPublisher {
 
     private final StreamBridge streamBridge;
@@ -53,6 +54,10 @@ public class RwmsKafkaOutboundEventPublisher {
         properties.validate();
     }
 
+    /**
+     * Serializes a typed canonical V2 envelope and delegates to the same validation and broker
+     * acknowledgement path used by already serialized transactional-outbox payloads.
+     */
     public void publish(String destination, DomainEventEnvelopeV2<?> envelope) {
         if (envelope == null) {
             throw new IllegalArgumentException("event envelope is required");
@@ -68,6 +73,10 @@ public class RwmsKafkaOutboundEventPublisher {
         publishSerializedV2(destination, destination, serializedPayload);
     }
 
+    /**
+     * Validates canonical serialized V2 data, binds its aggregate ID as the Kafka key and fails
+     * if the configured binding, destination or broker acknowledgement is not trustworthy.
+     */
     public void publishSerializedV2(
             String bindingName, String destination, byte[] serializedPayload) {
         if (bindingName == null || bindingName.isBlank()) {

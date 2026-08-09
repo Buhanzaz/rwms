@@ -16,6 +16,7 @@ import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
 import java.util.LinkedHashMap;
@@ -31,6 +32,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Builds the authenticated driver board from logistics-owned task state and assignment scope.
+ */
 @Service
 @RequiredArgsConstructor
 public class DriverBoardService {
@@ -44,6 +48,7 @@ public class DriverBoardService {
   private final DriverTaskProcessor processor;
   private final DriverQueueScheduler scheduler;
   private final DriverTaskService driverTaskService;
+  private final LogisticsTransactionLock transactionLock;
 
   public DriverBoardResponse board(UUID warehouseId) {
     LogisticsDependencyGateway.DriverBoardSnapshot board =
@@ -87,7 +92,7 @@ public class DriverBoardService {
   @Transactional
   public DriverBoardCardResponse move(
       UUID externalTaskId, MoveDriverBoardTaskRequest request) {
-    tasks.acquireTransactionLock("driver-queue:" + request.warehouseId());
+    transactionLock.acquire("driver-queue:" + request.warehouseId());
     DriverLogisticsTask local =
         tasks.findForUpdateByExternalTaskId(externalTaskId)
             .orElseThrow(
@@ -159,7 +164,7 @@ public class DriverBoardService {
       UUID idempotencyKey,
       UUID repairId,
       ScheduleCapitalRepairRequest request) {
-    tasks.acquireTransactionLock("driver-queue:" + request.warehouseId());
+    transactionLock.acquire("driver-queue:" + request.warehouseId());
     DriverTaskService.CreateResult created =
         driverTaskService.createCapitalMovement(
             actorSubjectId,
@@ -178,7 +183,7 @@ public class DriverBoardService {
       UUID repairId,
       ScheduleCapitalRepairRequest request,
       AdmissionTicket admission) {
-    tasks.acquireTransactionLock("driver-queue:" + request.warehouseId());
+    transactionLock.acquire("driver-queue:" + request.warehouseId());
     DriverTaskService.CreateResult created =
         driverTaskService.createCapitalMovement(
             actorSubjectId,
@@ -227,7 +232,7 @@ public class DriverBoardService {
   @Transactional
   public void returnToCapitalRepairs(
       UUID externalTaskId, ReturnCapitalRepairRequest request) {
-    tasks.acquireTransactionLock("driver-queue:" + request.warehouseId());
+    transactionLock.acquire("driver-queue:" + request.warehouseId());
     DriverLogisticsTask local =
         tasks.findForUpdateByExternalTaskId(externalTaskId)
             .orElseThrow(

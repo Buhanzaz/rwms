@@ -13,6 +13,10 @@ import org.springframework.core.env.Environment;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.stereotype.Component;
 
+/**
+ * Coordinates prepare/remote/finalize worker credential effects without holding a database
+ * transaction across the auth-service call.
+ */
 @Component
 public class WorkerCredentialOperationCoordinator {
   private static final Logger LOGGER =

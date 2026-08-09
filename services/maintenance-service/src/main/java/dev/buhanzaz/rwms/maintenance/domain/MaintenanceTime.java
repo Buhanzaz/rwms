@@ -4,6 +4,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 
+/** Normalizes maintenance timestamps to UTC and PostgreSQL microsecond precision. */
 final class MaintenanceTime {
   private MaintenanceTime() {}
 

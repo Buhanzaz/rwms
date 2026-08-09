@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.maintenance.service;
 
+/** Signals a maintenance service-boundary failure for MaintenanceConflict. */
 public class MaintenanceConflictException extends RuntimeException {
   private final String code;
 

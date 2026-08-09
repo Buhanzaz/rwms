@@ -106,7 +106,7 @@ class InventorySourcePolicyTest {
   }
 
   @Test
-  void acceptsLowLevelSqlOnlyInAnExactTechnicalAdapter() throws Exception {
+  void acceptsLowLevelSqlOnlyInExactTechnicalAdapters() throws Exception {
     write(
         "src/main/java/dev/buhanzaz/rwms/inventory/eventing/InventoryEventStore.java",
         """
@@ -118,6 +118,36 @@ class InventorySourcePolicyTest {
           private final JdbcTemplate jdbc;
 
           InventoryEventStore(JdbcTemplate jdbc) {
+            this.jdbc = jdbc;
+          }
+        }
+        """);
+    write(
+        "src/main/java/dev/buhanzaz/rwms/inventory/eventing/InventoryAssetInboxStore.java",
+        """
+        package dev.buhanzaz.rwms.inventory.eventing;
+
+        import org.springframework.jdbc.core.JdbcTemplate;
+
+        final class InventoryAssetInboxStore {
+          private final JdbcTemplate jdbc;
+
+          InventoryAssetInboxStore(JdbcTemplate jdbc) {
+            this.jdbc = jdbc;
+          }
+        }
+        """);
+    write(
+        "src/main/java/dev/buhanzaz/rwms/inventory/persistence/InventoryPostgresJsonbCanonicalizer.java",
+        """
+        package dev.buhanzaz.rwms.inventory.persistence;
+
+        import org.springframework.jdbc.core.JdbcTemplate;
+
+        final class InventoryPostgresJsonbCanonicalizer {
+          private final JdbcTemplate jdbc;
+
+          InventoryPostgresJsonbCanonicalizer(JdbcTemplate jdbc) {
             this.jdbc = jdbc;
           }
         }

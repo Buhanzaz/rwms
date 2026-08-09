@@ -1,5 +1,7 @@
 # RWMS Contracts
 
+[Русская версия](README.ru.md)
+
 This directory is the canonical repository boundary for versioned contracts
 exchanged between independently deployable RWMS components. It contains
 transport schemas and contract documentation, not shared domain models or

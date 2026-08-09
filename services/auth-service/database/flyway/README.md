@@ -1,5 +1,7 @@
 # Auth Flyway adoption at version 2
 
+[Русская версия](README.ru.md)
+
 `V2__auth_schema.sql` installs a new empty auth database. Never run `baseline`
 for a new database; `migrate` applies V2 and creates `flyway_schema_history`.
 

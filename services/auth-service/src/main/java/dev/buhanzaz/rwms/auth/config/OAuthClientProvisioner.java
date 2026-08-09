@@ -29,6 +29,15 @@ import org.springframework.security.oauth2.server.authorization.settings.TokenSe
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 
+/**
+ * Reconciles declarative OAuth client configuration with the authorization-server database at startup.
+ *
+ * <p>The provisioner validates every client before entering its transaction, acquires a PostgreSQL
+ * advisory transaction lock when available, and then applies only the desired managed registrations.
+ * It uses a revision and a deterministic configuration fingerprint to make security-policy changes
+ * explicit. Removing a managed client declaration is rejected; disabling it is the deliberate,
+ * non-destructive way to stop new protocol use.</p>
+ */
 @Component
 public class OAuthClientProvisioner implements ApplicationRunner {
 
@@ -46,6 +55,21 @@ public class OAuthClientProvisioner implements ApplicationRunner {
     private final AuthProperties authProperties;
     private final OAuthClientProperties properties;
 
+    /**
+     * Creates a provisioner over the unfiltered JDBC repository.
+     *
+     * <p>The direct repository is intentional: reconciliation must be able to inspect historical
+     * disabled rows, while runtime protocol lookups use the filtered repository exposed elsewhere in
+     * this configuration.</p>
+     *
+     * @param clients raw persistent client repository
+     * @param passwordEncoder encoder used to retain or safely replace a configured client secret
+     * @param jdbc database access used for the advisory lock and authorization revocation
+     * @param transactions transaction boundary for an all-or-nothing reconciliation
+     * @param environment environment containing service-client secrets
+     * @param authProperties auth profile settings that control development-only fallbacks
+     * @param properties declarative OAuth client registrations
+     */
     public OAuthClientProvisioner(
             @Qualifier("jdbcRegisteredClientRepository") RegisteredClientRepository clients,
             PasswordEncoder passwordEncoder,
@@ -63,6 +87,15 @@ public class OAuthClientProvisioner implements ApplicationRunner {
         this.properties = properties;
     }
 
+    /**
+     * Validates and reconciles every managed OAuth client before the application becomes available.
+     *
+     * <p>A requested authorization revocation is recorded at its revision and removes persisted
+     * grants/consents within the same transaction. This ensures a revision cannot silently leave
+     * previously authorized sessions active when the configuration explicitly requires revocation.</p>
+     *
+     * @param args startup arguments; they do not affect the managed client declarations
+     */
     @Override
     public void run(ApplicationArguments args) {
         List<ValidatedClient> validated = validateConfiguration();

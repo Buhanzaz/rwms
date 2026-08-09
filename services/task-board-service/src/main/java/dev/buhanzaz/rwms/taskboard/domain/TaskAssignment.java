@@ -12,6 +12,7 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
 
+/** Versioned assignment of a route entry to a worker group and, optionally, an exact worker. */
 @Entity
 @Table(
     name = "task_assignment",

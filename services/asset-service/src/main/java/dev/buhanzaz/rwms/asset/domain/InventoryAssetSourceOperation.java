@@ -8,6 +8,9 @@ import jakarta.persistence.Version;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 
+/**
+ * JPA entity that persists inventory asset source operation in the asset-owned database.
+ */
 @Entity
 @Table(name = "inventory_asset_source_operation")
 public class InventoryAssetSourceOperation {

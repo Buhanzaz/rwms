@@ -944,7 +944,9 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
     put:
       operationId: updateOrder
-      description: Updates only the existing client of an editable DRAFT order.
+      description: >-
+        Replaces the selected client and complete delivery draft under expectedVersion.
+        A SAVED order is editable only while its linked shipment remains an untouched draft.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -980,7 +982,8 @@ paths:
     post:
       operationId: saveOrder
       description: >-
-        Locks a non-empty DRAFT order whose complete rental-duration vector is configured. Saving
+        Locks a non-empty DRAFT order whose complete rental-duration vector, delivery address,
+        coordinate pair, contact phone and non-empty acceptable-date list are configured. Saving
         does not implicitly choose a shipment batch; create one explicitly with selected unitIds.
       responses:
         "200": { $ref: "#/components/responses/OrderDetail" }
@@ -1046,7 +1049,8 @@ paths:
       operationId: createOrderRentalShipment
       description: >-
         Creates one DRAFT shipment for exactly the selected unitIds. The driver and calendar date
-        are saved immediately; preparation starts only when the shipment plan command is called.
+        are saved immediately, and the date must be one of the configured acceptable delivery
+        dates when that list is non-empty. Preparation starts only when the shipment plan command is called.
         A cabin cannot be selected by another non-cancelled shipment. When this shipment reaches
         SHIPPED, logistics creates one cabin-level return document per shipped line, each linked by
         rentalShipmentId, so return dates and drivers can be changed independently.
@@ -1115,6 +1119,87 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/logistics/v1/clients/{clientId}:
+    parameters:
+      - name: clientId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getOrderClient
+      description: >-
+        Returns a client only when the caller can see at least one of the
+        client's orders, owns the client as its responsible manager, or has a
+        global logistics view. An inaccessible client is not disclosed.
+      responses:
+        "200": { $ref: "#/components/responses/OrderClient" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/logistics/v1/clients/{clientId}/orders:
+    parameters:
+      - name: clientId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: listOrderClientOrders
+      description: >-
+        Returns the server-paginated subset of this client's orders visible to
+        the authenticated caller. The client itself is not disclosed when no
+        visibility rule applies.
+      parameters:
+        - {
+            name: page,
+            in: query,
+            schema: { type: integer, minimum: 0, default: 0 },
+          }
+        - {
+            name: size,
+            in: query,
+            schema: { type: integer, minimum: 1, maximum: 100, default: 25 },
+          }
+        - {
+            name: sort,
+            in: query,
+            schema:
+              {
+                type: string,
+                enum: [number, client, manager, warehouse, status, createdAt, updatedAt],
+                default: updatedAt,
+              },
+          }
+        - {
+            name: direction,
+            in: query,
+            schema: { type: string, enum: [ASC, DESC], default: DESC },
+          }
+        - name: status
+          in: query
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              { type: string, enum: [DRAFT, SAVED, FULFILLED, CLOSED, CANCELLED] }
+        - name: warehouseId
+          in: query
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string, format: uuid }
+        - { name: createdFrom, in: query, schema: { type: string, format: date-time } }
+        - { name: createdTo, in: query, schema: { type: string, format: date-time } }
+      responses:
+        "200":
+          description: Visible orders for this client.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrderPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/logistics/v1/orders/{orderId}/warehouse:
     parameters:
       - $ref: "#/components/parameters/OrderId"
@@ -1354,8 +1439,12 @@ paths:
     post:
       operationId: searchRentalInquiryCabins
       description: >-
-        Searches currently rentable cabins by exact structured filters supplied by the LLM tool call.
-        Every result is FREE; category is an independent exact filter and may be omitted.
+        Write-authorized, subject-scoped idempotent search for currently rentable cabins by exact
+        structured filters supplied by the LLM tool call. Every result is FREE; category is an
+        independent exact filter and may be omitted. An identical retry resumes the exact frozen
+        asset command; reusing the key for another inquiry, warehouse, or group set is a conflict.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -1363,10 +1452,92 @@ paths:
             schema: { $ref: "#/components/schemas/CabinSearchRequest" }
       responses:
         "200":
-          description: Rentable cabins grouped in request order.
+          description: Rentable cabins grouped in request order, or the frozen successful replay.
+          headers:
+            Idempotency-Replayed:
+              required: false
+              description: Present with value `true` when the response came from the frozen completed receipt.
+              schema: { type: string, const: "true" }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CabinSearchResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/rental-inquiries/{inquiryId}/cabin-selection:
+    parameters:
+      - $ref: "#/components/parameters/InquiryId"
+    get:
+      operationId: getRentalInquiryCabinSelection
+      description: >-
+        Returns the inquiry's authoritative asset-owned chat holds and current
+        cabin snapshots. An empty released selection has a null expiresAt.
+      responses:
+        "200":
+          description: Current authoritative chat selection.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CabinSelectionResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+    put:
+      operationId: replaceRentalInquiryCabinSelection
+      description: >-
+        Replaces the full asset-owned chat selection using the configured hold
+        duration. The empty list releases every inquiry hold immediately. The
+        server durably freezes the exact downstream command and a non-null
+        retry deadline before calling asset-service. A replace uses that same
+        deadline as its public hold expiry; a release keeps the public expiry
+        null but remains recoverable after its persisted retry deadline. An
+        identical Idempotency-Key retry reuses the frozen bytes and returns the
+        frozen successful response without another asset mutation; changed
+        reuse is a conflict.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReplaceCabinSelectionRequest" }
+      responses:
+        "200":
+          description: Replaced or idempotently replayed authoritative selection.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CabinSelectionResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/rental-inquiries/{inquiryId}/cabin-catalog:
+    parameters:
+      - $ref: "#/components/parameters/InquiryId"
+    get:
+      operationId: searchRentalInquiryCabinCatalog
+      description: >-
+        Performs a bounded, read-only cabin fact lookup by number, type, or
+        other catalog text. It never creates, extends, or releases holds.
+      parameters:
+        - name: warehouseId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - { name: query, in: query, schema: { type: string, default: "", maxLength: 255 } }
+        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        "200":
+          description: Bounded cabin catalog page; no hold side effect.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CabinCatalogPage" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -2795,7 +2966,7 @@ components:
         reason: { type: string, minLength: 1, maxLength: 500 }
     ClientType:
       type: string
-      enum: [INDIVIDUAL, LEGAL_ENTITY]
+      enum: [INDIVIDUAL, SOLE_PROPRIETOR, LEGAL_ENTITY]
     NewClientInput:
       type: object
       additionalProperties: false
@@ -2803,8 +2974,25 @@ components:
       properties:
         clientType: { $ref: "#/components/schemas/ClientType" }
         displayName: { type: string, minLength: 1, maxLength: 512 }
-        phone: { type: string, minLength: 1, maxLength: 32 }
+        phone:
+          type: string
+          minLength: 7
+          maxLength: 32
+          pattern: '^(?:\+|8)[0-9() .-]{6,31}$'
+          description: Human-formatted phone normalized to canonical E.164 before storage.
+        contactPerson: { type: [string, "null"], minLength: 1, maxLength: 255 }
         email: { type: [string, "null"], format: email, maxLength: 320 }
+        comment: { type: [string, "null"], minLength: 1, maxLength: 2000 }
+        source: { type: [string, "null"], minLength: 1, maxLength: 255 }
+      allOf:
+        - if:
+            properties:
+              clientType: { enum: [SOLE_PROPRIETOR, LEGAL_ENTITY] }
+            required: [clientType]
+          then:
+            required: [contactPerson]
+            properties:
+              contactPerson: { type: string, minLength: 1, maxLength: 255 }
     CreateClientRequest:
       type: object
       additionalProperties: false
@@ -2812,14 +3000,57 @@ components:
       properties:
         clientType: { $ref: "#/components/schemas/ClientType" }
         displayName: { type: string, minLength: 1, maxLength: 512 }
-        phone: { type: string, minLength: 1, maxLength: 32 }
+        phone:
+          type: string
+          minLength: 7
+          maxLength: 32
+          pattern: '^(?:\+|8)[0-9() .-]{6,31}$'
+          description: Human-formatted phone normalized to canonical E.164 before storage.
+        contactPerson: { type: [string, "null"], minLength: 1, maxLength: 255 }
         email: { type: [string, "null"], format: email, maxLength: 320 }
+        comment: { type: [string, "null"], minLength: 1, maxLength: 2000 }
+        source: { type: [string, "null"], minLength: 1, maxLength: 255 }
+      allOf:
+        - if:
+            properties:
+              clientType: { enum: [SOLE_PROPRIETOR, LEGAL_ENTITY] }
+            required: [clientType]
+          then:
+            required: [contactPerson]
+            properties:
+              contactPerson: { type: string, minLength: 1, maxLength: 255 }
     CreateOrderRequest:
       type: object
       additionalProperties: false
       properties:
         clientId: { type: string, format: uuid }
         newClient: { $ref: "#/components/schemas/NewClientInput" }
+        deliveryAddress: { type: [string, "null"], minLength: 1, maxLength: 1000 }
+        latitude:
+          { type: [number, "null"], format: double, minimum: -90, maximum: 90 }
+        longitude:
+          { type: [number, "null"], format: double, minimum: -180, maximum: 180 }
+        contactPhone:
+          type: [string, "null"]
+          minLength: 7
+          maxLength: 32
+          pattern: '^(?:\+|8)[0-9() .-]{6,31}$'
+          description: Human-formatted international or Russian trunk phone; normalized to canonical E.164 before storage.
+        comment: { type: [string, "null"], minLength: 1, maxLength: 2000 }
+        acceptableDeliveryDates:
+          type: [array, "null"]
+          maxItems: 31
+          uniqueItems: true
+          items: { type: string, format: date }
+      allOf:
+        - if:
+            required: [latitude]
+          then:
+            required: [longitude]
+        - if:
+            required: [longitude]
+          then:
+            required: [latitude]
       oneOf:
         - required: [clientId]
           not: { required: [newClient] }
@@ -2832,6 +3063,32 @@ components:
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         clientId: { type: string, format: uuid }
+        deliveryAddress: { type: [string, "null"], minLength: 1, maxLength: 1000 }
+        latitude:
+          { type: [number, "null"], format: double, minimum: -90, maximum: 90 }
+        longitude:
+          { type: [number, "null"], format: double, minimum: -180, maximum: 180 }
+        contactPhone:
+          type: [string, "null"]
+          minLength: 7
+          maxLength: 32
+          pattern: '^(?:\+|8)[0-9() .-]{6,31}$'
+          description: Human-formatted international or Russian trunk phone; normalized to canonical E.164 before storage.
+        comment: { type: [string, "null"], minLength: 1, maxLength: 2000 }
+        acceptableDeliveryDates:
+          type: [array, "null"]
+          maxItems: 31
+          uniqueItems: true
+          items: { type: string, format: date }
+      allOf:
+        - if:
+            required: [latitude]
+          then:
+            required: [longitude]
+        - if:
+            required: [longitude]
+          then:
+            required: [latitude]
     SelectOrderWarehouseRequest:
       type: object
       additionalProperties: false
@@ -2918,14 +3175,43 @@ components:
     OrderClient:
       type: object
       additionalProperties: false
-      required: [id, version, type, displayName, phone, email, createdAt, updatedAt]
+      required:
+        [
+          id,
+          version,
+          type,
+          displayName,
+          phone,
+          contactPerson,
+          email,
+          responsibleManagerId,
+          responsibleManagerDisplayName,
+          comment,
+          source,
+          createdAt,
+          updatedAt,
+        ]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         type: { $ref: "#/components/schemas/ClientType" }
         displayName: { type: string }
-        phone: { type: string, maxLength: 32 }
+        phone:
+          description: Null only for historical clients created before phone became mandatory.
+          type: [string, "null"]
+          maxLength: 16
+          pattern: '^\+[1-9][0-9]{6,14}$'
+        contactPerson: { type: [string, "null"], maxLength: 255 }
         email: { type: [string, "null"], format: email, maxLength: 320 }
+        responsibleManagerId: { type: string, format: uuid }
+        responsibleManagerDisplayName:
+          description: >-
+            Authenticated manager display-name snapshot. Null for historical
+            clients whose creator subject was backfilled without inventing a name.
+          type: [string, "null"]
+          maxLength: 255
+        comment: { type: [string, "null"], maxLength: 2000 }
+        source: { type: [string, "null"], maxLength: 255 }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
     ClientPage:
@@ -2955,6 +3241,12 @@ components:
           createdBy,
           createdByDisplayName,
           warehouseId,
+          deliveryAddress,
+          latitude,
+          longitude,
+          contactPhone,
+          comment,
+          acceptableDeliveryDates,
           unitCount,
           createdAt,
           updatedAt,
@@ -2971,6 +3263,22 @@ components:
         createdBy: { type: string, format: uuid }
         createdByDisplayName: { type: string }
         warehouseId: { type: [string, "null"], format: uuid }
+        deliveryAddress: { type: [string, "null"], maxLength: 1000 }
+        latitude:
+          { type: [number, "null"], format: double, minimum: -90, maximum: 90 }
+        longitude:
+          { type: [number, "null"], format: double, minimum: -180, maximum: 180 }
+        contactPhone:
+          type: [string, "null"]
+          maxLength: 16
+          pattern: '^\+[1-9][0-9]{6,14}$'
+          description: Canonical E.164 contact phone stored by logistics.
+        comment: { type: [string, "null"], maxLength: 2000 }
+        acceptableDeliveryDates:
+          type: array
+          maxItems: 31
+          uniqueItems: true
+          items: { type: string, format: date }
         unitCount: { type: integer, format: int64, minimum: 0 }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
@@ -3099,10 +3407,17 @@ components:
           createdBy,
           createdByDisplayName,
           warehouseId,
+          deliveryAddress,
+          latitude,
+          longitude,
+          contactPhone,
+          comment,
+          acceptableDeliveryDates,
           unitCount,
           createdAt,
           updatedAt,
           units,
+          movements,
           permissions,
         ]
       properties:
@@ -3117,12 +3432,74 @@ components:
         createdBy: { type: string, format: uuid }
         createdByDisplayName: { type: string }
         warehouseId: { type: [string, "null"], format: uuid }
+        deliveryAddress: { type: [string, "null"], maxLength: 1000 }
+        latitude:
+          { type: [number, "null"], format: double, minimum: -90, maximum: 90 }
+        longitude:
+          { type: [number, "null"], format: double, minimum: -180, maximum: 180 }
+        contactPhone:
+          type: [string, "null"]
+          maxLength: 16
+          pattern: '^\+[1-9][0-9]{6,14}$'
+          description: Canonical E.164 contact phone stored by logistics.
+        comment: { type: [string, "null"], maxLength: 2000 }
+        acceptableDeliveryDates:
+          type: array
+          maxItems: 31
+          uniqueItems: true
+          items: { type: string, format: date }
         unitCount: { type: integer, format: int64, minimum: 0 }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
         units:
           { type: array, items: { $ref: "#/components/schemas/OrderUnit" } }
+        movements:
+          type: array
+          items: { $ref: "#/components/schemas/OrderMovement" }
         permissions: { $ref: "#/components/schemas/OrderPermissions" }
+    OrderMovementCabin:
+      type: object
+      additionalProperties: false
+      required: [rentalItemId, lineState]
+      properties:
+        rentalItemId: { type: string, format: uuid }
+        lineState: { type: string }
+    OrderMovement:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          documentId,
+          documentType,
+          state,
+          scheduledDate,
+          actualAt,
+          rentalShipmentId,
+          createdAt,
+          updatedAt,
+          cabins,
+        ]
+      properties:
+        documentId: { type: string, format: uuid }
+        documentType: { type: string, enum: [SHIPMENT, RETURN] }
+        state: { type: string }
+        scheduledDate:
+          type: [string, "null"]
+          format: date
+          description: Null while an automatically created rental return has not yet been scheduled.
+        actualAt:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            Logistics completion timestamp of the SHIPPED, ACCEPTED, or
+            ESTIMATE_REQUESTED terminal branch; this is not an independently
+            captured physical-arrival timestamp.
+        rentalShipmentId: { type: [string, "null"], format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        cabins:
+          type: array
+          items: { $ref: "#/components/schemas/OrderMovementCabin" }
     OrderHistoryEvent:
       type: object
       additionalProperties: false
@@ -3197,7 +3574,18 @@ components:
     CabinFacetWarehouse:
       type: object
       additionalProperties: false
-      required: [warehouseId, name, city, cabinTypes, finishes, dimensions, categories]
+      required:
+        [
+          warehouseId,
+          name,
+          city,
+          cabinTypes,
+          finishes,
+          dimensions,
+          categories,
+          characteristics,
+          typeDimensions,
+        ]
       properties:
         warehouseId: { type: string, format: uuid }
         name: { type: string }
@@ -3212,6 +3600,21 @@ components:
           type: array
           items: { type: string }
         categories:
+          type: array
+          items: { type: string }
+        characteristics:
+          type: array
+          items: { type: string }
+        typeDimensions:
+          type: array
+          items: { $ref: "#/components/schemas/CabinTypeDimensionRelation" }
+    CabinTypeDimensionRelation:
+      type: object
+      additionalProperties: false
+      required: [cabinType, dimensions]
+      properties:
+        cabinType: { type: string }
+        dimensions:
           type: array
           items: { type: string }
     CabinFacets:
@@ -3240,6 +3643,13 @@ components:
       required: [warehouseId, groups]
       properties:
         warehouseId: { type: string, format: uuid }
+        resultMode:
+          description: >-
+            REPLACE is the default and atomically releases previous inquiry
+            holds. APPEND retains them and must be requested explicitly.
+          type: string
+          enum: [APPEND, REPLACE]
+          default: REPLACE
         groups:
           type: array
           minItems: 1
@@ -3269,7 +3679,7 @@ components:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         warehouseId: { type: string, format: uuid }
-        status: { type: string, enum: [FREE] }
+        status: { type: string }
         number: { type: string }
         rentalType: { type: [string, "null"] }
         dimensions: { type: [string, "null"] }
@@ -3305,6 +3715,59 @@ components:
           type: array
           maxItems: 20
           items: { $ref: "#/components/schemas/CabinSearchGroupResult" }
+    ReplaceCabinSelectionRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, rentalItemIds]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        rentalItemIds:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+    CabinSelectionResponse:
+      type: object
+      additionalProperties: false
+      required: [inquiryId, warehouseId, expiresAt, rentalItemIds, items]
+      properties:
+        inquiryId: { type: string, format: uuid }
+        warehouseId:
+          description: Null only for an empty selection before the inquiry chose a warehouse.
+          type: [string, "null"]
+          format: uuid
+        expiresAt:
+          description: Null when the authoritative selection is empty and released.
+          type: [string, "null"]
+          format: date-time
+        rentalItemIds:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        items:
+          type: array
+          maxItems: 100
+          items:
+            allOf:
+              - $ref: "#/components/schemas/AvailableCabin"
+              - type: object
+                description: A selected cabin is always currently FREE.
+                properties:
+                  status: { type: string, const: FREE }
+    CabinCatalogPage:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, content, page, size, totalElements, totalPages]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        content:
+          type: array
+          items: { $ref: "#/components/schemas/AvailableCabin" }
+        page: { type: integer, format: int64, minimum: 0 }
+        size: { type: integer, format: int64, minimum: 1, maximum: 100 }
+        totalElements: { type: integer, format: int64, minimum: 0 }
+        totalPages: { type: integer, format: int64, minimum: 0 }
     CabinAvailabilityRequest:
       type: object
       additionalProperties: false
@@ -3716,7 +4179,7 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/OrderDetail" }
     OrderClient:
-      description: Explicitly created client, or the original idempotent result.
+      description: Current client detail, explicit create result, or its idempotent replay.
       headers:
         ETag:
           required: true

@@ -19,6 +19,9 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.proxy.HibernateProxy;
 
+/**
+ * JPA entity that persists order unit reservation in the asset-owned database.
+ */
 @Entity
 @Table(name = "order_unit_reservation")
 @Getter

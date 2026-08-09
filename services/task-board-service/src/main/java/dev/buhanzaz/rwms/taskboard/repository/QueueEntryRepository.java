@@ -12,6 +12,7 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/** Ordered and locking queries for mutable task route entries. */
 public interface QueueEntryRepository extends JpaRepository<QueueEntry, UUID> {
   List<QueueEntry> findAllByTaskIdOrderByRouteIndexAsc(UUID taskId);
 

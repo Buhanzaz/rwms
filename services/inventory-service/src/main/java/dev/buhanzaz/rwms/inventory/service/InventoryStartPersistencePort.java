@@ -5,6 +5,9 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * Port for durable inventory-start capture and release recovery records.
+ */
 public interface InventoryStartPersistencePort {
   StartOperation reserve(
       UUID subjectId, UUID idempotencyKey, String requestHash, UUID warehouseId);

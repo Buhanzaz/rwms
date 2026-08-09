@@ -15,6 +15,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+/**
+ * Defines transport models for rental inquiry, presentation and booking HTTP operations.
+ */
 public final class RentalInquiryApiModels {
   private RentalInquiryApiModels() {}
 
@@ -40,6 +43,7 @@ public final class RentalInquiryApiModels {
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt) {}
 
+  /** Warehouse identity plus exact asset-owned facet values and type-to-dimension relations. */
   public record CabinFacetWarehouse(
       UUID warehouseId,
       String name,
@@ -47,8 +51,14 @@ public final class RentalInquiryApiModels {
       List<String> cabinTypes,
       List<String> finishes,
       List<String> dimensions,
-      List<String> categories) {}
+      List<String> categories,
+      List<String> characteristics,
+      List<CabinTypeDimensionRelation> typeDimensions) {}
 
+  /** Exact available dimension names related to one cabin type. */
+  public record CabinTypeDimensionRelation(String cabinType, List<String> dimensions) {}
+
+  /** Available cabin facets for the inquiry's currently authorized warehouse set. */
   public record CabinFacetsResponse(List<CabinFacetWarehouse> warehouses) {}
 
   public record CabinSearchGroup(
@@ -60,9 +70,26 @@ public final class RentalInquiryApiModels {
       Boolean linoleum,
       @NotNull @Min(1) @Max(30) Integer quantity) {}
 
+  /** Controls whether a cabin search replaces or explicitly extends the inquiry selection. */
+  public enum CabinSearchResultMode {
+    APPEND,
+    REPLACE
+  }
+
+  /** Structured cabin search whose omitted result mode safely replaces the previous selection. */
   public record CabinSearchRequest(
       @NotNull UUID warehouseId,
-      @NotNull @Size(min = 1, max = 20) List<@NotNull @Valid CabinSearchGroup> groups) {}
+      CabinSearchResultMode resultMode,
+      @NotNull @Size(min = 1, max = 20) List<@NotNull @Valid CabinSearchGroup> groups) {
+    public CabinSearchRequest(UUID warehouseId, List<CabinSearchGroup> groups) {
+      this(warehouseId, CabinSearchResultMode.REPLACE, groups);
+    }
+
+    /** Returns REPLACE for omitted legacy requests; APPEND must always be explicit. */
+    public CabinSearchResultMode effectiveResultMode() {
+      return resultMode == null ? CabinSearchResultMode.REPLACE : resultMode;
+    }
+  }
 
   public record AvailableCabinResponse(
       UUID id,
@@ -85,6 +112,34 @@ public final class RentalInquiryApiModels {
 
   public record CabinSearchResponse(
       UUID warehouseId, OffsetDateTime expiresAt, List<CabinSearchGroupResult> groups) {}
+
+  /** Complete desired chat selection; an empty list releases every inquiry hold immediately. */
+  public record CabinSelectionRequest(
+      @NotNull UUID warehouseId,
+      @NotNull @Size(max = 100) List<@NotNull UUID> rentalItemIds) {
+    @AssertTrue(message = "rentalItemIds must be unique")
+    public boolean hasUniqueRentalItemIds() {
+      return rentalItemIds == null
+          || rentalItemIds.size() == new java.util.LinkedHashSet<>(rentalItemIds).size();
+    }
+  }
+
+  /** Authoritative active holds and current cabin snapshots for one inquiry. */
+  public record CabinSelectionResponse(
+      UUID inquiryId,
+      UUID warehouseId,
+      OffsetDateTime expiresAt,
+      List<UUID> rentalItemIds,
+      List<AvailableCabinResponse> items) {}
+
+  /** Bounded facts-only cabin catalog page; reading it never creates or renews a hold. */
+  public record CabinCatalogResponse(
+      UUID warehouseId,
+      List<AvailableCabinResponse> content,
+      long page,
+      long size,
+      long totalElements,
+      long totalPages) {}
 
   public record CabinAvailabilityRequest(
       @NotNull UUID warehouseId,

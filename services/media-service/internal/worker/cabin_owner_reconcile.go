@@ -33,6 +33,8 @@ type cabinOwnerReconciliationFile struct {
 	} `json:"records"`
 }
 
+// RunCabinOwnerReconciliationFile applies one operator-reviewed, bounded
+// CABIN owner recovery file only after parsing every record as a live fact.
 func RunCabinOwnerReconciliationFile(
 	ctx context.Context,
 	repository *persistence.Repository,

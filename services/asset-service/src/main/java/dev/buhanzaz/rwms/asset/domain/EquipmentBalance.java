@@ -18,6 +18,9 @@ import java.util.Objects;
 import java.util.UUID;
 import org.hibernate.proxy.HibernateProxy;
 
+/**
+ * JPA entity that persists equipment balance in the asset-owned database.
+ */
 @Entity
 @Table(name = "equipment_balance")
 public class EquipmentBalance {

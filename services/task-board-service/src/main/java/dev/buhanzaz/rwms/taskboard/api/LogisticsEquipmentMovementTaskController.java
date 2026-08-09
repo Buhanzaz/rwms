@@ -20,7 +20,12 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
-/** Typed private logistics surface for furniture moves reserved until their task deadline. */
+/**
+ * Typed private logistics surface for furniture moves reserved until their task deadline.
+ *
+ * <p>Logistics supplies immutable movement facts. Task-board derives its title, route and queue,
+ * so neither client can accidentally take ownership of the other service's business data.
+ */
 @RestController
 @RequestMapping("/api/internal/task-board/v1/logistics/equipment-movement-tasks")
 @RequiredArgsConstructor
@@ -28,6 +33,7 @@ public class LogisticsEquipmentMovementTaskController {
   private final TaskBoardService service;
   private final TaskSyncAuthorizer access;
 
+  /** Registers a typed logistics equipment-movement task. */
   @PostMapping
   @ResponseStatus(HttpStatus.CREATED)
   public LogisticsTaskSnapshot register(
@@ -37,6 +43,7 @@ public class LogisticsEquipmentMovementTaskController {
     return service.registerLogisticsEquipmentMovementTask(request);
   }
 
+  /** Returns only the matching logistics-owned equipment-movement task snapshot. */
   @GetMapping("/{externalTaskId}")
   public LogisticsTaskSnapshot get(
       @AuthenticationPrincipal Jwt jwt, @PathVariable UUID externalTaskId) {
@@ -44,6 +51,7 @@ public class LogisticsEquipmentMovementTaskController {
     return service.logisticsEquipmentMovementTask(externalTaskId);
   }
 
+  /** Cancels the logistics task under the observed task version. */
   @PostMapping("/{externalTaskId}/cancel")
   public LogisticsTaskSnapshot cancel(
       @AuthenticationPrincipal Jwt jwt,

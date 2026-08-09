@@ -9,6 +9,9 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/**
+ * Spring Data persistence boundary for logistics-owned Client Presentation Repository; it does not own cross-service workflow decisions.
+ */
 public interface ClientPresentationRepository
     extends JpaRepository<ClientPresentation, UUID> {
   Optional<ClientPresentation> findByInquiryId(UUID inquiryId);

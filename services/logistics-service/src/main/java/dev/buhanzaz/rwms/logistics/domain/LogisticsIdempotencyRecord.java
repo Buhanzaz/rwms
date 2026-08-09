@@ -19,6 +19,9 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.JdbcTypeCode;
 
+/**
+ * Durably fences a logistics command by subject, operation, request digest and Idempotency-Key to prevent replayed effects.
+ */
 @Entity
 @Table(
     name = "logistics_idempotency_record",

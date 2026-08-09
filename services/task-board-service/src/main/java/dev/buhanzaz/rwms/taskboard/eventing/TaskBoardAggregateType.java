@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.taskboard.eventing;
 
 import java.util.List;
 
+/** Maps each published task-board aggregate family to its exact topic and sanitized DLT. */
 public enum TaskBoardAggregateType {
   WORKER_CLASS("rwms.task-board.worker-class.v1"),
   WORKER("rwms.task-board.worker.v1"),

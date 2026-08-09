@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// ServiceOwnerProofCommand is one private service's authoritative ownership
+// assertion for a media scope and revision.
 type ServiceOwnerProofCommand struct {
 	SourceService    string
 	OwnerType        string
@@ -23,6 +25,8 @@ type ServiceOwnerProofCommand struct {
 	Active           bool
 }
 
+// ServiceOwnerProofRecord is the normalized, safe result of a stored private
+// service owner proof.
 type ServiceOwnerProofRecord struct {
 	SourceService    string
 	OwnerType        string
@@ -80,6 +84,8 @@ type serviceOwnerProofQuarantine struct {
 var serviceOwnerProofGapRecoverySubjectID = uuid.NewSHA1(uuid.NameSpaceURL,
 	[]byte("urn:rwms:media-service:owner-proof-aggregate-version-gap-recovery"))
 
+// UpsertServiceOwnerProof applies or exactly replays a private service proof
+// with owner-revision fencing and quarantine handling.
 func (repository *Repository) UpsertServiceOwnerProof(
 	ctx context.Context,
 	command ServiceOwnerProofCommand,

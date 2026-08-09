@@ -7,6 +7,7 @@ import java.util.Objects;
 import java.util.UUID;
 import lombok.Getter;
 
+/** Composite persistence identity for LogisticsReturnShortageId. */
 @Embeddable
 @Getter
 public class LogisticsReturnShortageId implements Serializable {

@@ -5,6 +5,10 @@ server:
         secure: false
 
 spring:
+  datasource:
+    url: ${AUTH_DB_URL:jdbc:postgresql://127.0.0.1:5433/rwms_auth}
+    username: ${AUTH_DB_USERNAME:rwms_auth}
+    password: ${AUTH_DB_PASSWORD:rwms_auth}
   cloud:
     stream:
       kafka:

@@ -7,6 +7,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+/** Records low-cardinality counters for task-board outbox, inbox, replay, and sanitized DLT work. */
 @Component
 public class TaskBoardEventingMetrics {
   private final Counter published;

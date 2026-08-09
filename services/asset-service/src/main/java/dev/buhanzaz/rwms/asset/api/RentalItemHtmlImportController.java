@@ -31,6 +31,10 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+/**
+ * HTTP adapter for rental item html import.
+ * It exposes the contract boundary without owning a persistence model or domain transition.
+ */
 @RestController
 @Validated
 @RequestMapping("/api/asset/v1/html-imports")

@@ -8,6 +8,12 @@ import java.util.Objects;
 import java.util.UUID;
 import org.hibernate.proxy.HibernateProxy;
 
+/**
+ * Base mapping for task-board entities with UUID identity and optimistic version fencing.
+ *
+ * <p>Equality is proxy-safe and uses only an assigned persistent identifier; business transitions
+ * remain explicit in owning services.
+ */
 @MappedSuperclass
 public abstract class AbstractVersionedEntity {
   @Id

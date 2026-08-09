@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import org.springframework.stereotype.Component;
 
+/** Loads and applies the canonical KPI event JSON schema before semantic envelope validation. */
 @Component
 public final class AnalyticsEventSchemaValidator {
   private static final String RESOURCE =

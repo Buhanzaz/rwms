@@ -4,6 +4,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+/** Supplies the default delay boundary for recoverable inbound Kafka processing failures. */
 @Configuration(proxyBeanMethods = false)
 class LogisticsInboundConfiguration {
   @Bean

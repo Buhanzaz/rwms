@@ -16,13 +16,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -82,11 +83,30 @@ class DriverCapitalRepairPromotionIntegrationTest {
 
   @BeforeEach
   void resetState() {
-    jdbc.execute("truncate table driver_logistics_task");
+    jdbc.execute(
+        """
+        truncate table
+          logistics_warehouse_admission_intent,
+          warehouse_operation_mark_outbox,
+          driver_logistics_task
+        cascade
+        """);
     reset(dependencies);
     boardTask.set(null);
     registrations.set(0);
 
+    when(dependencies.productionReady()).thenReturn(true);
+    when(
+            dependencies.warehouseAdmission(
+                WAREHOUSE,
+                LogisticsDependencyGateway.WarehouseOperationDirection.OUTGOING))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseOperationAdmission(
+                WAREHOUSE,
+                29,
+                LogisticsDependencyGateway.WarehouseLifecycleState.ACTIVE,
+                LogisticsDependencyGateway.WarehouseOperationDirection.OUTGOING,
+                true));
     when(dependencies.readWarehouseIdentity(WAREHOUSE))
         .thenReturn(new LogisticsDependencyGateway.WarehouseIdentity(WAREHOUSE, 0, true, "UTC"));
     when(dependencies.warehouseTimeZoneAt(eq(WAREHOUSE), any(OffsetDateTime.class)))
@@ -278,6 +298,8 @@ class DriverCapitalRepairPromotionIntegrationTest {
         .andExpect(jsonPath("$.kind").value("CAPITAL_TO_PRODUCTION"))
         .andExpect(jsonPath("$.state").value("CURRENT"));
 
+    when(dependencies.productionReady()).thenReturn(false);
+
     mvc.perform(promote(idempotencyKey))
         .andExpect(status().isOk())
         .andExpect(header().string("Idempotency-Replayed", "true"))
@@ -313,9 +335,128 @@ class DriverCapitalRepairPromotionIntegrationTest {
                 String.class,
                 REPAIR))
         .isEqualTo("CURRENT");
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select admission_direction,admission_warehouse_version
+                  from warehouse_operation_mark_outbox
+                 where operation_id=(select id from driver_logistics_task where source_id=?)
+                   and warehouse_id=?
+                """,
+                REPAIR,
+                WAREHOUSE))
+        .containsEntry("admission_direction", "OUTGOING")
+        .containsEntry("admission_warehouse_version", 29L);
+    verify(dependencies, times(1))
+        .warehouseAdmission(
+            WAREHOUSE,
+            LogisticsDependencyGateway.WarehouseOperationDirection.OUTGOING);
+    verify(dependencies, times(1))
+        .warehouseTimeZoneAt(eq(WAREHOUSE), any(OffsetDateTime.class));
     verify(dependencies, never())
         .transitionRepairPlace(any(), any(), any(), anyLong(), any());
     verify(dependencies, times(1)).setDriverTaskLane(any(), anyLong(), eq("CURRENT"));
+  }
+
+  @Test
+  void exactNonUtcAutoTaskReplayUsesPersistedDateWithoutAdmissionDependency()
+      throws Exception {
+    UUID idempotencyKey = UUID.randomUUID();
+    UUID sourceId = UUID.randomUUID();
+    AtomicReference<LocalDate> admittedLocalDate = new AtomicReference<>();
+    AtomicReference<LocalDate> admissionUtcDate = new AtomicReference<>();
+    when(
+            dependencies.warehouseAdmission(
+                WAREHOUSE,
+                LogisticsDependencyGateway.WarehouseOperationDirection.INCOMING))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseOperationAdmission(
+                WAREHOUSE,
+                31,
+                LogisticsDependencyGateway.WarehouseLifecycleState.ACTIVE,
+                LogisticsDependencyGateway.WarehouseOperationDirection.INCOMING,
+                true));
+    when(dependencies.warehouseTimeZoneAt(eq(WAREHOUSE), any(OffsetDateTime.class)))
+        .thenAnswer(
+            invocation -> {
+              OffsetDateTime at = invocation.getArgument(1);
+              String zone = at.getHour() < 10 ? "Etc/GMT+12" : "Pacific/Kiritimati";
+              admissionUtcDate.set(at.toLocalDate());
+              admittedLocalDate.set(
+                  at.toInstant().atZone(ZoneId.of(zone)).toLocalDate());
+              return new LogisticsDependencyGateway.WarehouseTimeZone(
+                  WAREHOUSE, zone, at);
+            });
+    String request = driverTaskBody(sourceId, 2);
+
+    mvc.perform(
+            post("/api/logistics/v1/driver-tasks")
+                .header("Idempotency-Key", idempotencyKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(request)
+                .with(actor()))
+        .andExpect(status().isCreated());
+    UUID taskId =
+        Objects.requireNonNull(
+            jdbc.queryForObject(
+                """
+                select id from driver_logistics_task
+                 where created_by_subject_id=? and idempotency_key=?
+                """,
+                UUID.class,
+                ACTOR,
+                idempotencyKey));
+    assertThat(admittedLocalDate.get()).isNotEqualTo(admissionUtcDate.get());
+    assertThat(
+            jdbc.queryForObject(
+                "select scheduled_date from driver_logistics_task where id=?",
+                LocalDate.class,
+                taskId))
+        .isEqualTo(admittedLocalDate.get());
+
+    when(dependencies.productionReady()).thenReturn(false);
+
+    mvc.perform(
+            post("/api/logistics/v1/driver-tasks")
+                .header("Idempotency-Key", idempotencyKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(request)
+                .with(actor()))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.id").value(taskId.toString()))
+        .andExpect(jsonPath("$.scheduledDate").value(admittedLocalDate.get().toString()));
+    mvc.perform(
+            post("/api/logistics/v1/driver-tasks")
+                .header("Idempotency-Key", idempotencyKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(driverTaskBody(sourceId, 3))
+                .with(actor()))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("LOGISTICS_CONFLICT"));
+
+    assertThat(jdbc.queryForObject("select count(*) from driver_logistics_task", Long.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select admission_direction,admission_warehouse_version
+                  from warehouse_operation_mark_outbox
+                 where operation_id=? and warehouse_id=?
+                """,
+                taskId,
+                WAREHOUSE))
+        .containsEntry("admission_direction", "INCOMING")
+        .containsEntry("admission_warehouse_version", 31L);
+    assertThat(registrations).hasValue(1);
+    verify(dependencies, times(1))
+        .warehouseAdmission(
+            WAREHOUSE,
+            LogisticsDependencyGateway.WarehouseOperationDirection.INCOMING);
+    verify(dependencies, times(1))
+        .warehouseTimeZoneAt(eq(WAREHOUSE), any(OffsetDateTime.class));
+    verify(dependencies, times(1)).readWarehouseDriverQueue(WAREHOUSE);
+    verify(dependencies, times(1)).readRentalItemSnapshot(CABIN);
   }
 
   @Test
@@ -423,6 +564,23 @@ class DriverCapitalRepairPromotionIntegrationTest {
             "{\"warehouseId\":\"%s\",\"targetDate\":\"%s\",\"targetIndex\":%d}"
                 .formatted(WAREHOUSE, targetDate, targetIndex))
         .with(actor());
+  }
+
+  private static String driverTaskBody(UUID sourceId, int priority) {
+    return """
+        {
+          "warehouseId":"%s",
+          "cabinId":"%s",
+          "sourceType":"MANUAL",
+          "sourceId":"%s",
+          "kind":"GENERAL_MOVEMENT",
+          "planningMode":"AUTO",
+          "priority":%d,
+          "activateNow":false,
+          "comment":"Проверка границы складской даты"
+        }
+        """
+        .formatted(WAREHOUSE, CABIN, sourceId, priority);
   }
 
   private static JwtRequestPostProcessor actor() {

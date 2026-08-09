@@ -17,6 +17,7 @@ import org.springframework.cloud.stream.binding.NewDestinationBindingCallback;
 import org.springframework.cloud.stream.config.BindingServiceProperties;
 import org.springframework.context.annotation.Bean;
 
+/** Enforces synchronous, idempotent and acknowledged Kafka producer minimums without declaring any business destination. */
 @AutoConfiguration(after = RwmsKafkaAutoConfiguration.class)
 @ConditionalOnClass(KafkaProducerProperties.class)
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")

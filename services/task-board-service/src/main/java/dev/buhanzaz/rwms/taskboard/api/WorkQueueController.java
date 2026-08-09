@@ -14,6 +14,13 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
+/**
+ * Public warehouse-scoped view of derived work queues and driver-queue configuration.
+ *
+ * <p>The endpoint exposes local queue identities used by assignments and task history. It does not
+ * let a warehouse mutate the shared {@code GENERAL} catalog; only the dedicated logistics-driver
+ * queue is locally configurable.
+ */
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/warehouses/{warehouseId}")
@@ -22,12 +29,14 @@ public class WorkQueueController {
   private final RegistryService service;
   private final WarehouseAccessAuthorizer access;
 
+  /** Lists the selected warehouse's stable physical queue projections. */
   @GetMapping("/work-queues")
   public List<WorkQueueDto> list(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID warehouseId) {
     read(jwt, warehouseId);
     return service.listQueues(warehouseId);
   }
 
+  /** Returns active visible process capabilities for routing clients. */
   @GetMapping("/queue-capabilities")
   public WarehouseQueueCapabilities capabilities(
       @AuthenticationPrincipal Jwt jwt, @PathVariable UUID warehouseId) {
@@ -35,6 +44,7 @@ public class WorkQueueController {
     return service.queueCapabilities(warehouseId);
   }
 
+  /** Creates or replaces the warehouse-specific {@code LOGISTICS_DRIVER} queue configuration. */
   @PutMapping("/driver-queue")
   public WorkQueueDto updateDriverQueue(
       @AuthenticationPrincipal Jwt jwt,

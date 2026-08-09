@@ -17,6 +17,9 @@ import java.util.UUID;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+/**
+ * JPA entity that persists inventory publication intent in the inventory-owned database.
+ */
 @Entity
 @Table(name = "inventory_publication_intent")
 public class InventoryPublicationIntent {

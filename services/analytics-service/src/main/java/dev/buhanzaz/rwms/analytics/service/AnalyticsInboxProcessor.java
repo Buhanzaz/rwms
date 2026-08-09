@@ -26,6 +26,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+/** Applies one validated Kafka fact in a local transaction while preserving inbox identity, source coordinates and aggregate version ordering. */
 @Service
 public class AnalyticsInboxProcessor {
   private final AnalyticsInboxRepository inboxes;
@@ -59,6 +60,10 @@ public class AnalyticsInboxProcessor {
     this.clock = clock;
   }
 
+  /**
+   * Applies one validated record through a short local transaction, retrying only database
+   * uniqueness and optimistic-lock races so inbox, journal, projection and checkpoints agree.
+   */
   public Outcome process(AnalyticsValidatedEvent event) {
     for (int attempt = 0; attempt < 4; attempt++) {
       try {
@@ -72,6 +77,10 @@ public class AnalyticsInboxProcessor {
     throw new IllegalStateException("ANALYTICS_PROCESSING_RETRY_EXHAUSTED");
   }
 
+  /**
+   * Makes an exhausted listener failure durable and advances its partition checkpoint so one
+   * poison record cannot indefinitely block later records on that partition.
+   */
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public void deadLetterAfterRetries(AnalyticsValidatedEvent event, Object key) {
     OffsetDateTime now = OffsetDateTime.now(clock);

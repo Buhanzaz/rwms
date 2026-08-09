@@ -6,6 +6,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Serializes auth transitions that must preserve service-wide invariants.
+ *
+ * <p>PostgreSQL transaction-scoped advisory locks are used only while an existing caller
+ * transaction is active; the guard neither starts a transaction nor owns business transitions.
+ */
 @Service
 @RequiredArgsConstructor
 public class AuthInvariantGuard {
@@ -15,11 +21,13 @@ public class AuthInvariantGuard {
 
     private final JdbcTemplate jdbc;
 
+    /** Acquires the transaction-scoped lock protecting the system-administrator invariant. */
     @Transactional(propagation = Propagation.MANDATORY)
     public void lockSystemAdminInvariant() {
         lock(SYSTEM_ADMIN_GUARD_KEY);
     }
 
+    /** Acquires the transaction-scoped lock protecting bootstrap initialization. */
     @Transactional(propagation = Propagation.MANDATORY)
     public void lockBootstrap() {
         lock(BOOTSTRAP_GUARD_KEY);

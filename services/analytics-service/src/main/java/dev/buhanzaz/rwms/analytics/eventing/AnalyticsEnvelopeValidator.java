@@ -13,6 +13,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.SerializationFeature;
 
+/** Rejects malformed, unsupported, duplicate-field or incorrectly keyed KPI envelopes before any raw value reaches persistence. */
 @Component
 public final class AnalyticsEnvelopeValidator {
   private static final Set<String> ENVELOPE_FIELDS =
@@ -67,6 +68,10 @@ public final class AnalyticsEnvelopeValidator {
     this.schema = schema;
   }
 
+  /**
+   * Parses one Kafka record into a canonical validated fact. It checks the configured source,
+   * schema, exact object shape and aggregate Kafka key before any persistence is attempted.
+   */
   public AnalyticsValidatedEvent validate(
       String topic, int partition, long offset, Object kafkaKey, byte[] raw) {
     if (!AnalyticsTopics.INPUT.equals(topic) || partition < 0 || offset < 0 || raw == null || raw.length == 0) {

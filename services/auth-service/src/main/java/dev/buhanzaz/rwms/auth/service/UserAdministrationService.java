@@ -43,6 +43,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+/**
+ * Transactional owner of interactive user administration, warehouse grants, and the corresponding
+ * authorization event stream.
+ *
+ * <p>The service fences mutable commands with the aggregate and stream versions, preserves the
+ * last active system administrator, and never physically deletes a user until external audit and
+ * session safety can be proven.
+ */
 @Service
 @RequiredArgsConstructor
 public class UserAdministrationService {
@@ -65,6 +73,11 @@ public class UserAdministrationService {
     private final AuthResponseMapper responseMapper;
     private final AuthorizationRevocationService authorizationRevocations;
 
+    /**
+     * Lists all interactive users as administrator-safe representations, ordered by login.
+     *
+     * @return user representations including current warehouse access grants
+     */
     @Transactional(readOnly = true)
     public List<AdminUserResponse> listUsers() {
         return subjects.findAllByPrincipalTypeOrderByUsername(PrincipalType.USER).stream()
@@ -73,11 +86,24 @@ public class UserAdministrationService {
                 .toList();
     }
 
+    /**
+     * Gets one interactive user and its warehouse access grants.
+     *
+     * @param id user subject identifier
+     * @return administrative user representation
+     */
     @Transactional(readOnly = true)
     public AdminUserResponse getUser(UUID id) {
         return adminResponse(user(id));
     }
 
+    /**
+     * Resolves the currently authenticated interactive user and computes the effective warehouse
+     * access claims exposed to the caller.
+     *
+     * @param authentication current Spring Security authentication
+     * @return current-user representation without credential material
+     */
     @Transactional(readOnly = true)
     public CurrentUserResponse currentUser(Authentication authentication) {
         AuthSubject subject = currentSubject(authentication);
@@ -93,6 +119,13 @@ public class UserAdministrationService {
                 subject, profile, displayName(profile), accessAll, effectiveAccesses);
     }
 
+    /**
+     * Resolves a bounded, de-duplicated list of author display identities while retaining input
+     * order and omitting unknown subject IDs.
+     *
+     * @param subjectIds requested author subject identifiers
+     * @return available display identities in first-occurrence order
+     */
     @Transactional(readOnly = true)
     public List<ActorDisplayResponse> actorDisplays(List<UUID> subjectIds) {
         if (subjectIds.size() > MAX_ACTOR_DISPLAY_SUBJECTS) {
@@ -110,6 +143,14 @@ public class UserAdministrationService {
                 .toList();
     }
 
+    /**
+     * Creates an interactive user, its access projection, and initial authorization event in one
+     * transaction.
+     *
+     * @param request requested profile, role, credentials, and warehouse grants
+     * @param actor authenticated administrator initiating the command
+     * @return created administrator-safe user representation
+     */
     @Transactional
     public AdminUserResponse create(CreateUserRequest request, Authentication actor) {
         AuthSubject current = currentSubject(actor);
@@ -145,6 +186,15 @@ public class UserAdministrationService {
         return adminResponse(subject);
     }
 
+    /**
+     * Applies a version-fenced user profile and authorization change, emitting the appropriate
+     * event and revoking only the OAuth authorization affected by the removed access.
+     *
+     * @param id user subject identifier
+     * @param request complete requested mutable user state and expected version
+     * @param actor authenticated administrator initiating the command
+     * @return updated administrator-safe user representation
+     */
     @Transactional
     public AdminUserResponse update(UUID id, UpdateUserRequest request, Authentication actor) {
         AuthSubject subject = user(id);
@@ -218,6 +268,15 @@ public class UserAdministrationService {
         return adminResponse(subject);
     }
 
+    /**
+     * Changes an interactive user's password under both projection and event-stream version fences,
+     * then revokes stored authorizations.
+     *
+     * @param id user subject identifier
+     * @param password replacement password
+     * @param expectedVersion caller's current aggregate version
+     * @param actor authenticated administrator initiating the command
+     */
     @Transactional
     public void resetPassword(
             UUID id,
@@ -246,6 +305,16 @@ public class UserAdministrationService {
                 profiles.require(subject.getId()).username());
     }
 
+    /**
+     * Replaces a user's complete warehouse-grant set after canonicalizing identifiers and verifying
+     * all referenced warehouses; an equal replacement is an event-free retry.
+     *
+     * @param id user subject identifier
+     * @param requestedAccesses complete replacement grant list
+     * @param expectedVersion caller's current aggregate version
+     * @param actor authenticated administrator initiating the command
+     * @return updated administrator-safe user representation
+     */
     @Transactional
     public AdminUserResponse replaceAccesses(
             UUID id,
@@ -276,6 +345,15 @@ public class UserAdministrationService {
         return adminResponse(subject);
     }
 
+    /**
+     * Rejects physical user deletion after applying actor and last-system-administrator safeguards.
+     *
+     * <p>Disabling the user is the supported reversible operation until external history and active
+     * sessions can be proven absent.
+     *
+     * @param id user subject identifier
+     * @param actor authenticated administrator initiating the command
+     */
     @Transactional
     public void delete(UUID id, Authentication actor) {
         AuthSubject subject = user(id);
@@ -291,6 +369,10 @@ public class UserAdministrationService {
         throw conflict("Физическое удаление пользователя запрещено: отсутствие истории и активных сессий не доказано");
     }
 
+    /**
+     * Converts each requested warehouse identifier to its UUID form and rejects duplicate logical
+     * grants before any mutation starts.
+     */
     private List<CanonicalWarehouseAccess> canonicalAccesses(List<WarehouseAccessRequest> requestedAccesses) {
         var canonical = new LinkedHashMap<UUID, CanonicalWarehouseAccess>();
         for (WarehouseAccessRequest request : requestedAccesses) {
@@ -305,12 +387,14 @@ public class UserAdministrationService {
         return List.copyOf(canonical.values());
     }
 
+    /** Verifies every distinct requested warehouse before writing the replacement grant set. */
     private void validateWarehouses(List<CanonicalWarehouseAccess> requestedAccesses) {
         warehouseExistenceClient.requireActive(requestedAccesses.stream()
                 .map(CanonicalWarehouseAccess::warehouseId)
                 .collect(java.util.stream.Collectors.toUnmodifiableSet()));
     }
 
+    /** Maps canonical transport requests to the projection writer's normalized access values. */
     private List<WarehouseAccessWrite> accessWrites(List<CanonicalWarehouseAccess> requestedAccesses) {
         return requestedAccesses.stream()
                 .map(canonical -> new WarehouseAccessWrite(
@@ -321,6 +405,10 @@ public class UserAdministrationService {
                 .toList();
     }
 
+    /**
+     * Compares the requested complete grant set against the projection and its separately held
+     * comments, treating a missing note-vault record as an invariant failure.
+     */
     private boolean accessesEqual(
             AuthSubject subject, List<CanonicalWarehouseAccess> requestedAccesses) {
         var current = accesses.findAllByUserIdOrderByWarehouseId(subject.getId());
@@ -344,6 +432,7 @@ public class UserAdministrationService {
         });
     }
 
+    /** Builds the administrator representation from the authorization projection and note vault. */
     private AdminUserResponse adminResponse(AuthSubject subject) {
         var profile = profiles.require(subject.getId());
         var notes = accessNotes.findAllByUserId(subject.getId());
@@ -359,6 +448,7 @@ public class UserAdministrationService {
         return responseMapper.toAdmin(subject, profile, warehouseAccesses);
     }
 
+    /** Resolves an authenticated principal to an active interactive user subject. */
     private AuthSubject currentSubject(Authentication authentication) {
         if (authentication == null || !authentication.isAuthenticated()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Требуется аутентификация");
@@ -372,12 +462,14 @@ public class UserAdministrationService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Пользователь токена не найден"));
     }
 
+    /** Loads an interactive user or maps a missing/non-user subject to a not-found response. */
     private AuthSubject user(UUID id) {
         return subjects.findById(id)
                 .filter(subject -> subject.getPrincipalType() == PrincipalType.USER)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Пользователь не найден"));
     }
 
+    /** Determines whether changing this subject would remove the last active system administrator. */
     private boolean isLastActiveSystemAdmin(AuthSubject subject) {
         return subject.isActive()
                 && subject.getGlobalRole() == UserGlobalRole.SYSTEM_ADMIN
@@ -385,18 +477,21 @@ public class UserAdministrationService {
                         PrincipalType.USER, UserGlobalRole.SYSTEM_ADMIN) <= 1;
     }
 
+    /** Fences a command against a stale JPA aggregate version. */
     private void checkVersion(AuthSubject subject, int expectedVersion) {
         if (subject.getVersion() != expectedVersion) {
             throw conflict("Пользователь уже изменён; обновите данные и повторите действие");
         }
     }
 
+    /** Fences a command against a stale authorization event-stream version. */
     private void checkStreamVersion(long streamVersion, int expectedVersion) {
         if (streamVersion != expectedVersion) {
             throw conflict("Поток авторизации уже изменён; обновите данные и повторите действие");
         }
     }
 
+    /** Prevents non-system administrators from creating or administering system-administrator accounts. */
     private void checkSystemAdminBoundary(
             AuthSubject actor,
             AuthSubject target,
@@ -410,6 +505,7 @@ public class UserAdministrationService {
         }
     }
 
+    /** Requires that a login is not reserved for an OAuth client or owned by another subject. */
     private void ensureUsernameAvailable(String username, UUID id) {
         principalNames.requireAvailableForHumanPrincipal(username);
         boolean exists = profiles.findSubjectIdByUsername(username)
@@ -420,14 +516,17 @@ public class UserAdministrationService {
         }
     }
 
+    /** Trims the already request-validated required login value. */
     private String normalizedUsername(String username) {
         return username.trim();
     }
 
+    /** Trims an optional profile value and turns blank input into an absent value. */
     private String normalizedOptional(String value) {
         return value == null || value.isBlank() ? null : value.trim();
     }
 
+    /** Resolves optional manager-app access while enforcing the role eligibility invariant. */
     private boolean requestedMobileAppAccess(
             UserGlobalRole role, Boolean requested, boolean current) {
         boolean mobileAppAccess = requested == null ? current : requested;
@@ -443,10 +542,12 @@ public class UserAdministrationService {
         return mobileAppAccess;
     }
 
+    /** Resolves an omitted rental-access flag to the current/default value. */
     private boolean requestedRentalAccess(Boolean requested, boolean current) {
         return requested == null ? current : requested;
     }
 
+    /** Creates a display label from a profile name, falling back to the login when no name exists. */
     private String displayName(AuthSubjectProfileStore.Profile profile) {
         String fullName = String.join(" ", Stream.of(profile.firstName(), profile.lastName())
                 .filter(value -> value != null && !value.isBlank())
@@ -454,10 +555,12 @@ public class UserAdministrationService {
         return fullName.isBlank() ? profile.username() : fullName;
     }
 
+    /** Builds a uniform conflict response for failed user-administration invariants. */
     private ResponseStatusException conflict(String message) {
         return new ResponseStatusException(HttpStatus.CONFLICT, message);
     }
 
+    /** Couples a canonical warehouse UUID with the original validated replacement request. */
     private record CanonicalWarehouseAccess(UUID warehouseId, WarehouseAccessRequest request) {
     }
 }

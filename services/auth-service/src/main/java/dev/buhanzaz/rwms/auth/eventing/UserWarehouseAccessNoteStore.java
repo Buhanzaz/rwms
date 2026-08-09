@@ -13,12 +13,25 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Maintains private notes attached to user warehouse-access grants.
+ *
+ * <p>Notes are kept outside authorization fact payloads. Eventing consumers receive only the
+ * opaque note revision, allowing safe invalidation without distributing comment content.
+ */
 @Service
 @RequiredArgsConstructor
 public class UserWarehouseAccessNoteStore {
 
     private final JdbcTemplate jdbc;
 
+    /**
+     * Replaces one grant's private note and creates a new opaque revision.
+     *
+     * @param accessId warehouse-access grant identifier
+     * @param comment optional internal note, normalized before storage
+     * @return stored note with its new revision
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public Note replace(UUID accessId, String comment) {
         OffsetDateTime now = databaseNow();
@@ -46,6 +59,12 @@ public class UserWarehouseAccessNoteStore {
         return new Note(accessId, normalized, revision);
     }
 
+    /**
+     * Loads notes for all warehouse grants belonging to one user.
+     *
+     * @param userId user aggregate identifier
+     * @return immutable map indexed by warehouse-access grant identifier
+     */
     @Transactional(readOnly = true)
     public Map<UUID, Note> findAllByUserId(UUID userId) {
         return jdbc.query(
@@ -69,5 +88,12 @@ public class UserWarehouseAccessNoteStore {
         return value == null ? OffsetDateTime.now(ZoneOffset.UTC) : value;
     }
 
+    /**
+     * Private warehouse-access note and its safe invalidation revision.
+     *
+     * @param accessId warehouse-access grant identifier
+     * @param comment internal note content; never included in an auth event fact
+     * @param revision opaque revision exposed to safe facts
+     */
     public record Note(UUID accessId, String comment, UUID revision) {}
 }

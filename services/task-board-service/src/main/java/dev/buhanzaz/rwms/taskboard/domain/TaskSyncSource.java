@@ -16,6 +16,12 @@ import java.util.UUID;
 import org.hibernate.annotations.Check;
 import org.hibernate.proxy.HibernateProxy;
 
+/**
+ * Stable ownership link between a task-board task and the source service's external task identity.
+ *
+ * <p>The source client and fingerprint make retried private synchronization idempotent and prevent
+ * another producer from mutating the task.
+ */
 @Entity
 @Table(
     name = "task_sync_source",

@@ -19,6 +19,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+/** Configures maintenance HTTP security without owning domain transitions. */
 @Configuration
 @EnableMethodSecurity
 public class SecurityConfiguration {

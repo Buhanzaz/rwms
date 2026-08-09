@@ -3,7 +3,7 @@ package dev.buhanzaz.rwms.dossier.eventing;
 import java.util.Map;
 import java.util.Set;
 
-/** Canonical Stage 9 source-topic allowlist. Unknown topics never enter the journal. */
+/** Canonical dossier source-topic allowlist. Unknown topics never enter the journal. */
 public final class DossierSourceTopics {
   public static final String CONSUMER_GROUP = "dossier-projection-v1";
 

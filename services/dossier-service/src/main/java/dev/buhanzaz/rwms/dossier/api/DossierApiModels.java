@@ -5,6 +5,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
+/** Groups public dossier transport records so source facts and projection entities never cross the API boundary. */
 public final class DossierApiModels {
   private DossierApiModels() {}
 

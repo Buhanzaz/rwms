@@ -27,6 +27,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+/** HTTP controller for MaintenanceCatalog; it authorizes the request and delegates the business transition. */
 @RestController
 @Validated
 @RequestMapping("/api/maintenance/v1/catalog")

@@ -4,6 +4,7 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Table;
 
+/** Ordered inclusive KPI threshold range belonging to one palette revision. */
 @Entity
 @Table(name = "kpi_palette_range")
 public class KpiPaletteRange extends AbstractVersionedEntity {

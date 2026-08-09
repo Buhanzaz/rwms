@@ -4,6 +4,9 @@ import java.net.URI;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+/**
+ * Configuration value for the asset private integration boundary.
+ */
 @ConfigurationProperties("rwms.asset.media-import")
 public record MediaAssetImportProperties(
     boolean enabled,

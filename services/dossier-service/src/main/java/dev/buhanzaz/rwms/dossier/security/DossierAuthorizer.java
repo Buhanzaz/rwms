@@ -23,6 +23,10 @@ public final class DossierAuthorizer {
     developmentBypass = configuredBypass && environment.matchesProfiles("dev") && !production;
   }
 
+  /**
+   * Translates JWT roles and warehouse claims into a SQL-ready read scope. Invalid claim entries
+   * grant nothing, so a non-administrator without valid warehouses receives an empty scope.
+   */
   public WarehouseScope requireReadScope(Jwt jwt) {
     if (developmentBypass) return new WarehouseScope(true, Set.of());
     if (jwt == null

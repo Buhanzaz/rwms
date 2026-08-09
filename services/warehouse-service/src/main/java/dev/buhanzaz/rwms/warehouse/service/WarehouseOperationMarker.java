@@ -8,14 +8,31 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Persists immutable, source-scoped evidence that a warehouse has operated.
+ *
+ * <p>This evidence is the durable boundary that prevents a later timezone correction from
+ * rewriting operational history. It is separate from a lifecycle admission decision.
+ */
 @Service
 public class WarehouseOperationMarker {
   private final JdbcTemplate jdbc;
 
+  /**
+   * Creates the durable operation-evidence boundary.
+   *
+   * @param jdbc persistence access for immutable operation evidence
+   */
   public WarehouseOperationMarker(JdbcTemplate jdbc) {
     this.jdbc = jdbc;
   }
 
+  /**
+   * Returns whether any durable operation evidence has already been recorded.
+   *
+   * @param warehouseId stable warehouse identity
+   * @return whether the warehouse has operated
+   */
   public boolean hasRecordedOperation(UUID warehouseId) {
     Boolean exists =
         jdbc.queryForObject(
@@ -25,6 +42,16 @@ public class WarehouseOperationMarker {
     return Boolean.TRUE.equals(exists);
   }
 
+  /**
+   * Appends an operation mark or accepts its exact replay within the surrounding transaction.
+   *
+   * @param warehouse warehouse aggregate already locked by the caller's transaction
+   * @param source operation owner inferred from the credential
+   * @param operationId stable idempotency identity
+   * @param occurredAt actual operation instant
+   * @param recordedAt authoritative database timestamp
+   * @return true for a newly stored mark, false for an exact source-and-timestamp replay
+   */
   @Transactional(propagation = Propagation.MANDATORY)
   public boolean mark(
       Warehouse warehouse,

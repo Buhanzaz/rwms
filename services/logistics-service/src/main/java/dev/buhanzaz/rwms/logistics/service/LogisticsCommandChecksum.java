@@ -6,6 +6,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.List;
 
+/** Produces canonical length-delimited fingerprints for logistics document commands. */
 final class LogisticsCommandChecksum {
   private LogisticsCommandChecksum() {}
 

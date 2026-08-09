@@ -11,8 +11,13 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const processingConsumer = "media-processing-v1"
+const (
+	processingConsumer                = "media-processing-v1"
+	processingAttemptExhaustedFailure = "PROCESSING_ATTEMPT_EXHAUSTED"
+)
 
+// ProcessingMessage is the validated media-processing Kafka request identity
+// and expected aggregate state used for an idempotent claim.
 type ProcessingMessage struct {
 	EventID                 uuid.UUID
 	BodySHA256              string
@@ -32,6 +37,8 @@ type ProcessingMessage struct {
 	ExpectedSourceVersionID string
 }
 
+// WorkerJob is fenced, version-pinned work carrying both the lifetime claim
+// count and the bounded per-cycle attempt used for durable recovery.
 type WorkerJob struct {
 	ProcessingMessage
 	JobID           uuid.UUID
@@ -48,27 +55,96 @@ type WorkerJob struct {
 	SourceChecksum  string
 	ContentType     string
 	Attempt         int
+	AttemptInCycle  int
+	CreatedAt       time.Time
 	LeaseToken      uuid.UUID
 	LeaseFence      int64
 }
 
+// ClaimResult contains a fenced worker job, reports an exact duplicate, or
+// marks an expired fourth-attempt lease that must be terminalized without
+// invoking the processor again.
 type ClaimResult struct {
-	Job       WorkerJob
-	Duplicate bool
+	Job                    WorkerJob
+	Duplicate              bool
+	AttemptBudgetExhausted bool
 }
 
+// ProcessingConflictDisposition determines whether a processing consumer must
+// retry later or accept a terminal conflicting request.
 type ProcessingConflictDisposition string
 
 const (
-	ProcessingConflictRetryAt          ProcessingConflictDisposition = "RETRY_AT"
+	// ProcessingConflictRetryAt instructs the worker to retry after RetryAt.
+	ProcessingConflictRetryAt ProcessingConflictDisposition = "RETRY_AT"
+	// ProcessingConflictTerminalConflict resolves to a durable terminal conflict.
 	ProcessingConflictTerminalConflict ProcessingConflictDisposition = "TERMINAL_CONFLICT"
 )
 
+// ProcessingConflictResolution provides the durable conflict disposition and
+// optional retry deadline.
 type ProcessingConflictResolution struct {
 	Disposition ProcessingConflictDisposition
 	RetryAt     time.Time
 }
 
+// ProcessingTerminalDecision is the closed operator decision recorded against
+// one immutable, versioned terminal processing result.
+type ProcessingTerminalDecision string
+
+const (
+	// ProcessingRetryApproved records that a later authorized command may retry.
+	ProcessingRetryApproved ProcessingTerminalDecision = "RETRY_APPROVED"
+	// ProcessingRetryRejected records that the terminal result must remain closed.
+	ProcessingRetryRejected ProcessingTerminalDecision = "RETRY_REJECTED"
+)
+
+// ProcessingRetryReviewReason is a bounded, non-free-form reason for an
+// operator decision. It is safe to use as a low-cardinality telemetry value.
+type ProcessingRetryReviewReason string
+
+const (
+	// ProcessingReviewDependencyRecovered proves the failed dependency recovered.
+	ProcessingReviewDependencyRecovered ProcessingRetryReviewReason = "DEPENDENCY_RECOVERED"
+	// ProcessingReviewSourceRepaired proves invalid source bytes were replaced.
+	ProcessingReviewSourceRepaired ProcessingRetryReviewReason = "SOURCE_REPAIRED"
+	// ProcessingReviewAttemptBudgetReset approves a new cycle after exhausted
+	// work was reviewed.
+	ProcessingReviewAttemptBudgetReset ProcessingRetryReviewReason = "ATTEMPT_BUDGET_RESET"
+	// ProcessingReviewValidationConfirmed confirms a permanent validation result.
+	ProcessingReviewValidationConfirmed ProcessingRetryReviewReason = "VALIDATION_CONFIRMED"
+	// ProcessingReviewPolicyRejected rejects retry under an operational policy.
+	ProcessingReviewPolicyRejected ProcessingRetryReviewReason = "POLICY_REJECTED"
+)
+
+// ProcessingRetryReview identifies an idempotent decision for the exact
+// version of a terminal row. It never contains source payload or free-form text.
+type ProcessingRetryReview struct {
+	ReviewID            uuid.UUID
+	ProcessingJobID     uuid.UUID
+	TerminalVersion     int64
+	ReviewedBySubjectID uuid.UUID
+	Decision            ProcessingTerminalDecision
+	Reason              ProcessingRetryReviewReason
+}
+
+// ProcessingRecoveryTelemetry is a fixed-cardinality operational snapshot of
+// active work and terminal rows awaiting an explicit review.
+type ProcessingRecoveryTelemetry struct {
+	PendingJobs                 int64
+	RunningJobs                 int64
+	PendingValidationReviews    int64
+	PendingDependencyReviews    int64
+	PendingExhaustedReviews     int64
+	PendingLegacyReviews        int64
+	OldestActiveJobAge          time.Duration
+	MaximumActiveAttemptInCycle int
+}
+
+// ClaimProcessingJob verifies a delivered request against its published outbox
+// fact and atomically leases its exact processing generation. Reclaiming an
+// expired fourth attempt refreshes only its fence and is explicitly marked so
+// the caller terminalizes it without running the processor again.
 func (repository *Repository) ClaimProcessingJob(ctx context.Context, message ProcessingMessage, owner string, lease time.Duration) (ClaimResult, error) {
 	if !validProcessingMessage(message) {
 		return ClaimResult{}, ErrConflict
@@ -157,9 +233,33 @@ func (repository *Repository) ClaimProcessingJob(ctx context.Context, message Pr
 		return ClaimResult{}, ErrVersionGap
 	}
 	job := WorkerJob{ProcessingMessage: message, JobID: message.AggregateID, LeaseToken: uuid.New()}
+	var previousAttemptInCycle int
+	err = tx.QueryRow(ctx, `select job.attempt_in_cycle
+		from media_processing_job job
+		join media_asset a on a.media_id=job.media_id
+		where job.processing_job_id=$1
+		  and job.generation>0 and job.source_version_id is not null
+		  and job.source_checksum_sha256 is not null
+		  and (job.job_status='PENDING'
+		       or (job.job_status='RUNNING' and job.lease_until<clock_timestamp()))
+		  and job.next_attempt_at<=clock_timestamp()
+		  and a.processing_status='PROCESSING' and a.pending_generation=job.generation
+		  and media_asset_is_available(a.media_id)
+		  and not exists (select 1 from media_recovery_quarantine quarantine
+		      where quarantine.source_table='media_processing_job'
+		        and quarantine.source_id=job.processing_job_id)
+		for update of a,job`, job.JobID).Scan(&previousAttemptInCycle)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ClaimResult{}, ErrConflict
+	}
+	if err != nil {
+		return ClaimResult{}, err
+	}
 	err = tx.QueryRow(ctx, `
 		update media_processing_job job set
-			job_status='RUNNING',attempt_count=attempt_count+1,lease_owner=$2,
+			job_status='RUNNING',
+			attempt_count=attempt_count+case when attempt_in_cycle<4 then 1 else 0 end,
+			attempt_in_cycle=least(attempt_in_cycle+1,4),lease_owner=$2,
 			lease_token=$3,lease_fence=lease_fence+1,lease_until=clock_timestamp()+$4::interval,
 			last_error=null
 		from media_asset a
@@ -175,11 +275,12 @@ func (repository *Repository) ClaimProcessingJob(ctx context.Context, message Pr
 			job.generation,job.requested_rotation_degrees,a.source_object_key,
 			job.source_version_id,job.source_checksum_sha256,
 			coalesce(a.finalized_content_type,a.original_content_type),
-			job.attempt_count,job.lease_fence`,
+			job.attempt_count,job.attempt_in_cycle,job.created_at,job.lease_fence`,
 		job.JobID, owner, job.LeaseToken, lease.String()).Scan(
 		&job.MediaID, &job.WarehouseID, &job.OwnerType, &job.OwnerID, &job.MediaKind, &job.ProcessingKind,
 		&job.Generation, &job.Rotation, &job.SourceObjectKey, &job.SourceVersionID,
-		&job.SourceChecksum, &job.ContentType, &job.Attempt, &job.LeaseFence)
+		&job.SourceChecksum, &job.ContentType, &job.Attempt, &job.AttemptInCycle,
+		&job.CreatedAt, &job.LeaseFence)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ClaimResult{}, ErrConflict
 	}
@@ -195,7 +296,7 @@ func (repository *Repository) ClaimProcessingJob(ctx context.Context, message Pr
 	if err := tx.Commit(ctx); err != nil {
 		return ClaimResult{}, err
 	}
-	return ClaimResult{Job: job}, nil
+	return ClaimResult{Job: job, AttemptBudgetExhausted: previousAttemptInCycle >= 4}, nil
 }
 
 // ResolveProcessingClaimConflict classifies a valid Kafka record that could
@@ -204,6 +305,8 @@ func (repository *Repository) ClaimProcessingJob(ctx context.Context, message Pr
 // state. Only a record with no source outbox, job, current generation, inbox,
 // retry, checkpoint, or quarantine evidence is terminalized as a sanitized
 // DLT in the same transaction as its inbox outcome.
+// ResolveProcessingClaimConflict returns the safe retry or terminal outcome
+// for a processing claim that initially conflicts.
 func (repository *Repository) ResolveProcessingClaimConflict(
 	ctx context.Context,
 	message ProcessingMessage,
@@ -424,6 +527,8 @@ func (repository *Repository) terminalizeOrphanProcessingMessage(
 	return repository.insertProcessingDLTOutbox(ctx, tx, message, failureCode)
 }
 
+// CompleteProcessingJob atomically persists the required version-pinned output
+// variants and advances the associated asset to READY.
 func (repository *Repository) CompleteProcessingJob(ctx context.Context, job WorkerJob, variants []media.ProcessedVariant) error {
 	if err := validateProcessedVariants(job, variants); err != nil {
 		return err
@@ -550,8 +655,15 @@ func validateProcessedVariants(job WorkerJob, variants []media.ProcessedVariant)
 
 // RecordProcessingFailure releases a fenced attempt. Transient failures use
 // exactly 1s/2s/4s before the fourth delivery becomes terminal. A validation
-// failure is terminal immediately and retains its actual delivery-attempt count.
+// failure is terminal immediately and retains its actual delivery-attempt
+// count. An exhausted-attempt outcome is accepted only for attempt four.
+// RecordProcessingFailure records a fenced failure and returns its next retry
+// delay or terminal outcome.
 func (repository *Repository) RecordProcessingFailure(ctx context.Context, job WorkerJob, failureCode string) (time.Duration, bool, error) {
+	if !validProcessingTerminalFailure(failureCode) || job.AttemptInCycle < 1 || job.AttemptInCycle > 4 ||
+		(failureCode == processingAttemptExhaustedFailure && job.AttemptInCycle != 4) {
+		return 0, false, ErrConflict
+	}
 	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return 0, false, err
@@ -561,8 +673,8 @@ func (repository *Repository) RecordProcessingFailure(ctx context.Context, job W
 	if err != nil {
 		return 0, false, err
 	}
-	if failureCode != "VALIDATION_FAILED" && job.Attempt <= 3 {
-		delay := time.Second * time.Duration(1<<(job.Attempt-1))
+	if failureCode == "PROCESSING_DEPENDENCY_UNAVAILABLE" && job.AttemptInCycle < 4 {
+		delay := time.Second * time.Duration(1<<(job.AttemptInCycle-1))
 		command, err := tx.Exec(ctx, `update media_processing_job set job_status='PENDING',
 			next_attempt_at=clock_timestamp()+$4::interval,lease_owner=null,lease_token=null,
 			lease_until=null,last_error=$5
@@ -576,7 +688,7 @@ func (repository *Repository) RecordProcessingFailure(ctx context.Context, job W
 		values ($1,$2,$3,$4,clock_timestamp()+$5::interval,$6)
 		on conflict (consumer_name,event_id) do update set attempt=excluded.attempt,
 			available_at=excluded.available_at,last_error_code=excluded.last_error_code`,
-			processingConsumer, job.EventID, job.BodySHA256, job.Attempt, delay.String(), failureCode)
+			processingConsumer, job.EventID, job.BodySHA256, job.AttemptInCycle, delay.String(), failureCode)
 		if err != nil {
 			return 0, false, err
 		}
@@ -619,11 +731,14 @@ func (repository *Repository) RecordProcessingFailure(ctx context.Context, job W
 	values ($1,$2,$3,$4,$5,$6,$7,$8)
 	on conflict (consumer_name,event_id) do nothing`, processingConsumer, job.EventID,
 		job.AggregateType, job.AggregateID, job.AggregateVersion, job.BodySHA256, failureCode,
-		min(max(job.Attempt, 1), 4))
+		job.AttemptInCycle)
 	if err != nil {
 		return 0, false, err
 	}
 	if err := repository.insertProcessingDLTOutbox(ctx, tx, job.ProcessingMessage, failureCode); err != nil {
+		return 0, false, err
+	}
+	if err := insertProcessingTerminal(ctx, tx, job, failureCode); err != nil {
 		return 0, false, err
 	}
 	_, err = tx.Exec(ctx, `delete from media_retry_schedule where consumer_name=$1 and event_id=$2`, processingConsumer, job.EventID)
@@ -633,6 +748,39 @@ func (repository *Repository) RecordProcessingFailure(ctx context.Context, job W
 	return 0, true, tx.Commit(ctx)
 }
 
+// RecordProcessingAttemptExhaustion terminalizes a freshly fenced reclaim of
+// an expired fourth attempt without granting a fifth processor invocation.
+func (repository *Repository) RecordProcessingAttemptExhaustion(ctx context.Context, job WorkerJob) error {
+	_, terminal, err := repository.RecordProcessingFailure(ctx, job, processingAttemptExhaustedFailure)
+	if err != nil {
+		return err
+	}
+	if !terminal {
+		return ErrConflict
+	}
+	return nil
+}
+
+func validProcessingTerminalFailure(failureCode string) bool {
+	return failureCode == "VALIDATION_FAILED" ||
+		failureCode == "PROCESSING_DEPENDENCY_UNAVAILABLE" ||
+		failureCode == processingAttemptExhaustedFailure
+}
+
+// insertProcessingTerminal appends sanitized, versioned evidence while the
+// fenced processing job is locked by the caller's transaction.
+func insertProcessingTerminal(ctx context.Context, tx pgx.Tx, job WorkerJob, failureCode string) error {
+	_, err := tx.Exec(ctx, `insert into media_processing_terminal (
+		processing_job_id,terminal_version,source_event_id,source_body_sha256,
+		failure_code,attempt_count,terminal_at)
+	select $1,coalesce(max(terminal_version),0)+1,$2,$3,$4,$5,clock_timestamp()
+	from media_processing_terminal where processing_job_id=$1`, job.JobID, job.EventID,
+		job.BodySHA256, failureCode, job.AttemptInCycle)
+	return translateConstraint(err)
+}
+
+// RecordInvalidProcessingMessage emits the sanitized terminal record for a
+// malformed processing request.
 func (repository *Repository) RecordInvalidProcessingMessage(ctx context.Context, message ProcessingMessage, failureCode string) error {
 	tx, err := repository.pool.Begin(ctx)
 	if err != nil {
@@ -697,6 +845,149 @@ func (repository *Repository) insertProcessingDLTOutbox(
 	return translateConstraint(err)
 }
 
+// ReviewProcessingTerminal atomically records one idempotent, version-fenced
+// operator decision. Approval is evidence only: this method deliberately does
+// not requeue the job or mutate its media asset.
+func (repository *Repository) ReviewProcessingTerminal(
+	ctx context.Context,
+	review ProcessingRetryReview,
+) (bool, error) {
+	if !validProcessingRetryReview(review) {
+		return false, ErrConflict
+	}
+	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+
+	var existing ProcessingRetryReview
+	err = tx.QueryRow(ctx, `select review_id,processing_job_id,terminal_version,
+		reviewed_by_subject_id,decision,reason_code
+		from media_processing_retry_review where review_id=$1`, review.ReviewID).Scan(
+		&existing.ReviewID, &existing.ProcessingJobID, &existing.TerminalVersion,
+		&existing.ReviewedBySubjectID, &existing.Decision, &existing.Reason)
+	if err == nil {
+		if existing != review {
+			return false, ErrIdempotencyMismatch
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return false, err
+	}
+
+	var failureCode, jobStatus string
+	err = tx.QueryRow(ctx, `select terminal.failure_code,job.job_status
+		from media_processing_terminal terminal
+		join media_processing_job job on job.processing_job_id=terminal.processing_job_id
+		where terminal.processing_job_id=$1 and terminal.terminal_version=$2
+		for update of terminal,job`, review.ProcessingJobID, review.TerminalVersion).Scan(
+		&failureCode, &jobStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, ErrConflict
+	}
+	if err != nil {
+		return false, err
+	}
+	if jobStatus != "FAILED" {
+		return false, ErrConflict
+	}
+	if !reviewMatchesTerminalFailure(review, failureCode) {
+		return false, ErrConflict
+	}
+	_, err = tx.Exec(ctx, `insert into media_processing_retry_review (
+		review_id,processing_job_id,terminal_version,reviewed_by_subject_id,
+		decision,reason_code,reviewed_at)
+	values ($1,$2,$3,$4,$5,$6,$7)`, review.ReviewID, review.ProcessingJobID,
+		review.TerminalVersion, review.ReviewedBySubjectID, review.Decision,
+		review.Reason, repository.now().UTC())
+	if err != nil {
+		return false, translateConstraint(err)
+	}
+	return false, tx.Commit(ctx)
+}
+
+func validProcessingRetryReview(review ProcessingRetryReview) bool {
+	if review.ReviewID == uuid.Nil || review.ProcessingJobID == uuid.Nil ||
+		review.TerminalVersion <= 0 || review.ReviewedBySubjectID == uuid.Nil {
+		return false
+	}
+	switch review.Decision {
+	case ProcessingRetryApproved:
+		return review.Reason == ProcessingReviewDependencyRecovered ||
+			review.Reason == ProcessingReviewSourceRepaired ||
+			review.Reason == ProcessingReviewAttemptBudgetReset
+	case ProcessingRetryRejected:
+		return review.Reason == ProcessingReviewValidationConfirmed ||
+			review.Reason == ProcessingReviewPolicyRejected
+	default:
+		return false
+	}
+}
+
+func reviewMatchesTerminalFailure(review ProcessingRetryReview, failureCode string) bool {
+	switch review.Reason {
+	case ProcessingReviewDependencyRecovered:
+		return failureCode == "PROCESSING_DEPENDENCY_UNAVAILABLE"
+	case ProcessingReviewSourceRepaired, ProcessingReviewValidationConfirmed:
+		return failureCode == "VALIDATION_FAILED"
+	case ProcessingReviewAttemptBudgetReset:
+		return failureCode == processingAttemptExhaustedFailure
+	case ProcessingReviewPolicyRejected:
+		return failureCode == "VALIDATION_FAILED" ||
+			failureCode == "PROCESSING_DEPENDENCY_UNAVAILABLE" ||
+			failureCode == processingAttemptExhaustedFailure ||
+			failureCode == "LEGACY_TERMINAL"
+	default:
+		return false
+	}
+}
+
+// ProcessingRecoveryTelemetry returns a typed, fixed-cardinality snapshot for
+// structured operational emission. It never returns media, event, user, or
+// payload identifiers.
+func (repository *Repository) ProcessingRecoveryTelemetry(
+	ctx context.Context,
+) (ProcessingRecoveryTelemetry, error) {
+	var snapshot ProcessingRecoveryTelemetry
+	var oldestAgeSeconds float64
+	err := repository.pool.QueryRow(ctx, `with active as (
+		select job_status,attempt_in_cycle,created_at
+		from media_processing_job where job_status in ('PENDING','RUNNING')
+	), pending_review as (
+		select terminal.failure_code
+		from media_processing_terminal terminal
+		left join media_processing_retry_review review
+		  on review.processing_job_id=terminal.processing_job_id
+		 and review.terminal_version=terminal.terminal_version
+		where review.review_id is null
+	)
+	select
+		(select count(*) from active where job_status='PENDING'),
+		(select count(*) from active where job_status='RUNNING'),
+		(select count(*) from pending_review where failure_code='VALIDATION_FAILED'),
+		(select count(*) from pending_review where failure_code='PROCESSING_DEPENDENCY_UNAVAILABLE'),
+		(select count(*) from pending_review where failure_code='PROCESSING_ATTEMPT_EXHAUSTED'),
+		(select count(*) from pending_review where failure_code='LEGACY_TERMINAL'),
+		coalesce((select greatest(0,extract(epoch from clock_timestamp()-min(created_at))) from active),0),
+		coalesce((select max(attempt_in_cycle) from active),0)`).Scan(
+		&snapshot.PendingJobs, &snapshot.RunningJobs,
+		&snapshot.PendingValidationReviews, &snapshot.PendingDependencyReviews,
+		&snapshot.PendingExhaustedReviews, &snapshot.PendingLegacyReviews, &oldestAgeSeconds,
+		&snapshot.MaximumActiveAttemptInCycle)
+	if err != nil {
+		return ProcessingRecoveryTelemetry{}, err
+	}
+	snapshot.OldestActiveJobAge = time.Duration(oldestAgeSeconds * float64(time.Second))
+	return snapshot, nil
+}
+
+// ReleaseProcessingLeases returns all processing work owned by a stopping
+// worker to safe durable recovery.
 func (repository *Repository) ReleaseProcessingLeases(ctx context.Context, owner string) error {
 	_, err := repository.pool.Exec(ctx, `update media_processing_job set job_status='PENDING',
 		lease_owner=null,lease_token=null,lease_until=null

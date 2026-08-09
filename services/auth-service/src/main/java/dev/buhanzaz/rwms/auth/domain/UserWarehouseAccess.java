@@ -21,6 +21,12 @@ import java.util.UUID;
 import lombok.Getter;
 import org.hibernate.annotations.UuidGenerator;
 
+/**
+ * Warehouse-specific authorization grant owned by an interactive user.
+ *
+ * <p>A unique user/warehouse pair prevents duplicate grants. The aggregate is initialized once
+ * and then represents the configured access level, note, and active state for that pair.
+ */
 @Entity
 @Table(name = "user_warehouse_access", uniqueConstraints =
         @UniqueConstraint(name = "uk_user_warehouse_access", columnNames = {"user_id", "warehouse_id"}))
@@ -68,6 +74,7 @@ public class UserWarehouseAccess {
     @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt;
 
+    /** Initializes audit timestamps and normalizes the warehouse identifier and optional note. */
     @PrePersist
     void beforeInsert() {
         var now = OffsetDateTime.now(ZoneOffset.UTC);
@@ -76,6 +83,7 @@ public class UserWarehouseAccess {
         normalize();
     }
 
+    /** Refreshes the update timestamp and normalizes mutable textual values before persistence. */
     @PreUpdate
     void beforeUpdate() {
         updatedAt = OffsetDateTime.now(ZoneOffset.UTC);
@@ -87,6 +95,16 @@ public class UserWarehouseAccess {
         comment = comment == null || comment.isBlank() ? null : comment.trim();
     }
 
+    /**
+     * Initializes this grant for one user and warehouse.
+     *
+     * @param user owning authorization subject
+     * @param warehouseId warehouse receiving the grant
+     * @param accessLevel configured access level
+     * @param comment optional administrative note
+     * @param active whether the grant is initially active
+     * @throws IllegalStateException if the grant has already been initialized
+     */
     public void define(
             AuthSubject user,
             String warehouseId,

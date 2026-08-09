@@ -4,6 +4,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
+/** Bootstraps maintenance-service and scans its service-local configuration. */
 @SpringBootApplication
 @EnableScheduling
 public class MaintenanceServiceApplication {

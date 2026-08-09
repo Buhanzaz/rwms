@@ -26,6 +26,9 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 import tools.jackson.databind.JsonNode;
 
+/**
+ * JPA persistence model for one logistics document line; document commands own its workflow transitions.
+ */
 @Entity
 @Table(name = "logistics_document_line")
 @Getter

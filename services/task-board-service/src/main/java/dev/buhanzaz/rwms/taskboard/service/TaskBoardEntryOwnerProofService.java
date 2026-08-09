@@ -21,6 +21,13 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Publishes the task-board-owned media-authorization projection for an entry.
+ *
+ * <p>The projection contains only entry scope, current assignees, evidence reservers and immutable
+ * source-media references. Media-service can authorize a capture without reading task-board tables
+ * or accepting browser-supplied ownership claims.
+ */
 @Service
 public class TaskBoardEntryOwnerProofService {
   private static final Set<AssignmentStatus> CURRENT_ASSIGNMENTS =

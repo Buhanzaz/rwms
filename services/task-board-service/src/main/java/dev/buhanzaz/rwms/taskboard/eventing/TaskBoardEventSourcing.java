@@ -18,6 +18,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Appends task-board domain facts for committed application transitions.
+ *
+ * <p>Callers invoke this inside the owner transaction so history and its outbox envelope cannot
+ * diverge from the changed aggregate.
+ */
 @Service
 @RequiredArgsConstructor
 public class TaskBoardEventSourcing {

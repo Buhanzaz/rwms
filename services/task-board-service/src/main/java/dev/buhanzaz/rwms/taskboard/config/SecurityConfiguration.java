@@ -19,6 +19,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+/** Enforces JWT, scope and dev-only bypass policy for public worker and private task-board routes. */
 @Configuration
 @EnableMethodSecurity
 public class SecurityConfiguration {

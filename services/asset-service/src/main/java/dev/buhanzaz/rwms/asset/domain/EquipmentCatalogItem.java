@@ -20,6 +20,9 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 import org.hibernate.proxy.HibernateProxy;
 
+/**
+ * JPA entity that persists equipment catalog item in the asset-owned database.
+ */
 @Entity
 @Table(
     name = "equipment_catalog_item",

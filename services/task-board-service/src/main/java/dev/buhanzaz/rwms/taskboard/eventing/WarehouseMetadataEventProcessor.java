@@ -15,6 +15,7 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/** Applies ordered warehouse facts to the task-board metadata projection with inbox deduplication. */
 @Service
 @RequiredArgsConstructor
 public class WarehouseMetadataEventProcessor {

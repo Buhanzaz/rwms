@@ -32,10 +32,12 @@ final class InventorySourcePolicy {
       Set.of(
           "dev/buhanzaz/rwms/inventory/eventing/InventoryDeadLetterRelay.java",
           "dev/buhanzaz/rwms/inventory/eventing/InventoryDeadLetterStore.java",
+          "dev/buhanzaz/rwms/inventory/eventing/InventoryAssetInboxStore.java",
           "dev/buhanzaz/rwms/inventory/eventing/InventoryEventStore.java",
           "dev/buhanzaz/rwms/inventory/eventing/InventoryMediaInboxProcessor.java",
           "dev/buhanzaz/rwms/inventory/eventing/InventoryMediaRetryStore.java",
-          "dev/buhanzaz/rwms/inventory/eventing/InventoryOutboxStore.java");
+          "dev/buhanzaz/rwms/inventory/eventing/InventoryOutboxStore.java",
+          "dev/buhanzaz/rwms/inventory/persistence/InventoryPostgresJsonbCanonicalizer.java");
 
   private InventorySourcePolicy() {}
 
@@ -77,7 +79,7 @@ final class InventorySourcePolicy {
     if (LOW_LEVEL_SQL.matcher(source).find() && !LOW_LEVEL_SQL_ADAPTERS.contains(relative)) {
       violations.add(
           path
-              + ": low-level SQL is restricted to the six exact CAS/outbox/inbox/checkpoint/DLT adapters");
+              + ": low-level SQL is restricted to eight exact CAS/outbox/inbox/checkpoint/DLT/JSONB adapters");
     }
     if (LOW_LEVEL_SQL.matcher(source).find() && BUSINESS_TABLE_SQL.matcher(source).find()) {
       violations.add(

@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.warehouse.eventing;
 
+/** Maps the warehouse aggregate family to its canonical Kafka topic. */
 public enum WarehouseAggregateType {
   WAREHOUSE("rwms.warehouse.warehouse.v1");
 

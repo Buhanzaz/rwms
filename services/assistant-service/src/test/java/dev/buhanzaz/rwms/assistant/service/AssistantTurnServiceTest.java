@@ -8,11 +8,13 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import dev.buhanzaz.rwms.assistant.api.AssistantApiModels;
 import dev.buhanzaz.rwms.assistant.config.AssistantLlmProperties;
 import dev.buhanzaz.rwms.assistant.domain.AssistantMessage;
 import dev.buhanzaz.rwms.assistant.integration.ChatCompletionClient;
 import dev.buhanzaz.rwms.assistant.integration.ChatCompletionClient.ChatCompletionRequest;
 import java.time.Duration;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -22,6 +24,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/** Covers guarded model turns, prompt policy, tool sequencing and structured SSE events. */
 class AssistantTurnServiceTest {
   private final ObjectMapper mapper = new ObjectMapper();
 
@@ -100,47 +103,120 @@ class AssistantTurnServiceTest {
         .extracting(ChatCompletionClient.ToolDefinition::name)
         .containsExactly(
             AssistantToolDefinitions.LIST_AVAILABLE_CABIN_FACETS,
-            AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS);
+            AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS,
+            AssistantToolDefinitions.REQUEST_CABIN_CLARIFICATIONS,
+            AssistantToolDefinitions.LOOKUP_CABIN_CATALOG);
     assertThat(provider.requests.get(1).toolRequired()).isTrue();
     assertThat(provider.requests.get(1).tools())
         .extracting(ChatCompletionClient.ToolDefinition::name)
-        .containsExactly(AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS);
+        .containsExactly(
+            AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS,
+            AssistantToolDefinitions.REQUEST_CABIN_CLARIFICATIONS,
+            AssistantToolDefinitions.LOOKUP_CABIN_CATALOG);
     assertThat(provider.requests.get(2).toolRequired()).isFalse();
     verify(conversations)
         .completeAssistantTurn(owner, conversationId, "Проверенный текущий результат.");
   }
 
   @Test
-  void instructsTheModelToRerunShowAllSearchesAndKeepExactMatchesDistinctFromAlternatives() {
-    assertThat(AssistantTurnService.SYSTEM_PROMPT)
-        .contains("show all")
-        .contains("30, the tool maximum")
-        .contains("MUST make one additional search_available_cabins call")
-        .contains("removing exactly one")
-        .contains("category \"Новая\"")
-        .contains("one group's categories array")
-        .contains("totalQuantity to 10")
+  void instructsTheModelToUseExactInteractiveSearchAndReadOnlyReferenceFacts() {
+    String prompt = AssistantTurnService.SYSTEM_PROMPT.replaceAll("\\s+", " ");
+    assertThat(prompt)
+        .contains("exact current cabinType and finish")
+        .contains("покажи 2 ЛДСП")
+        .contains("two independent questions")
+        .contains("either may be answered first")
+        .contains("If it has several, ask with exact size buttons")
+        .contains("6x2.4-equivalent")
+        .contains("narrow the type buttons to compatible relations")
+        .contains("Модуль")
+        .contains("пост охраны")
+        .contains("type-dimension relations")
+        .contains("lookup_cabin_catalog")
+        .contains("read-only and creates no hold")
+        .contains("linoleum=true")
+        .contains("filterSuggestions")
+        .contains("remove_selected_cabins")
         .contains("INQUIRY_ARCHIVED")
-        .contains("all FREE categories")
-        .contains("\"ТВП\" as returned facet \"ДВП\"")
-        .contains("requires at least one new")
-        .contains("Never claim current")
-        .contains("availability from an earlier search result")
-        .contains("Tool arguments must always use an exact returned facet")
-        .contains("characteristic text exactly")
-        .contains("linoleum to true")
-        .contains("six БК-1 plus six БК-2")
         .contains("LOGISTICS_UNAVAILABLE")
-        .contains("Do not mention this failure in final prose")
-        .contains("claim that there are no cabins based on a failure code")
-        .contains("request_search_merge_confirmation")
         .contains("CABINS_NOT_FOUND")
-        .contains("resultMode APPEND")
-        .contains("show all such cabins")
-        .contains("describe only cabins")
-        .contains("UI-only availability feedback")
-        .contains("short neutral completion")
+        .contains("APPEND must use at most one exact category")
         .contains("обновлён.");
+  }
+
+  @Test
+  void buttonAnswerEmitsItsStructuredClarificationBeforeContinuingTheTurn() {
+    UUID owner = UUID.randomUUID();
+    UUID conversationId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID userMessageId = UUID.randomUUID();
+    UUID questionId = UUID.randomUUID();
+    UUID optionId = UUID.randomUUID();
+    AssistantApiModels.ClarificationQuestionResponse answeredQuestion =
+        new AssistantApiModels.ClarificationQuestionResponse(
+            questionId,
+            "search:ldsp:type",
+            "CABIN_TYPE",
+            "Какой тип бытовки нужен для ЛДСП?",
+            "ANSWERED",
+            List.of(
+                new AssistantApiModels.ClarificationOptionResponse(
+                    optionId, "Модуль", "Модуль"),
+                new AssistantApiModels.ClarificationOptionResponse(
+                    UUID.randomUUID(), "Пост охраны", "Пост охраны")),
+            optionId,
+            OffsetDateTime.parse("2026-08-09T12:00:00Z"),
+            OffsetDateTime.parse("2026-08-09T12:01:00Z"));
+    AssistantApiModels.TurnRequest request =
+        new AssistantApiModels.TurnRequest(
+            null, new AssistantApiModels.ClarificationAnswerRequest(questionId, optionId));
+    AssistantConversationService conversations = mock(AssistantConversationService.class);
+    when(conversations.beginTurn(owner, conversationId, request))
+        .thenReturn(
+            new AssistantConversationService.TurnStart(
+                conversationId,
+                inquiryId,
+                userMessageId,
+                "Ответ на уточнение: Модуль",
+                answeredQuestion));
+    when(conversations.promptMessages(owner, conversationId)).thenReturn(List.of());
+    AssistantToolExecutor tools = mock(AssistantToolExecutor.class);
+    when(tools.execute(
+            eq(owner),
+            eq(conversationId),
+            eq(inquiryId),
+            eq(userMessageId),
+            any(),
+            eq("current-user-bearer"),
+            any()))
+        .thenAnswer(
+            invocation -> {
+              ChatCompletionClient.ProviderToolCall call = invocation.getArgument(4);
+              return new AssistantToolExecutor.ToolExecution(
+                  call, mapper.readTree("{\"code\":\"INQUIRY_ARCHIVED\"}"), UUID.randomUUID());
+            });
+    AssistantMessage completed = mock(AssistantMessage.class);
+    when(completed.getId()).thenReturn(UUID.randomUUID());
+    when(
+            conversations.completeAssistantTurn(
+                owner, conversationId, "Этот диалог уже завершён: подборка больше не активна."))
+        .thenReturn(completed);
+    CapturingEmitter emitter = new CapturingEmitter();
+
+    new AssistantTurnService(
+            conversations,
+            new ArchivedInquiryProvider(),
+            new AssistantToolDefinitions(),
+            tools,
+            mapper,
+            properties(),
+            Runnable::run)
+        .stream(owner, conversationId, request, "current-user-bearer", emitter);
+
+    assertThat(emitter.events)
+        .extracting(AssistantApiModels.TurnEvent::event)
+        .startsWith("turn.started", "clarification.answered");
+    assertThat(emitter.events.get(1).clarification()).isEqualTo(answeredQuestion);
   }
 
   @Test
@@ -195,7 +271,7 @@ class AssistantTurnServiceTest {
                   call,
                   mapper.readTree(
                       """
-                      {"tool":"request_search_merge_confirmation","data":{"action":"ASK_ADD_OR_REPLACE"}}
+                      {"tool":"request_cabin_clarifications","data":{"questions":[]}}
                       """),
                   UUID.randomUUID());
             });
@@ -223,7 +299,9 @@ class AssistantTurnServiceTest {
         .containsExactly(
             AssistantToolDefinitions.LIST_AVAILABLE_CABIN_FACETS,
             AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS,
-            AssistantToolDefinitions.REQUEST_SEARCH_MERGE_CONFIRMATION);
+            AssistantToolDefinitions.REQUEST_CABIN_CLARIFICATIONS,
+            AssistantToolDefinitions.LOOKUP_CABIN_CATALOG,
+            AssistantToolDefinitions.REMOVE_SELECTED_CABINS);
     assertThat(provider.requests.getFirst().messages().getFirst().content())
         .contains("DYNAMIC SELECTION CONTEXT: There is an active");
     assertThat(provider.requests.get(1).toolRequired()).isFalse();
@@ -287,11 +365,16 @@ class AssistantTurnServiceTest {
         .extracting(ChatCompletionClient.ToolDefinition::name)
         .containsExactly(
             AssistantToolDefinitions.LIST_AVAILABLE_CABIN_FACETS,
-            AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS);
+            AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS,
+            AssistantToolDefinitions.REQUEST_CABIN_CLARIFICATIONS,
+            AssistantToolDefinitions.LOOKUP_CABIN_CATALOG);
     assertThat(provider.requests.get(1).toolRequired()).isTrue();
     assertThat(provider.requests.get(1).tools())
         .extracting(ChatCompletionClient.ToolDefinition::name)
-        .containsExactly(AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS);
+        .containsExactly(
+            AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS,
+            AssistantToolDefinitions.REQUEST_CABIN_CLARIFICATIONS,
+            AssistantToolDefinitions.LOOKUP_CABIN_CATALOG);
     assertThat(provider.requests.get(2).toolRequired()).isFalse();
     verify(conversations)
         .completeAssistantTurn(owner, conversationId, "Подбор обновлён.");
@@ -359,17 +442,22 @@ class AssistantTurnServiceTest {
         .extracting(ChatCompletionClient.ToolDefinition::name)
         .containsExactly(
             AssistantToolDefinitions.LIST_AVAILABLE_CABIN_FACETS,
-            AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS);
+            AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS,
+            AssistantToolDefinitions.REQUEST_CABIN_CLARIFICATIONS,
+            AssistantToolDefinitions.LOOKUP_CABIN_CATALOG);
     assertThat(provider.requests.get(1).toolRequired()).isTrue();
     assertThat(provider.requests.get(1).tools())
         .extracting(ChatCompletionClient.ToolDefinition::name)
-        .containsExactly(AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS);
+        .containsExactly(
+            AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS,
+            AssistantToolDefinitions.REQUEST_CABIN_CLARIFICATIONS,
+            AssistantToolDefinitions.LOOKUP_CABIN_CATALOG);
     assertThat(provider.requests.get(2).toolRequired()).isFalse();
     verify(conversations).completeAssistantTurn(owner, conversationId, "Найдены текущие варианты.");
   }
 
   @Test
-  void doesNotAcceptTextOnlyAlternativesAfterAnEmptyExactSearch() {
+  void acceptsNeutralCompletionAfterOneAuthoritativeEmptySearch() {
     UUID owner = UUID.randomUUID();
     UUID conversationId = UUID.randomUUID();
     UUID inquiryId = UUID.randomUUID();
@@ -411,7 +499,7 @@ class AssistantTurnServiceTest {
             });
     AssistantMessage completed = mock(AssistantMessage.class);
     when(completed.getId()).thenReturn(UUID.randomUUID());
-    when(conversations.completeAssistantTurn(owner, conversationId, "Проверенные альтернативы."))
+    when(conversations.completeAssistantTurn(owner, conversationId, "Подбор обновлён."))
         .thenReturn(completed);
 
     new AssistantTurnService(
@@ -429,15 +517,10 @@ class AssistantTurnServiceTest {
             "current-user-bearer",
             new SseEmitter());
 
-    assertThat(provider.requests).hasSize(4);
-    assertThat(provider.requests.get(1).toolRequired()).isTrue();
-    assertThat(provider.requests.get(1).tools())
-        .extracting(ChatCompletionClient.ToolDefinition::name)
-        .containsExactly(AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS);
-    assertThat(provider.requests.get(2).messages().getLast().content())
-        .contains("must supply the alternatives");
+    assertThat(provider.requests).hasSize(2);
+    assertThat(provider.requests.get(1).toolRequired()).isFalse();
     verify(conversations)
-        .completeAssistantTurn(owner, conversationId, "Проверенные альтернативы.");
+        .completeAssistantTurn(owner, conversationId, "Подбор обновлён.");
   }
 
   @Test
@@ -562,6 +645,7 @@ class AssistantTurnServiceTest {
     listener.onFinish("tool_calls");
   }
 
+  /** Provider fixture that first violates the guard, then searches and finally returns text. */
   private static final class TextThenSearchProvider implements ChatCompletionClient {
     private final List<ChatCompletionRequest> requests = new ArrayList<>();
     private final String finalText;
@@ -593,6 +677,7 @@ class AssistantTurnServiceTest {
     }
   }
 
+  /** Provider fixture that asks a merge question before returning its user-facing prompt. */
   private static final class ConfirmationThenTextProvider implements ChatCompletionClient {
     private final List<ChatCompletionRequest> requests = new ArrayList<>();
 
@@ -604,7 +689,7 @@ class AssistantTurnServiceTest {
             toolCall(
                 listener,
                 "merge-confirmation",
-                AssistantToolDefinitions.REQUEST_SEARCH_MERGE_CONFIRMATION,
+                AssistantToolDefinitions.REQUEST_CABIN_CLARIFICATIONS,
                 "{}");
         case 2 -> {
           listener.onContent("Добавить к текущей подборке или заменить её?");
@@ -615,6 +700,7 @@ class AssistantTurnServiceTest {
     }
   }
 
+  /** Provider fixture proving that facets alone do not satisfy the outcome guard. */
   private static final class FacetThenSearchProvider implements ChatCompletionClient {
     private final List<ChatCompletionRequest> requests = new ArrayList<>();
 
@@ -647,6 +733,7 @@ class AssistantTurnServiceTest {
     }
   }
 
+  /** Provider fixture issuing the single call that reports a terminal archived inquiry. */
   private static final class ArchivedInquiryProvider implements ChatCompletionClient {
     private final List<ChatCompletionRequest> requests = new ArrayList<>();
 
@@ -662,6 +749,7 @@ class AssistantTurnServiceTest {
     }
   }
 
+  /** Provider fixture returning neutral prose after one authoritative empty search. */
   private static final class AlternativeSearchProvider implements ChatCompletionClient {
     private final List<ChatCompletionRequest> requests = new ArrayList<>();
 
@@ -678,22 +766,26 @@ class AssistantTurnServiceTest {
               "{\"groups\":[{\"quantity\":2}]}");
         }
         case 2 -> {
-          listener.onContent("Непроверенная текстовая альтернатива.");
-          listener.onFinish("stop");
-        }
-        case 3 ->
-            toolCall(
-                listener,
-                "alternative",
-                AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS,
-                "{\"groups\":[{\"quantity\":2}]}");
-        case 4 -> {
-          listener.onContent("Проверенные альтернативы.");
+          listener.onContent("Подбор обновлён.");
           listener.onFinish("stop");
         }
         default -> throw new AssertionError("Unexpected provider round");
       }
     }
 
+  }
+
+  /** Captures structured event payloads without starting an HTTP response. */
+  private static final class CapturingEmitter extends SseEmitter {
+    private final List<AssistantApiModels.TurnEvent> events = new ArrayList<>();
+
+    @Override
+    public void send(SseEventBuilder builder) {
+      builder.build().stream()
+          .map(org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter.DataWithMediaType::getData)
+          .filter(AssistantApiModels.TurnEvent.class::isInstance)
+          .map(AssistantApiModels.TurnEvent.class::cast)
+          .forEach(events::add);
+    }
   }
 }

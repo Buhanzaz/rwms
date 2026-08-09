@@ -38,7 +38,7 @@ import tools.jackson.databind.node.ObjectNode;
 /**
  * Transactional local half of the return-registration saga. Network calls are
  * deliberately made by {@link ReturnRegistrationProcessor} outside these
- * transactions; this class only claims and records durable truth.
+ * transactions; this class validates a claimed lease and records owner-local durable truth.
  */
 @Service
 @RequiredArgsConstructor
@@ -51,75 +51,79 @@ class ReturnRegistrationWorkflowStore {
   private final LogisticsDocumentRepository documentRepository;
   private final LogisticsDocumentLineRepository lineRepository;
   private final LogisticsExternalAttemptRepository attemptRepository;
+  private final LogisticsExternalAttemptClaimService claims;
   private final LogisticsGuardRepository guardRepository;
   private final LogisticsReconciliationRepository reconciliationRepository;
   private final LogisticsEventStore eventStore;
 
-  Optional<Work> nextWork(UUID documentId) {
-    if (documentId == null) return Optional.empty();
-    OffsetDateTime now = now();
-    for (LogisticsExternalAttempt attempt :
-        attemptRepository.findAllByDocument_IdOrderByCreatedAtAsc(documentId)) {
-      LogisticsDocument document = attempt.getDocument();
-      if (document.getState() != LogisticsDocumentState.REGISTERING || !attempt.isDue(now)) {
-        continue;
+  /**
+   * Builds local request data only for one exact current lease. Returning empty means a different
+   * owner-local prerequisite has not committed yet, so the processor defers this lease without
+   * making a remote call.
+   */
+  @Transactional
+  public Optional<Work> workForClaim(LogisticsExternalAttemptClaimService.Claim claim) {
+    LogisticsExternalAttempt attempt = claims.requireCurrentAttempt(claim);
+    LogisticsDocument document = attempt.getDocument();
+    if (document.getState() != LogisticsDocumentState.REGISTERING) return Optional.empty();
+    LogisticsDocumentLine line = attempt.getLine();
+    if (LogisticsDocumentService.RETURN_WAREHOUSE_IDENTITY.equals(attempt.getOperationType())) {
+      return Optional.of(
+          Work.warehouse(
+              attempt.getOperationId(),
+              document.getId(),
+              document.getWarehouseId(),
+              document.getCorrelationId()));
+    }
+    if (line == null) return Optional.empty();
+    if (RETURN_ASSET_SNAPSHOT.equals(attempt.getOperationType())) {
+      return Optional.of(
+          Work.snapshot(
+              attempt.getOperationId(),
+              document.getId(),
+              line.getId(),
+              line.getAssetId(),
+              line.getAssetVersion(),
+              document.getWarehouseId(),
+              document.getCorrelationId()));
+    }
+    if (RETURN_ASSET_LEASE_ACQUIRE.equals(attempt.getOperationType())) {
+      return Optional.of(
+          Work.lease(
+              attempt.getOperationId(),
+              document.getId(),
+              line.getId(),
+              line.getAssetId(),
+              line.getAssetVersion(),
+              document.getCorrelationId(),
+              line.getRentalOrderId()));
+    }
+    if (RETURN_ASSET_INTAKE.equals(attempt.getOperationType())) {
+      Optional<LogisticsGuard> guard = guardRepository.findByLine_Id(line.getId());
+      if (guard.isEmpty() || guard.get().getGuardState() != LogisticsGuardState.ACTIVE) {
+        return Optional.empty();
       }
-      LogisticsDocumentLine line = attempt.getLine();
-      if (LogisticsDocumentService.RETURN_WAREHOUSE_IDENTITY.equals(attempt.getOperationType())) {
-        return Optional.of(
-            Work.warehouse(
-                attempt.getOperationId(),
-                document.getId(),
-                document.getWarehouseId(),
-                document.getCorrelationId()));
-      }
-      if (line == null) continue;
-      if (RETURN_ASSET_SNAPSHOT.equals(attempt.getOperationType())) {
-        return Optional.of(
-            Work.snapshot(
-                attempt.getOperationId(),
-                document.getId(),
-                line.getId(),
-                line.getAssetId(),
-                line.getAssetVersion(),
-                document.getWarehouseId(),
-                document.getCorrelationId()));
-      }
-      if (RETURN_ASSET_LEASE_ACQUIRE.equals(attempt.getOperationType())) {
-        return Optional.of(
-            Work.lease(
-                attempt.getOperationId(),
-                document.getId(),
-                line.getId(),
-                line.getAssetId(),
-                line.getAssetVersion(),
-                document.getCorrelationId(),
-                line.getRentalOrderId()));
-      }
-      if (RETURN_ASSET_INTAKE.equals(attempt.getOperationType())) {
-        Optional<LogisticsGuard> guard = guardRepository.findByLine_Id(line.getId());
-        if (guard.isEmpty() || guard.get().getGuardState() != LogisticsGuardState.ACTIVE) {
-          throw malformed("Return intake has no active asset guard");
-        }
-        return Optional.of(
-            Work.intake(
-                attempt.getOperationId(),
-                document.getId(),
-                line.getId(),
-                line.getAssetId(),
-                line.getAssetVersion(),
-                guard.get().getLeaseId(),
-                guard.get().getFenceToken(),
-                document.getCorrelationId()));
-      }
+      return Optional.of(
+          Work.intake(
+              attempt.getOperationId(),
+              document.getId(),
+              line.getId(),
+              line.getAssetId(),
+              line.getAssetVersion(),
+              guard.get().getLeaseId(),
+              guard.get().getFenceToken(),
+              document.getCorrelationId()));
     }
     return Optional.empty();
   }
 
+  /** Records the warehouse prerequisite only if the supplied lease is still exact and current. */
   @Transactional
   public void confirmWarehouse(
-      UUID operationId, LogisticsDependencyGateway.WarehouseIdentity identity) {
-    LogisticsExternalAttempt attempt = attempt(operationId, LogisticsDocumentService.RETURN_WAREHOUSE_IDENTITY);
+      LogisticsExternalAttemptClaimService.Claim claim,
+      LogisticsDependencyGateway.WarehouseIdentity identity) {
+    LogisticsExternalAttempt attempt =
+        attempt(claim, LogisticsDocumentService.RETURN_WAREHOUSE_IDENTITY);
     if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
     LogisticsDocument document = attempt.getDocument();
     if (document.getState() != LogisticsDocumentState.REGISTERING) return;
@@ -144,10 +148,12 @@ class ReturnRegistrationWorkflowStore {
     }
   }
 
+  /** Records the asset snapshot only if the supplied lease is still exact and current. */
   @Transactional
   public void confirmAssetSnapshot(
-      UUID operationId, LogisticsDependencyGateway.RentalItemSnapshot snapshot) {
-    LogisticsExternalAttempt attempt = attempt(operationId, RETURN_ASSET_SNAPSHOT);
+      LogisticsExternalAttemptClaimService.Claim claim,
+      LogisticsDependencyGateway.RentalItemSnapshot snapshot) {
+    LogisticsExternalAttempt attempt = attempt(claim, RETURN_ASSET_SNAPSHOT);
     if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
     LogisticsDocument document = attempt.getDocument();
     LogisticsDocumentLine line = requiredLine(attempt);
@@ -172,9 +178,12 @@ class ReturnRegistrationWorkflowStore {
         completedAt);
   }
 
+  /** Records the asset lease only if the supplied lease is still exact and current. */
   @Transactional
-  public void confirmLease(UUID operationId, LogisticsDependencyGateway.OperationLease lease) {
-    LogisticsExternalAttempt attempt = attempt(operationId, RETURN_ASSET_LEASE_ACQUIRE);
+  public void confirmLease(
+      LogisticsExternalAttemptClaimService.Claim claim,
+      LogisticsDependencyGateway.OperationLease lease) {
+    LogisticsExternalAttempt attempt = attempt(claim, RETURN_ASSET_LEASE_ACQUIRE);
     if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
     LogisticsDocument document = attempt.getDocument();
     LogisticsDocumentLine line = requiredLine(attempt);
@@ -229,10 +238,12 @@ class ReturnRegistrationWorkflowStore {
         completedAt);
   }
 
+  /** Records the return intake only if the supplied lease is still exact and current. */
   @Transactional
   public void confirmReturnIntake(
-      UUID operationId, LogisticsDependencyGateway.RentalItemSnapshot snapshot) {
-    LogisticsExternalAttempt attempt = attempt(operationId, RETURN_ASSET_INTAKE);
+      LogisticsExternalAttemptClaimService.Claim claim,
+      LogisticsDependencyGateway.RentalItemSnapshot snapshot) {
+    LogisticsExternalAttempt attempt = attempt(claim, RETURN_ASSET_INTAKE);
     if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
     LogisticsDocument document = attempt.getDocument();
     LogisticsDocumentLine line = requiredLine(attempt);
@@ -251,12 +262,11 @@ class ReturnRegistrationWorkflowStore {
     finishRegistrationIfReady(document);
   }
 
+  /** Records a dependency failure only if the supplied lease is still exact and current. */
   @Transactional
-  public void recordFailure(UUID operationId, LogisticsDependencyException exception) {
-    LogisticsExternalAttempt attempt =
-        attemptRepository
-            .findByOperationId(operationId)
-            .orElseThrow(() -> new IllegalArgumentException("External attempt is missing"));
+  public void recordFailure(
+      LogisticsExternalAttemptClaimService.Claim claim, LogisticsDependencyException exception) {
+    LogisticsExternalAttempt attempt = claims.requireCurrentAttempt(claim);
     if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
     LogisticsDocument document = attempt.getDocument();
     LogisticsDocumentLine line = attempt.getLine();
@@ -313,11 +323,9 @@ class ReturnRegistrationWorkflowStore {
     attempt.retry(completedAt.plusSeconds(retryDelaySeconds(attempt.getRetryCount())));
   }
 
-  private LogisticsExternalAttempt attempt(UUID operationId, String operationType) {
-    LogisticsExternalAttempt attempt =
-        attemptRepository
-            .findByOperationId(operationId)
-            .orElseThrow(() -> new IllegalArgumentException("External attempt is missing"));
+  private LogisticsExternalAttempt attempt(
+      LogisticsExternalAttemptClaimService.Claim claim, String operationType) {
+    LogisticsExternalAttempt attempt = claims.requireCurrentAttempt(claim);
     if (!operationType.equals(attempt.getOperationType())) {
       throw new IllegalArgumentException("External attempt type is invalid");
     }

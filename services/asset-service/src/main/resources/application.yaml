@@ -99,7 +99,7 @@ spring:
 rwms:
   platform:
     kafka:
-      enabled: ${ASSET_KAFKA_ENABLED:false}
+      enabled: ${ASSET_KAFKA_ENABLED}
       destinations:
         - rwms.asset.rental-item.v1
         - rwms.asset.equipment-catalog.v1

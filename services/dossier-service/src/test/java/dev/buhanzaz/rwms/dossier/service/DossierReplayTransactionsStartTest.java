@@ -16,6 +16,7 @@ import dev.buhanzaz.rwms.dossier.repository.DossierPartitionCheckpointRepository
 import dev.buhanzaz.rwms.dossier.repository.DossierProjectionGenerationRepository;
 import dev.buhanzaz.rwms.dossier.repository.DossierReplayPartitionHighWaterRepository;
 import dev.buhanzaz.rwms.dossier.repository.DossierReplayRunRepository;
+import dev.buhanzaz.rwms.dossier.repository.DossierSanitizedDeadLetterRepository;
 import dev.buhanzaz.rwms.dossier.repository.DossierSourceFactRepository;
 import java.util.List;
 import java.util.Optional;
@@ -47,6 +48,7 @@ class DossierReplayTransactionsStartTest {
             mock(DossierReplayPartitionHighWaterRepository.class),
             mock(DossierActivityRepository.class),
             mock(DossierMediaProjectionRepository.class),
+            mock(DossierSanitizedDeadLetterRepository.class),
             mock(DossierProjectionService.class),
             mock(dev.buhanzaz.rwms.dossier.eventing.DossierEnvelopeValidator.class),
             new ObjectMapper());

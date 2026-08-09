@@ -6,6 +6,10 @@ import java.util.Map;
 import java.util.UUID;
 import org.springframework.stereotype.Component;
 
+/**
+ * Queues only a hash and sanitized metadata for a rejected maintenance message; the original body
+ * is not copied into the dead-letter record or logs.
+ */
 @Component
 public class MaintenanceSanitizedDltPublisher {
   private final MaintenanceSanitizedDltStore store;

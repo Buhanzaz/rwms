@@ -1,9 +1,9 @@
 package dev.buhanzaz.rwms.logistics.order.mapper;
 
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.ClientResponse;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderDesiredEquipmentResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderHistoryEventResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderRentalTermResponse;
-import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderDesiredEquipmentResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderSummaryResponse;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderAuditEvent;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
@@ -16,6 +16,9 @@ import org.mapstruct.Mapping;
 import org.mapstruct.MappingConstants;
 import org.mapstruct.ReportingPolicy;
 
+/**
+ * Maps Rental Order Response Mapper at a logistics boundary without applying a domain transition.
+ */
 @Mapper(
     componentModel = MappingConstants.ComponentModel.SPRING,
     injectionStrategy = InjectionStrategy.CONSTRUCTOR,
@@ -34,6 +37,12 @@ public interface RentalOrderResponseMapper {
   @Mapping(source = "order.createdBySubjectId", target = "createdBy")
   @Mapping(source = "order.createdByDisplayName", target = "createdByDisplayName")
   @Mapping(source = "order.warehouseId", target = "warehouseId")
+  @Mapping(source = "order.deliveryAddress", target = "deliveryAddress")
+  @Mapping(source = "order.latitude", target = "latitude")
+  @Mapping(source = "order.longitude", target = "longitude")
+  @Mapping(source = "order.contactPhone", target = "contactPhone")
+  @Mapping(source = "order.comment", target = "comment")
+  @Mapping(source = "order.acceptableDeliveryDates", target = "acceptableDeliveryDates")
   @Mapping(source = "unitCount", target = "unitCount")
   @Mapping(source = "order.createdAt", target = "createdAt")
   @Mapping(source = "order.updatedAt", target = "updatedAt")

@@ -14,6 +14,7 @@ import java.util.UUID;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+/** JPA stage of a repair plan, including its ordered execution state. */
 @Entity
 @Table(name = "repair_stage")
 public class RepairStage {

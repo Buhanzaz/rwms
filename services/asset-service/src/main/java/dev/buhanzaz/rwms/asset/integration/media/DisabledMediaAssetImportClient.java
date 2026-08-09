@@ -5,6 +5,9 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 
+/**
+ * Disabled local implementation of the asset media-import boundary.
+ */
 final class DisabledMediaAssetImportClient implements MediaAssetImportClient {
   @Override
   public MediaAssetImportJob preflight(

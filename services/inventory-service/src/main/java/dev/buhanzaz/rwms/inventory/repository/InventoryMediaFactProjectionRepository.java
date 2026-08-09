@@ -5,6 +5,9 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/**
+ * Spring Data repository for service-local inventory media fact projection persistence.
+ */
 public interface InventoryMediaFactProjectionRepository
     extends JpaRepository<InventoryMediaFactProjection, InventoryMediaFactProjection.Key> {
   Optional<InventoryMediaFactProjection> findByMediaIdAndGeneration(UUID mediaId, long generation);

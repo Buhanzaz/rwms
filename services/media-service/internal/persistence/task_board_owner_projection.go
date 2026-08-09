@@ -33,11 +33,15 @@ type TaskBoardEntryOwnerProofMessage struct {
 	SourceMediaRefs  []TaskBoardSourceMediaReference
 }
 
+// TaskBoardSourceMediaReference fences a source asset to the exact generation
+// task-board authorizes a worker to read.
 type TaskBoardSourceMediaReference struct {
 	MediaID    uuid.UUID
 	Generation int
 }
 
+// TaskBoardEntryOwnerProofApplyResult reports an exact replay or quarantine
+// outcome after one task-board owner proof is applied.
 type TaskBoardEntryOwnerProofApplyResult struct {
 	Duplicate   bool
 	Quarantined bool
@@ -412,6 +416,8 @@ func (repository *Repository) recordTaskBoardOwnerProofConflict(ctx context.Cont
 	return translateConstraint(err)
 }
 
+// RecordTaskBoardEntryOwnerProofDLT persists the hash-only dead-letter result
+// for an invalid task-board owner-proof record.
 func (repository *Repository) RecordTaskBoardEntryOwnerProofDLT(ctx context.Context, bodySHA256 string) error {
 	if !validSHA256(bodySHA256) {
 		return ErrConflict
@@ -436,6 +442,8 @@ func insertTaskBoardOwnerProofDeadLetter(ctx context.Context, tx pgx.Tx, eventID
 // RequireTaskBoardEntryWorkerAccess is used by command transactions and by
 // request handlers before streaming bytes. It locks both the current binding
 // and the membership row so a revocation cannot race a metadata/read callback.
+// RequireTaskBoardEntryWorkerAccess confirms current worker authorization for a
+// task-board entry in the requested warehouse.
 func RequireTaskBoardEntryWorkerAccess(ctx context.Context, database queryer, entryID, warehouseID, workerID uuid.UUID) error {
 	if entryID == uuid.Nil || warehouseID == uuid.Nil || workerID == uuid.Nil {
 		return ErrOwnerProofMissing
@@ -474,6 +482,8 @@ func RequireTaskBoardEntryWorkerAccess(ctx context.Context, database queryer, en
 // The proof and binding rows remain share-locked for the caller's complete
 // metadata or content callback so a concurrent proof replacement cannot race
 // a source-reference read.
+// RequireTaskBoardEntryUserReadAccess confirms that a task-board entry is
+// currently readable within the requested warehouse.
 func RequireTaskBoardEntryUserReadAccess(ctx context.Context, database queryer, entryID, warehouseID uuid.UUID) error {
 	if entryID == uuid.Nil || warehouseID == uuid.Nil {
 		return ErrOwnerProofMissing
@@ -512,6 +522,8 @@ func RequireTaskBoardEntryUserReadAccess(ctx context.Context, database queryer, 
 	return nil
 }
 
+// AuthorizeTaskBoardEntryWorker applies the worker-access check through this
+// repository's PostgreSQL pool.
 func (repository *Repository) AuthorizeTaskBoardEntryWorker(ctx context.Context, entryID, warehouseID, workerID uuid.UUID) error {
 	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {

@@ -18,6 +18,7 @@ import dev.buhanzaz.rwms.dossier.repository.DossierPartitionCheckpointRepository
 import dev.buhanzaz.rwms.dossier.repository.DossierProjectionGenerationRepository;
 import dev.buhanzaz.rwms.dossier.repository.DossierReplayRunRepository;
 import dev.buhanzaz.rwms.dossier.repository.DossierReplayPartitionHighWaterRepository;
+import dev.buhanzaz.rwms.dossier.repository.DossierSanitizedDeadLetterRepository;
 import dev.buhanzaz.rwms.dossier.repository.DossierSourceFactRepository;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
@@ -33,6 +34,7 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.SerializationFeature;
 
+/** Owns transactional claim, build, tail verification and atomic activation steps for a dossier generation replay. */
 @Service
 public class DossierReplayTransactions {
   private final DossierActiveGenerationRepository activePointers;
@@ -44,6 +46,7 @@ public class DossierReplayTransactions {
   private final DossierReplayPartitionHighWaterRepository highWaters;
   private final DossierActivityRepository activities;
   private final DossierMediaProjectionRepository media;
+  private final DossierSanitizedDeadLetterRepository deadLetters;
   private final DossierProjectionService projections;
   private final DossierEnvelopeValidator validator;
   private final ObjectMapper mapper;
@@ -58,6 +61,7 @@ public class DossierReplayTransactions {
       DossierReplayPartitionHighWaterRepository highWaters,
       DossierActivityRepository activities,
       DossierMediaProjectionRepository media,
+      DossierSanitizedDeadLetterRepository deadLetters,
       DossierProjectionService projections,
       DossierEnvelopeValidator validator,
       ObjectMapper mapper) {
@@ -70,11 +74,16 @@ public class DossierReplayTransactions {
     this.highWaters = highWaters;
     this.activities = activities;
     this.media = media;
+    this.deadLetters = deadLetters;
     this.projections = projections;
     this.validator = validator;
     this.mapper = mapper;
   }
 
+  /**
+   * Locks the active-generation pointer, refuses a concurrent replay and captures partition
+   * high-water marks that define the immutable source snapshot for a new target generation.
+   */
   @Transactional
   public ReplayClaim start() {
     DossierActiveGeneration pointer =
@@ -129,6 +138,10 @@ public class DossierReplayTransactions {
     return new ReplayClaim(run.getId(), now);
   }
 
+  /**
+   * Replays only locally persisted processed facts at or below the claimed high-water marks, then
+   * advances the run to tailing without changing the reader-visible generation.
+   */
   @Transactional
   public void build(UUID runId) {
     DossierReplayRun run = runs.findById(runId).orElseThrow();
@@ -151,6 +164,11 @@ public class DossierReplayTransactions {
     run.tailing();
   }
 
+  /**
+   * Locks the source pointer, applies post-snapshot facts, compares canonical source and target
+   * projections, and switches the active generation only after parity succeeds. Unresolved DLT
+   * coverage advances without changing relay state; rejection leaves source coverage untouched.
+   */
   @Transactional
   public void tailVerifyAndActivate(UUID runId) {
     DossierActiveGeneration pointer =
@@ -193,6 +211,8 @@ public class DossierReplayTransactions {
     }
     DossierProjectionGeneration sourceGeneration =
         generations.findById(run.getSourceGenerationId()).orElseThrow();
+    deadLetters.advanceUnresolvedCoverage(
+        run.getSourceGenerationId(), run.getTargetGenerationId());
     targetGeneration.ready();
     sourceGeneration.retire(now);
     generations.flush();
@@ -201,6 +221,10 @@ public class DossierReplayTransactions {
     run.activated(now);
   }
 
+  /**
+   * Independently rejects a replay target after orchestration failure so a rollback of the caller
+   * cannot leave an apparently runnable generation behind.
+   */
   @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
   public void rejectFailed(UUID runId) {
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);

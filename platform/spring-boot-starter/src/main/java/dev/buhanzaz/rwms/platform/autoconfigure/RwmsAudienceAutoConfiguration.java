@@ -7,6 +7,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.context.annotation.Bean;
 import org.springframework.security.oauth2.jwt.Jwt;
 
+/** Exposes the reusable JWT audience-validator factory when JWT support is on the application classpath. */
 @AutoConfiguration
 @ConditionalOnClass(Jwt.class)
 public class RwmsAudienceAutoConfiguration {

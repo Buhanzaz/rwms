@@ -7,8 +7,8 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Versioned, local transport boundary for the small Stage 8 private APIs.
- * Incoming user credentials never cross this interface.
+ * Versioned private transport boundary for logistics dependency operations. Incoming user
+ * credentials never cross this interface.
  */
 public interface LogisticsDependencyGateway {
   WarehouseIdentity readWarehouseIdentity(UUID warehouseId);
@@ -416,13 +416,18 @@ public interface LogisticsDependencyGateway {
     throw unavailable("Cabin facets are not configured");
   }
 
+  /** Reads a bounded cabin fact page without acquiring or renewing any hold. */
+  default CabinCatalogPage readCabinCatalog(
+      UUID warehouseId, String query, int page, int size) {
+    throw unavailable("Cabin catalog is not configured");
+  }
+
+  /**
+   * Sends the exact prepared asset request with its derived downstream idempotency key.
+   * Implementations must not deserialize and rebuild {@code exactRequestBody} before sending it.
+   */
   default CabinSearchResult searchAvailableCabins(
-      UUID warehouseId,
-      UUID holdScopeId,
-      OffsetDateTime expiresAt,
-      UUID actorSubjectId,
-      String actorRole,
-      List<CabinSearchGroup> groups) {
+      UUID downstreamIdempotencyKey, String exactRequestBody) {
     throw unavailable("Cabin search is not configured");
   }
 
@@ -445,6 +450,12 @@ public interface LogisticsDependencyGateway {
       UUID actorSubjectId,
       String actorRole) {
     throw unavailable("Presentation holds are not configured");
+  }
+
+  /** Replays an already-frozen asset replace-holds JSON body without rebuilding it. */
+  default PresentationHolds replacePresentationHoldsExact(
+      UUID idempotencyKey, UUID presentationId, String exactRequestBody) {
+    throw unavailable("Exact presentation hold replacement is not configured");
   }
 
   default PresentationHolds replacePresentationHolds(
@@ -484,6 +495,12 @@ public interface LogisticsDependencyGateway {
       UUID actorSubjectId,
       String actorRole) {
     throw unavailable("Presentation holds are not configured");
+  }
+
+  /** Replays an already-frozen asset release-holds JSON body without rebuilding it. */
+  default PresentationHolds releasePresentationHoldsExact(
+      UUID idempotencyKey, UUID presentationId, String exactRequestBody) {
+    throw unavailable("Exact presentation hold release is not configured");
   }
 
   default ConvertedPresentationHolds convertPresentationHolds(
@@ -964,12 +981,18 @@ public interface LogisticsDependencyGateway {
   record CabinFurnitureMovementPlan(
       UUID rentalItemId, String unitNumber, List<CabinFurnitureMovementPlanLine> lines) {}
 
+  /** Exact available asset facet values and type-dimension relations for one warehouse. */
   record CabinFacets(
       UUID warehouseId,
       List<String> cabinTypes,
       List<String> finishes,
       List<String> dimensions,
-      List<String> categories) {}
+      List<String> categories,
+      List<String> characteristics,
+      List<CabinTypeDimensionRelation> typeDimensions) {}
+
+  /** Exact dimension values that currently relate to one cabin type. */
+  record CabinTypeDimensionRelation(String cabinType, List<String> dimensions) {}
 
   record CabinSearchGroup(
       String cabinType,
@@ -979,6 +1002,24 @@ public interface LogisticsDependencyGateway {
       String characteristics,
       Boolean linoleum,
       int quantity) {}
+
+  /** Owner-side hold behavior for an inquiry cabin search. */
+  enum CabinSearchResultMode {
+    APPEND,
+    REPLACE
+  }
+
+  /**
+   * Immutable wire command frozen before a rental-inquiry search calls asset-service.
+   */
+  record CabinSearchCommand(
+      UUID warehouseId,
+      UUID holdScopeId,
+      OffsetDateTime expiresAt,
+      UUID actorSubjectId,
+      String actorRole,
+      CabinSearchResultMode resultMode,
+      List<CabinSearchGroup> groups) {}
 
   record AvailableCabin(
       UUID id,
@@ -995,6 +1036,15 @@ public interface LogisticsDependencyGateway {
       Map<String, Object> passport,
       List<String> tags,
       OffsetDateTime updatedAt) {}
+
+  /** Facts-only cabin page returned by asset-service catalog lookup. */
+  record CabinCatalogPage(
+      UUID warehouseId,
+      List<AvailableCabin> content,
+      long page,
+      long size,
+      long totalElements,
+      long totalPages) {}
 
   record CabinSearchGroupResult(
       CabinSearchGroup group, List<AvailableCabin> cabins) {}

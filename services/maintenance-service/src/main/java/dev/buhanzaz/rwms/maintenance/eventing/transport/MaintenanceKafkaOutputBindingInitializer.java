@@ -10,6 +10,10 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.stereotype.Component;
 
+/**
+ * Creates the explicitly owned maintenance producer bindings at startup and unbinds them at
+ * shutdown when Kafka transport is enabled.
+ */
 @Component
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")
 public class MaintenanceKafkaOutputBindingInitializer

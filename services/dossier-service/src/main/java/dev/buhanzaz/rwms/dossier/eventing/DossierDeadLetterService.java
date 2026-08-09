@@ -31,12 +31,25 @@ public class DossierDeadLetterService {
         offset,
         recordKey,
         DossierEventHash.sha256(raw == null ? new byte[0] : raw),
-        mapValidation(internalCode));
+        mapValidation(internalCode),
+        null,
+        null);
   }
 
+  /**
+   * Records a validated processing failure against the generation locked by the caller. A null
+   * subject cabin retains operational audit evidence without making any cabin read partial.
+   */
   @Transactional
   public void processingFailure(
-      DossierValidatedEvent event, Object recordKey, DossierDltFailureCode failureCode) {
+      DossierValidatedEvent event,
+      Object recordKey,
+      DossierDltFailureCode failureCode,
+      UUID generationId,
+      UUID subjectCabinId) {
+    if (generationId == null) {
+      throw new IllegalArgumentException("generationId is required");
+    }
     save(
         event.eventId(),
         event.aggregateId(),
@@ -45,7 +58,22 @@ public class DossierDeadLetterService {
         event.offset(),
         recordKey,
         event.payloadSha256(),
-        failureCode);
+        failureCode,
+        subjectCabinId == null ? null : generationId,
+        subjectCabinId);
+  }
+
+  /**
+   * Resolves exact source-failure coverage without deleting or republishing its audit rows. Locked
+   * reads serialize this coverage mutation with concurrent DLT relay-state transitions.
+   */
+  @Transactional
+  public void resolveProcessingCoverage(
+      UUID sourceEventId, UUID generationId, OffsetDateTime resolvedAt) {
+    repository
+        .findAllForUpdateBySourceEventIdAndCoverageGenerationIdAndCoverageResolvedAtIsNull(
+            sourceEventId, generationId)
+        .forEach(failure -> failure.resolveCoverage(resolvedAt));
   }
 
   private void save(
@@ -56,7 +84,9 @@ public class DossierDeadLetterService {
       long offset,
       Object recordKey,
       String messageHash,
-      DossierDltFailureCode code) {
+      DossierDltFailureCode code,
+      UUID coverageGenerationId,
+      UUID coverageSubjectCabinId) {
     if (!DossierSourceTopics.inputs().contains(topic)) {
       throw new IllegalStateException("DOSSIER_SOURCE_TOPIC_HEADER_INVALID");
     }
@@ -70,8 +100,16 @@ public class DossierDeadLetterService {
             DossierEventHash.sha256(keyBytes(recordKey)),
             messageHash,
             code,
+            coverageGenerationId,
+            coverageSubjectCabinId,
             OffsetDateTime.now(ZoneOffset.UTC));
-    if (!repository.existsById(failure.getId())) repository.save(failure);
+    repository
+        .findForUpdateById(failure.getId())
+        .ifPresentOrElse(
+            existing ->
+                existing.markCoverageUnresolved(
+                    coverageGenerationId, coverageSubjectCabinId),
+            () -> repository.save(failure));
   }
 
   private static byte[] keyBytes(Object recordKey) {

@@ -7,6 +7,9 @@ import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
+/**
+ * JPA entity that persists inventory start operation in the inventory-owned database.
+ */
 @Entity
 @Table(name = "inventory_start_operation")
 public class InventoryStartOperation {

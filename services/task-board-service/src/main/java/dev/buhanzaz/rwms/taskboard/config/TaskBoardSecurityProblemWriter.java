@@ -17,6 +17,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
+/** Writes authentication and access-denial failures in the shared sanitized Problem Details shape. */
 @Component
 @RequiredArgsConstructor
 public class TaskBoardSecurityProblemWriter {

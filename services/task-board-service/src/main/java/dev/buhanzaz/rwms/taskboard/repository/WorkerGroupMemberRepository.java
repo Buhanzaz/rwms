@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/** Maintains current and historical worker group membership links. */
 public interface WorkerGroupMemberRepository extends JpaRepository<WorkerGroupMember, UUID> {
   List<WorkerGroupMember> findAllByWorkerGroupId(UUID groupId);
 

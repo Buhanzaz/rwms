@@ -14,6 +14,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 
+/** Spring Data persistence boundary for MaintenanceRepair; business transitions remain in the owning service. */
 public interface MaintenanceRepairRepository extends JpaRepository<MaintenanceRepair, UUID> {
   List<MaintenanceRepair> findAllByWarehouseIdOrderByCreatedAtDesc(UUID warehouseId);
   List<MaintenanceRepair> findAllByWarehouseIdAndExecutionStateInOrderByCreatedAtAscIdAsc(

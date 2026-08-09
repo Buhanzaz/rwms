@@ -7,6 +7,9 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Selects the enabled or disabled asset media-import client from configuration.
+ */
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(MediaAssetImportProperties.class)
 class MediaAssetImportConfiguration {

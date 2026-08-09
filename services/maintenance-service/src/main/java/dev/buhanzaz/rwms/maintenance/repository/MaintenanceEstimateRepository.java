@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+/** Spring Data persistence boundary for MaintenanceEstimate; business transitions remain in the owning service. */
 public interface MaintenanceEstimateRepository extends JpaRepository<MaintenanceEstimate, UUID> {
   List<MaintenanceEstimate> findAllByWarehouseIdOrderByCreatedAtDesc(UUID warehouseId);
   List<MaintenanceEstimate> findAllByRentalItemIdOrderByCreatedAtAscIdAsc(UUID rentalItemId);

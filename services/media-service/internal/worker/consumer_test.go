@@ -209,7 +209,7 @@ func TestProcessingConsumerKeepsRuntimeAliveAndCommitsOnlyPersistedTerminalOutco
 			switch record.Offset {
 			case 9:
 				firstCalls++
-				if firstCalls <= 4 {
+				if firstCalls <= 3 {
 					firstFailureOnce.Do(func() { close(firstFailure) })
 					return dependencyFailure
 				}
@@ -262,7 +262,7 @@ func TestProcessingConsumerKeepsRuntimeAliveAndCommitsOnlyPersistedTerminalOutco
 	if orderingViolation || !terminalPersisted {
 		t.Fatalf("terminal/order state = persisted:%v violation:%v", terminalPersisted, orderingViolation)
 	}
-	wantHandled := []int64{9, 9, 9, 9, 9, 10}
+	wantHandled := []int64{9, 9, 9, 9, 10}
 	if !equalOffsets(handledOffsets, wantHandled) {
 		t.Fatalf("handled offsets = %v, want %v", handledOffsets, wantHandled)
 	}

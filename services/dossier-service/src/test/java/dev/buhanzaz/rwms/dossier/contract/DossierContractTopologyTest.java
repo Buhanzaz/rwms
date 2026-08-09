@@ -54,6 +54,8 @@ class DossierContractTopologyTest {
           "REPAIR_STAGE_COMPLETED",
           "REPAIR_PENDING_ACCEPTANCE",
           "REPAIR_REWORK_CREATED",
+          "REPAIR_TRANSFER_PREPARED",
+          "REPAIR_TRANSFERRED",
           "REPAIR_ACCEPTED",
           "REPAIR_WRITTEN_OFF",
           "INVENTORY_FINDING_ADDED",

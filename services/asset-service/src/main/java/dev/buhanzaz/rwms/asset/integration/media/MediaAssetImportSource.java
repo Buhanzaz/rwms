@@ -2,6 +2,9 @@ package dev.buhanzaz.rwms.asset.integration.media;
 
 import java.util.UUID;
 
+/**
+ * Private asset integration type for media asset import source.
+ */
 public record MediaAssetImportSource(UUID sourceRowId, String publicUrl) {
   private static final String PUBLIC_URL_PATTERN =
       "^https://disk\\.yandex\\.ru/d/[A-Za-z0-9_-]{14}$";

@@ -18,6 +18,9 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.util.UriComponentsBuilder;
 import tools.jackson.databind.JsonNode;
 
+/**
+ * Client-credential HTTP implementation of the inventory private dependency boundary.
+ */
 final class HttpInventoryDependencyGateway implements InventoryDependencyGateway {
   private static final String WAREHOUSE_TIME_ZONE_CLIENT = "inventory-warehouse-timezone";
   private static final String WAREHOUSE_OPERATION_CLIENT = "inventory-warehouse-operation";

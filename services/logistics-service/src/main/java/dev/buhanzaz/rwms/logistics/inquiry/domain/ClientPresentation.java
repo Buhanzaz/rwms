@@ -19,6 +19,9 @@ import lombok.NoArgsConstructor;
 import org.hibernate.proxy.HibernateProxy;
 import org.hibernate.annotations.JdbcTypeCode;
 
+/**
+ * JPA persistence model for Client Presentation in the logistics-owned database.
+ */
 @Entity
 @Table(name = "client_presentation")
 @Getter

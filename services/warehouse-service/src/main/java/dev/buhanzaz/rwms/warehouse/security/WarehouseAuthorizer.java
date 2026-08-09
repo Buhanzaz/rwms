@@ -12,12 +12,25 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Component;
 
+/**
+ * Enforces the API's deliberately narrow user and service-credential boundaries.
+ *
+ * <p>Public directory access requires a user principal, while every internal route checks an exact
+ * service identity and single-purpose scope. For owner-attributed operations, the credential — not
+ * the request body — determines the owner.
+ */
 @Component
 public class WarehouseAuthorizer {
   private static final UUID DEVELOPMENT_SUBJECT =
       UUID.fromString("00000000-0000-0000-0000-0000000000d1");
   private final boolean developmentPublicBypass;
 
+  /**
+   * Creates the authorization boundary and constrains its development bypass.
+   *
+   * @param environment active environment used to constrain the development-only bypass
+   * @param developmentAuthBypass configured development-only public access flag
+   */
   public WarehouseAuthorizer(
       Environment environment,
       @Value("${rwms.security.dev-auth-bypass:false}") boolean developmentAuthBypass) {
@@ -26,18 +39,33 @@ public class WarehouseAuthorizer {
         developmentAuthBypass && environment.matchesProfiles("dev") && !production;
   }
 
+  /**
+   * Requires a user principal with directory-read authority.
+   *
+   * @param jwt authenticated caller
+   */
   public void requireWarehouseRead(Jwt jwt) {
     if (developmentPublicBypass) return;
     requireUser(jwt);
     requireScope(jwt, "warehouse.read");
   }
 
+  /**
+   * Requires a system administrator with mutation authority.
+   *
+   * @param jwt authenticated caller
+   */
   public void requireSystemAdminWrite(Jwt jwt) {
     if (developmentPublicBypass) return;
     requireSystemAdmin(jwt);
     requireScope(jwt, "rwms.write");
   }
 
+  /**
+   * Requires a user principal whose global role is exactly {@code SYSTEM_ADMIN}.
+   *
+   * @param jwt authenticated caller
+   */
   public void requireSystemAdmin(Jwt jwt) {
     if (developmentPublicBypass) return;
     requireUser(jwt);
@@ -46,6 +74,12 @@ public class WarehouseAuthorizer {
     }
   }
 
+  /**
+   * Tests whether the caller has the system-administrator role.
+   *
+   * @param jwt authenticated caller, if any
+   * @return whether the caller is a system administrator
+   */
   public boolean isSystemAdmin(Jwt jwt) {
     return developmentPublicBypass
         || (jwt != null
@@ -53,6 +87,12 @@ public class WarehouseAuthorizer {
             && "SYSTEM_ADMIN".equals(jwt.getClaimAsString("global_role")));
   }
 
+  /**
+   * Returns the UUID user identity used to scope create idempotency records.
+   *
+   * @param jwt authenticated user caller
+   * @return caller UUID
+   */
   public UUID subjectId(Jwt jwt) {
     if (developmentPublicBypass) return DEVELOPMENT_SUBJECT;
     requireUser(jwt);
@@ -63,16 +103,29 @@ public class WarehouseAuthorizer {
     }
   }
 
+  /**
+   * Requires the narrow internal credential issued to {@code auth-service}.
+   *
+   * @param jwt authenticated service caller
+   */
   public void requireInternalAuthService(Jwt jwt) {
     requireInternalWarehouseReader(jwt, "auth-service");
   }
 
-  /** A separate private registry path keeps asset-service from using auth-service's endpoint. */
+  /**
+   * A separate private registry path keeps asset-service from using auth-service's endpoint.
+   *
+   * @param jwt authenticated asset-service caller
+   */
   public void requireInternalAssetService(Jwt jwt) {
     requireInternalWarehouseReader(jwt, "asset-service");
   }
 
-  /** Inventory receives only active warehouse identity, version, and canonical timezone. */
+  /**
+   * Inventory receives only active warehouse identity, version, and canonical timezone.
+   *
+   * @param jwt authenticated inventory-service caller
+   */
   public void requireInternalInventoryService(Jwt jwt) {
     String clientId = "inventory-service";
     if (jwt == null
@@ -86,7 +139,11 @@ public class WarehouseAuthorizer {
     }
   }
 
-  /** Logistics receives only an exact warehouse identity for origin/destination validation. */
+  /**
+   * Logistics receives only an exact warehouse identity for origin/destination validation.
+   *
+   * @param jwt authenticated logistics-service caller
+   */
   public void requireInternalLogisticsService(Jwt jwt) {
     String clientId = "logistics-service";
     if (jwt == null
@@ -103,6 +160,8 @@ public class WarehouseAuthorizer {
   /**
    * Operation owners resolve a historical timezone only through this explicit as-of contract.
    * A broad warehouse.read token cannot be repurposed for it.
+   *
+   * @param jwt authenticated lifecycle-owner caller
    */
   public void requireInternalTimeZoneReader(Jwt jwt) {
     requireKnownLifecycleOwner(jwt, "warehouse.timezone.read");
@@ -111,12 +170,19 @@ public class WarehouseAuthorizer {
   /**
    * The authenticated client determines the durable operation source. Request bodies cannot
    * choose a source and therefore cannot impersonate another owning workflow.
+   *
+   * @param jwt authenticated operation-owner caller
+   * @return operation source inferred from the client identity
    */
   public WarehouseOperationSource requireInternalOperationMarker(Jwt jwt) {
     return requireKnownOperationOwner(jwt, "warehouse.operation.mark");
   }
 
-  /** Resource owners ask this narrow boundary whether one directional operation is admitted. */
+  /**
+   * Resource owners ask this narrow boundary whether one directional operation is admitted.
+   *
+   * @param jwt authenticated lifecycle-owner caller
+   */
   public void requireInternalLifecycleAdmissionReader(Jwt jwt) {
     requireKnownLifecycleOwner(jwt, "warehouse.lifecycle.read");
   }
@@ -124,12 +190,20 @@ public class WarehouseAuthorizer {
   /**
    * A durable pull backlog lets every owner reconcile even when an event was missed or it owns no
    * live records for the warehouse.
+   *
+   * @param jwt authenticated lifecycle-owner caller
+   * @return lifecycle owner inferred from the client identity
    */
   public WarehouseLifecycleReadinessOwner requireInternalLifecycleWorkReader(Jwt jwt) {
     return requireKnownLifecycleOwner(jwt, "warehouse.lifecycle.read");
   }
 
-  /** Lifecycle readiness is attributed to the authenticated resource owner, never a request body. */
+  /**
+   * Lifecycle readiness is attributed to the authenticated resource owner, never a request body.
+   *
+   * @param jwt authenticated lifecycle-owner caller
+   * @return lifecycle owner inferred from the client identity
+   */
   public WarehouseLifecycleReadinessOwner requireInternalLifecycleReadinessConfirmer(Jwt jwt) {
     return requireKnownLifecycleOwner(jwt, "warehouse.lifecycle.confirm");
   }

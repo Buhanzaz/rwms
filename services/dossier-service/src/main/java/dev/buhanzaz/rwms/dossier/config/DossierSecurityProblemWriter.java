@@ -10,6 +10,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
+/** Writes safe security Problem Details before an unauthenticated request reaches dossier controllers. */
 @Component
 final class DossierSecurityProblemWriter {
   private final ObjectMapper mapper;

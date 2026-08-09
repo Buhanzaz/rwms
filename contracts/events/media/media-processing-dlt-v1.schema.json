@@ -8,7 +8,12 @@
   "required": ["failureCode", "messageSha256", "recordedAt"],
   "properties": {
     "failureCode": {
-      "enum": ["INVALID_PROCESSING_REQUEST", "VALIDATION_FAILED", "PROCESSING_DEPENDENCY_UNAVAILABLE"]
+      "enum": [
+        "INVALID_PROCESSING_REQUEST",
+        "VALIDATION_FAILED",
+        "PROCESSING_DEPENDENCY_UNAVAILABLE",
+        "PROCESSING_ATTEMPT_EXHAUSTED"
+      ]
     },
     "messageSha256": {
       "type": "string",

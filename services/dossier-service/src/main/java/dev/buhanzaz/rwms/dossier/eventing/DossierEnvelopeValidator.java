@@ -12,7 +12,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.SerializationFeature;
 
-/** Validates the exact Stage 9 source surface before any raw value reaches PostgreSQL. */
+/** Validates the exact dossier source-contract surface before any raw value reaches PostgreSQL. */
 @Component
 public final class DossierEnvelopeValidator {
   private static final Set<String> ENVELOPE_FIELDS =
@@ -66,6 +66,10 @@ public final class DossierEnvelopeValidator {
     this.producerSchemas = producerSchemas;
   }
 
+  /**
+   * Parses one Kafka record only when its topic policy, canonical V2 envelope, aggregate key and
+   * producer-specific payload schema all agree; validation itself does not persist raw input.
+   */
   public DossierValidatedEvent validate(
       String topic, int partition, long offset, Object kafkaKey, byte[] raw) {
     if (partition < 0 || offset < 0 || raw == null || raw.length == 0) {
@@ -233,7 +237,7 @@ public final class DossierEnvelopeValidator {
         "maintenance.estimate.draft-changed.v1", "ESTIMATE_DRAFT_CHANGED",
         "maintenance.estimate.completed.v1", "ESTIMATE_COMPLETED",
         "maintenance.estimate.amended.v1", "ESTIMATE_AMENDED"));
-    Set<String> repair = Set.of("repairId", "rootRepairId", "sourceRepairId", "estimateId", "warehouseId", "rentalItemId", "origin", "kind", "executionState", "acceptanceState", "dispatchDate", "stages");
+    Set<String> repair = Set.of("repairId", "rootRepairId", "sourceRepairId", "estimateId", "warehouseId", "rentalItemId", "origin", "kind", "executionState", "acceptanceState", "dispatchDate", "priority", "stages");
     addMaintenance(result, "REPAIR", repair, "repairId", Map.ofEntries(
         Map.entry("maintenance.repair.created.v1", "REPAIR_CREATED"),
         Map.entry("maintenance.repair.plan-changed.v1", "REPAIR_PLAN_CHANGED"),
@@ -241,6 +245,8 @@ public final class DossierEnvelopeValidator {
         Map.entry("maintenance.repair.stage-completed.v1", "REPAIR_STAGE_COMPLETED"),
         Map.entry("maintenance.repair.pending-acceptance.v1", "REPAIR_PENDING_ACCEPTANCE"),
         Map.entry("maintenance.repair.rework-created.v1", "REPAIR_REWORK_CREATED"),
+        Map.entry("maintenance.repair.transfer-prepared.v1", "REPAIR_TRANSFER_PREPARED"),
+        Map.entry("maintenance.repair.transferred.v1", "REPAIR_TRANSFERRED"),
         Map.entry("maintenance.repair.accepted.v1", "REPAIR_ACCEPTED"),
         Map.entry("maintenance.repair.written-off.v1", "REPAIR_WRITTEN_OFF")));
 
@@ -287,11 +293,12 @@ public final class DossierEnvelopeValidator {
       }
     }
 
-    Set<String> boardTask = Set.of("boardTaskId", "warehouseId", "externalTaskId", "status", "plannedDurationMinutes", "deadlineAt", "doneAt", "deleted");
+    Set<String> boardTask = Set.of("boardTaskId", "warehouseId", "externalTaskId", "status", "scheduledDate", "lane", "priority", "pinned", "plannedDurationMinutes", "deadlineAt", "doneAt", "deleted");
+    Set<String> requiredBoardTask = Set.of("boardTaskId", "warehouseId", "externalTaskId", "status", "lane", "plannedDurationMinutes", "deadlineAt", "doneAt", "deleted");
     for (String suffix : Set.of("created", "changed", "completed", "cancelled")) {
-      add(result, "rwms.task-board.board-task.v1", "BOARD_TASK", SubjectKind.NONE, boardTask, boardTask, "boardTaskId", null, "task-board.board-task." + suffix + ".v1");
+      add(result, "rwms.task-board.board-task.v1", "BOARD_TASK", SubjectKind.NONE, boardTask, requiredBoardTask, "boardTaskId", null, "task-board.board-task." + suffix + ".v1");
     }
-    Set<String> queueEntry = Set.of("queueEntryId", "taskId", "queueId", "routeIndex", "queuePosition", "entryType", "status", "plannedDurationMinutes", "activeStartedAt", "pausedAt", "doneAt", "activeWorkSeconds", "pauseOrigin", "assignments", "timeEvents", "interruptions", "deleted");
+    Set<String> queueEntry = Set.of("queueEntryId", "taskId", "queueId", "routeIndex", "queuePosition", "entryType", "status", "plannedDurationMinutes", "activeStartedAt", "pausedAt", "doneAt", "activeWorkSeconds", "originalBudgetSeconds", "currentBudgetSeconds", "pauseOrigin", "assignments", "timeEvents", "interruptions", "deleted");
     for (String suffix : Set.of("created", "changed", "taken", "paused", "resumed", "completed", "moved", "cancelled", "interrupted", "returning")) {
       add(result, "rwms.task-board.queue-entry.v1", "QUEUE_ENTRY", SubjectKind.NONE, queueEntry, queueEntry, "queueEntryId", null, "task-board.queue-entry." + suffix + ".v1");
     }
@@ -301,7 +308,7 @@ public final class DossierEnvelopeValidator {
   private static Set<String> logisticsEvents(String family) {
     return switch (family) {
       case "return" -> Set.of("logistics.return.created.v1", "logistics.return.registration-started.v1", "logistics.return.inspection-required.v1", "logistics.return.acceptance-started.v1", "logistics.return.accepted.v1", "logistics.return.estimate-started.v1", "logistics.return.estimate-requested.v1", "logistics.return.conflicted.v1", "logistics.return.conflict.v1", "logistics.return.reconciliation-required.v1");
-      case "shipment" -> Set.of("logistics.shipment.created.v1", "logistics.shipment.preparation-started.v1", "logistics.shipment.planned.v1", "logistics.shipment.confirmation-started.v1", "logistics.shipment.preparation-confirmed.v1", "logistics.shipment.cancellation-started.v1", "logistics.shipment.cancelled.v1", "logistics.shipment.conflict.v1", "logistics.shipment.reconciliation-required.v1");
+      case "shipment" -> Set.of("logistics.shipment.created.v1", "logistics.shipment.draft-updated.v1", "logistics.shipment.preparation-started.v1", "logistics.shipment.planned.v1", "logistics.shipment.confirmation-started.v1", "logistics.shipment.preparation-confirmed.v1", "logistics.shipment.cancellation-started.v1", "logistics.shipment.cancelled.v1", "logistics.shipment.conflict.v1", "logistics.shipment.reconciliation-required.v1");
       case "transfer" -> Set.of("logistics.transfer.created.v1", "logistics.transfer.departure-started.v1", "logistics.transfer.departed.v1", "logistics.transfer.arrival-started.v1", "logistics.transfer.line-arrived.v1", "logistics.transfer.completed.v1", "logistics.transfer.cancelled.v1", "logistics.transfer.conflict.v1", "logistics.transfer.reconciliation-required.v1");
       default -> throw new IllegalArgumentException("Unsupported family");
     };

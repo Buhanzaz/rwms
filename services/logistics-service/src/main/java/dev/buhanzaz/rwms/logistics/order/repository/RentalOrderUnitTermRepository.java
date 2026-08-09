@@ -6,6 +6,9 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+/**
+ * Spring Data persistence boundary for logistics-owned Rental Order Unit Term Repository; it does not own cross-service workflow decisions.
+ */
 public interface RentalOrderUnitTermRepository
     extends JpaRepository<RentalOrderUnitTerm, UUID> {
   List<RentalOrderUnitTerm> findAllByOrder_IdOrderByRentalItemIdAsc(UUID orderId);

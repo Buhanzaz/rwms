@@ -15,6 +15,7 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+/** Stores a proved relation from a source subject to a cabin without inventing an association from unrelated data. */
 @Entity
 @Table(name = "dossier_subject_association")
 @Getter

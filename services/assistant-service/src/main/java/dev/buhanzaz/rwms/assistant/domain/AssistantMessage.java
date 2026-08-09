@@ -13,6 +13,7 @@ import java.util.Objects;
 import java.util.UUID;
 import org.hibernate.proxy.HibernateProxy;
 
+/** Immutable persisted user or assistant message that provides server-authoritative turn history. */
 @Entity
 @Table(name = "assistant_message")
 public class AssistantMessage {

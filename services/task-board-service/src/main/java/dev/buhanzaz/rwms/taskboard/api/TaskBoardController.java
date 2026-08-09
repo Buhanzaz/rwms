@@ -22,6 +22,13 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
 
+/**
+ * Public operational board API for warehouse managers and eligible workers.
+ *
+ * <p>The service owns task state, queue position, assignments and time events. Source services
+ * request their work through explicit private contracts; clients receive a read model and issue
+ * version-fenced commands rather than reconstructing workflow in the browser or app.
+ */
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/warehouses/{warehouseId}/task-board")
@@ -30,6 +37,12 @@ public class TaskBoardController {
   private final WarehouseAccessAuthorizer access;
   private final ObjectMapper objectMapper;
 
+  /**
+   * Returns a date-scoped board snapshot with a weak semantic ETag.
+   *
+   * <p>Rolling timer counters are intentionally excluded from the validator, while timer state,
+   * next transition, requested date and shadow-lane selection remain part of it.
+   */
   @GetMapping
   public ResponseEntity<TaskBoardSnapshot> snapshot(
       @AuthenticationPrincipal Jwt jwt,
@@ -46,6 +59,7 @@ public class TaskBoardController {
     return ResponseEntity.ok().eTag(etag).body(snapshot);
   }
 
+  /** Returns the dedicated driver board without mixing it with ordinary operational queues. */
   @GetMapping("/logistics")
   public LogisticsBoardSnapshot logisticsSnapshot(
       @AuthenticationPrincipal Jwt jwt, @PathVariable UUID warehouseId) {
@@ -53,6 +67,7 @@ public class TaskBoardController {
     return service.logisticsSnapshot(warehouseId);
   }
 
+  /** Lists worker groups currently eligible to serve the selected physical queue. */
   @GetMapping("/queues/{queueId}/eligible-groups")
   public List<WorkerGroupDto> eligible(
       @AuthenticationPrincipal Jwt jwt,
@@ -62,6 +77,7 @@ public class TaskBoardController {
     return service.eligibleGroups(warehouseId, queueId);
   }
 
+  /** Returns the durable time-event history for one entry in its warehouse scope. */
   @GetMapping("/entries/{entryId}/history")
   public List<TimeEventDto> history(
       @AuthenticationPrincipal Jwt jwt,
@@ -71,6 +87,7 @@ public class TaskBoardController {
     return service.history(warehouseId, entryId);
   }
 
+  /** Creates a user-originated task and its immutable sequence of route entries. */
   @PostMapping("/tasks")
   @ResponseStatus(HttpStatus.CREATED)
   public TaskBoardSnapshot create(
@@ -81,6 +98,7 @@ public class TaskBoardController {
     return service.createTask(warehouseId, request);
   }
 
+  /** Cancels the task identified by the stable source-facing external UUID. */
   @PostMapping("/tasks/by-external-id/{externalTaskId}/cancel")
   public CancelledTaskDto cancel(
       @AuthenticationPrincipal Jwt jwt,
@@ -91,6 +109,7 @@ public class TaskBoardController {
     return service.cancelTask(warehouseId, externalTaskId, request);
   }
 
+  /** Resolves the registration and route state for an external task UUID. */
   @GetMapping("/tasks/by-external-id/{externalTaskId}")
   public BoardTaskRegistrationDto registration(
       @AuthenticationPrincipal Jwt jwt,
@@ -100,6 +119,7 @@ public class TaskBoardController {
     return service.registration(warehouseId, externalTaskId);
   }
 
+  /** Takes an entry under its observed version and records the authenticated worker when present. */
   @PostMapping("/entries/{entryId}/take")
   public BoardEntryDto take(
       @AuthenticationPrincipal Jwt jwt,
@@ -110,6 +130,7 @@ public class TaskBoardController {
     return service.take(warehouseId, entryId, request, access.workerId(jwt));
   }
 
+  /** Pauses an active entry with an optional durable reason. */
   @PostMapping("/entries/{entryId}/pause")
   public BoardEntryDto pause(
       @AuthenticationPrincipal Jwt jwt,
@@ -120,6 +141,7 @@ public class TaskBoardController {
     return service.pause(warehouseId, entryId, request, access.workerId(jwt));
   }
 
+  /** Resumes a paused entry under its optimistic-concurrency fence. */
   @PostMapping("/entries/{entryId}/resume")
   public BoardEntryDto resume(
       @AuthenticationPrincipal Jwt jwt,
@@ -130,6 +152,7 @@ public class TaskBoardController {
     return service.resume(warehouseId, entryId, request, access.workerId(jwt));
   }
 
+  /** Completes an entry under its optimistic-concurrency fence. */
   @PostMapping("/entries/{entryId}/complete")
   public BoardEntryDto complete(
       @AuthenticationPrincipal Jwt jwt,
@@ -140,6 +163,7 @@ public class TaskBoardController {
     return service.complete(warehouseId, entryId, request, access.workerId(jwt));
   }
 
+  /** Moves an entry to an eligible target queue, date and position as one version-fenced command. */
   @PostMapping("/entries/{entryId}/move")
   public TaskBoardSnapshot move(
       @AuthenticationPrincipal Jwt jwt,
@@ -150,6 +174,12 @@ public class TaskBoardController {
     return service.move(warehouseId, entryId, request);
   }
 
+  /**
+   * Exchanges two complete visual date columns after proving the caller observed every entry.
+   *
+   * <p>The complete expectation set prevents a stale or partial client from moving only a subset
+   * of a task's route.
+   */
   @PostMapping("/dates/swap")
   public TaskBoardSnapshot swapDates(
       @AuthenticationPrincipal Jwt jwt,
@@ -159,6 +189,7 @@ public class TaskBoardController {
     return service.swapDates(warehouseId, request);
   }
 
+  /** Pins or unpins a task in every route queue without changing its position. */
   @PostMapping("/tasks/{taskId}/pin")
   public TaskBoardSnapshot pin(
       @AuthenticationPrincipal Jwt jwt,

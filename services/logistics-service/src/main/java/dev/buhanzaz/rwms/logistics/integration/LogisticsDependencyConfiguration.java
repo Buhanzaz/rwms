@@ -14,6 +14,10 @@ import org.springframework.security.oauth2.client.registration.InMemoryClientReg
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.web.client.RestClient;
 
+/**
+ * Builds the private logistics dependency gateway from local configuration. Enabled clients use
+ * service credentials; incoming user credentials never cross this boundary.
+ */
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(LogisticsDependencyProperties.class)
 class LogisticsDependencyConfiguration {

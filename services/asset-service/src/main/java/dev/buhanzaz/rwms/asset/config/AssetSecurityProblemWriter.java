@@ -15,6 +15,9 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Writes asset authentication and authorization failures as safe Problem Details responses.
+ */
 @Component
 public class AssetSecurityProblemWriter {
   private final ObjectMapper objectMapper;

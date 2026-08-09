@@ -1,3 +1,5 @@
+// Package realtime provides the process-local SSE invalidation fan-out used by
+// the media API. Durable state remains outside this transient transport.
 package realtime
 
 import (
@@ -69,10 +71,13 @@ type Hub struct {
 	subscribers map[uuid.UUID]map[*subscriber]struct{}
 }
 
+// NewHub creates an empty warehouse-scoped invalidation hub.
 func NewHub() *Hub {
 	return &Hub{subscribers: make(map[uuid.UUID]map[*subscriber]struct{})}
 }
 
+// Publish fan-outs one invalidation to the event's warehouse subscribers. A
+// slow subscriber receives a RESYNC marker instead of blocking a write path.
 func (hub *Hub) Publish(event Event) {
 	if hub == nil || event.WarehouseID == uuid.Nil {
 		return

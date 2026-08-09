@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import org.springframework.stereotype.Component;
 
+/** Validates serialized sanitized cabin-activity and DLT payloads against their canonical outbound schemas. */
 @Component
 public final class DossierOutboundSchemaValidator {
   private static final JsonSchemaFactory FACTORY =

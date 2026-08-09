@@ -12,6 +12,10 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Lease-based store for sanitized dead-letter metadata, using message hashes rather than retained
+ * rejected payloads so terminal delivery failures remain recoverable without data leakage.
+ */
 @Repository
 public class MaintenanceSanitizedDltStore {
   private final JdbcTemplate jdbc;

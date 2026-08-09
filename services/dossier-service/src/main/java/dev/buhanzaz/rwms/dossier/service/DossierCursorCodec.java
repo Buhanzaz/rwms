@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
+/** Signs and verifies cursor positions bound to a cabin and normalized filter set to prevent cross-query reuse. */
 @Component
 public final class DossierCursorCodec {
   private final ObjectMapper mapper;

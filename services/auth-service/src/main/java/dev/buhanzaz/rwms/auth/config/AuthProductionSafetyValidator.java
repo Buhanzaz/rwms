@@ -14,6 +14,15 @@ import org.springframework.core.env.Environment;
 import org.springframework.core.env.Profiles;
 import org.springframework.stereotype.Component;
 
+/**
+ * Fails application startup when the authentication boundary has an unsafe production configuration.
+ *
+ * <p>The checks deliberately run before normal application initialization. They prevent development
+ * credentials, insecure public OAuth endpoints, invalid Android App Links, and an incomplete Kafka
+ * outbox/consumer cutover from reaching an environment where the service is authoritative. Datasource
+ * settings are also checked by {@link AuthDatasourceEnvironmentPostProcessor} before the application
+ * context can create a {@code DataSource}.</p>
+ */
 @Component
 @RequiredArgsConstructor
 @Order(Ordered.HIGHEST_PRECEDENCE)
@@ -23,6 +32,12 @@ public class AuthProductionSafetyValidator implements InitializingBean {
     private final Environment environment;
     private final RwmsKafkaProperties kafkaProperties;
 
+    /**
+     * Validates the active profile and all security-sensitive deployment invariants.
+     *
+     * <p>Development defaults are permitted only for {@code dev} and {@code test}; every other
+     * profile must use HTTPS public endpoints and the declared production Kafka configuration.</p>
+     */
     @Override
     public void afterPropertiesSet() {
         boolean productionProfile = environment.acceptsProfiles(Profiles.of("prod", "production"));

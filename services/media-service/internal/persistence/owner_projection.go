@@ -23,12 +23,19 @@ const (
 )
 
 var (
-	ErrVersionGap         = errors.New("aggregate version gap")
+	// ErrVersionGap rejects a non-contiguous authoritative inventory fact.
+	ErrVersionGap = errors.New("aggregate version gap")
+	// ErrOwnerProofConflict rejects a reused or non-contiguous owner revision.
 	ErrOwnerProofConflict = errors.New("owner proof revision conflict")
-	ErrAggregateBlocked   = errors.New("inventory finding aggregate is quarantined")
-	ErrReconciliation     = errors.New("inventory owner reconciliation evidence is invalid")
+	// ErrAggregateBlocked indicates that the inventory aggregate is quarantined
+	// and must not authorize public media operations.
+	ErrAggregateBlocked = errors.New("inventory finding aggregate is quarantined")
+	// ErrReconciliation rejects invalid operator-reviewed owner recovery data.
+	ErrReconciliation = errors.New("inventory owner reconciliation evidence is invalid")
 )
 
+// InventoryOwnerProof is authoritative inventory metadata that binds a finding
+// to a warehouse and active media owner revision.
 type InventoryOwnerProof struct {
 	OwnerType     string
 	OwnerID       uuid.UUID
@@ -37,6 +44,8 @@ type InventoryOwnerProof struct {
 	Active        bool
 }
 
+// InventoryFindingMessage is the strictly parsed canonical inventory Kafka
+// record used to advance a finding's local owner projection.
 type InventoryFindingMessage struct {
 	EventID          uuid.UUID
 	BodySHA256       string
@@ -52,11 +61,15 @@ type InventoryFindingMessage struct {
 	Proof            *InventoryOwnerProof
 }
 
+// InventoryFindingApplyResult reports an exact replay or a newly quarantined
+// owner aggregate after applying one fact.
 type InventoryFindingApplyResult struct {
 	Duplicate   bool
 	Quarantined bool
 }
 
+// InventoryOwnerDLTMessage is the sanitized media-owned dead-letter record for
+// an invalid or exhausted inventory owner fact.
 type InventoryOwnerDLTMessage struct {
 	SourceEventID    uuid.UUID
 	BodySHA256       string
@@ -67,6 +80,8 @@ type InventoryOwnerDLTMessage struct {
 	AttemptCount     int
 }
 
+// InventoryOwnerRetryState stores durable retry identity and availability for
+// a transient inventory owner-projection failure.
 type InventoryOwnerRetryState struct {
 	Attempt          int
 	AvailableAt      time.Time
@@ -76,6 +91,8 @@ type InventoryOwnerRetryState struct {
 	WarehouseID      uuid.UUID
 }
 
+// ApplyInventoryFindingMessage advances one inventory finding owner stream
+// atomically, with deduplication, continuity checks, and quarantine handling.
 func (repository *Repository) ApplyInventoryFindingMessage(
 	ctx context.Context,
 	message InventoryFindingMessage,
@@ -450,6 +467,7 @@ func validateInventoryFindingMessage(message InventoryFindingMessage) error {
 	return nil
 }
 
+// RecordInventoryOwnerDLT persists an idempotent sanitized dead-letter fact.
 func (repository *Repository) RecordInventoryOwnerDLT(
 	ctx context.Context,
 	message InventoryOwnerDLTMessage,
@@ -485,6 +503,8 @@ func (repository *Repository) RecordInventoryOwnerDLT(
 // QuarantineInventoryOwnerProcessingFailure is the terminal owner-consumer
 // transaction. The DLT, open quarantine, binding invalidation, inbox outcome,
 // and retry cleanup become visible together before the Kafka offset is committed.
+// QuarantineInventoryOwnerProcessingFailure blocks an aggregate after bounded
+// transient consumer retries are exhausted.
 func (repository *Repository) QuarantineInventoryOwnerProcessingFailure(
 	ctx context.Context,
 	message InventoryFindingMessage,
@@ -531,6 +551,7 @@ func (repository *Repository) QuarantineInventoryOwnerProcessingFailure(
 	return tx.Commit(ctx)
 }
 
+// ScheduleInventoryOwnerRetry records the next safe retry time for one fact.
 func (repository *Repository) ScheduleInventoryOwnerRetry(
 	ctx context.Context,
 	message InventoryFindingMessage,
@@ -565,6 +586,7 @@ func (repository *Repository) ScheduleInventoryOwnerRetry(
 	return nil
 }
 
+// InventoryOwnerRetryState returns the durable retry state for a fact identity.
 func (repository *Repository) InventoryOwnerRetryState(
 	ctx context.Context,
 	eventID uuid.UUID,
@@ -593,6 +615,8 @@ func (repository *Repository) InventoryOwnerRetryState(
 // mismatch before apply. The durable retry row is the authoritative prior
 // identity, so both the prior and incoming aggregate are failed closed in the
 // same transaction as conflict evidence, DLT publication and retry cleanup.
+// QuarantineInventoryOwnerRetryIdentityConflict blocks a finding when the same
+// event identity carries conflicting retry evidence.
 func (repository *Repository) QuarantineInventoryOwnerRetryIdentityConflict(
 	ctx context.Context,
 	message InventoryFindingMessage,
@@ -709,6 +733,7 @@ func deactivateInventoryFindingBindings(ctx context.Context, tx pgx.Tx, aggregat
 	return nil
 }
 
+// ClearInventoryOwnerRetry removes retry bookkeeping after the fact persists.
 func (repository *Repository) ClearInventoryOwnerRetry(ctx context.Context, eventID uuid.UUID) error {
 	_, err := repository.pool.Exec(ctx, `delete from media_retry_schedule
 		where consumer_name=$1 and event_id=$2`, InventoryOwnerConsumerGroup, eventID)
@@ -801,6 +826,8 @@ func nullableAggregateType(aggregateID *uuid.UUID) any {
 // ValidatedOwnerProof remains an internal fixture boundary for existing API and
 // persistence integration tests. Production Kafka delivery always uses the
 // strict worker parser and ApplyInventoryFindingMessage.
+// ValidatedOwnerProof is a normalized private service proof ready for durable
+// owner-projection application.
 type ValidatedOwnerProof struct {
 	ConsumerName     string
 	EventID          uuid.UUID
@@ -816,6 +843,8 @@ type ValidatedOwnerProof struct {
 	RecordedAt       time.Time
 }
 
+// ApplyValidatedOwnerProof applies a current service-signed owner proof with
+// revision fencing and quarantine rules.
 func (repository *Repository) ApplyValidatedOwnerProof(
 	ctx context.Context,
 	proof ValidatedOwnerProof,
