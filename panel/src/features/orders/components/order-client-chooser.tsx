@@ -1,9 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useState,
-  type RefObject,
-} from "react"
+import { useEffect, useMemo, useState, type RefObject } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Add01Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -26,6 +21,7 @@ import {
   FieldLabel,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Select,
   SelectContent,
@@ -46,6 +42,7 @@ import {
   type OrderClientSearchItem,
   type OrderClientType,
 } from "@/features/orders/domain/orders"
+import { clientNeedsContactPerson } from "@/features/clients/domain/clients"
 
 export type OrderClientChoice =
   | {
@@ -57,7 +54,10 @@ export type OrderClientChoice =
       clientType: OrderClientType
       displayName: string
       phone: string
+      contactPerson: string | null
       email: string | null
+      comment: string | null
+      source: string | null
     }
 
 type ExistingClientOption = {
@@ -81,6 +81,7 @@ export function OrderClientChooser({
   actorId,
   idPrefix,
   portalContainer,
+  initialClient = null,
   newClientCreationContext = "после успешного создания бронирования",
   onChange,
 }: {
@@ -88,16 +89,30 @@ export function OrderClientChooser({
   actorId: string
   idPrefix: string
   portalContainer?: RefObject<HTMLDivElement | null>
+  initialClient?: OrderClientSearchItem | null
   newClientCreationContext?: string
   onChange: (choice: OrderClientChoice | null) => void
 }) {
-  const [clientType, setClientType] =
-    useState<OrderClientType>("LEGAL_ENTITY")
+  const [clientType, setClientType] = useState<OrderClientType>(
+    initialClient?.type ?? "LEGAL_ENTITY"
+  )
   const [clientComboboxOpen, setClientComboboxOpen] = useState(false)
-  const [search, setSearch] = useState("")
-  const [selection, setSelection] = useState<ClientOption | null>(null)
+  const [search, setSearch] = useState(initialClient?.displayName ?? "")
+  const [selection, setSelection] = useState<ClientOption | null>(() =>
+    initialClient
+      ? {
+          kind: "existing",
+          value: initialClient.id,
+          label: initialClient.displayName,
+          client: initialClient,
+        }
+      : null
+  )
   const [phone, setPhone] = useState("")
+  const [contactPerson, setContactPerson] = useState("")
   const [email, setEmail] = useState("")
+  const [comment, setComment] = useState("")
+  const [source, setSource] = useState("")
   const normalizedSearch = normalizeClientSearch(search)
   const displayName = normalizeClientDisplayName(search)
 
@@ -121,13 +136,22 @@ export function OrderClientChooser({
   })
   const existingOptions = useMemo<ExistingClientOption[]>(
     () =>
-      (clientsQuery.data?.content ?? []).map((client) => ({
-        kind: "existing",
-        value: client.id,
-        label: client.displayName,
-        client,
-      })),
-    [clientsQuery.data?.content]
+      [
+        ...(initialClient ? [initialClient] : []),
+        ...(clientsQuery.data?.content ?? []),
+      ]
+        .filter(
+          (client, index, clients) =>
+            clients.findIndex((candidate) => candidate.id === client.id) ===
+            index
+        )
+        .map((client) => ({
+          kind: "existing",
+          value: client.id,
+          label: client.displayName,
+          client,
+        })),
+    [clientsQuery.data?.content, initialClient]
   )
   const exactMatch =
     clientsQuery.isSuccess &&
@@ -159,17 +183,32 @@ export function OrderClientChooser({
         clientType,
         displayName: selection.displayName,
         phone: phone.trim(),
+        contactPerson: contactPerson.trim() || null,
         email: email.trim() || null,
+        comment: comment.trim() || null,
+        source: source.trim() || null,
       })
       return
     }
     onChange(null)
-  }, [clientType, email, onChange, phone, selection])
+  }, [
+    clientType,
+    comment,
+    contactPerson,
+    email,
+    onChange,
+    phone,
+    selection,
+    source,
+  ])
 
   function resetChoice() {
     setSelection(null)
     setPhone("")
+    setContactPerson("")
     setEmail("")
+    setComment("")
+    setSource("")
   }
 
   function selectNewClient() {
@@ -183,9 +222,7 @@ export function OrderClientChooser({
   return (
     <>
       <Field>
-        <FieldLabel htmlFor={`${idPrefix}-client-type`}>
-          Тип клиента
-        </FieldLabel>
+        <FieldLabel htmlFor={`${idPrefix}-client-type`}>Тип клиента</FieldLabel>
         <Select
           value={clientType}
           onValueChange={(value) => {
@@ -290,11 +327,9 @@ export function OrderClientChooser({
                     <ComboboxItem key={option.value} value={option}>
                       <span className="min-w-0">
                         <span className="block truncate">{option.label}</span>
-                        {option.client.phone ? (
-                          <span className="block text-xs text-muted-foreground">
-                            {option.client.phone}
-                          </span>
-                        ) : null}
+                        <span className="block text-xs text-muted-foreground">
+                          {option.client.phone ?? "Телефон не указан"}
+                        </span>
                       </span>
                     </ComboboxItem>
                   )}
@@ -342,10 +377,26 @@ export function OrderClientChooser({
               Обязателен и используется для поиска существующего клиента.
             </FieldDescription>
           </Field>
+          {clientNeedsContactPerson(clientType) ? (
+            <Field>
+              <FieldLabel htmlFor={`${idPrefix}-client-contact-person`}>
+                Основное контактное лицо
+              </FieldLabel>
+              <Input
+                id={`${idPrefix}-client-contact-person`}
+                value={contactPerson}
+                required
+                autoComplete="name"
+                placeholder="Фамилия Имя"
+                onChange={(event) => setContactPerson(event.target.value)}
+              />
+              <FieldDescription>
+                Обязательно для ИП и юридического лица.
+              </FieldDescription>
+            </Field>
+          ) : null}
           <Field>
-            <FieldLabel htmlFor={`${idPrefix}-client-email`}>
-              Email
-            </FieldLabel>
+            <FieldLabel htmlFor={`${idPrefix}-client-email`}>Email</FieldLabel>
             <Input
               id={`${idPrefix}-client-email`}
               type="email"
@@ -353,6 +404,31 @@ export function OrderClientChooser({
               autoComplete="email"
               placeholder="client@example.ru"
               onChange={(event) => setEmail(event.target.value)}
+            />
+            <FieldDescription>Необязательное поле.</FieldDescription>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor={`${idPrefix}-client-source`}>
+              Источник клиента
+            </FieldLabel>
+            <Input
+              id={`${idPrefix}-client-source`}
+              value={source}
+              maxLength={255}
+              placeholder="Рекомендация, сайт, звонок"
+              onChange={(event) => setSource(event.target.value)}
+            />
+            <FieldDescription>Необязательное поле.</FieldDescription>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor={`${idPrefix}-client-comment`}>
+              Комментарий о клиенте
+            </FieldLabel>
+            <Textarea
+              id={`${idPrefix}-client-comment`}
+              value={comment}
+              maxLength={2_000}
+              onChange={(event) => setComment(event.target.value)}
             />
             <FieldDescription>Необязательное поле.</FieldDescription>
           </Field>

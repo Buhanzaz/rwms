@@ -43,6 +43,7 @@ import {
   listOrderClients,
   ORDERS_QUERY_KEY,
   updateOrder,
+  type OrderDeliveryInput,
 } from "@/features/orders/api/orders-api"
 import {
   normalizeClientDisplayName,
@@ -55,6 +56,12 @@ import {
 } from "@/features/orders/domain/orders"
 import { useOrdersModule } from "@/features/orders/orders-module-context"
 import { ApiError } from "@/lib/api-client"
+import { OrderDeliveryFields } from "@/features/orders/components/order-delivery-fields"
+import {
+  parseOrderDeliveryDraft,
+  type OrderDeliveryDraft,
+  type OrderDeliveryErrors,
+} from "@/features/orders/domain/order-delivery-draft"
 
 type ExistingClientOption = {
   value: string
@@ -79,12 +86,14 @@ export function EditOrderDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent ref={contentRef} className="max-w-xl">
+      <DialogContent
+        ref={contentRef}
+        className="max-h-[90vh] max-w-3xl overflow-y-auto"
+      >
         <DialogHeader>
           <DialogTitle>Редактировать бронирование</DialogTitle>
           <DialogDescription>
-            Для черновика можно изменить клиента, выбрав уже существующую
-            карточку.
+            Для черновика можно изменить клиента и параметры доставки.
           </DialogDescription>
         </DialogHeader>
         {open ? (
@@ -127,6 +136,19 @@ function EditOrderDialogContent({
     client: order.client,
   })
   const [errorText, setErrorText] = useState<string | null>(null)
+  const initialDelivery: OrderDeliveryDraft = {
+    deliveryAddress: order.deliveryAddress ?? "",
+    latitude: order.latitude === null ? "" : String(order.latitude),
+    longitude: order.longitude === null ? "" : String(order.longitude),
+    contactPhone: order.contactPhone ?? order.client.phone ?? "",
+    comment: order.comment ?? "",
+    acceptableDeliveryDates:
+      (order.acceptableDeliveryDates ?? []).length > 0
+        ? order.acceptableDeliveryDates
+        : [""],
+  }
+  const [delivery, setDelivery] = useState<OrderDeliveryDraft>(initialDelivery)
+  const [deliveryErrors, setDeliveryErrors] = useState<OrderDeliveryErrors>({})
   const commandIdentity = useRef(new OrderCommandIdentityRegistry())
   const normalizedSearch = normalizeClientSearch(search)
 
@@ -158,15 +180,19 @@ function EditOrderDialogContent({
     [clientsQuery.data?.content]
   )
   const selectedClientUnchanged = selection?.client.id === order.client.id
+  const deliveryUnchanged =
+    JSON.stringify(delivery) === JSON.stringify(initialDelivery)
 
   const updateMutation = useMutation({
     mutationFn: ({
       clientId,
       expectedVersion,
+      delivery: nextDelivery,
       fingerprint,
     }: {
       clientId: string
       expectedVersion: number
+      delivery: OrderDeliveryInput
       fingerprint: string
     }) => {
       if (!accessToken) throw new Error("Сессия завершена.")
@@ -176,13 +202,14 @@ function EditOrderDialogContent({
         orderId: order.id,
         expectedVersion,
         clientId,
+        delivery: nextDelivery,
         idempotencyKey: commandIdentity.current.keyFor(fingerprint),
       })
     },
     onSuccess: (projection, { fingerprint }) => {
       commandIdentity.current.confirm(fingerprint)
       onUpdated(projection)
-      toast.success("Клиент бронирования изменён.")
+      toast.success("Бронирование изменено.")
       onClose()
     },
     onError: (error) => {
@@ -208,15 +235,28 @@ function EditOrderDialogContent({
       setErrorText("Выберите существующего клиента.")
       return
     }
-    if (selectedClientUnchanged) {
-      setErrorText("Выберите клиента, отличающегося от текущего.")
+    const parsedDelivery = parseOrderDeliveryDraft(delivery)
+    setDeliveryErrors(parsedDelivery.errors)
+    if (!parsedDelivery.input) {
+      setErrorText("Проверьте обязательные поля доставки и приёмки.")
+      return
+    }
+    if (selectedClientUnchanged && deliveryUnchanged) {
+      setErrorText("Измените клиента или параметры доставки.")
       return
     }
 
-    const fingerprint = `update-client:${order.id}:${order.version}:${selection.client.id}`
+    const fingerprint = JSON.stringify({
+      operation: "update-order",
+      orderId: order.id,
+      expectedVersion: order.version,
+      clientId: selection.client.id,
+      delivery: parsedDelivery.input,
+    })
     updateMutation.mutate({
       clientId: selection.client.id,
       expectedVersion: order.version,
+      delivery: parsedDelivery.input,
       fingerprint,
     })
   }
@@ -250,6 +290,19 @@ function EditOrderDialogContent({
             </SelectContent>
           </Select>
         </Field>
+
+        <OrderDeliveryFields
+          idPrefix="edit-order"
+          value={delivery}
+          errors={deliveryErrors}
+          disabled={updateMutation.isPending}
+          onChange={(next) => {
+            commandIdentity.current.reset()
+            setDelivery(next)
+            setDeliveryErrors({})
+            setErrorText(null)
+          }}
+        />
 
         <Field data-invalid={clientsQuery.isError || errorText !== null}>
           <FieldLabel htmlFor="edit-order-client-search">Клиент</FieldLabel>
@@ -345,7 +398,7 @@ function EditOrderDialogContent({
             type="submit"
             disabled={
               selection === null ||
-              selectedClientUnchanged ||
+              (selectedClientUnchanged && deliveryUnchanged) ||
               updateMutation.isPending
             }
           >

@@ -5,7 +5,7 @@ import {
   type FormEvent,
   type RefObject,
 } from "react"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Loading03Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { toast } from "sonner"
@@ -21,6 +21,10 @@ import {
 } from "@/components/ui/dialog"
 import { FieldError, FieldGroup } from "@/components/ui/field"
 import {
+  getClient,
+  CLIENTS_QUERY_KEY,
+} from "@/features/clients/api/clients-api"
+import {
   OrderClientChooser,
   type OrderClientChoice,
 } from "@/features/orders/components/order-client-chooser"
@@ -32,13 +36,22 @@ import {
 import { OrderCommandIdentityRegistry } from "@/features/orders/api/order-command-identity"
 import type { OrderDetail } from "@/features/orders/domain/orders"
 import { useOrdersModule } from "@/features/orders/orders-module-context"
+import { clientNeedsContactPerson } from "@/features/clients/domain/clients"
+import { OrderDeliveryFields } from "@/features/orders/components/order-delivery-fields"
+import {
+  emptyOrderDeliveryDraft,
+  parseOrderDeliveryDraft,
+  type OrderDeliveryErrors,
+} from "@/features/orders/domain/order-delivery-draft"
 
 export function CreateOrderDialog({
   open,
+  initialClientId = null,
   onOpenChange,
   onCreated,
 }: {
   open: boolean
+  initialClientId?: string | null
   onOpenChange: (open: boolean) => void
   onCreated: (order: OrderDetail) => void
 }) {
@@ -46,7 +59,10 @@ export function CreateOrderDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent ref={contentRef} className="max-w-xl">
+      <DialogContent
+        ref={contentRef}
+        className="max-h-[90vh] max-w-3xl overflow-y-auto"
+      >
         <DialogHeader>
           <DialogTitle>Новое бронирование</DialogTitle>
           <DialogDescription>
@@ -56,6 +72,7 @@ export function CreateOrderDialog({
         {open ? (
           <CreateOrderDialogContent
             portalContainer={contentRef}
+            initialClientId={initialClientId}
             onClose={() => onOpenChange(false)}
             onCreated={onCreated}
           />
@@ -67,22 +84,44 @@ export function CreateOrderDialog({
 
 function CreateOrderDialogContent({
   portalContainer,
+  initialClientId,
   onClose,
   onCreated,
 }: {
   portalContainer: RefObject<HTMLDivElement | null>
+  initialClientId: string | null
   onClose: () => void
   onCreated: (order: OrderDetail) => void
 }) {
   const queryClient = useQueryClient()
   const { accessToken, currentUser } = useOrdersModule()
   const [choice, setChoice] = useState<OrderClientChoice | null>(null)
+  const [delivery, setDelivery] = useState(() => emptyOrderDeliveryDraft())
+  const [deliveryErrors, setDeliveryErrors] = useState<OrderDeliveryErrors>({})
   const [errorText, setErrorText] = useState<string | null>(null)
   const commandIdentity = useRef(new OrderCommandIdentityRegistry())
+  const suggestedPhone = useRef("")
+  const initialClientQuery = useQuery({
+    queryKey: [...CLIENTS_QUERY_KEY, "detail", initialClientId],
+    queryFn: () => getClient(accessToken!, initialClientId!),
+    enabled: Boolean(accessToken && initialClientId),
+  })
   const handleChoice = useCallback((next: OrderClientChoice | null) => {
     commandIdentity.current.reset()
     setChoice(next)
     setErrorText(null)
+    const phone =
+      next?.kind === "existing"
+        ? (next.client.phone ?? "")
+        : (next?.phone ?? "")
+    setDelivery((current) => ({
+      ...current,
+      contactPhone:
+        !current.contactPhone || current.contactPhone === suggestedPhone.current
+          ? phone
+          : current.contactPhone,
+    }))
+    suggestedPhone.current = phone
   }, [])
 
   const createMutation = useMutation({
@@ -126,23 +165,53 @@ function CreateOrderDialogContent({
       setErrorText("Укажите телефон нового клиента.")
       return
     }
+    if (
+      choice.kind === "new" &&
+      clientNeedsContactPerson(choice.clientType) &&
+      !choice.contactPerson
+    ) {
+      setErrorText("Укажите основное контактное лицо нового клиента.")
+      return
+    }
+    const parsedDelivery = parseOrderDeliveryDraft(delivery)
+    setDeliveryErrors(parsedDelivery.errors)
+    if (!parsedDelivery.input) {
+      setErrorText("Проверьте обязательные поля доставки и приёмки.")
+      return
+    }
 
     const input: CreateOrderInput =
       choice.kind === "existing"
-        ? { clientId: choice.client.id }
+        ? { clientId: choice.client.id, ...parsedDelivery.input }
         : {
             newClient: {
               clientType: choice.clientType,
               displayName: choice.displayName,
               phone: choice.phone,
+              contactPerson: choice.contactPerson,
               email: choice.email,
+              comment: choice.comment,
+              source: choice.source,
             },
+            ...parsedDelivery.input,
           }
     createMutation.mutate({ input, fingerprint: JSON.stringify(input) })
   }
 
   if (!accessToken || !currentUser) {
     return <FieldError>Сессия завершена.</FieldError>
+  }
+  if (initialClientId && initialClientQuery.isPending) {
+    return <FieldError>Загружаем выбранного клиента…</FieldError>
+  }
+  if (initialClientId && initialClientQuery.isError) {
+    return (
+      <FieldError>
+        {initialClientQuery.error instanceof Error
+          ? initialClientQuery.error.message
+          : "Не удалось загрузить выбранного клиента."}
+      </FieldError>
+    )
   }
 
   return (
@@ -153,7 +222,21 @@ function CreateOrderDialogContent({
           actorId={currentUser.id}
           idPrefix="order"
           portalContainer={portalContainer}
+          initialClient={initialClientQuery.data ?? null}
           onChange={handleChoice}
+        />
+
+        <OrderDeliveryFields
+          idPrefix="order"
+          value={delivery}
+          errors={deliveryErrors}
+          disabled={createMutation.isPending}
+          onChange={(next) => {
+            commandIdentity.current.reset()
+            setDelivery(next)
+            setDeliveryErrors({})
+            setErrorText(null)
+          }}
         />
 
         {errorText ? <FieldError>{errorText}</FieldError> : null}

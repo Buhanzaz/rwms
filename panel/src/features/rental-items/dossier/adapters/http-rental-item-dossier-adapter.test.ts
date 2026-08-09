@@ -95,6 +95,19 @@ describe("dossier-service HTTP adapter", () => {
     )
   })
 
+  it.each(["REPAIR_TRANSFER_PREPARED", "REPAIR_TRANSFERRED"] as const)(
+    "accepts the canonical repair transfer activity %s",
+    async (activityCode) => {
+      const response = dossierResponse()
+      response.activities[0]!.activityCode = activityCode
+      fetchMock.mockResolvedValue(jsonResponse(response))
+
+      await expect(
+        getRentalItemDossierPage("access-token", CABIN_ID)
+      ).resolves.toEqual(response)
+    }
+  )
+
   it("preserves PARTIAL coverage even when the visible filtered page is empty", async () => {
     fetchMock.mockResolvedValue(
       jsonResponse(

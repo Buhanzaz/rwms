@@ -2,20 +2,26 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react"
+import { QueryClientProvider } from "@tanstack/react-query"
 import type { User } from "oidc-client-ts"
 
 import { AuthContext, type AuthStatus } from "@/features/auth/auth-context"
 import { getCurrentUser } from "@/features/auth/current-user-api"
-import { clearMediaPreviewCache } from "@/features/media/media-preview-cache"
 import {
   getSafeReturnTo,
   getUserManager,
   hasRenewablePanelSession,
   isPanelUser,
 } from "@/features/auth/oidc-client"
+import {
+  ProtectedClientState,
+  type ProtectedClientSnapshot,
+  type ProtectedPrincipalGrant,
+} from "@/features/auth/protected-client-state"
 
 const MISSING_OIDC_STATE_MESSAGE = "No matching state found in storage"
 
@@ -36,14 +42,39 @@ function getErrorMessage(error: unknown) {
 }
 
 function isAlreadyConsumedCallbackError(error: unknown) {
-  return (
-    error instanceof Error && error.message === MISSING_OIDC_STATE_MESSAGE
-  )
+  return error instanceof Error && error.message === MISSING_OIDC_STATE_MESSAGE
 }
 
 class PanelPrincipalError extends Error {
   constructor() {
     super("Панель доступна только учётным записям пользователей.")
+  }
+}
+
+/**
+ * Produces the client-side authorization revision from the verified `/me`
+ * profile and the effective bearer scopes. Token rotation alone retains the
+ * protected client; a subject, role, scope or warehouse-grant change replaces it.
+ */
+function protectedPrincipalGrant(
+  user: User,
+  profile: Awaited<ReturnType<typeof getCurrentUser>>
+): ProtectedPrincipalGrant {
+  return {
+    subjectId: profile.id,
+    grantRevision: JSON.stringify({
+      oidcScopes: [...user.scopes].sort(),
+      globalRole: profile.globalRole,
+      rentalAccess: profile.rentalAccess,
+      warehouseAccessAll: profile.warehouseAccessAll,
+      warehouseAccesses: [...profile.warehouseAccesses]
+        .sort(
+          (left, right) =>
+            left.warehouseId.localeCompare(right.warehouseId, "en") ||
+            left.level.localeCompare(right.level, "en")
+        )
+        .map(({ warehouseId, level }) => ({ warehouseId, level })),
+    }),
   }
 }
 
@@ -53,26 +84,60 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 function OidcAuthProvider({ children }: { children: ReactNode }) {
   const [manager] = useState(() => getUserManager())
+  const [protectedClientState] = useState(() => new ProtectedClientState())
+  const [protectedClientSnapshot, setProtectedClientSnapshot] =
+    useState<ProtectedClientSnapshot>(() => protectedClientState.snapshot)
   const [status, setStatus] = useState<AuthStatus>("loading")
   const [oidcUser, setOidcUser] = useState<User | null>(null)
   const [currentUser, setCurrentUser] = useState<Awaited<
     ReturnType<typeof getCurrentUser>
   > | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const authenticationAttempt = useRef(0)
+
+  const isCurrentAuthenticationAttempt = (attempt: number) =>
+    attempt === authenticationAttempt.current
+
+  const closeProtectedClientState = useCallback(
+    async (attempt: number) => {
+      if (!isCurrentAuthenticationAttempt(attempt)) return false
+      const nextSnapshot = await protectedClientState.deactivate()
+      if (!isCurrentAuthenticationAttempt(attempt)) return false
+      setProtectedClientSnapshot(nextSnapshot)
+      return true
+    },
+    [protectedClientState]
+  )
+
+  const publishUnauthenticatedState = useCallback((attempt: number) => {
+    if (!isCurrentAuthenticationAttempt(attempt)) return false
+    setOidcUser(null)
+    setCurrentUser(null)
+    setStatus("unauthenticated")
+    return true
+  }, [])
+
+  const resetToUnauthenticated = useCallback(
+    async (attempt: number) => {
+      const closed = await closeProtectedClientState(attempt)
+      if (!closed) return false
+      return publishUnauthenticatedState(attempt)
+    },
+    [closeProtectedClientState, publishUnauthenticatedState]
+  )
 
   const acceptUser = useCallback(
-    async (user: User | null) => {
+    async (user: User | null, attempt: number) => {
       if (user === null || user.expired) {
-        clearMediaPreviewCache()
-        setOidcUser(null)
-        setCurrentUser(null)
-        setStatus("unauthenticated")
+        await resetToUnauthenticated(attempt)
         return
       }
 
       if (!isPanelUser(user)) {
+        if (!isCurrentAuthenticationAttempt(attempt)) return
         await manager.removeUser()
-        clearMediaPreviewCache()
+        if (!isCurrentAuthenticationAttempt(attempt)) return
+        await resetToUnauthenticated(attempt)
         throw new PanelPrincipalError()
       }
 
@@ -80,49 +145,57 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
       // them immediately on page load instead of interrupting an open form when
       // their five-minute access token expires.
       if (!hasRenewablePanelSession(user)) {
+        if (!isCurrentAuthenticationAttempt(attempt)) return
         await manager.removeUser()
-        clearMediaPreviewCache()
-        setOidcUser(null)
-        setCurrentUser(null)
-        setStatus("unauthenticated")
+        if (!isCurrentAuthenticationAttempt(attempt)) return
+        await resetToUnauthenticated(attempt)
         return
       }
 
-      // A refresh-token renewal emits userLoaded. Publish the fresh token before
-      // loading the profile, so in-flight panel UI stays mounted and subsequent
-      // API requests do not keep using an expired bearer token.
-      setOidcUser(user)
-
+      // Verify the profile before publishing a refreshed token. A userLoaded
+      // event can represent a different browser principal, so exposing its
+      // token to the prior UI before the revision boundary would cross scopes.
       const profile = await getCurrentUser(user.access_token)
+      if (!isCurrentAuthenticationAttempt(attempt)) return
 
       if (profile.principalType !== "USER") {
         await manager.removeUser()
+        if (!isCurrentAuthenticationAttempt(attempt)) return
+        await resetToUnauthenticated(attempt)
         throw new PanelPrincipalError()
       }
 
+      const nextSnapshot = await protectedClientState.activate(
+        protectedPrincipalGrant(user, profile)
+      )
+      if (!isCurrentAuthenticationAttempt(attempt)) return
+      setProtectedClientSnapshot(nextSnapshot)
       setOidcUser(user)
       setCurrentUser(profile)
       setError(null)
       setStatus("authenticated")
     },
-    [manager]
+    [manager, protectedClientState, resetToUnauthenticated]
   )
 
   useEffect(() => {
     let cancelled = false
 
     async function restoreSession() {
+      const attempt = ++authenticationAttempt.current
       try {
         const user = await manager.getUser()
 
-        if (!cancelled) {
-          await acceptUser(user)
+        if (!cancelled && isCurrentAuthenticationAttempt(attempt)) {
+          await acceptUser(user, attempt)
         }
       } catch (restoreError) {
-        if (!cancelled) {
+        if (!cancelled && isCurrentAuthenticationAttempt(attempt)) {
           await manager.removeUser()
+          if (!isCurrentAuthenticationAttempt(attempt)) return
+          await resetToUnauthenticated(attempt)
+          if (!isCurrentAuthenticationAttempt(attempt)) return
           setError(getErrorMessage(restoreError))
-          setStatus("unauthenticated")
         }
       }
     }
@@ -130,13 +203,11 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
     void restoreSession()
 
     const handleUserLoaded = (user: User) => {
-      void acceptUser(user).catch((renewError) => {
+      const attempt = ++authenticationAttempt.current
+      void acceptUser(user, attempt).catch((renewError) => {
+        if (!isCurrentAuthenticationAttempt(attempt)) return
         if (renewError instanceof PanelPrincipalError) {
-          clearMediaPreviewCache()
-          setOidcUser(null)
-          setCurrentUser(null)
           setError(getErrorMessage(renewError))
-          setStatus("unauthenticated")
           return
         }
 
@@ -147,11 +218,15 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
     }
 
     const handleExpired = () => {
-      void manager.removeUser()
-      clearMediaPreviewCache()
-      setOidcUser(null)
-      setCurrentUser(null)
-      setStatus("unauthenticated")
+      const attempt = ++authenticationAttempt.current
+      void (async () => {
+        try {
+          await manager.removeUser()
+        } catch {
+          // The local boundary must still close when OIDC storage is gone.
+        }
+        await resetToUnauthenticated(attempt)
+      })()
     }
 
     manager.events.addAccessTokenExpired(handleExpired)
@@ -159,10 +234,12 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
 
     return () => {
       cancelled = true
+      authenticationAttempt.current += 1
       manager.events.removeAccessTokenExpired(handleExpired)
       manager.events.removeUserLoaded(handleUserLoaded)
+      void protectedClientState.deactivate().catch(() => undefined)
     }
-  }, [acceptUser, manager])
+  }, [acceptUser, manager, protectedClientState, resetToUnauthenticated])
 
   const beginLogin = useCallback(
     async (returnTo = "/") => {
@@ -181,12 +258,13 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
     }
 
     const completion = (async () => {
+      const attempt = ++authenticationAttempt.current
       setStatus("loading")
       setError(null)
 
       try {
         const user = await manager.signinRedirectCallback()
-        await acceptUser(user)
+        await acceptUser(user, attempt)
 
         const state = user.state as { returnTo?: unknown } | undefined
         return getSafeReturnTo(state?.returnTo)
@@ -205,7 +283,7 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
               isPanelUser(existingUser) &&
               hasRenewablePanelSession(existingUser)
             ) {
-              await acceptUser(existingUser)
+              await acceptUser(existingUser, attempt)
               return "/"
             }
           } catch {
@@ -213,39 +291,53 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
           }
         }
 
-        await manager.removeUser()
-        clearMediaPreviewCache()
-        setOidcUser(null)
-        setCurrentUser(null)
+        if (isCurrentAuthenticationAttempt(attempt)) {
+          await manager.removeUser()
+          if (isCurrentAuthenticationAttempt(attempt)) {
+            await resetToUnauthenticated(attempt)
+          }
+        }
+        if (!isCurrentAuthenticationAttempt(attempt)) throw callbackError
         setError(getErrorMessage(callbackError))
-        setStatus("unauthenticated")
         throw callbackError
       }
     })()
 
     callbackCompletion = { callbackUrl, promise: completion }
     return completion
-  }, [acceptUser, manager])
+  }, [acceptUser, manager, resetToUnauthenticated])
 
   const logout = useCallback(async () => {
+    const attempt = ++authenticationAttempt.current
     setStatus("loading")
+    setError(null)
 
     try {
       const idToken = oidcUser?.id_token
-      await manager.removeUser()
-      clearMediaPreviewCache()
+      const closed = await closeProtectedClientState(attempt)
+      if (!closed || !isCurrentAuthenticationAttempt(attempt)) return
       setOidcUser(null)
       setCurrentUser(null)
+      await manager.removeUser()
+      if (!isCurrentAuthenticationAttempt(attempt)) return
       await manager.signoutRedirect({ id_token_hint: idToken })
     } catch (logoutError) {
-      await manager.removeUser()
-      clearMediaPreviewCache()
-      setOidcUser(null)
-      setCurrentUser(null)
+      if (!isCurrentAuthenticationAttempt(attempt)) return
+      try {
+        await manager.removeUser()
+      } catch {
+        // The local boundary was already closed before the OIDC call failed.
+      }
+      if (!isCurrentAuthenticationAttempt(attempt)) return
+      publishUnauthenticatedState(attempt)
       setError(getErrorMessage(logoutError))
-      setStatus("unauthenticated")
     }
-  }, [manager, oidcUser])
+  }, [
+    closeProtectedClientState,
+    manager,
+    oidcUser,
+    publishUnauthenticatedState,
+  ])
 
   const value = useMemo(
     () => ({
@@ -260,5 +352,14 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
     [beginLogin, completeLogin, currentUser, error, logout, oidcUser, status]
   )
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+  return (
+    <AuthContext.Provider value={value}>
+      <QueryClientProvider
+        client={protectedClientSnapshot.queryClient}
+        key={protectedClientSnapshot.revision}
+      >
+        {children}
+      </QueryClientProvider>
+    </AuthContext.Provider>
+  )
 }

@@ -46,20 +46,35 @@ const order: OrderDetail = {
   status: "DRAFT",
   client: {
     id: CLIENT_ID,
+    version: 1,
     type: "LEGAL_ENTITY",
     displayName: "ООО Тест",
     phone: "+79990000000",
+    contactPerson: "Иван Иванов",
     email: null,
+    responsibleManagerId: "11111111-1111-4111-8111-111111111111",
+    responsibleManagerDisplayName: "Менеджер",
+    comment: null,
+    source: null,
+    createdAt: "2026-07-19T08:00:00Z",
+    updatedAt: "2026-07-19T09:00:00Z",
   },
   managerId: "11111111-1111-4111-8111-111111111111",
   managerDisplayName: "Менеджер",
   createdBy: "11111111-1111-4111-8111-111111111111",
   createdByDisplayName: "Менеджер",
   warehouseId: WAREHOUSE_ID,
+  deliveryAddress: "Москва, Складская, 1",
+  latitude: 55.75,
+  longitude: 37.62,
+  contactPhone: "+79990000000",
+  comment: null,
+  acceptableDeliveryDates: ["2026-08-15"],
   unitCount: 1,
   createdAt: "2026-07-19T08:00:00Z",
   updatedAt: "2026-07-19T09:00:00Z",
   permissions: { canEdit: true, canViewOtherManagers: false },
+  movements: [],
   units: [
     {
       reservationId: RESERVATION_ID,
@@ -100,8 +115,7 @@ const order: OrderDetail = {
 }
 
 function equipmentItem(
-  overrides: Partial<EquipmentItemDto> &
-    Pick<EquipmentItemDto, "id" | "name">
+  overrides: Partial<EquipmentItemDto> & Pick<EquipmentItemDto, "id" | "name">
 ): EquipmentItemDto {
   const { id, name, ...rest } = overrides
   return {

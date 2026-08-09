@@ -1,5 +1,5 @@
 import type { OrderClientChoice } from "@/features/orders/components/order-client-chooser"
-import { bearerRequest } from "@/lib/api-client"
+import { apiErrorFromResponse, bearerRequest } from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 
 export const ASSISTANT_QUERY_KEY = ["assistant-conversations"] as const
@@ -34,6 +34,31 @@ export type AssistantConversationDetail = {
   conversation: AssistantConversation
   messages: AssistantMessage[]
   lastSearchResult: AssistantTurnEvent["result"] | null
+  clarifications: ClarificationQuestion[]
+  currentSelection: CabinSelection | null
+}
+
+export type ClarificationKind =
+  "CABIN_TYPE" | "FINISH" | "DIMENSIONS" | "CATEGORY" | "SEARCH_MERGE"
+
+export type ClarificationStatus = "PENDING" | "ANSWERED" | "SUPERSEDED"
+
+export type ClarificationOption = {
+  id: string
+  label: string
+  value: string
+}
+
+export type ClarificationQuestion = {
+  id: string
+  branchKey: string
+  kind: ClarificationKind
+  prompt: string
+  status: ClarificationStatus
+  options: ClarificationOption[]
+  answeredOptionId: string | null
+  createdAt: string
+  answeredAt: string | null
 }
 
 export type AvailableCabin = {
@@ -94,17 +119,50 @@ export type CabinSearchResultEnvelope = {
   data: CabinSearchResult
   resultMode: CabinSearchResultMode
   notices: CabinSearchNotice[]
+  filterSuggestions: CabinFilterSuggestions
 }
 
-export type AssistantToolResult = {
-  tool:
-    | "list_available_cabin_facets"
-    | "search_available_cabins"
-    | "request_search_merge_confirmation"
-  data?: unknown
-  resultMode?: unknown
-  notices?: unknown
+export type CabinFilterSuggestions = {
+  cabinTypes: string[]
+  finishes: string[]
+  dimensions: string[]
+  categories: string[]
+  characteristics: string[]
 }
+
+export type CabinSelection = {
+  inquiryId: string
+  warehouseId: string | null
+  expiresAt: string | null
+  rentalItemIds: string[]
+  items: AvailableCabin[]
+}
+
+export type CabinSelectionUpdate = CabinSelection & {
+  removedRentalItemIds: string[]
+}
+
+export type AssistantToolResult =
+  | {
+      tool:
+        | "list_available_cabin_facets"
+        | "search_available_cabins"
+        | "request_cabin_clarifications"
+        | "lookup_cabin_catalog"
+        | "remove_selected_cabins"
+      data?: unknown
+      resultMode?: unknown
+      notices?: unknown
+      filterSuggestions?: unknown
+    }
+  | {
+      code: string
+      tool?: never
+      data?: never
+      resultMode?: never
+      notices?: never
+      filterSuggestions?: never
+    }
 
 export type AssistantTurnEvent = {
   event:
@@ -115,13 +173,26 @@ export type AssistantTurnEvent = {
     | "tool.completed"
     | "turn.completed"
     | "turn.failed"
+    | "clarification.requested"
+    | "clarification.answered"
+    | "selection.updated"
   conversationId: string
   messageId?: string | null
   toolCallId?: string | null
   delta?: string | null
   result?: AssistantToolResult | null
   code?: string | null
+  clarification?: ClarificationQuestion
 }
+
+export type ClarificationAnswer = {
+  questionId: string
+  optionId: string
+}
+
+export type AssistantTurnRequest =
+  | { message: string; clarificationAnswer?: never }
+  | { message?: never; clarificationAnswer: ClarificationAnswer }
 
 function conversationsEndpoint(path = "") {
   return `${getGatewayRuntimeConfig().assistantApiBaseUrl}/v1/conversations${path}`
@@ -134,13 +205,15 @@ export function listAssistantConversations(accessToken: string) {
   )
 }
 
-export function getAssistantConversation(
+export async function getAssistantConversation(
   accessToken: string,
   conversationId: string
 ) {
-  return bearerRequest<AssistantConversationDetail>(
-    accessToken,
-    conversationsEndpoint(`/${encodeURIComponent(conversationId)}`)
+  return parseAssistantConversationDetail(
+    await bearerRequest<unknown>(
+      accessToken,
+      conversationsEndpoint(`/${encodeURIComponent(conversationId)}`)
+    )
   )
 }
 
@@ -168,7 +241,10 @@ export async function createAssistantConversation(params: {
             clientType: params.choice.clientType,
             displayName: params.choice.displayName,
             phone: params.choice.phone,
+            contactPerson: params.choice.contactPerson,
             email: params.choice.email,
+            comment: params.choice.comment,
+            source: params.choice.source,
           },
         }
   return bearerRequest<{
@@ -199,13 +275,14 @@ function parseSseBlock(block: string): AssistantTurnEvent | null {
   return parsed && typeof parsed.event === "string" ? parsed : null
 }
 
-export async function streamAssistantTurn(params: {
-  accessToken: string
-  conversationId: string
-  message: string
-  onEvent: (event: AssistantTurnEvent) => void
-  signal?: AbortSignal
-}) {
+export async function streamAssistantTurn(
+  params: {
+    accessToken: string
+    conversationId: string
+    onEvent: (event: AssistantTurnEvent) => void
+    signal?: AbortSignal
+  } & AssistantTurnRequest
+) {
   const response = await fetch(
     conversationsEndpoint(
       `/${encodeURIComponent(params.conversationId)}/turns`
@@ -217,12 +294,16 @@ export async function streamAssistantTurn(params: {
         Accept: "text/event-stream",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ message: params.message }),
+      body: JSON.stringify(
+        params.message !== undefined
+          ? { message: params.message }
+          : { clarificationAnswer: params.clarificationAnswer }
+      ),
       signal: params.signal,
     }
   )
   if (!response.ok) {
-    throw new Error(`Не удалось отправить сообщение (${response.status}).`)
+    throw await apiErrorFromResponse(response)
   }
   if (!response.body) {
     throw new Error("Сервис чата не открыл поток ответа.")
@@ -252,6 +333,42 @@ export function asCabinSearchResult(
   return asCabinSearchResultEnvelope(event)?.data ?? null
 }
 
+export function asCabinSelectionUpdate(
+  event: AssistantTurnEvent
+): CabinSelectionUpdate | null {
+  if (
+    event.event !== "selection.updated" ||
+    !isRecord(event.result) ||
+    event.result.tool !== "remove_selected_cabins" ||
+    !isRecord(event.result.data)
+  ) {
+    return null
+  }
+  const removedRentalItemIds = event.result.data.removedRentalItemIds
+  if (
+    !isStringArray(removedRentalItemIds) ||
+    removedRentalItemIds.length === 0 ||
+    removedRentalItemIds.length > 100 ||
+    new Set(removedRentalItemIds).size !== removedRentalItemIds.length
+  ) {
+    return null
+  }
+  try {
+    const selection = parseCabinSelection(event.result.data)
+    if (
+      removedRentalItemIds.some((id) => selection.rentalItemIds.includes(id))
+    ) {
+      return null
+    }
+    return {
+      ...selection,
+      removedRentalItemIds,
+    }
+  } catch {
+    return null
+  }
+}
+
 export function asCabinSearchResultEnvelope(
   event: AssistantTurnEvent
 ): CabinSearchResultEnvelope | null {
@@ -272,12 +389,279 @@ export function asPersistedCabinSearchResultEnvelope(
     return null
   }
   const data = parseCabinSearchResult(result.data)
-  if (!data) return null
+  const filterSuggestions = parseCabinFilterSuggestions(
+    result.filterSuggestions
+  )
+  if (!data || !filterSuggestions) return null
   return {
     tool: "search_available_cabins",
     data,
     resultMode: parseCabinSearchResultMode(result.resultMode),
     notices: parseCabinSearchNotices(result.notices),
+    filterSuggestions,
+  }
+}
+
+export async function updateAssistantSelection(params: {
+  accessToken: string
+  conversationId: string
+  idempotencyKey: string
+  warehouseId: string
+  rentalItemIds: string[]
+}) {
+  return parseCabinSelection(
+    await bearerRequest<unknown>(
+      params.accessToken,
+      conversationsEndpoint(
+        `/${encodeURIComponent(params.conversationId)}/selection`
+      ),
+      {
+        method: "PUT",
+        headers: { "Idempotency-Key": params.idempotencyKey },
+        body: JSON.stringify({
+          warehouseId: params.warehouseId,
+          rentalItemIds: [...new Set(params.rentalItemIds)],
+        }),
+      }
+    )
+  )
+}
+
+function parseCabinFilterSuggestions(
+  value: unknown
+): CabinFilterSuggestions | null {
+  if (!isRecord(value)) return null
+  const { cabinTypes, finishes, dimensions, categories, characteristics } =
+    value
+  if (
+    !isStringArray(cabinTypes) ||
+    !isStringArray(finishes) ||
+    !isStringArray(dimensions) ||
+    !isStringArray(categories) ||
+    !isStringArray(characteristics)
+  ) {
+    return null
+  }
+  return { cabinTypes, finishes, dimensions, categories, characteristics }
+}
+
+function parseAssistantConversationDetail(
+  value: unknown
+): AssistantConversationDetail {
+  if (
+    !isRecord(value) ||
+    !isRecord(value.conversation) ||
+    !Array.isArray(value.messages) ||
+    !Array.isArray(value.clarifications)
+  ) {
+    throw new Error("Сервис чата вернул некорректный диалог.")
+  }
+
+  const conversation = parseAssistantConversation(value.conversation)
+  const messages = value.messages.map(parseAssistantMessage)
+  const clarifications = value.clarifications.map(parseClarificationQuestion)
+  const lastSearchResult =
+    value.lastSearchResult === null
+      ? null
+      : asPersistedCabinSearchResultEnvelope(value.lastSearchResult)
+  const currentSelection =
+    value.currentSelection === null
+      ? null
+      : parseCabinSelection(value.currentSelection)
+
+  if (
+    !conversation ||
+    messages.some((message) => message === null) ||
+    clarifications.some((clarification) => clarification === null) ||
+    (value.lastSearchResult !== null && !lastSearchResult) ||
+    (currentSelection !== null && currentSelection.rentalItemIds.length === 0)
+  ) {
+    throw new Error("Сервис чата вернул некорректный диалог.")
+  }
+
+  return {
+    conversation,
+    messages: messages as AssistantMessage[],
+    lastSearchResult,
+    clarifications: clarifications as ClarificationQuestion[],
+    currentSelection,
+  }
+}
+
+function parseAssistantConversation(
+  value: Record<string, unknown>
+): AssistantConversation | null {
+  const {
+    id,
+    version,
+    clientId,
+    rentalInquiryId,
+    clientType,
+    clientDisplayName,
+    archived,
+    archivedAt,
+    createdAt,
+    updatedAt,
+  } = value
+  if (
+    typeof id !== "string" ||
+    !isNonNegativeInteger(version) ||
+    typeof clientId !== "string" ||
+    typeof rentalInquiryId !== "string" ||
+    !isNullableString(clientType) ||
+    !isNullableString(clientDisplayName) ||
+    typeof archived !== "boolean" ||
+    !isNullableDateTime(archivedAt) ||
+    !isDateTime(createdAt) ||
+    !isDateTime(updatedAt)
+  ) {
+    return null
+  }
+  return {
+    id,
+    version,
+    clientId,
+    rentalInquiryId,
+    clientType,
+    clientDisplayName,
+    archived,
+    archivedAt,
+    createdAt,
+    updatedAt,
+  }
+}
+
+function parseAssistantMessage(value: unknown): AssistantMessage | null {
+  if (!isRecord(value)) return null
+  const { id, role, content, createdAt, searchNotices } = value
+  if (
+    typeof id !== "string" ||
+    (role !== "USER" && role !== "ASSISTANT") ||
+    typeof content !== "string" ||
+    !isDateTime(createdAt)
+  ) {
+    return null
+  }
+  if (searchNotices !== undefined && !Array.isArray(searchNotices)) return null
+  const parsedNotices =
+    searchNotices === undefined
+      ? undefined
+      : parseCabinSearchNotices(searchNotices)
+  if (
+    searchNotices !== undefined &&
+    parsedNotices?.length !== searchNotices.length
+  ) {
+    return null
+  }
+  return {
+    id,
+    role,
+    content,
+    createdAt,
+    ...(parsedNotices === undefined ? {} : { searchNotices: parsedNotices }),
+  }
+}
+
+function parseClarificationQuestion(
+  value: unknown
+): ClarificationQuestion | null {
+  if (!isRecord(value) || !Array.isArray(value.options)) return null
+  const {
+    id,
+    branchKey,
+    kind,
+    prompt,
+    status,
+    answeredOptionId,
+    createdAt,
+    answeredAt,
+  } = value
+  const options = value.options.map(parseClarificationOption)
+  if (
+    typeof id !== "string" ||
+    typeof branchKey !== "string" ||
+    !isClarificationKind(kind) ||
+    typeof prompt !== "string" ||
+    !isClarificationStatus(status) ||
+    !isNullableString(answeredOptionId) ||
+    !isDateTime(createdAt) ||
+    !isNullableDateTime(answeredAt) ||
+    options.length < 2 ||
+    options.length > 30 ||
+    options.some((option) => option === null) ||
+    new Set(options.map((option) => option?.id)).size !== options.length ||
+    (answeredOptionId !== null &&
+      !options.some((option) => option?.id === answeredOptionId))
+  ) {
+    return null
+  }
+  return {
+    id,
+    branchKey,
+    kind,
+    prompt,
+    status,
+    options: options as ClarificationOption[],
+    answeredOptionId,
+    createdAt,
+    answeredAt,
+  }
+}
+
+function parseClarificationOption(value: unknown): ClarificationOption | null {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    typeof value.label !== "string" ||
+    typeof value.value !== "string"
+  ) {
+    return null
+  }
+  return { id: value.id, label: value.label, value: value.value }
+}
+
+function parseCabinSelection(value: unknown): CabinSelection {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.rentalItemIds) ||
+    !Array.isArray(value.items)
+  ) {
+    throw new Error("Сервис чата вернул некорректную текущую выборку.")
+  }
+  const rentalItemIds = value.rentalItemIds
+  if (!isStringArray(rentalItemIds)) {
+    throw new Error("Сервис чата вернул некорректную текущую выборку.")
+  }
+  const items = value.items
+    .map(parseAvailableCabin)
+    .filter((item): item is AvailableCabin => item !== null)
+  if (
+    typeof value.inquiryId !== "string" ||
+    value.inquiryId.length === 0 ||
+    (value.warehouseId !== null && typeof value.warehouseId !== "string") ||
+    (value.expiresAt !== null &&
+      (typeof value.expiresAt !== "string" ||
+        !Number.isFinite(Date.parse(value.expiresAt)))) ||
+    new Set(rentalItemIds).size !== rentalItemIds.length ||
+    rentalItemIds.length > 100 ||
+    items.length !== value.items.length ||
+    new Set(items.map((item) => item.id)).size !== items.length ||
+    items.some((item) => !rentalItemIds.includes(item.id)) ||
+    rentalItemIds.some((id) => !items.some((item) => item.id === id)) ||
+    (rentalItemIds.length > 0 &&
+      (value.warehouseId === null || value.expiresAt === null)) ||
+    (value.warehouseId !== null &&
+      items.some((item) => item.warehouseId !== value.warehouseId)) ||
+    (rentalItemIds.length === 0 && value.expiresAt !== null)
+  ) {
+    throw new Error("Сервис чата вернул некорректную текущую выборку.")
+  }
+  return {
+    inquiryId: value.inquiryId,
+    warehouseId: value.warehouseId,
+    expiresAt: value.expiresAt,
+    rentalItemIds,
+    items,
   }
 }
 
@@ -524,6 +908,28 @@ function isOptionalNullableStringArray(
   value: unknown
 ): value is string[] | null | undefined {
   return value === undefined || value === null || isStringArray(value)
+}
+
+function isDateTime(value: unknown): value is string {
+  return typeof value === "string" && Number.isFinite(Date.parse(value))
+}
+
+function isNullableDateTime(value: unknown): value is string | null {
+  return value === null || isDateTime(value)
+}
+
+function isClarificationKind(value: unknown): value is ClarificationKind {
+  return (
+    value === "CABIN_TYPE" ||
+    value === "FINISH" ||
+    value === "DIMENSIONS" ||
+    value === "CATEGORY" ||
+    value === "SEARCH_MERGE"
+  )
+}
+
+function isClarificationStatus(value: unknown): value is ClarificationStatus {
+  return value === "PENDING" || value === "ANSWERED" || value === "SUPERSEDED"
 }
 
 export function isCabinSearchResultActive(

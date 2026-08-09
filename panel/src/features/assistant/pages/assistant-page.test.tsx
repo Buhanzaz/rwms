@@ -22,6 +22,7 @@ import type {
 const queryFixtures = vi.hoisted(() => ({
   conversations: [] as unknown[],
   detail: null as unknown,
+  client: null as unknown,
 }))
 
 const authFixture = vi.hoisted(() => ({
@@ -52,7 +53,16 @@ const queryRuntime = vi.hoisted(() => ({
 
 const assistantApi = vi.hoisted(() => ({
   streamAssistantTurn: vi.fn(),
+  updateAssistantSelection: vi.fn(),
 }))
+
+const filterSuggestions = {
+  cabinTypes: ["БК-1"],
+  finishes: ["ДВП"],
+  dimensions: ["2x2"],
+  categories: ["Обычная"],
+  characteristics: [],
+}
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: ({ queryKey }: { queryKey: readonly unknown[] }) => {
@@ -70,6 +80,14 @@ vi.mock("@tanstack/react-query", () => ({
             isError: false,
             refetch: queryRuntime.detailRefetch,
           }
+    }
+    if (queryKey[0] === "rental-clients") {
+      return {
+        data: queryFixtures.client,
+        isPending: false,
+        isError: false,
+        error: null,
+      }
     }
     return { data: null, isPending: false, isError: false }
   },
@@ -92,7 +110,17 @@ vi.mock("@/features/auth/use-auth", () => ({
 }))
 
 vi.mock("@/features/orders/components/order-client-chooser", () => ({
-  OrderClientChooser: () => <div>Выбор клиента</div>,
+  OrderClientChooser: ({
+    initialClient,
+  }: {
+    initialClient?: { displayName: string } | null
+  }) => (
+    <div>
+      {initialClient
+        ? `Предвыбран клиент: ${initialClient.displayName}`
+        : "Выбор клиента"}
+    </div>
+  ),
 }))
 
 vi.mock("@/features/assistant/components/manager-booking-alert-dialog", () => ({
@@ -236,6 +264,19 @@ function conversationDetail(
       ? {
           tool: "search_available_cabins",
           data: lastSearchResult,
+          filterSuggestions,
+        }
+      : null,
+    clarifications: [],
+    currentSelection: lastSearchResult
+      ? {
+          inquiryId: conversation.rentalInquiryId,
+          warehouseId: lastSearchResult.warehouseId,
+          expiresAt: lastSearchResult.expiresAt,
+          rentalItemIds: lastSearchResult.groups.flatMap((group) =>
+            group.cabins.map((cabin) => cabin.id)
+          ),
+          items: lastSearchResult.groups.flatMap((group) => group.cabins),
         }
       : null,
   }
@@ -254,6 +295,7 @@ function searchResultEvent(
     result: {
       tool: "search_available_cabins",
       data: result,
+      filterSuggestions,
       resultMode: options.resultMode,
       notices: options.notices,
     },
@@ -287,6 +329,7 @@ describe("AssistantPage composer", () => {
   beforeEach(() => {
     queryFixtures.conversations = [conversation]
     queryFixtures.detail = conversationDetail(activeSearchResult())
+    queryFixtures.client = null
     queryRuntime.detailRefetch.mockReset()
     queryRuntime.detailRefetch.mockResolvedValue({ data: queryFixtures.detail })
     queryRuntime.invalidateQueries.mockReset()
@@ -326,6 +369,27 @@ describe("AssistantPage composer", () => {
       document.querySelector('[data-slot="assistant-search-results"]')
     ).toBeNull()
     expect(composer().className).not.toContain("border-t")
+  })
+
+  it("starts a new dialog with the exact client from the dossier query", () => {
+    queryFixtures.client = {
+      id: "99999999-9999-4999-8999-999999999999",
+      displayName: "ООО Предвыбранный клиент",
+    }
+
+    render(
+      <MemoryRouter
+        initialEntries={[
+          "/assistant?clientId=99999999-9999-4999-8999-999999999999",
+        ]}
+      >
+        <AssistantPage />
+      </MemoryRouter>
+    )
+
+    expect(
+      screen.getByText("Предвыбран клиент: ООО Предвыбранный клиент")
+    ).toBeTruthy()
   })
 
   it("keeps closed chats in history and lets the manager hide the cabin results", () => {
@@ -529,7 +593,7 @@ describe("AssistantPage composer", () => {
     await act(async () => finishTurn?.())
   })
 
-  it("replaces the displayed result and clears an old selection", async () => {
+  it("replaces the displayed result and reconciles selection after reload", async () => {
     queryFixtures.detail = conversationDetail(activeSearchResult(1))
     let finishTurn: (() => void) | undefined
     assistantApi.streamAssistantTurn.mockImplementation(
@@ -543,6 +607,7 @@ describe("AssistantPage composer", () => {
         onEvent(searchResultEvent(replacement, { resultMode: "REPLACE" }))
         await new Promise<void>((resolve) => {
           finishTurn = () => {
+            queryFixtures.detail = conversationDetail(replacement)
             onEvent({
               event: "turn.completed",
               conversationId: conversation.id,
@@ -569,8 +634,83 @@ describe("AssistantPage composer", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Найдено: cabin-2")).toBeTruthy()
-      expect(screen.getByText("Выбрано:")).toBeTruthy()
+      expect(screen.getByText("Выбрано: cabin-1")).toBeTruthy()
     })
+
+    await act(async () => finishTurn?.())
+    await waitFor(() =>
+      expect(screen.getByText("Выбрано: cabin-2")).toBeTruthy()
+    )
+  })
+
+  it("applies streamed LLM removal and renewed hold expiry before terminal refetch", async () => {
+    const initial = activeSearchResult(2)
+    queryFixtures.detail = conversationDetail(initial)
+    let finishTurn: (() => void) | undefined
+    assistantApi.streamAssistantTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: AssistantTurnEvent) => void }) => {
+        const retained = initial.groups[0].cabins[1]
+        const renewedExpiry = new Date(Date.now() + 20 * 60_000).toISOString()
+        onEvent({
+          event: "selection.updated",
+          conversationId: conversation.id,
+          toolCallId: "tool-remove-1",
+          result: {
+            tool: "remove_selected_cabins",
+            data: {
+              inquiryId: conversation.rentalInquiryId,
+              warehouseId: initial.warehouseId,
+              expiresAt: renewedExpiry,
+              rentalItemIds: [retained.id],
+              items: [retained],
+              removedRentalItemIds: [initial.groups[0].cabins[0].id],
+            },
+          },
+        })
+        await new Promise<void>((resolve) => {
+          finishTurn = () => {
+            const retainedResult = {
+              ...initial,
+              expiresAt: renewedExpiry,
+              groups: [
+                {
+                  ...initial.groups[0],
+                  group: { ...initial.groups[0].group, quantity: 1 },
+                  cabins: [retained],
+                },
+              ],
+            }
+            queryFixtures.detail = conversationDetail(retainedResult)
+            onEvent({
+              event: "turn.completed",
+              conversationId: conversation.id,
+            })
+            resolve()
+          }
+        })
+      }
+    )
+
+    render(
+      <MemoryRouter>
+        <AssistantPage />
+      </MemoryRouter>
+    )
+    fireEvent.change(
+      screen.getByPlaceholderText("Напишите, какие бытовки подобрать…"),
+      { target: { value: "Удали БЫТ-1 из выборки" } }
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Отправить сообщение" }))
+
+    await waitFor(() => {
+      expect(screen.getByText("Найдено: cabin-2")).toBeTruthy()
+      expect(screen.getByText("Выбрано: cabin-2")).toBeTruthy()
+      expect(screen.queryByText(/cabin-1, cabin-2/)).toBeNull()
+    })
+    expect(queryRuntime.setQueryData).toHaveBeenCalledWith(
+      ["assistant-conversations", conversation.id],
+      expect.any(Function)
+    )
 
     await act(async () => finishTurn?.())
   })

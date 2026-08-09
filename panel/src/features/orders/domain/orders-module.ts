@@ -7,6 +7,7 @@ export type OrdersModuleRole =
 
 export type OrdersModuleUser = {
   id: string
+  displayName: string
   globalRole: OrdersModuleRole
 }
 

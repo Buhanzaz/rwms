@@ -20,18 +20,22 @@ import {
 } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { toast } from "sonner"
+import { useSearchParams } from "react-router-dom"
 
 import { AssistantSearchResults } from "@/features/assistant/components/assistant-search-results"
+import { AssistantClarifications } from "@/features/assistant/components/assistant-clarifications"
 import { ManagerBookingAlertDialog } from "@/features/assistant/components/manager-booking-alert-dialog"
 import {
   assistantSearchResultKey,
   assistantSearchGroupLabel,
+  reconcileSearchResultSelection,
   selectionGroups,
 } from "@/features/assistant/assistant-search-selection"
 import {
   archiveAssistantConversation,
+  asCabinSelectionUpdate,
   asCabinSearchResultEnvelope,
-  asPersistedCabinSearchResult,
+  asPersistedCabinSearchResultEnvelope,
   ASSISTANT_QUERY_KEY,
   cabinSearchNoticeKey,
   createAssistantConversation,
@@ -42,10 +46,17 @@ import {
   mergeCabinSearchResults,
   parseCabinSearchNotices,
   streamAssistantTurn,
+  updateAssistantSelection,
   type AssistantMessage,
   type AssistantConversation,
+  type AssistantConversationDetail,
+  type AssistantTurnRequest,
+  type CabinFilterSuggestions,
+  type CabinSelection,
   type CabinSearchNotice,
   type CabinSearchResult,
+  type ClarificationOption,
+  type ClarificationQuestion,
 } from "@/features/assistant/api/assistant-api"
 import {
   getClientPresentation,
@@ -103,17 +114,27 @@ import {
 } from "@/features/orders/components/order-client-chooser"
 import { OrderCommandIdentityRegistry } from "@/features/orders/api/order-command-identity"
 import { useAuth } from "@/features/auth/use-auth"
+import {
+  CLIENTS_QUERY_KEY,
+  getClient,
+} from "@/features/clients/api/clients-api"
+import {
+  clientNeedsContactPerson,
+  type RentalClient,
+} from "@/features/clients/domain/clients"
 import { cn } from "@/lib/utils"
-
-const EMPTY_SELECTED_IDS: ReadonlySet<string> = new Set()
 
 export function AssistantPage() {
   const { accessToken, currentUser } = useAuth()
   const queryClient = useQueryClient()
+  const [searchParams] = useSearchParams()
+  const requestedClientId = searchParams.get("clientId")
   const [selectedConversationId, setSelectedConversationId] = useState<
     string | null
   >(null)
-  const [creatingNew, setCreatingNew] = useState(false)
+  const [creatingNew, setCreatingNew] = useState(
+    () => requestedClientId !== null
+  )
   const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false)
   const conversationsQuery = useQuery({
     queryKey: ASSISTANT_QUERY_KEY,
@@ -121,6 +142,11 @@ export function AssistantPage() {
     enabled: Boolean(accessToken && currentUser?.rentalAccess),
   })
   const conversations = conversationsQuery.data ?? []
+  const requestedClientQuery = useQuery({
+    queryKey: [...CLIENTS_QUERY_KEY, "detail", requestedClientId],
+    queryFn: () => getClient(accessToken!, requestedClientId!),
+    enabled: Boolean(accessToken && requestedClientId),
+  })
   const defaultConversationId =
     conversations.find((conversation) => !conversation.archived)?.id ??
     conversations[0]?.id ??
@@ -283,6 +309,15 @@ export function AssistantPage() {
             <ClientGate
               accessToken={accessToken}
               actorId={currentUser.id}
+              initialClient={requestedClientQuery.data ?? null}
+              initialClientLoading={
+                requestedClientId !== null && requestedClientQuery.isPending
+              }
+              initialClientError={
+                requestedClientId !== null && requestedClientQuery.isError
+                  ? requestedClientQuery.error
+                  : null
+              }
               onCancel={
                 conversations.length > 0
                   ? () => {
@@ -419,11 +454,17 @@ function AssistantPageAlertBoundary({ children }: { children: ReactNode }) {
 function ClientGate({
   accessToken,
   actorId,
+  initialClient,
+  initialClientLoading,
+  initialClientError,
   onCancel,
   onCreated,
 }: {
   accessToken: string
   actorId: string
+  initialClient: RentalClient | null
+  initialClientLoading: boolean
+  initialClientError: unknown
   onCancel?: () => void
   onCreated: (conversationId: string) => Promise<void>
 }) {
@@ -464,6 +505,14 @@ function ClientGate({
       setErrorText("Укажите телефон нового клиента.")
       return
     }
+    if (
+      choice.kind === "new" &&
+      clientNeedsContactPerson(choice.clientType) &&
+      !choice.contactPerson
+    ) {
+      setErrorText("Укажите основное контактное лицо нового клиента.")
+      return
+    }
     mutation.mutate(choice)
   }
 
@@ -483,13 +532,26 @@ function ClientGate({
         <CardContent>
           <form onSubmit={submit}>
             <FieldGroup>
-              <OrderClientChooser
-                accessToken={accessToken}
-                actorId={actorId}
-                idPrefix="assistant"
-                newClientCreationContext="после открытия диалога"
-                onChange={handleChoice}
-              />
+              {initialClientLoading ? (
+                <p className="text-sm text-muted-foreground">
+                  Загружаем выбранного клиента…
+                </p>
+              ) : initialClientError ? (
+                <FieldError>
+                  {initialClientError instanceof Error
+                    ? initialClientError.message
+                    : "Не удалось загрузить выбранного клиента."}
+                </FieldError>
+              ) : (
+                <OrderClientChooser
+                  accessToken={accessToken}
+                  actorId={actorId}
+                  idPrefix="assistant"
+                  initialClient={initialClient}
+                  newClientCreationContext="после открытия диалога"
+                  onChange={handleChoice}
+                />
+              )}
               {errorText ? <FieldError>{errorText}</FieldError> : null}
               <div className="flex justify-end gap-2">
                 {onCancel ? (
@@ -501,7 +563,12 @@ function ClientGate({
                   type="submit"
                   disabled={
                     !choice ||
+                    initialClientLoading ||
+                    initialClientError !== null ||
                     (choice.kind === "new" && !choice.phone) ||
+                    (choice.kind === "new" &&
+                      clientNeedsContactPerson(choice.clientType) &&
+                      !choice.contactPerson) ||
                     mutation.isPending
                   }
                 >
@@ -553,20 +620,27 @@ function ConversationWorkspace({
   const [errorText, setErrorText] = useState<string | null>(null)
   const [liveSearchResult, setLiveSearchResult] =
     useState<CabinSearchResult | null>(null)
+  const [liveFilterSuggestions, setLiveFilterSuggestions] =
+    useState<CabinFilterSuggestions | null>(null)
+  const [liveClarifications, setLiveClarifications] = useState<
+    ClarificationQuestion[] | null
+  >(null)
+  const [liveCurrentSelection, setLiveCurrentSelection] = useState<
+    CabinSelection | null | undefined
+  >(undefined)
   const [searchNow, setSearchNow] = useState(() => Date.now())
   const [searchResultRevision, setSearchResultRevision] = useState(0)
   const [searchResultsVisible, setSearchResultsVisible] = useState(true)
-  const [selection, setSelection] = useState<{
-    searchResult: CabinSearchResult | null
-    ids: Set<string>
-  }>({ searchResult: null, ids: new Set() })
   const [presentationOpen, setPresentationOpen] = useState(false)
   const presentationCommand = useRef(new OrderCommandIdentityRegistry())
+  const selectionCommand = useRef(new OrderCommandIdentityRegistry())
 
-  const persistedSearchResult = useMemo(
-    () => asPersistedCabinSearchResult(detailQuery.data?.lastSearchResult),
+  const persistedSearchEnvelope = useMemo(
+    () =>
+      asPersistedCabinSearchResultEnvelope(detailQuery.data?.lastSearchResult),
     [detailQuery.data?.lastSearchResult]
   )
+  const persistedSearchResult = persistedSearchEnvelope?.data ?? null
   const searchResultCandidate = liveSearchResult ?? persistedSearchResult
   const searchResult =
     searchResultCandidate &&
@@ -580,23 +654,98 @@ function ConversationWorkspace({
     const timeout = window.setTimeout(
       () => {
         setSearchNow(Date.now())
-        setSelection((current) =>
-          current.searchResult === searchResultCandidate
-            ? { searchResult: null, ids: new Set() }
-            : current
-        )
       },
       Math.max(0, expiresAt - Date.now() + 50)
     )
     return () => window.clearTimeout(timeout)
   }, [searchResultCandidate])
-  const selectedIds =
-    selection.searchResult === searchResult ? selection.ids : EMPTY_SELECTED_IDS
-  const handleSelectionChange = useCallback(
-    (next: Set<string>) => {
-      if (searchResult) setSelection({ searchResult, ids: next })
+  const filterSuggestions =
+    liveFilterSuggestions ?? persistedSearchEnvelope?.filterSuggestions
+  const clarifications =
+    liveClarifications ?? detailQuery.data?.clarifications ?? []
+  const currentSelection =
+    liveCurrentSelection === undefined
+      ? (detailQuery.data?.currentSelection ?? null)
+      : liveCurrentSelection
+  const selectedIds = useMemo(
+    () => new Set(currentSelection?.rentalItemIds ?? []),
+    [currentSelection?.rentalItemIds]
+  )
+  const visibleSearchResult = useMemo(() => {
+    if (!searchResult) return null
+    const groups = searchResult.groups
+      .filter((entry) =>
+        Boolean(entry.group.cabinType?.trim() && entry.group.finish?.trim())
+      )
+      .map((entry) => ({
+        ...entry,
+        cabins: sending
+          ? entry.cabins
+          : entry.cabins.filter((cabin) => selectedIds.has(cabin.id)),
+      }))
+      .filter((entry) => entry.cabins.length > 0)
+    return groups.length > 0 ? { ...searchResult, groups } : null
+  }, [searchResult, selectedIds, sending])
+  const selectionMutation = useMutation({
+    mutationFn: (next: Set<string>) => {
+      const warehouseId =
+        currentSelection?.warehouseId ?? searchResult?.warehouseId
+      if (!warehouseId) throw new Error("Склад текущей выборки не определён.")
+      const rentalItemIds = [...next].sort()
+      const fingerprint = JSON.stringify({ warehouseId, rentalItemIds })
+      const removedIds = [...selectedIds].filter((id) => !next.has(id))
+      return updateAssistantSelection({
+        accessToken,
+        conversationId,
+        idempotencyKey: selectionCommand.current.keyFor(fingerprint),
+        warehouseId,
+        rentalItemIds,
+      }).then((selection) => ({
+        selection,
+        fingerprint,
+        removedIds,
+      }))
     },
-    [searchResult]
+    onSuccess: ({ selection: nextSelection, fingerprint, removedIds }) => {
+      selectionCommand.current.confirm(fingerprint)
+      queryClient.setQueryData<AssistantConversationDetail>(
+        [...ASSISTANT_QUERY_KEY, conversationId],
+        (current) =>
+          current
+            ? {
+                ...current,
+                currentSelection:
+                  nextSelection.rentalItemIds.length > 0 ? nextSelection : null,
+              }
+            : current
+      )
+      setLiveCurrentSelection(
+        nextSelection.rentalItemIds.length > 0 ? nextSelection : null
+      )
+      if (removedIds.length > 0 && searchResultCandidate) {
+        const nextResult = reconcileSearchResultSelection(
+          searchResultCandidate,
+          nextSelection,
+          new Set(removedIds)
+        )
+        setLiveSearchResult(nextResult)
+        setSearchNow(Date.now())
+        setSearchResultRevision((revision) => revision + 1)
+      }
+      if (nextSelection.rentalItemIds.length === 0) {
+        toast.success("Выборка освобождена.")
+      }
+    },
+    onError: (error) =>
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Не удалось изменить текущую выборку."
+      ),
+  })
+  const handleSelectionChange = useCallback(
+    (next: Set<string>) => selectionMutation.mutate(next),
+    [selectionMutation]
   )
   const presentationQueryKey = [
     "assistant-client-presentation",
@@ -644,10 +793,6 @@ function ConversationWorkspace({
       if (searchResult) {
         const retained = retainCabins(searchResult, new Set(publishedIds))
         setLiveSearchResult(retained)
-        setSelection({
-          searchResult: retained,
-          ids: new Set(publishedIds),
-        })
       }
       setPresentationOpen(true)
       toast.success("Представление для клиента создано.")
@@ -660,13 +805,12 @@ function ConversationWorkspace({
       ),
   })
 
-  async function sendMessage() {
-    const message = draft.trim()
-    if (!message || sending || archived) return
+  async function sendTurn(request: AssistantTurnRequest, userContent: string) {
+    if (sending || archived) return
     const userMessage: AssistantMessage = {
       id: crypto.randomUUID(),
       role: "USER",
-      content: message,
+      content: userContent,
       createdAt: new Date().toISOString(),
     }
     const assistantMessage: AssistantMessage = {
@@ -675,7 +819,6 @@ function ConversationWorkspace({
       content: "",
       createdAt: new Date().toISOString(),
     }
-    setDraft("")
     setErrorText(null)
     setToolRunning(false)
     setSending(true)
@@ -689,7 +832,7 @@ function ConversationWorkspace({
       await streamAssistantTurn({
         accessToken,
         conversationId,
-        message,
+        ...request,
         onEvent: (event) => {
           if (event.event === "assistant.delta" && event.delta) {
             setLocalMessages((current) =>
@@ -702,8 +845,46 @@ function ConversationWorkspace({
           }
           if (event.event === "tool.started") setToolRunning(true)
           if (event.event === "tool.completed") setToolRunning(false)
+          if (
+            (event.event === "clarification.requested" ||
+              event.event === "clarification.answered") &&
+            event.clarification
+          ) {
+            setLiveClarifications((current) =>
+              mergeClarifications(
+                current ?? detailQuery.data?.clarifications ?? [],
+                event.clarification!
+              )
+            )
+          }
+          const selectionUpdate = asCabinSelectionUpdate(event)
+          if (selectionUpdate) {
+            const nextSelection =
+              selectionUpdate.rentalItemIds.length > 0 ? selectionUpdate : null
+            setLiveCurrentSelection(nextSelection)
+            queryClient.setQueryData<AssistantConversationDetail>(
+              [...ASSISTANT_QUERY_KEY, conversationId],
+              (current) =>
+                current
+                  ? { ...current, currentSelection: nextSelection }
+                  : current
+            )
+            setLiveSearchResult((current) => {
+              const source = current ?? persistedSearchResult
+              return source
+                ? reconcileSearchResultSelection(
+                    source,
+                    selectionUpdate,
+                    new Set(selectionUpdate.removedRentalItemIds)
+                  )
+                : current
+            })
+            setSearchNow(Date.now())
+            setSearchResultRevision((revision) => revision + 1)
+          }
           const nextSearch = asCabinSearchResultEnvelope(event)
           if (nextSearch) {
+            setLiveFilterSuggestions(nextSearch.filterSuggestions)
             if (nextSearch.resultMode === "APPEND") {
               turnSearchResultMode = "APPEND"
             } else if (!turnSearchResultMode) {
@@ -722,13 +903,6 @@ function ConversationWorkspace({
                 : turnSearchResult
             setLiveSearchResult(displayedSearchResult)
             setSearchResultRevision((revision) => revision + 1)
-            setSelection((current) => ({
-              searchResult: displayedSearchResult,
-              ids:
-                turnSearchResultMode === "APPEND" && searchResultBeforeTurn
-                  ? retainSelectedCabins(displayedSearchResult, current.ids)
-                  : new Set(),
-            }))
             if (nextSearch.notices.length > 0) {
               setLocalMessages((current) =>
                 current.map((item) =>
@@ -764,6 +938,9 @@ function ConversationWorkspace({
       await detailQuery.refetch()
       await onTurnCompleted(conversationId)
       setLocalMessages([])
+      setLiveClarifications(null)
+      setLiveFilterSuggestions(null)
+      setLiveCurrentSelection(undefined)
     } catch (error) {
       setErrorText(
         error instanceof Error ? error.message : "Не удалось получить ответ."
@@ -772,6 +949,28 @@ function ConversationWorkspace({
       setToolRunning(false)
       setSending(false)
     }
+  }
+
+  async function sendMessage(messageOverride?: string) {
+    const message = (messageOverride ?? draft).trim()
+    if (!message) return
+    if (messageOverride === undefined) setDraft("")
+    await sendTurn({ message }, message)
+  }
+
+  function answerClarification(
+    question: ClarificationQuestion,
+    option: ClarificationOption
+  ) {
+    void sendTurn(
+      {
+        clarificationAnswer: {
+          questionId: question.id,
+          optionId: option.id,
+        },
+      },
+      `Ответ на «${question.prompt}»: ${option.label}`
+    )
   }
 
   if (detailQuery.isPending) {
@@ -863,6 +1062,11 @@ function ConversationWorkspace({
               ) : (
                 messageItems
               )}
+              <AssistantClarifications
+                questions={clarifications}
+                disabled={sending || archived}
+                onAnswer={answerClarification}
+              />
               {toolRunning ? (
                 <MessageScrollerItem className="mx-auto w-full max-w-4xl">
                   <Attachment state="processing" size="sm">
@@ -899,14 +1103,17 @@ function ConversationWorkspace({
         </MessageScroller>
       </MessageScrollerProvider>
 
-      {searchResult ? (
+      {visibleSearchResult ? (
         <div className="shrink-0">
           <AssistantSearchResults
-            key={`${assistantSearchResultKey(searchResult)}:${searchResultRevision}`}
+            key={`${assistantSearchResultKey(visibleSearchResult)}:${searchResultRevision}`}
             accessToken={accessToken}
-            result={searchResult}
+            result={visibleSearchResult}
             selectedIds={selectedIds}
             onSelectionChange={handleSelectionChange}
+            selectionPending={selectionMutation.isPending}
+            filterSuggestions={filterSuggestions}
+            onSuggestion={(message) => void sendMessage(message)}
             collapsed={!searchResultsVisible}
             onCollapsedChange={(collapsed) =>
               setSearchResultsVisible(!collapsed)
@@ -919,10 +1126,19 @@ function ConversationWorkspace({
                 >
                   Выбрано: {selectedIds.size}
                 </span>
+                <span className="text-xs text-muted-foreground">
+                  {currentSelection?.expiresAt
+                    ? `Резерв действует до ${formatConversationDate(currentSelection.expiresAt)}`
+                    : "Активного резерва нет"}
+                </span>
                 <Button
                   type="button"
                   size="sm"
-                  disabled={publishMutation.isPending || selectedIds.size === 0}
+                  disabled={
+                    publishMutation.isPending ||
+                    selectionMutation.isPending ||
+                    selectedIds.size === 0
+                  }
                   onClick={() => publishMutation.mutate()}
                 >
                   {publishMutation.isPending ? (
@@ -1210,12 +1426,13 @@ function retainCabins(
   }
 }
 
-function retainSelectedCabins(
-  result: CabinSearchResult,
-  selectedIds: ReadonlySet<string>
+function mergeClarifications(
+  current: ClarificationQuestion[],
+  next: ClarificationQuestion
 ) {
-  const availableIds = new Set(
-    result.groups.flatMap((entry) => entry.cabins.map((cabin) => cabin.id))
+  const byId = new Map(current.map((question) => [question.id, question]))
+  byId.set(next.id, next)
+  return [...byId.values()].sort((left, right) =>
+    left.createdAt.localeCompare(right.createdAt)
   )
-  return new Set([...selectedIds].filter((id) => availableIds.has(id)))
 }

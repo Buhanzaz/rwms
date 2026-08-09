@@ -8,7 +8,7 @@ import {
 } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Copy, LoaderCircle, Share2 } from "lucide-react"
-import { useNavigate } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -55,6 +55,10 @@ import {
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 import { ApiError } from "@/lib/api-client"
 import { useWarehouse } from "@/hooks/use-warehouse"
+import {
+  CLIENTS_QUERY_KEY,
+  getClient,
+} from "@/features/clients/api/clients-api"
 
 class BookingUnavailableError extends Error {
   constructor() {
@@ -122,6 +126,7 @@ function BookingContinuePageState({
   warehouseId: string
 }) {
   const navigate = useNavigate()
+  const location = useLocation()
   const queryClient = useQueryClient()
   const { draftId, stagedItems, activeHold, removeMany, setActiveHold, clear } =
     useBookingSelection()
@@ -138,6 +143,13 @@ function BookingContinuePageState({
   const [presentationOpen, setPresentationOpen] = useState(false)
   const conversationIdentity = useRef(new OrderCommandIdentityRegistry())
   const presentationIdentity = useRef(new OrderCommandIdentityRegistry())
+  const requestedClientId = new URLSearchParams(location.search).get("clientId")
+  const initialClientQuery = useQuery({
+    queryKey: [...CLIENTS_QUERY_KEY, "detail", requestedClientId],
+    queryFn: () => getClient(accessToken, requestedClientId!),
+    enabled: Boolean(requestedClientId),
+  })
+  const bookingRoot = { pathname: "/booking", search: location.search }
 
   const selectedItemById = useMemo(
     () => new Map(stagedItems.map((item) => [item.id, item])),
@@ -345,7 +357,7 @@ function BookingContinuePageState({
 
   function changePresentationOpen(open: boolean) {
     setPresentationOpen(open)
-    if (!open && presentation) navigate("/booking")
+    if (!open && presentation) navigate(bookingRoot)
   }
 
   if (stagedItems.length === 0 && !presentation) {
@@ -354,7 +366,7 @@ function BookingContinuePageState({
         <BookingContinueMessage
           text="Сначала выберите свободные бытовки для бронирования."
           action={
-            <Button type="button" onClick={() => navigate("/booking")}>
+            <Button type="button" onClick={() => navigate(bookingRoot)}>
               Перейти к выбору
             </Button>
           }
@@ -395,7 +407,7 @@ function BookingContinuePageState({
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => navigate("/booking")}
+                  onClick={() => navigate(bookingRoot)}
                 >
                   Изменить выбор
                 </Button>
@@ -446,19 +458,32 @@ function BookingContinuePageState({
             <CardContent>
               <form onSubmit={submit}>
                 <FieldGroup>
-                  <OrderClientChooser
-                    accessToken={accessToken}
-                    actorId={actorId}
-                    idPrefix="manual-booking"
-                    newClientCreationContext="при создании представления"
-                    onChange={handleChoice}
-                  />
+                  {initialClientQuery.isPending && requestedClientId ? (
+                    <p className="text-sm text-muted-foreground">
+                      Загружаем выбранного клиента…
+                    </p>
+                  ) : initialClientQuery.isError && requestedClientId ? (
+                    <FieldError>
+                      {initialClientQuery.error instanceof Error
+                        ? initialClientQuery.error.message
+                        : "Не удалось загрузить выбранного клиента."}
+                    </FieldError>
+                  ) : (
+                    <OrderClientChooser
+                      accessToken={accessToken}
+                      actorId={actorId}
+                      idPrefix="manual-booking"
+                      initialClient={initialClientQuery.data ?? null}
+                      newClientCreationContext="при создании представления"
+                      onChange={handleChoice}
+                    />
+                  )}
                   {errorText ? <FieldError>{errorText}</FieldError> : null}
                   <div className="flex flex-wrap justify-end gap-2">
                     <Button
                       type="button"
                       variant="outline"
-                      onClick={() => navigate("/booking")}
+                      onClick={() => navigate(bookingRoot)}
                     >
                       Назад
                     </Button>

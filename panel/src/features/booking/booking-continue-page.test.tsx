@@ -9,6 +9,7 @@ const flow = vi.hoisted(() => ({
   conflictAfterPublish: false,
   expired: false,
   getHold: vi.fn(),
+  getClient: vi.fn(),
   create: vi.fn(),
   publish: vi.fn(),
 }))
@@ -44,6 +45,11 @@ vi.mock("@/features/assistant/api/rental-presentations-api", () => ({
   publishClientPresentation: flow.publish,
 }))
 
+vi.mock("@/features/clients/api/clients-api", () => ({
+  CLIENTS_QUERY_KEY: ["rental-clients"],
+  getClient: flow.getClient,
+}))
+
 vi.mock("@/features/booking/api/manual-booking-drafts-api", async () => {
   const actual = await vi.importActual<
     typeof import("@/features/booking/api/manual-booking-drafts-api")
@@ -54,23 +60,30 @@ vi.mock("@/features/booking/api/manual-booking-drafts-api", async () => {
 vi.mock("@/features/orders/components/order-client-chooser", () => ({
   OrderClientChooser: ({
     onChange,
+    initialClient,
   }: {
     onChange: (choice: unknown) => void
+    initialClient?: { id: string; displayName: string } | null
   }) => (
-    <button
-      type="button"
-      onClick={() =>
-        onChange({
-          kind: "existing",
-          client: {
-            id: "99999999-9999-4999-8999-999999999999",
-            displayName: "ООО Клиент",
-          },
-        })
-      }
-    >
-      Выбрать клиента
-    </button>
+    <div>
+      {initialClient ? (
+        <span>Предвыбран клиент: {initialClient.displayName}</span>
+      ) : null}
+      <button
+        type="button"
+        onClick={() =>
+          onChange({
+            kind: "existing",
+            client: initialClient ?? {
+              id: "99999999-9999-4999-8999-999999999999",
+              displayName: "ООО Клиент",
+            },
+          })
+        }
+      >
+        Выбрать клиента
+      </button>
+    </div>
   ),
 }))
 
@@ -137,7 +150,13 @@ function cabin(index: number): RentalItemDto {
   }
 }
 
-function SeedSelection({ items }: { items: RentalItemDto[] }) {
+function SeedSelection({
+  items,
+  clientId,
+}: {
+  items: RentalItemDto[]
+  clientId?: string
+}) {
   const selection = useBookingSelection()
   const navigate = useNavigate()
   return (
@@ -154,7 +173,9 @@ function SeedSelection({ items }: { items: RentalItemDto[] }) {
             : "2099-08-04T12:00:00Z",
           rentalItemIds: items.map((item) => item.id),
         })
-        navigate("/booking/continue")
+        navigate(
+          `/booking/continue${clientId ? `?clientId=${encodeURIComponent(clientId)}` : ""}`
+        )
       }}
     >
       Подготовить {items.length}
@@ -162,7 +183,7 @@ function SeedSelection({ items }: { items: RentalItemDto[] }) {
   )
 }
 
-function renderFlow(items: RentalItemDto[]) {
+function renderFlow(items: RentalItemDto[], clientId?: string) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -171,7 +192,10 @@ function renderFlow(items: RentalItemDto[]) {
       <QueryClientProvider client={queryClient}>
         <BookingSelectionProvider>
           <Routes>
-            <Route path="/seed" element={<SeedSelection items={items} />} />
+            <Route
+              path="/seed"
+              element={<SeedSelection items={items} clientId={clientId} />}
+            />
             <Route path="/booking/continue" element={<BookingContinuePage />} />
           </Routes>
         </BookingSelectionProvider>
@@ -199,6 +223,36 @@ afterEach(() => {
 })
 
 describe("BookingContinuePage", () => {
+  it("prefills the exact client carried from the client dossier", async () => {
+    const clientId = "99999999-9999-4999-8999-999999999999"
+    const items = [cabin(1)]
+    configureHold(items)
+    flow.getClient.mockResolvedValue({
+      id: clientId,
+      version: 1,
+      type: "LEGAL_ENTITY",
+      displayName: "ООО Предвыбранный клиент",
+      phone: "+79990000000",
+      contactPerson: "Иван Иванов",
+      email: null,
+      responsibleManagerId: "manager-1",
+      responsibleManagerDisplayName: "Менеджер",
+      comment: null,
+      source: null,
+      createdAt: "2026-08-09T08:00:00Z",
+      updatedAt: "2026-08-09T08:00:00Z",
+    })
+    const user = userEvent.setup()
+    renderFlow(items, clientId)
+
+    await user.click(screen.getByRole("button", { name: "Подготовить 1" }))
+
+    expect(
+      await screen.findByText("Предвыбран клиент: ООО Предвыбранный клиент")
+    ).toBeTruthy()
+    expect(flow.getClient).toHaveBeenCalledWith("access-token", clientId)
+  })
+
   it("publishes only the final checked cabins through the owned manual draft", async () => {
     const user = userEvent.setup()
     const items = Array.from({ length: 31 }, (_, index) => cabin(index + 1))

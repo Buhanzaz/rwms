@@ -1,5 +1,6 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
 import { useEffect } from "react"
+import { useQueryClient, type QueryClient } from "@tanstack/react-query"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { CurrentUser } from "@/features/auth/auth-model"
@@ -114,6 +115,20 @@ function AuthActionsProbe({
   return null
 }
 
+function ProtectedQueryClientProbe({
+  onClientChanged,
+}: {
+  onClientChanged: (queryClient: QueryClient) => void
+}) {
+  const queryClient = useQueryClient()
+
+  useEffect(() => {
+    onClientChanged(queryClient)
+  }, [onClientChanged, queryClient])
+
+  return null
+}
+
 afterEach(() => {
   cleanup()
   oidc.reset()
@@ -121,18 +136,24 @@ afterEach(() => {
 })
 
 describe("AuthProvider refresh-token renewal", () => {
-  it("updates the context on userLoaded without logging out or unmounting the panel", async () => {
+  it("keeps protected cache state when only the bearer token rotates", async () => {
     oidc.manager.getUser.mockResolvedValue(user("old-access-token"))
     getCurrentUser.mockResolvedValue(currentUser)
     const unmounted = vi.fn()
+    const clients: QueryClient[] = []
 
     render(
       <AuthProvider>
         <SessionProbe onUnmount={unmounted} />
+        <ProtectedQueryClientProbe
+          onClientChanged={(queryClient) => clients.push(queryClient)}
+        />
       </AuthProvider>
     )
 
     await screen.findByText("authenticated:old-access-token:panel-user")
+    const oldGrantClient = clients.at(-1)!
+    oldGrantClient.setQueryData(["rental-items"], ["old grant"])
 
     act(() => oidc.emitUserLoaded(user("renewed-access-token")))
 
@@ -145,6 +166,179 @@ describe("AuthProvider refresh-token renewal", () => {
     expect(oidc.manager.signinRedirect).not.toHaveBeenCalled()
     expect(oidc.manager.removeUser).not.toHaveBeenCalled()
     expect(unmounted).not.toHaveBeenCalled()
+    expect(clients.at(-1)).toBe(oldGrantClient)
+    expect(oldGrantClient.getQueryData(["rental-items"])).toEqual(["old grant"])
+  })
+
+  it("replaces protected cache state when a silent renewal changes the verified grant", async () => {
+    const upgradedGrant: CurrentUser = {
+      ...currentUser,
+      globalRole: "WAREHOUSE_MANAGER",
+      warehouseAccessAll: false,
+      warehouseAccesses: [
+        {
+          warehouseId: "22222222-2222-4222-8222-222222222222",
+          level: "MANAGE",
+        },
+      ],
+    }
+    oidc.manager.getUser.mockResolvedValue(user("old-access-token"))
+    getCurrentUser
+      .mockResolvedValueOnce(currentUser)
+      .mockResolvedValueOnce(upgradedGrant)
+    const unmounted = vi.fn()
+    const clients: QueryClient[] = []
+
+    render(
+      <AuthProvider>
+        <SessionProbe onUnmount={unmounted} />
+        <ProtectedQueryClientProbe
+          onClientChanged={(queryClient) => clients.push(queryClient)}
+        />
+      </AuthProvider>
+    )
+
+    await screen.findByText("authenticated:old-access-token:panel-user")
+    const oldGrantClient = clients.at(-1)!
+    oldGrantClient.setQueryData(["rental-items"], ["old grant"])
+
+    act(() => oidc.emitUserLoaded(user("renewed-access-token")))
+
+    await screen.findByText("authenticated:renewed-access-token:panel-user")
+    expect(unmounted).toHaveBeenCalledOnce()
+    expect(clients.at(-1)).not.toBe(oldGrantClient)
+    expect(oldGrantClient.getQueryData(["rental-items"])).toBeUndefined()
+    expect(clients.at(-1)!.getQueryData(["rental-items"])).toBeUndefined()
+  })
+
+  it("replaces protected cache state before publishing a different verified principal", async () => {
+    const principalB: CurrentUser = {
+      ...currentUser,
+      id: "1a73542f-9a89-46af-b196-22c7f3cf590e",
+      username: "panel-user-b",
+      displayName: "Пользователь B",
+    }
+    oidc.manager.getUser.mockResolvedValue(user("a-access-token"))
+    getCurrentUser
+      .mockResolvedValueOnce(currentUser)
+      .mockResolvedValueOnce(principalB)
+    const clients: QueryClient[] = []
+
+    render(
+      <AuthProvider>
+        <SessionProbe onUnmount={() => undefined} />
+        <ProtectedQueryClientProbe
+          onClientChanged={(queryClient) => clients.push(queryClient)}
+        />
+      </AuthProvider>
+    )
+
+    await screen.findByText("authenticated:a-access-token:panel-user")
+    const principalAClient = clients.at(-1)!
+    principalAClient.setQueryData(["rental-items"], ["A only"])
+
+    act(() => oidc.emitUserLoaded(user("b-access-token")))
+
+    await screen.findByText("authenticated:b-access-token:panel-user-b")
+    const principalBClient = clients.at(-1)!
+    expect(principalBClient).not.toBe(principalAClient)
+    expect(principalAClient.getQueryData(["rental-items"])).toBeUndefined()
+    expect(principalBClient.getQueryData(["rental-items"])).toBeUndefined()
+  })
+
+  it("does not let a late profile restore replace a newer principal", async () => {
+    const principalB: CurrentUser = {
+      ...currentUser,
+      id: "1a73542f-9a89-46af-b196-22c7f3cf590e",
+      username: "panel-user-b",
+      displayName: "Пользователь B",
+    }
+    let resolvePrincipalA!: (profile: CurrentUser) => void
+    oidc.manager.getUser.mockResolvedValue(user("a-access-token"))
+    getCurrentUser.mockImplementation((accessToken: string) => {
+      if (accessToken === "a-access-token") {
+        return new Promise<CurrentUser>((resolve) => {
+          resolvePrincipalA = resolve
+        })
+      }
+      return Promise.resolve(principalB)
+    })
+
+    render(
+      <AuthProvider>
+        <SessionProbe onUnmount={() => undefined} />
+      </AuthProvider>
+    )
+
+    await waitFor(() =>
+      expect(getCurrentUser).toHaveBeenCalledWith("a-access-token")
+    )
+    act(() => oidc.emitUserLoaded(user("b-access-token")))
+    await screen.findByText("authenticated:b-access-token:panel-user-b")
+
+    resolvePrincipalA(currentUser)
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(
+      screen.getByText("authenticated:b-access-token:panel-user-b")
+    ).toBeTruthy()
+  })
+
+  it("closes the protected query client before logout redirects", async () => {
+    oidc.manager.getUser.mockResolvedValue(user("a-access-token"))
+    getCurrentUser.mockResolvedValue(currentUser)
+    const actions: { current: AuthContextValue | null } = { current: null }
+    const clients: QueryClient[] = []
+
+    render(
+      <AuthProvider>
+        <AuthActionsProbe
+          onActionsChanged={(next) => (actions.current = next)}
+        />
+        <ProtectedQueryClientProbe
+          onClientChanged={(queryClient) => clients.push(queryClient)}
+        />
+      </AuthProvider>
+    )
+
+    await waitFor(() => expect(actions.current?.status).toBe("authenticated"))
+    const principalAClient = clients.at(-1)!
+    principalAClient.setQueryData(["rental-items"], ["A only"])
+
+    await act(async () => {
+      await actions.current!.logout()
+    })
+
+    await waitFor(() => expect(clients.at(-1)).not.toBe(principalAClient))
+    expect(principalAClient.getQueryData(["rental-items"])).toBeUndefined()
+    expect(oidc.manager.removeUser).toHaveBeenCalledOnce()
+    expect(oidc.manager.signoutRedirect).toHaveBeenCalledOnce()
+  })
+
+  it("retires protected cache state when the provider leaves the route tree", async () => {
+    oidc.manager.getUser.mockResolvedValue(user("a-access-token"))
+    getCurrentUser.mockResolvedValue(currentUser)
+    const clients: QueryClient[] = []
+    const rendered = render(
+      <AuthProvider>
+        <SessionProbe onUnmount={() => undefined} />
+        <ProtectedQueryClientProbe
+          onClientChanged={(queryClient) => clients.push(queryClient)}
+        />
+      </AuthProvider>
+    )
+
+    await screen.findByText("authenticated:a-access-token:panel-user")
+    const principalClient = clients.at(-1)!
+    principalClient.setQueryData(["rental-items"], ["A only"])
+
+    rendered.unmount()
+
+    await waitFor(() =>
+      expect(principalClient.getQueryCache().getAll()).toHaveLength(0)
+    )
   })
 
   it("continues to reject a renewed non-user principal", async () => {
@@ -197,7 +391,9 @@ describe("AuthProvider refresh-token renewal", () => {
 
   it("exchanges an authorization callback only once when it is delivered twice", async () => {
     oidc.manager.getUser.mockResolvedValue(null)
-    oidc.manager.signinRedirectCallback.mockResolvedValue(user("callback-token"))
+    oidc.manager.signinRedirectCallback.mockResolvedValue(
+      user("callback-token")
+    )
     getCurrentUser.mockResolvedValue(currentUser)
     const actions: { current: AuthContextValue | null } = { current: null }
     const onActionsChanged = (next: AuthContextValue) => {
@@ -210,9 +406,7 @@ describe("AuthProvider refresh-token renewal", () => {
       </AuthProvider>
     )
 
-    await waitFor(() =>
-      expect(actions.current?.status).toBe("unauthenticated")
-    )
+    await waitFor(() => expect(actions.current?.status).toBe("unauthenticated"))
 
     let returns: string[] = []
     await act(async () => {
@@ -251,16 +445,12 @@ describe("AuthProvider refresh-token renewal", () => {
       </AuthProvider>
     )
 
-    await waitFor(() =>
-      expect(actions.current?.status).toBe("unauthenticated")
-    )
+    await waitFor(() => expect(actions.current?.status).toBe("unauthenticated"))
 
     await expect(actions.current!.completeLogin()).resolves.toBe("/")
 
     expect(oidc.manager.removeUser).not.toHaveBeenCalled()
-    await waitFor(() =>
-      expect(actions.current?.status).toBe("authenticated")
-    )
+    await waitFor(() => expect(actions.current?.status).toBe("authenticated"))
   })
 
   it("fails closed when a missing callback state has no saved panel session", async () => {
@@ -284,9 +474,7 @@ describe("AuthProvider refresh-token renewal", () => {
       </AuthProvider>
     )
 
-    await waitFor(() =>
-      expect(actions.current?.status).toBe("unauthenticated")
-    )
+    await waitFor(() => expect(actions.current?.status).toBe("unauthenticated"))
 
     await expect(actions.current!.completeLogin()).rejects.toThrow(
       "No matching state found in storage"

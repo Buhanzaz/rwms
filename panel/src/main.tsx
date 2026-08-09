@@ -7,11 +7,13 @@ import "./index.css"
 import { AuthRouter } from "@/features/auth/auth-router"
 import { Toaster } from "@/components/ui/sonner"
 
-const queryClient = new QueryClient()
+// Public offer routes and bootstrap work keep this root client. AuthProvider
+// installs a separate revision-scoped client around protected routes.
+const publicQueryClient = new QueryClient()
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
+    <QueryClientProvider client={publicQueryClient}>
       <BrowserRouter>
         <AuthRouter />
       </BrowserRouter>

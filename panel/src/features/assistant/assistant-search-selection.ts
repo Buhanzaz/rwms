@@ -1,4 +1,5 @@
 import type {
+  CabinSelection,
   CabinSearchGroup,
   CabinSearchResult,
 } from "@/features/assistant/api/assistant-api"
@@ -48,4 +49,21 @@ export function selectionGroups(
           },
         ]
   })
+}
+
+export function reconcileSearchResultSelection(
+  result: CabinSearchResult,
+  selection: CabinSelection,
+  removedIds: ReadonlySet<string>
+): CabinSearchResult {
+  return {
+    ...result,
+    expiresAt: selection.expiresAt ?? result.expiresAt,
+    groups: result.groups
+      .map((entry) => ({
+        ...entry,
+        cabins: entry.cabins.filter((cabin) => !removedIds.has(cabin.id)),
+      }))
+      .filter((entry) => entry.cabins.length > 0),
+  }
 }

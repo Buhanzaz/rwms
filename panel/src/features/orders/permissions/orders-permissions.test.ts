@@ -9,6 +9,7 @@ import { canViewAllOrders } from "@/features/orders/permissions/orders-permissio
 function user(globalRole: OrdersModuleRole): OrdersModuleUser {
   return {
     id: "11111111-1111-4111-8111-111111111111",
+    displayName: "Тестовый пользователь",
     globalRole,
   }
 }

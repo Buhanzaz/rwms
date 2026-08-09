@@ -20,8 +20,11 @@ import {
   CarouselPrevious,
 } from "@/components/ui/carousel"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type {
   AvailableCabin,
+  CabinFilterSuggestions,
   CabinSearchResult,
 } from "@/features/assistant/api/assistant-api"
 import { assistantSearchGroupLabel } from "@/features/assistant/assistant-search-selection"
@@ -38,16 +41,22 @@ export function AssistantSearchResults({
   result,
   selectedIds,
   onSelectionChange,
+  selectionPending = false,
   collapsed = false,
   onCollapsedChange,
+  filterSuggestions,
+  onSuggestion,
   footer,
 }: {
   accessToken: string
   result: CabinSearchResult
   selectedIds: ReadonlySet<string>
   onSelectionChange: (next: Set<string>) => void
+  selectionPending?: boolean
   collapsed?: boolean
   onCollapsedChange?: (collapsed: boolean) => void
+  filterSuggestions?: CabinFilterSuggestions
+  onSuggestion?: (message: string) => void
   footer?: ReactNode
 }) {
   const [activeGroup, setActiveGroup] = useState(0)
@@ -116,98 +125,108 @@ export function AssistantSearchResults({
             {collapsed ? "Развернуть" : "Скрыть"}
           </Button>
         </div>
-        <div className="mb-3 min-w-0 [scrollbar-width:none] overflow-x-auto pb-1 [&::-webkit-scrollbar]:hidden">
-          <div className="mx-auto flex w-max min-w-full items-center justify-center gap-2 px-1">
-            {result.groups.map((group, index) => (
-              <Button
-                key={`${assistantSearchGroupLabel(group.group, index)}-${index}`}
-                type="button"
-                size="sm"
-                variant={activeGroup === index ? "default" : "outline"}
-                className="shrink-0 rounded-full"
-                onClick={() => setActiveGroup(index)}
-              >
-                {assistantSearchGroupLabel(group.group, index)}
-                <Badge
-                  variant="secondary"
-                  className="ml-1 rounded-full bg-background/80"
+        <Tabs
+          value={String(activeGroup)}
+          onValueChange={(value) => setActiveGroup(Number(value))}
+        >
+          <div className="mb-3 min-w-0 [scrollbar-width:none] overflow-x-auto pb-1 [&::-webkit-scrollbar]:hidden">
+            <TabsList
+              variant="line"
+              aria-label="Группы найденных бытовок"
+              className="mx-auto flex w-max min-w-full items-center justify-center gap-2 px-1"
+            >
+              {result.groups.map((group, index) => (
+                <TabsTrigger
+                  key={`${assistantSearchGroupLabel(group.group, index)}-${index}`}
+                  value={String(index)}
+                  className="shrink-0 rounded-full"
                 >
-                  {group.cabins.length}
-                </Badge>
-              </Button>
-            ))}
-          </div>
-        </div>
-
-        {!collapsed && entry.cabins.length === 0 ? (
-          <div className="flex h-40 items-center justify-center rounded-xl border border-dashed bg-background text-sm text-muted-foreground">
-            Доступные бытовки по этой группе не найдены.
-          </div>
-        ) : !collapsed && carouselEnabled ? (
-          <Carousel
-            key={activeGroup}
-            orientation="horizontal"
-            opts={{ align: "start", dragFree: true }}
-            className="px-9"
-            data-slot="assistant-cabin-search-carousel"
-            aria-label="Карусель найденных бытовок"
-          >
-            <CarouselContent className="-ml-3">
-              {entry.cabins.map((cabin) => (
-                <CarouselItem
-                  key={cabin.id}
-                  className="basis-[88%] pl-3 sm:basis-1/2 lg:basis-1/3 xl:basis-1/4"
-                >
-                  <AssistantCabinSearchCard
-                    accessToken={accessToken}
-                    cabin={cabin}
-                    projection={projections.get(cabin.id)}
-                    coverAvailability={coverAvailability}
-                    selectedIds={selectedIds}
-                    onSelectionChange={onSelectionChange}
-                  />
-                </CarouselItem>
+                  {assistantSearchGroupLabel(group.group, index)}
+                  <Badge
+                    variant="secondary"
+                    className="ml-1 rounded-full bg-background/80"
+                  >
+                    {group.cabins.length}
+                  </Badge>
+                </TabsTrigger>
               ))}
-            </CarouselContent>
-            <CarouselPrevious className="left-0" />
-            <CarouselNext className="right-0" />
-            <CarouselDots
-              className="mt-2"
-              aria-label="Навигация по найденным бытовкам"
-              getDotLabel={(index, count) =>
-                `Перейти к бытовке ${index + 1} из ${count}`
-              }
-            />
-          </Carousel>
-        ) : !collapsed ? (
-          <div
-            role="list"
-            aria-label="Карточки найденных бытовок"
-            className={cn(
-              "mx-auto grid w-full gap-3",
-              entry.cabins.length === 1 && "max-w-sm grid-cols-1",
-              entry.cabins.length === 2 &&
-                "max-w-2xl grid-cols-1 sm:grid-cols-2",
-              entry.cabins.length === 3 &&
-                "max-w-6xl grid-cols-1 sm:grid-cols-2 md:grid-cols-3",
-              entry.cabins.length === 4 &&
-                "max-w-6xl grid-cols-1 sm:grid-cols-2 md:grid-cols-4"
-            )}
-          >
-            {entry.cabins.map((cabin) => (
-              <div key={cabin.id} role="listitem" className="min-w-0">
-                <AssistantCabinSearchCard
-                  accessToken={accessToken}
-                  cabin={cabin}
-                  projection={projections.get(cabin.id)}
-                  coverAvailability={coverAvailability}
-                  selectedIds={selectedIds}
-                  onSelectionChange={onSelectionChange}
-                />
-              </div>
-            ))}
+            </TabsList>
           </div>
-        ) : null}
+
+          <TabsContent value={String(activeGroup)}>
+            {!collapsed && entry.cabins.length === 0 ? (
+              <div className="flex h-40 items-center justify-center rounded-xl border border-dashed bg-background text-sm text-muted-foreground">
+                Доступные бытовки по этой группе не найдены.
+              </div>
+            ) : !collapsed && carouselEnabled ? (
+              <Carousel
+                key={activeGroup}
+                orientation="horizontal"
+                opts={{ align: "start", dragFree: true }}
+                className="px-9"
+                data-slot="assistant-cabin-search-carousel"
+                aria-label="Карусель найденных бытовок"
+              >
+                <CarouselContent className="-ml-3">
+                  {entry.cabins.map((cabin) => (
+                    <CarouselItem
+                      key={cabin.id}
+                      className="basis-[88%] pl-3 sm:basis-1/2 lg:basis-1/3 xl:basis-1/4"
+                    >
+                      <AssistantCabinSearchCard
+                        accessToken={accessToken}
+                        cabin={cabin}
+                        projection={projections.get(cabin.id)}
+                        coverAvailability={coverAvailability}
+                        selectedIds={selectedIds}
+                        selectionPending={selectionPending}
+                        onSelectionChange={onSelectionChange}
+                      />
+                    </CarouselItem>
+                  ))}
+                </CarouselContent>
+                <CarouselPrevious className="left-0" />
+                <CarouselNext className="right-0" />
+                <CarouselDots
+                  className="mt-2"
+                  aria-label="Навигация по найденным бытовкам"
+                  getDotLabel={(index, count) =>
+                    `Перейти к бытовке ${index + 1} из ${count}`
+                  }
+                />
+              </Carousel>
+            ) : !collapsed ? (
+              <div
+                role="list"
+                aria-label="Карточки найденных бытовок"
+                className={cn(
+                  "mx-auto grid w-full gap-3",
+                  entry.cabins.length === 1 && "max-w-sm grid-cols-1",
+                  entry.cabins.length === 2 &&
+                    "max-w-2xl grid-cols-1 sm:grid-cols-2",
+                  entry.cabins.length === 3 &&
+                    "max-w-6xl grid-cols-1 sm:grid-cols-2 md:grid-cols-3",
+                  entry.cabins.length === 4 &&
+                    "max-w-6xl grid-cols-1 sm:grid-cols-2 md:grid-cols-4"
+                )}
+              >
+                {entry.cabins.map((cabin) => (
+                  <div key={cabin.id} role="listitem" className="min-w-0">
+                    <AssistantCabinSearchCard
+                      accessToken={accessToken}
+                      cabin={cabin}
+                      projection={projections.get(cabin.id)}
+                      coverAvailability={coverAvailability}
+                      selectedIds={selectedIds}
+                      selectionPending={selectionPending}
+                      onSelectionChange={onSelectionChange}
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </TabsContent>
+        </Tabs>
         {!collapsed && hasCabins && footer ? (
           <div
             data-slot="assistant-search-results-footer"
@@ -216,8 +235,106 @@ export function AssistantSearchResults({
             {footer}
           </div>
         ) : null}
+        {!collapsed && filterSuggestions && onSuggestion ? (
+          <AssistantFilterSuggestions
+            suggestions={filterSuggestions}
+            onSuggestion={onSuggestion}
+          />
+        ) : null}
       </div>
     </section>
+  )
+}
+
+function SuggestionGroup({
+  label,
+  values,
+  prompt,
+  onSuggestion,
+}: {
+  label: string
+  values: string[]
+  prompt: (value: string) => string
+  onSuggestion: (message: string) => void
+}) {
+  if (values.length === 0) return null
+  return (
+    <div className="flex flex-col gap-1.5">
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <ToggleGroup
+        type="single"
+        value=""
+        size="sm"
+        variant="outline"
+        className="max-w-full flex-wrap justify-start"
+        aria-label={label}
+        onValueChange={(value) => {
+          if (value) onSuggestion(prompt(value))
+        }}
+      >
+        {values.map((value) => (
+          <ToggleGroupItem key={value} value={value}>
+            {value}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+    </div>
+  )
+}
+
+function AssistantFilterSuggestions({
+  suggestions,
+  onSuggestion,
+}: {
+  suggestions: CabinFilterSuggestions
+  onSuggestion: (message: string) => void
+}) {
+  return (
+    <div className="mt-4 rounded-xl border border-dashed p-3">
+      <p className="mb-3 text-sm font-medium">Продолжить точный поиск</p>
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        <SuggestionGroup
+          label="Тип"
+          values={suggestions.cabinTypes}
+          prompt={(value) => `Уточни выборку: тип бытовки «${value}».`}
+          onSuggestion={onSuggestion}
+        />
+        <SuggestionGroup
+          label="Отделка"
+          values={suggestions.finishes}
+          prompt={(value) => `Уточни выборку: отделка «${value}».`}
+          onSuggestion={onSuggestion}
+        />
+        <SuggestionGroup
+          label="Размер"
+          values={suggestions.dimensions}
+          prompt={(value) => `Уточни выборку: точный размер «${value}».`}
+          onSuggestion={onSuggestion}
+        />
+        <SuggestionGroup
+          label="Категория"
+          values={suggestions.categories}
+          prompt={(value) => `Уточни выборку: категория «${value}».`}
+          onSuggestion={onSuggestion}
+        />
+        <SuggestionGroup
+          label="Характеристика"
+          values={suggestions.characteristics}
+          prompt={(value) => `Уточни выборку: характеристика «${value}».`}
+          onSuggestion={onSuggestion}
+        />
+        <SuggestionGroup
+          label="Линолеум"
+          values={["Есть", "Нет"]}
+          prompt={(value) =>
+            value === "Есть"
+              ? "Уточни выборку: только бытовки с линолеумом."
+              : "Уточни выборку: только бытовки без линолеума."
+          }
+          onSuggestion={onSuggestion}
+        />
+      </div>
+    </div>
   )
 }
 
@@ -227,6 +344,7 @@ function AssistantCabinSearchCard({
   projection,
   coverAvailability,
   selectedIds,
+  selectionPending,
   onSelectionChange,
 }: {
   accessToken: string
@@ -234,6 +352,7 @@ function AssistantCabinSearchCard({
   projection: CabinCoverProjection | undefined
   coverAvailability: "loading" | "available" | "unavailable"
   selectedIds: ReadonlySet<string>
+  selectionPending: boolean
   onSelectionChange: (next: Set<string>) => void
 }) {
   return (
@@ -243,6 +362,7 @@ function AssistantCabinSearchCard({
       projection={projection}
       coverAvailability={coverAvailability}
       selected={selectedIds.has(cabin.id)}
+      disabled={selectionPending}
       onSelectedChange={(selected) => {
         const next = new Set(selectedIds)
         if (selected) next.add(cabin.id)
@@ -259,6 +379,7 @@ function AssistantCabinCard({
   projection,
   coverAvailability,
   selected,
+  disabled,
   onSelectedChange,
 }: {
   accessToken: string
@@ -266,6 +387,7 @@ function AssistantCabinCard({
   projection: CabinCoverProjection | undefined
   coverAvailability: "loading" | "available" | "unavailable"
   selected: boolean
+  disabled: boolean
   onSelectedChange: (selected: boolean) => void
 }) {
   const media = useRentalItemCardPhotos({
@@ -304,6 +426,7 @@ function AssistantCabinCard({
           <Checkbox
             aria-label={`Выбрать бытовку ${cabinNumber}`}
             checked={selected}
+            disabled={disabled}
             onCheckedChange={(value) => onSelectedChange(value === true)}
           />
         </label>

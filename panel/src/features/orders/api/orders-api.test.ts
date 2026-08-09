@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   extendOrderRentalTerms,
+  listClientOrders,
   listOrders,
   listOrderClients,
   parseOrderDetail,
@@ -15,26 +16,49 @@ const CLIENT_ID = "8a14d50d-4b0b-4a4d-9aaf-b29cd877fcd3"
 const UNIT_ID = "9b14d50d-4b0b-4a4d-9aaf-b29cd877fcd3"
 const WAREHOUSE_ID = "4b14d50d-4b0b-4a4d-9aaf-b29cd877fcd3"
 const IDEMPOTENCY_KEY = "ad4f4e00-2378-457b-82fc-14d43daa5c5c"
+const MANAGER_ID = "00000000-0000-0000-0000-0000000000d8"
+const delivery = {
+  deliveryAddress: "Москва, Складская, 1",
+  latitude: 55.75,
+  longitude: 37.62,
+  contactPhone: "+79990000000",
+  comment: "Позвонить заранее",
+  acceptableDeliveryDates: ["2026-07-21"],
+}
+
+const clientResponse = {
+  id: CLIENT_ID,
+  version: 0,
+  type: "LEGAL_ENTITY",
+  displayName: "Диагностический клиент",
+  phone: "+79990000000",
+  contactPerson: "Иван Петров",
+  email: null,
+  responsibleManagerId: MANAGER_ID,
+  responsibleManagerDisplayName: "development-admin",
+  comment: null,
+  source: null,
+  createdAt: "2026-07-19T19:49:56.021463Z",
+  updatedAt: "2026-07-19T19:49:56.021463Z",
+}
 
 const orderDetailResponse = {
   id: ORDER_ID,
   version: 5,
   number: "ORD-000003",
   status: "DRAFT",
-  client: {
-    id: CLIENT_ID,
-    type: "LEGAL_ENTITY",
-    displayName: "Диагностический клиент",
-  },
-  managerId: "00000000-0000-0000-0000-0000000000d8",
+  client: clientResponse,
+  managerId: MANAGER_ID,
   managerDisplayName: "development-admin",
   createdBy: "00000000-0000-0000-0000-0000000000d8",
   createdByDisplayName: "development-admin",
   warehouseId: null,
+  ...delivery,
   unitCount: 0,
   createdAt: "2026-07-19T19:49:56.046806Z",
   updatedAt: "2026-07-19T20:49:56.046806Z",
   units: [],
+  movements: [],
   permissions: { canEdit: true, canViewOtherManagers: true },
 }
 
@@ -47,23 +71,18 @@ describe("parseOrderDetail", () => {
       version: 0,
       number: "ORD-000003",
       status: "DRAFT",
-      client: {
-        id: "8a14d50d-4b0b-4a4d-9aaf-b29cd877fcd3",
-        version: 0,
-        type: "LEGAL_ENTITY",
-        displayName: "Диагностический клиент",
-        createdAt: "2026-07-19T19:49:56.021463Z",
-        updatedAt: "2026-07-19T19:49:56.021463Z",
-      },
+      client: clientResponse,
       managerId: "00000000-0000-0000-0000-0000000000d8",
       managerDisplayName: "development-admin",
       createdBy: "00000000-0000-0000-0000-0000000000d8",
       createdByDisplayName: "development-admin",
       warehouseId: null,
+      ...delivery,
       unitCount: 0,
       createdAt: "2026-07-19T19:49:56.046806Z",
       updatedAt: "2026-07-19T19:49:56.046806Z",
       units: [],
+      movements: [],
       permissions: { canEdit: true, canViewOtherManagers: true },
     })
 
@@ -130,6 +149,7 @@ describe("parseOrderDetail", () => {
         expectedVersion: 4,
         clientId: CLIENT_ID,
         idempotencyKey: IDEMPOTENCY_KEY,
+        delivery,
       })
     ).resolves.toMatchObject({
       id: ORDER_ID,
@@ -149,6 +169,7 @@ describe("parseOrderDetail", () => {
     expect(JSON.parse(String(init.body))).toEqual({
       expectedVersion: 4,
       clientId: CLIENT_ID,
+      ...delivery,
     })
   })
 
@@ -156,13 +177,7 @@ describe("parseOrderDetail", () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
-          content: [
-            {
-              id: CLIENT_ID,
-              type: "LEGAL_ENTITY",
-              displayName: "Диагностический клиент",
-            },
-          ],
+          content: [clientResponse],
           page: 0,
           size: 50,
           totalElements: 1,
@@ -192,6 +207,41 @@ describe("parseOrderDetail", () => {
     expect(url.pathname).toBe("/api/logistics/v1/clients")
     expect(url.searchParams.get("search")).toBe("Диагностический")
     expect(url.searchParams.has("type")).toBe(false)
+  })
+
+  it("loads a server-paginated order page owned by one client", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          content: [orderDetailResponse],
+          page: 1,
+          size: 30,
+          totalElements: 31,
+          totalPages: 2,
+        }),
+        { headers: { "Content-Type": "application/json" } }
+      )
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      listClientOrders({
+        accessToken: "orders-token",
+        clientId: CLIENT_ID,
+        page: 1,
+        size: 30,
+        statuses: ["SAVED"],
+      })
+    ).resolves.toMatchObject({ page: 1, totalElements: 31 })
+
+    const [input] = fetchMock.mock.calls[0] as [string]
+    const endpoint = new URL(input)
+    expect(endpoint.pathname).toBe(
+      `/api/logistics/v1/clients/${CLIENT_ID}/orders`
+    )
+    expect(endpoint.searchParams.get("page")).toBe("1")
+    expect(endpoint.searchParams.get("size")).toBe("30")
+    expect(endpoint.searchParams.getAll("status")).toEqual(["SAVED"])
   })
 
   it("saves an order through the versioned idempotent command", async () => {

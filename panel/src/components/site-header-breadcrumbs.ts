@@ -197,6 +197,18 @@ export function resolveHeaderBreadcrumbs(
     return [{ title: "Заказы", to: "/orders" }]
   }
 
+  if (pathname === "/clients/new") {
+    return [{ title: "Клиенты", to: "/clients" }, { title: "Создать клиента" }]
+  }
+
+  if (/^\/clients\/[0-9a-f-]{36}$/i.test(pathname)) {
+    return [{ title: "Клиенты", to: "/clients" }, { title: "Клиент" }]
+  }
+
+  if (pathname.startsWith("/clients")) {
+    return [{ title: "Клиенты", to: "/clients" }]
+  }
+
   if (pathname === "/") {
     return [{ title: "Главная" }]
   }

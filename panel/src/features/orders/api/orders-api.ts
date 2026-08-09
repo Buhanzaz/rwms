@@ -1,6 +1,5 @@
 import {
   ORDER_AUDIT_EVENT_TYPES,
-  ORDER_CLIENT_TYPES,
   ORDER_STATUSES,
   type OrderAuditEvent,
   type OrderAuditEventType,
@@ -10,6 +9,7 @@ import {
   type OrderDetail,
   type OrderDesiredEquipment,
   type OrderEquipmentContent,
+  type OrderMovement,
   type OrderPage,
   type OrderRentalTerm,
   type OrderRentalUnit,
@@ -17,6 +17,12 @@ import {
   type OrderSummary,
   type OrderUnitCandidate,
 } from "@/features/orders/domain/orders"
+import {
+  createClient,
+  listClients,
+  parseRentalClient,
+} from "@/features/clients/api/clients-api"
+import type { CreateClientInput } from "@/features/clients/domain/clients"
 import {
   RENTAL_ITEM_STATUS_LABEL,
   type RentalItemStatus,
@@ -47,17 +53,20 @@ export type ListOrdersParams = {
   createdTo?: string
 }
 
-export type CreateOrderInput =
+export type CreateOrderInput = (
   | { clientId: string; newClient?: never }
-  | {
-      clientId?: never
-      newClient: {
-        clientType: OrderClientType
-        displayName: string
-        phone: string
-        email?: string | null
-      }
-    }
+  | { clientId?: never; newClient: CreateClientInput }
+) &
+  OrderDeliveryInput
+
+export type OrderDeliveryInput = {
+  deliveryAddress?: string | null
+  latitude?: number | null
+  longitude?: number | null
+  contactPhone?: string | null
+  comment?: string | null
+  acceptableDeliveryDates?: string[] | null
+}
 
 function invalidResponse(): never {
   throw new Error(INVALID_RESPONSE_MESSAGE)
@@ -100,6 +109,12 @@ function nullableUuid(value: unknown): string | null {
   return value === null ? null : uuid(value)
 }
 
+function nullableNumber(value: unknown): number | null {
+  if (value === null) return null
+  if (typeof value !== "number" || !Number.isFinite(value)) invalidResponse()
+  return value
+}
+
 function nullableText(value: unknown): string | null {
   if (value === null) return null
   if (typeof value !== "string") invalidResponse()
@@ -134,10 +149,30 @@ function timestamp(value: unknown): string {
 function nullableDate(value: unknown): string | null {
   if (value === null) return null
   const parsed = text(value)
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(parsed)
+  if (!match) invalidResponse()
+  const instant = new Date(
+    Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+  )
   if (
-    !/^\d{4}-\d{2}-\d{2}$/.test(parsed) ||
-    !Number.isFinite(Date.parse(`${parsed}T00:00:00Z`))
+    instant.getUTCFullYear() !== Number(match[1]) ||
+    instant.getUTCMonth() !== Number(match[2]) - 1 ||
+    instant.getUTCDate() !== Number(match[3])
   ) {
+    invalidResponse()
+  }
+  return parsed
+}
+
+function date(value: unknown): string {
+  const parsed = nullableDate(value)
+  if (parsed === null) invalidResponse()
+  return parsed
+}
+
+function dates(value: unknown): string[] {
+  const parsed = list(value).map(date)
+  if (parsed.length > 31 || new Set(parsed).size !== parsed.length) {
     invalidResponse()
   }
   return parsed
@@ -154,32 +189,7 @@ function jsonObjectOrNull(value: unknown): JsonRecord | null {
 }
 
 function parseClient(value: unknown): OrderClient {
-  const source = record(value)
-  return {
-    id: uuid(source.id),
-    type: enumValue(source.type, ORDER_CLIENT_TYPES),
-    displayName: text(source.displayName),
-    phone: source.phone === undefined ? null : nullableText(source.phone),
-    email: source.email === undefined ? null : nullableText(source.email),
-  }
-}
-
-function parseClientSearchItem(value: unknown): OrderClientSearchItem {
-  const source = record(value)
-  const client = parseClient(source)
-
-  return {
-    ...client,
-    ...(source.version === undefined
-      ? {}
-      : { version: nonNegativeInteger(source.version) }),
-    ...(source.createdAt === undefined
-      ? {}
-      : { createdAt: timestamp(source.createdAt) }),
-    ...(source.updatedAt === undefined
-      ? {}
-      : { updatedAt: timestamp(source.updatedAt) }),
-  }
+  return parseRentalClient(value)
 }
 
 function parseOrderSummaryRecord(source: JsonRecord): OrderSummary {
@@ -194,9 +204,36 @@ function parseOrderSummaryRecord(source: JsonRecord): OrderSummary {
     createdBy: uuid(source.createdBy),
     createdByDisplayName: text(source.createdByDisplayName),
     warehouseId: nullableUuid(source.warehouseId),
+    deliveryAddress: nullableText(source.deliveryAddress),
+    latitude: nullableNumber(source.latitude),
+    longitude: nullableNumber(source.longitude),
+    contactPhone: nullableText(source.contactPhone),
+    comment: nullableText(source.comment),
+    acceptableDeliveryDates: dates(source.acceptableDeliveryDates),
     unitCount: nonNegativeInteger(source.unitCount),
     createdAt: timestamp(source.createdAt),
     updatedAt: timestamp(source.updatedAt),
+  }
+}
+
+function parseOrderMovement(value: unknown): OrderMovement {
+  const source = record(value)
+  return {
+    documentId: uuid(source.documentId),
+    documentType: enumValue(source.documentType, ["SHIPMENT", "RETURN"]),
+    state: text(source.state),
+    scheduledDate: date(source.scheduledDate),
+    actualAt: source.actualAt === null ? null : timestamp(source.actualAt),
+    rentalShipmentId: nullableUuid(source.rentalShipmentId),
+    createdAt: timestamp(source.createdAt),
+    updatedAt: timestamp(source.updatedAt),
+    cabins: list(source.cabins).map((entry) => {
+      const cabin = record(entry)
+      return {
+        rentalItemId: uuid(cabin.rentalItemId),
+        lineState: text(cabin.lineState),
+      }
+    }),
   }
 }
 
@@ -285,6 +322,7 @@ export function parseOrderDetail(value: unknown): OrderDetail {
   const detail = {
     ...parseOrderSummaryRecord(source),
     units: list(source.units).map(parseOrderUnitCandidate),
+    movements: list(source.movements).map(parseOrderMovement),
     permissions: {
       canEdit: boolean(permissions.canEdit),
       canViewOtherManagers: boolean(permissions.canViewOtherManagers),
@@ -412,6 +450,7 @@ export async function updateOrder(params: {
   orderId: string
   expectedVersion: number
   clientId: string
+  delivery: OrderDeliveryInput
   idempotencyKey: string
 }): Promise<OrderDetail> {
   return parseOrderDetail(
@@ -424,6 +463,7 @@ export async function updateOrder(params: {
         body: JSON.stringify({
           expectedVersion: params.expectedVersion,
           clientId: uuid(params.clientId),
+          ...params.delivery,
         }),
       }
     )
@@ -540,16 +580,7 @@ export async function listOrderClients(params: {
   page?: number
   size?: number
 }): Promise<OrderPage<OrderClientSearchItem>> {
-  const endpoint = new URL(clientsEndpoint())
-  if (params.type) endpoint.searchParams.set("type", params.type)
-  endpoint.searchParams.set("search", params.search.trim())
-  endpoint.searchParams.set("page", String(params.page ?? 0))
-  endpoint.searchParams.set("size", String(params.size ?? 20))
-
-  return parsePage(
-    await bearerRequest<unknown>(params.accessToken, endpoint),
-    parseClientSearchItem
-  )
+  return listClients(params)
 }
 
 export async function createOrderClient(params: {
@@ -559,15 +590,49 @@ export async function createOrderClient(params: {
     clientType: OrderClientType
     displayName: string
     phone: string
+    contactPerson?: string | null
     email?: string | null
+    comment?: string | null
+    source?: string | null
   }
 }): Promise<OrderClientSearchItem> {
-  return parseClientSearchItem(
-    await bearerRequest<unknown>(params.accessToken, clientsEndpoint(), {
-      method: "POST",
-      headers: idempotencyHeaders(params.idempotencyKey),
-      body: JSON.stringify(params.input),
-    })
+  return createClient(params)
+}
+
+export async function listClientOrders(params: {
+  accessToken: string
+  clientId: string
+  page: number
+  size: number
+  sort?: string
+  direction?: "asc" | "desc"
+  statuses?: OrderStatus[]
+  warehouseIds?: string[]
+  createdFrom?: string
+  createdTo?: string
+}): Promise<OrderPage<OrderSummary>> {
+  const endpoint = new URL(
+    clientsEndpoint(`/${encodeURIComponent(uuid(params.clientId))}/orders`)
+  )
+  endpoint.searchParams.set("page", String(params.page))
+  endpoint.searchParams.set("size", String(params.size))
+  endpoint.searchParams.set("sort", params.sort ?? "updatedAt")
+  endpoint.searchParams.set(
+    "direction",
+    (params.direction ?? "desc").toUpperCase()
+  )
+  params.statuses?.forEach((status) =>
+    endpoint.searchParams.append("status", status)
+  )
+  params.warehouseIds?.forEach((warehouseId) =>
+    endpoint.searchParams.append("warehouseId", uuid(warehouseId))
+  )
+  if (params.createdFrom)
+    endpoint.searchParams.set("createdFrom", params.createdFrom)
+  if (params.createdTo) endpoint.searchParams.set("createdTo", params.createdTo)
+  return parsePage(
+    await bearerRequest<unknown>(params.accessToken, endpoint),
+    parseOrderSummary
   )
 }
 

@@ -21,14 +21,19 @@ export type MediaPreviewLease = Readonly<{
 const MAX_ENTRIES = 512
 const entries = new Map<string, CacheEntry>()
 const pending = new Map<string, PendingEntry>()
+let cacheRevision = 0
 
 /** Keeps decoded preview Blob URLs until an invalidation, logout, or size cap. */
 export async function acquireMediaPreview(
   key: string,
   loader: () => Promise<DisposableMediaObjectUrl>
 ): Promise<MediaPreviewLease> {
+  const acquisitionRevision = cacheRevision
   sweep()
   while (true) {
+    if (acquisitionRevision !== cacheRevision) {
+      throw new MediaPreviewCacheClearedError()
+    }
     let entry = entries.get(key)
     if (entry?.evicted) {
       if (entry.references === 0) {
@@ -48,6 +53,10 @@ export async function acquireMediaPreview(
       }
       try {
         const objectUrl = await pendingEntry.promise
+        if (acquisitionRevision !== cacheRevision) {
+          objectUrl.dispose()
+          throw new MediaPreviewCacheClearedError()
+        }
         if (pendingEntry.invalidated) {
           objectUrl.dispose()
           if (pending.get(key) === pendingEntry) pending.delete(key)
@@ -154,9 +163,18 @@ export function evictWarehouseMediaPreviews(warehouseId: string | undefined) {
 }
 
 export function clearMediaPreviewCache() {
+  cacheRevision += 1
   for (const entry of entries.values()) disposeEntry(entry)
   entries.clear()
   for (const pendingEntry of pending.values()) pendingEntry.invalidated = true
+  pending.clear()
+}
+
+/** Signals that a principal-wide cache clear superseded an in-flight preview. */
+class MediaPreviewCacheClearedError extends Error {
+  constructor() {
+    super("Media preview cache was cleared")
+  }
 }
 
 function markEvicted(entry: CacheEntry) {

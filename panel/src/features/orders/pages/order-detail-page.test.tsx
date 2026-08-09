@@ -113,6 +113,9 @@ vi.mock("@/features/orders/components/order-unit-contents", () => ({
   OrderUnitContentsView: () => null,
   OrderUnitEquipmentDialog: () => null,
 }))
+vi.mock("@/features/orders/components/order-unit-dossier-evidence", () => ({
+  OrderUnitDossierEvidence: () => null,
+}))
 
 import { OrderDetailPage } from "@/features/orders/pages/order-detail-page"
 
@@ -128,18 +131,35 @@ const detail = {
   status: "DRAFT" as const,
   client: {
     id: CLIENT_ID,
+    version: 1,
     type: "LEGAL_ENTITY" as const,
     displayName: "ООО Тест",
+    phone: "+79990000000",
+    contactPerson: "Иван Иванов",
+    email: null,
+    responsibleManagerId: "11111111-1111-4111-8111-111111111111",
+    responsibleManagerDisplayName: "Менеджер",
+    comment: null,
+    source: null,
+    createdAt: "2026-07-19T08:00:00Z",
+    updatedAt: "2026-07-19T08:00:00Z",
   },
   managerId: "11111111-1111-4111-8111-111111111111",
   managerDisplayName: "Менеджер",
   createdBy: "11111111-1111-4111-8111-111111111111",
   createdByDisplayName: "Менеджер",
   warehouseId: WAREHOUSE_ID,
+  deliveryAddress: "Москва, Складская, 1",
+  latitude: 55.75,
+  longitude: 37.62,
+  contactPhone: "+79990000000",
+  comment: "Позвонить за час",
+  acceptableDeliveryDates: ["2026-08-15"],
   unitCount: 0,
   createdAt: "2026-07-19T08:00:00Z",
   updatedAt: "2026-07-19T09:00:00Z",
   units: [],
+  movements: [],
   permissions: { canEdit: true, canViewOtherManagers: false },
 }
 
@@ -242,7 +262,19 @@ describe("OrderDetailPage reservation conflict", () => {
       unitCount: 1,
       units: [selectedCandidate],
     })
+    const polledPage = {
+      content: [selectedCandidate],
+      page: 0,
+      size: 40,
+      totalElements: 1,
+      totalPages: 1,
+    }
+    let resolvePolledPage!: (page: typeof polledPage) => void
+    const polledResponse = new Promise<typeof polledPage>((resolve) => {
+      resolvePolledPage = resolve
+    })
     ordersApi.listAvailableOrderUnits
+      .mockReset()
       .mockResolvedValueOnce({
         content: [candidate, selectedCandidate],
         page: 0,
@@ -250,24 +282,39 @@ describe("OrderDetailPage reservation conflict", () => {
         totalElements: 2,
         totalPages: 1,
       })
-      .mockResolvedValue({
-        content: [selectedCandidate],
-        page: 0,
-        size: 40,
-        totalElements: 1,
-        totalPages: 1,
-      })
+      .mockImplementation(() => polledResponse)
 
     renderPage()
 
-    expect(await screen.findByRole("button", { name: "Добавить" })).toBeTruthy()
+    await waitFor(
+      () => expect(ordersApi.listAvailableOrderUnits).toHaveBeenCalledTimes(1),
+      { timeout: 3_500 }
+    )
+    expect(
+      await screen.findByRole(
+        "button",
+        { name: "Добавить" },
+        { timeout: 3_500 }
+      )
+    ).toBeTruthy()
+    await waitFor(
+      () =>
+        expect(
+          ordersApi.listAvailableOrderUnits.mock.calls.length
+        ).toBeGreaterThanOrEqual(2),
+      { timeout: 3_500 }
+    )
+    await act(async () => {
+      resolvePolledPage(polledPage)
+      await polledResponse
+    })
     await waitFor(
       () =>
         expect(screen.queryByRole("button", { name: "Добавить" })).toBeNull(),
       { timeout: 3_500 }
     )
     expect(screen.getByRole("button", { name: "Добавлено" })).toBeTruthy()
-    expect(screen.getByText("БЫТ-002")).toBeTruthy()
+    expect(screen.getAllByText("БЫТ-002").length).toBeGreaterThan(0)
     expect(
       ordersApi.listAvailableOrderUnits.mock.calls.length
     ).toBeGreaterThanOrEqual(2)
@@ -405,6 +452,47 @@ describe("OrderDetailPage draft actions", () => {
     expect(
       screen.queryByRole("heading", { name: "Бронирование ORD-000001" })
     ).toBeNull()
+  })
+
+  it("shows delivery metadata and the planned/actual logistics timeline", async () => {
+    ordersApi.getOrder.mockResolvedValue({
+      ...detail,
+      movements: [
+        {
+          documentId: "99999999-9999-4999-8999-999999999991",
+          documentType: "SHIPMENT",
+          state: "COMPLETED",
+          scheduledDate: "2026-08-15",
+          actualAt: "2026-08-15T08:30:00Z",
+          rentalShipmentId: "99999999-9999-4999-8999-999999999992",
+          createdAt: "2026-08-14T08:00:00Z",
+          updatedAt: "2026-08-15T08:30:00Z",
+          cabins: [],
+        },
+        {
+          documentId: "99999999-9999-4999-8999-999999999993",
+          documentType: "RETURN",
+          state: "PLANNED",
+          scheduledDate: "2026-09-15",
+          actualAt: null,
+          rentalShipmentId: null,
+          createdAt: "2026-08-15T09:00:00Z",
+          updatedAt: "2026-08-15T09:00:00Z",
+          cabins: [],
+        },
+      ],
+    })
+
+    renderPage()
+
+    expect(await screen.findByText("Москва, Складская, 1")).toBeTruthy()
+    expect(screen.getByText("Координаты: 55.75, 37.62")).toBeTruthy()
+    expect(screen.getByText("+79990000000")).toBeTruthy()
+    expect(screen.getByText("Позвонить за час")).toBeTruthy()
+    expect(screen.getAllByText("15.08.2026").length).toBeGreaterThan(0)
+    expect(screen.getByText("Отвоз клиенту")).toBeTruthy()
+    expect(screen.getByText("Возврат от клиента")).toBeTruthy()
+    expect(screen.getByText("Ещё не выполнено")).toBeTruthy()
   })
 
   it("shows only human-readable order data and history", async () => {
@@ -705,8 +793,18 @@ describe("OrderDetailPage draft actions", () => {
   it("updates the detail projection after selecting an existing client", async () => {
     const replacementClient = {
       id: "66666666-6666-4666-8666-666666666666",
+      version: 1,
       type: "LEGAL_ENTITY" as const,
       displayName: "ООО Новый клиент",
+      phone: "+79991111111",
+      contactPerson: "Пётр Петров",
+      email: null,
+      responsibleManagerId: "11111111-1111-4111-8111-111111111111",
+      responsibleManagerDisplayName: "Менеджер",
+      comment: null,
+      source: null,
+      createdAt: "2026-07-19T08:00:00Z",
+      updatedAt: "2026-07-19T08:00:00Z",
     }
     ordersApi.listOrderClients.mockResolvedValue({
       content: [replacementClient],
@@ -740,11 +838,19 @@ describe("OrderDetailPage draft actions", () => {
         orderId: ORDER_ID,
         expectedVersion: 4,
         clientId: replacementClient.id,
-        idempotencyKey: "99999999-9999-4999-8999-999999999999",
+        delivery: {
+          deliveryAddress: "Москва, Складская, 1",
+          latitude: 55.75,
+          longitude: 37.62,
+          contactPhone: "+79990000000",
+          comment: "Позвонить за час",
+          acceptableDeliveryDates: ["2026-08-15"],
+        },
+        idempotencyKey: expect.any(String),
       })
     )
     expect(await screen.findByText(replacementClient.displayName)).toBeTruthy()
-    expect(toast.success).toHaveBeenCalledWith("Клиент бронирования изменён.")
+    expect(toast.success).toHaveBeenCalledWith("Бронирование изменено.")
   })
 
   it("labels draft deletion as a logical cancellation and releases reservations", async () => {

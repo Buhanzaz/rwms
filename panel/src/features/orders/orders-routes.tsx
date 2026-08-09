@@ -19,7 +19,13 @@ export function VaultPanelOrdersModuleAdapter({
   const runtime = useMemo<OrdersModuleRuntime>(
     () => ({
       accessToken,
-      currentUser,
+      currentUser: currentUser
+        ? {
+            id: currentUser.id,
+            displayName: currentUser.displayName || currentUser.id,
+            globalRole: currentUser.globalRole,
+          }
+        : null,
       warehouses: warehouses.map((warehouse) => ({
         id: warehouse.id,
         name: warehouse.name,

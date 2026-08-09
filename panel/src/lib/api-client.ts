@@ -14,39 +14,48 @@ type ErrorEnvelope = {
   message?: unknown
   detail?: unknown
   error?: unknown
+  title?: unknown
   code?: unknown
 }
 
 function getEnvelopeMessage(body: ErrorEnvelope) {
-  const candidate = body.message ?? body.detail ?? body.error
+  const candidate = body.detail ?? body.message ?? body.error ?? body.title
   return typeof candidate === "string" && candidate.trim() ? candidate : null
+}
+
+function asErrorEnvelope(value: unknown): ErrorEnvelope | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  return value as ErrorEnvelope
 }
 
 async function readErrorDetails(response: Response) {
   const fallback = `Запрос завершился с ошибкой ${response.status}`
-  const contentType = response.headers.get("content-type") ?? ""
+  const text = await response.text().catch(() => "")
 
-  if (!contentType.includes("json")) {
-    const text = (await response.text()).trim()
-    if (text.startsWith("{")) {
-      try {
-        const parsed = JSON.parse(text) as ErrorEnvelope
-        return {
-          message: getEnvelopeMessage(parsed) ?? text,
-          code: typeof parsed.code === "string" ? parsed.code : null,
-        }
-      } catch {
-        // Preserve a non-JSON upstream error body verbatim.
-      }
+  try {
+    const body = asErrorEnvelope(JSON.parse(text))
+    if (!body) return { message: fallback, code: null }
+    return {
+      message: getEnvelopeMessage(body) ?? fallback,
+      code:
+        typeof body.code === "string" && body.code.trim() ? body.code : null,
     }
-    return { message: text || fallback, code: null }
+  } catch {
+    // A proxy or upstream can return malformed Problem Details. Keep the
+    // response status authoritative and do not expose an arbitrary body.
+    return { message: fallback, code: null }
   }
+}
 
-  const body = (await response.json()) as ErrorEnvelope
-  return {
-    message: getEnvelopeMessage(body) ?? fallback,
-    code: typeof body.code === "string" && body.code.trim() ? body.code : null,
-  }
+/**
+ * Converts every non-success gateway response, including malformed Problem
+ * Details, into the same status-bearing error used by normal panel requests.
+ */
+export async function apiErrorFromResponse(
+  response: Response
+): Promise<ApiError> {
+  const error = await readErrorDetails(response)
+  return new ApiError(error.message, response.status, error.code)
 }
 
 export async function bearerRequest<T>(
@@ -69,8 +78,7 @@ export async function bearerRequest<T>(
   const response = await fetch(input, { ...init, headers })
 
   if (!response.ok) {
-    const error = await readErrorDetails(response)
-    throw new ApiError(error.message, response.status, error.code)
+    throw await apiErrorFromResponse(response)
   }
 
   if (response.status === 204) {

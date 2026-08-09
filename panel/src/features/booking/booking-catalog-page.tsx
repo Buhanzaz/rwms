@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useInfiniteQuery, useMutation } from "@tanstack/react-query"
-import { useNavigate } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -101,6 +101,7 @@ function BookingCatalogPageState({
   warehouseId: string
 }) {
   const navigate = useNavigate()
+  const location = useLocation()
   const {
     draftId,
     checkedItems,
@@ -257,7 +258,7 @@ function BookingCatalogPageState({
     onSuccess: ({ hold, fingerprint }) => {
       holdIdentity.current.confirm(fingerprint)
       setActiveHold(hold)
-      navigate("/booking/continue")
+      navigate({ pathname: "/booking/continue", search: location.search })
     },
     onError: (error) =>
       toast.error(

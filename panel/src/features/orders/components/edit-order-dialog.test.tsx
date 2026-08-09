@@ -39,38 +39,62 @@ import type {
 const ORDER_ID = "33333333-3333-4333-8333-333333333333"
 const CLIENT_ID = "44444444-4444-4444-8444-444444444444"
 const REPLACEMENT_CLIENT_ID = "55555555-5555-4555-8555-555555555555"
+const delivery = {
+  deliveryAddress: "Москва, Складская, 1",
+  latitude: 55.75,
+  longitude: 37.62,
+  contactPhone: "+79990000000",
+  comment: "Позвонить за час",
+  acceptableDeliveryDates: ["2026-08-15"],
+}
+
+function client(
+  id: string,
+  displayName: string,
+  phone = "+79990000000"
+): OrderClientSearchItem {
+  return {
+    id,
+    version: 1,
+    type: "LEGAL_ENTITY",
+    displayName,
+    phone,
+    contactPerson: "Иван Иванов",
+    email: null,
+    responsibleManagerId: "11111111-1111-4111-8111-111111111111",
+    responsibleManagerDisplayName: "Менеджер",
+    comment: null,
+    source: null,
+    createdAt: "2026-07-19T08:00:00Z",
+    updatedAt: "2026-07-19T08:00:00Z",
+  }
+}
 
 const order: OrderDetail = {
   id: ORDER_ID,
   version: 4,
   number: "ORD-000001",
   status: "DRAFT",
-  client: {
-    id: CLIENT_ID,
-    type: "LEGAL_ENTITY",
-    displayName: "ООО Тест",
-    phone: "+79990000000",
-    email: null,
-  },
+  client: client(CLIENT_ID, "ООО Тест"),
   managerId: "11111111-1111-4111-8111-111111111111",
   managerDisplayName: "Менеджер",
   createdBy: "11111111-1111-4111-8111-111111111111",
   createdByDisplayName: "Менеджер",
   warehouseId: null,
+  ...delivery,
   unitCount: 0,
   createdAt: "2026-07-19T08:00:00Z",
   updatedAt: "2026-07-19T09:00:00Z",
   units: [],
+  movements: [],
   permissions: { canEdit: true, canViewOtherManagers: false },
 }
 
-const replacementClient: OrderClientSearchItem = {
-  id: REPLACEMENT_CLIENT_ID,
-  type: "LEGAL_ENTITY",
-  displayName: "ООО Новый клиент",
-  phone: "+79991111111",
-  email: null,
-}
+const replacementClient = client(
+  REPLACEMENT_CLIENT_ID,
+  "ООО Новый клиент",
+  "+79991111111"
+)
 const updatedOrder: OrderDetail = {
   ...order,
   version: 5,
@@ -156,12 +180,13 @@ describe("EditOrderDialog", () => {
         orderId: ORDER_ID,
         expectedVersion: 4,
         clientId: REPLACEMENT_CLIENT_ID,
-        idempotencyKey: "99999999-9999-4999-8999-999999999999",
+        delivery,
+        idempotencyKey: expect.any(String),
       })
     )
     expect(callbacks.onUpdated).toHaveBeenCalledWith(updatedOrder)
     expect(callbacks.onOpenChange).toHaveBeenCalledWith(false)
-    expect(toast.success).toHaveBeenCalledWith("Клиент бронирования изменён.")
+    expect(toast.success).toHaveBeenCalledWith("Бронирование изменено.")
   })
 
   it("keeps the dialog open and refreshes the order boundary on a stale write", async () => {

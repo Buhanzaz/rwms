@@ -78,6 +78,12 @@ const order = {
   createdBy: "11111111-1111-4111-8111-111111111111",
   createdByDisplayName: "Администратор",
   warehouseId: "22222222-2222-4222-8222-222222222222",
+  deliveryAddress: "Москва, Складская, 1",
+  latitude: 55.75,
+  longitude: 37.62,
+  contactPhone: "+79990000000",
+  comment: null,
+  acceptableDeliveryDates: ["2026-08-15"],
   unitCount: 2,
   createdAt: "2026-07-19T08:00:00Z",
   updatedAt: "2026-07-19T09:00:00Z",
@@ -205,6 +211,13 @@ describe("OrdersListPage", () => {
 
     expect(await screen.findAllByText("Петров Иван")).toHaveLength(2)
     expect(await screen.findAllByText("Мск")).toHaveLength(2)
+  })
+
+  it("shows the order delivery address and contact phone in grid and mobile projections", async () => {
+    renderPage()
+
+    expect(await screen.findAllByText("Москва, Складская, 1")).toHaveLength(2)
+    expect(screen.getAllByText("+79990000000")).toHaveLength(2)
   })
 
   it.each([

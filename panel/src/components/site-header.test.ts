@@ -150,4 +150,22 @@ describe("resolveHeaderBreadcrumbs", () => {
       { title: "Продолжение" },
     ])
   })
+
+  it("keeps client creation and detail under the client grid", () => {
+    expect(resolveHeaderBreadcrumbs("/clients", "", null, null)).toEqual([
+      { title: "Клиенты", to: "/clients" },
+    ])
+    expect(resolveHeaderBreadcrumbs("/clients/new", "", null, null)).toEqual([
+      { title: "Клиенты", to: "/clients" },
+      { title: "Создать клиента" },
+    ])
+    expect(
+      resolveHeaderBreadcrumbs(
+        "/clients/11111111-1111-4111-8111-111111111111",
+        "",
+        null,
+        null
+      )
+    ).toEqual([{ title: "Клиенты", to: "/clients" }, { title: "Клиент" }])
+  })
 })

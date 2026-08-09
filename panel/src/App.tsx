@@ -29,6 +29,7 @@ import { WarehouseTransfersPage } from "@/features/logistics/warehouse-transfers
 import { DriverBoardPage } from "@/features/logistics/driver-board"
 import { LogisticsSettingsPage } from "@/features/settings/logistics"
 import { OrdersRoutes } from "@/features/orders/orders-routes"
+import { ClientsRoutes } from "@/features/clients/clients-routes"
 import { AssistantPage } from "@/features/assistant/pages/assistant-page"
 import { RentalSettingsPage } from "@/features/assistant/pages/rental-settings-page"
 import {
@@ -285,6 +286,7 @@ function AppLayout() {
                 element={<WarehouseTransfersPage />}
               />
               <Route path="/orders/*" element={<OrdersRoutes />} />
+              <Route path="/clients/*" element={<ClientsRoutes />} />
               <Route path="/assistant" element={<AssistantPage />} />
               <Route path="/write-offs" element={<WriteOffsPage />} />
               <Route

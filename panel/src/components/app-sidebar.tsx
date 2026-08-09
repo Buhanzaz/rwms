@@ -39,6 +39,7 @@ import { useWarehouse } from "@/hooks/use-warehouse"
 import { isGlobalAdministrator } from "@/features/auth/auth-model"
 import { useAuth } from "@/features/auth/use-auth"
 import { ORDERS_NAVIGATION } from "@/features/orders/permissions/orders-permissions"
+import { CLIENTS_NAVIGATION } from "@/features/clients/clients-navigation"
 import {
   INVENTORY_QUERY_KEY,
   getActiveInventory,
@@ -846,6 +847,52 @@ function BookingSidebarMenu({
   )
 }
 
+function ClientsSidebarMenu({
+  currentPath,
+  onNavigate,
+}: {
+  currentPath: string
+  onNavigate: () => void
+}) {
+  return (
+    <>
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          asChild
+          isActive={currentPath === CLIENTS_NAVIGATION.createPath}
+          tooltip="Создать клиента"
+          className="h-10 py-1"
+        >
+          <Link to={CLIENTS_NAVIGATION.createPath} onClick={onNavigate}>
+            <span className="flex size-8 shrink-0 items-center justify-center group-data-[collapsible=icon]:size-9">
+              <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
+            </span>
+            <span>Создать клиента</span>
+          </Link>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          asChild
+          isActive={
+            currentPath !== CLIENTS_NAVIGATION.createPath &&
+            isActiveUrl(currentPath, CLIENTS_NAVIGATION.listPath)
+          }
+          tooltip="Клиенты"
+          className="h-10 py-1"
+        >
+          <Link to={CLIENTS_NAVIGATION.listPath} onClick={onNavigate}>
+            <span className="flex size-8 shrink-0 items-center justify-center group-data-[collapsible=icon]:size-9">
+              <HugeiconsIcon icon={UserGroupIcon} strokeWidth={2} />
+            </span>
+            <span>Клиенты</span>
+          </Link>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    </>
+  )
+}
+
 export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
   const location = useLocation()
   const { selectedWarehouse } = useWarehouse()
@@ -989,6 +1036,10 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
                 onNavigate={handleNavigationClick}
               />
               <BookingSidebarMenu
+                currentPath={location.pathname}
+                onNavigate={handleNavigationClick}
+              />
+              <ClientsSidebarMenu
                 currentPath={location.pathname}
                 onNavigate={handleNavigationClick}
               />

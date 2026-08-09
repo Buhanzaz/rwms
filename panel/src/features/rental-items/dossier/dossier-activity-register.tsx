@@ -69,6 +69,8 @@ const activityLabel: Record<DossierActivityCode, string> = {
   REPAIR_STAGE_COMPLETED: "Этап ремонта завершён",
   REPAIR_PENDING_ACCEPTANCE: "Ремонт ожидает приёмки",
   REPAIR_REWORK_CREATED: "Создана доработка ремонта",
+  REPAIR_TRANSFER_PREPARED: "Передача ремонта подготовлена",
+  REPAIR_TRANSFERRED: "Ремонт передан на другой склад",
   REPAIR_ACCEPTED: "Ремонт принят",
   REPAIR_WRITTEN_OFF: "Бытовка списана из ремонта",
   INVENTORY_FINDING_ADDED: "Зафиксирована находка инвентаризации",

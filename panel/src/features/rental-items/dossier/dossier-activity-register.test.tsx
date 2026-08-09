@@ -159,6 +159,25 @@ describe("DossierActivityRegister", () => {
     expect(onLoadMore).toHaveBeenCalledTimes(1)
   })
 
+  it("renders the canonical repair transfer activity label", () => {
+    const transfer = page()
+    transfer.activities[0]!.activityCode = "REPAIR_TRANSFERRED"
+
+    renderWithQueryClient(
+      <DossierActivityRegister
+        pages={[transfer]}
+        error={null}
+        isLoading={false}
+        hasNextPage={false}
+        isFetchingNextPage={false}
+        onLoadMore={vi.fn()}
+        showTechnicalActorDetails={false}
+      />
+    )
+
+    expect(screen.getByText("Ремонт передан на другой склад")).toBeTruthy()
+  })
+
   it("hides technical actor details by default and allows a permission-ready show flag", async () => {
     const { rerender } = renderWithQueryClient(
       <DossierActivityRegister

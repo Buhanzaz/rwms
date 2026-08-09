@@ -133,3 +133,40 @@ it("retries a preview that was invalidated while its prior request was in flight
   clearMediaPreviewCache()
   expect(secondDispose).toHaveBeenCalledOnce()
 })
+
+it("does not recreate a preview after a principal-wide clear races its loader", async () => {
+  type Preview = {
+    url: string
+    contentType: string
+    size: number
+    dispose: () => void
+  }
+  let resolvePreview!: (value: Preview) => void
+  const dispose = vi.fn()
+  const key = mediaPreviewCacheKey({
+    warehouseId: "warehouse-id",
+    cabinId: "cabin-id",
+    mediaId: "media-id",
+    generation: 1,
+    variant: "SMALL",
+  })
+  const pendingLease = acquireMediaPreview(
+    key,
+    () =>
+      new Promise<Preview>((resolve) => {
+        resolvePreview = resolve
+      })
+  )
+
+  clearMediaPreviewCache()
+  resolvePreview({
+    url: "blob:late-preview",
+    contentType: "image/webp",
+    size: 42,
+    dispose,
+  })
+
+  await expect(pendingLease).rejects.toThrow("Media preview cache was cleared")
+  expect(dispose).toHaveBeenCalledOnce()
+  expect(getCachedMediaPreviewUrl(key)).toBeUndefined()
+})

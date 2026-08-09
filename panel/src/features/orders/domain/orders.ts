@@ -3,15 +3,20 @@ import {
   type RentalItemDto,
   type RentalItemStatus,
 } from "@/features/rental-items/model/rental-item"
+import {
+  CLIENT_TYPES,
+  CLIENT_TYPE_LABELS,
+  normalizeClientDisplayName,
+  normalizeClientSearch,
+  type ClientType,
+  type RentalClient,
+} from "@/features/clients/domain/clients"
 
-export const ORDER_CLIENT_TYPES = ["INDIVIDUAL", "LEGAL_ENTITY"] as const
+export const ORDER_CLIENT_TYPES = CLIENT_TYPES
 
-export type OrderClientType = (typeof ORDER_CLIENT_TYPES)[number]
+export type OrderClientType = ClientType
 
-export const ORDER_CLIENT_TYPE_LABELS: Record<OrderClientType, string> = {
-  INDIVIDUAL: "Физическое лицо",
-  LEGAL_ENTITY: "Юридическое лицо",
-}
+export const ORDER_CLIENT_TYPE_LABELS = CLIENT_TYPE_LABELS
 
 export const ORDER_STATUSES = [
   "DRAFT",
@@ -30,19 +35,9 @@ export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   CANCELLED: "Отменён",
 }
 
-export type OrderClient = {
-  id: string
-  type: OrderClientType
-  displayName: string
-  phone: string | null
-  email: string | null
-}
+export type OrderClient = RentalClient
 
-export type OrderClientSearchItem = OrderClient & {
-  version?: number
-  createdAt?: string
-  updatedAt?: string
-}
+export type OrderClientSearchItem = RentalClient
 
 export type OrderEquipmentContent = {
   equipmentId: string
@@ -101,6 +96,12 @@ export type OrderSummary = {
   createdBy: string
   createdByDisplayName: string
   warehouseId: string | null
+  deliveryAddress: string | null
+  latitude: number | null
+  longitude: number | null
+  contactPhone: string | null
+  comment: string | null
+  acceptableDeliveryDates: string[]
   unitCount: number
   createdAt: string
   updatedAt: string
@@ -111,8 +112,26 @@ export type OrderDetailPermissions = {
   canViewOtherManagers: boolean
 }
 
+export type OrderMovementCabin = {
+  rentalItemId: string
+  lineState: string
+}
+
+export type OrderMovement = {
+  documentId: string
+  documentType: "SHIPMENT" | "RETURN"
+  state: string
+  scheduledDate: string
+  actualAt: string | null
+  rentalShipmentId: string | null
+  createdAt: string
+  updatedAt: string
+  cabins: OrderMovementCabin[]
+}
+
 export type OrderDetail = OrderSummary & {
   units: OrderUnitCandidate[]
+  movements: OrderMovement[]
   permissions: OrderDetailPermissions
 }
 
@@ -181,13 +200,7 @@ export type OrderAuditEvent = {
   occurredAt: string
 }
 
-export function normalizeClientDisplayName(value: string) {
-  return value.trim().replace(/\s+/g, " ")
-}
-
-export function normalizeClientSearch(value: string) {
-  return normalizeClientDisplayName(value).toLocaleLowerCase("ru-RU")
-}
+export { normalizeClientDisplayName, normalizeClientSearch }
 
 export function orderUnitToRentalItem(unit: OrderRentalUnit): RentalItemDto {
   const contentsItems = unit.contents.map((content) => ({

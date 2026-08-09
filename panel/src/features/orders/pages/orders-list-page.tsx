@@ -190,6 +190,12 @@ function OrderMobileCard({
               {managerName}
             </OrderMobileDetail>
             <OrderMobileDetail label="Склад">{warehouseName}</OrderMobileDetail>
+            <OrderMobileDetail label="Адрес">
+              {order.deliveryAddress ?? "Не указан"}
+            </OrderMobileDetail>
+            <OrderMobileDetail label="Телефон">
+              {order.contactPhone ?? "Не указан"}
+            </OrderMobileDetail>
             <OrderMobileDetail label="Бытовки">
               {order.unitCount}
             </OrderMobileDetail>
@@ -217,6 +223,9 @@ export function OrdersListPage() {
   const { filtersOpen, setFiltersOpen } = useResponsiveFiltersOpen()
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const routeRequestsCreate = location.pathname === ORDERS_NAVIGATION.createPath
+  const requestedClientId = routeRequestsCreate
+    ? new URLSearchParams(location.search).get("clientId")
+    : null
   const statusOptions = useMemo(
     () =>
       ORDER_STATUSES.map((status) => ({
@@ -402,7 +411,7 @@ export function OrdersListPage() {
         <>
           <div className="hidden min-h-0 w-full flex-1 overflow-hidden rounded-lg border bg-card md:block">
             <div className="h-full w-full overflow-auto">
-              <table className="w-full min-w-[1050px] table-fixed border-separate border-spacing-0 text-sm">
+              <table className="w-full min-w-[1280px] table-fixed border-separate border-spacing-0 text-sm">
                 <thead className={GRID_HEADER_CLASS}>
                   <tr>
                     <th className={GRID_HEADER_CELL_CLASS}>
@@ -437,6 +446,12 @@ export function OrdersListPage() {
                     </th>
                     <th className={GRID_HEADER_CELL_CLASS}>
                       <SortIndicator label="Склад" />
+                    </th>
+                    <th className={GRID_HEADER_CELL_CLASS}>
+                      <SortIndicator label="Адрес" />
+                    </th>
+                    <th className={GRID_HEADER_CELL_CLASS}>
+                      <SortIndicator label="Телефон" />
                     </th>
                     <th className={GRID_HEADER_CELL_CLASS}>
                       <SortIndicator label="Бытовки" />
@@ -507,6 +522,16 @@ export function OrdersListPage() {
                             {warehouseName}
                           </div>
                         </td>
+                        <td className={GRID_CELL_CLASS}>
+                          <div className="min-w-0 truncate">
+                            {order.deliveryAddress ?? "Не указан"}
+                          </div>
+                        </td>
+                        <td className={GRID_CELL_CLASS}>
+                          <div className="min-w-0 truncate">
+                            {order.contactPhone ?? "Не указан"}
+                          </div>
+                        </td>
                         <td className={GRID_CELL_CLASS}>{order.unitCount}</td>
                         <td className={GRID_CELL_CLASS}>
                           <OrderStatusBadge status={order.status} />
@@ -549,6 +574,7 @@ export function OrdersListPage() {
 
       <CreateOrderDialog
         open={routeRequestsCreate || createDialogOpen}
+        initialClientId={requestedClientId ?? undefined}
         onOpenChange={setDialogOpen}
         onCreated={(order) => navigate(`/orders/${order.id}`)}
       />

@@ -1,5 +1,6 @@
 import * as React from "react"
 import { cleanup, render, screen, within } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -234,7 +235,7 @@ describe("AssistantSearchResults layout", () => {
     const expand = screen.getByRole("button", {
       name: "Развернуть подбор бытовок",
     })
-    const group = screen.getByRole("button", { name: /4/ })
+    const group = screen.getByRole("tab", { name: /4/ })
     expect(
       expand.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
@@ -328,7 +329,7 @@ describe("AssistantSearchResults layout", () => {
       </MemoryRouter>
     )
 
-    expect(screen.getByRole("button", { name: /Новая1/ })).toBeTruthy()
+    expect(screen.getByRole("tab", { name: /Новая1/ })).toBeTruthy()
   })
 
   it("shows characteristics and the linoleum requirement in a group label", () => {
@@ -353,7 +354,7 @@ describe("AssistantSearchResults layout", () => {
     )
 
     expect(
-      screen.getByRole("button", {
+      screen.getByRole("tab", {
         name: /БК-1 · ДВП · Пластиковое окно · Без линолеума1/,
       })
     ).toBeTruthy()
@@ -378,9 +379,7 @@ describe("AssistantSearchResults layout", () => {
       </MemoryRouter>
     )
 
-    expect(
-      screen.getByRole("button", { name: /Обычная или ИТР1/ })
-    ).toBeTruthy()
+    expect(screen.getByRole("tab", { name: /Обычная или ИТР1/ })).toBeTruthy()
   })
 
   it("puts its footer immediately after cabin results and hides it without cabins", () => {
@@ -445,5 +444,60 @@ describe("AssistantSearchResults layout", () => {
         name: "Создать представление для клиента",
       })
     ).toBeNull()
+  })
+
+  it("offers only authoritative exact filters plus an explicit linoleum choice", async () => {
+    const onSuggestion = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter>
+        <AssistantSearchResults
+          accessToken="token"
+          result={resultWithCabins(1)}
+          selectedIds={new Set()}
+          onSelectionChange={vi.fn()}
+          filterSuggestions={{
+            cabinTypes: ["БК-1"],
+            finishes: ["ЛДСП"],
+            dimensions: ["6x2.4"],
+            categories: ["ИТР"],
+            characteristics: ["Пластиковое окно"],
+          }}
+          onSuggestion={onSuggestion}
+        />
+      </MemoryRouter>
+    )
+
+    await user.click(screen.getByRole("radio", { name: "Пластиковое окно" }))
+    expect(onSuggestion).toHaveBeenCalledWith(
+      "Уточни выборку: характеристика «Пластиковое окно»."
+    )
+    await user.click(screen.getByRole("radio", { name: "Есть" }))
+    expect(onSuggestion).toHaveBeenCalledWith(
+      "Уточни выборку: только бытовки с линолеумом."
+    )
+    expect(screen.queryByText("Несуществующий тип")).toBeNull()
+  })
+
+  it("emits the complete remaining ID set when a selected cabin is unchecked", async () => {
+    const onSelectionChange = vi.fn()
+    const user = userEvent.setup()
+    const result = resultWithCabins(2)
+    render(
+      <MemoryRouter>
+        <AssistantSearchResults
+          accessToken="token"
+          result={result}
+          selectedIds={new Set(["cabin-1", "cabin-2"])}
+          onSelectionChange={onSelectionChange}
+        />
+      </MemoryRouter>
+    )
+
+    await user.click(
+      screen.getByRole("checkbox", { name: "Выбрать бытовку БЫТ-1" })
+    )
+    expect(onSelectionChange).toHaveBeenCalledOnce()
+    expect([...onSelectionChange.mock.calls[0][0]]).toEqual(["cabin-2"])
   })
 })

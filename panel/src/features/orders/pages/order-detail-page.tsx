@@ -60,6 +60,7 @@ import {
 } from "@/features/orders/api/orders-api"
 import { OrderCommandIdentityRegistry } from "@/features/orders/api/order-command-identity"
 import { EditOrderDialog } from "@/features/orders/components/edit-order-dialog"
+import { OrderUnitDossierEvidence } from "@/features/orders/components/order-unit-dossier-evidence"
 import {
   OrderUnitContentsView,
   OrderUnitEquipmentDialog,
@@ -71,6 +72,7 @@ import {
   ORDER_CLIENT_TYPE_LABELS,
   ORDER_STATUS_LABELS,
   type OrderDetail,
+  type OrderMovement,
   type OrderUnitCandidate,
 } from "@/features/orders/domain/orders"
 import { useOrdersModule } from "@/features/orders/orders-module-context"
@@ -94,6 +96,11 @@ const ORDER_CHANGE_LABELS: Record<string, string> = {
 const RESERVATION_STATE_LABELS: Record<string, string> = {
   ACTIVE: "активен",
   RELEASED: "освобождён",
+}
+
+const MOVEMENT_TYPE_LABELS: Record<OrderMovement["documentType"], string> = {
+  SHIPMENT: "Отвоз клиенту",
+  RETURN: "Возврат от клиента",
 }
 
 function isUuid(value: unknown) {
@@ -879,6 +886,8 @@ export function OrderDetailPage() {
   const canEdit = order.permissions.canEdit
   const canCancel = canEdit && order.status === "DRAFT"
   const warehouseLocked = order.unitCount > 0
+  const acceptableDeliveryDates = order.acceptableDeliveryDates ?? []
+  const orderMovements = order.movements ?? []
   const saveActionLabel =
     order.status === "SAVED" ? "Создать заказ" : "Сохранить бронирование"
 
@@ -976,6 +985,118 @@ export function OrderDetailPage() {
               {formatOrderDateTime(order.createdAt)}
             </p>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle>Доставка и приёмка</CardTitle>
+          <CardDescription>
+            Контактные данные и согласованные даты этого заказа.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="sm:col-span-2">
+            <p className="text-xs text-muted-foreground">Адрес</p>
+            <p className="font-medium">
+              {order.deliveryAddress ?? "Не указан"}
+            </p>
+            {order.latitude !== null && order.longitude !== null ? (
+              <p className="text-sm text-muted-foreground">
+                Координаты: {order.latitude}, {order.longitude}
+              </p>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Координаты не указаны
+              </p>
+            )}
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Контактный телефон</p>
+            <p className="font-medium">{order.contactPhone ?? "Не указан"}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Комментарий</p>
+            <p className="font-medium">{order.comment ?? "Нет"}</p>
+          </div>
+          <div className="sm:col-span-2 xl:col-span-4">
+            <p className="text-xs text-muted-foreground">
+              Возможные даты приёмки
+            </p>
+            <div className="mt-1 flex flex-wrap gap-2">
+              {acceptableDeliveryDates.length === 0 ? (
+                <span className="text-sm font-medium">Не указаны</span>
+              ) : (
+                acceptableDeliveryDates.map((date) => (
+                  <Badge key={date} variant="outline">
+                    {formatRentalDate(date)}
+                  </Badge>
+                ))
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle>Логистика заказа</CardTitle>
+          <CardDescription>
+            Плановые и фактические отвозы и возвраты из logistics-service.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {orderMovements.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Отвозы и возвраты ещё не зарегистрированы.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {orderMovements.map((movement) => (
+                <div
+                  key={movement.documentId}
+                  className="rounded-lg border p-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-medium">
+                      {MOVEMENT_TYPE_LABELS[movement.documentType] ??
+                        movement.documentType}
+                    </p>
+                    <Badge variant="outline">{movement.state}</Badge>
+                  </div>
+                  <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-4">
+                    <div>
+                      <dt className="text-muted-foreground">Запланировано</dt>
+                      <dd className="font-medium">
+                        {formatRentalDate(movement.scheduledDate)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">Выполнено</dt>
+                      <dd className="font-medium">
+                        {movement.actualAt
+                          ? formatOrderDateTime(movement.actualAt)
+                          : "Ещё не выполнено"}
+                      </dd>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <dt className="text-muted-foreground">Бытовки</dt>
+                      <dd className="font-medium">
+                        {movement.cabins
+                          .map((cabin) => {
+                            const candidate = order.units.find(
+                              (item) => item.unit.id === cabin.rentalItemId
+                            )
+                            return `${candidate?.unit.number ?? cabin.rentalItemId} · ${cabin.lineState}`
+                          })
+                          .join(", ") || "Не указаны"}
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -1468,6 +1589,14 @@ export function OrderDetailPage() {
           })
         )}
       </section>
+
+      <OrderUnitDossierEvidence
+        accessToken={accessToken!}
+        orderId={order.id}
+        orderCreatedAt={order.createdAt}
+        candidates={selectedUnits}
+        movements={orderMovements}
+      />
 
       <Card size="sm">
         <CardHeader>
