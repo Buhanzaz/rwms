@@ -859,25 +859,7 @@ function ClientsSidebarMenu({
       <SidebarMenuItem>
         <SidebarMenuButton
           asChild
-          isActive={currentPath === CLIENTS_NAVIGATION.createPath}
-          tooltip="Создать клиента"
-          className="h-10 py-1"
-        >
-          <Link to={CLIENTS_NAVIGATION.createPath} onClick={onNavigate}>
-            <span className="flex size-8 shrink-0 items-center justify-center group-data-[collapsible=icon]:size-9">
-              <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
-            </span>
-            <span>Создать клиента</span>
-          </Link>
-        </SidebarMenuButton>
-      </SidebarMenuItem>
-      <SidebarMenuItem>
-        <SidebarMenuButton
-          asChild
-          isActive={
-            currentPath !== CLIENTS_NAVIGATION.createPath &&
-            isActiveUrl(currentPath, CLIENTS_NAVIGATION.listPath)
-          }
+          isActive={isActiveUrl(currentPath, CLIENTS_NAVIGATION.listPath)}
           tooltip="Клиенты"
           className="h-10 py-1"
         >

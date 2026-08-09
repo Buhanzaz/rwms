@@ -1,18 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react"
-import userEvent from "@testing-library/user-event"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import type { ReactNode } from "react"
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const clientsApi = vi.hoisted(() => ({
-  createClient: vi.fn(),
   getClient: vi.fn(),
   listClients: vi.fn(),
 }))
@@ -22,9 +14,6 @@ const ordersApi = vi.hoisted(() => ({
     () => "55555555-5555-4555-8555-555555555555"
   ),
 }))
-const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
-
-vi.mock("sonner", () => ({ toast }))
 vi.mock("@/features/clients/api/clients-api", () => ({
   CLIENTS_QUERY_KEY: ["rental-clients"],
   ...clientsApi,
@@ -45,7 +34,6 @@ vi.mock("@/features/orders/orders-module-context", () => ({
   }),
 }))
 
-import { ClientCreatePage } from "@/features/clients/pages/client-create-page"
 import { ClientDetailPage } from "@/features/clients/pages/client-detail-page"
 import { ClientsListPage } from "@/features/clients/pages/clients-list-page"
 
@@ -114,10 +102,6 @@ function renderRoute(initialEntry: string, route: string, element: ReactNode) {
 }
 
 beforeEach(() => {
-  clientsApi.createClient.mockResolvedValue({
-    ...client,
-    phone: "+79990000000",
-  })
   clientsApi.getClient.mockResolvedValue(client)
   clientsApi.listClients.mockResolvedValue({
     content: [client],
@@ -141,68 +125,6 @@ afterEach(() => {
 })
 
 describe("client pages", () => {
-  it("requires a contact person for a legal entity and keeps the authenticated manager read-only", async () => {
-    const user = userEvent.setup()
-    renderRoute("/clients/new", "/clients/new", <ClientCreatePage />)
-
-    const manager = screen.getByLabelText(
-      "Ответственный менеджер"
-    ) as HTMLInputElement
-    expect(manager.value).toBe("Мария Менеджер")
-    expect(manager.readOnly).toBe(true)
-    expect(manager.required).toBe(true)
-    const comment = screen.getByLabelText("Комментарий")
-    const source = screen.getByLabelText("Источник клиента")
-    expect(
-      comment.compareDocumentPosition(source) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy()
-    expect(screen.queryByRole("radio", { name: "ИП" })).toBeNull()
-
-    await user.click(screen.getByRole("radio", { name: "Юридическое лицо" }))
-    await user.type(screen.getByLabelText("Наименование или ФИО"), "ООО Петров")
-    await user.type(screen.getByLabelText("Основной телефон"), "+79990000000")
-    const submit = screen.getByRole("button", { name: "Создать клиента" })
-    fireEvent.submit(submit.closest("form")!)
-
-    expect(
-      await screen.findByText("Укажите основное контактное лицо.")
-    ).toBeTruthy()
-    expect(document.activeElement).toBe(
-      screen.getByLabelText("Основное контактное лицо")
-    )
-    expect(
-      screen
-        .getByText("Проверьте обязательные поля клиента.")
-        .getAttribute("role")
-    ).toBe("alert")
-    expect(clientsApi.createClient).not.toHaveBeenCalled()
-
-    await user.type(
-      screen.getByLabelText("Основное контактное лицо"),
-      "Пётр Петров"
-    )
-    await user.click(submit)
-
-    await waitFor(() =>
-      expect(clientsApi.createClient).toHaveBeenCalledWith({
-        accessToken: "token",
-        idempotencyKey: expect.any(String),
-        input: {
-          clientType: "LEGAL_ENTITY",
-          displayName: "ООО Петров",
-          phone: "+79990000000",
-          contactPerson: "Пётр Петров",
-          email: null,
-          comment: null,
-          source: null,
-        },
-      })
-    )
-    expect(
-      JSON.stringify(clientsApi.createClient.mock.calls[0][0])
-    ).not.toContain("responsibleManager")
-  })
-
   it("opens a paginated grid row by double-click and exposes keyboard navigation", async () => {
     renderRoute("/clients", "/clients", <ClientsListPage />)
 

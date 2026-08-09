@@ -1,14 +1,10 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Add01Icon, RefreshIcon } from "@hugeicons/core-free-icons"
+import { RefreshIcon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Link, useNavigate } from "react-router-dom"
 
-import {
-  PageToolbar,
-  PageToolbarActions,
-  PageToolbarContent,
-} from "@/components/page-toolbar"
+import { PageToolbar, PageToolbarContent } from "@/components/page-toolbar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -40,7 +36,6 @@ import {
   CLIENTS_QUERY_KEY,
   listClients,
 } from "@/features/clients/api/clients-api"
-import { CLIENTS_NAVIGATION } from "@/features/clients/clients-navigation"
 import {
   CLIENT_TYPES,
   CLIENT_TYPE_LABELS,
@@ -147,14 +142,6 @@ export function ClientsListPage() {
             </SelectContent>
           </Select>
         </PageToolbarContent>
-        <PageToolbarActions>
-          <Button asChild>
-            <Link to={CLIENTS_NAVIGATION.createPath}>
-              <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-              {CLIENTS_NAVIGATION.createLabel}
-            </Link>
-          </Button>
-        </PageToolbarActions>
       </PageToolbar>
 
       {clientsQuery.isLoading ? (
@@ -193,7 +180,8 @@ export function ClientsListPage() {
           <CardHeader>
             <CardTitle>Клиенты не найдены</CardTitle>
             <CardDescription>
-              Измените запрос или создайте новую карточку клиента.
+              Измените запрос или создайте клиента в чате, бронировании или
+              новом заказе.
             </CardDescription>
           </CardHeader>
         </Card>

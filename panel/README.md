@@ -63,16 +63,13 @@ contexts and screens are usable.
   expiry. Streamed LLM removal is reconciled immediately and followed by the
   terminal conversation refetch. The browser never treats a local checkbox set
   as authoritative state.
-- Rental navigation exposes `/clients/new`, `/clients`, and
-  `/clients/:clientId`. The create form offers only individual and legal-entity
-  client types, requires the client type, display name, and phone, additionally
-  requires a contact person for a legal entity, and visibly shows the
-  authenticated responsible manager as a
-  read-only server-owned value. The client grid is server-paginated; a client
-  detail reads that client's orders and links to chat, warehouse selection, or
-  manual order creation with only `clientId` as prefill. A truthful null phone
-  on a historical client is displayed as not specified and is never backfilled
-  in the browser. See the
+- Rental navigation exposes the client grid at `/clients` and client details at
+  `/clients/:clientId`. Clients are created from chat, booking, or the new-order
+  flow; the client grid has no standalone creation action. The client grid is
+  server-paginated; a client detail reads that client's orders and links to
+  chat, warehouse selection, or manual order creation with only `clientId` as
+  prefill. A truthful null phone on a historical client is displayed as not
+  specified and is never backfilled in the browser. See the
   [logistics OpenAPI](../contracts/openapi/logistics-service.yaml) and the
   [client feature](src/features/clients/).
 - Booking requests 50 cabins per server page and defers text before it becomes

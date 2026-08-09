@@ -151,13 +151,9 @@ describe("resolveHeaderBreadcrumbs", () => {
     ])
   })
 
-  it("keeps client creation and detail under the client grid", () => {
+  it("keeps the client grid and detail under the client section", () => {
     expect(resolveHeaderBreadcrumbs("/clients", "", null, null)).toEqual([
       { title: "Клиенты", to: "/clients" },
-    ])
-    expect(resolveHeaderBreadcrumbs("/clients/new", "", null, null)).toEqual([
-      { title: "Клиенты", to: "/clients" },
-      { title: "Создать клиента" },
     ])
     expect(
       resolveHeaderBreadcrumbs(

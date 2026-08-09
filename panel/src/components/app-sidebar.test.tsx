@@ -192,12 +192,11 @@ describe("AppSidebar collapsed desktop navigation", () => {
     expect(screen.queryByText("Задания водителей")).toBeNull()
   })
 
-  it("groups chat, booking, client actions and orders in Rental for every signed-in user", () => {
+  it("groups chat, booking, clients and orders in Rental for every signed-in user", () => {
     const first = renderSidebar()
     expect(screen.getByText("Аренда")).toBeTruthy()
     const chat = screen.getByRole("link", { name: "Чат" })
     const booking = screen.getByRole("link", { name: "Бронирование" })
-    const createClient = screen.getByRole("link", { name: "Создать клиента" })
     const clients = screen.getByRole("link", { name: "Клиенты" })
     const orders = screen.getByRole("link", { name: "Заказы" })
 
@@ -205,18 +204,13 @@ describe("AppSidebar collapsed desktop navigation", () => {
       chat.compareDocumentPosition(booking) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
     expect(
-      booking.compareDocumentPosition(createClient) &
-        Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy()
-    expect(
-      createClient.compareDocumentPosition(clients) &
+      booking.compareDocumentPosition(clients) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
     expect(
       clients.compareDocumentPosition(orders) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
     expect(booking.getAttribute("href")).toBe("/booking")
-    expect(createClient.getAttribute("href")).toBe("/clients/new")
     expect(clients.getAttribute("href")).toBe("/clients")
     expect(orders.getAttribute("href")).toBe("/orders")
 
@@ -228,7 +222,6 @@ describe("AppSidebar collapsed desktop navigation", () => {
     expect(screen.getByText("Аренда")).toBeTruthy()
     expect(screen.getByRole("link", { name: "Чат" })).toBeTruthy()
     expect(screen.getByRole("link", { name: "Бронирование" })).toBeTruthy()
-    expect(screen.getByRole("link", { name: "Создать клиента" })).toBeTruthy()
     expect(screen.getByRole("link", { name: "Клиенты" })).toBeTruthy()
     expect(screen.getByRole("link", { name: "Заказы" })).toBeTruthy()
   })
