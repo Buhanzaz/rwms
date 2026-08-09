@@ -157,6 +157,19 @@ afterEach(() => {
 })
 
 describe("CreateOrderDialog", () => {
+  it("uses a wide responsive layout for a new booking", () => {
+    renderDialog()
+
+    const dialog = screen.getByRole("dialog", {
+      name: "Новое бронирование",
+    })
+    expect(dialog.className).toContain("w-[calc(100vw-2rem)]")
+    expect(dialog.className).toContain("max-w-6xl")
+    expect(dialog.className).toContain("sm:max-w-6xl")
+    expect(dialog.className).toContain("max-h-[90vh]")
+    expect(dialog.className).toContain("overflow-y-auto")
+  })
+
   it("prefills the client and editable order phone from a client detail action", async () => {
     renderDialog(vi.fn(), CLIENT_ID)
 

@@ -61,7 +61,7 @@ export function CreateOrderDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         ref={contentRef}
-        className="max-h-[90vh] max-w-4xl overflow-y-auto"
+        className="max-h-[90vh] w-[calc(100vw-2rem)] max-w-6xl overflow-y-auto sm:max-w-6xl"
       >
         <DialogHeader>
           <DialogTitle>Новое бронирование</DialogTitle>
