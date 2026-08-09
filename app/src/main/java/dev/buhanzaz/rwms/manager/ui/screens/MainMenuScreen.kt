@@ -20,6 +20,7 @@ import dev.buhanzaz.rwms.manager.R
 import dev.buhanzaz.rwms.manager.ui.components.ManagerMenuCard
 import dev.buhanzaz.rwms.manager.ui.components.ManagerScreenScaffold
 
+/** Renders the warehouse-scoped manager menu and pending-upload status. */
 @Composable
 fun ManagerMainMenuScreen(
     onLogout: () -> Unit,

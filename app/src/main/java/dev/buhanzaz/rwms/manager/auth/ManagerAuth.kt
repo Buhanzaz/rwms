@@ -52,6 +52,9 @@ import org.json.JSONObject
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+/**
+ * Owns the manager OAuth/session boundary. Encrypted client state enables requests but never grants server authorization.
+ */
 sealed interface ManagerAuthState {
     data object Loading : ManagerAuthState
     data object SignedOut : ManagerAuthState
@@ -60,6 +63,9 @@ sealed interface ManagerAuthState {
     data class Failure(val message: String) : ManagerAuthState
 }
 
+/**
+ * Owns the manager OAuth/session boundary. Encrypted client state enables requests but never grants server authorization.
+ */
 data class ManagerAuthConfiguration(
     val publicBaseUrl: Uri,
 ) {
@@ -124,6 +130,9 @@ private const val MANAGER_CLIENT_ID = "rwms-manager-android"
 private const val MANAGER_SCOPE =
     "openid profile offline_access rwms.read rwms.write warehouse.read"
 
+/**
+ * Owns the manager OAuth/session boundary. Encrypted client state enables requests but never grants server authorization.
+ */
 class ManagerAuthRepository(
     context: Context,
     val configuration: ManagerAuthConfiguration,
@@ -214,6 +223,10 @@ class ManagerAuthRepository(
         }
     }
 
+    /**
+     * Returns a usable token, serializing refreshes and durably replacing the encrypted session.
+     * An absent or revoked refresh token clears the local session instead of fabricating a token.
+     */
     suspend fun freshAccessToken(forceRefresh: Boolean = false): String? {
         val current = currentState() ?: return null
         if (!forceRefresh && !current.needsTokenRefresh && !current.accessToken.isNullOrBlank()) {
@@ -263,6 +276,10 @@ class ManagerAuthRepository(
         }
     }
 
+    /**
+     * Attempts remote revocation/logout, then always removes the local encrypted session and
+     * ephemeral browser cookies even if the gateway is unavailable.
+     */
     suspend fun logout() {
         val state = currentState()
         val refreshToken = state?.refreshToken
@@ -321,6 +338,9 @@ class ManagerAuthRepository(
     }
 }
 
+/**
+ * Owns the manager OAuth/session boundary. Credentials and cookies remain client-local and never grant server authorization.
+ */
 internal sealed class NativeManagerLoginException(
     val userMessage: String,
 ) : IOException(userMessage) {
@@ -334,11 +354,17 @@ internal sealed class NativeManagerLoginException(
         NativeManagerLoginException("Не удалось безопасно выполнить вход. Повторите попытку")
 }
 
+/**
+ * Owns the manager OAuth/session boundary. Credentials and cookies remain client-local and never grant server authorization.
+ */
 internal data class NativeManagerLoginSession(
     val authorizationResponse: AuthorizationResponse,
     val cookies: EphemeralCookieJar,
 )
 
+/**
+ * Owns the manager OAuth/session boundary. Credentials and cookies remain client-local and never grant server authorization.
+ */
 internal class NativeManagerLoginClient private constructor(
     private val csrfEndpoint: HttpUrl,
     private val loginEndpoint: HttpUrl,
@@ -471,6 +497,9 @@ internal class NativeManagerLoginClient private constructor(
     }
 }
 
+/**
+ * Owns the manager OAuth/session boundary. Credentials and cookies remain client-local and never grant server authorization.
+ */
 internal class EphemeralCookieJar : CookieJar {
     private val cookies = mutableListOf<Cookie>()
 
@@ -568,6 +597,9 @@ private suspend fun AuthorizationResponse.performTokenExchange(
 private val Context.managerAuthDataStore by preferencesDataStore(name = "manager_auth_state")
 private val encryptedAuthStateKey = stringPreferencesKey("encrypted_auth_state")
 
+/**
+ * Owns the manager OAuth/session boundary. Credentials and cookies remain client-local and never grant server authorization.
+ */
 private class EncryptedManagerAuthStateStore(
     private val context: Context,
 ) {
@@ -628,11 +660,17 @@ private class EncryptedManagerAuthStateStore(
     }
 }
 
+/**
+ * Owns the manager OAuth/session boundary. Credentials and cookies remain client-local and never grant server authorization.
+ */
 private data class CsrfToken(
     val parameterName: String,
     val token: String,
 )
 
+/**
+ * Owns the manager OAuth/session boundary. Credentials and cookies remain client-local and never grant server authorization.
+ */
 private sealed interface RefreshExchange {
     data class Success(val response: TokenResponse) : RefreshExchange
     data class Failure(val exception: AuthorizationException?) : RefreshExchange

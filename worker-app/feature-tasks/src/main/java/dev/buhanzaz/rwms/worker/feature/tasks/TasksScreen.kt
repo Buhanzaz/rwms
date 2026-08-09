@@ -39,6 +39,7 @@ import dev.buhanzaz.rwms.worker.core.ui.WorkerScreenScaffold
 import dev.buhanzaz.rwms.worker.core.ui.cabinNumberForDisplay
 import dev.buhanzaz.rwms.worker.core.ui.workerKpiTimeColor
 
+/** Renders the worker task board from the locally synchronized projection. */
 @Composable
 fun TasksScreen(
     userId: String,
@@ -116,6 +117,7 @@ fun TasksScreen(
     }
 }
 
+/** Lays out the current and queued work columns for the available window width. */
 @Composable
 internal fun WorkBoardColumns(
     columns: List<WorkBoardColumn>,
@@ -155,6 +157,7 @@ internal fun WorkBoardColumns(
     }
 }
 
+/** Renders one ordered task queue with its empty and loading states. */
 @Composable
 internal fun TaskQueueList(
     sections: List<TaskQueueSection>,

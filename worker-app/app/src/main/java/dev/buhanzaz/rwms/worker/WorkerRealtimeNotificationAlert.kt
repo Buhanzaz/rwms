@@ -8,6 +8,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
+/**
+ * Defines worker application UI or lifecycle state; it does not decide a server task transition.
+ */
 class WorkerRealtimeNotificationAlert @Inject constructor(
     @param:ApplicationContext private val context: Context,
 ) : WorkerRealtimeInvalidationAlert {

@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import dev.buhanzaz.rwms.manager.R
 import dev.buhanzaz.rwms.manager.auth.ManagerAuthState
 
+/** Renders manager OIDC login state and initiates the configured authorization flow. */
 @Composable
 fun ManagerLoginScreen(
     authState: ManagerAuthState,

@@ -6,6 +6,9 @@ import java.io.File
 import java.util.UUID
 import okhttp3.ResponseBody
 
+/**
+ * Encapsulates manager media transfer or retrieval through the public gateway.
+ */
 class MediaDownloader(
     private val api: RwmsApi,
     cacheDir: File,

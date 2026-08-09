@@ -19,6 +19,9 @@ import retrofit2.HttpException
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 
+/**
+ * Encapsulates the manager public-gateway transport boundary; it is not a backend domain or persistence type.
+ */
 class RwmsBackend(
     context: Context,
     publicBaseUrl: String,
@@ -98,6 +101,9 @@ class RwmsBackend(
     }
 }
 
+/**
+ * Encapsulates the manager public-gateway transport boundary; it is not a backend domain or persistence type.
+ */
 private class BearerTokenInterceptor(
     private val auth: ManagerAuthRepository,
 ) : Interceptor {

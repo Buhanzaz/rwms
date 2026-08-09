@@ -37,6 +37,9 @@ import kotlinx.serialization.json.Json
 
 private data class DetailKey(val userId: String, val entryId: String)
 
+/**
+ * Defines worker feature UI state; server data and authorization remain authoritative.
+ */
 data class TaskDetailUiState(
     val task: WorkerTaskEntity? = null,
     val detail: WorkerTaskDetailDto? = null,
@@ -60,6 +63,9 @@ private data class SupportingState(
 
 @HiltViewModel
 @OptIn(ExperimentalCoroutinesApi::class)
+/**
+ * Defines worker feature UI state; server data and authorization remain authoritative.
+ */
 class TaskDetailViewModel @Inject constructor(
     private val localStore: WorkerLocalStore,
     private val gateway: WorkerGatewayClient,

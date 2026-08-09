@@ -6,6 +6,9 @@ import kotlinx.serialization.json.Json
 import okhttp3.RequestBody
 import okhttp3.ResponseBody
 
+/**
+ * Encapsulates worker public-gateway transport/failure handling; it is never backend persistence.
+ */
 sealed interface WorkerFeedResponse {
     data class Changed(val feed: WorkerFeedDto, val etag: String?) : WorkerFeedResponse
     data class NotModified(val etag: String?) : WorkerFeedResponse

@@ -27,6 +27,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.buhanzaz.rwms.worker.core.ui.WorkerScreenScaffold
 import kotlin.math.roundToInt
 
+/** Displays task evidence at full size with paging and bounded gesture zoom. */
 @Composable
 fun PhotoPagerScreen(
     title: String,

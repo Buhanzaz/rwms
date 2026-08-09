@@ -9,12 +9,18 @@ import java.time.Duration
 import java.time.Instant
 import java.util.Locale
 
+/**
+ * Defines worker UI/presentation state; it does not decide a server task transition.
+ */
 internal data class EvidencePresentation(
     val status: String,
     val message: String?,
     val canRetryReservation: Boolean,
 )
 
+/**
+ * Defines worker UI/presentation state; it does not decide a server task transition.
+ */
 internal data class PhotoCapturePresentation(
     val enabled: Boolean,
     val message: String?,
@@ -93,12 +99,18 @@ internal fun evidencePresentation(
     )
 }
 
+/**
+ * Defines worker UI/presentation state; it does not decide a server task transition.
+ */
 internal data class WorkPresentation(
     val quantity: String,
     val plannedDuration: String?,
     val comment: String?,
 )
 
+/**
+ * Defines worker UI/presentation state; it does not decide a server task transition.
+ */
 internal data class TaskSourceMediaPresentation(
     val general: List<WorkerMediaReferenceDto>,
     val byWorkId: Map<String, List<WorkerMediaReferenceDto>>,
@@ -126,6 +138,9 @@ internal fun workPresentation(work: WorkerWorkDto): WorkPresentation = WorkPrese
     comment = work.comment?.trim()?.takeIf(String::isNotBlank),
 )
 
+/**
+ * Defines worker UI/presentation state; it does not decide a server task transition.
+ */
 internal data class TaskTimingPresentation(
     val activeElapsed: String,
     val activeLabel: String,

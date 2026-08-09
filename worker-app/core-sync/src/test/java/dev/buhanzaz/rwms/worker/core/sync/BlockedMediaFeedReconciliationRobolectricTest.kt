@@ -29,6 +29,7 @@ import dev.buhanzaz.rwms.worker.core.network.WorkerOfflineLeaseDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerTaskDetailDto
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import okhttp3.RequestBody
@@ -82,7 +83,7 @@ class BlockedMediaFeedReconciliationRobolectricTest {
 
         val outcome = coordinator.sync(USER_ID)
 
-        assertThat(outcome).isEqualTo(WorkerSyncOutcome.Retry("Фотография ещё обрабатывается"))
+        assertThat(outcome).isEqualTo(WorkerSyncOutcome.Deferred("Фотография ещё обрабатывается"))
         assertThat(uploader.calls).isEqualTo(1)
         assertThat(api.feedCalls.get()).isEqualTo(1)
         assertThat(database.taskDao().task(USER_ID, ENTRY_ID)).isNull()
@@ -121,6 +122,36 @@ class BlockedMediaFeedReconciliationRobolectricTest {
         // Media work is durable and is retried; it does not block feed reconciliation.
         assertThat(database.evidenceDao().evidence(USER_ID, EVIDENCE_ID)?.state).isEqualTo("RESERVED")
         assertThat(database.sessionDao().session(USER_ID)?.leaseId).isNull()
+    }
+
+    @Test
+    fun `cancelled media upload propagates without scheduling a sync retry`() = runTest {
+        val now = System.currentTimeMillis()
+        database.taskDao().upsertAll(listOf(inProgressTask(now)))
+        database.evidenceDao().upsert(reservedEvidence(now))
+        val api = FreshEmptyFeedApi()
+        val coordinator = WorkerSyncCoordinator(
+            gateway = WorkerGatewayClient(api, json),
+            database = database,
+            localStore = WorkerLocalStore(
+                database,
+                PendingPayloadCipher(RuntimeEnvironment.getApplication()),
+                json,
+            ),
+            projections = WorkerProjectionWriter(database, json),
+            mediaUploadPipeline = CancellingUploader(),
+            json = json,
+        )
+
+        val cancellation = try {
+            coordinator.sync(USER_ID)
+            null
+        } catch (error: CancellationException) {
+            error
+        }
+
+        assertThat(cancellation).isNotNull()
+        assertThat(api.feedCalls.get()).isEqualTo(0)
     }
 
     private fun inProgressTask(now: Long) = WorkerTaskEntity(
@@ -196,6 +227,13 @@ class BlockedMediaFeedReconciliationRobolectricTest {
             calls += 1
             throw IOException("Media session unavailable")
         }
+    }
+
+    private class CancellingUploader : WorkerEvidenceUploader {
+        override suspend fun uploadReservedEvidence(
+            userId: String,
+            evidence: TaskEvidenceEntity,
+        ): EvidenceUploadResult = throw CancellationException("worker cancelled")
     }
 
     private class FreshEmptyFeedApi : WorkerGatewayApi {

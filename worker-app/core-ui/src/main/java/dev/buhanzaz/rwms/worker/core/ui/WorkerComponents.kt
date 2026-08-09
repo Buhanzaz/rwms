@@ -28,6 +28,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Sync
 
 @OptIn(ExperimentalMaterial3Api::class)
+/** Provides the common worker screen shell with app bar, content and transient messages. */
 @Composable
 fun WorkerScreenScaffold(
     title: String,
@@ -55,6 +56,7 @@ fun WorkerScreenScaffold(
     )
 }
 
+/** Displays offline, synchronizing and failed synchronization state without becoming task truth. */
 @Composable
 fun SyncStatusBanner(
     online: Boolean,
@@ -86,6 +88,7 @@ fun SyncStatusBanner(
     }
 }
 
+/** Renders a compact visual label for a canonical task status. */
 @Composable
 fun TaskStatusChip(status: String, modifier: Modifier = Modifier) {
     val label = when (status) {

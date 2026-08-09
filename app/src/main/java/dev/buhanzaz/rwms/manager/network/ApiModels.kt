@@ -1,5 +1,8 @@
 package dev.buhanzaz.rwms.manager.network
 
+/**
+ * Public-manager-gateway response/read payload for CurrentUserDto. It is a transport boundary model, not persisted domain state.
+ */
 data class CurrentUserDto(
     val id: String,
     val username: String,
@@ -14,11 +17,17 @@ data class CurrentUserDto(
     val warehouseAccesses: List<WarehouseAccessDto> = emptyList(),
 )
 
+/**
+ * Public-manager-gateway response/read payload for WarehouseAccessDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WarehouseAccessDto(
     val warehouseId: String,
     val level: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for WarehouseDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WarehouseDto(
     val id: String,
     val version: Long,
@@ -36,6 +45,9 @@ data class WarehouseDto(
             .joinToString(" · ")
 }
 
+/**
+ * Public-manager-gateway response/read payload for InventorySessionDto. It is a transport boundary model, not persisted domain state.
+ */
 data class InventorySessionDto(
     val id: String,
     val sessionRevision: Long,
@@ -52,6 +64,9 @@ data class InventorySessionDto(
     val publicationState: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for InventoryFindingDto. It is a transport boundary model, not persisted domain state.
+ */
 data class InventoryFindingDto(
     val id: String,
     val inventoryId: String,
@@ -79,6 +94,9 @@ data class InventoryFindingDto(
     val coverMediaId: String? = null,
 )
 
+/**
+ * Public-manager-gateway response/read payload for InventorySnapshotDto. It is a transport boundary model, not persisted domain state.
+ */
 data class InventorySnapshotDto(
     val assetId: String,
     val assetVersion: Long,
@@ -90,6 +108,9 @@ data class InventorySnapshotDto(
     val contentsSnapshot: Any? = null,
 )
 
+/**
+ * Public-manager-gateway response/read payload for InventoryCurrentSnapshotDto. It is a transport boundary model, not persisted domain state.
+ */
 data class InventoryCurrentSnapshotDto(
     val assetId: String,
     val assetVersion: Long,
@@ -102,6 +123,9 @@ data class InventoryCurrentSnapshotDto(
     val repairsSnapshot: List<InventoryRepairRegistryFactDto> = emptyList(),
 )
 
+/**
+ * Public-manager-gateway response/read payload for InventoryRepairRegistryFactDto. It is a transport boundary model, not persisted domain state.
+ */
 data class InventoryRepairRegistryFactDto(
     val repairId: String,
     val rootRepairId: String,
@@ -112,6 +136,9 @@ data class InventoryRepairRegistryFactDto(
     val planFingerprintSha256: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for InventoryConflictDto. It is a transport boundary model, not persisted domain state.
+ */
 data class InventoryConflictDto(
     val code: String,
     val message: String,
@@ -119,22 +146,34 @@ data class InventoryConflictDto(
     val actual: String? = null,
 )
 
+/**
+ * Public-manager-gateway response/read payload for InventoryConflictResolutionDto. It is a transport boundary model, not persisted domain state.
+ */
 data class InventoryConflictResolutionDto(
     val strategy: String,
     val reason: String? = null,
     val resolvedAt: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for ObservationDto. It is a transport boundary model, not persisted domain state.
+ */
 data class ObservationDto(
     val presence: String,
     val value: Any? = null,
 )
 
+/**
+ * Public-manager-gateway response/read payload for InventoryFindingPageDto. It is a transport boundary model, not persisted domain state.
+ */
 data class InventoryFindingPageDto(
     val content: List<InventoryFindingDto>,
     val page: PageMetadataDto,
 )
 
+/**
+ * Public-manager-gateway response/read payload for PageMetadataDto. It is a transport boundary model, not persisted domain state.
+ */
 data class PageMetadataDto(
     val page: Int,
     val size: Int,
@@ -142,11 +181,17 @@ data class PageMetadataDto(
     val totalPages: Int,
 )
 
+/**
+ * Public-manager-gateway request payload for ResolveNumberRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class ResolveNumberRequest(
     val expectedSessionRevision: Long,
     val submittedNumber: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for NumberResolutionDto. It is a transport boundary model, not persisted domain state.
+ */
 data class NumberResolutionDto(
     val displayCanonicalNumber: String,
     val identityMatchKey: String,
@@ -154,6 +199,9 @@ data class NumberResolutionDto(
     val finding: InventoryFindingDto? = null,
 )
 
+/**
+ * Public-manager-gateway request payload for CreateFindingAssetRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class CreateFindingAssetRequest(
     val expectedSessionRevision: Long,
     val expectedFindingRevision: Long,
@@ -163,11 +211,17 @@ data class CreateFindingAssetRequest(
     val safePassport: Map<String, Any?>,
 )
 
+/**
+ * Public-manager-gateway request payload for ObservationInput. It is a transport boundary model, not persisted domain state.
+ */
 data class ObservationInput(
     val presence: String,
     @param:ExplicitNull val value: Any?,
 )
 
+/**
+ * Public-manager-gateway request payload for SaveInspectionRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class SaveInspectionRequest(
     val expectedSessionRevision: Long,
     val expectedFindingRevision: Long,
@@ -180,6 +234,9 @@ data class SaveInspectionRequest(
     @param:ExplicitNull val planSelection: InventoryPlanSelectionDto? = null,
 )
 
+/**
+ * Public-manager-gateway response/read payload for InventoryPlanLineInputDto. It is a transport boundary model, not persisted domain state.
+ */
 data class InventoryPlanLineInputDto(
     val aggregationKind: String,
     @param:ExplicitNull val catalogNodeId: String?,
@@ -196,12 +253,18 @@ data class InventoryPlanLineInputDto(
     val mediaReferences: List<MediaReferenceDto> = emptyList(),
 )
 
+/**
+ * Public-manager-gateway response/read payload for InventoryPlanStageSelectionDto. It is a transport boundary model, not persisted domain state.
+ */
 data class InventoryPlanStageSelectionDto(
     val catalogNodeId: String,
     val kind: String,
     val order: Int,
 )
 
+/**
+ * Public-manager-gateway response/read payload for InventoryPlanSelectionDto. It is a transport boundary model, not persisted domain state.
+ */
 data class InventoryPlanSelectionDto(
     val mode: String,
     val priority: Int = 3,
@@ -213,6 +276,9 @@ data class InventoryPlanSelectionDto(
     val stages: List<InventoryPlanStageSelectionDto>,
 )
 
+/**
+ * Public-manager-gateway response/read payload for InventoryFrozenPlanLineDto. It is a transport boundary model, not persisted domain state.
+ */
 data class InventoryFrozenPlanLineDto(
     val id: String,
     val sourceKind: String,
@@ -229,6 +295,9 @@ data class InventoryFrozenPlanLineDto(
     val mediaReferences: List<MediaReferenceDto> = emptyList(),
 )
 
+/**
+ * Public-manager-gateway response/read payload for InventoryFrozenPlanStageDto. It is a transport boundary model, not persisted domain state.
+ */
 data class InventoryFrozenPlanStageDto(
     val id: String,
     val order: Int,
@@ -242,6 +311,9 @@ data class InventoryFrozenPlanStageDto(
     val normativeDurationMinutes: Int,
 )
 
+/**
+ * Public-manager-gateway response/read payload for InventoryFrozenPlanDto. It is a transport boundary model, not persisted domain state.
+ */
 data class InventoryFrozenPlanDto(
     val mode: String,
     val catalogVersionId: String,
@@ -255,6 +327,9 @@ data class InventoryFrozenPlanDto(
     val stages: List<InventoryFrozenPlanStageDto> = emptyList(),
 )
 
+/**
+ * Public-manager-gateway request payload for ResolveInventoryConflictRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class ResolveInventoryConflictRequest(
     val expectedSessionRevision: Long,
     val expectedFindingRevision: Long,
@@ -262,16 +337,25 @@ data class ResolveInventoryConflictRequest(
     @param:ExplicitNull val reason: String?,
 )
 
+/**
+ * Public-manager-gateway response/read payload for InventoryRevisionExpectationDto. It is a transport boundary model, not persisted domain state.
+ */
 data class InventoryRevisionExpectationDto(
     val findingId: String,
     val expectedFindingRevision: Long,
 )
 
+/**
+ * Public-manager-gateway response/read payload for InventoryCompletionRiskDto. It is a transport boundary model, not persisted domain state.
+ */
 data class InventoryCompletionRiskDto(
     val findingId: String,
     val code: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for InventoryStatisticsLineDto. It is a transport boundary model, not persisted domain state.
+ */
 data class InventoryStatisticsLineDto(
     val aggregationKind: String,
     val catalogVersionId: String? = null,
@@ -284,6 +368,9 @@ data class InventoryStatisticsLineDto(
     val rowTotalMinor: Long,
 )
 
+/**
+ * Public-manager-gateway response/read payload for InventoryFrozenStatisticsDto. It is a transport boundary model, not persisted domain state.
+ */
 data class InventoryFrozenStatisticsDto(
     val expectedCount: Int,
     val inspectedCount: Int,
@@ -304,12 +391,18 @@ data class InventoryFrozenStatisticsDto(
     val aggregateLines: List<InventoryStatisticsLineDto> = emptyList(),
 )
 
+/**
+ * Public-manager-gateway response/read payload for InventoryValidatedFindingDto. It is a transport boundary model, not persisted domain state.
+ */
 data class InventoryValidatedFindingDto(
     val findingId: String,
     val currentSnapshot: InventoryCurrentSnapshotDto? = null,
     val conflicts: List<InventoryConflictDto> = emptyList(),
 )
 
+/**
+ * Public-manager-gateway response/read payload for InventoryCompletionPreviewDto. It is a transport boundary model, not persisted domain state.
+ */
 data class InventoryCompletionPreviewDto(
     val inventoryId: String,
     val sessionRevision: Long,
@@ -322,6 +415,9 @@ data class InventoryCompletionPreviewDto(
     val validatedFindings: List<InventoryValidatedFindingDto> = emptyList(),
 )
 
+/**
+ * Public-manager-gateway response/read payload for RentalItemDto. It is a transport boundary model, not persisted domain state.
+ */
 data class RentalItemDto(
     val id: String,
     val version: Long,
@@ -360,6 +456,9 @@ data class CabinTypeDimensionDto(
     val sortOrder: Int,
 )
 
+/**
+ * Public-manager-gateway response/read payload for RentalItemCreationOptionsDto. It is a transport boundary model, not persisted domain state.
+ */
 data class RentalItemCreationOptionsDto(
     val newCategory: String,
     val usedCategories: List<String>,
@@ -370,6 +469,9 @@ data class RentalItemCreationOptionsDto(
     val typeDimensions: List<CabinTypeDimensionDto>,
 )
 
+/**
+ * Public-manager-gateway response/read payload for EquipmentContentDto. It is a transport boundary model, not persisted domain state.
+ */
 data class EquipmentContentDto(
     val equipmentId: String,
     val equipmentName: String,
@@ -377,6 +479,9 @@ data class EquipmentContentDto(
     val locationKind: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for EquipmentCatalogItemDto. It is a transport boundary model, not persisted domain state.
+ */
 data class EquipmentCatalogItemDto(
     val id: String,
     val version: Long,
@@ -385,10 +490,16 @@ data class EquipmentCatalogItemDto(
     val active: Boolean,
 )
 
+/**
+ * Public-manager-gateway response/read payload for EquipmentItemViewDto. It is a transport boundary model, not persisted domain state.
+ */
 data class EquipmentItemViewDto(
     val equipment: EquipmentCatalogItemDto,
 )
 
+/**
+ * Public-manager-gateway response/read payload for ActiveOrderReservationDto. It is a transport boundary model, not persisted domain state.
+ */
 data class ActiveOrderReservationDto(
     val reservationId: String,
     val orderId: String,
@@ -397,6 +508,9 @@ data class ActiveOrderReservationDto(
     val reservedAt: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for RentalItemPageDto. It is a transport boundary model, not persisted domain state.
+ */
 data class RentalItemPageDto(
     val content: List<RentalItemDto>,
     val page: Int,
@@ -405,6 +519,9 @@ data class RentalItemPageDto(
     val totalPages: Int,
 )
 
+/**
+ * Public-manager-gateway response/read payload for LogisticsDocumentDto. It is a transport boundary model, not persisted domain state.
+ */
 data class LogisticsDocumentDto(
     val id: String,
     val version: Long,
@@ -424,6 +541,9 @@ data class LogisticsDocumentDto(
     val updatedAt: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for LogisticsLineDto. It is a transport boundary model, not persisted domain state.
+ */
 data class LogisticsLineDto(
     val id: String,
     val version: Long,
@@ -435,8 +555,14 @@ data class LogisticsLineDto(
     val rentalOrderId: String? = null,
 )
 
+/**
+ * Public-manager-gateway request payload for AcceptReturnRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class AcceptReturnRequest(val lines: List<AcceptReturnLineRequest>)
 
+/**
+ * Public-manager-gateway request payload for AcceptReturnLineRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class AcceptReturnLineRequest(
     val lineId: String,
     val equipmentConfirmed: Boolean,
@@ -444,20 +570,32 @@ data class AcceptReturnLineRequest(
     val additionalEquipment: List<AdditionalEquipmentRequest> = emptyList(),
 )
 
+/**
+ * Public-manager-gateway request payload for AdditionalEquipmentRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class AdditionalEquipmentRequest(
     val equipmentId: String,
     val quantity: Long,
 )
 
+/**
+ * Public-manager-gateway request payload for StartReturnEstimatesRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class StartReturnEstimatesRequest(
     val lines: List<StartReturnEstimateLine>,
 )
 
+/**
+ * Public-manager-gateway response/read payload for StartReturnEstimateLine. It is a transport boundary model, not persisted domain state.
+ */
 data class StartReturnEstimateLine(
     val lineId: String,
     val references: List<MediaReferenceDto>,
 )
 
+/**
+ * Public-manager-gateway response/read payload for ReturnEstimateSourceDto. It is a transport boundary model, not persisted domain state.
+ */
 data class ReturnEstimateSourceDto(
     val returnId: String,
     val lineId: String,
@@ -466,18 +604,27 @@ data class ReturnEstimateSourceDto(
     val estimateId: String,
 )
 
+/**
+ * Public-manager-gateway request payload for ShipmentEquipmentAllocationRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class ShipmentEquipmentAllocationRequest(
     val equipmentId: String,
     val quantity: Long,
     val expectedStockVersion: Long,
 )
 
+/**
+ * Public-manager-gateway request payload for ShipmentLineRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class ShipmentLineRequest(
     val assetId: String,
     val assetVersion: Long,
     val allocations: List<ShipmentEquipmentAllocationRequest>,
 )
 
+/**
+ * Public-manager-gateway request payload for CreateShipmentRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class CreateShipmentRequest(
     val warehouseId: String,
     @param:ExplicitNull val clientId: String?,
@@ -487,11 +634,17 @@ data class CreateShipmentRequest(
     val lines: List<ShipmentLineRequest>,
 )
 
+/**
+ * Public-manager-gateway request payload for ShipmentPlanRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class ShipmentPlanRequest(
     val driverSnapshot: String,
     val scheduledDate: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for ShipmentFurnitureTaskDto. It is a transport boundary model, not persisted domain state.
+ */
 data class ShipmentFurnitureTaskDto(
     val rentalItemId: String,
     val unitNumber: String,
@@ -499,12 +652,18 @@ data class ShipmentFurnitureTaskDto(
     val lineCount: Int,
 )
 
+/**
+ * Public-manager-gateway response/read payload for ShipmentFurnitureTaskResultDto. It is a transport boundary model, not persisted domain state.
+ */
 data class ShipmentFurnitureTaskResultDto(
     val shipmentId: String,
     val shipmentVersion: Long,
     val tasks: List<ShipmentFurnitureTaskDto>,
 )
 
+/**
+ * Public-manager-gateway response/read payload for FurnitureTaskStatusDto. It is a transport boundary model, not persisted domain state.
+ */
 data class FurnitureTaskStatusDto(
     val rentalItemId: String,
     val unitNumber: String,
@@ -515,6 +674,9 @@ data class FurnitureTaskStatusDto(
     val lineCount: Int,
 )
 
+/**
+ * Public-manager-gateway response/read payload for ShipmentFurnitureReadinessDto. It is a transport boundary model, not persisted domain state.
+ */
 data class ShipmentFurnitureReadinessDto(
     val shipmentId: String,
     val shipmentVersion: Long,
@@ -522,6 +684,9 @@ data class ShipmentFurnitureReadinessDto(
     val tasks: List<FurnitureTaskStatusDto>,
 )
 
+/**
+ * Public-manager-gateway response/read payload for TransferFurnitureReadinessDto. It is a transport boundary model, not persisted domain state.
+ */
 data class TransferFurnitureReadinessDto(
     val transferId: String,
     val transferVersion: Long,
@@ -529,22 +694,34 @@ data class TransferFurnitureReadinessDto(
     val tasks: List<FurnitureTaskStatusDto>,
 )
 
+/**
+ * Public-manager-gateway request payload for TransferLineRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class TransferLineRequest(
     val assetId: String,
     val assetVersion: Long,
 )
 
+/**
+ * Public-manager-gateway response/read payload for CabinFurnitureRequirementDto. It is a transport boundary model, not persisted domain state.
+ */
 data class CabinFurnitureRequirementDto(
     val equipmentId: String,
     val quantity: Long,
 )
 
+/**
+ * Public-manager-gateway request payload for CreateCabinFurnitureTaskRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class CreateCabinFurnitureTaskRequest(
     val warehouseId: String,
     val scheduledDate: String,
     val contents: List<CabinFurnitureRequirementDto>,
 )
 
+/**
+ * Public-manager-gateway response/read payload for CabinFurnitureTaskResultDto. It is a transport boundary model, not persisted domain state.
+ */
 data class CabinFurnitureTaskResultDto(
     val rentalItemId: String,
     val unitNumber: String,
@@ -552,11 +729,17 @@ data class CabinFurnitureTaskResultDto(
     val lineCount: Int,
 )
 
+/**
+ * Public-manager-gateway request payload for TransferFurnitureReplacementRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class TransferFurnitureReplacementRequest(
     val assetId: String,
     val contents: List<CabinFurnitureRequirementDto>,
 )
 
+/**
+ * Public-manager-gateway request payload for CreateTransferRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class CreateTransferRequest(
     val warehouseId: String,
     val destinationWarehouseId: String,
@@ -566,14 +749,23 @@ data class CreateTransferRequest(
     val furnitureReplacements: List<TransferFurnitureReplacementRequest>,
 )
 
+/**
+ * Public-manager-gateway request payload for ArriveTransferLineRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class ArriveTransferLineRequest(
     val references: List<MediaReferenceDto>,
 )
 
+/**
+ * Public-manager-gateway request payload for ReconcileLogisticsRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class ReconcileLogisticsRequest(
     val reason: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for CatalogVersionDto. It is a transport boundary model, not persisted domain state.
+ */
 data class CatalogVersionDto(
     val id: String,
     val warehouseId: String,
@@ -587,11 +779,17 @@ data class CatalogVersionDto(
     val routingSync: CatalogRoutingSyncDto? = null,
 )
 
+/**
+ * Public-manager-gateway response/read payload for CatalogCountsDto. It is a transport boundary model, not persisted domain state.
+ */
 data class CatalogCountsDto(
     val nodes: Int,
     val links: Int,
 )
 
+/**
+ * Public-manager-gateway response/read payload for CatalogValidationReportDto. It is a transport boundary model, not persisted domain state.
+ */
 data class CatalogValidationReportDto(
     val valid: Boolean,
     val errorCount: Int,
@@ -599,6 +797,9 @@ data class CatalogValidationReportDto(
     val reportSha256: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for CatalogRoutingSyncDto. It is a transport boundary model, not persisted domain state.
+ */
 data class CatalogRoutingSyncDto(
     val state: String,
     val registrationsRequired: Int,
@@ -609,6 +810,9 @@ data class CatalogRoutingSyncDto(
     val updatedAt: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for CatalogVersionPageDto. It is a transport boundary model, not persisted domain state.
+ */
 data class CatalogVersionPageDto(
     val items: List<CatalogVersionDto>,
     val page: Int,
@@ -616,17 +820,26 @@ data class CatalogVersionPageDto(
     val totalElements: Long,
 )
 
+/**
+ * Public-manager-gateway response/read payload for RoutingSnapshotDto. It is a transport boundary model, not persisted domain state.
+ */
 data class RoutingSnapshotDto(
     val queueId: String,
     val queueName: String,
     val queueType: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for FurnitureEquipmentReferenceDto. It is a transport boundary model, not persisted domain state.
+ */
 data class FurnitureEquipmentReferenceDto(
     val equipmentId: String,
     val equipmentName: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for CatalogNodeDto. It is a transport boundary model, not persisted domain state.
+ */
 data class CatalogNodeDto(
     val id: String,
     val catalogVersionId: String,
@@ -650,6 +863,9 @@ data class CatalogNodeDto(
     val comment: String? = null,
 )
 
+/**
+ * Public-manager-gateway response/read payload for CatalogLinkDto. It is a transport boundary model, not persisted domain state.
+ */
 data class CatalogLinkDto(
     val id: String,
     val catalogVersionId: String,
@@ -661,6 +877,9 @@ data class CatalogLinkDto(
     val sortOrder: Int,
 )
 
+/**
+ * Public-manager-gateway response/read payload for CatalogNodeSnapshotDto. It is a transport boundary model, not persisted domain state.
+ */
 data class CatalogNodeSnapshotDto(
     val catalogVersionId: String,
     val nodeId: String,
@@ -673,6 +892,9 @@ data class CatalogNodeSnapshotDto(
     @param:ExplicitNull val furnitureEquipment: FurnitureEquipmentReferenceDto?,
 )
 
+/**
+ * Public-manager-gateway response/read payload for EstimateLineInputDto. It is a transport boundary model, not persisted domain state.
+ */
 data class EstimateLineInputDto(
     val id: String,
     @param:ExplicitNull val catalogSnapshot: CatalogNodeSnapshotDto?,
@@ -686,6 +908,9 @@ data class EstimateLineInputDto(
     val mediaReferences: List<MediaReferenceDto>,
 )
 
+/**
+ * Public-manager-gateway response/read payload for EstimateLineDto. It is a transport boundary model, not persisted domain state.
+ */
 data class EstimateLineDto(
     val id: String,
     val catalogSnapshot: CatalogNodeSnapshotDto? = null,
@@ -707,6 +932,9 @@ data class EstimateLineDto(
     val lineageRootLineId: String? = null,
 )
 
+/**
+ * Public-manager-gateway response/read payload for PlanStageInputDto. It is a transport boundary model, not persisted domain state.
+ */
 data class PlanStageInputDto(
     val id: String,
     val kind: String,
@@ -718,6 +946,9 @@ data class PlanStageInputDto(
     @param:ExplicitNull val taskDeadline: String?,
 )
 
+/**
+ * Public-manager-gateway response/read payload for EstimateRevisionDto. It is a transport boundary model, not persisted domain state.
+ */
 data class EstimateRevisionDto(
     val revision: Int,
     val dispatchDate: String,
@@ -730,11 +961,17 @@ data class EstimateRevisionDto(
     val coverMediaId: String? = null,
 )
 
+/**
+ * Public-manager-gateway response/read payload for ActorSnapshotDto. It is a transport boundary model, not persisted domain state.
+ */
 data class ActorSnapshotDto(
     val actorId: String,
     val actorType: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for EstimateDto. It is a transport boundary model, not persisted domain state.
+ */
 data class EstimateDto(
     val id: String,
     val warehouseId: String,
@@ -751,6 +988,9 @@ data class EstimateDto(
     val actor: ActorSnapshotDto? = null,
 )
 
+/**
+ * Public-manager-gateway response/read payload for EstimatePageDto. It is a transport boundary model, not persisted domain state.
+ */
 data class EstimatePageDto(
     val items: List<EstimateDto>,
     val page: Int,
@@ -758,6 +998,9 @@ data class EstimatePageDto(
     val totalElements: Long,
 )
 
+/**
+ * Public-manager-gateway request payload for CreateEstimateRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class CreateEstimateRequest(
     val warehouseId: String,
     val rentalItemId: String,
@@ -769,6 +1012,9 @@ data class CreateEstimateRequest(
     @param:ExplicitNull val coverMediaId: String? = null,
 )
 
+/**
+ * Public-manager-gateway request payload for ReplaceEstimateRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class ReplaceEstimateRequest(
     val expectedVersion: Long,
     val dispatchDate: String,
@@ -779,6 +1025,9 @@ data class ReplaceEstimateRequest(
     @param:ExplicitNull val coverMediaId: String? = null,
 )
 
+/**
+ * Public-manager-gateway request payload for AmendEstimateRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class AmendEstimateRequest(
     val expectedVersion: Long,
     @param:ExplicitNull val expectedLinkedRepairVersion: Long?,
@@ -791,6 +1040,9 @@ data class AmendEstimateRequest(
     @param:ExplicitNull val coverMediaId: String? = null,
 )
 
+/**
+ * Public-manager-gateway request payload for PriorityVersionRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class PriorityVersionRequest(
     val expectedVersion: Long,
     val priority: Int,
@@ -799,6 +1051,9 @@ data class PriorityVersionRequest(
     @param:ExplicitNull val logisticsScheduledDate: String?,
 )
 
+/**
+ * Public-manager-gateway request payload for CompleteEstimateRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class CompleteEstimateRequest(
     val expectedVersion: Long,
     val priority: Int,
@@ -808,12 +1063,18 @@ data class CompleteEstimateRequest(
     val allowUnaccountedFurniture: Boolean = false,
 )
 
+/**
+ * Public-manager-gateway response/read payload for DeliverySnapshotDto. It is a transport boundary model, not persisted domain state.
+ */
 data class DeliverySnapshotDto(
     val state: String,
     val attempts: Int,
     val updatedAt: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for LeaseSnapshotDto. It is a transport boundary model, not persisted domain state.
+ */
 data class LeaseSnapshotDto(
     val leaseId: String,
     val fencingToken: Long,
@@ -821,6 +1082,9 @@ data class LeaseSnapshotDto(
     val reconciliationState: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for TaskSyncSnapshotDto. It is a transport boundary model, not persisted domain state.
+ */
 data class TaskSyncSnapshotDto(
     val externalTaskId: String,
     val taskBoardEntryId: String? = null,
@@ -829,6 +1093,9 @@ data class TaskSyncSnapshotDto(
     val delivery: DeliverySnapshotDto,
 )
 
+/**
+ * Public-manager-gateway response/read payload for TaskEvidenceDto. It is a transport boundary model, not persisted domain state.
+ */
 data class TaskEvidenceDto(
     val evidenceId: String,
     val entryId: String,
@@ -841,6 +1108,9 @@ data class TaskEvidenceDto(
     val state: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for RepairStageDto. It is a transport boundary model, not persisted domain state.
+ */
 data class RepairStageDto(
     val id: String,
     val kind: String,
@@ -857,12 +1127,18 @@ data class RepairStageDto(
     val completedAt: String? = null,
 )
 
+/**
+ * Public-manager-gateway response/read payload for RepairPlanDto. It is a transport boundary model, not persisted domain state.
+ */
 data class RepairPlanDto(
     val repairId: String,
     val repairVersion: Long,
     val stages: List<RepairStageDto> = emptyList(),
 )
 
+/**
+ * Public-manager-gateway response/read payload for InventorySourceReferenceDto. It is a transport boundary model, not persisted domain state.
+ */
 data class InventorySourceReferenceDto(
     val inventoryId: String,
     val findingId: String,
@@ -871,6 +1147,9 @@ data class InventorySourceReferenceDto(
     val sourceFingerprint: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for RepairDto. It is a transport boundary model, not persisted domain state.
+ */
 data class RepairDto(
     val id: String,
     val rootRepairId: String,
@@ -899,6 +1178,9 @@ data class RepairDto(
     val actor: ActorSnapshotDto? = null,
 )
 
+/**
+ * Public-manager-gateway response/read payload for RepairPageDto. It is a transport boundary model, not persisted domain state.
+ */
 data class RepairPageDto(
     val items: List<RepairDto>,
     val page: Int,
@@ -906,6 +1188,9 @@ data class RepairPageDto(
     val totalElements: Long,
 )
 
+/**
+ * Public-manager-gateway response/read payload for AcceptanceProjectionDto. It is a transport boundary model, not persisted domain state.
+ */
 data class AcceptanceProjectionDto(
     val repairId: String,
     val rootRepairId: String,
@@ -917,6 +1202,9 @@ data class AcceptanceProjectionDto(
     val readyAt: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for AcceptanceProjectionPageDto. It is a transport boundary model, not persisted domain state.
+ */
 data class AcceptanceProjectionPageDto(
     val items: List<AcceptanceProjectionDto>,
     val page: Int,
@@ -924,6 +1212,9 @@ data class AcceptanceProjectionPageDto(
     val totalElements: Long,
 )
 
+/**
+ * Public-manager-gateway request payload for CreateDirectRepairRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class CreateDirectRepairRequest(
     val warehouseId: String,
     val rentalItemId: String,
@@ -935,6 +1226,9 @@ data class CreateDirectRepairRequest(
     @param:ExplicitNull val coverMediaId: String? = null,
 )
 
+/**
+ * Public-manager-gateway request payload for ReplaceRepairPlanRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class ReplaceRepairPlanRequest(
     val expectedVersion: Long,
     val lines: List<EstimateLineInputDto>,
@@ -943,6 +1237,9 @@ data class ReplaceRepairPlanRequest(
     @param:ExplicitNull val coverMediaId: String? = null,
 )
 
+/**
+ * Public-manager-gateway response/read payload for ReworkCandidateDto. It is a transport boundary model, not persisted domain state.
+ */
 data class ReworkCandidateDto(
     val sourceRepairId: String,
     val sourceLineId: String,
@@ -950,10 +1247,16 @@ data class ReworkCandidateDto(
     val line: EstimateLineDto,
 )
 
+/**
+ * Public-manager-gateway response/read payload for ReworkCandidatesDto. It is a transport boundary model, not persisted domain state.
+ */
 data class ReworkCandidatesDto(
     val items: List<ReworkCandidateDto> = emptyList(),
 )
 
+/**
+ * Public-manager-gateway response/read payload for ReworkLineInputDto. It is a transport boundary model, not persisted domain state.
+ */
 data class ReworkLineInputDto(
     val id: String,
     val disposition: String,
@@ -964,6 +1267,9 @@ data class ReworkLineInputDto(
     val line: EstimateLineInputDto? = null,
 )
 
+/**
+ * Public-manager-gateway request payload for CreateReworkRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class CreateReworkRequest(
     val expectedVersion: Long,
     val reason: String,
@@ -973,29 +1279,44 @@ data class CreateReworkRequest(
     @param:ExplicitNull val coverMediaId: String? = null,
 )
 
+/**
+ * Public-manager-gateway request payload for RepairDecisionRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class RepairDecisionRequest(
     val expectedVersion: Long,
     @param:ExplicitNull val comment: String?,
     val mediaReferences: List<MediaReferenceDto>,
 )
 
+/**
+ * Public-manager-gateway response/read payload for EstimateCommandResultDto. It is a transport boundary model, not persisted domain state.
+ */
 data class EstimateCommandResultDto(
     val estimate: EstimateDto,
     val repair: RepairDto? = null,
     val delivery: DeliverySnapshotDto,
 )
 
+/**
+ * Public-manager-gateway response/read payload for RepairCommandResultDto. It is a transport boundary model, not persisted domain state.
+ */
 data class RepairCommandResultDto(
     val repair: RepairDto,
     val affectedSourceRepairs: List<RepairDto> = emptyList(),
     val delivery: DeliverySnapshotDto,
 )
 
+/**
+ * Public-manager-gateway response/read payload for TaskBoardSourceDto. It is a transport boundary model, not persisted domain state.
+ */
 data class TaskBoardSourceDto(
     val type: String,
     val sourceId: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for TaskBoardAssignmentDto. It is a transport boundary model, not persisted domain state.
+ */
 data class TaskBoardAssignmentDto(
     val id: String,
     val version: Long,
@@ -1010,6 +1331,9 @@ data class TaskBoardAssignmentDto(
     val finishedAt: String? = null,
 )
 
+/**
+ * Public-manager-gateway response/read payload for TaskBoardEntryDto. It is a transport boundary model, not persisted domain state.
+ */
 data class TaskBoardEntryDto(
     val id: String,
     val version: Long,
@@ -1036,6 +1360,9 @@ data class TaskBoardEntryDto(
     val assignments: List<TaskBoardAssignmentDto> = emptyList(),
 )
 
+/**
+ * Public-manager-gateway response/read payload for TaskBoardColumnDto. It is a transport boundary model, not persisted domain state.
+ */
 data class TaskBoardColumnDto(
     val queueId: String,
     val queueName: String,
@@ -1044,6 +1371,9 @@ data class TaskBoardColumnDto(
     val entries: List<TaskBoardEntryDto> = emptyList(),
 )
 
+/**
+ * Public-manager-gateway response/read payload for TaskBoardSnapshotDto. It is a transport boundary model, not persisted domain state.
+ */
 data class TaskBoardSnapshotDto(
     val warehouseId: String,
     val selectedDate: String? = null,
@@ -1051,6 +1381,9 @@ data class TaskBoardSnapshotDto(
     val columns: List<TaskBoardColumnDto> = emptyList(),
 )
 
+/**
+ * Public-manager-gateway request payload for MoveTaskBoardEntryRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class MoveTaskBoardEntryRequest(
     val expectedVersion: Long,
     val expectedTaskVersion: Long,
@@ -1066,12 +1399,18 @@ data class TaskBoardDateEntryExpectationDto(
     val expectedTaskVersion: Long,
 )
 
+/**
+ * Public-manager-gateway request payload for SwapTaskBoardDatesRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class SwapTaskBoardDatesRequest(
     val firstDate: String,
     val secondDate: String,
     val entries: List<TaskBoardDateEntryExpectationDto>,
 )
 
+/**
+ * Public-manager-gateway request payload for CreateUploadSessionRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class CreateUploadSessionRequest(
     val ownerType: String,
     val ownerId: String? = null,
@@ -1087,6 +1426,9 @@ data class CreateUploadSessionRequest(
     val sortOrder: Int,
 )
 
+/**
+ * Public-manager-gateway response/read payload for UploadSessionDto. It is a transport boundary model, not persisted domain state.
+ */
 data class UploadSessionDto(
     val uploadSessionId: String,
     val mediaId: String,
@@ -1094,18 +1436,27 @@ data class UploadSessionDto(
     val contentUploadUrl: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for UploadedObjectDto. It is a transport boundary model, not persisted domain state.
+ */
 data class UploadedObjectDto(
     val objectVersionId: String,
     val etag: String,
     val checksumSha256: String,
 )
 
+/**
+ * Public-manager-gateway request payload for FinalizeUploadRequest. It is a transport boundary model, not persisted domain state.
+ */
 data class FinalizeUploadRequest(
     val objectVersionId: String,
     val etag: String,
     val checksumSha256: String,
 )
 
+/**
+ * Public-manager-gateway response/read payload for MediaAssetDto. It is a transport boundary model, not persisted domain state.
+ */
 data class MediaAssetDto(
     val id: String,
     val folderId: String,
@@ -1123,6 +1474,9 @@ data class MediaAssetDto(
     val variants: List<MediaVariantDto> = emptyList(),
 )
 
+/**
+ * Public-manager-gateway response/read payload for MediaVariantDto. It is a transport boundary model, not persisted domain state.
+ */
 data class MediaVariantDto(
     val kind: String,
     val contentType: String,
@@ -1131,16 +1485,25 @@ data class MediaVariantDto(
     val height: Int? = null,
 )
 
+/**
+ * Public-manager-gateway response/read payload for MediaPageDto. It is a transport boundary model, not persisted domain state.
+ */
 data class MediaPageDto(
     val items: List<MediaAssetDto>,
     val next: String? = null,
 )
 
+/**
+ * Public-manager-gateway response/read payload for MediaReferenceDto. It is a transport boundary model, not persisted domain state.
+ */
 data class MediaReferenceDto(
     val mediaId: String,
     val generation: Long,
 )
 
+/**
+ * Public-manager-gateway response/read payload for ProblemDetailsDto. It is a transport boundary model, not persisted domain state.
+ */
 data class ProblemDetailsDto(
     val title: String? = null,
     val status: Int? = null,

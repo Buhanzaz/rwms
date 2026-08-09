@@ -3,6 +3,9 @@ package dev.buhanzaz.rwms.worker.core.ui
 import androidx.compose.ui.graphics.Color
 import kotlin.math.roundToInt
 
+/**
+ * Defines worker feature UI state; server data and authorization remain authoritative.
+ */
 data class WorkerKpiColorRange(
     val fromPercent: Int,
     val toPercent: Int,

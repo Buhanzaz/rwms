@@ -12,6 +12,7 @@ import dev.buhanzaz.rwms.worker.core.database.WorkerSyncProgressEntity
 import dev.buhanzaz.rwms.worker.core.media.EvidenceUploadResult
 import dev.buhanzaz.rwms.worker.core.media.WorkerEvidenceUploader
 import dev.buhanzaz.rwms.worker.core.network.EvidenceReservationRequestDto
+import dev.buhanzaz.rwms.worker.core.network.GatewayFailureDisposition
 import dev.buhanzaz.rwms.worker.core.network.GatewayProblemException
 import dev.buhanzaz.rwms.worker.core.network.WorkerActionRequestDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerCategoryDto
@@ -19,7 +20,8 @@ import dev.buhanzaz.rwms.worker.core.network.WorkerContextDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerFeedCategoryDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerFeedResponse
 import dev.buhanzaz.rwms.worker.core.network.WorkerGatewayClient
-import java.io.IOException
+import dev.buhanzaz.rwms.worker.core.network.gatewayFailureDisposition
+import dev.buhanzaz.rwms.worker.core.network.isProvenGatewayTransportFailure
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
@@ -27,14 +29,50 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
+/**
+ * Reports one sync pass to the bounded worker job. Only an explicitly
+ * classified temporary gateway or transport failure can return [Retry].
+ */
 sealed interface WorkerSyncOutcome {
+    /** All pending work and the authoritative worker projection are synchronized. */
     data object Complete : WorkerSyncOutcome
+
+    /** A bounded automatic retry is permitted for a transient dependency or transport failure. */
     data class Retry(val reason: String) : WorkerSyncOutcome
+
+    /** A server-confirmed evidence dependency is pending until a later explicit sync trigger. */
+    data class Deferred(val reason: String) : WorkerSyncOutcome
+
+    /** The gateway's token refresh opportunity was exhausted and login is required. */
     data class AuthenticationRequired(val reason: String) : WorkerSyncOutcome
+
+    /** A valid session lacks the current grant and must not be retried in the background. */
+    data class UserActionRequired(val reason: String) : WorkerSyncOutcome
+
+    /** A command conflict has been persisted and requires authoritative state before another action. */
+    data class Conflict(val reason: String) : WorkerSyncOutcome
+
+    /** A non-recoverable local or protocol failure stopped this sync attempt safely. */
+    data class Failed(val reason: String) : WorkerSyncOutcome
 }
 
+/**
+ * Carries only an explicitly classified temporary failure to the bounded
+ * WorkManager recovery loop.
+ */
 private class RetryableSyncException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
+/** Stops background replay when the current worker grant cannot perform the requested action. */
+private class UserActionRequiredSyncException(message: String) : Exception(message)
+
+/** Stops automatic recovery for an invalid local state or terminal gateway/protocol response. */
+private class TerminalSyncException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+/**
+ * Represents one complete authoritative feed fetch. A changed result contains
+ * every consistent page; a not-modified result is the validated first-page
+ * cache response.
+ */
 private sealed interface FetchedFeed {
     data class Changed(
         val revision: Long,
@@ -46,6 +84,10 @@ private sealed interface FetchedFeed {
     data class NotModified(val etag: String?) : FetchedFeed
 }
 
+/**
+ * Carries media-phase progress and an optional blocked-evidence outcome so the
+ * coordinator can reconcile the authoritative feed before returning.
+ */
 private data class EvidenceSyncResult(
     val outcome: WorkerSyncOutcome?,
     val completedUnits: Int,
@@ -65,13 +107,17 @@ class WorkerSyncCoordinator @Inject constructor(
     private val mediaUploadPipeline: WorkerEvidenceUploader,
     private val json: Json,
 ) {
+    /**
+     * Runs one authenticated recovery pass in the fixed command/evidence/feed order and returns a
+     * durable outcome; it never activates a new offline lease from a partial sync.
+     */
     suspend fun sync(userId: String): WorkerSyncOutcome {
         localStore.hideExpiredCacheIfNeeded(userId)
         return try {
             updateProgress(userId, "CONTEXT", 0, 1, null, null, "Проверяем доступ")
             val context = gateway.context()
             if (context.worker.id != userId) {
-                throw SecurityException("Ответ RWMS получен для другого пользователя")
+                throw UserActionRequiredSyncException("Ответ RWMS получен для другого пользователя")
             }
             // Do not activate this new lease yet. A dropped upload or failed
             // feed must not grant another 24 offline hours.
@@ -104,7 +150,14 @@ class WorkerSyncCoordinator @Inject constructor(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: GatewayProblemException) {
-                if (error.problem.status == 401) throw error
+                if (error.disposition == GatewayFailureDisposition.AUTHENTICATION_REQUIRED) {
+                    throw error
+                }
+                if (error.disposition == GatewayFailureDisposition.USER_ACTION_REQUIRED) {
+                    return WorkerSyncOutcome.UserActionRequired(
+                        error.problem.detail ?: "Нужно обновить доступ рабочего",
+                    )
+                }
                 reconcileFeedAfterBlockedMedia(userId, context)
                 updateProgress(
                     userId,
@@ -115,8 +168,21 @@ class WorkerSyncCoordinator @Inject constructor(
                     null,
                     "Фото не отправлено; задания обновлены по данным RWMS",
                 )
-                return WorkerSyncOutcome.Retry(error.problem.detail ?: "Не удалось загрузить фотографию")
+                return workerSyncOutcomeForGatewayProblem(error)
             } catch (error: Throwable) {
+                if (!error.isProvenGatewayTransportFailure()) {
+                    reconcileFeedAfterBlockedMedia(userId, context)
+                    updateProgress(
+                        userId,
+                        "WAITING_FOR_EVIDENCE",
+                        completed,
+                        total,
+                        null,
+                        null,
+                        "Фото требует действия; задания обновлены по данным RWMS",
+                    )
+                    return WorkerSyncOutcome.Failed(error.message ?: "Не удалось загрузить фотографию")
+                }
                 reconcileFeedAfterBlockedMedia(userId, context)
                 updateProgress(
                     userId,
@@ -160,7 +226,7 @@ class WorkerSyncCoordinator @Inject constructor(
                         null,
                         "Завершение ждёт готовые фотографии",
                     )
-                    return WorkerSyncOutcome.Retry("Завершение ждёт обработки фотографии")
+                    return WorkerSyncOutcome.Deferred("Завершение ждёт обработки фотографии")
                 }
                 applyAction(userId, operation)
                 completed += 1
@@ -184,18 +250,22 @@ class WorkerSyncCoordinator @Inject constructor(
             completed += 1
             updateProgress(userId, "IDLE", completed, total, null, null, "Синхронизировано")
             WorkerSyncOutcome.Complete
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: UserActionRequiredSyncException) {
+            WorkerSyncOutcome.UserActionRequired(error.message ?: "Нужно обновить доступ рабочего")
         } catch (error: GatewayProblemException) {
-            if (error.problem.status == 401) {
-                WorkerSyncOutcome.AuthenticationRequired(error.problem.detail ?: "Требуется повторный вход")
-            } else if (error.problem.status >= 500 || error.problem.status == 429) {
-                WorkerSyncOutcome.Retry(error.problem.detail ?: "RWMS временно недоступен")
-            } else {
-                WorkerSyncOutcome.Retry(error.problem.detail ?: "Не удалось синхронизировать данные")
-            }
+            workerSyncOutcomeForGatewayProblem(error)
         } catch (error: RetryableSyncException) {
             WorkerSyncOutcome.Retry(error.message ?: "Сеть недоступна")
-        } catch (error: IOException) {
-            WorkerSyncOutcome.Retry(error.message ?: "Сеть недоступна")
+        } catch (error: TerminalSyncException) {
+            WorkerSyncOutcome.Failed(error.message ?: "Не удалось синхронизировать данные")
+        } catch (error: Throwable) {
+            if (error.isProvenGatewayTransportFailure()) {
+                WorkerSyncOutcome.Retry(error.message ?: "Сеть недоступна")
+            } else {
+                WorkerSyncOutcome.Failed(error.message ?: "Не удалось синхронизировать данные")
+            }
         }
     }
 
@@ -215,45 +285,41 @@ class WorkerSyncCoordinator @Inject constructor(
                 ),
             )
             projections.commitActionResult(userId, operation.operationId, result.entry)
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: GatewayProblemException) {
-            if (error.problem.status == 401) throw error
-            if (error.isTerminalCommandProblem()) {
-                recordConflict(userId, operation, error)
-                val currentEntry = error.problem.currentEntry
-                if (currentEntry == null) {
-                    if (error.problem.status == 404) {
-                        // A terminal command response without an entry means
-                        // the worker can no longer see or act on it. Remove the
-                        // stale optimistic task immediately; durable evidence
-                        // is intentionally left in place.
-                        projections.commitAbsentActionResult(
-                            userId = userId,
-                            operationId = operation.operationId,
-                            entryId = operation.entryId,
-                        )
-                    } else {
-                        // Authorization/validation conflicts without a current
-                        // entry are not proof of absence, so retain the server
-                        // projection and only stop this command replay.
-                        localStore.markOutboxComplete(operation.operationId)
-                    }
-                } else {
-                    projections.commitActionResult(userId, operation.operationId, currentEntry)
+            when (error.disposition) {
+                GatewayFailureDisposition.AUTHENTICATION_REQUIRED -> throw error
+                GatewayFailureDisposition.RETRYABLE -> {
+                    localStore.markOutboxRetry(operation, error.problem.detail ?: error.problem.title)
+                    throw RetryableSyncException(error.problem.detail ?: error.problem.title, error)
                 }
-            } else {
-                localStore.markOutboxRetry(operation, error.problem.detail ?: error.problem.title)
-                throw RetryableSyncException(error.problem.detail ?: error.problem.title, error)
+                GatewayFailureDisposition.USER_ACTION_REQUIRED,
+                GatewayFailureDisposition.CONFLICT,
+                GatewayFailureDisposition.TERMINAL,
+                -> {
+                    resolveTerminalActionProblem(userId, operation, error)
+                    if (error.disposition == GatewayFailureDisposition.USER_ACTION_REQUIRED) {
+                        throw UserActionRequiredSyncException(
+                            error.problem.detail ?: "Нужно обновить доступ рабочего",
+                        )
+                    }
+                }
             }
         } catch (error: Throwable) {
+            if (error.isProvenGatewayTransportFailure()) {
+                localStore.markOutboxRetry(operation, error.message ?: "network")
+                throw RetryableSyncException("Не удалось передать действие", error)
+            }
             localStore.markOutboxRetry(operation, error.message ?: "network")
-            throw RetryableSyncException("Не удалось передать действие", error)
+            throw TerminalSyncException("Не удалось передать действие", error)
         }
     }
 
     private suspend fun reserveEvidence(userId: String, operation: WorkerOutboxEntity) {
         val pending = runCatching {
             json.decodeFromString<PendingEvidenceReservation>(localStore.decryptOutboxPayload(operation))
-        }.getOrElse { throw RetryableSyncException("Локальная резервная запись повреждена", it) }
+        }.getOrElse { throw TerminalSyncException("Локальная резервная запись повреждена", it) }
         try {
             val remote = gateway.reserveEvidence(
                 operation.entryId,
@@ -277,27 +343,87 @@ class WorkerSyncCoordinator @Inject constructor(
                 now = System.currentTimeMillis(),
             )
             localStore.markOutboxComplete(operation.operationId)
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: GatewayProblemException) {
-            if (error.problem.status == 401) throw error
-            if (error.isTerminalEvidenceReservationProblem()) {
-                recordConflict(userId, operation, error)
-                database.evidenceDao().updateState(
-                    pending.evidenceId,
-                    "REVIEW_REQUIRED",
-                    null,
-                    null,
-                    error.problem.detail ?: error.problem.title,
-                    System.currentTimeMillis(),
-                )
-                localStore.markOutboxComplete(operation.operationId)
-            } else {
-                localStore.markOutboxRetry(operation, error.problem.detail ?: error.problem.title)
-                throw RetryableSyncException(error.problem.detail ?: error.problem.title, error)
+            when (error.disposition) {
+                GatewayFailureDisposition.AUTHENTICATION_REQUIRED -> throw error
+                GatewayFailureDisposition.RETRYABLE -> {
+                    localStore.markOutboxRetry(operation, error.problem.detail ?: error.problem.title)
+                    throw RetryableSyncException(error.problem.detail ?: error.problem.title, error)
+                }
+                GatewayFailureDisposition.USER_ACTION_REQUIRED,
+                GatewayFailureDisposition.CONFLICT,
+                GatewayFailureDisposition.TERMINAL,
+                -> {
+                    resolveTerminalEvidenceReservationProblem(userId, operation, pending, error)
+                    if (error.disposition == GatewayFailureDisposition.USER_ACTION_REQUIRED) {
+                        throw UserActionRequiredSyncException(
+                            error.problem.detail ?: "Нужно обновить доступ рабочего",
+                        )
+                    }
+                }
             }
         } catch (error: Throwable) {
+            if (error.isProvenGatewayTransportFailure()) {
+                localStore.markOutboxRetry(operation, error.message ?: "network")
+                throw RetryableSyncException("Не удалось зарезервировать фото", error)
+            }
             localStore.markOutboxRetry(operation, error.message ?: "network")
-            throw RetryableSyncException("Не удалось зарезервировать фото", error)
+            throw TerminalSyncException("Не удалось зарезервировать фото", error)
         }
+    }
+
+    /**
+     * Persists an authoritative terminal command response before stopping
+     * replay. A 409 snapshot is applied immediately and a later full feed
+     * remains the final source of truth for the worker projection.
+     */
+    private suspend fun resolveTerminalActionProblem(
+        userId: String,
+        operation: WorkerOutboxEntity,
+        error: GatewayProblemException,
+    ) {
+        recordConflict(userId, operation, error)
+        val currentEntry = error.problem.currentEntry
+        if (currentEntry == null) {
+            if (error.problem.status == 404) {
+                // A terminal command response without an entry means the
+                // worker can no longer see or act on it. Durable evidence is
+                // deliberately retained for an explicit recovery decision.
+                projections.commitAbsentActionResult(
+                    userId = userId,
+                    operationId = operation.operationId,
+                    entryId = operation.entryId,
+                )
+            } else {
+                localStore.markOutboxComplete(operation.operationId)
+            }
+        } else {
+            projections.commitActionResult(userId, operation.operationId, currentEntry)
+        }
+    }
+
+    /**
+     * Retains a server-rejected evidence row as review-required instead of
+     * replaying a request that has already reached a terminal response.
+     */
+    private suspend fun resolveTerminalEvidenceReservationProblem(
+        userId: String,
+        operation: WorkerOutboxEntity,
+        pending: PendingEvidenceReservation,
+        error: GatewayProblemException,
+    ) {
+        recordConflict(userId, operation, error)
+        database.evidenceDao().updateState(
+            pending.evidenceId,
+            "REVIEW_REQUIRED",
+            null,
+            null,
+            error.problem.detail ?: error.problem.title,
+            System.currentTimeMillis(),
+        )
+        localStore.markOutboxComplete(operation.operationId)
     }
 
     private suspend fun uploadEvidence(
@@ -319,11 +445,11 @@ class WorkerSyncCoordinator @Inject constructor(
             )
             when (val result = mediaUploadPipeline.uploadReservedEvidence(userId, item)) {
                 EvidenceUploadResult.WaitingForReservation -> return EvidenceSyncResult(
-                    WorkerSyncOutcome.Retry("Ожидается резервирование фотографии"),
+                    WorkerSyncOutcome.Deferred("Ожидается резервирование фотографии"),
                     completed + index,
                 )
                 EvidenceUploadResult.Processing -> return EvidenceSyncResult(
-                    WorkerSyncOutcome.Retry("Фотография ещё обрабатывается"),
+                    WorkerSyncOutcome.Deferred("Фотография ещё обрабатывается"),
                     completed + index,
                 )
                 is EvidenceUploadResult.Ready,
@@ -364,13 +490,13 @@ class WorkerSyncCoordinator @Inject constructor(
         var pageCount = 0
         do {
             if (++pageCount > MAX_FEED_PAGES) {
-                throw RetryableSyncException("Пагинация ленты превысила безопасный предел")
+                throw TerminalSyncException("Пагинация ленты превысила безопасный предел")
             }
             when (val page = gateway.feed(cursor = cursor, etag = if (first) cachedFirstPageEtag else null)) {
                 is WorkerFeedResponse.NotModified -> {
                     // A 304 only applies to the first complete cached feed.
                     if (!first || session?.cacheHidden != false) {
-                        throw RetryableSyncException("Скрытый кэш нельзя подтверждать ответом 304")
+                        throw TerminalSyncException("Скрытый кэш нельзя подтверждать ответом 304")
                     }
                     return FetchedFeed.NotModified(page.etag ?: cachedFirstPageEtag)
                 }
@@ -385,7 +511,7 @@ class WorkerSyncCoordinator @Inject constructor(
                     }
                     cursor = page.feed.nextCursor
                     if (cursor != null && !seenCursors.add(cursor)) {
-                        throw RetryableSyncException("Сервер вернул циклический курсор ленты")
+                        throw TerminalSyncException("Сервер вернул циклический курсор ленты")
                     }
                 }
             }
@@ -431,7 +557,7 @@ class WorkerSyncCoordinator @Inject constructor(
 
     private fun actionPayload(operation: WorkerOutboxEntity): PendingWorkerAction =
         runCatching { json.decodeFromString<PendingWorkerAction>(localStore.decryptOutboxPayload(operation)) }
-            .getOrElse { throw RetryableSyncException("Локальная команда повреждена", it) }
+            .getOrElse { throw TerminalSyncException("Локальная команда повреждена", it) }
 
     private suspend fun recordConflict(
         userId: String,
@@ -470,21 +596,36 @@ class WorkerSyncCoordinator @Inject constructor(
         ),
     )
 
-    private fun GatewayProblemException.isTerminalCommandProblem(): Boolean =
-        problem.status == 400 || problem.status == 403 || problem.status == 404 || problem.status == 409
-
-    /**
-     * A 404 can mean that a rolling deployment has not exposed the reservation
-     * route yet. Keep the encrypted photo and stable outbox operation so the
-     * same reservation is retried once the service recovers.
-     */
-    private fun GatewayProblemException.isTerminalEvidenceReservationProblem(): Boolean =
-        isTerminalEvidenceReservationStatus(problem.status)
 }
 
-internal fun isTerminalEvidenceReservationStatus(status: Int): Boolean =
-    status == 400 || status == 403 || status == 409
+/**
+ * Returns the typed sync outcome for a gateway Problem Details response after
+ * the authenticator has had its single refresh opportunity.
+ */
+internal fun workerSyncOutcomeForGatewayProblem(error: GatewayProblemException): WorkerSyncOutcome =
+    when (error.disposition) {
+        GatewayFailureDisposition.AUTHENTICATION_REQUIRED ->
+            WorkerSyncOutcome.AuthenticationRequired(error.problem.detail ?: "Требуется повторный вход")
+        GatewayFailureDisposition.USER_ACTION_REQUIRED ->
+            WorkerSyncOutcome.UserActionRequired(error.problem.detail ?: "Нужно обновить доступ рабочего")
+        GatewayFailureDisposition.CONFLICT ->
+            WorkerSyncOutcome.Conflict(
+                error.problem.detail ?: "Данные задания изменились на RWMS. Обновите список задач.",
+            )
+        GatewayFailureDisposition.RETRYABLE ->
+            WorkerSyncOutcome.Retry(error.problem.detail ?: "RWMS временно недоступен")
+        GatewayFailureDisposition.TERMINAL ->
+            WorkerSyncOutcome.Failed(error.problem.detail ?: "Не удалось синхронизировать данные")
+    }
 
+/** A reservation response outside the narrow retry set is terminal for automatic replay. */
+internal fun isTerminalEvidenceReservationStatus(status: Int): Boolean =
+    gatewayFailureDisposition(status) != GatewayFailureDisposition.RETRYABLE
+
+/**
+ * Records the revision and server time from the first changed feed page so all
+ * following pages can be rejected when they describe a mixed snapshot.
+ */
 internal data class FeedPageConsistency(val revision: Long, val serverTime: String)
 
 internal fun validateFeedPage(

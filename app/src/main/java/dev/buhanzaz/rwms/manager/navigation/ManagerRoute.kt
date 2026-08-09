@@ -2,6 +2,9 @@ package dev.buhanzaz.rwms.manager.navigation
 
 import android.net.Uri
 
+/**
+ * Defines manager navigation/UI state only; it does not own a server-side business transition.
+ */
 sealed class ManagerRoute(val route: String) {
     data object Home : ManagerRoute("manager-home")
     data object Uploads : ManagerRoute("manager-uploads")

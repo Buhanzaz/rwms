@@ -22,6 +22,9 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import retrofit2.HttpException
 
+/**
+ * Encapsulates manager media transfer or retrieval through the public gateway.
+ */
 data class MediaOwner(
     val ownerType: String,
     val warehouseId: String,
@@ -31,6 +34,9 @@ data class MediaOwner(
     val lineId: String? = null,
 )
 
+/**
+ * Encapsulates manager media transfer or retrieval through the public gateway.
+ */
 data class PhotoPayload(
     val fileName: String,
     val contentType: String,
@@ -98,6 +104,9 @@ private fun stableMediaUploadUuid(scope: String, fingerprint: String): String =
         "rwms-mobile-media:$scope:$fingerprint".toByteArray(StandardCharsets.UTF_8),
     ).toString()
 
+/**
+ * Encapsulates manager media transfer or retrieval through the public gateway.
+ */
 class PhotoPayloadReader(
     private val contentResolver: ContentResolver,
 ) {
@@ -129,6 +138,9 @@ class PhotoPayloadReader(
     }
 }
 
+/**
+ * Encapsulates manager media transfer or retrieval through the public gateway.
+ */
 class MediaUploader private constructor(
     private val api: RwmsApi,
     private val payloadLoader: (String) -> PhotoPayload,

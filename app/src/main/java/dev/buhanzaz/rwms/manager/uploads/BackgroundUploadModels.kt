@@ -8,7 +8,12 @@ import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.network.ObservationInput
 import dev.buhanzaz.rwms.manager.network.PlanStageInputDto
 import dev.buhanzaz.rwms.manager.network.PriorityVersionRequest
+import java.util.concurrent.atomic.AtomicReference
 
+/**
+ * Represents manager durable background-upload recovery state; it must be reconciled with the
+ * authoritative server result.
+ */
 enum class BackgroundUploadArea(val title: String) {
     INVENTORY("Инвентаризация"),
     MAINTENANCE("Ремонтный цикл"),
@@ -16,12 +21,20 @@ enum class BackgroundUploadArea(val title: String) {
     ACCEPTANCE("Приёмка"),
 }
 
+/**
+ * Represents manager durable background-upload recovery state; it must be reconciled with the
+ * authoritative server result.
+ */
 enum class BackgroundUploadStatus {
     QUEUED,
     RUNNING,
     FAILED,
 }
 
+/**
+ * Represents manager durable background-upload recovery state; it must be reconciled with the
+ * authoritative server result.
+ */
 enum class BackgroundPhotoStatus {
     QUEUED,
     UPLOADING,
@@ -29,6 +42,42 @@ enum class BackgroundPhotoStatus {
     FAILED,
 }
 
+/**
+ * Identifies the verified manager principal and selected warehouse that exclusively own one
+ * durable upload. The pair is copied into the queue row, file path and WorkManager request; it
+ * is never inferred from a later OAuth session.
+ */
+data class BackgroundUploadScope(
+    val ownerAccountId: String,
+    val warehouseId: String,
+) {
+    init {
+        require(ownerAccountId.isNotBlank()) { "Не указан владелец фоновой загрузки" }
+        require(warehouseId.isNotBlank()) { "Не указан склад фоновой загрузки" }
+    }
+}
+
+/**
+ * Process-local capture boundary for transient drafts. The coordinator is its sole lifecycle
+ * writer; taking the snapshot in the draft constructor prevents a command started by account A
+ * from being rebound to account B if logout completes before enqueue is reached.
+ */
+internal object BackgroundUploadDraftScopeRegistry {
+    private val activeScope = AtomicReference<BackgroundUploadScope?>(null)
+
+    /** Captures one immutable identity pair for a newly constructed draft. */
+    fun snapshot(): BackgroundUploadScope? = activeScope.get()
+
+    /** Replaces or closes draft admission as part of the coordinator's serialized lifecycle. */
+    fun replace(scope: BackgroundUploadScope?) {
+        activeScope.set(scope)
+    }
+}
+
+/**
+ * Represents manager durable background-upload recovery state; it must be reconciled with the
+ * authoritative server result.
+ */
 data class BackgroundUploadPhoto(
     val id: String,
     val sourceName: String,
@@ -43,6 +92,10 @@ data class BackgroundUploadPhoto(
     val error: String? = null,
 )
 
+/**
+ * Durable, immutable command input owned by exactly one verified account and warehouse.
+ * Ownerless instances can only be decoded from legacy/test data and are rejected by the store.
+ */
 data class BackgroundUploadOperation(
     val id: String,
     val area: BackgroundUploadArea,
@@ -59,6 +112,8 @@ data class BackgroundUploadOperation(
     val acceptance: AcceptanceUploadCommand? = null,
     val transferArrival: TransferArrivalUploadCommand? = null,
     val returnAction: ReturnUploadCommand? = null,
+    val ownerAccountId: String = "",
+    val warehouseId: String = "",
 ) {
     init {
         require(
@@ -70,6 +125,9 @@ data class BackgroundUploadOperation(
                 returnAction,
             ).size == 1,
         ) { "Фоновая операция должна содержать ровно одну итоговую команду" }
+        require(ownerAccountId.isBlank() == warehouseId.isBlank()) {
+            "Владелец и склад фоновой загрузки должны задаваться вместе"
+        }
     }
 
     val readyPhotoCount: Int
@@ -79,6 +137,10 @@ data class BackgroundUploadOperation(
         get() = photos.count { it.status == BackgroundPhotoStatus.FAILED }
 }
 
+/**
+ * Represents manager durable background-upload recovery state; it must be reconciled with the
+ * authoritative server result.
+ */
 data class PendingBackgroundPhoto(
     val uri: String,
     val owner: MediaOwner,
@@ -87,6 +149,11 @@ data class PendingBackgroundPhoto(
     val lineId: String? = null,
 )
 
+/**
+ * UI-produced upload input that captures the currently verified scope at construction time. The
+ * coordinator rejects an absent or stale snapshot before any file or queue write, so a command
+ * coroutine cannot cross an A-to-B logout/login transition while it is preparing the draft.
+ */
 data class BackgroundUploadDraft(
     val area: BackgroundUploadArea,
     val title: String,
@@ -97,6 +164,9 @@ data class BackgroundUploadDraft(
     val acceptance: AcceptanceUploadCommand? = null,
     val transferArrival: TransferArrivalUploadCommand? = null,
     val returnAction: ReturnUploadCommand? = null,
+    val scope: BackgroundUploadScope = requireNotNull(
+        BackgroundUploadDraftScopeRegistry.snapshot(),
+    ) { "Черновик недоступен до проверки учётной записи и склада" },
 ) {
     init {
         require(
@@ -109,8 +179,18 @@ data class BackgroundUploadDraft(
             ).size == 1,
         ) { "Фоновая операция должна содержать ровно одну итоговую команду" }
     }
+
+    val ownerAccountId: String
+        get() = scope.ownerAccountId
+
+    val warehouseId: String
+        get() = scope.warehouseId
 }
 
+/**
+ * Represents manager durable background-upload recovery state; it must be reconciled with the
+ * authoritative server result.
+ */
 data class InventoryUploadCommand(
     val inventoryId: String,
     val findingId: String,
@@ -129,6 +209,10 @@ data class InventoryUploadCommand(
     val inspectionSaved: Boolean = false,
 )
 
+/**
+ * Represents manager durable background-upload recovery state; it must be reconciled with the
+ * authoritative server result.
+ */
 data class InventoryFurnitureUploadCommand(
     val rentalItemId: String,
     val warehouseId: String,
@@ -137,6 +221,10 @@ data class InventoryFurnitureUploadCommand(
     val desiredContents: List<CabinFurnitureRequirementDto> = emptyList(),
 )
 
+/**
+ * Represents manager durable background-upload recovery state; it must be reconciled with the
+ * authoritative server result.
+ */
 enum class MaintenanceReplaceKind {
     NONE,
     ESTIMATE,
@@ -144,6 +232,10 @@ enum class MaintenanceReplaceKind {
     REPAIR,
 }
 
+/**
+ * Represents manager durable background-upload recovery state; it must be reconciled with the
+ * authoritative server result.
+ */
 data class MaintenanceUploadCommand(
     val mode: String,
     val entityId: String,
@@ -167,6 +259,10 @@ data class MaintenanceUploadCommand(
     val requiresUnaccountedFurnitureConfirmation: Boolean = false,
 )
 
+/**
+ * Represents manager durable background-upload recovery state; it must be reconciled with the
+ * authoritative server result.
+ */
 data class AcceptanceUploadCommand(
     val repairId: String,
     val warehouseId: String,
@@ -176,6 +272,10 @@ data class AcceptanceUploadCommand(
     val idempotencyKey: String,
 )
 
+/**
+ * Represents manager durable background-upload recovery state; it must be reconciled with the
+ * authoritative server result.
+ */
 data class TransferArrivalUploadCommand(
     val documentId: String,
     val lineId: String,
@@ -185,6 +285,10 @@ data class TransferArrivalUploadCommand(
     val idempotencyKey: String,
 )
 
+/**
+ * Represents manager durable background-upload recovery state; it must be reconciled with the
+ * authoritative server result.
+ */
 enum class ReturnUploadAction {
     ACCEPT,
     START_ESTIMATES,
@@ -196,12 +300,20 @@ enum class ReturnUploadAction {
     REQUEST_ESTIMATE,
 }
 
+/**
+ * Represents manager durable background-upload recovery state; it must be reconciled with the
+ * authoritative server result.
+ */
 data class ReturnUploadLineCommand(
     val lineId: String,
     val equipmentConfirmed: Boolean = true,
     val existingMedia: List<MediaReferenceDto> = emptyList(),
 )
 
+/**
+ * Represents manager durable background-upload recovery state; it must be reconciled with the
+ * authoritative server result.
+ */
 data class ReturnUploadCommand(
     val documentId: String,
     val warehouseId: String,
@@ -211,10 +323,13 @@ data class ReturnUploadCommand(
     val idempotencyKey: String,
 )
 
+/** Versioned queue envelope; schema 1 had no immutable account or warehouse owner. */
 internal data class BackgroundUploadStoreDocument(
     val schemaVersion: Int = 1,
     val operations: List<BackgroundUploadOperation> = emptyList(),
 )
+
+internal const val CURRENT_BACKGROUND_UPLOAD_SCHEMA_VERSION = 2
 
 internal fun InventoryPlanSelectionDto.withUploadedMedia(
     coverMediaId: String?,

@@ -13,6 +13,9 @@ import retrofit2.http.Path
 import retrofit2.http.Query
 import retrofit2.http.Url
 
+/**
+ * Encapsulates the manager public-gateway transport boundary; it is not a backend domain or persistence type.
+ */
 interface RwmsApi {
     @GET("auth/api/users/me")
     suspend fun currentUser(): CurrentUserDto

@@ -3,13 +3,16 @@ package dev.buhanzaz.rwms.manager.uploads
 import android.net.Uri
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.manager.media.MediaOwner
+import dev.buhanzaz.rwms.manager.network.CurrentUserDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
+import dev.buhanzaz.rwms.manager.network.WarehouseAccessDto
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import org.junit.After
+import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -26,20 +29,27 @@ class BackgroundUploadStoreTest {
     @Before
     fun setUp() {
         BackgroundUploadStore.resetForTests()
+        BackgroundUploadDraftScopeRegistry.replace(null)
         context.filesDir.resolve("background-uploads").deleteRecursively()
+        context.filesDir.resolve("background-uploads-v2").deleteRecursively()
+        context.filesDir.resolve("background-uploads-quarantine").deleteRecursively()
     }
 
     @After
     fun tearDown() {
         BackgroundUploadStore.resetForTests()
+        BackgroundUploadDraftScopeRegistry.replace(null)
         context.filesDir.resolve("background-uploads").deleteRecursively()
+        context.filesDir.resolve("background-uploads-v2").deleteRecursively()
+        context.filesDir.resolve("background-uploads-quarantine").deleteRecursively()
     }
 
     @Test
     fun `operation and per-photo progress survive a process-style store reload`() = runBlocking {
         val store = BackgroundUploadStore.get(context)
         store.initialize()
-        val photoFile = store.operationDirectory("operation-1").resolve("photo.jpg")
+        store.activateScope(scopeA)
+        val photoFile = store.operationDirectory(scopeA, "operation-1").resolve("photo.jpg")
         photoFile.writeBytes(byteArrayOf(1, 2, 3))
         val operation = operation(
             photo = BackgroundUploadPhoto(
@@ -51,7 +61,7 @@ class BackgroundUploadStoreTest {
             ),
         )
         store.put(operation)
-        store.update(operation.id) { current ->
+        store.update(scopeA, operation.id) { current ->
             current.copy(
                 status = BackgroundUploadStatus.RUNNING,
                 stage = "Загрузка фото 1 из 1",
@@ -67,7 +77,8 @@ class BackgroundUploadStoreTest {
         BackgroundUploadStore.resetForTests()
         val restoredStore = BackgroundUploadStore.get(context)
         restoredStore.initialize()
-        val restored = restoredStore.operation(operation.id)
+        restoredStore.activateScope(scopeA)
+        val restored = restoredStore.operation(scopeA, operation.id)
 
         assertThat(restored?.status).isEqualTo(BackgroundUploadStatus.RUNNING)
         assertThat(restored?.stage).isEqualTo("Загрузка фото 1 из 1")
@@ -81,11 +92,12 @@ class BackgroundUploadStoreTest {
     fun `successful removal deletes both queue row and durable originals`() = runBlocking {
         val store = BackgroundUploadStore.get(context)
         store.initialize()
-        val directory = store.operationDirectory("operation-1")
+        store.activateScope(scopeA)
+        val directory = store.operationDirectory(scopeA, "operation-1")
         directory.resolve("photo.jpg").writeBytes(byteArrayOf(9))
         store.put(operation())
 
-        store.remove("operation-1")
+        store.remove(scopeA, "operation-1")
 
         assertThat(store.operations.value).isEmpty()
         assertThat(directory.exists()).isFalse()
@@ -95,12 +107,13 @@ class BackgroundUploadStoreTest {
     fun `cancelled operation stays removed when a running worker reports progress`() = runBlocking {
         val store = BackgroundUploadStore.get(context)
         store.initialize()
-        val directory = store.operationDirectory("operation-1")
+        store.activateScope(scopeA)
+        val directory = store.operationDirectory(scopeA, "operation-1")
         directory.resolve("photo.jpg").writeBytes(byteArrayOf(9))
         store.put(operation())
 
-        store.remove("operation-1")
-        val workerUpdate = store.update("operation-1") { current ->
+        store.remove(scopeA, "operation-1")
+        val workerUpdate = store.update(scopeA, "operation-1") { current ->
             current.copy(
                 status = BackgroundUploadStatus.RUNNING,
                 stage = "Загрузка фото 1 из 1",
@@ -116,6 +129,7 @@ class BackgroundUploadStoreTest {
     fun `concurrent initialization restores one durable queue`() = runBlocking {
         val persisted = BackgroundUploadStore.get(context)
         persisted.initialize()
+        persisted.activateScope(scopeA)
         persisted.put(operation())
 
         BackgroundUploadStore.resetForTests()
@@ -125,116 +139,161 @@ class BackgroundUploadStoreTest {
                 async(Dispatchers.Default) { restored.initialize() }
             }.awaitAll()
         }
+        restored.activateScope(scopeA)
 
         assertThat(restored.operations.value).containsExactly(operation())
-        assertThat(restored.operation("operation-1")).isEqualTo(operation())
+        assertThat(restored.operation(scopeA, "operation-1")).isEqualTo(operation())
     }
 
     @Test
-    fun `legacy rotation fields do not prevent durable inventory recovery after app update`() {
-        runBlocking {
-            val root = context.filesDir.resolve("background-uploads").apply { mkdirs() }
-            root.resolve("queue.json").writeText(
-                """
-                {
-                  "schemaVersion": 1,
-                  "operations": [{
-                    "id": "operation-legacy",
-                    "area": "INVENTORY",
-                    "title": "Проверка бытовки БЫТ-001",
-                    "createdAtEpochMillis": 100,
-                    "updatedAtEpochMillis": 100,
-                    "photos": [{
-                      "id": "photo-legacy",
-                      "sourceName": "door.jpg",
-                      "durableUri": "file:///legacy/door.jpg",
-                      "owner": {
-                        "ownerType": "INVENTORY_FINDING",
-                        "warehouseId": "warehouse-1",
-                        "context": "INSPECTION",
-                        "ownerId": "finding-1"
-                      },
-                      "sortOrder": 0,
-                      "rotationDegrees": 90,
-                      "status": "READY",
-                      "reference": { "mediaId": "media-1", "generation": 2 }
-                    }],
-                    "inventory": {
-                      "inventoryId": "inventory-1",
-                      "findingId": "finding-1",
-                      "expectedFindingRevision": 1,
-                      "inspection": "READY",
-                      "comment": "",
-                      "passportObservation": { "presence": "ABSENT", "value": null },
-                      "equipmentObservation": { "presence": "ABSENT", "value": null },
-                      "existingMedia": [{ "mediaId": "media-1", "generation": 2 }],
-                      "existingMediaRotations": [{
-                        "reference": { "mediaId": "media-1", "generation": 2 },
-                        "rotationDegrees": 90
-                      }]
-                    }
-                  }]
-                }
-                """.trimIndent(),
-            )
+    fun `same warehouse is isolated by account across restart and mutation`() = runBlocking {
+        val store = BackgroundUploadStore.get(context)
+        store.initialize()
+        val accountA = operation(id = "operation-a", scope = scopeA).copy(
+            status = BackgroundUploadStatus.RUNNING,
+            stage = "Загрузка фото",
+        )
+        val accountB = operation(id = "operation-b", scope = scopeB)
+        store.put(accountA)
+        store.put(accountB)
 
-            val store = BackgroundUploadStore.get(context)
-            store.initialize()
-            val restored = requireNotNull(store.operation("operation-legacy"))
+        store.activateScope(scopeA)
+        assertThat(store.operations.value).containsExactly(accountA)
+        assertThat(store.operation(scopeA, accountB.id)).isNull()
+        assertThat(store.update(scopeA, accountB.id) { it.copy(stage = "wrong") }).isNull()
 
-            assertThat(restored.photos.single().reference)
-                .isEqualTo(MediaReferenceDto("media-1", 2))
-            assertThat(restored.inventory?.existingMedia)
-                .containsExactly(MediaReferenceDto("media-1", 2))
-        }
+        store.activateScope(scopeB)
+        assertThat(store.operations.value).containsExactly(accountB)
+        assertThat(store.operation(scopeB, accountA.id)).isNull()
+        assertThat(store.update(scopeB, accountA.id) { it.copy(stage = "retry") }).isNull()
+
+        BackgroundUploadStore.resetForTests()
+        val restored = BackgroundUploadStore.get(context)
+        restored.initialize()
+        restored.activateScope(scopeB)
+
+        assertThat(restored.operations.value).containsExactly(accountB)
+        assertThat(restored.operation(scopeB, accountB.id)).isEqualTo(accountB)
     }
 
-    @Suppress("DEPRECATION")
     @Test
-    fun `legacy return estimate upload survives removal of shortage fields`() {
-        runBlocking {
-            val root = context.filesDir.resolve("background-uploads").apply { mkdirs() }
-            root.resolve("queue.json").writeText(
-                """
-                {
-                  "schemaVersion": 1,
-                  "operations": [{
-                    "id": "operation-return",
-                    "area": "LOGISTICS",
-                    "title": "Возврат со сметой",
-                    "createdAtEpochMillis": 100,
-                    "updatedAtEpochMillis": 100,
-                    "returnAction": {
-                      "documentId": "return-1",
-                      "warehouseId": "warehouse-1",
-                      "expectedVersion": 2,
-                      "action": "REQUEST_ESTIMATE",
-                      "lines": [{
-                        "lineId": "line-1",
-                        "shortages": [{ "equipmentId": "chair-1", "missingQuantity": 2 }],
-                        "existingMedia": [{ "mediaId": "photo-1", "generation": 3 }]
-                      }],
-                      "idempotencyKey": "return-estimate-1"
-                    }
-                  }]
+    fun `same operation id uses different durable directories for each scope`() = runBlocking {
+        val store = BackgroundUploadStore.get(context)
+        store.initialize()
+
+        val accountA = store.operationDirectory(scopeA, "same-operation")
+        val accountB = store.operationDirectory(scopeB, "same-operation")
+        val otherWarehouse = store.operationDirectory(scopeAOtherWarehouse, "same-operation")
+
+        assertThat(accountA).isNotEqualTo(accountB)
+        assertThat(accountA).isNotEqualTo(otherWarehouse)
+        assertThat(accountA.canonicalPath).doesNotContain(scopeA.ownerAccountId)
+        assertThat(accountA.canonicalPath).doesNotContain(scopeA.warehouseId)
+    }
+
+    @Test
+    fun `ownerless schema one queue and originals are quarantined and ignored`() = runBlocking {
+        val legacyRoot = context.filesDir.resolve("background-uploads").apply { mkdirs() }
+        legacyRoot.resolve("operation-legacy").apply { mkdirs() }
+            .resolve("photo.jpg").writeBytes(byteArrayOf(4, 5, 6))
+        legacyRoot.resolve("queue.json").writeText(
+            """
+            {
+              "schemaVersion": 1,
+              "operations": [{
+                "id": "operation-legacy",
+                "area": "ACCEPTANCE",
+                "title": "Legacy ownerless upload",
+                "createdAtEpochMillis": 100,
+                "updatedAtEpochMillis": 100,
+                "acceptance": {
+                  "repairId": "repair-1",
+                  "warehouseId": "warehouse-1",
+                  "expectedVersion": 3,
+                  "idempotencyKey": "command-1"
                 }
-                """.trimIndent(),
-            )
+              }]
+            }
+            """.trimIndent(),
+        )
 
-            val store = BackgroundUploadStore.get(context)
-            store.initialize()
-            val restored = requireNotNull(store.operation("operation-return")).returnAction
+        val store = BackgroundUploadStore.get(context)
+        store.initialize()
+        store.activateScope(scopeA)
 
-            assertThat(restored?.action).isEqualTo(ReturnUploadAction.REQUEST_ESTIMATE)
-            assertThat(restored?.lines?.single()?.existingMedia)
-                .containsExactly(MediaReferenceDto("photo-1", 3))
-        }
+        assertThat(store.operations.value).isEmpty()
+        assertThat(store.operation(scopeA, "operation-legacy")).isNull()
+        assertThat(legacyRoot.exists()).isFalse()
+        val quarantinedNames = context.filesDir.resolve("background-uploads-quarantine")
+            .walkTopDown()
+            .map { it.name }
+            .toList()
+        assertThat(quarantinedNames).containsAtLeast("queue.json", "photo.jpg")
+        Unit
+    }
+
+    @Test
+    fun `work identity changes with account and warehouse`() {
+        val operationId = "same-operation"
+
+        val accountA = BackgroundUploadCoordinator.workName(scopeA, operationId)
+        val accountB = BackgroundUploadCoordinator.workName(scopeB, operationId)
+        val otherWarehouse = BackgroundUploadCoordinator.workName(
+            scopeAOtherWarehouse,
+            operationId,
+        )
+
+        assertThat(accountA).isNotEqualTo(accountB)
+        assertThat(accountA).isNotEqualTo(otherWarehouse)
+        assertThat(accountA).doesNotContain(scopeA.ownerAccountId)
+        assertThat(accountA).doesNotContain(scopeA.warehouseId)
+    }
+
+    @Test
+    fun `draft captures account before logout and cannot be created while unverified`() {
+        BackgroundUploadDraftScopeRegistry.replace(scopeA)
+        val accountA = draft()
+
+        BackgroundUploadDraftScopeRegistry.replace(scopeB)
+        val accountB = draft()
+
+        assertThat(accountA.scope).isEqualTo(scopeA)
+        assertThat(accountB.scope).isEqualTo(scopeB)
+        assertThat(accountA.ownerAccountId).isEqualTo("account-a")
+        BackgroundUploadDraftScopeRegistry.replace(null)
+        assertThrows(IllegalArgumentException::class.java) { draft() }
+    }
+
+    @Test
+    fun `worker policy rejects account switch and warehouse grant downgrade`() {
+        val operation = operation()
+
+        assertThat(
+            BackgroundUploadAuthorizationPolicy.canExecute(
+                user(accountId = "account-a", warehouseIds = listOf("warehouse-1")),
+                operation,
+            ),
+        ).isTrue()
+        assertThat(
+            BackgroundUploadAuthorizationPolicy.canExecute(
+                user(accountId = "account-b", warehouseIds = listOf("warehouse-1")),
+                operation,
+            ),
+        ).isFalse()
+        assertThat(
+            BackgroundUploadAuthorizationPolicy.canExecute(
+                user(accountId = "account-a", warehouseIds = emptyList()),
+                operation,
+            ),
+        ).isFalse()
     }
 
     private fun operation(
         photo: BackgroundUploadPhoto? = null,
+        id: String = "operation-1",
+        scope: BackgroundUploadScope = scopeA,
     ) = BackgroundUploadOperation(
-        id = "operation-1",
+        id = id,
         area = BackgroundUploadArea.ACCEPTANCE,
         title = "Приёмка ремонта 231226",
         createdAtEpochMillis = 100,
@@ -246,6 +305,8 @@ class BackgroundUploadStoreTest {
             expectedVersion = 3,
             idempotencyKey = "command-1",
         ),
+        ownerAccountId = scope.ownerAccountId,
+        warehouseId = scope.warehouseId,
     )
 
     private fun owner() = MediaOwner(
@@ -254,4 +315,36 @@ class BackgroundUploadStoreTest {
         warehouseId = "warehouse-1",
         context = "ACCEPTANCE",
     )
+
+    private fun user(
+        accountId: String,
+        warehouseIds: List<String>,
+    ) = CurrentUserDto(
+        id = accountId,
+        username = accountId,
+        displayName = accountId,
+        principalType = "USER",
+        globalRole = "WAREHOUSE_MANAGER",
+        rentalAccess = false,
+        warehouseAccessAll = false,
+        warehouseAccesses = warehouseIds.map { WarehouseAccessDto(it, "MANAGE") },
+    )
+
+    private fun draft() = BackgroundUploadDraft(
+        area = BackgroundUploadArea.ACCEPTANCE,
+        title = "Приёмка",
+        acceptance = AcceptanceUploadCommand(
+            repairId = "repair-1",
+            warehouseId = "warehouse-1",
+            expectedVersion = 3,
+            idempotencyKey = "command-1",
+        ),
+    )
+
+    /** Stable account-and-warehouse scopes shared by the focused outbox tests. */
+    private companion object {
+        val scopeA = BackgroundUploadScope("account-a", "warehouse-1")
+        val scopeB = BackgroundUploadScope("account-b", "warehouse-1")
+        val scopeAOtherWarehouse = BackgroundUploadScope("account-a", "warehouse-2")
+    }
 }

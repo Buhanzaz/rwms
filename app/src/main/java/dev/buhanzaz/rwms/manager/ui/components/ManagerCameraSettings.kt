@@ -7,12 +7,18 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal enum class ManagerCameraMode(val label: String) {
     Night("НОЧЬ"),
     Photo("ФОТО"),
     Video("ВИДЕО"),
 }
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal enum class ManagerCameraAspectRatio(val label: String) {
     FourThree("4:3"),
     SixteenNine("16:9"),
@@ -24,12 +30,18 @@ internal enum class ManagerCameraAspectRatio(val label: String) {
     }
 }
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal enum class ManagerVideoQuality(val label: String) {
     Uhd("4K"),
     Fhd("1080P"),
     Hd("720P"),
 }
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal data class ManagerCameraSettings(
     val gridEnabled: Boolean = false,
     val aspectRatio: ManagerCameraAspectRatio = ManagerCameraAspectRatio.FourThree,
@@ -42,6 +54,9 @@ internal data class ManagerCameraSettings(
     val videoFramesPerSecond: Int = 30,
 )
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal class ManagerCameraPreferences(context: Context) {
     private val preferences = context.applicationContext.getSharedPreferences(
         PREFERENCES_NAME,
@@ -152,6 +167,9 @@ internal fun managerNormalizedLensZoomRatio(value: Float): Float {
         .coerceAtLeast(0.1f)
 }
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal data class ManagerCameraLensProfile(
     val key: String,
     val displayZoom: Float,

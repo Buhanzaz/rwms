@@ -39,6 +39,9 @@ sealed interface WorkerPushCapability {
     data class TemporaryFailure(val message: String?) : WorkerPushCapability
 }
 
+/**
+ * Defines worker application UI or lifecycle state; it does not decide a server task transition.
+ */
 data class WorkerPushInvalidation(
     val eventId: String,
     val revision: Long,
@@ -57,6 +60,9 @@ data class WorkerPushInvalidation(
 }
 
 @Singleton
+/**
+ * Defines worker application UI or lifecycle state; it does not decide a server task transition.
+ */
 class WorkerPushCoordinator @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val authStateStore: EncryptedAuthStateStore,

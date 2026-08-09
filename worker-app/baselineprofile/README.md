@@ -1,5 +1,7 @@
 # Baseline-profile test module
 
+[Русская версия](README.ru.md)
+
 This is intentionally a `com.android.test` module targeting `:app`, so a
 device-backed baseline profile journey has a dedicated home without joining the
 application module.

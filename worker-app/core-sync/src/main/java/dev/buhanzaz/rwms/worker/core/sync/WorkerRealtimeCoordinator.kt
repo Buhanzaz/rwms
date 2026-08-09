@@ -24,6 +24,10 @@ class WorkerRealtimeCoordinator @Inject constructor(
     private val scheduler: WorkerSyncScheduler,
     private val alert: WorkerRealtimeInvalidationAlert,
 ) {
+    /**
+     * Starts paired SSE invalidation and foreground polling jobs for one user. Both merely request
+     * the unique authenticated sync; neither applies a task state directly.
+     */
     fun start(scope: CoroutineScope, userId: String): RealtimeHandles = RealtimeHandles(
         events = scope.launch {
             val lastEventId = database.invalidationDao().latestEventId(userId)
@@ -65,6 +69,9 @@ class WorkerRealtimeCoordinator @Inject constructor(
     )
 }
 
+/**
+ * Coordinates worker sync/realtime invalidation as a trigger for an authenticated server refresh.
+ */
 data class RealtimeHandles(
     val events: Job,
     val polling: Job,

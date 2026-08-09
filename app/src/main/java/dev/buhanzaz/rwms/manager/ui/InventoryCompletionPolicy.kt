@@ -4,6 +4,7 @@ import dev.buhanzaz.rwms.manager.network.InventoryCompletionPreviewDto
 import dev.buhanzaz.rwms.manager.network.InventoryFindingDto
 import dev.buhanzaz.rwms.manager.network.InventoryRevisionExpectationDto
 
+/** Risk codes that prevent a manager from submitting inventory completion. */
 internal val inventoryBlockingCompletionRiskCodes = setOf(
     "CONFLICT",
     "ASSET_CHANGED",
@@ -12,6 +13,7 @@ internal val inventoryBlockingCompletionRiskCodes = setOf(
     "MUTATION_IN_FLIGHT",
 )
 
+/** Builds the exact expected finding revisions used to fence inventory completion. */
 internal fun inventoryCompletionRevisionExpectations(
     findings: List<InventoryFindingDto>,
 ): List<InventoryRevisionExpectationDto> =
@@ -24,12 +26,15 @@ internal fun inventoryCompletionRevisionExpectations(
             )
         }
 
+/** Counts preview risks by canonical server code for compact UI summaries. */
 internal fun InventoryCompletionPreviewDto.inventoryCompletionRiskCounts(): Map<String, Int> =
     risks.groupingBy { it.code }.eachCount()
 
+/** Selects only completion-blocking risks from this server preview. */
 internal fun InventoryCompletionPreviewDto.inventoryBlockingCompletionRisks() =
     risks.filter { it.code in inventoryBlockingCompletionRiskCodes }
 
+/** Merges a refreshed preview into validation state without discarding a newer request result. */
 internal fun mergeInventoryCompletionValidation(
     findings: List<InventoryFindingDto>,
     preview: InventoryCompletionPreviewDto,
@@ -48,6 +53,7 @@ internal fun mergeInventoryCompletionValidation(
     }
 }
 
+/** Converts a failed preview refresh into the manager-facing validation state. */
 internal fun inventoryCompletionValidationError(
     preview: InventoryCompletionPreviewDto,
     confirmNotInspected: Boolean,
@@ -69,6 +75,7 @@ internal fun inventoryCompletionValidationError(
     return null
 }
 
+/** Returns whether this preview and the current editor state permit a fenced completion command. */
 internal fun InventoryCompletionPreviewDto.canCompleteInventory(
     confirmNotInspected: Boolean,
     confirmMissing: Boolean,
@@ -78,6 +85,7 @@ internal fun InventoryCompletionPreviewDto.canCompleteInventory(
     confirmMissing = confirmMissing,
 ) == null
 
+/** Maps a canonical completion-risk code to its Russian manager-facing label. */
 internal fun inventoryCompletionRiskLabel(code: String): String =
     when (code) {
         "NOT_INSPECTED" -> "Не проверена"

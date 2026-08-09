@@ -53,6 +53,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.buhanzaz.rwms.manager.network.WarehouseDto
 
+/**
+ * Defines manager UI state or presentation policy; server state and command authorization remain authoritative.
+ */
 data class ManagerHeaderState(
     val warehouses: List<WarehouseDto>,
     val selectedWarehouseId: String?,
@@ -67,6 +70,9 @@ val LocalManagerHeaderState = compositionLocalOf<ManagerHeaderState?> { null }
 internal const val MANAGER_BACK_GLYPH = "←"
 internal const val MANAGER_BACK_CONTENT_DESCRIPTION = "Назад"
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal data class ManagerWarehouseSelection(
     val warehouseId: String,
     val label: String,
@@ -343,6 +349,9 @@ fun StatusPill(
     )
 }
 
+/**
+ * Defines manager UI state or presentation policy; server state and command authorization remain authoritative.
+ */
 enum class StatusPillEmphasis { Positive, Warning, Neutral }
 
 @Composable

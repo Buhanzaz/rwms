@@ -112,6 +112,9 @@ internal fun InventoryFindingDto.inventoryFurnitureInitialQuantities(
     contents = currentSnapshot?.contentsSnapshot.orEmpty(),
 )
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal data class InventoryFurnitureReinspectionSeed(
     val observationRequested: Boolean?,
     val quantities: Map<String, String>,

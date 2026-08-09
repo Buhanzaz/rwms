@@ -14,6 +14,9 @@ import javax.inject.Singleton
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 
+/**
+ * Encapsulates worker evidence/media recovery behavior; server confirmation remains authoritative.
+ */
 sealed interface EvidenceUploadResult {
     data object WaitingForReservation : EvidenceUploadResult
     data object Processing : EvidenceUploadResult
@@ -23,6 +26,10 @@ sealed interface EvidenceUploadResult {
 
 /** Allows sync ordering to be tested without a real media transfer. */
 interface WorkerEvidenceUploader {
+    /**
+     * Continues the durable reservation/upload/finalize pipeline for one evidence row and reports
+     * only a server-confirmed terminal state or a state that still requires recovery.
+     */
     suspend fun uploadReservedEvidence(userId: String, evidence: TaskEvidenceEntity): EvidenceUploadResult
 }
 
@@ -180,6 +187,9 @@ class MediaUploadPipeline @Inject constructor(
 
 @Module
 @InstallIn(SingletonComponent::class)
+/**
+ * Encapsulates worker evidence/media recovery behavior; server confirmation remains authoritative.
+ */
 abstract class WorkerEvidenceUploaderModule {
     @Binds
     abstract fun bindWorkerEvidenceUploader(implementation: MediaUploadPipeline): WorkerEvidenceUploader

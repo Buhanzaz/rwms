@@ -15,6 +15,9 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 
+/**
+ * Defines worker application UI or lifecycle state; it does not decide a server task transition.
+ */
 data class ProfileUiState(
     val login: String? = null,
     val groups: List<WorkerGroupEntity> = emptyList(),
@@ -25,6 +28,9 @@ data class ProfileUiState(
 
 @HiltViewModel
 @OptIn(ExperimentalCoroutinesApi::class)
+/**
+ * Defines worker application UI or lifecycle state; it does not decide a server task transition.
+ */
 class ProfileViewModel @Inject constructor(private val localStore: WorkerLocalStore) : ViewModel() {
     private val userId = MutableStateFlow<String?>(null)
     val state: StateFlow<ProfileUiState> = userId.flatMapLatest { id ->

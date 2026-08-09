@@ -42,6 +42,7 @@ import dev.buhanzaz.rwms.worker.core.ui.cabinNumberForDisplay
 import dev.buhanzaz.rwms.worker.core.ui.workerKpiTimeColor
 import kotlinx.coroutines.delay
 
+/** Renders one task, its evidence and the actions allowed by the synchronized server state. */
 @Composable
 fun TaskDetailScreen(
     userId: String,

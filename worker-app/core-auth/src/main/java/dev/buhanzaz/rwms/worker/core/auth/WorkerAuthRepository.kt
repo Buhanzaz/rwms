@@ -34,6 +34,9 @@ import okhttp3.Request
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+/**
+ * Owns the worker OAuth/session boundary. Credential storage stays encrypted and the gateway remains authoritative.
+ */
 sealed interface WorkerAuthUiState {
     data object Loading : WorkerAuthUiState
     data object SignedOut : WorkerAuthUiState
@@ -42,15 +45,25 @@ sealed interface WorkerAuthUiState {
     data class Failure(val message: String) : WorkerAuthUiState
 }
 
+/**
+ * Owns the worker OAuth/session boundary. Credential storage stays encrypted and the gateway remains authoritative.
+ */
 interface WorkerAuthRepository {
     val state: StateFlow<WorkerAuthUiState>
     suspend fun login(username: String, password: String)
     suspend fun logout()
     suspend fun cachedWorkerIdentity(): String?
+    /**
+     * Persists only the worker ID returned by the authenticated server context; callers must not
+     * derive it from a username, cached profile, or push payload.
+     */
     suspend fun bindWorkerIdentity(workerId: String)
 }
 
 @Singleton
+/**
+ * Owns the worker OAuth/session boundary. Credential storage stays encrypted and the gateway remains authoritative.
+ */
 class AppAuthWorkerAuthRepository @Inject constructor(
     private val configuration: WorkerAuthConfiguration,
     private val authStateStore: EncryptedAuthStateStore,
@@ -242,6 +255,9 @@ private fun randomOAuthToken(): String {
     }
 }
 
+/**
+ * Owns the worker OAuth/session boundary. Credentials and cookies remain client-local and never grant server authorization.
+ */
 private sealed interface RefreshExchange {
     data class Response(val response: TokenResponse) : RefreshExchange
     data class Failure(val exception: AuthorizationException?) : RefreshExchange

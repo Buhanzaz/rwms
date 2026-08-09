@@ -44,6 +44,7 @@ import dev.buhanzaz.rwms.manager.ui.components.ManagerScreenScaffold
 import dev.buhanzaz.rwms.manager.ui.components.StatusPill
 import dev.buhanzaz.rwms.manager.ui.components.StatusPillEmphasis
 
+/** Lists shipment documents for the selected warehouse. */
 @Composable
 fun ShipmentsListScreen(
     uiState: ManagerUiState,
@@ -83,6 +84,7 @@ fun ShipmentsListScreen(
     }
 }
 
+/** Renders shipment planning, preparation and cancellation commands for one document. */
 @Composable
 fun ShipmentDetailScreen(
     uiState: ManagerUiState,
@@ -235,6 +237,7 @@ fun ShipmentDetailScreen(
     }
 }
 
+/** Lists inter-warehouse transfer documents visible to the manager. */
 @Composable
 fun TransfersListScreen(
     uiState: ManagerUiState,
@@ -295,6 +298,7 @@ fun TransfersListScreen(
     }
 }
 
+/** Collects a version-fenced transfer request and its cabin lines. */
 @Composable
 fun TransferCreateScreen(
     uiState: ManagerUiState,
@@ -481,6 +485,7 @@ private fun TransferCabinEditor(
     }
 }
 
+/** Renders the departure, arrival and cancellation lifecycle of one transfer. */
 @Composable
 fun TransferDetailScreen(
     uiState: ManagerUiState,

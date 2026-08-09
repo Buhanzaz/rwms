@@ -157,11 +157,17 @@ internal class ManagerReadCache(
     }
 }
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal data class ManagerReadCacheScope(
     val accountId: String,
     val warehouseId: String,
 )
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal data class CachedMaintenanceRead(
     val estimates: EstimatePageDto? = null,
     val estimatesEtag: String? = null,
@@ -170,6 +176,9 @@ internal data class CachedMaintenanceRead(
     val assetLabels: Map<String, String> = emptyMap(),
 )
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal data class CachedRepairQueueRead(
     val rootSnapshot: TaskBoardSnapshotDto,
     val rootEtag: String? = null,
@@ -177,6 +186,9 @@ internal data class CachedRepairQueueRead(
     val etagsByDate: Map<String, String> = emptyMap(),
 )
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal data class CachedInventoryRead(
     val activeEtag: String? = null,
     val rentalItems: List<RentalItemDto> = emptyList(),

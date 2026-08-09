@@ -12,12 +12,18 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+/**
+ * Defines worker application UI or lifecycle state; it does not decide a server task transition.
+ */
 data class PhotoUiState(
     val bitmaps: Map<String, Bitmap> = emptyMap(),
     val error: String? = null,
 )
 
 @HiltViewModel
+/**
+ * Defines worker application UI or lifecycle state; it does not decide a server task transition.
+ */
 class PhotoViewModel @Inject constructor(
     private val gateway: WorkerGatewayClient,
 ) : ViewModel() {

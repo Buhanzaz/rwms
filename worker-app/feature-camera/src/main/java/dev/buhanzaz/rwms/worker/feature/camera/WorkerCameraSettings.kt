@@ -6,12 +6,18 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
+/**
+ * Defines worker UI/presentation state; it does not decide a server task transition.
+ */
 internal enum class WorkerCameraMode(val label: String) {
     Night("НОЧЬ"),
     Photo("ФОТО"),
     Video("ВИДЕО"),
 }
 
+/**
+ * Defines worker UI/presentation state; it does not decide a server task transition.
+ */
 internal enum class WorkerCameraAspectRatio(val label: String) {
     FourThree("4:3"),
     SixteenNine("16:9");
@@ -22,6 +28,9 @@ internal enum class WorkerCameraAspectRatio(val label: String) {
     }
 }
 
+/**
+ * Defines worker UI/presentation state; it does not decide a server task transition.
+ */
 internal data class WorkerCameraSettings(
     val gridEnabled: Boolean = false,
     val aspectRatio: WorkerCameraAspectRatio = WorkerCameraAspectRatio.FourThree,
@@ -29,6 +38,9 @@ internal data class WorkerCameraSettings(
     val exposureEvTenths: Int = 0,
 )
 
+/**
+ * Defines worker UI/presentation state; it does not decide a server task transition.
+ */
 internal class WorkerCameraPreferences(context: Context) {
     private val preferences = context.applicationContext.getSharedPreferences(
         "worker-camera-v3-manager-0.3.29",
@@ -125,6 +137,9 @@ internal fun workerZoomLabel(value: Float): String =
     if (abs(value - value.roundToInt()) < 0.01f) "${value.roundToInt()}×"
     else String.format(Locale.US, "%.1f×", value)
 
+/**
+ * Defines worker UI/presentation state; it does not decide a server task transition.
+ */
 internal data class WorkerCameraModeSelection(
     val mode: WorkerCameraMode,
     val message: String?,
@@ -141,6 +156,7 @@ internal fun selectWorkerCameraMode(requested: WorkerCameraMode): WorkerCameraMo
         WorkerCameraModeSelection(requested, null)
     }
 
+/** Installs or removes the foreground camera action invoked by a hardware volume key. */
 fun interface VolumeShutterHost {
     fun setVolumeShutterHandler(handler: (() -> Unit)?)
 }

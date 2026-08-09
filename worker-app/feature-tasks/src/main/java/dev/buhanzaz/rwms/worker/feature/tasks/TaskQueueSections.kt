@@ -5,6 +5,9 @@ import dev.buhanzaz.rwms.worker.core.database.WorkerCategoryEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerGroupEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerTaskEntity
 
+/**
+ * Defines worker UI/presentation state; it does not decide a server task transition.
+ */
 internal data class TaskQueueSection(
     val queueId: String,
     val name: String,
@@ -13,6 +16,9 @@ internal data class TaskQueueSection(
     val tasks: List<WorkerTaskEntity>,
 )
 
+/**
+ * Defines worker UI/presentation state; it does not decide a server task transition.
+ */
 internal data class WorkBoardColumn(
     val id: String,
     val name: String,
@@ -20,6 +26,9 @@ internal data class WorkBoardColumn(
     val sections: List<TaskQueueSection>,
 )
 
+/**
+ * Defines worker UI/presentation state; it does not decide a server task transition.
+ */
 internal data class QueueTaskTimerPresentation(
     val remaining: String?,
     val percent: String?,

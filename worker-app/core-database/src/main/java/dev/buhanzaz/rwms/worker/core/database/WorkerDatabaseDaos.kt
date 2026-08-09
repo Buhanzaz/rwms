@@ -8,6 +8,9 @@ import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
 @Dao
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 interface WorkerSessionDao {
     @Upsert
     suspend fun upsert(session: WorkerSessionEntity)
@@ -23,6 +26,9 @@ interface WorkerSessionDao {
 }
 
 @Dao
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 interface WorkerGroupDao {
     @Upsert
     suspend fun upsertAll(groups: List<WorkerGroupEntity>)
@@ -35,6 +41,9 @@ interface WorkerGroupDao {
 }
 
 @Dao
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 interface WorkerCategoryDao {
     @Upsert
     suspend fun upsertAll(categories: List<WorkerCategoryEntity>)
@@ -50,6 +59,9 @@ interface WorkerCategoryDao {
 }
 
 @Dao
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 interface WorkerTaskDao {
     @Upsert
     suspend fun upsertAll(tasks: List<WorkerTaskEntity>)
@@ -74,6 +86,9 @@ interface WorkerTaskDao {
 }
 
 @Dao
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 interface WorkerAssignmentDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(assignments: List<WorkerAssignmentEntity>)
@@ -92,6 +107,9 @@ interface WorkerAssignmentDao {
 }
 
 @Dao
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 interface WorkerTaskDetailDao {
     @Upsert
     suspend fun upsert(detail: WorkerTaskDetailEntity)
@@ -113,6 +131,9 @@ interface WorkerTaskDetailDao {
 }
 
 @Dao
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 interface WorkerOutboxDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(operation: WorkerOutboxEntity)
@@ -142,6 +163,9 @@ interface WorkerOutboxDao {
 }
 
 @Dao
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 interface TaskEvidenceDao {
     @Upsert
     suspend fun upsert(evidence: TaskEvidenceEntity)
@@ -169,6 +193,9 @@ interface TaskEvidenceDao {
 }
 
 @Dao
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 interface WorkerSyncProgressDao {
     @Upsert
     suspend fun upsert(progress: WorkerSyncProgressEntity)
@@ -178,6 +205,9 @@ interface WorkerSyncProgressDao {
 }
 
 @Dao
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 interface WorkerConflictDao {
     @Upsert
     suspend fun upsert(conflict: WorkerConflictEntity)
@@ -199,6 +229,9 @@ interface WorkerConflictDao {
 }
 
 @Dao
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 interface WorkerInvalidationDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(event: WorkerInvalidationEntity): Long

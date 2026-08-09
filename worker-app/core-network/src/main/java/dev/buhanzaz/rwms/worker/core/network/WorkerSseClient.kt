@@ -23,6 +23,10 @@ class WorkerSseClient(
     private val publicBaseUrl: HttpUrl,
     private val json: Json,
 ) {
+    /**
+     * Opens an invalidation-only stream and forwards the last local event ID when one exists.
+     * Consumers still refresh through REST: reconnect is not proof that the server replayed data.
+     */
     fun events(lastEventId: String?): Flow<WorkerInvalidationEventDto> = callbackFlow {
         val endpoint = publicBaseUrl.newBuilder()
             .addPathSegments("api/task-board/worker/v1/events")

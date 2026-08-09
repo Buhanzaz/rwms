@@ -15,6 +15,9 @@ import okhttp3.OkHttpClient
 
 @Module
 @InstallIn(SingletonComponent::class)
+/**
+ * Owns the worker OAuth/session boundary. Credential storage stays encrypted and the gateway remains authoritative.
+ */
 abstract class WorkerAuthBindings {
     @Binds
     @Singleton
@@ -27,6 +30,9 @@ abstract class WorkerAuthBindings {
 
 @Module
 @InstallIn(SingletonComponent::class)
+/**
+ * Owns the worker OAuth/session boundary. Credential storage stays encrypted and the gateway remains authoritative.
+ */
 object WorkerAuthModule {
     @Provides
     @Singleton
@@ -48,8 +54,14 @@ object WorkerAuthModule {
 
 @Qualifier
 @Retention(AnnotationRetention.BINARY)
+/**
+ * Owns the worker OAuth/session boundary. Credential storage stays encrypted and the gateway remains authoritative.
+ */
 annotation class RevocationClient
 
 @Qualifier
 @Retention(AnnotationRetention.BINARY)
+/**
+ * Owns the worker OAuth/session boundary. Credential storage stays encrypted and the gateway remains authoritative.
+ */
 annotation class NativeLoginClient

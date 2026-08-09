@@ -15,6 +15,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * Defines worker feature UI state; server data and authorization remain authoritative.
+ */
 sealed interface TaskMediaThumbnail {
     data object Loading : TaskMediaThumbnail
     data class Ready(val bitmap: Bitmap) : TaskMediaThumbnail

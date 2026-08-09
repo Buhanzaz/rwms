@@ -43,6 +43,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.buhanzaz.rwms.worker.core.ui.WorkerScreenScaffold
 
+/** Renders the worker credential form and delegates authentication to the supplied callback. */
 @Composable
 fun LoginScreen(
     failure: String?,

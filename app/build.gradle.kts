@@ -36,7 +36,6 @@ android {
         versionName = "0.3.37"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        manifestPlaceholders["appAuthRedirectScheme"] = "rwms-manager-auth"
     }
 
     buildFeatures {

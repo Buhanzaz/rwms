@@ -2898,6 +2898,9 @@ internal fun normalizeManagerCameraCapturedJpegOrientation(
     trustRecordedExif = false,
 )
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal data class ManagerNormalizedCameraPhoto(
     val file: File,
     val resolutionReduced: Boolean,

@@ -2,6 +2,9 @@ package dev.buhanzaz.rwms.manager.ui
 
 import java.util.UUID
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal class StableCommandKeys(
     private val generate: () -> String = { UUID.randomUUID().toString() },
 ) {

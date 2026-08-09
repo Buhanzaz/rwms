@@ -11,6 +11,9 @@ enum class InventoryReinspectionMode {
     REPLACE,
 }
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal data class InventoryReinspectionSeed(
     val passport: Map<String, Any?>,
     val comment: String,

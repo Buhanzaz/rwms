@@ -28,6 +28,9 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 
+/**
+ * Defines worker feature UI state; server data and authorization remain authoritative.
+ */
 data class TasksUiState(
     val session: WorkerSessionEntity? = null,
     val groups: List<WorkerGroupEntity> = emptyList(),
@@ -63,6 +66,9 @@ private data class TaskProjection(
 
 @HiltViewModel
 @OptIn(ExperimentalCoroutinesApi::class)
+/**
+ * Defines worker feature UI state; server data and authorization remain authoritative.
+ */
 class TasksViewModel @Inject constructor(
     private val localStore: WorkerLocalStore,
     private val scheduler: WorkerSyncScheduler,

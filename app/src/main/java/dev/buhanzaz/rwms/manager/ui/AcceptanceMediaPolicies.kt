@@ -6,6 +6,9 @@ import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.network.RepairDto
 import dev.buhanzaz.rwms.manager.network.RepairStageDto
 
+/**
+ * Defines manager UI state or presentation policy; server state and command authorization remain authoritative.
+ */
 data class AcceptanceScopedMedia(
     val reference: MediaReferenceDto,
     val ownerType: String,
@@ -13,6 +16,9 @@ data class AcceptanceScopedMedia(
     val context: String,
 )
 
+/**
+ * Defines manager UI state or presentation policy; server state and command authorization remain authoritative.
+ */
 data class AcceptanceMediaCollection(
     val title: String,
     val items: List<AcceptanceScopedMedia>,

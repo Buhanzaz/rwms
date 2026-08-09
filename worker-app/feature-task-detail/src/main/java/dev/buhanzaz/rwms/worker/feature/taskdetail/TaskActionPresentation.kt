@@ -2,6 +2,9 @@ package dev.buhanzaz.rwms.worker.feature.taskdetail
 
 import dev.buhanzaz.rwms.worker.core.database.WorkerAssignmentEntity
 
+/**
+ * Defines worker UI/presentation state; it does not decide a server task transition.
+ */
 internal enum class WorkerTaskAction(val wireValue: String) {
     TAKE("TAKE"),
     JOIN("JOIN"),
@@ -10,6 +13,9 @@ internal enum class WorkerTaskAction(val wireValue: String) {
     RESUME("RESUME"),
 }
 
+/**
+ * Defines worker UI/presentation state; it does not decide a server task transition.
+ */
 internal data class TaskActionPresentation(
     val actions: List<WorkerTaskAction>,
     val actionsEnabled: Boolean,

@@ -13,6 +13,9 @@ data class WorkerIdentityDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for WorkerGroupSummaryDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WorkerGroupSummaryDto(
     val id: String,
     val name: String,
@@ -21,12 +24,18 @@ data class WorkerGroupSummaryDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for WorkerQualificationSummaryDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WorkerQualificationSummaryDto(
     val workerClassId: String,
     val name: String,
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for WorkerCategoryDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WorkerCategoryDto(
     val queueId: String,
     val name: String,
@@ -39,6 +48,9 @@ data class WorkerCategoryDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for WorkerKpiRangeDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WorkerKpiRangeDto(
     val fromPercent: Int,
     val toPercent: Int,
@@ -46,12 +58,18 @@ data class WorkerKpiRangeDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for WorkerKpiPaletteDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WorkerKpiPaletteDto(
     val ranges: List<WorkerKpiRangeDto>,
     val overdueColor: String,
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for WorkerOfflineLeaseDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WorkerOfflineLeaseDto(
     val id: String,
     val issuedAt: String,
@@ -60,6 +78,9 @@ data class WorkerOfflineLeaseDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for WorkerContextDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WorkerContextDto(
     val worker: WorkerIdentityDto,
     val groups: List<WorkerGroupSummaryDto>,
@@ -76,6 +97,9 @@ data class WorkerContextDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for WorkerTaskTimerSnapshotDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WorkerTaskTimerSnapshotDto(
     val countedActiveSeconds: Long,
     val remainingSeconds: Long?,
@@ -86,6 +110,9 @@ data class WorkerTaskTimerSnapshotDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for WorkerAssignmentDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WorkerAssignmentDto(
     val id: String,
     val workerId: String?,
@@ -100,6 +127,9 @@ data class WorkerAssignmentDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for WorkerFeedEntryDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WorkerFeedEntryDto(
     val entryId: String,
     val version: Long,
@@ -126,12 +156,18 @@ data class WorkerFeedEntryDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for WorkerFeedCategoryDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WorkerFeedCategoryDto(
     val category: WorkerCategoryDto,
     val entries: List<WorkerFeedEntryDto>,
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for WorkerFeedDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WorkerFeedDto(
     val revision: Long,
     val serverTime: String,
@@ -140,6 +176,9 @@ data class WorkerFeedDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for WorkerTaskObjectDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WorkerTaskObjectDto(
     val kind: String,
     val id: String?,
@@ -147,6 +186,9 @@ data class WorkerTaskObjectDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for WorkerMaterialDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WorkerMaterialDto(
     val id: String,
     val name: String,
@@ -172,6 +214,9 @@ data class WorkerWorkDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for WorkerVisibleCommentDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WorkerVisibleCommentDto(
     val id: String,
     val text: String,
@@ -180,6 +225,9 @@ data class WorkerVisibleCommentDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for WorkerMediaReferenceDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WorkerMediaReferenceDto(
     val mediaId: String,
     val generation: Long,
@@ -192,6 +240,9 @@ data class WorkerMediaReferenceDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for WorkerRelatedStepDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WorkerRelatedStepDto(
     val entryId: String,
     val routeIndex: Int,
@@ -201,6 +252,9 @@ data class WorkerRelatedStepDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for TaskEvidenceDto. It is a transport boundary model, not persisted domain state.
+ */
 data class TaskEvidenceDto(
     val evidenceId: String,
     val version: Long,
@@ -223,6 +277,9 @@ data class TaskEvidenceDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for AudienceSelectorDto. It is a transport boundary model, not persisted domain state.
+ */
 data class AudienceSelectorDto(
     val kind: String,
     val id: String,
@@ -233,6 +290,9 @@ data class AudienceSelectorDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for WorkerTaskDetailDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WorkerTaskDetailDto(
     val entryId: String,
     val version: Long,
@@ -266,7 +326,11 @@ data class WorkerTaskDetailDto(
     val timerSnapshot: WorkerTaskTimerSnapshotDto? = null,
 )
 
-@Serializable
+@Serializable(with = WorkerActionRequestDtoSerializer::class)
+/**
+ * Exact seven-field public worker action command. The canonical required-null
+ * `workerGroupId` and `evidenceId` keys are emitted by [WorkerActionRequestDtoSerializer].
+ */
 data class WorkerActionRequestDto(
     val operationId: String,
     val action: String,
@@ -278,6 +342,9 @@ data class WorkerActionRequestDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for WorkerActionResultDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WorkerActionResultDto(
     val outcome: String,
     val currentVersion: Long,
@@ -285,6 +352,9 @@ data class WorkerActionResultDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for EvidenceReservationRequestDto. It is a transport boundary model, not persisted domain state.
+ */
 data class EvidenceReservationRequestDto(
     val operationId: String,
     val evidenceId: String,
@@ -297,6 +367,9 @@ data class EvidenceReservationRequestDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for WorkerInvalidationEventDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WorkerInvalidationEventDto(
     val eventId: String,
     val revision: Long,
@@ -306,6 +379,9 @@ data class WorkerInvalidationEventDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for WorkerDeviceRegistrationRequestDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WorkerDeviceRegistrationRequestDto(
     val provider: String = "FCM",
     val token: String,
@@ -315,6 +391,9 @@ data class WorkerDeviceRegistrationRequestDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for WorkerDeviceRegistrationDto. It is a transport boundary model, not persisted domain state.
+ */
 data class WorkerDeviceRegistrationDto(
     val installationId: String,
     val provider: String,
@@ -324,6 +403,9 @@ data class WorkerDeviceRegistrationDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for CreateUploadSessionRequestDto. It is a transport boundary model, not persisted domain state.
+ */
 data class CreateUploadSessionRequestDto(
     val ownerType: String = "TASK_BOARD_ENTRY",
     val ownerId: String,
@@ -338,6 +420,9 @@ data class CreateUploadSessionRequestDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for UploadSessionDto. It is a transport boundary model, not persisted domain state.
+ */
 data class UploadSessionDto(
     val uploadSessionId: String,
     val mediaId: String,
@@ -346,6 +431,9 @@ data class UploadSessionDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for UploadedObjectDto. It is a transport boundary model, not persisted domain state.
+ */
 data class UploadedObjectDto(
     val objectVersionId: String,
     val etag: String,
@@ -353,6 +441,9 @@ data class UploadedObjectDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for FinalizeUploadRequestDto. It is a transport boundary model, not persisted domain state.
+ */
 data class FinalizeUploadRequestDto(
     val objectVersionId: String,
     val etag: String,
@@ -360,6 +451,9 @@ data class FinalizeUploadRequestDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for MediaAssetDto. It is a transport boundary model, not persisted domain state.
+ */
 data class MediaAssetDto(
     val id: String,
     val folderId: String,
@@ -378,6 +472,9 @@ data class MediaAssetDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for SafeMediaVariantDto. It is a transport boundary model, not persisted domain state.
+ */
 data class SafeMediaVariantDto(
     val kind: String,
     val contentType: String,
@@ -387,6 +484,9 @@ data class SafeMediaVariantDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for ApiProblemDto. It is a transport boundary model, not persisted domain state.
+ */
 data class ApiProblemDto(
     val type: String,
     val title: String,
@@ -402,7 +502,13 @@ data class ApiProblemDto(
 )
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for FieldViolationDto. It is a transport boundary model, not persisted domain state.
+ */
 data class FieldViolationDto(val field: String, val code: String, val message: String)
 
 @Serializable
+/**
+ * Public-worker-gateway response/read payload for CorrelationContextDto. It is a transport boundary model, not persisted domain state.
+ */
 data class CorrelationContextDto(val correlationId: String, val causationId: String? = null)

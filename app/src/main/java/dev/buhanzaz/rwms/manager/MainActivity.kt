@@ -23,6 +23,9 @@ class ManagerApplication : Application(), Configuration.Provider {
         get() = Configuration.Builder().build()
 }
 
+/**
+ * Defines manager UI state or presentation policy; server state and command authorization remain authoritative.
+ */
 class MainActivity : ComponentActivity() {
     private var volumeShutterHandler: (() -> Unit)? = null
 

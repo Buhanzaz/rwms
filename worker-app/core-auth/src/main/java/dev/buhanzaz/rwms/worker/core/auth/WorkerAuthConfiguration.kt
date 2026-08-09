@@ -2,6 +2,9 @@ package dev.buhanzaz.rwms.worker.core.auth
 
 import android.net.Uri
 
+/**
+ * Owns the worker OAuth/session boundary. Credential storage stays encrypted and the gateway remains authoritative.
+ */
 data class WorkerAuthConfiguration(
     val publicBaseUrl: Uri,
 ) {

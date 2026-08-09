@@ -1968,6 +1968,9 @@ private fun InventoryRepairDeliveryOptions(
 
 internal const val INVENTORY_PHOTO_PREVIEW_HOLD_MILLIS = 1_500L
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal enum class InventoryPhotoGestureAction {
     SelectCover,
     OpenPreview,

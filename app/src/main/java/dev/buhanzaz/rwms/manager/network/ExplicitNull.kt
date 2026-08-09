@@ -17,8 +17,14 @@ import java.lang.reflect.Type
     AnnotationTarget.VALUE_PARAMETER,
 )
 @JsonQualifier
+/**
+ * Encapsulates the manager public-gateway transport boundary; it is not a backend domain or persistence type.
+ */
 annotation class ExplicitNull
 
+/**
+ * Encapsulates the manager public-gateway transport boundary; it is not a backend domain or persistence type.
+ */
 object ExplicitNullJsonAdapterFactory : JsonAdapter.Factory {
     override fun create(
         type: Type,

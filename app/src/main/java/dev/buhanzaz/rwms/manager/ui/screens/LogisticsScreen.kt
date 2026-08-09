@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.dp
 import dev.buhanzaz.rwms.manager.ui.components.ManagerMenuCard
 import dev.buhanzaz.rwms.manager.ui.components.ManagerScreenScaffold
 
+/** Presents the manager entry points for return, shipment and transfer workflows. */
 @Composable
 fun LogisticsMenuScreen(
     onBack: () -> Unit,

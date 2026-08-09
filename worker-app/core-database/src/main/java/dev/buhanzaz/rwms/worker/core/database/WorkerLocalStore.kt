@@ -12,6 +12,9 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 @Serializable
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 data class PendingWorkerAction(
     val operationId: String,
     val action: String,
@@ -22,6 +25,9 @@ data class PendingWorkerAction(
     val offlineLeaseId: String,
 )
 
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 data class OptimisticAction(
     val userId: String,
     val entryId: String,
@@ -46,6 +52,9 @@ data class PendingEvidenceReservation(
     val sha256: String,
 )
 
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 data class ServerTimeAnchor(
     val serverEpochMillis: Long,
     val elapsedRealtimeAtSyncMillis: Long,
@@ -98,6 +107,10 @@ class WorkerLocalStore @Inject constructor(
 
     fun observeConflicts(userId: String): Flow<List<WorkerConflictEntity>> = database.conflictDao().observeOpen(userId)
 
+    /**
+     * Applies one fenced optimistic task state and its encrypted outbox command atomically.
+     * A stale cached version or another pending action for the same task is rejected locally.
+     */
     suspend fun applyOptimisticAction(action: OptimisticAction) {
         requireActiveLease(action.userId)
         val now = System.currentTimeMillis()
@@ -136,6 +149,10 @@ class WorkerLocalStore @Inject constructor(
         }
     }
 
+    /**
+     * Atomically records the encrypted evidence row and its reservation outbox effect under the
+     * active offline lease, preserving a stable operation ID for retry after process death.
+     */
     suspend fun enqueueEvidenceReservation(
         userId: String,
         entryId: String,
@@ -255,6 +272,10 @@ class WorkerLocalStore @Inject constructor(
 
     suspend fun cachedSession(userId: String): WorkerSessionEntity? = database.sessionDao().session(userId)
 
+    /**
+     * Refuses offline mutation when elapsed-realtime cannot prove that the server-issued lease is
+     * still valid; reboot/reset cannot extend the lease.
+     */
     suspend fun requireActiveLease(userId: String) {
         val lease = requireNotNull(leaseFor(userId)) { "Сначала обновите данные задания" }
         require(lease.isLeaseActive(SystemClock.elapsedRealtime())) {

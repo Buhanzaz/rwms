@@ -5,6 +5,9 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody
 import okio.BufferedSink
 
+/**
+ * Encapsulates worker evidence/media recovery behavior; server confirmation remains authoritative.
+ */
 class EncryptedJpegRequestBody(
     private val evidence: TaskEvidenceEntity,
     private val fileStore: EncryptedEvidenceFileStore,

@@ -24,6 +24,9 @@ import retrofit2.converter.kotlinx.serialization.asConverterFactory
 
 @Module
 @InstallIn(SingletonComponent::class)
+/**
+ * Defines worker application UI or lifecycle state; it does not decide a server task transition.
+ */
 object WorkerAppModule {
     @Provides
     @Singleton

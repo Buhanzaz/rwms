@@ -40,6 +40,7 @@ import dev.buhanzaz.rwms.manager.ui.components.ManagerPanel
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPhotoGalleryDialog
 import dev.buhanzaz.rwms.manager.ui.components.ManagerScreenScaffold
 
+/** Presents repairs awaiting acceptance and the accept-or-rework decision for each stage. */
 @Composable
 fun MaintenanceAcceptanceScreen(
     uiState: ManagerUiState,

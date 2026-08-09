@@ -1,0 +1,155 @@
+# RWMS Рабочий для Android
+
+'worker-app/' — самостоятельное Android-приложение для рабочих RWMS. Оно
+собирается отдельно от корневой Java multi-module сборки и потребляет только
+публичные gateway-контракты.
+
+English version: [README.md](README.md).
+
+## Публичная граница, роль и вход
+
+- Настройте один абсолютный HTTPS origin публичного gateway через
+  'RWMS_PUBLIC_BASE_URL'. Клиент использует только '/auth/**' и '/api/**'; ему
+  нельзя вызывать внутренний origin сервиса, service-port на localhost или
+  '/api/internal/**'.
+- OAuth-клиент 'rwms-worker-android' использует Authorization Code с PKCE S256
+  и scopes 'openid profile offline_access worker.tasks'. Пароль никогда не
+  сохраняется. Browser/deep-link activity не экспортируется.
+- Worker principal и выданный сервером worker context определяют видимые
+  assignments, warehouse scope, groups и permissions. Client filtering или
+  offline cache не являются авторизацией.
+
+### Проверка transport-контракта
+
+[`WorkerGatewayApiContractBoundaryTest.kt`](core-network/src/test/java/dev/buhanzaz/rwms/worker/core/network/WorkerGatewayApiContractBoundaryTest.kt)
+фиксирует все 11 объявленных методов `WorkerGatewayApi` на их канонический
+публичный OpenAPI-источник: девять фиксированных gateway routes и ровно два
+разрешённых динамических media routes. Тест запрещает internal/private
+namespaces и service origins, заранее разрешает каждый request/response
+converter Retrofit/kotlinx.serialization и проверяет каждую активную JSON-root
+fixture worker/task-board и media. Бинарные request/response bodies и
+`Unit`-ответ unregister проверяются converter-ом и намеренно не представлены
+JSON-fixtures. Динамические media-вызовы отклоняются до Retrofit, если не
+проходят точные public same-origin path guards.
+
+Каноническая семиполевая worker action command требует присутствия
+`workerGroupId` и `evidenceId`, даже когда их значения равны null. Узкий
+[`WorkerActionRequestDtoSerializer.kt`](core-network/src/main/java/dev/buhanzaz/rwms/worker/core/network/WorkerActionRequestDtoSerializer.kt)
+выдаёт эти явные null keys и отклоняет отсутствующие или дополнительные
+свойства команды. Глобальная JSON policy приложения остаётся неизменной для
+cached projections, Problem Details, media payloads и всех остальных DTO.
+
+## Экраны и работы, которыми владеет сервер
+
+Корневое меню содержит Работы, Загрузки и Профиль. Работы показывают только
+выданные в worker feed категории, группы, assignments, KPI palette,
+идентификаторы задач, материалы, работы, комментарии и media reference. Экран
+задачи снимает результат работы и JPEG evidence; локально он не принимает
+решение о переходе задачи.
+
+UI адаптивен: на узком экране колонки групп идут последовательно, на широком
+могут показываться вместе. Серверные KPI ranges определяют цвета; локальная
+green/yellow/red политика не выдумывается. Данные работы для рабочего не
+раскрывают price/cost поля.
+
+## Offline store, outbox, sync и realtime
+
+- Room — UI source of truth для account-scoped feed projection, task detail,
+  sync progress, conflict, invalidation и outbox. Action и его outbox-row
+  записываются одной локальной транзакцией.
+- Чувствительные тела неотправленных command/conflict шифруются отдельно;
+  captured evidence шифруется в app-private files. Эти записи — client recovery
+  state, но не backend persistence.
+- 24-часовой offline lease привязан к server time и 'elapsedRealtime'. Unique
+  connected WorkManager work отправляет actions, делает reservation/upload/finalize
+  evidence, ждёт 'READY', затем обновляет feed.
+- FCM и SSE несут только invalidation/revision signals. Они запускают focused
+  refresh, но не заменяют авторитетный feed. В foreground feed также
+  периодически обновляется polling-ом.
+
+## Ошибки, конкурентность и повторы
+
+Gateway Problem Details преобразуются в явные безопасные failures. Отсутствующий
+token, недействительная сессия, истёкший lease, недоступный gateway или
+неподдерживаемая операция не выдаются за mock success. Conflict сохраняется,
+чтобы UI задачи показал server state и потребовал осознанный refresh/retry.
+
+После единственной возможности authenticator обновить token `401`
+останавливает sync для повторного входа; `403` останавливает его для обновления
+grant или действия рабочего. При `409` сохраняется conflict (и переданный
+server snapshot, если он есть), после чего обновляется авторитетный feed.
+Автоматический повтор failure ограничен `429`, `502`, `503`, `504` и доказанными
+transport faults; некорректный Problem Details сохраняет фактический HTTP
+статус с безопасным fallback.
+
+Одна unique WorkManager job выполняет не более четырёх attempts: только
+разрешённые transient failures возвращают `Result.retry()`, а WorkManager
+использует сохранённый jittered seed для exponential backoff. Подтверждённое
+сервером ожидающее evidence завершает этот run и ждёт позднего явного trigger.
+Cancellation выходит наружу и не назначает следующий attempt. Поздний явный
+foreground, FCM или user trigger может поставить новую job с теми же durable
+operation identity.
+
+Каждый mutable action использует version fence контракта и стабильный operation
+ID/idempotency key, если он задан. Evidence использует упорядоченный flow
+reservation → upload/finalize → 'READY'. Повторы используют долговечную
+operation identity; клиент не должен дублировать effect из-за потерянного
+network response.
+
+## Камера и evidence
+
+Worker evidence — только JPEG. Камера нормализует физическую ориентацию в
+пиксели и записывает EXIF 'Orientation=1' до шифрования; нормализованное
+изображение ограничено 8 MP, а evidence contract — 15 MB. Ultra HDR не
+используется. Видимая вкладка Видео намеренно не создаёт MP4, потому что
+публичный worker evidence contract его не принимает.
+
+## Сборка и focused checks
+
+Нужны JDK 17 и установленный Android SDK. Из 'worker-app/':
+
+~~~bash
+bash ./gradlew :app:compileDebugKotlin
+bash ./gradlew :core-network:testDebugUnitTest --tests 'dev.buhanzaz.rwms.worker.core.network.WorkerGatewayApiContractBoundaryTest'
+bash ./gradlew testDebugUnitTest lintDebug assembleDebug
+bash ./gradlew -PRWMS_PUBLIC_BASE_URL=https://rwms.example.test assembleDebug
+~~~
+
+Для подписанного release храните signing material вне Git и передавайте внешний
+properties-файл по образцу [signing.properties.example](signing.properties.example):
+
+~~~bash
+bash ./gradlew -PsigningPropertiesFile=/secure/path/rwms-worker-signing.properties assembleRelease
+~~~
+
+## Целостность релиза
+
+Публикуйте только точный reviewed APK. Зафиксируйте его package name,
+'versionCode', 'versionName', signing certificate и SHA-256, затем установите
+этот же файл на device/emulator. End-to-end заявление требует входа через нужный
+публичный gateway, первого worker-context request и изменённого task/offline
+flow; успешная сборка или HTTP 200 сами по себе недостаточны.
+
+## Известные ограничения
+
+- Текущий worker SSE endpoint воспринимает новую подписку как новое
+  invalidation и не реализует пригодный 'Last-Event-ID' replay path. Foreground
+  polling сокращает окно устаревания, но не является replay событий.
+- Local invalidation row в текущей схеме append-only и не имеют retention/pruning
+  policy и индекса '(userId, revision)'. На долго живущих установках могут
+  накапливаться лишние локальные данные.
+- Baseline-profile module намеренно не активен, пока стабилизируется
+  совместимость Android plugin/toolchain; заявления о startup/performance нужно
+  измерять на фактической release-конфигурации.
+
+## Источник истины
+
+Публичные worker operations и payload определены в 'contracts/openapi/';
+семантика событий — в 'contracts/events/'. Владеющий сервис остаётся
+ответственным за авторизацию, переходы задач и recovery-инварианты. Gateway
+маршрутизирует и валидирует, но не владеет worker workflow.
+
+Граница worker failures реализована в
+[GatewayFailure.kt](core-network/src/main/java/dev/buhanzaz/rwms/worker/core/network/GatewayFailure.kt),
+[WorkerSyncCoordinator.kt](core-sync/src/main/java/dev/buhanzaz/rwms/worker/core/sync/WorkerSyncCoordinator.kt)
+и [WorkerSyncWork.kt](core-sync/src/main/java/dev/buhanzaz/rwms/worker/core/sync/WorkerSyncWork.kt).

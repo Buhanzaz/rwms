@@ -19,6 +19,9 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
+/**
+ * Defines worker feature UI state; server data and authorization remain authoritative.
+ */
 data class CameraUiState(
     val saving: Boolean = false,
     val savedEvidenceId: String? = null,
@@ -26,6 +29,9 @@ data class CameraUiState(
 )
 
 @HiltViewModel
+/**
+ * Defines worker feature UI state; server data and authorization remain authoritative.
+ */
 class CameraViewModel @Inject constructor(
     private val fileStore: EncryptedEvidenceFileStore,
     private val localStore: WorkerLocalStore,

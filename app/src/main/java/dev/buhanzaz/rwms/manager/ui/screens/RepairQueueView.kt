@@ -78,6 +78,7 @@ private data class ActiveRepairColumnDrag(
     val offset: Offset = Offset.Zero,
 )
 
+/** Renders the manager repair queue, including its date columns and fenced drag commands. */
 @Composable
 fun RepairQueueView(
     boards: List<TaskBoardSnapshotDto>,

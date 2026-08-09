@@ -38,6 +38,7 @@ import dev.buhanzaz.rwms.manager.ui.components.ManagerScreenScaffold
 import dev.buhanzaz.rwms.manager.ui.components.StatusPill
 import dev.buhanzaz.rwms.manager.ui.components.StatusPillEmphasis
 
+/** Lists return documents visible in the selected manager warehouse. */
 @Composable
 fun ReturnsListScreen(
     uiState: ManagerUiState,
@@ -105,6 +106,7 @@ private fun ReturnDocumentCard(document: LogisticsDocumentDto, onClick: () -> Un
     }
 }
 
+/** Guides inspection of one return and exposes the undamaged and estimate branches. */
 @Composable
 fun ReturnInspectionScreen(
     uiState: ManagerUiState,

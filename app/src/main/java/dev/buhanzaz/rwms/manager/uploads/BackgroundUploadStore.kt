@@ -7,18 +7,31 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import dev.buhanzaz.rwms.manager.network.ExplicitNullJsonAdapterFactory
 import java.io.File
 import java.io.FileOutputStream
+import java.security.MessageDigest
+import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 
+/**
+ * Persists the manager upload outbox while enforcing immutable account-and-warehouse ownership
+ * on every lookup and mutation. The exposed flow is empty until the workspace activates a scope,
+ * so another signed-in principal cannot observe or retry retained work.
+ */
 class BackgroundUploadStore private constructor(
     context: Context,
 ) {
     private val applicationContext = context.applicationContext
     private val rootDirectory by lazy {
-        File(applicationContext.filesDir, ROOT_DIRECTORY_NAME)
+        File(applicationContext.filesDir, CURRENT_ROOT_DIRECTORY_NAME)
+    }
+    private val legacyRootDirectory by lazy {
+        File(applicationContext.filesDir, LEGACY_ROOT_DIRECTORY_NAME)
+    }
+    private val quarantineRootDirectory by lazy {
+        File(applicationContext.filesDir, QUARANTINE_ROOT_DIRECTORY_NAME)
     }
     private val stateFile by lazy {
         AtomicFile(File(rootDirectory, STATE_FILE_NAME))
@@ -31,7 +44,9 @@ class BackgroundUploadStore private constructor(
             .build()
             .adapter(BackgroundUploadStoreDocument::class.java)
     }
+    private var allOperations: List<BackgroundUploadOperation> = emptyList()
     private val mutableOperations = MutableStateFlow<List<BackgroundUploadOperation>>(emptyList())
+    private var activeScope: BackgroundUploadScope? = null
 
     @Volatile
     private var initialized = false
@@ -49,34 +64,75 @@ class BackgroundUploadStore private constructor(
         withContext(Dispatchers.IO) {
             synchronized(lock) {
                 if (initialized) return@synchronized
+                quarantineLegacyOwnerlessStorage()
                 rootDirectory.mkdirs()
-                mutableOperations.value = readDocument().operations
+                allOperations = readDocument().operations
+                publishVisibleOperations()
                 initialized = true
             }
         }
     }
 
-    fun operation(id: String): BackgroundUploadOperation? {
+    /** Publishes only operations owned by the currently verified workspace scope. */
+    fun activateScope(scope: BackgroundUploadScope?) {
         requireInitialized()
-        return mutableOperations.value.firstOrNull { it.id == id }
+        synchronized(lock) {
+            activeScope = scope
+            publishVisibleOperations()
+        }
     }
 
+    /** Returns an immutable snapshot containing only rows owned by [scope]. */
+    fun operations(scope: BackgroundUploadScope): List<BackgroundUploadOperation> {
+        requireInitialized()
+        return synchronized(lock) { allOperations.filter { it.belongsTo(scope) } }
+    }
+
+    /** Finds an operation only when both its identifier and immutable owner match [scope]. */
+    fun operation(
+        scope: BackgroundUploadScope,
+        id: String,
+    ): BackgroundUploadOperation? {
+        requireInitialized()
+        return synchronized(lock) {
+            allOperations.firstOrNull { it.id == id && it.belongsTo(scope) }
+        }
+    }
+
+    /** Persists a fully scoped operation without replacing another account's same-named row. */
     fun put(operation: BackgroundUploadOperation) {
+        require(operation.hasDurableScope()) {
+            "Нельзя сохранить фоновую загрузку без проверенного владельца и склада"
+        }
         updateAll { current ->
-            (current.filterNot { it.id == operation.id } + operation)
+            (current.filterNot {
+                it.id == operation.id &&
+                    it.ownerAccountId == operation.ownerAccountId &&
+                    it.warehouseId == operation.warehouseId
+            } + operation)
                 .sortedBy(BackgroundUploadOperation::createdAtEpochMillis)
         }
     }
 
+    /**
+     * Applies one atomic queue mutation while forbidding changes to the operation identity,
+     * account or warehouse.
+     */
     fun update(
+        scope: BackgroundUploadScope,
         operationId: String,
         transform: (BackgroundUploadOperation) -> BackgroundUploadOperation,
     ): BackgroundUploadOperation? {
         var result: BackgroundUploadOperation? = null
         updateAll { current ->
             current.map { operation ->
-                if (operation.id == operationId) {
-                    transform(operation).also { result = it }
+                if (operation.id == operationId && operation.belongsTo(scope)) {
+                    transform(operation).also { updated ->
+                        require(updated.id == operation.id && updated.belongsTo(scope)) {
+                            "Владелец, склад и идентификатор фоновой загрузки неизменяемы"
+                        }
+                        result = updated
+                    }
                 } else {
                     operation
                 }
@@ -85,13 +141,28 @@ class BackgroundUploadStore private constructor(
         return result
     }
 
-    fun remove(operationId: String) {
-        updateAll { current -> current.filterNot { it.id == operationId } }
-        operationDirectory(operationId).deleteRecursively()
+    /** Removes one scoped row and its app-private originals without touching another scope. */
+    fun remove(
+        scope: BackgroundUploadScope,
+        operationId: String,
+    ) {
+        var removed = false
+        updateAll { current ->
+            current.filterNot { operation ->
+                (operation.id == operationId && operation.belongsTo(scope)).also { matched ->
+                    removed = removed || matched
+                }
+            }
+        }
+        if (removed) operationDirectoryPath(scope, operationId).deleteRecursively()
     }
 
-    fun operationDirectory(operationId: String): File = requireInitialized().let {
-        File(rootDirectory, operationId).apply { mkdirs() }
+    /** Returns the hashed, account-and-warehouse-partitioned directory for one operation. */
+    fun operationDirectory(
+        scope: BackgroundUploadScope,
+        operationId: String,
+    ): File = requireInitialized().let {
+        operationDirectoryPath(scope, operationId).apply { mkdirs() }
     }
 
     private fun updateAll(
@@ -99,9 +170,24 @@ class BackgroundUploadStore private constructor(
     ) {
         requireInitialized()
         synchronized(lock) {
-            val updated = transform(mutableOperations.value)
-            writeDocument(BackgroundUploadStoreDocument(operations = updated))
-            mutableOperations.value = updated
+            val updated = transform(allOperations)
+            writeDocument(
+                BackgroundUploadStoreDocument(
+                    schemaVersion = CURRENT_BACKGROUND_UPLOAD_SCHEMA_VERSION,
+                    operations = updated,
+                ),
+            )
+            allOperations = updated
+            publishVisibleOperations()
+        }
+    }
+
+    private fun publishVisibleOperations() {
+        val scope = activeScope
+        mutableOperations.value = if (scope == null) {
+            emptyList()
+        } else {
+            allOperations.filter { it.belongsTo(scope) }
         }
     }
 
@@ -112,13 +198,77 @@ class BackgroundUploadStore private constructor(
     }
 
     private fun readDocument(): BackgroundUploadStoreDocument {
-        if (!stateFile.baseFile.exists()) return BackgroundUploadStoreDocument()
-        return runCatching {
+        if (!stateFile.baseFile.exists()) return emptyDocument()
+        val restored = runCatching {
             stateFile.openRead().bufferedReader().use { reader ->
                 adapter.fromJson(reader.readText())
             }
-        }.getOrNull() ?: BackgroundUploadStoreDocument()
+        }.getOrNull()
+        if (restored == null ||
+            restored.schemaVersion != CURRENT_BACKGROUND_UPLOAD_SCHEMA_VERSION ||
+            restored.operations.any { !it.hasDurableScope() }
+        ) {
+            quarantineInvalidCurrentDocument()
+            return emptyDocument()
+        }
+        return restored
     }
+
+    private fun emptyDocument() = BackgroundUploadStoreDocument(
+        schemaVersion = CURRENT_BACKGROUND_UPLOAD_SCHEMA_VERSION,
+    )
+
+    /**
+     * Moves the complete schema-1 root without reading retained media. Its rows have no account
+     * owner, so assigning them to whichever user signs in next would be unsafe.
+     */
+    private fun quarantineLegacyOwnerlessStorage() {
+        if (!legacyRootDirectory.exists()) return
+        quarantineRootDirectory.mkdirs()
+        val target = File(
+            quarantineRootDirectory,
+            "ownerless-v1-${UUID.randomUUID()}",
+        )
+        check(legacyRootDirectory.renameTo(target)) {
+            "Не удалось изолировать старую очередь фоновых загрузок"
+        }
+    }
+
+    private fun quarantineInvalidCurrentDocument() {
+        val source = stateFile.baseFile
+        if (!source.exists()) return
+        quarantineRootDirectory.mkdirs()
+        check(
+            source.renameTo(
+                File(
+                    quarantineRootDirectory,
+                    "invalid-v2-queue-${UUID.randomUUID()}.json",
+                ),
+            ),
+        ) { "Не удалось изолировать повреждённую очередь фоновых загрузок" }
+    }
+
+    private fun operationDirectoryPath(
+        scope: BackgroundUploadScope,
+        operationId: String,
+    ): File = File(
+        File(File(rootDirectory, OPERATIONS_DIRECTORY_NAME), scope.storageKey()),
+        stableHash(operationId),
+    )
+
+    private fun BackgroundUploadOperation.hasDurableScope(): Boolean =
+        ownerAccountId.isNotBlank() && warehouseId.isNotBlank()
+
+    private fun BackgroundUploadOperation.belongsTo(scope: BackgroundUploadScope): Boolean =
+        ownerAccountId == scope.ownerAccountId && warehouseId == scope.warehouseId
+
+    private fun BackgroundUploadScope.storageKey(): String = stableHash(
+        "$ownerAccountId\u0000$warehouseId",
+    )
+
+    private fun stableHash(value: String): String = MessageDigest.getInstance("SHA-256")
+        .digest(value.toByteArray(Charsets.UTF_8))
+        .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
     private fun writeDocument(document: BackgroundUploadStoreDocument) {
         var output: FileOutputStream? = null
@@ -135,7 +285,10 @@ class BackgroundUploadStore private constructor(
     }
 
     companion object {
-        private const val ROOT_DIRECTORY_NAME = "background-uploads"
+        private const val LEGACY_ROOT_DIRECTORY_NAME = "background-uploads"
+        private const val CURRENT_ROOT_DIRECTORY_NAME = "background-uploads-v2"
+        private const val QUARANTINE_ROOT_DIRECTORY_NAME = "background-uploads-quarantine"
+        private const val OPERATIONS_DIRECTORY_NAME = "operations"
         private const val STATE_FILE_NAME = "queue.json"
 
         @Volatile

@@ -14,6 +14,9 @@ import dagger.hilt.android.AndroidEntryPoint
 import dev.buhanzaz.rwms.worker.feature.camera.VolumeShutterHost
 
 @AndroidEntryPoint
+/**
+ * Defines worker application UI or lifecycle state; it does not decide a server task transition.
+ */
 class MainActivity : ComponentActivity(), VolumeShutterHost {
     private var volumeShutterHandler: (() -> Unit)? = null
     private val appViewModel: WorkerAppViewModel by viewModels()

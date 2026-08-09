@@ -76,6 +76,9 @@ fun <T : Any> rememberWorkerListDetailSceneStrategy(): WorkerListDetailSceneStra
     return remember(windowSizeClass) { WorkerListDetailSceneStrategy(windowSizeClass) }
 }
 
+/**
+ * Defines worker application UI or lifecycle state; it does not decide a server task transition.
+ */
 class WorkerListDetailSceneStrategy<T : Any>(
     private val windowSizeClass: WindowSizeClass,
 ) : SceneStrategy<T> {

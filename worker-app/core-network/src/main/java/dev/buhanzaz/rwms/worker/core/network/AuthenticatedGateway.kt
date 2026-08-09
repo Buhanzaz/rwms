@@ -20,18 +20,27 @@ interface SessionCredentialStore {
     suspend fun clearSession()
 }
 
+/**
+ * Encapsulates worker public-gateway transport/failure handling; it is never backend persistence.
+ */
 sealed interface TokenRefreshResult {
     data class Refreshed(val accessToken: String) : TokenRefreshResult
     data object InvalidGrant : TokenRefreshResult
     data class TransientFailure(val reason: String? = null) : TokenRefreshResult
 }
 
+/**
+ * Encapsulates worker public-gateway transport/failure handling; it is never backend persistence.
+ */
 data class AuthenticatedGatewayState(
     val online: Boolean,
     val lastAuthenticatedContact: Instant?,
     val lastFailure: String? = null,
 )
 
+/**
+ * Encapsulates worker public-gateway transport/failure handling; it is never backend persistence.
+ */
 class AuthenticatedGatewayMonitor {
     private val mutableState = MutableStateFlow(AuthenticatedGatewayState(false, null))
     val state: StateFlow<AuthenticatedGatewayState> = mutableState.asStateFlow()
@@ -45,6 +54,9 @@ class AuthenticatedGatewayMonitor {
     }
 }
 
+/**
+ * Encapsulates worker public-gateway transport/failure handling; it is never backend persistence.
+ */
 class BearerTokenInterceptor(
     private val credentials: SessionCredentialStore,
     private val monitor: AuthenticatedGatewayMonitor,
@@ -70,6 +82,9 @@ class BearerTokenInterceptor(
     }
 }
 
+/**
+ * Encapsulates worker public-gateway transport/failure handling; it is never backend persistence.
+ */
 class RefreshingAuthenticator(
     private val credentials: SessionCredentialStore,
 ) : Authenticator {

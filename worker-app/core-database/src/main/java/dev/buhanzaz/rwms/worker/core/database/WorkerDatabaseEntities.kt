@@ -29,6 +29,9 @@ data class WorkerSessionEntity(
 )
 
 @Entity(tableName = "worker_group", indices = [Index(value = ["userId", "name"])])
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 data class WorkerGroupEntity(
     @PrimaryKey val localId: String,
     val userId: String,
@@ -50,6 +53,9 @@ data class WorkerGroupEntity(
         Index(value = ["userId", "sortOrder", "queueId"]),
     ],
 )
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 data class WorkerCategoryEntity(
     @PrimaryKey val localId: String,
     val userId: String,
@@ -70,6 +76,9 @@ data class WorkerCategoryEntity(
     tableName = "worker_task",
     indices = [Index(value = ["userId", "categorySortOrder", "queuePosition"]), Index(value = ["userId", "entryId"], unique = true)],
 )
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 data class WorkerTaskEntity(
     @PrimaryKey val localId: String,
     val userId: String,
@@ -105,6 +114,9 @@ data class WorkerTaskEntity(
 )
 
 @Entity(tableName = "worker_assignment", indices = [Index(value = ["userId", "entryId"])])
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 data class WorkerAssignmentEntity(
     @PrimaryKey val localId: String,
     val userId: String,
@@ -122,6 +134,9 @@ data class WorkerAssignmentEntity(
 )
 
 @Entity(tableName = "worker_task_detail", indices = [Index(value = ["userId", "entryId"], unique = true)])
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 data class WorkerTaskDetailEntity(
     @PrimaryKey val localId: String,
     val userId: String,
@@ -132,6 +147,9 @@ data class WorkerTaskDetailEntity(
 )
 
 @Entity(tableName = "worker_outbox", indices = [Index(value = ["userId", "state", "createdAtEpochMillis"]), Index(value = ["entryId"])])
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 data class WorkerOutboxEntity(
     @PrimaryKey val operationId: String,
     val userId: String,
@@ -147,6 +165,9 @@ data class WorkerOutboxEntity(
 )
 
 @Entity(tableName = "task_evidence", indices = [Index(value = ["userId", "entryId"]), Index(value = ["userId", "state"])])
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 data class TaskEvidenceEntity(
     @PrimaryKey val evidenceId: String,
     val userId: String,
@@ -172,6 +193,9 @@ data class TaskEvidenceEntity(
 )
 
 @Entity(tableName = "worker_sync_progress")
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 data class WorkerSyncProgressEntity(
     @PrimaryKey val userId: String,
     val stage: String,
@@ -184,6 +208,9 @@ data class WorkerSyncProgressEntity(
 )
 
 @Entity(tableName = "worker_conflict", indices = [Index(value = ["userId", "createdAtEpochMillis"])])
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 data class WorkerConflictEntity(
     @PrimaryKey val operationId: String,
     val userId: String,
@@ -197,6 +224,9 @@ data class WorkerConflictEntity(
 )
 
 @Entity(tableName = "worker_invalidation")
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 data class WorkerInvalidationEntity(
     @PrimaryKey val eventId: String,
     val userId: String,

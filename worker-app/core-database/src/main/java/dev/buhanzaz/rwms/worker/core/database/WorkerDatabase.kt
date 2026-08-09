@@ -30,6 +30,9 @@ import javax.inject.Singleton
     version = 6,
     exportSchema = true,
 )
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 abstract class WorkerDatabase : RoomDatabase() {
     abstract fun sessionDao(): WorkerSessionDao
     abstract fun groupDao(): WorkerGroupDao
@@ -318,6 +321,9 @@ abstract class WorkerDatabase : RoomDatabase() {
 
 @Module
 @InstallIn(SingletonComponent::class)
+/**
+ * Defines account-scoped worker local recovery state. Room is a client projection, never the backend source of truth.
+ */
 object WorkerDatabaseModule {
     @Provides
     @Singleton

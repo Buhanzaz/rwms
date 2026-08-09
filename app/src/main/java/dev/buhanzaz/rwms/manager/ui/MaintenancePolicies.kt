@@ -147,6 +147,9 @@ internal fun catalogMaintenanceLineType(nodeType: String): String = when (nodeTy
     else -> throw IllegalArgumentException("Неподдерживаемый тип позиции каталога")
 }
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal data class ActiveMaintenanceCatalogRevision(
     val id: String,
     val version: Long,
@@ -197,6 +200,9 @@ internal fun millisUntilNextMaintenanceCatalogSync(now: ZonedDateTime): Long {
     return Duration.between(now, nextSync).toMillis().coerceAtLeast(1L)
 }
 
+/**
+ * Defines manager UI state or presentation policy; server state and command authorization remain authoritative.
+ */
 data class MaintenanceReturnMetadata(
     val sourceParty: String?,
     val dispatchDate: String?,

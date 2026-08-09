@@ -18,6 +18,7 @@ private val DarkColors = darkColorScheme(
     tertiary = Color(0xFFFFDEA1),
 )
 
+/** Applies the RWMS worker color schemes and Material typography to [content]. */
 @Composable
 fun RwmsWorkerTheme(
     darkTheme: Boolean = androidx.compose.foundation.isSystemInDarkTheme(),

@@ -7,12 +7,18 @@ import dev.buhanzaz.rwms.manager.network.TaskBoardEntryDto
 import dev.buhanzaz.rwms.manager.network.TaskBoardSnapshotDto
 import java.time.LocalDate
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal data class RepairQueueDateColumnRange(
     val date: String,
     val left: Float,
     val right: Float,
 )
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal data class RepairQueueLineGroups(
     val works: List<String>,
     val materials: List<String>,
@@ -24,6 +30,9 @@ internal fun RepairStageDto.repairQueueLineGroups(): RepairQueueLineGroups = Rep
     materials = materialLines.map { line -> line.description.trim() }.filter(String::isNotEmpty),
 )
 
+/**
+ * Defines manager UI state or presentation policy; server state and command authorization remain authoritative.
+ */
 data class RepairQueueItem(
     val repair: RepairDto,
     val stage: RepairStageDto,

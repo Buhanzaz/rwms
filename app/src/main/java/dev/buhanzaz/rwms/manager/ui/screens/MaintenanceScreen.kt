@@ -123,6 +123,9 @@ private const val MAINTENANCE_STEP_COUNT = 5
 internal const val MAINTENANCE_CATALOG_PAGE_SIZE = 9
 internal const val MAINTENANCE_CATALOG_LABEL_HOLD_MILLIS = 2_000L
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal enum class MaintenanceSearchFeedbackPlacement {
     AboveField,
     BelowField,
@@ -2109,12 +2112,18 @@ private fun MaintenanceWorkPhotoPickerDialog(
     )
 }
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal enum class MaintenanceCatalogMode(val label: String) {
     LINKED_SET("Работы + материалы"),
     WORKS_ONLY("Только работы"),
     MATERIALS_ONLY("Только материалы"),
 }
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal data class MaintenanceCatalogIndex(
     val nodesById: Map<String, CatalogNodeDto>,
     val operationalMenuNodes: List<CatalogNodeDto>,
@@ -3307,6 +3316,9 @@ private fun maintenanceDetailsAreValid(editor: MaintenanceEditorState): Boolean 
             editor.entityId != null ||
             editor.reworkReason.trim().isNotEmpty())
 
+/**
+ * Defines manager UI or local cache state; it does not own a server-side business transition.
+ */
 internal data class MaintenancePhotoStepPolicy(
     val showNext: Boolean,
     val targetStep: Int,

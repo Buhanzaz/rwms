@@ -22,6 +22,9 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/**
+ * Encapsulates worker evidence/media recovery behavior; server confirmation remains authoritative.
+ */
 data class EncryptedEvidenceFile(
     val encryptedPath: String,
     val plainSizeBytes: Long,
@@ -38,6 +41,10 @@ class EncryptedEvidenceFileStore @Inject constructor(
 ) {
     private val root: File by lazy { File(context.noBackupFilesDir, "worker-evidence").also(File::mkdirs) }
 
+    /**
+     * Atomically encrypts a captured JPEG, derives its plaintext SHA-256, and removes the
+     * temporary CameraX file on every outcome.
+     */
     fun persistJpeg(userId: String, evidenceId: String, temporaryJpeg: File): EncryptedEvidenceFile {
         require(temporaryJpeg.isFile) { "Captured JPEG is missing" }
         require(temporaryJpeg.length() in 1..MAX_JPEG_BYTES) { "Captured JPEG exceeds 15 MiB" }

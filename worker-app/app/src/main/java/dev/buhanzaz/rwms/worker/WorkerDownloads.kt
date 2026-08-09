@@ -42,6 +42,9 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 
+/**
+ * Defines worker application UI or lifecycle state; it does not decide a server task transition.
+ */
 data class WorkerDownloadItem(
     val id: String,
     val title: String,
@@ -52,12 +55,18 @@ data class WorkerDownloadItem(
     val canRetry: Boolean,
 )
 
+/**
+ * Defines worker application UI or lifecycle state; it does not decide a server task transition.
+ */
 data class WorkerDownloadsUiState(
     val items: List<WorkerDownloadItem> = emptyList(),
 )
 
 @HiltViewModel
 @OptIn(ExperimentalCoroutinesApi::class)
+/**
+ * Defines worker application UI or lifecycle state; it does not decide a server task transition.
+ */
 class WorkerDownloadsViewModel @Inject constructor(
     private val localStore: WorkerLocalStore,
     private val scheduler: WorkerSyncScheduler,
@@ -267,6 +276,9 @@ private fun WorkerDownloadCard(item: WorkerDownloadItem, onRetry: () -> Unit) {
     }
 }
 
+/**
+ * Defines worker UI/presentation state; it does not decide a server task transition.
+ */
 internal data class WorkerMenuItem(
     val title: String,
     val description: String,
@@ -274,6 +286,9 @@ internal data class WorkerMenuItem(
     val destination: WorkerMenuDestination,
 )
 
+/**
+ * Defines worker UI/presentation state; it does not decide a server task transition.
+ */
 internal enum class WorkerMenuDestination { WORKS, DOWNLOADS, PROFILE }
 
 internal fun workerMenuItems(pendingDownloadCount: Int): List<WorkerMenuItem> = listOf(

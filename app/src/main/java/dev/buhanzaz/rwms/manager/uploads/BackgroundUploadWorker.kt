@@ -16,6 +16,7 @@ import dev.buhanzaz.rwms.manager.network.AmendEstimateRequest
 import dev.buhanzaz.rwms.manager.network.ArriveTransferLineRequest
 import dev.buhanzaz.rwms.manager.network.CreateCabinFurnitureTaskRequest
 import dev.buhanzaz.rwms.manager.network.CompleteEstimateRequest
+import dev.buhanzaz.rwms.manager.network.CurrentUserDto
 import dev.buhanzaz.rwms.manager.network.EstimateLineInputDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.network.RepairDecisionRequest
@@ -34,6 +35,11 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import retrofit2.HttpException
 
+/**
+ * Executes one account-and-warehouse-bound WorkManager request. Before any media or domain
+ * command, it resolves `/me` with the current session and proves that the persisted owner and
+ * all declared warehouse scopes still belong to that same eligible manager account.
+ */
 class BackgroundUploadWorker(
     applicationContext: Context,
     workerParameters: WorkerParameters,
@@ -44,25 +50,44 @@ class BackgroundUploadWorker(
         backend.api,
         PhotoPayloadReader(applicationContext.contentResolver),
     )
+    private var executionScope: BackgroundUploadScope? = null
 
     override suspend fun doWork(): Result {
         store.initialize()
         return operationPermit.withPermit {
-            executeOperation()
+            try {
+                executeOperation()
+            } finally {
+                // Logout acquires the same permit after cancellation, so this snapshot is closed
+                // before another principal can become active.
+                backend.auth.close()
+            }
         }
     }
 
     private suspend fun executeOperation(): Result {
         val operationId = inputData.getString(INPUT_OPERATION_ID)
             ?: return Result.failure()
+        val ownerAccountId = inputData.getString(INPUT_OWNER_ACCOUNT_ID)
+            ?: return Result.failure()
+        val warehouseId = inputData.getString(INPUT_WAREHOUSE_ID)
+            ?: return Result.failure()
+        val scope = runCatching {
+            BackgroundUploadScope(ownerAccountId, warehouseId)
+        }.getOrElse { return Result.failure() }
+        executionScope = scope
         val selectedPhotoId = inputData.getString(INPUT_PHOTO_ID)
-        val operation = store.operation(operationId) ?: return Result.success()
+        val operation = store.operation(scope, operationId) ?: return Result.success()
         return try {
+            val currentUser = backend.api.currentUser()
+            if (!BackgroundUploadAuthorizationPolicy.canExecute(currentUser, operation)) {
+                return Result.success()
+            }
             markRunning(operation.id)
             uploadPendingPhotos(operation.id, selectedPhotoId)
-            val afterPhotos = store.operation(operation.id) ?: return Result.success()
+            val afterPhotos = store.operation(scope, operation.id) ?: return Result.success()
             if (afterPhotos.photos.any { it.status != BackgroundPhotoStatus.READY }) {
-                store.update(operation.id) { current ->
+                store.update(scope, operation.id) { current ->
                     current.copy(
                         updatedAtEpochMillis = System.currentTimeMillis(),
                         status = BackgroundUploadStatus.FAILED,
@@ -75,10 +100,10 @@ class BackgroundUploadWorker(
                 return Result.success()
             }
             finalizeOperation(afterPhotos)
-            store.remove(operation.id)
+            store.remove(scope, operation.id)
             Result.success()
         } catch (cancelled: CancellationException) {
-            store.update(operation.id) { current ->
+            store.update(scope, operation.id) { current ->
                 current.copy(
                     updatedAtEpochMillis = System.currentTimeMillis(),
                     status = BackgroundUploadStatus.QUEUED,
@@ -104,7 +129,7 @@ class BackgroundUploadWorker(
                             !command.allowUnaccountedFurniture
                     } == true
             val message = failureMessage(failure)
-            store.update(operation.id) { current ->
+            store.update(scope, operation.id) { current ->
                 current.copy(
                     updatedAtEpochMillis = System.currentTimeMillis(),
                     status = BackgroundUploadStatus.FAILED,
@@ -131,13 +156,15 @@ class BackgroundUploadWorker(
                 )
             }
             Result.success()
-        } finally {
-            backend.auth.close()
         }
     }
 
+    private fun requireExecutionScope(): BackgroundUploadScope = requireNotNull(executionScope) {
+        "Worker не получил проверенную область фоновой загрузки"
+    }
+
     private fun markRunning(operationId: String) {
-        store.update(operationId) { operation ->
+        store.update(requireExecutionScope(), operationId) { operation ->
             val ready = operation.photos.count { it.status == BackgroundPhotoStatus.READY }
             operation.copy(
                 updatedAtEpochMillis = System.currentTimeMillis(),
@@ -153,14 +180,14 @@ class BackgroundUploadWorker(
     }
 
     private suspend fun uploadPendingPhotos(operationId: String, selectedPhotoId: String?) {
-        val snapshot = store.operation(operationId) ?: return
+        val snapshot = store.operation(requireExecutionScope(), operationId) ?: return
         val targets = snapshot.photos.filter { photo ->
             photo.status != BackgroundPhotoStatus.READY &&
                 (selectedPhotoId == null || photo.id == selectedPhotoId)
         }
         if (targets.isEmpty()) return
         val targetIds = targets.mapTo(hashSetOf(), BackgroundUploadPhoto::id)
-        store.update(operationId) { operation ->
+        store.update(requireExecutionScope(), operationId) { operation ->
             operation.copy(
                 updatedAtEpochMillis = System.currentTimeMillis(),
                 photos = operation.photos.map { photo ->
@@ -187,7 +214,7 @@ class BackgroundUploadWorker(
         }
         if (failures.isNotEmpty()) {
             val message = failureMessage(failures.first())
-            store.update(operationId) { operation ->
+            store.update(requireExecutionScope(), operationId) { operation ->
                 operation.copy(
                     updatedAtEpochMillis = System.currentTimeMillis(),
                     photos = operation.photos.map { photo ->
@@ -208,7 +235,7 @@ class BackgroundUploadWorker(
         selected: List<BackgroundUploadPhoto>,
     ) {
         val selectedIds = selected.mapTo(hashSetOf(), BackgroundUploadPhoto::id)
-        val current = store.operation(operationId)?.photos
+        val current = store.operation(requireExecutionScope(), operationId)?.photos
             ?.filter { it.id in selectedIds }
             .orEmpty()
         val withoutReference = current.filter { it.reference == null }
@@ -232,7 +259,7 @@ class BackgroundUploadWorker(
             }
         }
 
-        val uploaded = store.operation(operationId)?.photos
+        val uploaded = store.operation(requireExecutionScope(), operationId)?.photos
             ?.filter { it.id in selectedIds }
             .orEmpty()
         uploaded.filter { it.reference != null }.forEach { photo ->
@@ -258,7 +285,7 @@ class BackgroundUploadWorker(
         durableUri: String,
         transform: (BackgroundUploadPhoto) -> BackgroundUploadPhoto,
     ) {
-        store.update(operationId) { operation ->
+        store.update(requireExecutionScope(), operationId) { operation ->
             val updatedPhotos = operation.photos.map { photo ->
                 if (photo.durableUri == durableUri) transform(photo) else photo
             }
@@ -323,7 +350,7 @@ class BackgroundUploadWorker(
             } catch (failure: Throwable) {
                 if (!inventoryInspectionAlreadySaved(preparedCommand, media, coverMediaId)) throw failure
             }
-            store.update(operation.id) { current ->
+            store.update(requireExecutionScope(), operation.id) { current ->
                 current.copy(
                     updatedAtEpochMillis = System.currentTimeMillis(),
                     inventory = current.inventory?.copy(inspectionSaved = true),
@@ -379,7 +406,7 @@ class BackgroundUploadWorker(
         )
         val rebasedCommand = requireNotNull(rebasedOperation.inventory)
         if (rebasedOperation != operation) {
-            store.update(operation.id) { current ->
+            store.update(requireExecutionScope(), operation.id) { current ->
                 current.copy(
                     updatedAtEpochMillis = System.currentTimeMillis(),
                     photos = rebasedOperation.photos,
@@ -457,7 +484,7 @@ class BackgroundUploadWorker(
             ).version
         }
         if (command.replaceKind != MaintenanceReplaceKind.NONE) {
-            store.update(operation.id) { current ->
+            store.update(requireExecutionScope(), operation.id) { current ->
                 current.copy(
                     updatedAtEpochMillis = System.currentTimeMillis(),
                     maintenance = current.maintenance?.copy(
@@ -579,7 +606,7 @@ class BackgroundUploadWorker(
     }
 
     private fun updateStage(operationId: String, stage: String) {
-        store.update(operationId) { operation ->
+        store.update(requireExecutionScope(), operationId) { operation ->
             operation.copy(
                 updatedAtEpochMillis = System.currentTimeMillis(),
                 status = BackgroundUploadStatus.RUNNING,
@@ -669,7 +696,48 @@ class BackgroundUploadWorker(
             "MAINTENANCE_UNACCOUNTED_FURNITURE_CONFIRMATION_REQUIRED"
         private val operationPermit = Semaphore(1)
         const val INPUT_OPERATION_ID = "operation_id"
+        const val INPUT_OWNER_ACCOUNT_ID = "owner_account_id"
+        const val INPUT_WAREHOUSE_ID = "warehouse_id"
         const val INPUT_PHOTO_ID = "photo_id"
         const val WORK_TAG = "rwms-background-uploads"
+
+        /** Waits until the running worker has closed its account-bound authentication snapshot. */
+        internal suspend fun awaitIdle() {
+            operationPermit.withPermit { }
+        }
     }
+}
+
+/**
+ * Fail-closed admission policy applied to a persisted upload before its first side effect. It
+ * checks the authoritative `/me` response rather than trusting WorkManager input or a previous
+ * process's session, and requires every warehouse explicitly retained by the command/media data.
+ */
+internal object BackgroundUploadAuthorizationPolicy {
+    fun canExecute(
+        user: CurrentUserDto,
+        operation: BackgroundUploadOperation,
+    ): Boolean {
+        if (user.id != operation.ownerAccountId ||
+            user.principalType != "USER" ||
+            user.globalRole !in MANAGER_ROLES
+        ) {
+            return false
+        }
+        if (user.warehouseAccessAll) return true
+        val granted = user.warehouseAccesses.mapTo(hashSetOf()) { it.warehouseId }
+        return operation.requiredWarehouseIds().all(granted::contains)
+    }
+
+    private fun BackgroundUploadOperation.requiredWarehouseIds(): Set<String> = buildSet {
+        add(warehouseId)
+        photos.forEach { add(it.owner.warehouseId) }
+        inventory?.furnitureMove?.let { add(it.warehouseId) }
+        maintenance?.let { add(it.warehouseId) }
+        acceptance?.let { add(it.warehouseId) }
+        returnAction?.let { add(it.warehouseId) }
+    }
+
+    private val MANAGER_ROLES =
+        setOf("SYSTEM_ADMIN", "WMS_ADMIN", "WAREHOUSE_MANAGER")
 }

@@ -11,107 +11,183 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import java.io.File
+import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
+/**
+ * Owns the verified workspace scope for durable uploads. Every queue mutation and WorkManager
+ * schedule is serialized with scope replacement, so logout can await cancellation before the
+ * shared OAuth repository is cleared or another account signs in.
+ */
 class BackgroundUploadCoordinator(
     context: Context,
 ) {
     private val applicationContext = context.applicationContext
     private val store = BackgroundUploadStore.get(applicationContext)
     private val workManager = WorkManager.getInstance(applicationContext)
+    private val lifecycleMutex = Mutex()
+    private var activeScope: BackgroundUploadScope? = null
 
     val operations: StateFlow<List<BackgroundUploadOperation>> = store.operations
 
+    /** Restores and, when necessary, quarantines the durable queue before it can be observed. */
     suspend fun initialize() {
         store.initialize()
     }
 
-    suspend fun enqueue(draft: BackgroundUploadDraft): String = withContext(Dispatchers.IO) {
-        store.initialize()
-        val operationId = UUID.randomUUID().toString()
-        val operationDirectory = store.operationDirectory(operationId)
-        try {
-            val photos = draft.photos.mapIndexed { index, photo ->
-                copyPhoto(operationDirectory, index, photo)
+    /**
+     * Replaces the active scope only after `/me` verified [ownerAccountId] and the workspace
+     * selected [warehouseId]. Existing work is cancelled and joined before the replacement is
+     * visible, preventing an old worker from crossing the session boundary.
+     */
+    suspend fun activateVerifiedScope(
+        ownerAccountId: String,
+        warehouseId: String,
+    ) = withContext(Dispatchers.IO) {
+        lifecycleMutex.withLock {
+            store.initialize()
+            val next = BackgroundUploadScope(ownerAccountId, warehouseId)
+            if (activeScope == next) {
+                BackgroundUploadDraftScopeRegistry.replace(next)
+                store.activateScope(next)
+                return@withLock
             }
-            val now = System.currentTimeMillis()
-            val operation = BackgroundUploadOperation(
-                id = operationId,
-                area = draft.area,
-                title = draft.title,
-                subtitle = draft.subtitle,
-                createdAtEpochMillis = now,
-                updatedAtEpochMillis = now,
-                photos = photos,
-                inventory = draft.inventory,
-                maintenance = draft.maintenance,
-                acceptance = draft.acceptance,
-                transferArrival = draft.transferArrival,
-                returnAction = draft.returnAction,
-            )
-            store.put(operation)
-            schedule(operationId, ExistingWorkPolicy.REPLACE)
-            operationId
-        } catch (failure: Throwable) {
-            operationDirectory.deleteRecursively()
-            throw failure
+            activeScope = null
+            BackgroundUploadDraftScopeRegistry.replace(null)
+            store.activateScope(null)
+            cancelAllWorkAndAwait()
+            activeScope = next
+            BackgroundUploadDraftScopeRegistry.replace(next)
+            store.activateScope(next)
         }
     }
 
+    /**
+     * Copies selected originals into the durable app-private queue before scheduling one unique
+     * connected worker, so process death cannot turn a chosen photo into an untracked command.
+     */
+    suspend fun enqueue(draft: BackgroundUploadDraft): String = withContext(Dispatchers.IO) {
+        lifecycleMutex.withLock {
+            store.initialize()
+            val scope = requireActiveScope()
+            val scopedDraft = draft.bindTo(scope)
+            val operationId = UUID.randomUUID().toString()
+            val operationDirectory = store.operationDirectory(scope, operationId)
+            var persisted = false
+            try {
+                val photos = scopedDraft.photos.mapIndexed { index, photo ->
+                    copyPhoto(operationDirectory, index, photo)
+                }
+                val now = System.currentTimeMillis()
+                val operation = BackgroundUploadOperation(
+                    id = operationId,
+                    area = scopedDraft.area,
+                    title = scopedDraft.title,
+                    subtitle = scopedDraft.subtitle,
+                    createdAtEpochMillis = now,
+                    updatedAtEpochMillis = now,
+                    photos = photos,
+                    inventory = scopedDraft.inventory,
+                    maintenance = scopedDraft.maintenance,
+                    acceptance = scopedDraft.acceptance,
+                    transferArrival = scopedDraft.transferArrival,
+                    returnAction = scopedDraft.returnAction,
+                    ownerAccountId = scope.ownerAccountId,
+                    warehouseId = scope.warehouseId,
+                )
+                store.put(operation)
+                persisted = true
+                schedule(scope, operationId, ExistingWorkPolicy.REPLACE)
+                operationId
+            } catch (failure: Throwable) {
+                if (persisted) {
+                    store.remove(scope, operationId)
+                } else {
+                    operationDirectory.deleteRecursively()
+                }
+                throw failure
+            }
+        }
+    }
+
+    /** Re-schedules only non-failed entries in the already verified active scope. */
     suspend fun resumePending() = withContext(Dispatchers.IO) {
-        store.initialize()
-        store.operations.value
-            .filter { it.status != BackgroundUploadStatus.FAILED }
-            .forEach { schedule(it.id, ExistingWorkPolicy.KEEP) }
+        lifecycleMutex.withLock {
+            store.initialize()
+            val scope = requireActiveScope()
+            store.operations(scope)
+                .filter { it.status != BackgroundUploadStatus.FAILED }
+                .forEach { schedule(scope, it.id, ExistingWorkPolicy.KEEP) }
+        }
     }
 
-    fun pause() {
-        workManager.cancelAllWorkByTag(BackgroundUploadWorker.WORK_TAG)
+    /**
+     * Hides the queue immediately, then waits for every manager upload worker to run its
+     * cancellation/finally path before the caller clears or replaces authentication state.
+     */
+    suspend fun pause() = withContext(Dispatchers.IO) {
+        lifecycleMutex.withLock {
+            store.initialize()
+            activeScope = null
+            BackgroundUploadDraftScopeRegistry.replace(null)
+            store.activateScope(null)
+            cancelAllWorkAndAwait()
+        }
     }
 
+    /** Requeues a failed operation only inside the currently verified scope. */
     suspend fun retry(operationId: String) = withContext(Dispatchers.IO) {
-        store.initialize()
-        val now = System.currentTimeMillis()
-        val updated = store.update(operationId) { operation ->
-            operation.copy(
-                updatedAtEpochMillis = now,
-                status = BackgroundUploadStatus.QUEUED,
-                stage = "Ожидание сети",
-                error = null,
-                photos = operation.photos.map { photo ->
-                    if (photo.status == BackgroundPhotoStatus.FAILED) {
-                        photo.copy(status = BackgroundPhotoStatus.QUEUED, error = null)
-                    } else {
-                        photo
-                    }
-                },
-            )
-        } ?: return@withContext
-        schedule(updated.id, ExistingWorkPolicy.REPLACE)
+        lifecycleMutex.withLock {
+            store.initialize()
+            val scope = requireActiveScope()
+            val now = System.currentTimeMillis()
+            val updated = store.update(scope, operationId) { operation ->
+                operation.copy(
+                    updatedAtEpochMillis = now,
+                    status = BackgroundUploadStatus.QUEUED,
+                    stage = "Ожидание сети",
+                    error = null,
+                    photos = operation.photos.map { photo ->
+                        if (photo.status == BackgroundPhotoStatus.FAILED) {
+                            photo.copy(status = BackgroundPhotoStatus.QUEUED, error = null)
+                        } else {
+                            photo
+                        }
+                    },
+                )
+            } ?: return@withLock
+            schedule(scope, updated.id, ExistingWorkPolicy.REPLACE)
+        }
     }
 
+    /** Requeues one failed photo without granting access to an operation in another scope. */
     suspend fun retryPhoto(operationId: String, photoId: String) = withContext(Dispatchers.IO) {
-        store.initialize()
-        val now = System.currentTimeMillis()
-        val updated = store.update(operationId) { operation ->
-            operation.copy(
-                updatedAtEpochMillis = now,
-                status = BackgroundUploadStatus.QUEUED,
-                stage = "Ожидание сети",
-                error = null,
-                photos = operation.photos.map { photo ->
-                    if (photo.id == photoId) {
-                        photo.copy(status = BackgroundPhotoStatus.QUEUED, error = null)
-                    } else {
-                        photo
-                    }
-                },
-            )
-        } ?: return@withContext
-        schedule(updated.id, ExistingWorkPolicy.REPLACE, photoId)
+        lifecycleMutex.withLock {
+            store.initialize()
+            val scope = requireActiveScope()
+            val now = System.currentTimeMillis()
+            val updated = store.update(scope, operationId) { operation ->
+                operation.copy(
+                    updatedAtEpochMillis = now,
+                    status = BackgroundUploadStatus.QUEUED,
+                    stage = "Ожидание сети",
+                    error = null,
+                    photos = operation.photos.map { photo ->
+                        if (photo.id == photoId) {
+                            photo.copy(status = BackgroundPhotoStatus.QUEUED, error = null)
+                        } else {
+                            photo
+                        }
+                    },
+                )
+            } ?: return@withLock
+            schedule(scope, updated.id, ExistingWorkPolicy.REPLACE, photoId)
+        }
     }
 
     /**
@@ -120,34 +196,37 @@ class BackgroundUploadCoordinator(
      * idempotency key; the rejected `false` request must never be replayed with a new body.
      */
     suspend fun confirmUnaccountedFurniture(operationId: String) = withContext(Dispatchers.IO) {
-        store.initialize()
-        val now = System.currentTimeMillis()
-        var confirmed = false
-        val updated = store.update(operationId) { operation ->
-            val maintenance = operation.maintenance
-            if (
-                maintenance == null ||
-                    !maintenance.requiresUnaccountedFurnitureConfirmation ||
-                    maintenance.submitRequest == null
-            ) {
-                operation
-            } else {
-                confirmed = true
-                operation.copy(
-                    updatedAtEpochMillis = now,
-                    status = BackgroundUploadStatus.QUEUED,
-                    stage = "Ожидание сети",
-                    error = null,
-                    maintenance = maintenance.copy(
-                        allowUnaccountedFurniture = true,
-                        requiresUnaccountedFurnitureConfirmation = false,
-                        submitIdempotencyKey = UUID.randomUUID().toString(),
-                    ),
-                )
+        lifecycleMutex.withLock {
+            store.initialize()
+            val scope = requireActiveScope()
+            val now = System.currentTimeMillis()
+            var confirmed = false
+            val updated = store.update(scope, operationId) { operation ->
+                val maintenance = operation.maintenance
+                if (
+                    maintenance == null ||
+                        !maintenance.requiresUnaccountedFurnitureConfirmation ||
+                        maintenance.submitRequest == null
+                ) {
+                    operation
+                } else {
+                    confirmed = true
+                    operation.copy(
+                        updatedAtEpochMillis = now,
+                        status = BackgroundUploadStatus.QUEUED,
+                        stage = "Ожидание сети",
+                        error = null,
+                        maintenance = maintenance.copy(
+                            allowUnaccountedFurniture = true,
+                            requiresUnaccountedFurnitureConfirmation = false,
+                            submitIdempotencyKey = UUID.randomUUID().toString(),
+                        ),
+                    )
+                }
+            } ?: return@withLock
+            if (confirmed) {
+                schedule(scope, updated.id, ExistingWorkPolicy.REPLACE)
             }
-        } ?: return@withContext
-        if (confirmed) {
-            schedule(updated.id, ExistingWorkPolicy.REPLACE)
         }
     }
 
@@ -158,19 +237,26 @@ class BackgroundUploadCoordinator(
      * being started after its outbox entry has been removed.
      */
     suspend fun cancel(operationId: String) = withContext(Dispatchers.IO) {
-        store.initialize()
-        if (store.operation(operationId) == null) return@withContext
-        workManager.cancelUniqueWork(workName(operationId)).result.get()
-        store.remove(operationId)
+        lifecycleMutex.withLock {
+            store.initialize()
+            val scope = requireActiveScope()
+            if (store.operation(scope, operationId) == null) return@withLock
+            workManager.cancelUniqueWork(workName(scope, operationId)).result.get()
+            BackgroundUploadWorker.awaitIdle()
+            store.remove(scope, operationId)
+        }
     }
 
-    private fun schedule(
+    private suspend fun schedule(
+        scope: BackgroundUploadScope,
         operationId: String,
         policy: ExistingWorkPolicy,
         photoId: String? = null,
     ) {
         val input = Data.Builder()
             .putString(BackgroundUploadWorker.INPUT_OPERATION_ID, operationId)
+            .putString(BackgroundUploadWorker.INPUT_OWNER_ACCOUNT_ID, scope.ownerAccountId)
+            .putString(BackgroundUploadWorker.INPUT_WAREHOUSE_ID, scope.warehouseId)
             .apply { photoId?.let { putString(BackgroundUploadWorker.INPUT_PHOTO_ID, it) } }
             .build()
         val request = OneTimeWorkRequestBuilder<BackgroundUploadWorker>()
@@ -181,8 +267,25 @@ class BackgroundUploadCoordinator(
                     .build(),
             )
             .addTag(BackgroundUploadWorker.WORK_TAG)
+            .addTag(workScopeTag(scope))
             .build()
-        workManager.enqueueUniqueWork(workName(operationId), policy, request)
+        workManager.enqueueUniqueWork(workName(scope, operationId), policy, request).result.get()
+    }
+
+    private fun requireActiveScope(): BackgroundUploadScope = requireNotNull(activeScope) {
+        "Фоновые загрузки недоступны до проверки учётной записи и склада"
+    }
+
+    private suspend fun cancelAllWorkAndAwait() {
+        workManager.cancelAllWorkByTag(BackgroundUploadWorker.WORK_TAG).result.get()
+        BackgroundUploadWorker.awaitIdle()
+    }
+
+    private fun BackgroundUploadDraft.bindTo(scope: BackgroundUploadScope): BackgroundUploadDraft {
+        require(this.scope == scope) {
+            "Черновик фоновой загрузки принадлежит другой учётной записи или складу"
+        }
+        return this
     }
 
     private fun copyPhoto(
@@ -237,6 +340,19 @@ class BackgroundUploadCoordinator(
     }
 
     companion object {
-        private fun workName(operationId: String) = "rwms-background-upload-$operationId"
+        internal fun workName(
+            scope: BackgroundUploadScope,
+            operationId: String,
+        ) = "rwms-background-upload-v2-${scope.workKey()}-${stableHash(operationId)}"
+
+        internal fun workScopeTag(scope: BackgroundUploadScope) =
+            "rwms-background-upload-scope-${scope.workKey()}"
+
+        private fun BackgroundUploadScope.workKey(): String =
+            stableHash("$ownerAccountId\u0000$warehouseId")
+
+        private fun stableHash(value: String): String = MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray(Charsets.UTF_8))
+            .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
     }
 }

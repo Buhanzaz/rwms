@@ -17,6 +17,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+/**
+ * Defines worker application UI or lifecycle state; it does not decide a server task transition.
+ */
 sealed interface WorkerAppUiState {
     data object Loading : WorkerAppUiState
     data class SignedOut(
@@ -28,6 +31,9 @@ sealed interface WorkerAppUiState {
 }
 
 @HiltViewModel
+/**
+ * Defines worker application UI or lifecycle state; it does not decide a server task transition.
+ */
 class WorkerAppViewModel @Inject constructor(
     private val auth: WorkerAuthRepository,
     private val gateway: WorkerGatewayClient,

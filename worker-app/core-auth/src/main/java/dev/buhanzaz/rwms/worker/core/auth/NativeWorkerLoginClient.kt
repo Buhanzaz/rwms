@@ -17,6 +17,9 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
+/**
+ * Owns the worker OAuth/session boundary. Credentials and cookies remain client-local and never grant server authorization.
+ */
 internal sealed class NativeWorkerLoginException(
     val userMessage: String,
 ) : IOException(userMessage) {
@@ -30,6 +33,9 @@ internal sealed class NativeWorkerLoginException(
         NativeWorkerLoginException("Не удалось безопасно выполнить вход. Повторите попытку")
 }
 
+/**
+ * Owns the worker OAuth/session boundary. Credentials and cookies remain client-local and never grant server authorization.
+ */
 internal data class NativeWorkerLoginSession(
     val authorizationResponse: AuthorizationResponse,
     val cookies: EphemeralCookieJar,
@@ -193,6 +199,9 @@ class NativeWorkerLoginClient private constructor(
     }
 }
 
+/**
+ * Owns the worker OAuth/session boundary. Credentials and cookies remain client-local and never grant server authorization.
+ */
 internal class EphemeralCookieJar : CookieJar {
     private val cookies = mutableListOf<Cookie>()
 
@@ -267,6 +276,9 @@ private fun HttpUrl.hasSameOrigin(other: HttpUrl): Boolean =
     scheme == other.scheme && host == other.host && port == other.port
 
 @Serializable
+/**
+ * Owns the worker OAuth/session boundary. Credentials and cookies remain client-local and never grant server authorization.
+ */
 private data class CsrfToken(
     val parameterName: String,
     val token: String,
