@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -23,6 +24,9 @@ const returnApi = vi.hoisted(() => ({
 }))
 const orderShipmentApi = vi.hoisted(() => ({
   createOrderShipment: vi.fn(),
+}))
+const shipmentTaskSettingsApi = vi.hoisted(() => ({
+  getShipmentTaskSettings: vi.fn(),
 }))
 const ordersApi = vi.hoisted(() => ({
   getOrder: vi.fn(),
@@ -51,6 +55,19 @@ vi.mock("@/features/logistics/returns/api", () => ({
 vi.mock("@/features/logistics/order-tasks-api", () => ({
   createOrderShipment: orderShipmentApi.createOrderShipment,
 }))
+vi.mock(
+  "@/features/settings/logistics/api/shipment-task-settings-api",
+  () => ({
+    getShipmentTaskSettings: shipmentTaskSettingsApi.getShipmentTaskSettings,
+    shipmentTaskSettingsKeys: {
+      warehouse: (warehouseId: string) => [
+        "logistics",
+        "shipment-task-settings",
+        warehouseId,
+      ],
+    },
+  })
+)
 vi.mock("@/features/orders/api/orders-api", () => ({
   ORDERS_QUERY_KEY: ["orders"],
   getOrder: ordersApi.getOrder,
@@ -132,6 +149,9 @@ const LINE_ID = "33333333-3333-4333-8333-333333333333"
 const ASSET_ID = "44444444-4444-4444-8444-444444444444"
 const ORDER_ID = "55555555-5555-4555-8555-555555555555"
 const RETURN_ID = "66666666-6666-4666-8666-666666666666"
+const DRIVER_WORKER_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+const SECOND_ASSET_ID = "88888888-8888-4888-8888-888888888888"
+const THIRD_ASSET_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab"
 
 function shipment() {
   return {
@@ -143,6 +163,7 @@ function shipment() {
     destinationWarehouseId: null,
     partySnapshot: "ООО Тест",
     driverSnapshot: null,
+    driverWorkerId: null,
     clientId: "66666666-6666-4666-8666-666666666666",
     equipmentMovementTaskId: null,
     scheduledDate: null,
@@ -184,6 +205,7 @@ function rentalReturn() {
     destinationWarehouseId: null,
     partySnapshot: "ООО Тест",
     driverSnapshot: null,
+    driverWorkerId: null,
     clientId: "66666666-6666-4666-8666-666666666666",
     equipmentMovementTaskId: null,
     scheduledDate: null,
@@ -256,21 +278,62 @@ function savedOrder() {
   }
 }
 
+function savedOrderWithThreeCabins() {
+  const order = savedOrder()
+  return {
+    ...order,
+    unitCount: 3,
+    units: [
+      ...order.units,
+      {
+        reservationId: "88888888-8888-4888-8888-888888888889",
+        added: true,
+        unit: {
+          ...order.units[0].unit,
+          id: SECOND_ASSET_ID,
+          number: "БЫТ-002",
+        },
+        desiredContents: [],
+        rentalTerm: {
+          rentalMonths: 3,
+          shipmentDate: null,
+          returnDate: null,
+        },
+      },
+      {
+        reservationId: "99999999-9999-4999-8999-999999999998",
+        added: true,
+        unit: {
+          ...order.units[0].unit,
+          id: THIRD_ASSET_ID,
+          number: "БЫТ-003",
+        },
+        desiredContents: [],
+        rentalTerm: {
+          rentalMonths: 3,
+          shipmentDate: null,
+          returnDate: null,
+        },
+      },
+    ],
+  }
+}
+
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
-  return render(
+  const rendered = render(
     <MemoryRouter>
       <QueryClientProvider client={queryClient}>
         <LogisticsOrderTasksPage />
       </QueryClientProvider>
     </MemoryRouter>
   )
+  return { ...rendered, queryClient }
 }
 
-function useSavedOrderTask() {
-  const order = savedOrder()
+function useSavedOrderTask(order = savedOrder()) {
   shipmentApi.listShipments.mockResolvedValue([])
   ordersApi.listOrders.mockResolvedValue({
     content: [order],
@@ -280,6 +343,19 @@ function useSavedOrderTask() {
     totalPages: 1,
   })
   ordersApi.getOrder.mockResolvedValue(order)
+}
+
+function useThreeCabinReferenceLabels() {
+  referenceApi.useLogisticsReferenceLabels.mockReturnValue({
+    assetNumbers: new Map([
+      [ASSET_ID, "БЫТ-001"],
+      [SECOND_ASSET_ID, "БЫТ-002"],
+      [THIRD_ASSET_ID, "БЫТ-003"],
+    ]),
+    orderNumbers: new Map([[ORDER_ID, "ORD-000001"]]),
+    assets: new Map(),
+    orders: new Map(),
+  })
 }
 
 beforeEach(() => {
@@ -309,13 +385,22 @@ beforeEach(() => {
     version: 6,
     state: "PREPARING",
     driverSnapshot: "Иванов Иван",
+    driverWorkerId: DRIVER_WORKER_ID,
     scheduledDate: "2026-08-01",
   })
   orderShipmentApi.createOrderShipment.mockResolvedValue({
     ...document,
     version: 5,
     driverSnapshot: "Иванов Иван",
+    driverWorkerId: DRIVER_WORKER_ID,
     scheduledDate: "2026-08-01",
+  })
+  shipmentTaskSettingsApi.getShipmentTaskSettings.mockResolvedValue({
+    warehouseId: WAREHOUSE_ID,
+    version: 0,
+    maxCabinsPerShipmentTask: 3,
+    updatedBy: "00000000-0000-4000-8000-000000000010",
+    updatedAt: "2026-08-10T10:00:00Z",
   })
   referenceApi.useLogisticsReferenceLabels.mockReturnValue({
     assetNumbers: new Map([[ASSET_ID, "БЫТ-001"]]),
@@ -437,6 +522,7 @@ describe("LogisticsOrderTasksPage", () => {
           orderId: ORDER_ID,
           unitIds: [ASSET_ID],
           driverSnapshot: "Иванов Иван",
+          driverWorkerId: DRIVER_WORKER_ID,
         })
       )
     )
@@ -448,6 +534,7 @@ describe("LogisticsOrderTasksPage", () => {
         expect.objectContaining({
           documentId: SHIPMENT_ID,
           driverSnapshot: "Иванов Иван",
+          driverWorkerId: DRIVER_WORKER_ID,
         })
       )
     )
@@ -498,6 +585,141 @@ describe("LogisticsOrderTasksPage", () => {
         })
       )
     )
+  })
+
+  it("limits a saved-order shipment to the configured cabin cap and shows it in the dialog", async () => {
+    const user = userEvent.setup()
+    shipmentTaskSettingsApi.getShipmentTaskSettings.mockResolvedValue({
+      warehouseId: WAREHOUSE_ID,
+      version: 4,
+      maxCabinsPerShipmentTask: 2,
+      updatedBy: "admin-1",
+      updatedAt: "2026-08-10T12:00:00Z",
+    })
+    useSavedOrderTask(savedOrderWithThreeCabins())
+    useThreeCabinReferenceLabels()
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Показать бытовки" }))[0]
+    )
+    const first = screen.getAllByRole("checkbox", {
+      name: "Выбрать бытовку БЫТ-001",
+    })[0]
+    const second = screen.getAllByRole("checkbox", {
+      name: "Выбрать бытовку БЫТ-002",
+    })[0]
+    const third = screen.getAllByRole("checkbox", {
+      name: "Выбрать бытовку БЫТ-003",
+    })[0]
+    await waitFor(() =>
+      expect((first as HTMLButtonElement).disabled).toBe(false)
+    )
+
+    await user.click(first)
+    await user.click(second)
+
+    expect((third as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getAllByText("Лимит одного задания: 2.").length).toBeGreaterThan(
+      0
+    )
+    expect(screen.getAllByText(/Выбрано бытовок:/).length).toBeGreaterThan(0)
+
+    await user.click(
+      screen.getAllByRole("button", { name: "Создать отгрузку" }).at(-1)!
+    )
+    const dialog = await screen.findByRole("dialog", {
+      name: "Создать отгрузку",
+    })
+    expect(
+      within(dialog).getByText(
+        /Выбрано бытовок: 2 из 2\. Выбранные бытовки будут объединены/
+      )
+    ).toBeTruthy()
+  })
+
+  it("revalidates the cap when it changes while a shipment dialog is open", async () => {
+    const user = userEvent.setup()
+    shipmentTaskSettingsApi.getShipmentTaskSettings.mockResolvedValue({
+      warehouseId: WAREHOUSE_ID,
+      version: 4,
+      maxCabinsPerShipmentTask: 3,
+      updatedBy: "admin-1",
+      updatedAt: "2026-08-10T12:00:00Z",
+    })
+    useSavedOrderTask(savedOrderWithThreeCabins())
+    useThreeCabinReferenceLabels()
+    const { queryClient } = renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Показать бытовки" }))[0]
+    )
+    const cabinNames = ["БЫТ-001", "БЫТ-002", "БЫТ-003"]
+    for (const cabinNumber of cabinNames) {
+      const checkbox = screen.getAllByRole("checkbox", {
+        name: `Выбрать бытовку ${cabinNumber}`,
+      })[0]
+      await waitFor(() =>
+        expect((checkbox as HTMLButtonElement).disabled).toBe(false)
+      )
+      await user.click(checkbox)
+    }
+    await user.click(
+      screen.getAllByRole("button", { name: "Создать отгрузку" }).at(-1)!
+    )
+    const dialog = await screen.findByRole("dialog", {
+      name: "Создать отгрузку",
+    })
+
+    act(() => {
+      queryClient.setQueryData(
+        ["logistics", "shipment-task-settings", WAREHOUSE_ID],
+        {
+          warehouseId: WAREHOUSE_ID,
+          version: 5,
+          maxCabinsPerShipmentTask: 2,
+          updatedBy: "admin-2",
+          updatedAt: "2026-08-10T12:05:00Z",
+        }
+      )
+    })
+    await user.selectOptions(
+      within(dialog).getByRole("combobox", { name: "Водитель" }),
+      DRIVER_WORKER_ID
+    )
+    await user.click(
+      within(dialog).getByRole("button", { name: "Создать отгрузку" })
+    )
+
+    expect(
+      await screen.findByText(
+        "В одном задании отгрузки можно выбрать не больше 2 бытовок."
+      )
+    ).toBeTruthy()
+    expect(orderShipmentApi.createOrderShipment).not.toHaveBeenCalled()
+  })
+
+  it("blocks saved-order cabin selection when the shipment cap cannot be loaded", async () => {
+    const user = userEvent.setup()
+    shipmentTaskSettingsApi.getShipmentTaskSettings.mockRejectedValue(
+      new Error("logistics-service недоступен")
+    )
+    useSavedOrderTask(savedOrder())
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Показать бытовки" }))[0]
+    )
+    expect(
+      await screen.findByText(
+        /Не удалось загрузить лимит бытовок в одном задании отгрузки: logistics-service недоступен/
+      )
+    ).toBeTruthy()
+    const checkbox = screen.getAllByRole("checkbox", {
+      name: "Выбрать бытовку БЫТ-001",
+    })[0]
+    expect((checkbox as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByText("Лимит одного задания: 3.")).toBeNull()
   })
 
   it("waits for a furniture worker task before starting shipment preparation", async () => {
@@ -602,6 +824,7 @@ describe("LogisticsOrderTasksPage", () => {
           documentId: RETURN_ID,
           scheduledDate: "2026-08-15",
           driverSnapshot: "Иванов Иван",
+          driverWorkerId: DRIVER_WORKER_ID,
         })
       )
     )

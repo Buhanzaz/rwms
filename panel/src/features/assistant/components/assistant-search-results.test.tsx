@@ -11,14 +11,23 @@ import type {
 
 const coverQueryFixture = vi.hoisted(() => ({
   items: [] as unknown[],
+  queryOptions: [] as {
+    placeholderData?: (previousData: unknown) => unknown
+  }[],
 }))
 
 vi.mock("@tanstack/react-query", () => ({
-  useQuery: () => ({
-    data: { items: coverQueryFixture.items },
-    isPending: false,
-    isError: false,
-  }),
+  keepPreviousData: (previousData: unknown) => previousData,
+  useQuery: (options: {
+    placeholderData?: (previousData: unknown) => unknown
+  }) => {
+    coverQueryFixture.queryOptions.push(options)
+    return {
+      data: { items: coverQueryFixture.items },
+      isPending: false,
+      isError: false,
+    }
+  },
 }))
 
 vi.mock("@/components/media/photo-carousel", () => ({
@@ -99,6 +108,7 @@ import { AssistantSearchResults } from "@/features/assistant/components/assistan
 
 afterEach(() => {
   coverQueryFixture.items = []
+  coverQueryFixture.queryOptions = []
   cleanup()
 })
 
@@ -138,6 +148,55 @@ function resultWithCabins(count: number): CabinSearchResult {
       },
     ],
   }
+}
+
+function resultWithGroups(): CabinSearchResult {
+  return {
+    warehouseId: "warehouse-1",
+    expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+    groups: [
+      {
+        group: {
+          cabinType: "БК-1",
+          finish: "ЛДСП",
+          dimensions: null,
+          category: null,
+          quantity: 1,
+        },
+        cabins: [
+          {
+            ...cabin(1),
+            rentalType: "БК-1",
+            finishing: "ЛДСП",
+          },
+        ],
+      },
+      {
+        group: {
+          cabinType: "БК-2",
+          finish: "ОСБ",
+          dimensions: null,
+          category: null,
+          quantity: 1,
+        },
+        cabins: [
+          {
+            ...cabin(2),
+            rentalType: "БК-2",
+            finishing: "ОСБ",
+          },
+        ],
+      },
+    ],
+  }
+}
+
+const exactFilterSuggestions = {
+  cabinTypes: ["БК-1"],
+  finishes: ["ЛДСП"],
+  dimensions: ["6x2.4"],
+  categories: ["ИТР"],
+  characteristics: ["Пластиковое окно"],
 }
 
 function renderResults(count: number) {
@@ -244,6 +303,80 @@ describe("AssistantSearchResults layout", () => {
     ).toBeNull()
   })
 
+  it("uses compact rounded group pills without a line underline", () => {
+    render(
+      <MemoryRouter>
+        <AssistantSearchResults
+          accessToken="token"
+          result={resultWithGroups()}
+          selectedIds={new Set()}
+          onSelectionChange={vi.fn()}
+        />
+      </MemoryRouter>
+    )
+
+    const tabs = screen.getByRole("tablist", {
+      name: "Группы найденных бытовок",
+    })
+    const activeGroup = screen.getByRole("tab", { name: /БК-1 · ЛДСП/ })
+
+    expect(tabs.getAttribute("data-variant")).toBe("default")
+    expect(tabs.className).toContain("gap-1")
+    expect(tabs.className).not.toContain("min-w-full")
+    expect(activeGroup.className).toContain("rounded-full")
+    expect(activeGroup.className).toContain("bg-muted/70")
+    expect(activeGroup.className).toContain("after:hidden")
+    expect(activeGroup.getAttribute("data-state")).toBe("active")
+  })
+
+  it("keeps the active logical group through a content and expiry refresh", async () => {
+    const user = userEvent.setup()
+    const initial = resultWithGroups()
+    const { rerender } = render(
+      <MemoryRouter>
+        <AssistantSearchResults
+          accessToken="token"
+          result={initial}
+          selectedIds={new Set()}
+          onSelectionChange={vi.fn()}
+        />
+      </MemoryRouter>
+    )
+
+    await user.click(screen.getByRole("tab", { name: /БК-2 · ОСБ/ }))
+    expect(
+      screen.getByRole("tab", { name: /БК-2 · ОСБ/ }).getAttribute("data-state")
+    ).toBe("active")
+    expect(screen.getByText("Бытовка БЫТ-2")).toBeTruthy()
+
+    const refreshed = resultWithGroups()
+    refreshed.expiresAt = new Date(Date.now() + 20 * 60_000).toISOString()
+    refreshed.groups[1] = {
+      ...refreshed.groups[1],
+      cabins: [
+        {
+          ...refreshed.groups[1].cabins[0],
+          number: "БЫТ-2А",
+        },
+      ],
+    }
+    rerender(
+      <MemoryRouter>
+        <AssistantSearchResults
+          accessToken="token"
+          result={refreshed}
+          selectedIds={new Set()}
+          onSelectionChange={vi.fn()}
+        />
+      </MemoryRouter>
+    )
+
+    expect(
+      screen.getByRole("tab", { name: /БК-2 · ОСБ/ }).getAttribute("data-state")
+    ).toBe("active")
+    expect(screen.getByText("Бытовка БЫТ-2А")).toBeTruthy()
+  })
+
   it("keeps cards with canonical covers visible when another cabin has no cover projection", () => {
     const cover = {
       mediaId: "media-1",
@@ -276,6 +409,66 @@ describe("AssistantSearchResults layout", () => {
       )
     ).toBeTruthy()
     expect(screen.getAllByRole("article")).toHaveLength(2)
+  })
+
+  it("keeps prior cover data while loading a changed candidate list without applying it to another cabin", () => {
+    const cover = {
+      mediaId: "media-1",
+      generation: 1,
+      kind: "SMALL",
+      contentType: "image/webp",
+      contentPath: "/api/media/v1/assets/media-1/variants/SMALL/content",
+      width: 360,
+      height: 240,
+    }
+    coverQueryFixture.items = [
+      {
+        cabinId: "cabin-1",
+        photoCount: 1,
+        cover,
+        previews: [cover],
+      },
+    ]
+    const initial = resultWithCabins(1)
+    const { rerender } = render(
+      <MemoryRouter>
+        <AssistantSearchResults
+          accessToken="token"
+          result={initial}
+          selectedIds={new Set()}
+          onSelectionChange={vi.fn()}
+        />
+      </MemoryRouter>
+    )
+    const previousData = { items: coverQueryFixture.items }
+
+    expect(
+      coverQueryFixture.queryOptions.at(-1)?.placeholderData?.(previousData)
+    ).toBe(previousData)
+    expect(
+      within(screen.getByTestId("photo-carousel-Бытовка БЫТ-1")).getByText(
+        "Фото загружено"
+      )
+    ).toBeTruthy()
+
+    const changedCandidates = resultWithCabins(1)
+    changedCandidates.groups[0].cabins = [cabin(2)]
+    rerender(
+      <MemoryRouter>
+        <AssistantSearchResults
+          accessToken="token"
+          result={changedCandidates}
+          selectedIds={new Set()}
+          onSelectionChange={vi.fn()}
+        />
+      </MemoryRouter>
+    )
+
+    expect(
+      within(screen.getByTestId("photo-carousel-Бытовка БЫТ-2")).getByText(
+        "Фото не загружены."
+      )
+    ).toBeTruthy()
   })
 
   it("opens the cabin from the whole information area and keeps status there", () => {
@@ -446,7 +639,7 @@ describe("AssistantSearchResults layout", () => {
     ).toBeNull()
   })
 
-  it("offers only authoritative exact filters plus an explicit linoleum choice", async () => {
+  it("keeps exact filters hidden until the manager explicitly opens them", async () => {
     const onSuggestion = vi.fn()
     const user = userEvent.setup()
     render(
@@ -456,18 +649,24 @@ describe("AssistantSearchResults layout", () => {
           result={resultWithCabins(1)}
           selectedIds={new Set()}
           onSelectionChange={vi.fn()}
-          filterSuggestions={{
-            cabinTypes: ["БК-1"],
-            finishes: ["ЛДСП"],
-            dimensions: ["6x2.4"],
-            categories: ["ИТР"],
-            characteristics: ["Пластиковое окно"],
-          }}
+          filterSuggestions={exactFilterSuggestions}
           onSuggestion={onSuggestion}
         />
       </MemoryRouter>
     )
 
+    const toggle = screen.getByRole("button", {
+      name: "Продолжить точный поиск",
+    })
+    expect(toggle.getAttribute("aria-expanded")).toBe("false")
+    expect(screen.queryByRole("radio", { name: "Пластиковое окно" })).toBeNull()
+
+    await user.click(toggle)
+    expect(
+      screen
+        .getByRole("button", { name: "Продолжить точный поиск" })
+        .getAttribute("aria-expanded")
+    ).toBe("true")
     await user.click(screen.getByRole("radio", { name: "Пластиковое окно" }))
     expect(onSuggestion).toHaveBeenCalledWith(
       "Уточни выборку: характеристика «Пластиковое окно»."
@@ -477,6 +676,75 @@ describe("AssistantSearchResults layout", () => {
       "Уточни выборку: только бытовки с линолеумом."
     )
     expect(screen.queryByText("Несуществующий тип")).toBeNull()
+  })
+
+  it("persists the manager's exact-filter open and collapsed choices through result rerenders", async () => {
+    const user = userEvent.setup()
+    const initial = resultWithCabins(1)
+    const { rerender } = render(
+      <MemoryRouter>
+        <AssistantSearchResults
+          accessToken="token"
+          result={initial}
+          selectedIds={new Set()}
+          onSelectionChange={vi.fn()}
+          filterSuggestions={exactFilterSuggestions}
+          onSuggestion={vi.fn()}
+        />
+      </MemoryRouter>
+    )
+
+    const toggle = screen.getByRole("button", {
+      name: "Продолжить точный поиск",
+    })
+    await user.click(toggle)
+    const refreshed = {
+      ...initial,
+      expiresAt: new Date(Date.now() + 20 * 60_000).toISOString(),
+    }
+    rerender(
+      <MemoryRouter>
+        <AssistantSearchResults
+          accessToken="token"
+          result={refreshed}
+          selectedIds={new Set()}
+          onSelectionChange={vi.fn()}
+          filterSuggestions={exactFilterSuggestions}
+          onSuggestion={vi.fn()}
+        />
+      </MemoryRouter>
+    )
+
+    expect(
+      screen
+        .getByRole("button", { name: "Продолжить точный поиск" })
+        .getAttribute("aria-expanded")
+    ).toBe("true")
+    expect(screen.getByRole("radio", { name: "Пластиковое окно" })).toBeTruthy()
+
+    await user.click(toggle)
+    rerender(
+      <MemoryRouter>
+        <AssistantSearchResults
+          accessToken="token"
+          result={{
+            ...refreshed,
+            expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+          }}
+          selectedIds={new Set()}
+          onSelectionChange={vi.fn()}
+          filterSuggestions={exactFilterSuggestions}
+          onSuggestion={vi.fn()}
+        />
+      </MemoryRouter>
+    )
+
+    expect(
+      screen
+        .getByRole("button", { name: "Продолжить точный поиск" })
+        .getAttribute("aria-expanded")
+    ).toBe("false")
+    expect(screen.queryByRole("radio", { name: "Пластиковое окно" })).toBeNull()
   })
 
   it("emits the complete remaining ID set when a selected cabin is unchecked", async () => {

@@ -118,6 +118,10 @@ export function parseReturnDocument(value: unknown): ReturnDocument {
     destinationWarehouseId: null,
     partySnapshot: nullableText(source.partySnapshot),
     driverSnapshot: nullableText(source.driverSnapshot),
+    driverWorkerId:
+      source.driverWorkerId === undefined
+        ? null
+        : nullableUuid(source.driverWorkerId),
     clientId: nullableUuid(source.clientId),
     equipmentMovementTaskId: nullableUuid(source.equipmentMovementTaskId),
     scheduledDate: nullableLocalDate(source.scheduledDate),
@@ -173,6 +177,7 @@ export class HttpReturnClient implements ReturnClient {
         warehouseId: input.warehouseId,
         clientId: input.clientId,
         driverSnapshot: input.driverSnapshot,
+        driverWorkerId: input.driverWorkerId,
         lines: input.lines,
       }),
     })
@@ -189,6 +194,7 @@ export class HttpReturnClient implements ReturnClient {
         headers: commandHeaders(input.idempotencyKey),
         body: JSON.stringify({
           driverSnapshot: input.driverSnapshot,
+          driverWorkerId: input.driverWorkerId,
           scheduledDate: input.scheduledDate,
         }),
       }

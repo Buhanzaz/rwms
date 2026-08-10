@@ -37,6 +37,46 @@ public interface DriverLogisticsTaskRepository
       @Param("sourceId") UUID sourceId,
       @Param("kind") DriverTaskKind kind);
 
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      """
+      select task
+      from DriverLogisticsTask task
+      where task.sourceType = :sourceType
+        and task.sourceId = :sourceId
+        and task.kind = :kind
+        and task.state <> dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState.CANCELLED
+      """)
+  Optional<DriverLogisticsTask> findActiveForUpdateBySourceTypeAndSourceIdAndKind(
+      @Param("sourceType") DriverTaskSourceType sourceType,
+      @Param("sourceId") UUID sourceId,
+      @Param("kind") DriverTaskKind kind);
+
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      """
+      select task
+      from DriverLogisticsTask task
+      where task.sourceType = :sourceType
+        and task.sourceId in :sourceIds
+      order by task.createdAt asc, task.id asc
+      """)
+  List<DriverLogisticsTask> findAllForUpdateBySourceTypeAndSourceIdIn(
+      @Param("sourceType") DriverTaskSourceType sourceType,
+      @Param("sourceIds") Collection<UUID> sourceIds);
+
+  /** Detects legacy line-derived tasks so an existing shipment is never regrouped in place. */
+  @Query(
+      """
+      select case when count(task) > 0 then true else false end
+      from DriverLogisticsTask task
+      where task.sourceType = :sourceType
+        and task.sourceId in :sourceIds
+      """)
+  boolean existsBySourceTypeAndSourceIdIn(
+      @Param("sourceType") DriverTaskSourceType sourceType,
+      @Param("sourceIds") Collection<UUID> sourceIds);
+
   Optional<DriverLogisticsTask> findByExternalTaskId(UUID externalTaskId);
 
   Optional<DriverLogisticsTask> findFirstByRepairIdAndKindOrderByCreatedAtDescIdDesc(

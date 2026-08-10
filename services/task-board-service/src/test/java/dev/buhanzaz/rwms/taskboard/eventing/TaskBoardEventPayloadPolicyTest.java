@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.buhanzaz.rwms.taskboard.domain.EntryStatus;
 import dev.buhanzaz.rwms.taskboard.domain.EntryType;
+import dev.buhanzaz.rwms.taskboard.domain.DriverTaskAudienceMode;
 import dev.buhanzaz.rwms.taskboard.domain.GroupOperationalStatus;
 import dev.buhanzaz.rwms.taskboard.domain.ParticipationPolicy;
 import dev.buhanzaz.rwms.taskboard.domain.QueuePurpose;
@@ -31,6 +32,7 @@ class TaskBoardEventPayloadPolicyTest {
   @Test
   void acceptsAndSerializesApprovedTaskSchedulingFacts() {
     UUID taskId = UUID.randomUUID();
+    UUID driverId = UUID.randomUUID();
     LocalDate scheduledDate = LocalDate.of(2026, 7, 24);
     var fact =
         new BoardTaskFact(
@@ -45,6 +47,8 @@ class TaskBoardEventPayloadPolicyTest {
             null,
             null,
             null,
+            DriverTaskAudienceMode.ASSIGNED_DRIVER,
+            driverId,
             false);
 
     assertThatCode(
@@ -60,6 +64,98 @@ class TaskBoardEventPayloadPolicyTest {
     assertThat(payload.required("scheduledDate").stringValue()).isEqualTo("2026-07-24");
     assertThat(payload.required("priority").intValue()).isOne();
     assertThat(payload.required("pinned").booleanValue()).isTrue();
+    assertThat(payload.required("driverAudience").stringValue())
+        .isEqualTo("ASSIGNED_DRIVER");
+    assertThat(payload.required("plannedDriverWorkerId").stringValue())
+        .isEqualTo(driverId.toString());
+  }
+
+  @Test
+  void acceptsLegacyTaskFactsWithoutTheOptionalDriverAudiencePair() {
+    UUID taskId = UUID.randomUUID();
+    var legacy =
+        objectMapper.valueToTree(
+            new BoardTaskFact(
+                taskId,
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                TaskStatus.ACTIVE,
+                LocalDate.of(2026, 7, 24),
+                TaskLane.SCHEDULED,
+                3,
+                false,
+                null,
+                null,
+                null,
+                false));
+    assertThat(legacy.has("driverAudience")).isFalse();
+    assertThat(legacy.has("plannedDriverWorkerId")).isFalse();
+    var legacyObject = (tools.jackson.databind.node.ObjectNode) legacy;
+    legacyObject.remove("driverAudience");
+    legacyObject.remove("plannedDriverWorkerId");
+
+    assertThatCode(
+            () ->
+                policy.validateNode(
+                    TaskBoardEventTypes.BOARD_TASK_CHANGED,
+                    TaskBoardAggregateType.BOARD_TASK,
+                    taskId,
+                    legacyObject))
+        .doesNotThrowAnyException();
+
+    legacyObject.put("plannedDriverWorkerId", UUID.randomUUID().toString());
+    assertThatThrownBy(
+            () ->
+                policy.validateNode(
+                    TaskBoardEventTypes.BOARD_TASK_CHANGED,
+                    TaskBoardAggregateType.BOARD_TASK,
+                    taskId,
+                    legacyObject))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("typed semantic validation");
+  }
+
+  @Test
+  void rejectsDriverAudienceFactsWithInconsistentWorkerIdentity() {
+    assertThatThrownBy(
+            () ->
+                new BoardTaskFact(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    TaskStatus.ACTIVE,
+                    LocalDate.of(2026, 7, 24),
+                    TaskLane.CURRENT,
+                    2,
+                    false,
+                    null,
+                    null,
+                    null,
+                    DriverTaskAudienceMode.ASSIGNED_DRIVER,
+                    null,
+                    false))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("requires a worker");
+
+    assertThatThrownBy(
+            () ->
+                new BoardTaskFact(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    TaskStatus.ACTIVE,
+                    LocalDate.of(2026, 7, 24),
+                    TaskLane.CURRENT,
+                    2,
+                    false,
+                    null,
+                    null,
+                    null,
+                    DriverTaskAudienceMode.WAREHOUSE_DRIVERS,
+                    UUID.randomUUID(),
+                    false))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("shared driver audience cannot identify a worker");
   }
 
   @Test

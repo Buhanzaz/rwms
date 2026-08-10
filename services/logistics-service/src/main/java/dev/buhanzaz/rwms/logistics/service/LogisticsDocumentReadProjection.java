@@ -36,6 +36,7 @@ class LogisticsDocumentReadProjection {
         summary.destinationWarehouseId(),
         summary.partySnapshot(),
         summary.driverSnapshot(),
+        summary.driverWorkerId(),
         summary.clientId(),
         summary.equipmentMovementTaskId(),
         summary.scheduledDate(),

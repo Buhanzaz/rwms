@@ -21,6 +21,7 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferLineRequest;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsLineState;
+import dev.buhanzaz.rwms.logistics.driver.service.DocumentDriverTaskPlanner;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementLocationKind;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
 import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskService;
@@ -87,6 +88,7 @@ class TransferWorkflowSagaIntegrationTest {
   @Autowired JdbcTemplate jdbc;
 
   @MockitoBean LogisticsDependencyGateway dependencies;
+  @MockitoBean DocumentDriverTaskPlanner driverTaskPlanner;
 
   @BeforeEach
   void reset() {
@@ -101,7 +103,7 @@ class TransferWorkflowSagaIntegrationTest {
           outbox_event
         cascade
         """);
-    org.mockito.Mockito.reset(dependencies);
+    org.mockito.Mockito.reset(dependencies, driverTaskPlanner);
   }
 
   @Test
@@ -586,7 +588,6 @@ class TransferWorkflowSagaIntegrationTest {
             new CreateTransferRequest(
                 ORIGIN,
                 DESTINATION,
-                "Driver A",
                 scheduledDate,
                 List.of(new TransferLineRequest(ASSET, 7)),
                 List.of(
@@ -656,7 +657,6 @@ class TransferWorkflowSagaIntegrationTest {
             new CreateTransferRequest(
                 ORIGIN,
                 DESTINATION,
-                null,
                 scheduledDate,
                 List.of(new TransferLineRequest(ASSET, 7)),
                 List.of()));

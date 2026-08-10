@@ -149,6 +149,7 @@ const EXTERNAL_FURNITURE_TASK_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 const EQUIPMENT_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 const EQUIPMENT_TASK_LINE_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
 const RETURN_TASK_LINE_ID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+const DRIVER_WORKER_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 const ASSET_NUMBER = "БЫТ-041"
 const ORDER_NUMBER = "ORD-000007"
 
@@ -166,6 +167,7 @@ function shipmentDocument(
     destinationWarehouseId: null,
     partySnapshot: "ООО Тест",
     driverSnapshot: state === "DRAFT" ? null : "Иванов Иван",
+    driverWorkerId: state === "DRAFT" ? null : DRIVER_WORKER_ID,
     clientId: CLIENT_ID,
     equipmentMovementTaskId: null,
     scheduledDate: state === "DRAFT" ? null : "2026-07-18",
@@ -465,9 +467,9 @@ describe("LogisticsShipmentsPage", () => {
 
     await user.click(hideFilters)
 
-    expect(
-      document.getElementById("logistics-shipment-filters")?.hidden
-    ).toBe(true)
+    expect(document.getElementById("logistics-shipment-filters")?.hidden).toBe(
+      true
+    )
     const showFilters = screen.getByRole("button", {
       name: "Показать фильтры",
     })
@@ -475,9 +477,9 @@ describe("LogisticsShipmentsPage", () => {
 
     await user.click(showFilters)
 
-    expect(
-      document.getElementById("logistics-shipment-filters")?.hidden
-    ).toBe(false)
+    expect(document.getElementById("logistics-shipment-filters")?.hidden).toBe(
+      false
+    )
   })
 
   it("assigns a driver and date to the shipment created from a saved order", async () => {
@@ -506,6 +508,7 @@ describe("LogisticsShipmentsPage", () => {
         documentId: DRAFT_ID,
         expectedVersion: 2,
         driverSnapshot: "Иванов Иван",
+        driverWorkerId: DRIVER_WORKER_ID,
         scheduledDate,
         idempotencyKey: SCHEDULE_KEY,
       })

@@ -1,3 +1,6 @@
 node_modules/
 .wrangler/
 .site/
+.next/
+.open-next/
+public/

@@ -50,6 +50,7 @@ class TaskBoardReadProjectionService {
   private final JdbcTemplate jdbc;
   private final ObjectMapper objectMapper;
   private final WarehouseKpiClock kpiClock;
+  private final DriverTaskAudienceService driverAudiences;
 
   TaskBoardReadProjectionService(
       BoardTaskRepository tasks,
@@ -64,7 +65,8 @@ class TaskBoardReadProjectionService {
       TaskSyncSourceRepository taskSyncSources,
       JdbcTemplate jdbc,
       ObjectMapper objectMapper,
-      WarehouseKpiClock kpiClock) {
+      WarehouseKpiClock kpiClock,
+      DriverTaskAudienceService driverAudiences) {
     this.tasks = tasks;
     this.entries = entries;
     this.queues = queues;
@@ -78,6 +80,7 @@ class TaskBoardReadProjectionService {
     this.jdbc = jdbc;
     this.objectMapper = objectMapper;
     this.kpiClock = kpiClock;
+    this.driverAudiences = driverAudiences;
   }
 
   public TaskBoardSnapshot snapshot(
@@ -171,7 +174,7 @@ class TaskBoardReadProjectionService {
    * logistics entries from the server-controlled current lane.  The lane is an
    * ordered queue; only its first waiting entry is actionable for a driver.
    */
-  TaskBoardSnapshot workerSnapshot(UUID warehouseId) {
+  TaskBoardSnapshot workerSnapshot(UUID warehouseId, UUID workerId) {
     TaskBoardSnapshot ordinary = snapshot(warehouseId, null, false);
     List<BoardColumnDto> columns = new ArrayList<>(ordinary.columns());
     for (WorkQueue queue : queues.findAllActiveOrderedByWarehouseId(warehouseId)) {
@@ -181,6 +184,7 @@ class TaskBoardReadProjectionService {
               .filter(entry -> entry.getQueue() != null && entry.getQueue().equals(queue))
               .filter(entry -> entry.getEntryType() == EntryType.REAL)
               .filter(entry -> entry.getTask().getLane() == TaskLane.CURRENT)
+              .filter(entry -> driverAudiences.isVisibleTo(entry, workerId))
               .sorted(Comparator.comparingInt(QueueEntry::getQueuePosition))
               .toList();
       Map<UUID, TaskSourceReferenceDto> sources = sourceReferences(logisticsEntries);
@@ -201,6 +205,16 @@ class TaskBoardReadProjectionService {
 
   BoardEntryDto entry(UUID warehouseId, UUID entryId) {
     return dto(requireEntry(warehouseId, entryId));
+  }
+
+  /** Resolves a worker-visible entry and hides driver tasks outside its planned audience. */
+  BoardEntryDto workerEntry(UUID warehouseId, UUID entryId, UUID workerId) {
+    QueueEntry entry = requireEntry(warehouseId, entryId);
+    if (entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER
+        && !driverAudiences.isVisibleTo(entry, workerId)) {
+      throw new NotFoundException("Задание не найдено");
+    }
+    return dto(entry);
   }
 
   TaskWorkerContentDto workerContent(UUID warehouseId, UUID entryId) {
@@ -501,7 +515,8 @@ class TaskBoardReadProjectionService {
         e.getActiveWorkSeconds(),
         as,
         timerSnapshot(e, serverTime),
-        source);
+        source,
+        driverAudiences.dto(t));
   }
 
   private TaskTimerSnapshot timerSnapshot(QueueEntry entry, OffsetDateTime serverTime) {
@@ -576,6 +591,7 @@ class TaskBoardReadProjectionService {
         task.getLane(),
         task.getPriority(),
         task.isPinned(),
+        driverAudiences.dto(task),
         task.getDoneAt(),
         route);
   }

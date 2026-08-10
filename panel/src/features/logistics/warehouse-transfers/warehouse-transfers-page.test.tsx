@@ -31,9 +31,6 @@ const transferApi = vi.hoisted(() => ({
   listWarehouseTransfers: vi.fn(),
   reconcileWarehouseTransfer: vi.fn(),
 }))
-const driverDirectoryApi = vi.hoisted(() => ({
-  listRepairWorkerGroups: vi.fn(),
-}))
 const rentalItemsApi = vi.hoisted(() => ({
   getAssetRentalItem: vi.fn(),
   listAssetRentalItems: vi.fn(),
@@ -60,14 +57,6 @@ vi.mock(
     ...transferApi,
   })
 )
-
-vi.mock("@/features/repair-tasks/api/repair-worker-directory-api", () => ({
-  repairWorkerGroupsQueryKey: (query: unknown) => [
-    "repair-worker-groups",
-    query,
-  ],
-  listRepairWorkerGroups: driverDirectoryApi.listRepairWorkerGroups,
-}))
 
 vi.mock("@/api/equipment-api", () => ({
   getEquipmentItems: equipmentApi.getEquipmentItems,
@@ -245,7 +234,6 @@ function transferDocument(
     warehouseId: SOURCE_WAREHOUSE_ID,
     destinationWarehouseId: DESTINATION_WAREHOUSE_ID,
     partySnapshot: null,
-    driverSnapshot: "Иванов Иван",
     clientId: null,
     equipmentMovementTaskId: EQUIPMENT_TASK_ID,
     scheduledDate: "2026-07-19",
@@ -304,22 +292,6 @@ beforeEach(() => {
       disconnect() {}
     }
   )
-  driverDirectoryApi.listRepairWorkerGroups.mockResolvedValue([
-    {
-      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-      warehouseId: SOURCE_WAREHOUSE_ID,
-      name: "Водители",
-      active: true,
-      queueIds: [],
-      routeQueueKinds: ["MOVEMENT"],
-      members: [
-        {
-          id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-          name: "Иванов Иван",
-        },
-      ],
-    },
-  ])
   rentalItemsApi.listAssetRentalItems.mockResolvedValue({
     content: [TRANSFER_CABIN, SECOND_TRANSFER_CABIN, EMPTY_TRANSFER_CABIN],
   })
@@ -358,7 +330,7 @@ afterEach(() => {
 })
 
 describe("WarehouseTransfersPage", () => {
-  it("filters transfers by a readable route, driver, status, and planned date", async () => {
+  it("filters transfers by a readable route, status, and planned date", async () => {
     const user = userEvent.setup()
     const sourceRoute = "Москва · Москва → Петербург · Санкт-Петербург"
     const destinationRoute = "Петербург · Санкт-Петербург → Москва · Москва"
@@ -367,7 +339,6 @@ describe("WarehouseTransfersPage", () => {
       ...transferDocument(TRANSIT_DOCUMENT_ID, "IN_TRANSIT", 9, "DEPARTED"),
       warehouseId: DESTINATION_WAREHOUSE_ID,
       destinationWarehouseId: SOURCE_WAREHOUSE_ID,
-      driverSnapshot: "Петров Петр",
       scheduledDate: "2026-07-22",
     }
     transferApi.listWarehouseTransfers.mockResolvedValue([draft, transit])
@@ -413,7 +384,11 @@ describe("WarehouseTransfersPage", () => {
 
     expect(filterButton("Статус")).toBeTruthy()
     expect(filterButton("Маршрут")).toBeTruthy()
-    expect(filterButton("Водитель")).toBeTruthy()
+    expect(
+      document.querySelectorAll<HTMLButtonElement>(
+        '[data-slot="popover-trigger"]'
+      )
+    ).toHaveLength(2)
     expect(within(table).getByText(sourceRoute)).toBeTruthy()
     expect(within(table).getByText(destinationRoute)).toBeTruthy()
 
@@ -427,12 +402,6 @@ describe("WarehouseTransfersPage", () => {
 
     await user.click(filterButton("Маршрут"))
     await user.click(screen.getByRole("checkbox", { name: destinationRoute }))
-    await user.click(screen.getByRole("button", { name: "Применить" }))
-    await expectOnlyRoute(destinationRoute, sourceRoute)
-    await resetFilters()
-
-    await user.click(filterButton("Водитель"))
-    await user.click(screen.getByRole("checkbox", { name: "Петров Петр" }))
     await user.click(screen.getByRole("button", { name: "Применить" }))
     await expectOnlyRoute(destinationRoute, sourceRoute)
     await resetFilters()
@@ -518,7 +487,7 @@ describe("WarehouseTransfersPage", () => {
       screen.getByRole("heading", { name: "Создать складское перемещение" })
     ).toBeTruthy()
     expect(screen.getByText("Бытовки и наполнение")).toBeTruthy()
-    expect(screen.getByRole("combobox", { name: "Водитель" })).toBeTruthy()
+    expect(screen.queryByRole("combobox", { name: "Водитель" })).toBeNull()
     expect(screen.getByLabelText("Дата задания")).toBeTruthy()
     expect(screen.queryByText("Мебель")).toBeNull()
     expect(screen.queryByLabelText("Asset UUID")).toBeNull()
@@ -611,7 +580,6 @@ describe("WarehouseTransfersPage", () => {
         accessToken: "transfer-token",
         warehouseId: SOURCE_WAREHOUSE_ID,
         destinationWarehouseId: DESTINATION_WAREHOUSE_ID,
-        driverSnapshot: null,
         scheduledDate,
         lines: [{ assetId: ASSET_ID, assetVersion: 8 }],
         furnitureReplacements: [

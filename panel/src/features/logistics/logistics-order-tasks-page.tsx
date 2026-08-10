@@ -83,6 +83,10 @@ import {
 } from "@/features/orders/api/orders-api"
 import type { RepairTaskWorkerSnapshotDto } from "@/features/repair-tasks/model/repair-task"
 import { RENTAL_ITEM_STATUS_LABEL } from "@/features/rental-items/model/rental-item"
+import {
+  getShipmentTaskSettings,
+  shipmentTaskSettingsKeys,
+} from "@/features/settings/logistics/api/shipment-task-settings-api"
 import { useResponsiveFiltersOpen } from "@/hooks/use-responsive-filters-open"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { ApiError } from "@/lib/api-client"
@@ -234,6 +238,7 @@ function pendingOrderShipment(
     destinationWarehouseId: null,
     partySnapshot: order.client.displayName,
     driverSnapshot: null,
+    driverWorkerId: null,
     clientId: order.client.id,
     equipmentMovementTaskId: null,
     scheduledDate: null,
@@ -409,6 +414,27 @@ export function LogisticsOrderTasksPage() {
       refetchInterval: 5_000,
     })),
   })
+  const shipmentTaskSettingsQuery = useQuery({
+    queryKey: shipmentTaskSettingsKeys.warehouse(
+      selectedWarehouseId ?? "none"
+    ),
+    queryFn: () =>
+      getShipmentTaskSettings(accessToken!, selectedWarehouseId!),
+    enabled: Boolean(accessToken && selectedWarehouseId),
+  })
+  const shipmentTaskCap =
+    shipmentTaskSettingsQuery.data?.maxCabinsPerShipmentTask ?? null
+  const shipmentTaskSettingsMessage =
+    accessToken && selectedWarehouseId && shipmentTaskCap === null
+      ? shipmentTaskSettingsQuery.isLoading
+        ? "Загружаем лимит бытовок в одном задании отгрузки."
+        : shipmentTaskSettingsQuery.isError
+          ? `Не удалось загрузить лимит бытовок в одном задании отгрузки: ${errorMessage(
+              shipmentTaskSettingsQuery.error,
+              "сервис логистики не ответил"
+            )}`
+          : "Сервис логистики не вернул лимит бытовок в одном задании отгрузки."
+      : null
 
   const tasks = useMemo<RentalOrderTask[]>(() => {
     const rentalReturns = (returnsQuery.data ?? [])
@@ -593,6 +619,19 @@ export function LogisticsOrderTasksPage() {
   }, [filters, referenceLabels, search, tasks])
 
   const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? null
+
+  function shipmentTaskLimitError(task: RentalOrderTask, count: number) {
+    if (task.kind !== "SHIPMENT" || !task.virtual) return null
+    if (shipmentTaskCap === null) {
+      return shipmentTaskSettingsMessage ??
+        "Лимит бытовок в одном задании отгрузки недоступен."
+    }
+    if (count > shipmentTaskCap) {
+      return `В одном задании отгрузки можно выбрать не больше ${shipmentTaskCap} бытовок.`
+    }
+    return null
+  }
+
   function keyFor(signature: string) {
     const existing = commandKeys.current.get(signature)
     if (existing) return existing
@@ -602,16 +641,23 @@ export function LogisticsOrderTasksPage() {
   }
 
   function toggleLine(task: RentalOrderTask, lineId: string, checked: boolean) {
+    const current = selectedTaskId === task.id ? selectedLineIds : []
+    const next = checked
+      ? [...new Set([...current, lineId])]
+      : current.filter((candidate) => candidate !== lineId)
+    if (checked) {
+      const limitError = shipmentTaskLimitError(task, next.length)
+      if (limitError) {
+        setCommandError(limitError)
+        return
+      }
+    }
     if (selectedTaskId !== task.id) {
       setSelectedTaskId(task.id)
-      setSelectedLineIds(checked ? [lineId] : [])
+      setSelectedLineIds(next)
       return
     }
-    setSelectedLineIds((current) =>
-      checked
-        ? [...new Set([...current, lineId])]
-        : current.filter((candidate) => candidate !== lineId)
-    )
+    setSelectedLineIds(next)
   }
 
   function clearSelection() {
@@ -623,10 +669,12 @@ export function LogisticsOrderTasksPage() {
     mutationFn: ({
       task,
       driverSnapshot,
+      driverWorkerId,
       scheduledDate,
     }: {
       task: RentalOrderTask
       driverSnapshot: string
+      driverWorkerId: string
       scheduledDate: string
     }) => {
       if (task.kind !== "SHIPMENT" || !task.document.rentalOrderId) {
@@ -640,12 +688,15 @@ export function LogisticsOrderTasksPage() {
         .filter((line) => selectedLineIds.includes(line.id))
         .map((line) => line.assetId)
       if (unitIds.length === 0) throw new Error("Выберите хотя бы одну бытовку")
-      const signature = `order-shipment:${order.id}:${order.version}:${unitIds.join(",")}:${driverSnapshot}:${scheduledDate}`
+      const limitError = shipmentTaskLimitError(task, unitIds.length)
+      if (limitError) throw new Error(limitError)
+      const signature = `order-shipment:${order.id}:${order.version}:${unitIds.join(",")}:${driverWorkerId}:${driverSnapshot}:${scheduledDate}`
       return createOrderShipment({
         accessToken: accessToken!,
         orderId: order.id,
         expectedVersion: order.version,
         driverSnapshot,
+        driverWorkerId,
         scheduledDate,
         unitIds,
         idempotencyKey: keyFor(signature),
@@ -660,6 +711,7 @@ export function LogisticsOrderTasksPage() {
       furnitureTasksMutation.mutate({
         shipment,
         driverSnapshot: variables.driverSnapshot,
+        driverWorkerId: variables.driverWorkerId,
         scheduledDate: variables.scheduledDate,
       })
     },
@@ -672,18 +724,21 @@ export function LogisticsOrderTasksPage() {
     mutationFn: ({
       shipment,
       driverSnapshot,
+      driverWorkerId,
       scheduledDate,
     }: {
       shipment: ShipmentDocument
       driverSnapshot: string
+      driverWorkerId: string | null
       scheduledDate: string
     }) => {
-      const signature = `order-plan:${shipment.id}:${shipment.version}:${driverSnapshot}:${scheduledDate}`
+      const signature = `order-plan:${shipment.id}:${shipment.version}:${driverWorkerId ?? "unassigned"}:${driverSnapshot}:${scheduledDate}`
       return replaceShipmentPlan({
         accessToken: accessToken!,
         documentId: shipment.id,
         expectedVersion: shipment.version,
         driverSnapshot,
+        driverWorkerId,
         scheduledDate,
         idempotencyKey: keyFor(signature),
       })
@@ -703,7 +758,7 @@ export function LogisticsOrderTasksPage() {
     onError: (cause, variables) => {
       if (cause instanceof ApiError && cause.status === 409) {
         commandKeys.current.delete(
-          `order-plan:${variables.shipment.id}:${variables.shipment.version}:${variables.driverSnapshot}:${variables.scheduledDate}`
+          `order-plan:${variables.shipment.id}:${variables.shipment.version}:${variables.driverWorkerId ?? "unassigned"}:${variables.driverSnapshot}:${variables.scheduledDate}`
         )
         void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
       }
@@ -719,6 +774,7 @@ export function LogisticsOrderTasksPage() {
     }: {
       shipment: ShipmentDocument
       driverSnapshot?: string
+      driverWorkerId?: string
       scheduledDate?: string
     }) => {
       const signature = `order-furniture:${shipment.id}:${shipment.version}`
@@ -735,6 +791,8 @@ export function LogisticsOrderTasksPage() {
       ).length
       const driverSnapshot =
         variables.driverSnapshot ?? variables.shipment.driverSnapshot
+      const driverWorkerId =
+        variables.driverWorkerId ?? variables.shipment.driverWorkerId
       const scheduledDate =
         variables.scheduledDate ?? variables.shipment.scheduledDate
       setCommandError(null)
@@ -758,6 +816,7 @@ export function LogisticsOrderTasksPage() {
             version: result.shipmentVersion,
           },
           driverSnapshot,
+          driverWorkerId,
           scheduledDate,
         })
       }
@@ -773,19 +832,22 @@ export function LogisticsOrderTasksPage() {
     mutationFn: ({
       task,
       driverSnapshot,
+      driverWorkerId,
       scheduledDate,
     }: {
       task: RentalOrderTask
       driverSnapshot: string
+      driverWorkerId: string
       scheduledDate: string
     }) => {
       if (task.kind !== "RETURN") throw new Error("Это не задание возврата")
-      const signature = `rental-return:${task.document.id}:${task.document.version}:${driverSnapshot}:${scheduledDate}`
+      const signature = `rental-return:${task.document.id}:${task.document.version}:${driverWorkerId}:${driverSnapshot}:${scheduledDate}`
       return registerReturn({
         accessToken: accessToken!,
         documentId: task.document.id,
         expectedVersion: task.document.version,
         driverSnapshot,
+        driverWorkerId,
         scheduledDate,
         idempotencyKey: keyFor(signature),
       })
@@ -846,12 +908,13 @@ export function LogisticsOrderTasksPage() {
         throw new Error("Для отгрузки не указан водитель")
       }
       const scheduledDate = today()
-      const planSignature = `order-plan:${shipment.id}:${shipment.version}:${shipment.driverSnapshot}:${scheduledDate}`
+      const planSignature = `order-plan:${shipment.id}:${shipment.version}:${shipment.driverWorkerId ?? "unassigned"}:${shipment.driverSnapshot}:${scheduledDate}`
       const planned = await replaceShipmentPlan({
         accessToken: accessToken!,
         documentId: shipment.id,
         expectedVersion: shipment.version,
         driverSnapshot: shipment.driverSnapshot,
+        driverWorkerId: shipment.driverWorkerId,
         scheduledDate,
         idempotencyKey: keyFor(planSignature),
       })
@@ -965,12 +1028,14 @@ export function LogisticsOrderTasksPage() {
     planMutation.mutate({
       shipment,
       driverSnapshot: shipment.driverSnapshot,
+      driverWorkerId: shipment.driverWorkerId,
       scheduledDate: shipment.scheduledDate,
     })
   }
 
   function submitSelectedTask(input: {
     driverSnapshot: string
+    driverWorkerId: string
     scheduledDate: string
   }) {
     if (!selectedTask || selectedLineIds.length === 0) return
@@ -983,6 +1048,14 @@ export function LogisticsOrderTasksPage() {
         return
       }
       returnMutation.mutate({ task: selectedTask, ...input })
+      return
+    }
+    const limitError = shipmentTaskLimitError(
+      selectedTask,
+      selectedLineIds.length
+    )
+    if (limitError) {
+      setCommandError(limitError)
       return
     }
     shipmentCreateMutation.mutate({ task: selectedTask, ...input })
@@ -1080,6 +1153,9 @@ export function LogisticsOrderTasksPage() {
           )}
         </FieldError>
       ) : null}
+      {shipmentTaskSettingsMessage && !shipmentTaskSettingsQuery.isLoading ? (
+        <FieldError>{shipmentTaskSettingsMessage}</FieldError>
+      ) : null}
       {commandError ? <FieldError>{commandError}</FieldError> : null}
       {commandNotice ? (
         <p className="text-sm text-muted-foreground">{commandNotice}</p>
@@ -1104,6 +1180,7 @@ export function LogisticsOrderTasksPage() {
                   selectedLineIds={
                     selectedTaskId === task.id ? selectedLineIds : []
                   }
+                  shipmentTaskCap={shipmentTaskCap}
                   expandedCabinId={expandedCabinId}
                   onToggleLine={(lineId, checked) =>
                     toggleLine(task, lineId, checked)
@@ -1126,6 +1203,8 @@ export function LogisticsOrderTasksPage() {
                   <SelectedCabinsActions
                     task={task}
                     selectedLineCount={selectedLineIds.length}
+                    shipmentTaskCap={shipmentTaskCap}
+                    shipmentTaskSettingsMessage={shipmentTaskSettingsMessage}
                     pending={commandPending}
                     hasAccessToken={Boolean(accessToken)}
                     onSchedule={() => setScheduleTarget(task)}
@@ -1271,6 +1350,7 @@ export function LogisticsOrderTasksPage() {
                     selectedLineIds={
                       selectedTaskId === task.id ? selectedLineIds : []
                     }
+                    shipmentTaskCap={shipmentTaskCap}
                     expandedCabinId={expandedCabinId}
                     onToggleLine={(lineId, checked) =>
                       toggleLine(task, lineId, checked)
@@ -1293,6 +1373,8 @@ export function LogisticsOrderTasksPage() {
                     <SelectedCabinsActions
                       task={task}
                       selectedLineCount={selectedLineIds.length}
+                      shipmentTaskCap={shipmentTaskCap}
+                      shipmentTaskSettingsMessage={shipmentTaskSettingsMessage}
                       pending={commandPending}
                       hasAccessToken={Boolean(accessToken)}
                       onSchedule={() => setScheduleTarget(task)}
@@ -1352,6 +1434,10 @@ export function LogisticsOrderTasksPage() {
         <TaskScheduleDialog
           accessToken={accessToken}
           task={scheduleTarget}
+          selectedLineCount={
+            selectedTaskId === scheduleTarget.id ? selectedLineIds.length : 0
+          }
+          shipmentTaskCap={shipmentTaskCap}
           pending={shipmentCreateMutation.isPending || returnMutation.isPending}
           onOpenChange={(open) => !open && setScheduleTarget(null)}
           onSubmit={submitSelectedTask}
@@ -1467,6 +1553,8 @@ function TaskActions({
 function SelectedCabinsActions({
   task,
   selectedLineCount,
+  shipmentTaskCap,
+  shipmentTaskSettingsMessage,
   pending,
   hasAccessToken,
   onSchedule,
@@ -1474,6 +1562,8 @@ function SelectedCabinsActions({
 }: {
   task: RentalOrderTask
   selectedLineCount: number
+  shipmentTaskCap: number | null
+  shipmentTaskSettingsMessage: string | null
   pending: boolean
   hasAccessToken: boolean
   onSchedule: () => void
@@ -1486,6 +1576,18 @@ function SelectedCabinsActions({
     >
       <div className="mr-auto text-sm">
         Выбрано бытовок: <strong>{selectedLineCount}</strong>
+        {task.kind === "SHIPMENT" ? (
+          shipmentTaskCap === null ? (
+            <span className="ml-2 text-muted-foreground">
+              {shipmentTaskSettingsMessage ??
+                "Лимит бытовок в задании пока недоступен."}
+            </span>
+          ) : (
+            <span className="ml-2 text-muted-foreground">
+              Лимит одного задания: {shipmentTaskCap}.
+            </span>
+          )
+        ) : null}
         {task.kind === "RETURN" &&
         selectedLineCount !== task.document.lines.length ? (
           <span className="ml-2 text-muted-foreground">
@@ -1496,7 +1598,13 @@ function SelectedCabinsActions({
       <Button
         type="button"
         variant="secondary"
-        disabled={pending || !hasAccessToken}
+        disabled={
+          pending ||
+          !hasAccessToken ||
+          (task.kind === "SHIPMENT" &&
+            (shipmentTaskCap === null ||
+              selectedLineCount > shipmentTaskCap))
+        }
         onClick={onSchedule}
       >
         {task.kind === "SHIPMENT" ? "Создать отгрузку" : "Возврат"}
@@ -1518,6 +1626,7 @@ function RentalOrderTaskLines({
   referenceLabels,
   canEdit,
   selectedLineIds,
+  shipmentTaskCap,
   expandedCabinId,
   onToggleLine,
   onToggleCabin,
@@ -1528,6 +1637,7 @@ function RentalOrderTaskLines({
   referenceLabels: LogisticsReferenceLabels
   canEdit: boolean
   selectedLineIds: readonly string[]
+  shipmentTaskCap: number | null
   expandedCabinId: string | null
   onToggleLine: (lineId: string, checked: boolean) => void
   onToggleCabin: (lineId: string) => void
@@ -1558,9 +1668,20 @@ function RentalOrderTaskLines({
           order?.units.find(({ unit }) => unit.id === line.assetId)
             ?.desiredContents ?? []
         const term = unitTerm(order, line.assetId)
+        const selected = selectedLineIds.includes(line.id)
+        const shipmentLimitUnavailable =
+          task.kind === "SHIPMENT" && task.virtual && shipmentTaskCap === null
+        const shipmentLimitReached =
+          task.kind === "SHIPMENT" &&
+          task.virtual &&
+          shipmentTaskCap !== null &&
+          !selected &&
+          selectedLineIds.length >= shipmentTaskCap
         const disabled =
           !canEdit ||
           (task.kind === "SHIPMENT" && !task.virtual) ||
+          shipmentLimitUnavailable ||
+          shipmentLimitReached ||
           ["CANCELLED", "ARRIVED", "DEPARTED"].includes(line.state) ||
           (task.kind === "RETURN" && task.document.state !== "DRAFT")
         const expanded = expandedCabinId === line.id
@@ -1576,7 +1697,7 @@ function RentalOrderTaskLines({
           <Card key={line.id} size="sm">
             <CardHeader className="gap-3 sm:flex-row sm:items-center">
               <Checkbox
-                checked={selectedLineIds.includes(line.id)}
+                checked={selected}
                 disabled={disabled}
                 aria-label={`Выбрать бытовку ${logisticsAssetLabel(referenceLabels, line.assetId)}`}
                 onCheckedChange={(value) =>
@@ -1805,15 +1926,23 @@ function CompositionBlock({
 function TaskScheduleDialog({
   accessToken,
   task,
+  selectedLineCount,
+  shipmentTaskCap,
   pending,
   onOpenChange,
   onSubmit,
 }: {
   accessToken: string
   task: RentalOrderTask
+  selectedLineCount: number
+  shipmentTaskCap: number | null
   pending: boolean
   onOpenChange: (open: boolean) => void
-  onSubmit: (input: { driverSnapshot: string; scheduledDate: string }) => void
+  onSubmit: (input: {
+    driverSnapshot: string
+    driverWorkerId: string
+    scheduledDate: string
+  }) => void
 }) {
   const [driver, setDriver] = useState<RepairTaskWorkerSnapshotDto | null>(null)
   const [scheduledDate, setScheduledDate] = useState(
@@ -1832,7 +1961,11 @@ function TaskScheduleDialog({
       setError("Укажите дату.")
       return
     }
-    onSubmit({ driverSnapshot: driver.name.trim(), scheduledDate })
+    onSubmit({
+      driverSnapshot: driver.name.trim(),
+      driverWorkerId: driver.id,
+      scheduledDate,
+    })
   }
 
   const isShipment = task.kind === "SHIPMENT"
@@ -1846,7 +1979,7 @@ function TaskScheduleDialog({
             </DialogTitle>
             <DialogDescription>
               {isShipment
-                ? "Выбранные бытовки будут объединены в отдельное задание. После создания сервис рассчитает дату возврата по сроку аренды."
+                ? `Выбрано бытовок: ${selectedLineCount} из ${shipmentTaskCap ?? "—"}. Выбранные бытовки будут объединены в отдельное задание. После создания сервис рассчитает дату возврата по сроку аренды.`
                 : "Назначьте водителя и дату вывоза выбранных бытовок."}
             </DialogDescription>
           </DialogHeader>

@@ -14,6 +14,8 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsGuardState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsTargetService;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventStore;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventType;
+import dev.buhanzaz.rwms.logistics.driver.settings.service.ShipmentTaskSettingsService;
+import dev.buhanzaz.rwms.logistics.driver.service.DocumentDriverTaskPlanner;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
@@ -68,6 +70,8 @@ class LogisticsShipmentDocumentCoordinator {
   private final LogisticsDocumentReadProjection readProjection;
   private final LogisticsDocumentAttemptWriter attemptWriter;
   private final LogisticsRentalOrderBindingPolicy rentalOrderBinding;
+  private final DocumentDriverTaskPlanner driverTaskPlanner;
+  private final ShipmentTaskSettingsService shipmentTaskSettings;
 
   LogisticsDocumentCommandResult createShipment(
       UUID subjectId, UUID idempotencyKey, UUID correlationId, CreateShipmentRequest request) {
@@ -101,6 +105,10 @@ class LogisticsShipmentDocumentCoordinator {
         idempotency.replay(subjectId, idempotencyKey, CREATE_SHIPMENT, checksum);
     if (replay != null) return result(replay, true);
 
+    validateShipmentLineInputs(request.lines());
+    shipmentTaskSettings.requireWithinLimit(
+        request.warehouseId(), request.lines().size(), subjectId);
+
     warehouseAdmission.requireAdmission(
         admission,
         List.of(
@@ -114,9 +122,13 @@ class LogisticsShipmentDocumentCoordinator {
             request.clientId(),
             shipmentOrder == null ? request.partySnapshot() : shipmentOrder.getClient().getDisplayName(),
             request.driverSnapshot(),
+            request.driverWorkerId(),
             subjectId,
             correlationId);
-    document.scheduleShipment(request.driverSnapshot(), admission.localDate(request.warehouseId()));
+    document.scheduleShipment(
+        request.driverSnapshot(),
+        request.driverWorkerId(),
+        admission.localDate(request.warehouseId()));
     document = documentRepository.saveAndFlush(document);
     List<LogisticsDocumentLine> lines =
         lineRepository.saveAllAndFlush(
@@ -124,6 +136,7 @@ class LogisticsShipmentDocumentCoordinator {
                 document,
                 request.lines(),
                 shipmentOrder == null ? null : shipmentOrder.getId()));
+    driverTaskPlanner.plan(document, lines);
     eventStore.initialize(document, lines.size(), correlationId, subjectId);
     startShipmentPreparation(document, lines, correlationId, subjectId, now());
     warehouseAdmission.enqueue(document, document.getWarehouseId(), admission);
@@ -159,7 +172,8 @@ class LogisticsShipmentDocumentCoordinator {
     // before the event-store compare-and-set and make a valid plan look concurrent.
     synchronizeRentalShipmentTerms(document, request.scheduledDate());
     try {
-      document.scheduleShipment(request.driverSnapshot(), request.scheduledDate());
+      document.scheduleShipment(
+          request.driverSnapshot(), request.driverWorkerId(), request.scheduledDate());
     } catch (IllegalStateException exception) {
       throw new LogisticsConflictException("Shipment plan cannot be changed in its current lifecycle state");
     }
@@ -175,6 +189,7 @@ class LogisticsShipmentDocumentCoordinator {
           LogisticsEventType.SHIPMENT_PLANNED,
           null);
     }
+    driverTaskPlanner.plan(document, lines);
     idempotency.remember(subjectId, idempotencyKey, PLAN_SHIPMENT, checksum, document);
     return result(document, false);
   }
@@ -344,6 +359,7 @@ class LogisticsShipmentDocumentCoordinator {
         throw new LogisticsConflictException("A shipment preparation effect has an unknown outcome");
       }
     }
+    driverTaskPlanner.cancelBeforeStart(document, lines);
 
     OffsetDateTime now = now();
     document.beginShipmentCancellation();
@@ -517,11 +533,15 @@ class LogisticsShipmentDocumentCoordinator {
 
   private static List<String> shipmentPlanFingerprintValues(
       UUID documentId, long expectedVersion, ShipmentPlanRequest request) {
-    return List.of(
-        documentId.toString(),
-        Long.toString(expectedVersion),
-        request.driverSnapshot().trim(),
-        request.scheduledDate().toString());
+    List<String> values = new ArrayList<>();
+    values.add(documentId.toString());
+    values.add(Long.toString(expectedVersion));
+    values.add(request.driverSnapshot().trim());
+    if (request.driverWorkerId() != null) {
+      values.add(request.driverWorkerId().toString());
+    }
+    values.add(request.scheduledDate().toString());
+    return values;
   }
 
   private static List<LogisticsDocumentLine> shipmentLines(
@@ -563,6 +583,9 @@ class LogisticsShipmentDocumentCoordinator {
     values.add(request.rentalOrderId() == null ? null : request.rentalOrderId().toString());
     values.add(request.partySnapshot());
     values.add(request.driverSnapshot());
+    if (request.driverWorkerId() != null) {
+      values.add(request.driverWorkerId().toString());
+    }
     for (var line : request.lines()) {
       values.add(line.assetId().toString());
       values.add(Long.toString(line.assetVersion()));

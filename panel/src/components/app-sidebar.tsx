@@ -125,6 +125,11 @@ const navGroups: SidebarNavGroup[] = [
     title: "Логистика",
     items: [
       {
+        title: "Доска логистики",
+        url: "/logistics/board",
+        icon: KanbanIcon,
+      },
+      {
         title: "Задания",
         url: "/logistics/order-tasks",
         icon: ClipboardCheckIcon,

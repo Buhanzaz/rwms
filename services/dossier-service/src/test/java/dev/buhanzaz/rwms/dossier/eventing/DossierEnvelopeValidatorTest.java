@@ -104,6 +104,51 @@ class DossierEnvelopeValidatorTest {
   }
 
   @Test
+  void acceptsBothLegacyAndAudienceAwareTaskBoardFacts() {
+    UUID taskId = UUID.fromString("40000000-0000-0000-0000-000000000007");
+    String legacyPayload =
+        """
+        {"boardTaskId":"%s","warehouseId":"%s","externalTaskId":null,"status":"ACTIVE","scheduledDate":"2026-07-18","lane":"SCHEDULED","priority":3,"pinned":false,"plannedDurationMinutes":null,"deadlineAt":null,"doneAt":null,"deleted":false}
+        """
+            .formatted(taskId, WAREHOUSE_ID);
+    String currentPayload =
+        legacyPayload.replace(
+            "\"plannedDurationMinutes\":null",
+            "\"driverAudience\":\"ASSIGNED_DRIVER\",\"plannedDriverWorkerId\":\"50000000-0000-0000-0000-000000000001\",\"plannedDurationMinutes\":null");
+
+    DossierValidatedEvent legacy =
+        validator.validate(
+            "rwms.task-board.board-task.v1",
+            0,
+            3,
+            taskId.toString(),
+            envelope(
+                    "task-board.board-task.changed.v1",
+                    "task-board-service",
+                    "BOARD_TASK",
+                    taskId,
+                    legacyPayload)
+                .getBytes(StandardCharsets.UTF_8));
+    DossierValidatedEvent current =
+        validator.validate(
+            "rwms.task-board.board-task.v1",
+            0,
+            4,
+            taskId.toString(),
+            envelope(
+                    "task-board.board-task.changed.v1",
+                    "task-board-service",
+                    "BOARD_TASK",
+                    taskId,
+                    currentPayload)
+                .getBytes(StandardCharsets.UTF_8));
+
+    assertThat(legacy.payload().has("driverAudience")).isFalse();
+    assertThat(current.payload().required("driverAudience").stringValue())
+        .isEqualTo("ASSIGNED_DRIVER");
+  }
+
+  @Test
   void validatesDirectCabinMediaAsACabinSubject() {
     UUID mediaId = UUID.fromString("40000000-0000-0000-0000-000000000003");
     UUID folderId = UUID.fromString("40000000-0000-0000-0000-000000000004");

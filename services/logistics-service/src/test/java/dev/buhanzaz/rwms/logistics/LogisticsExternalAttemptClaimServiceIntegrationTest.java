@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.logistics;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateReturnRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnLineRequest;
@@ -70,6 +71,10 @@ class LogisticsExternalAttemptClaimServiceIntegrationTest {
   private static final UUID WAREHOUSE = UUID.fromString("00000000-0000-0000-0000-000000002001");
   private static final UUID SUBJECT = UUID.fromString("00000000-0000-0000-0000-000000002002");
   private static final UUID ASSET = UUID.fromString("00000000-0000-0000-0000-000000002003");
+  private static final UUID DRIVER_QUEUE_DEFINITION =
+      UUID.fromString("00000000-0000-0000-0000-000000002004");
+  private static final UUID DRIVER_QUEUE_CATEGORY =
+      UUID.fromString("00000000-0000-0000-0000-000000002005");
 
   @Container
   @ServiceConnection
@@ -90,6 +95,7 @@ class LogisticsExternalAttemptClaimServiceIntegrationTest {
     jdbc.execute(
         """
         truncate table
+          driver_logistics_task,
           logistics_document,
           event_stream_head,
           domain_event,
@@ -100,6 +106,14 @@ class LogisticsExternalAttemptClaimServiceIntegrationTest {
         """);
     executor = Executors.newFixedThreadPool(4);
     org.mockito.Mockito.reset(dependencies);
+    when(dependencies.readWarehouseDriverQueue(WAREHOUSE))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseDriverQueue(
+                WAREHOUSE, DRIVER_QUEUE_DEFINITION, DRIVER_QUEUE_CATEGORY));
+    when(dependencies.readRentalItemSnapshot(ASSET))
+        .thenReturn(
+            new LogisticsDependencyGateway.RentalItemSnapshot(
+                ASSET, 7, WAREHOUSE, "БТ-QA", "FREE", List.of()));
   }
 
   @AfterEach

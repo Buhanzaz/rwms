@@ -1,8 +1,10 @@
 package dev.buhanzaz.rwms.taskboard.api;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import dev.buhanzaz.rwms.taskboard.domain.AssignmentStatus;
 import dev.buhanzaz.rwms.taskboard.domain.AudienceMode;
 import dev.buhanzaz.rwms.taskboard.domain.CredentialStatus;
+import dev.buhanzaz.rwms.taskboard.domain.DriverTaskAudienceMode;
 import dev.buhanzaz.rwms.taskboard.domain.EquipmentMovementDirection;
 import dev.buhanzaz.rwms.taskboard.domain.EntryStatus;
 import dev.buhanzaz.rwms.taskboard.domain.EntryType;
@@ -665,6 +667,21 @@ public final class ApiModels {
       @NotNull TaskSourceType type, @NotNull UUID sourceId) {}
 
   /**
+   * Stable worker audience planned for one logistics driver task.
+   *
+   * <p>Only {@code ASSIGNED_DRIVER} carries an exact worker identity. Shared warehouse-driver work
+   * remains identity-free until task-board records an actual assignment.
+   *
+   * @param mode visibility rule owned by task-board
+   * @param workerId optional task-board worker identity
+   * @param workerName optional authoritative display-name snapshot
+   */
+  public record DriverTaskAudienceDto(
+      @NotNull DriverTaskAudienceMode mode,
+      UUID workerId,
+      @Size(max = 512) String workerName) {}
+
+  /**
    * Source-service request to register externally owned work.
    *
    * <p>{@code externalTaskId}, together with the authenticated source client, is the idempotent
@@ -683,6 +700,8 @@ public final class ApiModels {
    * @param dailyCapacity optional source planning capacity
    * @param source optional immutable source-domain reference
    * @param lane requested initial task lane
+   * @param driverAudience optional logistics driver audience; omitted legacy driver tasks are
+   *     shared with qualified warehouse drivers
    */
   public record RegisterExternalTaskRequest(
       @NotNull UUID warehouseId,
@@ -697,7 +716,39 @@ public final class ApiModels {
       @Min(1) @Max(5) Integer priority,
       @Min(1) Integer dailyCapacity,
       @Valid TaskSourceReferenceDto source,
-      TaskLane lane) {
+      TaskLane lane,
+      @Valid DriverTaskAudienceDto driverAudience) {
+    public RegisterExternalTaskRequest(
+        UUID warehouseId,
+        UUID externalTaskId,
+        String title,
+        String unitNumber,
+        String description,
+        Integer plannedDurationMinutes,
+        OffsetDateTime deadlineAt,
+        List<RouteStepRequest> route,
+        LocalDate scheduledDate,
+        Integer priority,
+        Integer dailyCapacity,
+        TaskSourceReferenceDto source,
+        TaskLane lane) {
+      this(
+          warehouseId,
+          externalTaskId,
+          title,
+          unitNumber,
+          description,
+          plannedDurationMinutes,
+          deadlineAt,
+          route,
+          scheduledDate,
+          priority,
+          dailyCapacity,
+          source,
+          lane,
+          null);
+    }
+
     public RegisterExternalTaskRequest(
         UUID warehouseId,
         UUID externalTaskId,
@@ -943,6 +994,7 @@ public final class ApiModels {
    * @param lane current task lane
    * @param priority task priority
    * @param pinned whether the task is pinned
+   * @param driverAudience logistics driver audience, or {@code null} for ordinary work
    * @param doneAt completion or cancellation time, if terminal
    * @param route registered route steps and their stable entry identities
    */
@@ -961,6 +1013,7 @@ public final class ApiModels {
       TaskLane lane,
       int priority,
       boolean pinned,
+      @JsonInclude(JsonInclude.Include.ALWAYS) DriverTaskAudienceDto driverAudience,
       OffsetDateTime doneAt,
       List<RegisteredRouteStepDto> route) {}
 
@@ -997,13 +1050,30 @@ public final class ApiModels {
    * @param targetLane target driver lane
    * @param targetDate target operational date
    * @param targetIndex zero-based target position
+   * @param targetDriverAudience optional replacement audience; omitted preserves the current value
    */
   public record MoveExternalLogisticsTaskRequest(
       @NotNull @Min(0) Long expectedTaskVersion,
       @NotNull @Min(0) Long expectedEntryVersion,
       @NotNull TaskLane targetLane,
       @NotNull LocalDate targetDate,
-      @NotNull @Min(0) Integer targetIndex) {}
+      @NotNull @Min(0) Integer targetIndex,
+      @Valid DriverTaskAudienceDto targetDriverAudience) {
+    public MoveExternalLogisticsTaskRequest(
+        Long expectedTaskVersion,
+        Long expectedEntryVersion,
+        TaskLane targetLane,
+        LocalDate targetDate,
+        Integer targetIndex) {
+      this(
+          expectedTaskVersion,
+          expectedEntryVersion,
+          targetLane,
+          targetDate,
+          targetIndex,
+          null);
+    }
+  }
 
   /**
    * Exchanges the scheduled dates assigned to two complete visual task-board date columns.
@@ -1095,6 +1165,7 @@ public final class ApiModels {
    * @param assignments assignment snapshots
    * @param timerSnapshot server-calculated timer state
    * @param source immutable source-domain reference, if any
+   * @param driverAudience logistics driver audience, or {@code null} for ordinary work
    */
   public record BoardEntryDto(
       UUID id,
@@ -1122,7 +1193,8 @@ public final class ApiModels {
       long activeWorkSeconds,
       List<AssignmentDto> assignments,
       TaskTimerSnapshot timerSnapshot,
-      TaskSourceReferenceDto source) {}
+      TaskSourceReferenceDto source,
+      @JsonInclude(JsonInclude.Include.ALWAYS) DriverTaskAudienceDto driverAudience) {}
 
   public record BoardColumnDto(
       UUID queueId,

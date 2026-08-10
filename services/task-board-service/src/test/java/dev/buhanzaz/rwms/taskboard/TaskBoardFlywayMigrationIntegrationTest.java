@@ -70,7 +70,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
   void cumulativeVersionFourEventSourcingAndTaskSyncMigrateCleanDatabaseAndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(24);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(26);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -123,7 +123,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
     assertThat(columnCounts())
         .containsAllEntriesOf(
             Map.ofEntries(
-                Map.entry("board_task", 17),
+                Map.entry("board_task", 20),
                 Map.entry("queue_entry", 22),
                 Map.entry("queue_usage_reference", 6),
                 Map.entry("task_assignment", 12),
@@ -320,6 +320,13 @@ class TaskBoardFlywayMigrationIntegrationTest {
         .containsEntry("script", "V27__warehouse_lifecycle_intents.sql")
         .containsEntry("success", true);
     assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='28'"))
+        .containsEntry("version", "28")
+        .containsEntry("script", "V28__driver_task_audience.sql")
+        .containsEntry("success", true);
+    assertThat(
             jdbc.queryForObject(
                 "select to_regprocedure('public.task_board_request_fingerprint_v4(jsonb)')",
                 String.class))
@@ -334,6 +341,123 @@ class TaskBoardFlywayMigrationIntegrationTest {
                     + "where table_schema='public' and table_name='queue_entry' "
                     + "and column_name='queue_id'"))
         .containsEntry("is_nullable", "NO");
+  }
+
+  @Test
+  void versionTwentyEightBackfillsOnlyExistingLogisticsDriverTasks() {
+    configuration(MIGRATION_LOCATION).target("27").load().migrate();
+    UUID warehouseId = UUID.randomUUID();
+    UUID driverTaskId = UUID.randomUUID();
+    UUID ordinaryTaskId = UUID.randomUUID();
+    UUID externalTaskId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into board_task(
+          id,version,warehouse_id,external_task_id,title,status,scheduled_date,
+          task_lane,priority,pinned,completion_deadline_enforced)
+        values (?,0,?,?,'driver','ACTIVE',date '2026-08-10','SCHEDULED',3,false,false),
+               (?,0,?,null,'ordinary','ACTIVE',date '2026-08-10','SCHEDULED',3,false,false)
+        """,
+        driverTaskId,
+        warehouseId,
+        externalTaskId,
+        ordinaryTaskId,
+        warehouseId);
+    jdbc.update(
+        """
+        insert into task_sync_source(
+          board_task_id,external_task_id,source_client_id,source_type,source_id)
+        values (?,?,'logistics-service','LOGISTICS_DRIVER_TASK',?)
+        """,
+        driverTaskId,
+        externalTaskId,
+        UUID.randomUUID());
+
+    Flyway current = configuration(MIGRATION_LOCATION).target("28").load();
+    assertThat(current.migrate().migrationsExecuted).isOne();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select driver_audience_mode from board_task where id=?",
+                String.class,
+                driverTaskId))
+        .isEqualTo("WAREHOUSE_DRIVERS");
+    assertThat(
+            jdbc.queryForObject(
+                "select driver_audience_mode from board_task where id=?",
+                String.class,
+                ordinaryTaskId))
+        .isNull();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select character_maximum_length
+                  from information_schema.columns
+                 where table_schema='public' and table_name='board_task'
+                   and column_name='planned_driver_name_snapshot'
+                """,
+                Integer.class))
+        .isEqualTo(512);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    update board_task
+                       set driver_audience_mode='ASSIGNED_DRIVER',
+                           planned_driver_worker_id=null,
+                           planned_driver_name_snapshot=null
+                     where id=?
+                    """,
+                    driverTaskId))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+  }
+
+  @Test
+  void versionTwentyNineRemovesSharedDriverIdentityAndEnforcesIdentityFreeAudience() {
+    configuration(MIGRATION_LOCATION).target("28").load().migrate();
+    UUID taskId = UUID.randomUUID();
+    UUID workerId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into board_task(
+          id,version,warehouse_id,title,status,scheduled_date,task_lane,priority,pinned,
+          completion_deadline_enforced,driver_audience_mode,planned_driver_worker_id,
+          planned_driver_name_snapshot)
+        values (?,0,?,'shared driver task','ACTIVE',date '2026-08-10','SCHEDULED',3,
+          false,false,'WAREHOUSE_DRIVERS',?,'Старый ответственный')
+        """,
+        taskId,
+        UUID.randomUUID(),
+        workerId);
+
+    Flyway upgraded = configuration(MIGRATION_LOCATION).target("29").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select driver_audience_mode,planned_driver_worker_id,
+                       planned_driver_name_snapshot
+                  from board_task where id=?
+                """,
+                taskId))
+        .containsEntry("driver_audience_mode", "WAREHOUSE_DRIVERS")
+        .containsEntry("planned_driver_worker_id", null)
+        .containsEntry("planned_driver_name_snapshot", null);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    update board_task
+                       set planned_driver_worker_id=?,
+                           planned_driver_name_snapshot='Повторный ответственный'
+                     where id=?
+                    """,
+                    UUID.randomUUID(),
+                    taskId))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class)
+        .hasMessageContaining("ck_board_task_driver_audience");
   }
 
   @Test
@@ -1355,7 +1479,9 @@ class TaskBoardFlywayMigrationIntegrationTest {
     String json =
         "board_task".equals(table)
             ? "to_jsonb(row_value) - array['completion_deadline_enforced',"
-                + "'scheduled_date','task_lane','priority','pinned','request_fingerprint']"
+                + "'scheduled_date','task_lane','priority','pinned','request_fingerprint',"
+                + "'driver_audience_mode','planned_driver_worker_id',"
+                + "'planned_driver_name_snapshot']"
             : "queue_entry".equals(table)
                 ? "to_jsonb(row_value) - array['queue_code','worker_works','worker_materials',"
                     + "'worker_comments','source_media_references','revision_marker',"

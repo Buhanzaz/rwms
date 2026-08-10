@@ -36,7 +36,6 @@ const DOCUMENT_KEYS = [
   "warehouseId",
   "destinationWarehouseId",
   "partySnapshot",
-  "driverSnapshot",
   "clientId",
   "equipmentMovementTaskId",
   "scheduledDate",
@@ -230,8 +229,7 @@ export function parseTransferArrivalPreflight(
     new Set(missingQueueDefinitionIds).size !==
       missingQueueDefinitionIds.length ||
     (activeRepairId === null &&
-      (priorityRequired ||
-        missingQueueDefinitionIds.length > 0)) ||
+      (priorityRequired || missingQueueDefinitionIds.length > 0)) ||
     (activeRepairId !== null && !priorityRequired)
   ) {
     invalidResponse()
@@ -268,7 +266,6 @@ export function parseTransferDocument(value: unknown): TransferDocument {
     warehouseId,
     destinationWarehouseId,
     partySnapshot: null,
-    driverSnapshot: nullableText(source.driverSnapshot),
     clientId: null,
     equipmentMovementTaskId: nullableUuid(source.equipmentMovementTaskId),
     scheduledDate: (() => {
@@ -372,7 +369,6 @@ export class HttpWarehouseTransferClient implements WarehouseTransferClient {
       body: JSON.stringify({
         warehouseId: input.warehouseId,
         destinationWarehouseId: input.destinationWarehouseId,
-        driverSnapshot: input.driverSnapshot,
         scheduledDate: input.scheduledDate,
         lines: input.lines,
         furnitureReplacements: input.furnitureReplacements,

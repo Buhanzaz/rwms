@@ -13,6 +13,7 @@ const CLIENT_ID = "77777777-7777-4777-8777-777777777777"
 const RENTAL_ORDER_ID = "88888888-8888-4888-8888-888888888888"
 const FURNITURE_TASK_ID = "99999999-9999-4999-8999-999999999999"
 const EXTERNAL_FURNITURE_TASK_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+const DRIVER_WORKER_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 
 const document: ShipmentDocument = {
   id: DOCUMENT_ID,
@@ -23,6 +24,7 @@ const document: ShipmentDocument = {
   destinationWarehouseId: null,
   partySnapshot: "ООО Тест",
   driverSnapshot: "Иванов Иван",
+  driverWorkerId: DRIVER_WORKER_ID,
   clientId: CLIENT_ID,
   equipmentMovementTaskId: null,
   scheduledDate: null,
@@ -123,6 +125,7 @@ describe("HttpShipmentClient", () => {
       rentalOrderId: RENTAL_ORDER_ID,
       partySnapshot: document.partySnapshot,
       driverSnapshot: document.driverSnapshot!,
+      driverWorkerId: DRIVER_WORKER_ID,
       lines: planLines,
       idempotencyKey: IDEMPOTENCY_KEY,
     }
@@ -144,6 +147,7 @@ describe("HttpShipmentClient", () => {
         rentalOrderId: RENTAL_ORDER_ID,
         partySnapshot: document.partySnapshot,
         driverSnapshot: document.driverSnapshot,
+        driverWorkerId: DRIVER_WORKER_ID,
         lines: planLines,
       })
     }
@@ -162,6 +166,7 @@ describe("HttpShipmentClient", () => {
       documentId: DOCUMENT_ID,
       expectedVersion: 4,
       driverSnapshot: document.driverSnapshot!,
+      driverWorkerId: DRIVER_WORKER_ID,
       scheduledDate: "2026-07-22",
       idempotencyKey: IDEMPOTENCY_KEY,
     })
@@ -176,6 +181,7 @@ describe("HttpShipmentClient", () => {
     )
     expect(JSON.parse(init.body)).toEqual({
       driverSnapshot: document.driverSnapshot,
+      driverWorkerId: DRIVER_WORKER_ID,
       scheduledDate: "2026-07-22",
     })
   })

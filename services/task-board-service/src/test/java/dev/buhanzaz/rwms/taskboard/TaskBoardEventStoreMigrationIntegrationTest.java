@@ -67,10 +67,10 @@ class TaskBoardEventStoreMigrationIntegrationTest {
   }
 
   @Test
-  void cleanInstallAppliesV4ThroughV27AndRepeatIsNoOp() {
+  void cleanInstallAppliesV4ThroughV28AndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(24);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(25);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -235,6 +235,13 @@ class TaskBoardEventStoreMigrationIntegrationTest {
                     + "where version='27'"))
         .containsEntry("version", "27")
         .containsEntry("script", "V27__warehouse_lifecycle_intents.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='28'"))
+        .containsEntry("version", "28")
+        .containsEntry("script", "V28__driver_task_audience.sql")
         .containsEntry("success", true);
     assertThat(
             jdbc.queryForList(
@@ -891,7 +898,9 @@ class TaskBoardEventStoreMigrationIntegrationTest {
     String json =
         "board_task".equals(table)
             ? "to_jsonb(row_value) - array['completion_deadline_enforced',"
-                + "'scheduled_date','task_lane','priority','pinned','request_fingerprint']"
+                + "'scheduled_date','task_lane','priority','pinned','request_fingerprint',"
+                + "'driver_audience_mode','planned_driver_worker_id',"
+                + "'planned_driver_name_snapshot']"
             : "queue_entry".equals(table)
                 ? "to_jsonb(row_value) - array['queue_code','worker_works','worker_materials',"
                     + "'worker_comments','source_media_references','revision_marker',"

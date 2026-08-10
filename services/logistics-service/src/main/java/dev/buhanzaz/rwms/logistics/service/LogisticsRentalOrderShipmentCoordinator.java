@@ -6,6 +6,8 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventStore;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventType;
+import dev.buhanzaz.rwms.logistics.driver.settings.service.ShipmentTaskSettingsService;
+import dev.buhanzaz.rwms.logistics.driver.service.DocumentDriverTaskPlanner;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRentalShipmentRequest;
@@ -47,6 +49,8 @@ class LogisticsRentalOrderShipmentCoordinator {
   private final LogisticsDocumentWarehouseAdmission warehouseAdmission;
   private final LogisticsDocumentIdempotency idempotency;
   private final LogisticsDocumentReadProjection readProjection;
+  private final DocumentDriverTaskPlanner driverTaskPlanner;
+  private final ShipmentTaskSettingsService shipmentTaskSettings;
 
   LogisticsDocumentCommandResult replayRentalOrderShipment(
       UUID subjectId, UUID idempotencyKey, String checksum) {
@@ -120,6 +124,8 @@ class LogisticsRentalOrderShipmentCoordinator {
     List<LogisticsDependencyGateway.OrderUnitReservation> validReservations =
         validRentalOrderReservations(order, reservations);
     List<UUID> selectedUnitIds = sortedSelectedUnitIds(request.unitIds());
+    shipmentTaskSettings.requireWithinLimit(
+        order.getWarehouseId(), selectedUnitIds.size(), subjectId);
     Map<UUID, LogisticsDependencyGateway.OrderUnitReservation> reservationsByUnit =
         validReservations.stream()
             .collect(
@@ -158,11 +164,13 @@ class LogisticsRentalOrderShipmentCoordinator {
             order.getClient().getDisplayName(),
             subjectId,
             correlationId);
-    document.scheduleShipment(request.driverSnapshot(), request.scheduledDate());
+    document.scheduleShipment(
+        request.driverSnapshot(), request.driverWorkerId(), request.scheduledDate());
     document = documentRepository.saveAndFlush(document);
     List<LogisticsDocumentLine> lines =
         lineRepository.saveAllAndFlush(
             rentalOrderShipmentLines(document, order, reservationsByUnit, selectedUnitIds));
+    driverTaskPlanner.plan(document, lines);
     for (RentalOrderUnitTerm term : terms) {
       term.assignShipment(document.getId(), request.scheduledDate());
     }

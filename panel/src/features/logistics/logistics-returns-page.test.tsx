@@ -166,6 +166,7 @@ const CLIENT_ID = "66666666-6666-4666-8666-666666666666"
 const ORDER_ID = "77777777-7777-4777-8777-777777777777"
 const EQUIPMENT_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab"
 const IDEMPOTENCY_KEY = "99999999-9999-4999-8999-999999999999"
+const DRIVER_WORKER_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 const ASSET_NUMBER = "БЫТ-041"
 const ORDER_NUMBER = "ORD-000007"
 
@@ -201,6 +202,7 @@ function returnDocument(
     destinationWarehouseId: null,
     partySnapshot: null,
     driverSnapshot: null,
+    driverWorkerId: null,
     clientId: CLIENT_ID,
     equipmentMovementTaskId: null,
     scheduledDate: state === "DRAFT" ? null : "2026-07-18",
@@ -445,6 +447,7 @@ describe("LogisticsReturnsPage", () => {
         documentId: DOCUMENT_ID,
         expectedVersion: 2,
         driverSnapshot: "Иванов Иван",
+        driverWorkerId: DRIVER_WORKER_ID,
         scheduledDate,
         idempotencyKey: IDEMPOTENCY_KEY,
       })

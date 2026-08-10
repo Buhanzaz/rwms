@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
@@ -152,13 +153,15 @@ class DriverCapitalRepairPromotionIntegrationTest {
             any(),
             eq(QUEUE_DEFINITION),
             any(),
-            anyInt()))
+            anyInt(),
+            any()))
         .thenAnswer(
             invocation -> {
               UUID externalTaskId = invocation.getArgument(1);
               UUID localTaskId = invocation.getArgument(2);
               LocalDate scheduledDate = invocation.getArgument(7);
               int priority = invocation.getArgument(8);
+              LogisticsDependencyGateway.DriverTaskAudience audience = invocation.getArgument(9);
               LogisticsDependencyGateway.DriverBoardTask registered =
                   new LogisticsDependencyGateway.DriverBoardTask(
                       UUID.nameUUIDFromBytes(("board:" + localTaskId).getBytes()),
@@ -168,6 +171,7 @@ class DriverCapitalRepairPromotionIntegrationTest {
                       "Переместить бытовку на производство",
                       "БЫТ-901",
                       "Переместить бытовку на производство",
+                      audience,
                       "ACTIVE",
                       scheduledDate,
                       "SCHEDULED",
@@ -207,6 +211,7 @@ class DriverCapitalRepairPromotionIntegrationTest {
                       scheduled.title(),
                       scheduled.unitNumber(),
                       scheduled.taskText(),
+                      scheduled.driverAudience(),
                       scheduled.status(),
                       scheduled.scheduledDate(),
                       "CURRENT",
@@ -221,7 +226,7 @@ class DriverCapitalRepairPromotionIntegrationTest {
               return current;
             });
     when(dependencies.moveDriverTask(
-            any(), anyLong(), anyLong(), eq("SCHEDULED"), any(), anyInt()))
+            any(), anyLong(), anyLong(), eq("SCHEDULED"), any(), anyInt(), isNull()))
         .thenAnswer(
             invocation -> {
               LogisticsDependencyGateway.DriverBoardTask scheduled = boardTask.get();
@@ -242,6 +247,7 @@ class DriverCapitalRepairPromotionIntegrationTest {
                       scheduled.title(),
                       scheduled.unitNumber(),
                       scheduled.taskText(),
+                      scheduled.driverAudience(),
                       scheduled.status(),
                       targetDate,
                       "SCHEDULED",
@@ -272,6 +278,7 @@ class DriverCapitalRepairPromotionIntegrationTest {
                       current.title(),
                       current.unitNumber(),
                       current.taskText(),
+                      current.driverAudience(),
                       "CANCELLED",
                       current.scheduledDate(),
                       current.lane(),
@@ -485,7 +492,8 @@ class DriverCapitalRepairPromotionIntegrationTest {
         .isEqualTo(targetDate);
     verify(dependencies, never()).setDriverTaskLane(any(), anyLong(), eq("CURRENT"));
     verify(dependencies)
-        .moveDriverTask(any(), anyLong(), anyLong(), eq("SCHEDULED"), eq(targetDate), eq(1));
+        .moveDriverTask(
+            any(), anyLong(), anyLong(), eq("SCHEDULED"), eq(targetDate), eq(1), isNull());
   }
 
   @Test

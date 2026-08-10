@@ -70,6 +70,7 @@ function returnDocument(
     destinationWarehouseId: null,
     partySnapshot: "ООО Арендатор",
     driverSnapshot: null,
+    driverWorkerId: null,
     clientId: null,
     equipmentMovementTaskId: null,
     scheduledDate: null,

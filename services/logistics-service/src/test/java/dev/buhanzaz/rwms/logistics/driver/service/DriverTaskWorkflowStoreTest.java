@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.MaintenanceDriverTaskCompensationOutcome;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskAudienceMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskPlanningMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
@@ -351,6 +352,82 @@ class DriverTaskWorkflowStoreTest {
     assertThat(rejectionTask.getNextAttemptAt()).isNull();
   }
 
+  @Test
+  void groupedShipmentCompletesOnlyAfterEveryCabinCoverAndRetriesTheSameMemberSafely() {
+    UUID taskId = UUID.randomUUID();
+    UUID firstCabinId = UUID.randomUUID();
+    UUID secondCabinId = UUID.randomUUID();
+    UUID boardTaskId = UUID.randomUUID();
+    UUID entryId = UUID.randomUUID();
+    UUID mediaId = UUID.randomUUID();
+    DriverLogisticsTask task =
+        finalizingGroupedShipment(
+            taskId, firstCabinId, secondCabinId, boardTaskId, entryId, mediaId);
+    when(tasks.findForUpdate(taskId)).thenReturn(Optional.of(task));
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    LogisticsDependencyGateway.CabinCoverChange firstCover =
+        new LogisticsDependencyGateway.CabinCoverChange(
+            firstCabinId,
+            task.getWarehouseId(),
+            mediaId,
+            1,
+            entryId,
+            0,
+            now);
+
+    assertThat(store.nextWork(taskId))
+        .contains(
+            new DriverTaskWorkflowStore.CoverWork(
+                taskId, firstCabinId, entryId, mediaId, true));
+    store.confirmCover(taskId, firstCover);
+    store.confirmCover(taskId, firstCover);
+
+    assertThat(task.isCoverApplied()).isFalse();
+    assertThat(task.getMembers().getFirst().isCoverApplied()).isTrue();
+    assertThat(task.getMembers().get(1).isCoverApplied()).isFalse();
+    assertThat(store.nextWork(taskId))
+        .contains(
+            new DriverTaskWorkflowStore.CoverWork(
+                taskId, secondCabinId, entryId, mediaId, true));
+
+    store.confirmCover(
+        taskId,
+        new LogisticsDependencyGateway.CabinCoverChange(
+            secondCabinId,
+            task.getWarehouseId(),
+            mediaId,
+            1,
+            entryId,
+            0,
+            now));
+
+    assertThat(task.isCoverApplied()).isTrue();
+    assertThat(task.getMembers()).allSatisfy(member -> assertThat(member.isCoverApplied()).isTrue());
+    assertThat(store.nextWork(taskId)).isEmpty();
+    assertThat(task.getState()).isEqualTo(DriverTaskState.COMPLETED);
+  }
+
+  @Test
+  void groupedShipmentRegistersAPluralTitleCountSummaryAndFullClientCabinText() {
+    UUID taskId = UUID.randomUUID();
+    UUID firstCabinId = UUID.randomUUID();
+    UUID secondCabinId = UUID.randomUUID();
+    DriverLogisticsTask task = registeringGroupedShipment(taskId, firstCabinId, secondCabinId);
+    when(tasks.findForUpdate(taskId)).thenReturn(Optional.of(task));
+
+    DriverTaskWorkflowStore.Work work = store.nextWork(taskId).orElseThrow();
+    assertThat(work)
+        .isInstanceOfSatisfying(
+            DriverTaskWorkflowStore.RegisterWork.class,
+            registration -> {
+              assertThat(registration.title()).isEqualTo("Отгрузить бытовки");
+              assertThat(registration.unitNumber()).isEqualTo("2 бытовки");
+              assertThat(registration.description())
+                  .isEqualTo("Клиент: ООО Клиент. Бытовки: БТ-301, БТ-302");
+              assertThat(registration.priority()).isEqualTo(3);
+            });
+  }
+
   private static DriverLogisticsTask repairDelivery(UUID taskId) {
     UUID repairId = UUID.randomUUID();
     DriverLogisticsTask task =
@@ -393,6 +470,51 @@ class DriverTaskWorkflowStoreTest {
         OffsetDateTime.now(ZoneOffset.UTC));
     task.captureEvidence(UUID.randomUUID(), UUID.randomUUID(), 1, entryId);
     task.markCoverApplied();
+    return task;
+  }
+
+  private static DriverLogisticsTask finalizingGroupedShipment(
+      UUID taskId,
+      UUID firstCabinId,
+      UUID secondCabinId,
+      UUID boardTaskId,
+      UUID entryId,
+      UUID mediaId) {
+    DriverLogisticsTask task = registeringGroupedShipment(taskId, firstCabinId, secondCabinId);
+    task.registerBoardTask(
+        boardTaskId,
+        0,
+        entryId,
+        "DONE",
+        "CURRENT",
+        OffsetDateTime.now(ZoneOffset.UTC));
+    task.captureEvidence(UUID.randomUUID(), mediaId, 1, entryId);
+    return task;
+  }
+
+  private static DriverLogisticsTask registeringGroupedShipment(
+      UUID taskId, UUID firstCabinId, UUID secondCabinId) {
+    UUID warehouseId = UUID.randomUUID();
+    DriverLogisticsTask task =
+        DriverLogisticsTask.createGroupedShipment(
+            warehouseId,
+            firstCabinId,
+            UUID.randomUUID(),
+            LocalDate.now(ZoneOffset.UTC),
+            3,
+            "Клиент: ООО Клиент. Бытовки: БТ-301, БТ-302",
+            "ООО Клиент",
+            "2 бытовки",
+            UUID.randomUUID(),
+            DriverTaskAudienceMode.ASSIGNED_DRIVER,
+            UUID.randomUUID(),
+            "Иван Петров",
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            "c".repeat(64));
+    ReflectionTestUtils.setField(task, "id", taskId);
+    task.addGroupedShipmentMember(UUID.randomUUID(), firstCabinId, "БТ-301", 1);
+    task.addGroupedShipmentMember(UUID.randomUUID(), secondCabinId, "БТ-302", 2);
     return task;
   }
 }

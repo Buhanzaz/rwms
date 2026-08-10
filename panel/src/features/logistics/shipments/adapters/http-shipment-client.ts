@@ -190,6 +190,10 @@ export function parseShipmentDocument(value: unknown): ShipmentDocument {
       source.driverSnapshot === null
         ? null
         : nonBlankText(source.driverSnapshot),
+    driverWorkerId:
+      source.driverWorkerId === undefined
+        ? null
+        : nullableUuid(source.driverWorkerId),
     clientId: nullableUuid(source.clientId),
     equipmentMovementTaskId: nullableUuid(source.equipmentMovementTaskId),
     scheduledDate: nullableLocalDate(source.scheduledDate),
@@ -258,6 +262,7 @@ export class HttpShipmentClient implements ShipmentClient {
         rentalOrderId: input.rentalOrderId,
         partySnapshot: input.partySnapshot,
         driverSnapshot: input.driverSnapshot,
+        driverWorkerId: input.driverWorkerId,
         lines: input.lines,
       }),
     })
@@ -274,6 +279,7 @@ export class HttpShipmentClient implements ShipmentClient {
         headers: commandHeaders(input.idempotencyKey),
         body: JSON.stringify({
           driverSnapshot: input.driverSnapshot,
+          driverWorkerId: input.driverWorkerId,
           scheduledDate: input.scheduledDate,
         }),
       }
@@ -296,7 +302,9 @@ export class HttpShipmentClient implements ShipmentClient {
   }
 
   confirmPreparation(input: ShipmentVersionedCommand) {
-    const keepScheduledDate = input.keepScheduledDate ? "&keepScheduledDate=true" : ""
+    const keepScheduledDate = input.keepScheduledDate
+      ? "&keepScheduledDate=true"
+      : ""
     return parsedRequest(
       input.accessToken,
       shipmentsEndpoint(

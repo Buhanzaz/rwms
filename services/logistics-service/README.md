@@ -22,6 +22,26 @@ shipments, transfers, equipment movements, driver board/tasks, orders and rental
 Commands use the contract-defined `Idempotency-Key` and expected-version field or parameter; callers
 must handle a canonical conflict rather than send a changed retry.
 
+Shipment and return commands carry an optional opaque task-board `driverWorkerId` together with
+the historical display snapshot; logistics never derives identity from the name. Transfer commands
+carry no driver identity. Once scheduled, each newly created shipment stores one durable
+document-owned driver task with an immutable client snapshot and ordered cabin members. Its neutral
+technical priority remains task-board implementation detail; the title, count summary and task text
+carry the shipment intent, client and full cabin-number list. Completion evidence applies its cover
+checkpoint idempotently to every member and the group completes only after all covers succeed.
+Historical document-line shipment tasks are not regrouped. Returns retain one task per line and are
+assigned when an ID is present and otherwise stay unassigned; transfers and other movement work use
+identity-free `WAREHOUSE_DRIVERS`. The public board exposes the audience used for date/driver
+grouping. Public moves can only reorder shipment and return work inside its current driver, date and
+lane. Movement work retains its existing date/lane planning policy, while no public move can change
+audience.
+
+`GET` and `PUT /api/logistics/v1/warehouses/{warehouseId}/shipment-task-settings` own the
+warehouse-scoped maximum cabin count for one newly created shipment task. The lazily materialized
+default is one cabin; GET requires read/VIEW scope and PUT requires write/MANAGE scope with an
+`expectedVersion`. Both generic and saved-order shipment commands reject a unique selected set above
+the current cap before creating a document or driver task; logistics never auto-splits that request.
+
 `POST /api/logistics/v1/rental-inquiries/{inquiryId}/cabin-searches` is a write-authorized command
 and requires `Idempotency-Key`. A short PREPARE transaction locks the inquiry, rechecks current
 ownership/state and warehouse-edit authority, and stores a subject/operation/key request digest,
@@ -103,6 +123,8 @@ facade delegates every interface operation:
 | `RentalInquiryCabinCatalogService` | Bounded facts-only cabin lookup with inquiry, warehouse and owner authorization |
 | `LogisticsDocumentService` | Stable return/shipment/transfer and rental-order hook facade over seven exact owners |
 | Return, shipment and transfer document coordinators | Independent document state machines with their existing transaction and recovery order |
+| `DocumentDriverTaskPlanner` | One idempotent document-owned task with ordered cabin members for each new scheduled shipment; legacy line tasks plus return/transfer tasks retain per-line planning and pre-start replan/cancel guards |
+| `ShipmentTaskSettingsService` | Warehouse-scoped, version-fenced cap for cabins in a new shipment task; materializes default one atomically and rejects over-limit creates before document persistence |
 | Rental-order shipment/completion and reconciliation coordinators | Document hooks for rental shipment, terminal return and reconciliation request commands |
 | Document admission, idempotency, attempts, reads and binding policies | Narrow warehouse, replay, external-attempt, projection and active-order leaves |
 | `RentalOrderService` | Stable order facade over reads, creation, lifecycle, reservations, terms and shipment hand-off |
@@ -192,6 +214,25 @@ Migration
 reclassifies historical `SOLE_PROPRIETOR` rows to `LEGAL_ENTITY` before restricting client types to
 `INDIVIDUAL` and `LEGAL_ENTITY`. It stops before the update when that reclassification would collide
 with an existing legal entity by normalized phone, preserving every record for manual resolution.
+
+Migration
+[`V44__driver_task_audience_and_document_driver.sql`](src/main/resources/db/migration/V44__driver_task_audience_and_document_driver.sql)
+adds the document's opaque driver ID, the three audience fields on durable
+driver tasks, and the document-line source plus shipment/return/transfer kinds.
+Existing driver tasks retain the former warehouse-shared behavior. The schema
+uses IDs and snapshots only; there is no cross-service foreign key.
+
+Migration
+[`V45__correct_driver_task_audience.sql`](src/main/resources/db/migration/V45__correct_driver_task_audience.sql)
+removes transfer driver snapshots/IDs and all shared-task responsibility hints. It maps shipment and
+return work to `ASSIGNED_DRIVER` when an ID exists and `UNASSIGNED` otherwise, maps every movement
+kind to identity-free `WAREHOUSE_DRIVERS`, and adds constraints that preserve those rules.
+
+Migration
+[`V46__shipment_task_grouping.sql`](src/main/resources/db/migration/V46__shipment_task_grouping.sql)
+adds warehouse-local shipment-task settings, the `LOGISTICS_DOCUMENT` driver-task source and ordered
+shipment-member cover checkpoints. It expands only: no historical
+`LOGISTICS_DOCUMENT_LINE` task is regrouped or rewritten.
 
 Logistics commits facts, projection checkpoints and a transactional outbox together. Kafka delivery
 is at-least-once: aggregate IDs are record keys, event IDs are dedupe identities, and consumers retain

@@ -61,6 +61,10 @@ class MediaOwnerProofWorkflowIntegrationTest {
       UUID.fromString("00000000-0000-0000-0000-000000001106");
   private static final UUID SHIPMENT_ASSET =
       UUID.fromString("00000000-0000-0000-0000-000000001107");
+  private static final UUID DRIVER_QUEUE_DEFINITION =
+      UUID.fromString("00000000-0000-0000-0000-000000001108");
+  private static final UUID DRIVER_QUEUE_CATEGORY =
+      UUID.fromString("00000000-0000-0000-0000-000000001109");
 
   @Container
   @ServiceConnection
@@ -78,6 +82,7 @@ class MediaOwnerProofWorkflowIntegrationTest {
     jdbc.execute(
         """
         truncate table
+          driver_logistics_task,
           logistics_document,
           event_stream_head,
           domain_event,
@@ -87,6 +92,15 @@ class MediaOwnerProofWorkflowIntegrationTest {
         cascade
         """);
     org.mockito.Mockito.reset(dependencies);
+    when(dependencies.readWarehouseDriverQueue(ORIGIN))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseDriverQueue(
+                ORIGIN, DRIVER_QUEUE_DEFINITION, DRIVER_QUEUE_CATEGORY));
+    when(dependencies.readRentalItemSnapshot(any()))
+        .thenAnswer(
+            invocation ->
+                new LogisticsDependencyGateway.RentalItemSnapshot(
+                    invocation.getArgument(0), 7, ORIGIN, "БТ-QA", "FREE", List.of()));
   }
 
   @Test
@@ -107,7 +121,6 @@ class MediaOwnerProofWorkflowIntegrationTest {
             new CreateTransferRequest(
                 ORIGIN,
                 DESTINATION,
-                null,
                 futureTaskDate(),
                 List.of(new TransferLineRequest(TRANSFER_ASSET, 8)),
                 List.of()));
@@ -228,7 +241,6 @@ class MediaOwnerProofWorkflowIntegrationTest {
             new CreateTransferRequest(
                 ORIGIN,
                 DESTINATION,
-                null,
                 futureTaskDate(),
                 List.of(new TransferLineRequest(TRANSFER_ASSET, 8)),
                 List.of()));

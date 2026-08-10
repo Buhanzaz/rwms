@@ -4,6 +4,7 @@ import static dev.buhanzaz.rwms.taskboard.QueueFixtureModels.*;
 
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -465,6 +466,11 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             "logistics-service",
             driverRegistration(movement.definitionId(), secondExternalId, today));
 
+    assertThat(first.driverAudience().mode())
+        .isEqualTo(DriverTaskAudienceMode.WAREHOUSE_DRIVERS);
+    assertThat(second.driverAudience().mode())
+        .isEqualTo(DriverTaskAudienceMode.WAREHOUSE_DRIVERS);
+
     first =
         board.setExternalTaskLane(
             "logistics-service",
@@ -526,6 +532,370 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(board.logisticsSnapshot(W1).current())
         .extracting(BoardEntryDto::externalTaskId)
         .containsExactly(secondExternalId, firstExternalId);
+  }
+
+  @Test
+  void driverAudienceFiltersWorkerFeedAndQueueHeadPerAuthenticatedDriver() {
+    var driverClass = registry.createClass(workerClass("DRIVER_PERSONAL_BOARD"));
+    var movement =
+        QueueRegistryTestFixtures.create(
+            registry,
+            jdbc,
+            W1,
+            queue(
+                "DRIVER_PERSONAL_BOARD",
+                QueueType.MOVEMENT,
+                QueuePurpose.LOGISTICS_DRIVER,
+                List.of(
+                    new QueueBindingRequest(
+                        driverClass.id(), 0, false, ParticipationPolicy.PRIMARY, false))));
+    var firstDriver =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Первый водитель",
+                null,
+                null,
+                List.of(new QualificationRequest(driverClass.id(), true, null))));
+    var secondDriver =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Второй водитель",
+                null,
+                null,
+                List.of(new QualificationRequest(driverClass.id(), true, null))));
+    var unqualifiedWorker =
+        workforce.createWorker(
+            W1, worker("Не водитель", null, null, List.of()));
+    var wrongWarehouseDriver =
+        workforce.createWorker(
+            W2,
+            worker(
+                "Водитель другого склада",
+                null,
+                null,
+                List.of(new QualificationRequest(driverClass.id(), true, null))));
+    var inactiveDriver =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Неактивный водитель",
+                null,
+                null,
+                List.of(new QualificationRequest(driverClass.id(), true, null))));
+    inactiveDriver =
+        workforce.updateWorker(
+            W1,
+            inactiveDriver.id(),
+            new WorkerRequest(
+                inactiveDriver.version(),
+                inactiveDriver.displayName(),
+                null,
+                null,
+                null,
+                false,
+                null,
+                null,
+                null,
+                List.of(new QualificationRequest(driverClass.id(), true, null))));
+    LocalDate date = LocalDate.of(2026, 8, 2);
+    assertThatThrownBy(
+            () ->
+                board.registerExternalTask(
+                    "logistics-service",
+                    driverRegistration(
+                        movement.definitionId(),
+                        UUID.randomUUID(),
+                        date,
+                        new DriverTaskAudienceDto(
+                            DriverTaskAudienceMode.ASSIGNED_DRIVER,
+                            unqualifiedWorker.id(),
+                            null))))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("квалификации водителя");
+    for (var unavailableDriver : List.of(wrongWarehouseDriver, inactiveDriver)) {
+      assertThatThrownBy(
+              () ->
+                  board.registerExternalTask(
+                      "logistics-service",
+                      driverRegistration(
+                          movement.definitionId(),
+                          UUID.randomUUID(),
+                          date,
+                          new DriverTaskAudienceDto(
+                              DriverTaskAudienceMode.ASSIGNED_DRIVER,
+                              unavailableDriver.id(),
+                              null))))
+          .isInstanceOf(ConflictException.class);
+    }
+    BoardTaskRegistrationDto first =
+        board.registerExternalTask(
+            "logistics-service",
+            driverRegistration(
+                movement.definitionId(),
+                UUID.randomUUID(),
+                date,
+                new DriverTaskAudienceDto(
+                    DriverTaskAudienceMode.ASSIGNED_DRIVER, firstDriver.id(), "ignored")));
+    BoardTaskRegistrationDto second =
+        board.registerExternalTask(
+            "logistics-service",
+            driverRegistration(
+                movement.definitionId(),
+                UUID.randomUUID(),
+                date,
+                new DriverTaskAudienceDto(
+                    DriverTaskAudienceMode.ASSIGNED_DRIVER, secondDriver.id(), null)));
+    BoardTaskRegistrationDto unassigned =
+        board.registerExternalTask(
+            "logistics-service",
+            driverRegistration(
+                movement.definitionId(),
+                UUID.randomUUID(),
+                date,
+                new DriverTaskAudienceDto(
+                    DriverTaskAudienceMode.UNASSIGNED, null, null)));
+    first =
+        board.setExternalTaskLane(
+            "logistics-service",
+            first.externalTaskId(),
+            new SetTaskLaneRequest(first.taskVersion(), TaskLane.CURRENT));
+    second =
+        board.setExternalTaskLane(
+            "logistics-service",
+            second.externalTaskId(),
+            new SetTaskLaneRequest(second.taskVersion(), TaskLane.CURRENT));
+    board.setExternalTaskLane(
+        "logistics-service",
+        unassigned.externalTaskId(),
+        new SetTaskLaneRequest(unassigned.taskVersion(), TaskLane.CURRENT));
+    UUID secondTaskId = second.taskId();
+
+    var firstFeedEntries =
+        workerBoard.feed(firstDriver.id(), W1, null, 50).feed().categories().stream()
+            .flatMap(category -> category.entries().stream())
+            .toList();
+    assertThat(firstFeedEntries).extracting(entry -> entry.taskId()).containsExactly(first.taskId());
+    assertThat(firstFeedEntries.getFirst().driverAudience().mode())
+        .isEqualTo(DriverTaskAudienceMode.ASSIGNED_DRIVER);
+    assertThat(firstFeedEntries.getFirst().driverAudience().workerId())
+        .isEqualTo(firstDriver.id());
+    var secondFeedEntries =
+        workerBoard.feed(secondDriver.id(), W1, null, 50).feed().categories().stream()
+            .flatMap(category -> category.entries().stream())
+            .toList();
+    assertThat(secondFeedEntries)
+        .extracting(entry -> entry.taskId())
+        .containsExactly(second.taskId());
+    assertThat(secondFeedEntries.getFirst().driverAudience().workerId())
+        .isEqualTo(secondDriver.id());
+
+    var unqualifiedFirstDriver =
+        workforce.updateWorker(
+            W1,
+            firstDriver.id(),
+            new WorkerRequest(
+                firstDriver.version(),
+                firstDriver.displayName(),
+                null,
+                null,
+                null,
+                true,
+                null,
+                null,
+                null,
+                List.of(new QualificationRequest(driverClass.id(), false, null))));
+    assertThat(
+            workerBoard.feed(unqualifiedFirstDriver.id(), W1, null, 50).feed().categories().stream()
+                .flatMap(category -> category.entries().stream())
+                .map(entry -> entry.taskId()))
+        .doesNotContain(first.taskId());
+
+    BoardEntryDto secondEntry =
+        board.logisticsSnapshot(W1).current().stream()
+            .filter(entry -> entry.taskId().equals(secondTaskId))
+            .findFirst()
+            .orElseThrow();
+    BoardEntryDto taken =
+        board.take(
+            W1,
+            secondEntry.id(),
+            new TakeEntryRequest(secondEntry.version(), null, secondDriver.id()),
+            secondDriver.id());
+
+    assertThat(taken.status()).isEqualTo(EntryStatus.IN_PROGRESS);
+    assertThatThrownBy(() -> workerBoard.detail(firstDriver.id(), W1, secondEntry.id()))
+        .isInstanceOf(NotFoundException.class);
+    assertThatThrownBy(
+            () ->
+                board.take(
+                    W1,
+                    secondEntry.id(),
+                    new TakeEntryRequest(taken.version(), null, firstDriver.id()),
+                    firstDriver.id()))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("второго водителя");
+  }
+
+  @Test
+  void sharedDriverAudienceHasNoPlannedIdentityAndNarrowsOnlyAfterTake() {
+    var driverClass = registry.createClass(workerClass("DRIVER_SHARED_BOARD"));
+    var movement =
+        QueueRegistryTestFixtures.create(
+            registry,
+            jdbc,
+            W1,
+            queue(
+                "DRIVER_SHARED_BOARD",
+                QueueType.MOVEMENT,
+                QueuePurpose.LOGISTICS_DRIVER,
+                List.of(
+                    new QueueBindingRequest(
+                        driverClass.id(), 0, false, ParticipationPolicy.PRIMARY, false))));
+    var firstDriver =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Первый водитель",
+                null,
+                null,
+                List.of(new QualificationRequest(driverClass.id(), true, null))));
+    var secondDriver =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Новый водитель",
+                null,
+                null,
+                List.of(new QualificationRequest(driverClass.id(), true, null))));
+    LocalDate date = LocalDate.of(2026, 8, 3);
+    UUID externalTaskId = UUID.randomUUID();
+    RegisterExternalTaskRequest initialRequest =
+        driverRegistration(
+            movement.definitionId(),
+            externalTaskId,
+            date,
+            new DriverTaskAudienceDto(
+                DriverTaskAudienceMode.WAREHOUSE_DRIVERS, null, null));
+    BoardTaskRegistrationDto registered =
+        board.registerExternalTask("logistics-service", initialRequest);
+    registered =
+        board.setExternalTaskLane(
+            "logistics-service",
+            externalTaskId,
+            new SetTaskLaneRequest(registered.taskVersion(), TaskLane.CURRENT));
+
+    assertThat(registered.driverAudience().mode())
+        .isEqualTo(DriverTaskAudienceMode.WAREHOUSE_DRIVERS);
+    assertThat(registered.driverAudience().workerId()).isNull();
+    assertThat(registered.driverAudience().workerName()).isNull();
+    assertThat(
+            workerBoard.feed(firstDriver.id(), W1, null, 50).feed().categories().stream()
+                .flatMap(category -> category.entries().stream())
+                .map(entry -> entry.taskId()))
+        .contains(registered.taskId());
+    assertThat(
+            workerBoard.feed(secondDriver.id(), W1, null, 50).feed().categories().stream()
+                .flatMap(category -> category.entries().stream())
+                .map(entry -> entry.taskId()))
+        .contains(registered.taskId());
+    assertThatThrownBy(
+            () ->
+                board.registerExternalTask(
+                    "logistics-service",
+                    driverRegistration(
+                        movement.definitionId(),
+                        UUID.randomUUID(),
+                        date,
+                        new DriverTaskAudienceDto(
+                            DriverTaskAudienceMode.WAREHOUSE_DRIVERS,
+                            firstDriver.id(),
+                            "ignored"))))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("не может содержать ответственного водителя");
+    assertThatThrownBy(
+            () ->
+                board.registerExternalTask(
+                    "logistics-service",
+                    withDriverAudience(
+                        initialRequest,
+                        new DriverTaskAudienceDto(
+                            DriverTaskAudienceMode.ASSIGNED_DRIVER,
+                            secondDriver.id(),
+                            null))))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("другими данными");
+
+    UUID sharedTaskId = registered.taskId();
+    BoardEntryDto sharedEntry =
+        board.logisticsSnapshot(W1).current().stream()
+            .filter(entry -> entry.taskId().equals(sharedTaskId))
+            .findFirst()
+            .orElseThrow();
+    board.take(
+        W1,
+        sharedEntry.id(),
+        new TakeEntryRequest(sharedEntry.version(), null, firstDriver.id()),
+        firstDriver.id());
+
+    assertThatCode(() -> workerBoard.detail(firstDriver.id(), W1, sharedEntry.id()))
+        .doesNotThrowAnyException();
+    assertThatThrownBy(() -> workerBoard.detail(secondDriver.id(), W1, sharedEntry.id()))
+        .isInstanceOf(NotFoundException.class);
+  }
+
+  @Test
+  void privateDocumentReplanCanAssignAnUnassignedDriverTask() {
+    var driverClass = registry.createClass(workerClass("DRIVER_PRIVATE_REPLAN"));
+    var movement =
+        QueueRegistryTestFixtures.create(
+            registry,
+            jdbc,
+            W1,
+            queue(
+                "DRIVER_PRIVATE_REPLAN",
+                QueueType.MOVEMENT,
+                QueuePurpose.LOGISTICS_DRIVER,
+                List.of(
+                    new QueueBindingRequest(
+                        driverClass.id(), 0, false, ParticipationPolicy.PRIMARY, false))));
+    var driver =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Назначенный водитель",
+                null,
+                null,
+                List.of(new QualificationRequest(driverClass.id(), true, null))));
+    LocalDate date = LocalDate.of(2026, 8, 4);
+    UUID externalTaskId = UUID.randomUUID();
+    BoardTaskRegistrationDto unassigned =
+        board.registerExternalTask(
+            "logistics-service",
+            driverRegistration(
+                movement.definitionId(),
+                externalTaskId,
+                date,
+                new DriverTaskAudienceDto(
+                    DriverTaskAudienceMode.UNASSIGNED, null, null)));
+
+    BoardTaskRegistrationDto assigned =
+        board.moveExternalLogisticsTask(
+            externalTaskId,
+            new MoveExternalLogisticsTaskRequest(
+                unassigned.taskVersion(),
+                unassigned.route().getFirst().entryVersion(),
+                TaskLane.SCHEDULED,
+                date,
+                0,
+                new DriverTaskAudienceDto(
+                    DriverTaskAudienceMode.ASSIGNED_DRIVER, driver.id(), null)));
+
+    assertThat(assigned.driverAudience().mode())
+        .isEqualTo(DriverTaskAudienceMode.ASSIGNED_DRIVER);
+    assertThat(assigned.driverAudience().workerId()).isEqualTo(driver.id());
+    assertThat(assigned.driverAudience().workerName()).isEqualTo(driver.displayName());
   }
 
   @Test
@@ -2909,6 +3279,28 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   void maintenanceRegistrationUsesDailyCapacityButManualDateMovesRemainUnrestricted() {
     var queue = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("DAILY_CAPACITY", QueueType.REPAIR, List.of()));
     LocalDate requestedDate = LocalDate.of(2026, 7, 25);
+    assertThatThrownBy(
+            () ->
+                board.registerExternalTask(
+                    "maintenance-service",
+                    new RegisterExternalTaskRequest(
+                        W1,
+                        UUID.randomUUID(),
+                        "ordinary-audience-rejected",
+                        null,
+                        null,
+                        null,
+                        null,
+                        List.of(new RouteStepRequest(queue.definitionId(), "repair", null)),
+                        requestedDate,
+                        3,
+                        null,
+                        null,
+                        TaskLane.SCHEDULED,
+                        new DriverTaskAudienceDto(
+                            DriverTaskAudienceMode.WAREHOUSE_DRIVERS, null, null))))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("только логистическому заданию");
     List<BoardTaskRegistrationDto> registrations = new java.util.ArrayList<>();
     for (int number = 1; number <= 7; number++) {
       List<RouteStepRequest> route =
@@ -2937,6 +3329,9 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(registrations.subList(0, 6))
         .extracting(BoardTaskRegistrationDto::scheduledDate)
         .containsOnly(requestedDate);
+    assertThat(registrations)
+        .extracting(BoardTaskRegistrationDto::driverAudience)
+        .containsOnlyNulls();
     BoardTaskRegistrationDto seventhRegistration = registrations.get(6);
     LocalDate overflowDate = requestedDate.plusDays(1);
     assertThat(seventhRegistration.scheduledDate()).isEqualTo(overflowDate);
@@ -4204,6 +4599,14 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
   private RegisterExternalTaskRequest driverRegistration(
       UUID queueDefinitionId, UUID externalTaskId, LocalDate scheduledDate) {
+    return driverRegistration(queueDefinitionId, externalTaskId, scheduledDate, null);
+  }
+
+  private RegisterExternalTaskRequest driverRegistration(
+      UUID queueDefinitionId,
+      UUID externalTaskId,
+      LocalDate scheduledDate,
+      DriverTaskAudienceDto driverAudience) {
     return new RegisterExternalTaskRequest(
         W1,
         externalTaskId,
@@ -4217,7 +4620,27 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         3,
         null,
         new TaskSourceReferenceDto(TaskSourceType.LOGISTICS_DRIVER_TASK, UUID.randomUUID()),
-        TaskLane.SCHEDULED);
+        TaskLane.SCHEDULED,
+        driverAudience);
+  }
+
+  private RegisterExternalTaskRequest withDriverAudience(
+      RegisterExternalTaskRequest request, DriverTaskAudienceDto driverAudience) {
+    return new RegisterExternalTaskRequest(
+        request.warehouseId(),
+        request.externalTaskId(),
+        request.title(),
+        request.unitNumber(),
+        request.description(),
+        request.plannedDurationMinutes(),
+        request.deadlineAt(),
+        request.route(),
+        request.scheduledDate(),
+        request.priority(),
+        request.dailyCapacity(),
+        request.source(),
+        request.lane(),
+        driverAudience);
   }
 
   private CreateBoardTaskRequest scheduledTask(

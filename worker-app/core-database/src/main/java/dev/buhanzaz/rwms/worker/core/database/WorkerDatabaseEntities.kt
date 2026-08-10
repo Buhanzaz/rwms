@@ -111,6 +111,8 @@ data class WorkerTaskEntity(
     val timerState: String? = null,
     val timerNextTransitionAt: String? = null,
     val timerServerTime: String? = null,
+    /** Server-owned driver audience used only to select the correct driver table. */
+    val driverAudienceMode: String? = null,
 )
 
 @Entity(tableName = "worker_assignment", indices = [Index(value = ["userId", "entryId"])])

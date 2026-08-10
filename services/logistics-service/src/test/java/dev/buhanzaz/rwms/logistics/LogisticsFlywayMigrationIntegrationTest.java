@@ -62,6 +62,7 @@ class LogisticsFlywayMigrationIntegrationTest {
             "client_presentation_item",
             "consumer_aggregate_checkpoint",
             "driver_logistics_task",
+            "driver_logistics_task_member",
             "equipment_movement_task",
             "equipment_movement_task_line",
             "domain_event",
@@ -97,6 +98,7 @@ class LogisticsFlywayMigrationIntegrationTest {
             "rental_order_command_receipt",
             "rental_order_unit_term",
             "rental_settings",
+            "shipment_task_settings",
             "sanitized_dead_letter",
             "warehouse_operation_mark_outbox",
             "warehouse_operation_mark_recovery_audit",
@@ -1943,6 +1945,161 @@ class LogisticsFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void v45RemovesTransferAndSharedDriverHintsAndEnforcesAudienceByTaskKind() {
+    Flyway beforeV45 = configuration(MIGRATIONS).target("44").load();
+    assertThat(beforeV45.migrate().migrationsExecuted).isEqualTo(44);
+    UUID warehouseId = UUID.randomUUID();
+    UUID destinationWarehouseId = UUID.randomUUID();
+    UUID oldDriverId = UUID.randomUUID();
+    UUID transferDocumentId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into logistics_document(
+          id,version,document_type,state,warehouse_id,destination_warehouse_id,
+          driver_snapshot,driver_worker_id,scheduled_date,requested_by_subject_id,
+          correlation_id,created_at,updated_at)
+        values (?,0,'TRANSFER','DRAFT',?,?,'Старый ответственный',?,date '2026-08-15',
+          ?,?,clock_timestamp(),clock_timestamp())
+        """,
+        transferDocumentId,
+        warehouseId,
+        destinationWarehouseId,
+        oldDriverId,
+        UUID.randomUUID(),
+        UUID.randomUUID());
+    UUID transferTaskId = UUID.randomUUID();
+    UUID shipmentTaskId = UUID.randomUUID();
+    UUID returnTaskId = UUID.randomUUID();
+    insertV44DocumentDriverTask(
+        transferTaskId, warehouseId, "TRANSFER", oldDriverId, "Старый ответственный");
+    insertV44DocumentDriverTask(
+        shipmentTaskId, warehouseId, "SHIPMENT", oldDriverId, "Назначенный водитель");
+    insertV44DocumentDriverTask(returnTaskId, warehouseId, "RETURN", null, null);
+
+    Flyway upgraded = configuration(MIGRATIONS).target("45").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForMap(
+                "select driver_snapshot,driver_worker_id from logistics_document where id=?",
+                transferDocumentId))
+        .containsEntry("driver_snapshot", null)
+        .containsEntry("driver_worker_id", null);
+    assertThat(driverAudienceRow(transferTaskId))
+        .containsEntry("driver_audience_mode", "WAREHOUSE_DRIVERS")
+        .containsEntry("planned_driver_worker_id", null)
+        .containsEntry("planned_driver_name_snapshot", null);
+    assertThat(driverAudienceRow(shipmentTaskId))
+        .containsEntry("driver_audience_mode", "ASSIGNED_DRIVER")
+        .containsEntry("planned_driver_worker_id", oldDriverId)
+        .containsEntry("planned_driver_name_snapshot", "Назначенный водитель");
+    assertThat(driverAudienceRow(returnTaskId))
+        .containsEntry("driver_audience_mode", "UNASSIGNED")
+        .containsEntry("planned_driver_worker_id", null)
+        .containsEntry("planned_driver_name_snapshot", null);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update logistics_document set driver_snapshot='Ошибка' where id=?",
+                    transferDocumentId))
+        .hasMessageContaining("ck_logistics_document_transfer_driver");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    update driver_logistics_task
+                       set driver_audience_mode='ASSIGNED_DRIVER',
+                           planned_driver_worker_id=?,
+                           planned_driver_name_snapshot='Ошибка'
+                     where id=?
+                    """,
+                    UUID.randomUUID(),
+                    transferTaskId))
+        .hasMessageContaining("ck_driver_logistics_task_kind_audience");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    update driver_logistics_task
+                       set driver_audience_mode='WAREHOUSE_DRIVERS',
+                           planned_driver_worker_id=null,
+                           planned_driver_name_snapshot=null
+                     where id=?
+                    """,
+                    shipmentTaskId))
+        .hasMessageContaining("ck_driver_logistics_task_kind_audience");
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v46AddsShipmentGroupingWithoutRegroupingLegacyDocumentLineTasks() {
+    Flyway beforeV46 = configuration(MIGRATIONS).target("45").load();
+    assertThat(beforeV46.migrate().migrationsExecuted).isEqualTo(45);
+    UUID warehouseId = UUID.randomUUID();
+    UUID legacyTaskId = UUID.randomUUID();
+    insertV45LegacyShipmentLineTask(legacyTaskId, warehouseId);
+
+    Flyway upgraded = configuration(MIGRATIONS).target("46").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(toRegclass("shipment_task_settings")).isNotNull();
+    assertThat(toRegclass("driver_logistics_task_member")).isNotNull();
+    assertThat(toRegclass("ix_driver_logistics_task_member_task_position")).isNotNull();
+    assertThat(toRegclass("ix_driver_logistics_task_member_cabin")).isNotNull();
+    assertThat(
+            jdbc.queryForList(
+                """
+                select conname from pg_constraint
+                 where conrelid='driver_logistics_task_member'::regclass
+                """,
+                String.class))
+        .contains(
+            "fk_driver_logistics_task_member_task",
+            "fk_driver_logistics_task_member_document_line",
+            "uk_driver_logistics_task_member_line",
+            "uk_driver_logistics_task_member_cabin");
+    assertThat(
+            jdbc.queryForMap(
+                "select source_type,client_snapshot from driver_logistics_task where id=?",
+                legacyTaskId))
+        .containsEntry("source_type", "LOGISTICS_DOCUMENT_LINE")
+        .containsEntry("client_snapshot", null);
+
+    UUID groupedTaskId = UUID.randomUUID();
+    insertV46GroupedShipmentTask(groupedTaskId, warehouseId);
+    assertThat(
+            jdbc.queryForMap(
+                "select source_type,task_kind,client_snapshot,unit_number from driver_logistics_task where id=?",
+                groupedTaskId))
+        .containsEntry("source_type", "LOGISTICS_DOCUMENT")
+        .containsEntry("task_kind", "SHIPMENT")
+        .containsEntry("client_snapshot", "ООО Группа")
+        .containsEntry("unit_number", "2 бытовки");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update driver_logistics_task set client_snapshot=null where id=?", groupedTaskId))
+        .hasMessageContaining("ck_driver_logistics_task_document_group");
+    jdbc.update(
+        """
+        insert into shipment_task_settings(
+          warehouse_id,version,max_cabins_per_shipment_task,updated_by_subject_id,updated_at)
+        values (?,0,3,?,clock_timestamp())
+        """,
+        warehouseId,
+        UUID.randomUUID());
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update shipment_task_settings set max_cabins_per_shipment_task=0 where warehouse_id=?",
+                    warehouseId))
+        .hasMessageContaining("ck_shipment_task_settings_max_cabins");
+    assertJpaValidationStarts();
+  }
+
+  @Test
   void modifiedAppliedMigrationIsRejectedByChecksumValidation(@TempDir Path directory)
       throws IOException {
     Path migration = directory.resolve("V1__logistics_schema.sql");
@@ -2205,6 +2362,103 @@ class LogisticsFlywayMigrationIntegrationTest {
         managerId,
         UUID.randomUUID(),
         "a".repeat(64));
+  }
+
+  /** Inserts one V44-era document driver task, including the now-obsolete shared-driver hint. */
+  private void insertV44DocumentDriverTask(
+      UUID taskId,
+      UUID warehouseId,
+      String taskKind,
+      UUID plannedDriverWorkerId,
+      String plannedDriverName) {
+    jdbc.update(
+        """
+        insert into driver_logistics_task(
+          id,version,warehouse_id,cabin_id,source_type,source_id,task_kind,planning_mode,
+          scheduled_date,fixed_date_lower_bound,priority,unit_number,driver_queue_definition_id,
+          driver_audience_mode,planned_driver_worker_id,planned_driver_name_snapshot,
+          external_task_id,state,cover_applied,repair_place_effect_applied,created_by_subject_id,
+          idempotency_key,request_sha256,retry_count,next_attempt_at,created_at,updated_at)
+        values (?,0,?,?,'LOGISTICS_DOCUMENT_LINE',?,?,'FIXED_DATE',date '2026-08-15',
+          date '2026-08-15',3,'БТ-V45',?,'WAREHOUSE_DRIVERS',?,?,?,'REGISTERING',
+          false,true,?,?,?,0,clock_timestamp(),clock_timestamp(),clock_timestamp())
+        """,
+        taskId,
+        warehouseId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        taskKind,
+        UUID.randomUUID(),
+        plannedDriverWorkerId,
+        plannedDriverName,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "e".repeat(64));
+  }
+
+  /** Inserts a V45 line-owned shipment task to prove V46 does not mutate historical topology. */
+  private void insertV45LegacyShipmentLineTask(UUID taskId, UUID warehouseId) {
+    jdbc.update(
+        """
+        insert into driver_logistics_task(
+          id,version,warehouse_id,cabin_id,source_type,source_id,task_kind,planning_mode,
+          scheduled_date,fixed_date_lower_bound,priority,movement_comment,unit_number,
+          driver_queue_definition_id,driver_audience_mode,planned_driver_worker_id,
+          planned_driver_name_snapshot,external_task_id,state,cover_applied,
+          repair_place_effect_applied,created_by_subject_id,idempotency_key,request_sha256,
+          retry_count,next_attempt_at,created_at,updated_at)
+        values (?,0,?,?,'LOGISTICS_DOCUMENT_LINE',?,'SHIPMENT','FIXED_DATE',current_date,
+          current_date,3,'Отгрузка бытовки','БТ-V45',?,'ASSIGNED_DRIVER',?,'Водитель V45',?,
+          'REGISTERING',false,true,?,?,?,0,clock_timestamp(),clock_timestamp(),clock_timestamp())
+        """,
+        taskId,
+        warehouseId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "f".repeat(64));
+  }
+
+  /** Inserts a V46 document-owned group to prove the expanded source constraint is usable. */
+  private void insertV46GroupedShipmentTask(UUID taskId, UUID warehouseId) {
+    jdbc.update(
+        """
+        insert into driver_logistics_task(
+          id,version,warehouse_id,cabin_id,source_type,source_id,task_kind,planning_mode,
+          scheduled_date,fixed_date_lower_bound,priority,movement_comment,client_snapshot,
+          unit_number,driver_queue_definition_id,driver_audience_mode,planned_driver_worker_id,
+          planned_driver_name_snapshot,external_task_id,state,cover_applied,
+          repair_place_effect_applied,created_by_subject_id,idempotency_key,request_sha256,
+          retry_count,next_attempt_at,created_at,updated_at)
+        values (?,0,?,?,'LOGISTICS_DOCUMENT',?,'SHIPMENT','FIXED_DATE',current_date,
+          current_date,3,'Клиент: ООО Группа. Бытовки: БТ-461, БТ-462','ООО Группа','2 бытовки',?,
+          'ASSIGNED_DRIVER',?,'Водитель V46',?,'REGISTERING',false,true,?,?,?,0,
+          clock_timestamp(),clock_timestamp(),clock_timestamp())
+        """,
+        taskId,
+        warehouseId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "a".repeat(64));
+  }
+
+  private Map<String, Object> driverAudienceRow(UUID taskId) {
+    return jdbc.queryForMap(
+        """
+        select driver_audience_mode,planned_driver_worker_id,planned_driver_name_snapshot
+          from driver_logistics_task where id=?
+        """,
+        taskId);
   }
 
   private java.net.URL requireResource(String path) {

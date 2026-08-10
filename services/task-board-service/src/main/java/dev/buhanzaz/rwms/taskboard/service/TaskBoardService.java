@@ -64,13 +64,19 @@ public class TaskBoardService {
    * ordered queue; only its first waiting entry is actionable for a driver.
    */
   @Transactional(readOnly = true)
-  public TaskBoardSnapshot workerSnapshot(UUID warehouseId) {
-    return readProjections.workerSnapshot(warehouseId);
+  public TaskBoardSnapshot workerSnapshot(UUID warehouseId, UUID workerId) {
+    return readProjections.workerSnapshot(warehouseId, workerId);
   }
 
   @Transactional(readOnly = true)
   public BoardEntryDto entry(UUID warehouseId, UUID entryId) {
     return readProjections.entry(warehouseId, entryId);
+  }
+
+  @Transactional(readOnly = true)
+  /** Returns an entry only when the authenticated worker may discover its driver audience. */
+  public BoardEntryDto workerEntry(UUID warehouseId, UUID entryId, UUID workerId) {
+    return readProjections.workerEntry(warehouseId, entryId, workerId);
   }
 
   @Transactional(readOnly = true)

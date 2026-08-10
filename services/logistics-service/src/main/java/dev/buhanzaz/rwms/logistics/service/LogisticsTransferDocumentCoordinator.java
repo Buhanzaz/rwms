@@ -16,6 +16,7 @@ import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
 import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskService;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventStore;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventType;
+import dev.buhanzaz.rwms.logistics.driver.service.DocumentDriverTaskPlanner;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
@@ -59,6 +60,7 @@ class LogisticsTransferDocumentCoordinator {
   private final LogisticsDocumentIdempotency idempotency;
   private final LogisticsDocumentReadProjection readProjection;
   private final LogisticsDocumentAttemptWriter attemptWriter;
+  private final DocumentDriverTaskPlanner driverTaskPlanner;
 
   LogisticsDocumentCommandResult createTransfer(
       UUID subjectId, UUID idempotencyKey, UUID correlationId, CreateTransferRequest request) {
@@ -97,12 +99,12 @@ class LogisticsTransferDocumentCoordinator {
             LogisticsDocument.createTransfer(
                 request.warehouseId(),
                 request.destinationWarehouseId(),
-                request.driverSnapshot(),
                 request.scheduledDate(),
                 subjectId,
                 correlationId));
     List<LogisticsDocumentLine> lines =
         lineRepository.saveAllAndFlush(transferLines(document, request.lines()));
+    driverTaskPlanner.plan(document, lines);
     OffsetDateTime proofCreatedAt = now();
     for (LogisticsDocumentLine line : lines) {
       attemptWriter.createLineAttempt(
@@ -382,6 +384,8 @@ class LogisticsTransferDocumentCoordinator {
           "A transfer can be cancelled only while every line is pending");
     }
 
+    driverTaskPlanner.cancelBeforeStart(document, lines);
+
     cancelTransferEquipmentTask(subjectId, document);
     transferFurnitureTasks.cancelForTransfer(subjectId, document.getId());
     document.beginTransferCancellation();
@@ -656,7 +660,6 @@ class LogisticsTransferDocumentCoordinator {
     List<String> values = new ArrayList<>();
     values.add(request.warehouseId().toString());
     values.add(request.destinationWarehouseId().toString());
-    values.add(request.driverSnapshot());
     values.add(request.scheduledDate().toString());
     for (var line : request.lines()) {
       values.add(line.assetId().toString());

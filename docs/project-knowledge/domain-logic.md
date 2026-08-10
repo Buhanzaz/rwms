@@ -113,8 +113,17 @@ Evidence: [`asset-service.yaml`](../../contracts/openapi/asset-service.yaml),
 and operational task state. Source domains may request work through defined
 contracts while task execution remains task-board-owned.
 
+A logistics driver task has one task-board-owned visibility audience. An
+unassigned task is dispatcher-only; an assigned task is visible and executable
+only for its active, same-warehouse, primary-qualified driver; an unclaimed
+warehouse-shared task is visible to every such driver and becomes assignee-only
+after take. A shared task may name a responsible driver without narrowing
+visibility. Task-board resolves the authoritative worker name and applies the
+same policy to feed, detail, take, execution ordering and invalidation.
+
 Evidence: [`services/task-board-service/`](../../services/task-board-service/),
-[`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml).
+[`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml),
+[`DriverTaskAudienceService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/DriverTaskAudienceService.java).
 
 ### Maintenance
 
@@ -362,6 +371,22 @@ manually move an ordinary scheduled task into Current; only
 removal movement is inserted before ordinary Current work but after all leading
 pinned cards.
 
+Each newly created shipment persists one logistics-owned driver intent for the
+whole document, with immutable document-line/cabin members and the client
+snapshot. A warehouse-local logistics setting caps the selected cabin count at
+1–100 (the compatibility default is one); a request above the current cap is
+rejected before the document or intent is created. The internal task-board
+priority is fixed and is not a logistics-board decision. Completion evidence is
+applied idempotently to every grouped cabin. Existing line-derived shipment
+intents are retained as legacy records; return and transfer continue to persist
+one intent per document line. Shipment and return use an assigned or unassigned
+audience according to the opaque worker ID stored on the document. Transfer is
+always warehouse-shared and stores no responsible-driver identity or display
+snapshot. The panel presents shipment/return in dated columns with collapsible
+driver sections, and keeps shared warehouse movements on a separate board.
+Shipment/return drag-and-drop is version-fenced and can only reorder inside the
+same driver/date/lane queue; it cannot reassign the audience.
+
 Evidence:
 [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml),
 [`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml),
@@ -369,7 +394,11 @@ Evidence:
 [`MaintenanceApplicationService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceApplicationService.java),
 [`DriverQueueScheduler.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverQueueScheduler.java),
 [`DriverTaskRelay.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverTaskRelay.java),
-[`DriverBoardService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverBoardService.java).
+[`DriverBoardService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverBoardService.java),
+[`DocumentDriverTaskPlanner.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DocumentDriverTaskPlanner.java),
+[`ShipmentTaskSettingsService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/settings/service/ShipmentTaskSettingsService.java),
+and
+[`V46__shipment_task_grouping.sql`](../../services/logistics-service/src/main/resources/db/migration/V46__shipment_task_grouping.sql).
 
 ### Media
 

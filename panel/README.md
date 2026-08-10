@@ -53,7 +53,10 @@ contexts and screens are usable.
   such as OSB and LDSP remain separately answerable in either order, while the
   panel renders only friendly question kinds and exact server-provided options.
   Search cards require both cabin type and finish, and exact follow-up filters
-  come from the search result rather than browser guesses. See the
+  come from the search result rather than browser guesses. Within one mounted
+  result surface, the active logical group remains selected through selection
+  and stream updates; compact rounded group pills replace underline tabs, and
+  exact filters stay collapsed until the manager opens them. See the
   [assistant OpenAPI](../contracts/openapi/assistant-service.yaml), the strict
   [assistant adapter](src/features/assistant/api/assistant-api.ts), and the
   [conversation page](src/features/assistant/pages/assistant-page.tsx).
@@ -79,15 +82,50 @@ contexts and screens are usable.
   schedules one deadline refresh instead of re-rendering the whole booking
   screen each second. See the [booking catalogue](src/features/booking/booking-catalog-page.tsx)
   and [expiry hook](src/features/booking/use-booking-hold-expiry.ts).
-- Order create/edit screens persist the delivery address, latitude, longitude,
-  editable contact phone, comment, and concrete acceptable delivery dates.
-  Lists and details render those server projections. Order detail shows
-  logistics-owned planned/actual delivery and return movements, then performs
-  independent public dossier reads for selected cabins. Estimate or repair
-  absence is shown as proven only after a complete dossier projection has been
-  paged to exhaustion; partial, failed, or still-paged reads remain explicitly
-  inconclusive. See the [order adapter](src/features/orders/api/orders-api.ts)
-  and [dossier evidence](src/features/orders/components/order-unit-dossier-evidence.tsx).
+- Order creation and address-edit screens persist the delivery address,
+  latitude, longitude, editable contact phone, comment, and concrete
+  acceptable delivery dates.
+  A DRAFT detail makes its save prerequisites visible: a nonblank address,
+  finite coordinate pair, nonblank contact phone, one or more acceptable dates,
+  selected warehouse, one or more cabins, and a persisted, unchanged rental
+  term for every selected cabin. Its address dialog changes only delivery data
+  and keeps the selected client. Saving moves the order to the saved state so it
+  can be handled in Tasks; it does not create a shipment or trip. Lists and
+  details render those server projections. Order detail shows logistics-owned
+  planned/actual delivery and return movements, then performs independent public
+  dossier reads for selected cabins. Estimate or repair absence is shown as
+  proven only after a complete dossier projection has been paged to exhaustion;
+  partial, failed, or still-paged reads remain explicitly inconclusive. See the
+  [order adapter](src/features/orders/api/orders-api.ts), [draft
+  detail](src/features/orders/pages/order-detail-page.tsx), [delivery
+  dialog](src/features/orders/components/order-delivery-dialog.tsx), and
+  [dossier evidence](src/features/orders/components/order-unit-dossier-evidence.tsx).
+
+## Logistics driver board
+
+- Shipment and return forms select an active driver by opaque worker ID. A
+  warehouse transfer has no responsible driver because it creates shared
+  warehouse movement work.
+- `/logistics/board` shows only shipment and return cards in horizontal calendar
+  columns. Each date contains independently collapsible active-driver queues and
+  an unassigned queue only when such cards exist. Current and scheduled lanes
+  remain distinct inside the same driver section, and cards collapse
+  independently.
+- A logistics card can be reordered only inside its existing date, lane and
+  driver queue. The client sends task and entry versions with the new index; it
+  never changes the driver audience through drag and drop.
+- `/logistics/tasks` is the separate shared warehouse movement board. It keeps
+  transfer, general movement, repair-place and capital-repair workflows without
+  driver sections or driver identity in the UI.
+- Optimistic movement is presentation state only. A rejection restores the
+  prior board and refreshes the authoritative projection; a driver-directory
+  failure leaves known tasks and board commands available.
+
+See the [canonical logistics contract](../contracts/openapi/logistics-service.yaml),
+[board model](src/features/logistics/driver-board/driver-board-model.ts), and
+[logistics board](src/features/logistics/driver-board/logistics-board-page.tsx),
+[movement board](src/features/logistics/driver-board/driver-board-page.tsx), and
+[warehouse-transfer adapter](src/features/logistics/warehouse-transfers/adapters/http-warehouse-transfer-client.ts).
 
 ## Failures, concurrency, and commands
 

@@ -1,5 +1,5 @@
 import { type ReactNode, useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import {
   ArrowDown01Icon,
   ArrowUp01Icon,
@@ -20,6 +20,11 @@ import {
   CarouselPrevious,
 } from "@/components/ui/carousel"
 import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type {
@@ -27,6 +32,7 @@ import type {
   CabinFilterSuggestions,
   CabinSearchResult,
 } from "@/features/assistant/api/assistant-api"
+import { cabinSearchGroupKey } from "@/features/assistant/api/assistant-api"
 import { assistantSearchGroupLabel } from "@/features/assistant/assistant-search-selection"
 import { RentalItemStatusBadge } from "@/features/rental-items/rental-item-status-badge"
 import type { CabinCoverProjection } from "@/features/media/media-service"
@@ -59,13 +65,27 @@ export function AssistantSearchResults({
   onSuggestion?: (message: string) => void
   footer?: ReactNode
 }) {
-  const [activeGroup, setActiveGroup] = useState(0)
+  const groups = useMemo(
+    () =>
+      result.groups.map((entry) => ({
+        entry,
+        key: cabinSearchGroupKey(entry.group),
+      })),
+    [result.groups]
+  )
+  const [activeGroupKey, setActiveGroupKey] = useState(
+    () => groups[0]?.key ?? null
+  )
+  const [exactSearchOpen, setExactSearchOpen] = useState(false)
   const cabinIds = useMemo(
-    () => [
-      ...new Set(
-        result.groups.flatMap((entry) => entry.cabins.map((cabin) => cabin.id))
-      ),
-    ],
+    () =>
+      [
+        ...new Set(
+          result.groups.flatMap((entry) =>
+            entry.cabins.map((cabin) => cabin.id)
+          )
+        ),
+      ].sort((left, right) => left.localeCompare(right)),
     [result.groups]
   )
   const coversQuery = useQuery({
@@ -77,6 +97,7 @@ export function AssistantSearchResults({
     queryFn: () =>
       loadRentalItemCoverPage(accessToken, result.warehouseId, cabinIds),
     enabled: cabinIds.length > 0,
+    placeholderData: keepPreviousData,
   })
   const projections = useMemo(
     () =>
@@ -89,9 +110,12 @@ export function AssistantSearchResults({
     [coversQuery.data?.items]
   )
 
-  const entry = result.groups[activeGroup]
+  const activeGroup =
+    groups.find((group) => group.key === activeGroupKey) ?? groups[0] ?? null
+  const resolvedActiveGroupKey = activeGroup?.key ?? ""
+  const entry = activeGroup?.entry
   if (!entry) return null
-  const hasCabins = result.groups.some((group) => group.cabins.length > 0)
+  const hasCabins = groups.some((group) => group.entry.cabins.length > 0)
   const coverAvailability = coversQuery.isPending
     ? "loading"
     : coversQuery.isError
@@ -125,21 +149,17 @@ export function AssistantSearchResults({
             {collapsed ? "Развернуть" : "Скрыть"}
           </Button>
         </div>
-        <Tabs
-          value={String(activeGroup)}
-          onValueChange={(value) => setActiveGroup(Number(value))}
-        >
+        <Tabs value={resolvedActiveGroupKey} onValueChange={setActiveGroupKey}>
           <div className="mb-3 min-w-0 [scrollbar-width:none] overflow-x-auto pb-1 [&::-webkit-scrollbar]:hidden">
             <TabsList
-              variant="line"
               aria-label="Группы найденных бытовок"
-              className="mx-auto flex w-max min-w-full items-center justify-center gap-2 px-1"
+              className="mx-auto flex w-max items-center justify-start gap-1 rounded-full bg-transparent p-0"
             >
-              {result.groups.map((group, index) => (
+              {groups.map(({ entry: group, key: groupKey }, index) => (
                 <TabsTrigger
-                  key={`${assistantSearchGroupLabel(group.group, index)}-${index}`}
-                  value={String(index)}
-                  className="shrink-0 rounded-full"
+                  key={groupKey}
+                  value={groupKey}
+                  className="h-8 shrink-0 rounded-full bg-muted/70 px-3 text-foreground/70 shadow-none after:hidden hover:bg-muted hover:text-foreground data-[state=active]:bg-muted data-[state=active]:text-foreground data-[state=active]:shadow-sm"
                 >
                   {assistantSearchGroupLabel(group.group, index)}
                   <Badge
@@ -153,14 +173,14 @@ export function AssistantSearchResults({
             </TabsList>
           </div>
 
-          <TabsContent value={String(activeGroup)}>
+          <TabsContent value={resolvedActiveGroupKey}>
             {!collapsed && entry.cabins.length === 0 ? (
               <div className="flex h-40 items-center justify-center rounded-xl border border-dashed bg-background text-sm text-muted-foreground">
                 Доступные бытовки по этой группе не найдены.
               </div>
             ) : !collapsed && carouselEnabled ? (
               <Carousel
-                key={activeGroup}
+                key={resolvedActiveGroupKey}
                 orientation="horizontal"
                 opts={{ align: "start", dragFree: true }}
                 className="px-9"
@@ -236,10 +256,27 @@ export function AssistantSearchResults({
           </div>
         ) : null}
         {!collapsed && filterSuggestions && onSuggestion ? (
-          <AssistantFilterSuggestions
-            suggestions={filterSuggestions}
-            onSuggestion={onSuggestion}
-          />
+          <Collapsible
+            open={exactSearchOpen}
+            onOpenChange={setExactSearchOpen}
+            className="mt-4"
+          >
+            <CollapsibleTrigger asChild>
+              <Button type="button" size="sm" variant="outline">
+                <HugeiconsIcon
+                  icon={exactSearchOpen ? ArrowUp01Icon : ArrowDown01Icon}
+                  aria-hidden="true"
+                />
+                Продолжить точный поиск
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <AssistantFilterSuggestions
+                suggestions={filterSuggestions}
+                onSuggestion={onSuggestion}
+              />
+            </CollapsibleContent>
+          </Collapsible>
         ) : null}
       </div>
     </section>
@@ -290,8 +327,8 @@ function AssistantFilterSuggestions({
   onSuggestion: (message: string) => void
 }) {
   return (
-    <div className="mt-4 rounded-xl border border-dashed p-3">
-      <p className="mb-3 text-sm font-medium">Продолжить точный поиск</p>
+    <div className="mt-3 rounded-xl border border-dashed p-3">
+      <p className="mb-3 text-sm font-medium">Точные фильтры</p>
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         <SuggestionGroup
           label="Тип"

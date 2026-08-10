@@ -88,7 +88,6 @@ import {
   LogisticsFiltersToggle,
   type LogisticsDocumentFiltersState,
 } from "@/features/logistics/logistics-document-filters"
-import { LogisticsDriverPicker } from "@/features/logistics/logistics-driver-picker"
 import {
   getAssetRentalItem,
   listAssetRentalItems,
@@ -126,7 +125,6 @@ import {
   type TransferLine,
   type TransferMediaReference,
 } from "@/features/logistics/warehouse-transfers/model/warehouse-transfer"
-import type { RepairTaskWorkerSnapshotDto } from "@/features/repair-tasks/model/repair-task"
 import { useResponsiveFiltersOpen } from "@/hooks/use-responsive-filters-open"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { ApiError } from "@/lib/api-client"
@@ -135,7 +133,6 @@ import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
 
 type TransferFilters = LogisticsDocumentFiltersState<TransferDocumentState> & {
   routes: string[]
-  drivers: string[]
 }
 
 const EMPTY_FILTERS: TransferFilters = {
@@ -144,7 +141,6 @@ const EMPTY_FILTERS: TransferFilters = {
   dateFrom: "",
   dateTo: "",
   routes: [],
-  drivers: [],
 }
 
 type TransferLineTarget = {
@@ -265,16 +261,6 @@ function matchesDateRange(
   if (filters.dateFrom && value < filters.dateFrom) return false
   if (filters.dateTo && value > filters.dateTo) return false
   return true
-}
-
-function textFilterOptions(values: Iterable<string | null | undefined>) {
-  return [
-    ...new Set(
-      [...values].filter((value): value is string => Boolean(value?.trim()))
-    ),
-  ]
-    .sort((left, right) => left.localeCompare(right, "ru"))
-    .map((value) => ({ value, label: value }))
 }
 
 function needsFurnitureReadiness(document: TransferDocument) {
@@ -417,14 +403,6 @@ export function WarehouseTransfersPage() {
       .sort(([, left], [, right]) => left.localeCompare(right, "ru"))
       .map(([value, label]) => ({ value, label }))
   }, [query.data, warehouses])
-  const driverOptions = useMemo(
-    () =>
-      textFilterOptions(
-        (query.data ?? []).map((document) => document.driverSnapshot)
-      ),
-    [query.data]
-  )
-
   const rows = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("ru")
     return (query.data ?? []).filter((document) => {
@@ -440,12 +418,6 @@ export function WarehouseTransfersPage() {
       ) {
         return false
       }
-      if (
-        filters.drivers.length > 0 &&
-        !filters.drivers.includes(document.driverSnapshot ?? "")
-      ) {
-        return false
-      }
       if (!matchesDateRange(document.scheduledDate, filters)) return false
       if (!needle) return true
       return [
@@ -453,7 +425,6 @@ export function WarehouseTransfersPage() {
         document.warehouseId,
         document.destinationWarehouseId,
         transferRouteLabel(document, warehouses),
-        document.driverSnapshot,
         TRANSFER_STATE_LABELS[document.state],
         ...document.lines.flatMap((line) => [line.id, line.assetId]),
       ]
@@ -717,7 +688,7 @@ export function WarehouseTransfersPage() {
         <PageToolbarContent className="max-w-xl">
           <Input
             aria-label="Поиск по маршруту"
-            placeholder="Маршрут, бытовка, водитель или склад"
+            placeholder="Маршрут, бытовка или склад"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
@@ -750,13 +721,6 @@ export function WarehouseTransfersPage() {
               selected: filters.routes,
               onApply: (routes) =>
                 setFilters((current) => ({ ...current, routes })),
-            },
-            {
-              label: "Водитель",
-              options: driverOptions,
-              selected: filters.drivers,
-              onApply: (drivers) =>
-                setFilters((current) => ({ ...current, drivers })),
             },
           ]}
           onChange={(nextFilters) =>
@@ -871,13 +835,6 @@ export function WarehouseTransfersPage() {
                 ),
               },
               {
-                id: "driver",
-                label: "Водитель",
-                className: "min-w-44",
-                getSortValue: (document) => document.driverSnapshot ?? "",
-                render: (document) => document.driverSnapshot ?? "Не указан",
-              },
-              {
                 id: "state",
                 label: "Статус",
                 className: "w-52",
@@ -990,11 +947,7 @@ export function WarehouseTransfersPage() {
           pending={arriveMutation.isPending}
           error={commandError}
           onOpenChange={(open) => !open && setArrivalTarget(null)}
-          onSubmit={(
-            references,
-            priority,
-            idempotencyKey
-          ) =>
+          onSubmit={(references, priority, idempotencyKey) =>
             arriveMutation.mutate({
               ...arrivalTarget,
               references,
@@ -1532,7 +1485,6 @@ function CreateTransferDialog({
       hasWarehouseAccess(currentUser, warehouse.id, "EDIT")
   )
   const [destinationWarehouseId, setDestinationWarehouseId] = useState("")
-  const [driver, setDriver] = useState<RepairTaskWorkerSnapshotDto | null>(null)
   const [scheduledDate, setScheduledDate] = useState("")
   const [lines, setLines] = useState<TransferLineDraft[]>(() => [emptyLine()])
   const [editingLineKey, setEditingLineKey] = useState<string | null>(null)
@@ -1576,7 +1528,6 @@ function CreateTransferDialog({
         accessToken,
         warehouseId,
         destinationWarehouseId,
-        driverSnapshot: driver?.name ?? null,
         scheduledDate: commandScheduledDate,
         lines: commandLines,
         furnitureReplacements,
@@ -1668,7 +1619,6 @@ function CreateTransferDialog({
     const signature = JSON.stringify({
       warehouseId,
       destinationWarehouseId,
-      driverSnapshot: driver?.name ?? null,
       scheduledDate,
       lines: commandLines,
       furnitureReplacements,
@@ -1730,19 +1680,6 @@ function CreateTransferDialog({
                 </FieldDescription>
               ) : null}
             </Field>
-            <LogisticsDriverPicker
-              accessToken={accessToken}
-              id="transfer-driver"
-              required={false}
-              warehouseId={warehouseId}
-              value={driver}
-              disabled={mutation.isPending}
-              onChange={(next) => {
-                setDriver(next)
-                attempt.current = null
-                setValidationError(null)
-              }}
-            />
             <Field data-invalid={Boolean(validationError) || undefined}>
               <FieldLabel htmlFor="transfer-scheduled-date">
                 Дата задания

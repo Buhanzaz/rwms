@@ -1,23 +1,35 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 
 const releaseFile = new URL("../release.json", import.meta.url);
 const templateFile = new URL("../src/index.html", import.meta.url);
 const outputDirectory = new URL("../.site/", import.meta.url);
+const publicDirectory = new URL("../public/", import.meta.url);
 const outputPage = new URL("index.html", outputDirectory);
 const outputWorker = new URL("worker.mjs", outputDirectory);
 const outputFavicon = new URL("favicon.ico", outputDirectory);
+const publicPage = new URL("index.html", publicDirectory);
+const publicFavicon = new URL("favicon.ico", publicDirectory);
 
 const release = JSON.parse(await readFile(releaseFile, "utf8"));
 validateRelease(release);
 
 const template = await readFile(templateFile, "utf8");
 const page = renderPage(template, release);
-const worker = renderWorker(page);
+const worker = renderWorker(page, release);
+const storageArtifactPath = releaseArtifactStoragePath(release);
+const artifactOutput = new URL("assets" + storageArtifactPath, outputDirectory);
+const publicArtifactOutput = new URL(storageArtifactPath.slice(1), publicDirectory);
 
 await mkdir(outputDirectory, { recursive: true });
+await rm(publicDirectory, { force: true, recursive: true });
+await mkdir(publicDirectory, { recursive: true });
 await writeFile(outputPage, page);
 await writeFile(outputWorker, worker);
 await writeFile(outputFavicon, "");
+await writeFile(publicPage, page);
+await writeFile(publicFavicon, "");
+await publishArtifact(release, [artifactOutput, publicArtifactOutput]);
 
 function validateRelease(candidate) {
   const requiredTextFields = [
@@ -26,6 +38,7 @@ function validateRelease(candidate) {
     "versionName",
     "minimumAndroidVersion",
     "publicGateway",
+    "artifactPath",
   ];
 
   for (const field of requiredTextFields) {
@@ -36,6 +49,15 @@ function validateRelease(candidate) {
 
   if (!Number.isInteger(candidate.versionCode) || candidate.versionCode <= 0) {
     throw new Error("release.json field 'versionCode' must be a positive integer.");
+  }
+
+  const expectedArtifactPath =
+    "/downloads/rwms-worker-" + encodeURIComponent(candidate.versionName) + ".apk";
+
+  if (candidate.artifactPath !== expectedArtifactPath) {
+    throw new Error(
+      "release.json field 'artifactPath' must be the versioned WorkerApp APK path.",
+    );
   }
 
   if (candidate.packageName !== "dev.buhanzaz.rwms.worker") {
@@ -69,7 +91,17 @@ function validateRelease(candidate) {
     throw new Error("release.json status must be either 'pending' or 'published'.");
   }
 
-  validateHttpsUrl(candidate.downloadUrl, "downloadUrl");
+  const downloadUrl = validateHttpsUrl(candidate.downloadUrl, "downloadUrl");
+
+  if (
+    downloadUrl.pathname !== candidate.artifactPath ||
+    downloadUrl.search !== "" ||
+    downloadUrl.hash !== ""
+  ) {
+    throw new Error(
+      "A published release URL must be the exact versioned APK asset URL without query or fragment.",
+    );
+  }
 
   if (!/^[a-f0-9]{64}$/.test(candidate.sha256)) {
     throw new Error("A published release must provide a lowercase SHA-256 checksum.");
@@ -96,6 +128,10 @@ function validateHttpsUrl(value, field) {
   return parsed;
 }
 
+function releaseArtifactStoragePath(release) {
+  return "/_release-assets/" + release.artifactPath.split("/").at(-1);
+}
+
 function renderPage(source, release) {
   const isPublished = release.status === "published";
   const version = release.versionName + " · code " + release.versionCode;
@@ -103,6 +139,9 @@ function renderPage(source, release) {
     APPLICATION_NAME: escapeHtml(release.applicationName),
     STATUS_CLASS: isPublished ? "release-status-published" : "release-status-pending",
     STATUS_LABEL: isPublished ? "Опубликована" : "Ожидает публикации",
+    SIDEBAR_RELEASE_STATE: isPublished
+      ? "Проверенная сборка"
+      : "Сборка ожидает публикации",
     RELEASE_DESCRIPTION: isPublished
       ? "Скачайте проверенный APK и войдите с учётной записью RWMS."
       : "Проверенный APK ещё не опубликован. Ссылка появится после проверки релиза.",
@@ -179,9 +218,53 @@ function escapeAttribute(value) {
   return escapeHtml(value);
 }
 
-function renderWorker(page) {
+async function publishArtifact(release, outputFiles) {
+  await Promise.all(outputFiles.map((outputFile) => rm(outputFile, { force: true })));
+
+  if (release.status !== "published") {
+    return;
+  }
+
+  const sourceFile = process.env.RWMS_WORKER_APK;
+
+  if (!sourceFile) {
+    throw new Error(
+      "RWMS_WORKER_APK must point to the reviewed APK when building a published release.",
+    );
+  }
+
+  const artifact = await readFile(sourceFile);
+  const checksum = createHash("sha256").update(artifact).digest("hex");
+
+  if (checksum !== release.sha256) {
+    throw new Error("RWMS_WORKER_APK checksum does not match release.json.");
+  }
+
+  await Promise.all(
+    outputFiles.map(async (outputFile) => {
+      await mkdir(new URL("./", outputFile), { recursive: true });
+      await writeFile(outputFile, artifact);
+    }),
+  );
+}
+
+function renderWorker(page, release) {
+  const artifactPath =
+    release.status === "published" ? JSON.stringify(release.artifactPath) : "null";
+  const artifactStoragePath =
+    release.status === "published"
+      ? JSON.stringify(releaseArtifactStoragePath(release))
+      : "null";
+  const artifactFileName =
+    release.status === "published"
+      ? JSON.stringify(release.artifactPath.split("/").at(-1))
+      : "null";
+
   return [
     "const DOWNLOAD_PAGE = " + JSON.stringify(page) + ";",
+    "const APK_PATH = " + artifactPath + ";",
+    "const APK_STORAGE_PATH = " + artifactStoragePath + ";",
+    "const APK_FILENAME = " + artifactFileName + ";",
     "",
     "const PAGE_HEADERS = {",
     "  'content-type': 'text/html; charset=utf-8',",
@@ -192,7 +275,7 @@ function renderWorker(page) {
     "};",
     "",
     "export default {",
-    "  async fetch(request) {",
+    "  async fetch(request, env) {",
     "    const url = new URL(request.url);",
     "",
     "    if (request.method !== 'GET' && request.method !== 'HEAD') {",
@@ -212,6 +295,29 @@ function renderWorker(page) {
     "      return new Response(null, {",
     "        status: 204,",
     "        headers: { 'cache-control': 'public, max-age=86400' },",
+    "      });",
+    "    }",
+    "",
+    "    if (APK_PATH !== null && url.pathname === APK_PATH) {",
+    "      const assetRequest = new Request(new URL(APK_STORAGE_PATH, url), request);",
+    "      const asset = env?.ASSETS?.fetch",
+    "        ? await env.ASSETS.fetch(assetRequest)",
+    "        : await fetch(assetRequest);",
+    "",
+    "      if (!asset.ok) {",
+    "        return asset;",
+    "      }",
+    "",
+    "      const headers = new Headers(asset.headers);",
+    "      headers.set('cache-control', 'public, max-age=31536000, immutable');",
+    "      headers.set('content-disposition', 'attachment; filename=\"' + APK_FILENAME + '\"');",
+    "      headers.set('content-type', 'application/vnd.android.package-archive');",
+    "      headers.set('x-content-type-options', 'nosniff');",
+    "",
+    "      return new Response(request.method === 'HEAD' ? null : asset.body, {",
+    "        status: asset.status,",
+    "        statusText: asset.statusText,",
+    "        headers,",
     "      });",
     "    }",
     "",

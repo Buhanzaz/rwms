@@ -57,6 +57,9 @@ describe("resolveHeaderBreadcrumbs", () => {
 
   it("keeps logistics screens at one breadcrumb level", () => {
     expect(
+      resolveHeaderBreadcrumbs("/logistics/board", "", null, null)
+    ).toEqual([{ title: "Доска логистики" }])
+    expect(
       resolveHeaderBreadcrumbs("/logistics/returns", "", null, null)
     ).toEqual([{ title: "Возврат из аренды" }])
     expect(

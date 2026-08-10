@@ -50,6 +50,36 @@ Evidence:
 and
 [`asset OpenAPI`](../../contracts/openapi/asset-service.yaml).
 
+### Driver Task Audience And Document Tasks
+
+The logistics HTTP contract carries an optional opaque `driverWorkerId` only
+on shipment and return scheduling commands and document responses. Transfer
+creation has no driver identity. Driver tasks and board cards still expose
+`UNASSIGNED`, `ASSIGNED_DRIVER` and `WAREHOUSE_DRIVERS`: shipment/return may be
+unassigned or assigned to exactly one driver, while every transfer is
+warehouse-shared and cannot carry an identity snapshot. The warehouse-scoped
+`shipment-task-settings` GET/PUT contract owns the 1–100 cabin cap and its
+optimistic version. It applies when a new shipment is created: its one local
+driver task is sourced from the document and carries immutable cabin members
+and client/cabin task text. Retained legacy shipment tasks, returns and
+transfers remain document-line sourced. The public logistics move command
+contains no audience replacement; shipment/return moves only reorder inside
+their existing driver/date/lane queue.
+
+The task-board private registration and movement boundary accepts the same
+audience for owner-driven reconciliation, but rejects a worker identity on a
+shared audience. Public board-entry, registration and worker-feed responses
+always contain the nullable audience property. Board-task V1 facts add optional
+`driverAudience` and `plannedDriverWorkerId` only: retained events without
+either field remain valid, and the display-name snapshot never crosses the
+event boundary.
+
+Evidence:
+[`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml),
+[`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml),
+and
+[`task-board-events-v1.schema.json`](../../contracts/events/task-board/task-board-events-v1.schema.json).
+
 ### Media Upload Session Recovery
 
 The public create-upload command in

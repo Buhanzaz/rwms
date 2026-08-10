@@ -61,6 +61,7 @@ class TaskBoardExternalRegistrationService {
   private final WorkQueueClassBindingRepository bindings;
   private final WorkforceService workforce;
   private final WorkerInvalidationHub workerInvalidations;
+  private final DriverTaskAudienceService driverAudiences;
   private final JdbcTemplate jdbc;
 
   TaskBoardExternalRegistrationService(
@@ -78,6 +79,7 @@ class TaskBoardExternalRegistrationService {
       WorkQueueClassBindingRepository bindings,
       WorkforceService workforce,
       WorkerInvalidationHub workerInvalidations,
+      DriverTaskAudienceService driverAudiences,
       JdbcTemplate jdbc) {
     this.tasks = tasks;
     this.entries = entries;
@@ -93,6 +95,7 @@ class TaskBoardExternalRegistrationService {
     this.bindings = bindings;
     this.workforce = workforce;
     this.workerInvalidations = workerInvalidations;
+    this.driverAudiences = driverAudiences;
     this.jdbc = jdbc;
   }
 
@@ -122,12 +125,15 @@ class TaskBoardExternalRegistrationService {
         null,
         null,
         TaskLane.SCHEDULED,
+        null,
         admissionDirection);
   }
 
   BoardTaskRegistrationDto registerExternalTask(
       String sourceClientId, RegisterExternalTaskRequest request) {
     TaskSourceReferenceDto source = sourceReferenceFor(sourceClientId, request.source());
+    DriverTaskAudienceDto driverAudience =
+        driverAudiences.normalizeRegistration(sourceClientId, source, request.driverAudience());
     CreateBoardTaskRequest createRequest =
         new CreateBoardTaskRequest(
             request.externalTaskId(),
@@ -151,6 +157,7 @@ class TaskBoardExternalRegistrationService {
             dailyCapacity,
             source,
             request.lane() == null ? TaskLane.SCHEDULED : request.lane(),
+            driverAudience,
             OperationDirection.INCOMING);
     return inLifecycleMutation(
         () -> registrationDto(requireTask(task.getWarehouseId(), task.getId())));
@@ -171,6 +178,7 @@ class TaskBoardExternalRegistrationService {
         null,
         null,
         TaskLane.SCHEDULED,
+        null,
         OperationDirection.INCOMING);
   }
 
@@ -191,6 +199,7 @@ class TaskBoardExternalRegistrationService {
         null,
         null,
         TaskLane.SCHEDULED,
+        null,
         OperationDirection.INCOMING);
   }
 
@@ -204,6 +213,7 @@ class TaskBoardExternalRegistrationService {
       Integer dailyCapacity,
       TaskSourceReferenceDto sourceReference,
       TaskLane taskLane,
+      DriverTaskAudienceDto driverAudience,
       OperationDirection admissionDirection) {
     TaskLane effectiveLane = taskLane == null ? TaskLane.SCHEDULED : taskLane;
     if (effectiveLane == TaskLane.CURRENT
@@ -223,6 +233,7 @@ class TaskBoardExternalRegistrationService {
                     dailyCapacity,
                     sourceReference,
                     effectiveLane,
+                    driverAudience,
                     suppliedFingerprint));
     if (existingTask != null) {
       return existingTask;
@@ -241,6 +252,7 @@ class TaskBoardExternalRegistrationService {
                 dailyCapacity,
                 sourceReference,
                 effectiveLane,
+                driverAudience,
                 admission));
   }
 
@@ -254,6 +266,7 @@ class TaskBoardExternalRegistrationService {
       Integer dailyCapacity,
       TaskSourceReferenceDto sourceReference,
       TaskLane effectiveLane,
+      DriverTaskAudienceDto driverAudience,
       AdmissionPermit admission) {
     warehouseLifecycleFence.terminalizeAdmission(admission);
     if (request.externalTaskId() != null) {
@@ -266,6 +279,7 @@ class TaskBoardExternalRegistrationService {
               dailyCapacity,
               sourceReference,
               effectiveLane,
+              driverAudience,
               suppliedFingerprint);
       if (existingTask != null) {
         return existingTask;
@@ -291,7 +305,13 @@ class TaskBoardExternalRegistrationService {
     String requestFingerprint =
         suppliedFingerprint == null
             ? routePayloads.fingerprint(
-                warehouseId, request, scheduledDate, effectivePriority, effectiveLane, jdbc)
+                warehouseId,
+                request,
+                scheduledDate,
+                effectivePriority,
+                effectiveLane,
+                driverAudience,
+                jdbc)
             : suppliedFingerprint;
     var task = new BoardTask();
     task.setWarehouseId(warehouseId);
@@ -306,6 +326,9 @@ class TaskBoardExternalRegistrationService {
     task.setPriority(effectivePriority);
     task.setPinned(false);
     task.setCompletionDeadlineEnforced(completionDeadlineEnforced);
+    if (driverAudience != null) {
+      driverAudiences.applyNewTask(task, routeSteps.getFirst().queue(), driverAudience);
+    }
     task.setRequestFingerprint(request.externalTaskId() == null ? null : requestFingerprint);
     try {
       task = projectionWriter.saveAndFlush(tasks, task);
@@ -384,6 +407,7 @@ class TaskBoardExternalRegistrationService {
       Integer dailyCapacity,
       TaskSourceReferenceDto sourceReference,
       TaskLane effectiveLane,
+      DriverTaskAudienceDto driverAudience,
       String suppliedFingerprint) {
     if (request.externalTaskId() == null) {
       return null;
@@ -403,11 +427,32 @@ class TaskBoardExternalRegistrationService {
                     : request.scheduledDate(),
                 request.priority() == null ? task.getPriority() : priority(request.priority()),
                 effectiveLane,
+                driverAudience,
                 jdbc)
             : suppliedFingerprint;
-    if (warehouseId.equals(task.getWarehouseId())
-        && task.getRequestFingerprint() != null
-        && task.getRequestFingerprint().equals(requestFingerprint)) {
+    boolean fingerprintMatches =
+        task.getRequestFingerprint() != null
+            && task.getRequestFingerprint().equals(requestFingerprint);
+    if (!fingerprintMatches
+        && suppliedFingerprint == null
+        && driverAudience != null
+        && task.getDriverAudienceMode() == DriverTaskAudienceMode.WAREHOUSE_DRIVERS
+        && task.getPlannedDriverWorkerId() == null) {
+      String legacyFingerprint =
+          routePayloads.fingerprint(
+              warehouseId,
+              request,
+              (MAINTENANCE_SOURCE_CLIENT_ID.equals(sourceClientId) && dailyCapacity != null)
+                      || request.scheduledDate() == null
+                  ? task.getScheduledDate()
+                  : request.scheduledDate(),
+              request.priority() == null ? task.getPriority() : priority(request.priority()),
+              effectiveLane,
+              null,
+              jdbc);
+      fingerprintMatches = task.getRequestFingerprint().equals(legacyFingerprint);
+    }
+    if (warehouseId.equals(task.getWarehouseId()) && fingerprintMatches) {
       requireExactSourceReference(task, sourceClientId, sourceReference);
       return task;
     }
@@ -617,6 +662,7 @@ class TaskBoardExternalRegistrationService {
         task.getLane(),
         task.getPriority(),
         task.isPinned(),
+        driverAudiences.dto(task),
         task.getDoneAt(),
         route);
   }
@@ -638,7 +684,7 @@ class TaskBoardExternalRegistrationService {
                 entry ->
                     new TaskAvailabilityNotification(
                         entry.getId(),
-                        eligibleWorkerIds(task.getWarehouseId(), entry.getQueue()),
+                        notificationWorkerIds(task, entry.getQueue()),
                         task.getPriority() <= 1))
             .filter(notification -> !notification.workerIds().isEmpty())
             .toList();
@@ -703,6 +749,16 @@ class TaskBoardExternalRegistrationService {
         .filter(activeWorkerIds::contains)
         .forEach(result::add);
     return Set.copyOf(result);
+  }
+
+  private Set<UUID> notificationWorkerIds(BoardTask task, WorkQueue queue) {
+    if (task.getDriverAudienceMode() == DriverTaskAudienceMode.UNASSIGNED) {
+      return Set.of();
+    }
+    if (task.getDriverAudienceMode() == DriverTaskAudienceMode.ASSIGNED_DRIVER) {
+      return Set.of(task.getPlannedDriverWorkerId());
+    }
+    return eligibleWorkerIds(task.getWarehouseId(), queue);
   }
 
   private long workerRevision() {

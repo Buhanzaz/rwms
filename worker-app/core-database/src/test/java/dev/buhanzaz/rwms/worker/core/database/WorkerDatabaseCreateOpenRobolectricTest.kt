@@ -441,6 +441,51 @@ class WorkerDatabaseCreateOpenRobolectricTest {
         context.deleteDatabase(name)
     }
 
+    @Test
+    fun migrationSixToSevenAddsNullableDriverAudienceClassification() {
+        val context = RuntimeEnvironment.getApplication()
+        val name = "worker-room-driver-audience-migration.db"
+        context.deleteDatabase(name)
+        val versionSix = openHelper(
+            context = context,
+            name = name,
+            version = 6,
+            onCreate = { database ->
+                database.execSQL(
+                    """
+                    CREATE TABLE `worker_task` (
+                        `localId` TEXT NOT NULL,
+                        PRIMARY KEY(`localId`)
+                    )
+                    """.trimIndent(),
+                )
+            },
+        )
+        versionSix.writableDatabase.execSQL(
+            "INSERT INTO `worker_task` (`localId`) VALUES ('worker:entry')",
+        )
+        versionSix.close()
+
+        val versionSeven = openHelper(
+            context = context,
+            name = name,
+            version = 7,
+            onCreate = { error("Expected the version 6 database to exist") },
+            onUpgrade = { database -> WorkerDatabase.MIGRATION_6_7.migrate(database) },
+        )
+        val database = versionSeven.writableDatabase
+
+        assertThat(columns(database, "worker_task")).contains("driverAudienceMode")
+        database.query(
+            "SELECT `driverAudienceMode` FROM `worker_task` WHERE `localId`='worker:entry'",
+        ).use { cursor ->
+            assertThat(cursor.moveToFirst()).isTrue()
+            assertThat(cursor.isNull(0)).isTrue()
+        }
+        versionSeven.close()
+        context.deleteDatabase(name)
+    }
+
     private fun columns(database: SupportSQLiteDatabase, table: String): List<String> =
         database.query("PRAGMA table_info(`$table`)").use { cursor ->
             buildList {

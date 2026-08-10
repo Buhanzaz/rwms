@@ -488,7 +488,8 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       String description,
       UUID queueDefinitionId,
       LocalDate scheduledDate,
-      int priority) {
+      int priority,
+      DriverTaskAudience driverAudience) {
     return taskBoard.registerDriverTask(
         warehouseId,
         externalTaskId,
@@ -498,7 +499,8 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
         description,
         queueDefinitionId,
         scheduledDate,
-        priority);
+        priority,
+        driverAudience);
   }
 
   @Override
@@ -535,14 +537,16 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       long expectedEntryVersion,
       String targetLane,
       LocalDate targetDate,
-      int targetIndex) {
+      int targetIndex,
+      DriverTaskAudience targetDriverAudience) {
     return taskBoard.moveDriverTask(
         externalTaskId,
         expectedTaskVersion,
         expectedEntryVersion,
         targetLane,
         targetDate,
-        targetIndex);
+        targetIndex,
+        targetDriverAudience);
   }
 
   @Override

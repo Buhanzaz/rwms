@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.logistics.driver.api;
 
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskAudienceMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskPlanningMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
@@ -68,6 +69,9 @@ public final class DriverTaskApiModels {
       String comment,
       String unitNumber,
       UUID driverQueueDefinitionId,
+      DriverTaskAudienceMode driverAudienceMode,
+      UUID plannedDriverWorkerId,
+      String plannedDriverNameSnapshot,
       UUID externalTaskId,
       UUID taskBoardTaskId,
       Long taskBoardTaskVersion,

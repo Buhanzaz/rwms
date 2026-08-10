@@ -32,6 +32,7 @@ import {
 import { DriverEditorDialog } from "@/features/settings/logistics/driver-editor-dialog"
 import { InventoryPlanningSettingsCard } from "@/features/settings/logistics/inventory-planning-settings-card"
 import { RepairCapacitySettingsCard } from "@/features/settings/logistics/repair-capacity-settings-card"
+import { ShipmentTaskSettingsCard } from "@/features/settings/logistics/shipment-task-settings-card"
 import {
   taskBoardSettingsClient,
   taskBoardSettingsKeys,
@@ -610,16 +611,39 @@ export function LogisticsSettingsPage() {
     )
   }
 
+  const independentSettings = (
+    <>
+      <ShipmentTaskSettingsCard
+        accessToken={accessToken!}
+        warehouseId={warehouseId}
+        warehouseName={selectedWarehouse.name}
+      />
+      <RepairCapacitySettingsCard
+        accessToken={accessToken!}
+        warehouseId={warehouseId}
+        warehouseName={selectedWarehouse.name}
+      />
+      <InventoryPlanningSettingsCard
+        accessToken={accessToken!}
+        warehouseId={warehouseId}
+        warehouseName={selectedWarehouse.name}
+      />
+    </>
+  )
+
   const queryError =
     queuesQuery.error ?? classesQuery.error ?? workersQuery.error
   if (queryError) {
     return (
-      <Alert variant="destructive">
-        <AlertTitle>Не удалось загрузить настройки логистики</AlertTitle>
-        <AlertDescription>
-          {taskBoardSettingsErrorMessage(queryError)}
-        </AlertDescription>
-      </Alert>
+      <div className="flex flex-col gap-4">
+        <Alert variant="destructive">
+          <AlertTitle>Не удалось загрузить настройки логистики</AlertTitle>
+          <AlertDescription>
+            {taskBoardSettingsErrorMessage(queryError)}
+          </AlertDescription>
+        </Alert>
+        {independentSettings}
+      </div>
     )
   }
   if (
@@ -628,9 +652,12 @@ export function LogisticsSettingsPage() {
     workersQuery.isLoading
   ) {
     return (
-      <p className="text-sm text-muted-foreground">
-        Загрузка настроек логистики…
-      </p>
+      <div className="flex flex-col gap-4">
+        <p className="text-sm text-muted-foreground">
+          Загрузка настроек логистики…
+        </p>
+        {independentSettings}
+      </div>
     )
   }
 
@@ -639,13 +666,16 @@ export function LogisticsSettingsPage() {
   )
   if (logisticsQueues.length > 1) {
     return (
-      <Alert variant="destructive">
-        <AlertTitle>Неверная конфигурация очереди водителей</AlertTitle>
-        <AlertDescription>
-          К складу подключено несколько очередей водителей. Должна остаться
-          ровно одна.
-        </AlertDescription>
-      </Alert>
+      <div className="flex flex-col gap-4">
+        <Alert variant="destructive">
+          <AlertTitle>Неверная конфигурация очереди водителей</AlertTitle>
+          <AlertDescription>
+            К складу подключено несколько очередей водителей. Должна остаться
+            ровно одна.
+          </AlertDescription>
+        </Alert>
+        {independentSettings}
+      </div>
     )
   }
 
@@ -690,16 +720,7 @@ export function LogisticsSettingsPage() {
             </AlertDescription>
           </Alert>
         )}
-        <RepairCapacitySettingsCard
-          accessToken={accessToken!}
-          warehouseId={warehouseId}
-          warehouseName={selectedWarehouse.name}
-        />
-        <InventoryPlanningSettingsCard
-          accessToken={accessToken!}
-          warehouseId={warehouseId}
-          warehouseName={selectedWarehouse.name}
-        />
+        {independentSettings}
       </div>
     )
   }
@@ -710,12 +731,15 @@ export function LogisticsSettingsPage() {
   )
   if (primaryBindings.length !== 1) {
     return (
-      <Alert variant="destructive">
-        <AlertTitle>Не определён основной класс водителей</AlertTitle>
-        <AlertDescription>
-          У логистической очереди должен быть ровно один основной класс.
-        </AlertDescription>
-      </Alert>
+      <div className="flex flex-col gap-4">
+        <Alert variant="destructive">
+          <AlertTitle>Не определён основной класс водителей</AlertTitle>
+          <AlertDescription>
+            У логистической очереди должен быть ровно один основной класс.
+          </AlertDescription>
+        </Alert>
+        {independentSettings}
+      </div>
     )
   }
 
@@ -782,16 +806,7 @@ export function LogisticsSettingsPage() {
           }}
         />
       ) : null}
-      <RepairCapacitySettingsCard
-        accessToken={accessToken!}
-        warehouseId={warehouseId}
-        warehouseName={selectedWarehouse.name}
-      />
-      <InventoryPlanningSettingsCard
-        accessToken={accessToken!}
-        warehouseId={warehouseId}
-        warehouseName={selectedWarehouse.name}
-      />
+      {independentSettings}
     </div>
   )
 }

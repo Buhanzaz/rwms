@@ -20,6 +20,7 @@ const routeTitles = [
   { path: "/equipment", title: "Доп. оборудование" },
   { path: "/inventory", title: "Инвентаризация" },
   { path: "/logistics/order-tasks", title: "Задания" },
+  { path: "/logistics/board", title: "Доска логистики" },
   { path: "/logistics/tasks", title: "Перемещение" },
   { path: "/logistics/returns", title: "Возврат из аренды" },
   { path: "/logistics/shipments", title: "Отгрузка в аренду" },

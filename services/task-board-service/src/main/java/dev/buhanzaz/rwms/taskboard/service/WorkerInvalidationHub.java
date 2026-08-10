@@ -75,6 +75,18 @@ public class WorkerInvalidationHub {
         });
   }
 
+  /** Broadcasts a projection-only feed invalidation without exposing an entry identity. */
+  public void feedChanged(long revision) {
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    emitters.forEach(
+        (workerId, workerEmitters) -> {
+          WorkerInvalidationEvent event =
+              new WorkerInvalidationEvent(
+                  UUID.randomUUID(), revision, "FEED_CHANGED", null, now);
+          workerEmitters.forEach(emitter -> send(workerId, emitter, event));
+        });
+  }
+
   /**
    * Announces a newly available current-day task only to workers whose
    * current qualifications or group memberships match the queue. The event

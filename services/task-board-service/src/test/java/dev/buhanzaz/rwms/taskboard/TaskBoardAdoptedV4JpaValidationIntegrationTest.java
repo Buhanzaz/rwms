@@ -86,7 +86,7 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
 
   @Test
   @Transactional
-  void bootMigratesAdoptedVersionFourThroughVersionTwentyFiveAndValidatesJpa() {
+  void bootMigratesAdoptedVersionFourThroughVersionTwentyNineAndValidatesJpa() {
     assertThat(entityManagerFactory.isOpen()).isTrue();
     assertThat(retainedDigests(jdbc)).containsExactlyInAnyOrderEntriesOf(beforeStartup);
     assertThat(
@@ -147,6 +147,18 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
             jdbc.queryForObject(
                 "select count(*) from flyway_schema_history "
                     + "where version='27' and type='SQL' and success",
+                Integer.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from flyway_schema_history "
+                    + "where version='28' and type='SQL' and success",
+                Integer.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from flyway_schema_history "
+                    + "where version='29' and type='SQL' and success",
                 Integer.class))
         .isOne();
     assertThat(
@@ -449,7 +461,9 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
     String json =
         "board_task".equals(table)
             ? "to_jsonb(row_value) - array['completion_deadline_enforced',"
-                + "'scheduled_date','task_lane','priority','pinned','request_fingerprint']"
+                + "'scheduled_date','task_lane','priority','pinned','request_fingerprint',"
+                + "'driver_audience_mode','planned_driver_worker_id',"
+                + "'planned_driver_name_snapshot']"
             : "queue_entry".equals(table)
                 ? "to_jsonb(row_value) - array['queue_code','worker_works','worker_materials',"
                     + "'worker_comments','source_media_references','revision_marker',"

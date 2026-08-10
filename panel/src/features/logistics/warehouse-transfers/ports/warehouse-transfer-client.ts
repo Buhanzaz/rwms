@@ -11,7 +11,6 @@ export type TransferCreateCommand = {
   accessToken: string
   warehouseId: string
   destinationWarehouseId: string
-  driverSnapshot: string | null
   scheduledDate: string
   lines: CreateTransferLine[]
   furnitureReplacements: TransferFurnitureReplacement[]

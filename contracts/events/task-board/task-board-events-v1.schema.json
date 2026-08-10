@@ -375,6 +375,34 @@
     },
     "boardTaskFact": {
       "type": "object", "additionalProperties": false,
+      "dependentRequired": {
+        "plannedDriverWorkerId": ["driverAudience"]
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["driverAudience"],
+            "properties": {"driverAudience": {"const": "ASSIGNED_DRIVER"}}
+          },
+          "then": {
+            "required": ["plannedDriverWorkerId"],
+            "properties": {
+              "plannedDriverWorkerId": {"type": "string", "format": "uuid"}
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["driverAudience"],
+            "properties": {
+              "driverAudience": {"enum": ["UNASSIGNED", "WAREHOUSE_DRIVERS", null]}
+            }
+          },
+          "then": {
+            "properties": {"plannedDriverWorkerId": {"type": "null"}}
+          }
+        }
+      ],
       "required": [
         "boardTaskId", "warehouseId", "externalTaskId", "status", "lane", "plannedDurationMinutes",
         "deadlineAt", "doneAt", "deleted"
@@ -388,6 +416,13 @@
         "lane": {"enum": ["SCHEDULED", "CURRENT"]},
         "priority": {"type": "integer", "minimum": 1, "maximum": 5},
         "pinned": {"type": "boolean"},
+        "driverAudience": {
+          "oneOf": [
+            {"enum": ["UNASSIGNED", "ASSIGNED_DRIVER", "WAREHOUSE_DRIVERS"]},
+            {"type": "null"}
+          ]
+        },
+        "plannedDriverWorkerId": {"$ref": "#/$defs/nullableUuid"},
         "plannedDurationMinutes": {"$ref": "#/$defs/nullableInteger"},
         "deadlineAt": {"$ref": "#/$defs/nullableDateTime"},
         "doneAt": {"$ref": "#/$defs/nullableDateTime"},

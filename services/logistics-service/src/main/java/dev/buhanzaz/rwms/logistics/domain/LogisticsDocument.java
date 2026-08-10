@@ -61,6 +61,10 @@ public class LogisticsDocument {
   @Column(name = "driver_snapshot", length = 512)
   private String driverSnapshot;
 
+  /** Opaque task-board worker identity selected for this document's driver work. */
+  @Column(name = "driver_worker_id")
+  private UUID driverWorkerId;
+
   /**
    * Opaque reference to the selected existing order client.  Logistics keeps
    * the immutable display snapshot above; the client aggregate remains owned
@@ -121,6 +125,25 @@ public class LogisticsDocument {
       String driverSnapshot,
       UUID subjectId,
       UUID correlationId) {
+    return createReturn(
+        warehouseId,
+        clientId,
+        partySnapshot,
+        driverSnapshot,
+        null,
+        subjectId,
+        correlationId);
+  }
+
+  /** Creates a return draft while retaining the stable selected driver identity when supplied. */
+  public static LogisticsDocument createReturn(
+      UUID warehouseId,
+      UUID clientId,
+      String partySnapshot,
+      String driverSnapshot,
+      UUID driverWorkerId,
+      UUID subjectId,
+      UUID correlationId) {
     LogisticsDocument document =
         initialize(
             LogisticsDocumentType.RETURN,
@@ -131,6 +154,7 @@ public class LogisticsDocument {
             subjectId,
             correlationId);
     document.clientId = clientId;
+    document.driverWorkerId = driverWorkerId;
     return document;
   }
 
@@ -141,7 +165,13 @@ public class LogisticsDocument {
       UUID subjectId,
       UUID correlationId) {
     return createShipment(
-        warehouseId, null, partySnapshot, driverSnapshot, subjectId, correlationId);
+        warehouseId,
+        null,
+        partySnapshot,
+        driverSnapshot,
+        null,
+        subjectId,
+        correlationId);
   }
 
   public static LogisticsDocument createShipment(
@@ -149,6 +179,25 @@ public class LogisticsDocument {
       UUID clientId,
       String partySnapshot,
       String driverSnapshot,
+      UUID subjectId,
+      UUID correlationId) {
+    return createShipment(
+        warehouseId,
+        clientId,
+        partySnapshot,
+        driverSnapshot,
+        null,
+        subjectId,
+        correlationId);
+  }
+
+  /** Creates a shipment draft with an optional stable task-board driver identity. */
+  public static LogisticsDocument createShipment(
+      UUID warehouseId,
+      UUID clientId,
+      String partySnapshot,
+      String driverSnapshot,
+      UUID driverWorkerId,
       UUID subjectId,
       UUID correlationId) {
     LogisticsDocument document =
@@ -161,6 +210,7 @@ public class LogisticsDocument {
             subjectId,
             correlationId);
     document.clientId = clientId;
+    document.driverWorkerId = driverWorkerId;
     return document;
   }
 
@@ -252,10 +302,10 @@ public class LogisticsDocument {
     touch();
   }
 
+  /** Creates shared warehouse-driver work without a planned or display-only driver identity. */
   public static LogisticsDocument createTransfer(
       UUID warehouseId,
       UUID destinationWarehouseId,
-      String driverSnapshot,
       LocalDate scheduledDate,
       UUID subjectId,
       UUID correlationId) {
@@ -268,7 +318,7 @@ public class LogisticsDocument {
         warehouseId,
         destinationWarehouseId,
         null,
-        optionalSnapshot(driverSnapshot, "driverSnapshot"),
+        null,
         subjectId,
         correlationId);
     document.scheduledDate = Objects.requireNonNull(scheduledDate, "scheduledDate");
@@ -291,10 +341,16 @@ public class LogisticsDocument {
   }
 
   public void scheduleReturn(String driver, LocalDate date) {
+    scheduleReturn(driver, null, date);
+  }
+
+  /** Plans a return pickup for the selected task-board worker. */
+  public void scheduleReturn(String driver, UUID workerId, LocalDate date) {
     if (documentType != LogisticsDocumentType.RETURN || state != LogisticsDocumentState.DRAFT) {
       throw new IllegalStateException("Return pickup cannot be scheduled in its current state");
     }
     driverSnapshot = requiredSnapshot(driver, "driverSnapshot");
+    driverWorkerId = workerId;
     scheduledDate = Objects.requireNonNull(date, "scheduledDate");
     touch();
   }
@@ -373,6 +429,11 @@ public class LogisticsDocument {
   }
 
   public void scheduleShipment(String driver, LocalDate date) {
+    scheduleShipment(driver, null, date);
+  }
+
+  /** Plans a shipment for the selected task-board worker. */
+  public void scheduleShipment(String driver, UUID workerId, LocalDate date) {
     boolean allowed =
         documentType == LogisticsDocumentType.SHIPMENT
             && (state == LogisticsDocumentState.DRAFT
@@ -381,6 +442,7 @@ public class LogisticsDocument {
       throw new IllegalStateException("Shipment cannot be scheduled in its current state");
     }
     driverSnapshot = requiredSnapshot(driver, "driverSnapshot");
+    driverWorkerId = workerId;
     scheduledDate = Objects.requireNonNull(date, "scheduledDate");
     touch();
   }

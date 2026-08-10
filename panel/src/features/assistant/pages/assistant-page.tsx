@@ -26,7 +26,6 @@ import { AssistantSearchResults } from "@/features/assistant/components/assistan
 import { AssistantClarifications } from "@/features/assistant/components/assistant-clarifications"
 import { ManagerBookingAlertDialog } from "@/features/assistant/components/manager-booking-alert-dialog"
 import {
-  assistantSearchResultKey,
   assistantSearchGroupLabel,
   reconcileSearchResultSelection,
   selectionGroups,
@@ -635,7 +634,6 @@ function ConversationWorkspace({
     CabinSelection | null | undefined
   >(undefined)
   const [searchNow, setSearchNow] = useState(() => Date.now())
-  const [searchResultRevision, setSearchResultRevision] = useState(0)
   const [searchResultsVisible, setSearchResultsVisible] = useState(true)
   const [presentationOpen, setPresentationOpen] = useState(false)
   const presentationCommand = useRef(new OrderCommandIdentityRegistry())
@@ -736,7 +734,6 @@ function ConversationWorkspace({
         )
         setLiveSearchResult(nextResult)
         setSearchNow(Date.now())
-        setSearchResultRevision((revision) => revision + 1)
       }
       if (nextSelection.rentalItemIds.length === 0) {
         toast.success("Выборка освобождена.")
@@ -886,7 +883,6 @@ function ConversationWorkspace({
                 : current
             })
             setSearchNow(Date.now())
-            setSearchResultRevision((revision) => revision + 1)
           }
           const nextSearch = asCabinSearchResultEnvelope(event)
           if (nextSearch) {
@@ -908,7 +904,6 @@ function ConversationWorkspace({
                   )
                 : turnSearchResult
             setLiveSearchResult(displayedSearchResult)
-            setSearchResultRevision((revision) => revision + 1)
             if (nextSearch.notices.length > 0) {
               setLocalMessages((current) =>
                 current.map((item) =>
@@ -1112,7 +1107,6 @@ function ConversationWorkspace({
       {visibleSearchResult ? (
         <div className="shrink-0">
           <AssistantSearchResults
-            key={`${assistantSearchResultKey(visibleSearchResult)}:${searchResultRevision}`}
             accessToken={accessToken}
             result={visibleSearchResult}
             selectedIds={selectedIds}

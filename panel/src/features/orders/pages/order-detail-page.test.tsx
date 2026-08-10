@@ -25,7 +25,6 @@ const ordersApi = vi.hoisted(() => ({
   removeOrderUnit: vi.fn(),
   selectOrderWarehouse: vi.fn(),
   deleteOrder: vi.fn(),
-  listOrderClients: vi.fn(),
   updateOrder: vi.fn(),
   saveOrder: vi.fn(),
   setOrderRentalTerms: vi.fn(),
@@ -217,13 +216,6 @@ beforeEach(() => {
   ordersApi.addOrderUnit.mockRejectedValue(
     new ApiError("Бытовка уже зарезервирована", 409, "UNIT_ALREADY_RESERVED")
   )
-  ordersApi.listOrderClients.mockResolvedValue({
-    content: [],
-    page: 0,
-    size: 20,
-    totalElements: 0,
-    totalPages: 0,
-  })
   ordersApi.updateOrder.mockResolvedValue(detail)
   ordersApi.saveOrder.mockResolvedValue({
     ...detail,
@@ -446,12 +438,35 @@ describe("OrderDetailPage draft actions", () => {
     expect(back.getAttribute("href")).toBe("/orders")
     expect(screen.getByText("Черновик")).toBeTruthy()
     expect(screen.getByText(/Изменён/)).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Сохранить заказ" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Изменить адрес" })).toBeTruthy()
     expect(
-      screen.getByRole("button", { name: "Сохранить бронирование" })
+      screen.getByRole("heading", { name: "Готовность к сохранению" })
     ).toBeTruthy()
     expect(
       screen.queryByRole("heading", { name: "Бронирование ORD-000001" })
     ).toBeNull()
+  })
+
+  it("offers adding an address when delivery details are incomplete", async () => {
+    ordersApi.getOrder.mockResolvedValue({
+      ...detail,
+      deliveryAddress: null,
+      latitude: null,
+      longitude: null,
+      contactPhone: null,
+      acceptableDeliveryDates: [],
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    expect(
+      await screen.findByText(
+        "Укажите адрес, координаты, телефон и дату приёмки."
+      )
+    ).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Добавить адрес" }))
+    expect(screen.getByRole("heading", { name: "Добавить адрес" })).toBeTruthy()
   })
 
   it("shows delivery metadata and the planned/actual logistics timeline", async () => {
@@ -583,7 +598,7 @@ describe("OrderDetailPage draft actions", () => {
     renderPage()
 
     await user.click(
-      await screen.findByRole("button", { name: "Сохранить бронирование" })
+      await screen.findByRole("button", { name: "Сохранить заказ" })
     )
 
     await waitFor(() =>
@@ -595,15 +610,16 @@ describe("OrderDetailPage draft actions", () => {
       })
     )
     expect(toast.success).toHaveBeenCalledWith(
-      "Бронирование сохранено. Создайте отгрузку в разделе «Задания» логистики."
+      "Заказ сохранён. Откройте «Задания», чтобы создать отгрузку; сохранение само не создаёт рейс."
     )
+    expect(screen.getByRole("button", { name: "Изменить адрес" })).toBeTruthy()
     expect(
-      screen.getByRole("button", { name: "Редактировать бронирование" })
-    ).toBeTruthy()
-    expect(screen.getByRole("button", { name: "Создать заказ" })).toBeTruthy()
-    expect(
-      screen.queryByRole("button", { name: "Сохранить бронирование" })
-    ).toBeNull()
+      screen
+        .getByRole("link", { name: "Перейти к заданиям" })
+        .getAttribute("href")
+    ).toBe("/logistics/order-tasks")
+    expect(screen.queryByRole("button", { name: "Создать заказ" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Сохранить заказ" })).toBeNull()
     expect(
       screen.queryByRole("button", { name: "Удалить черновик" })
     ).toBeNull()
@@ -644,12 +660,31 @@ describe("OrderDetailPage draft actions", () => {
       name: "Срок аренды в месяцах для БЫТ-001",
     })
     expect((term as HTMLSelectElement).disabled).toBe(false)
+    expect(
+      screen.getByText("Укажите срок аренды для каждой бытовки.")
+    ).toBeTruthy()
+    const rentalTerms = screen.getByRole("region", {
+      name: "Сроки аренды",
+    })
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(rentalTerms, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    })
+    await user.click(
+      screen.getByRole("button", { name: "Указать сроки аренды" })
+    )
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      behavior: "smooth",
+      block: "start",
+    })
+    expect(document.activeElement).toBe(rentalTerms)
     expect(within(term).getByRole("option", { name: "1 месяц" })).toBeTruthy()
     expect(
       within(term).getByRole("option", { name: "Другое положительное целое" })
     ).toBeTruthy()
     expect(
-      screen.getByRole("button", { name: "Сохранить бронирование" })
+      screen.getByRole("button", { name: "Сохранить заказ" })
     ).toHaveProperty("disabled", true)
 
     await user.selectOptions(term, "custom")
@@ -674,7 +709,7 @@ describe("OrderDetailPage draft actions", () => {
     expect(await screen.findByText("18 месяцев")).toBeTruthy()
     expect(screen.getAllByText("Не назначена")).toHaveLength(2)
     expect(
-      screen.getByRole("button", { name: "Сохранить бронирование" })
+      screen.getByRole("button", { name: "Сохранить заказ" })
     ).toHaveProperty("disabled", false)
   })
 
@@ -790,67 +825,42 @@ describe("OrderDetailPage draft actions", () => {
     expect(screen.getByText("22.07.2027")).toBeTruthy()
   })
 
-  it("updates the detail projection after selecting an existing client", async () => {
-    const replacementClient = {
-      id: "66666666-6666-4666-8666-666666666666",
-      version: 1,
-      type: "LEGAL_ENTITY" as const,
-      displayName: "ООО Новый клиент",
-      phone: "+79991111111",
-      contactPerson: "Пётр Петров",
-      email: null,
-      responsibleManagerId: "11111111-1111-4111-8111-111111111111",
-      responsibleManagerDisplayName: "Менеджер",
-      comment: null,
-      source: null,
-      createdAt: "2026-07-19T08:00:00Z",
-      updatedAt: "2026-07-19T08:00:00Z",
-    }
-    ordersApi.listOrderClients.mockResolvedValue({
-      content: [replacementClient],
-      page: 0,
-      size: 20,
-      totalElements: 1,
-      totalPages: 1,
-    })
+  it("updates the detail projection after changing delivery data", async () => {
     ordersApi.updateOrder.mockResolvedValue({
       ...detail,
       version: 5,
-      client: replacementClient,
+      comment: "Доставить после обеда",
     })
     const user = userEvent.setup()
     renderPage()
 
     await user.click(
-      await screen.findByRole("button", { name: "Редактировать бронирование" })
+      await screen.findByRole("button", { name: "Изменить адрес" })
     )
-    const input = screen.getByPlaceholderText("Например, ООО Петров")
-    await user.clear(input)
-    await user.type(input, "Новый")
-    await user.click(await screen.findByText(replacementClient.displayName))
-    await user.click(
-      screen.getByRole("button", { name: "Сохранить изменения" })
-    )
+    const comment = screen.getByLabelText("Комментарий к заказу")
+    await user.clear(comment)
+    await user.type(comment, "Доставить после обеда")
+    await user.click(screen.getByRole("button", { name: "Сохранить адрес" }))
 
     await waitFor(() =>
       expect(ordersApi.updateOrder).toHaveBeenCalledWith({
         accessToken: "orders-token",
         orderId: ORDER_ID,
         expectedVersion: 4,
-        clientId: replacementClient.id,
+        clientId: CLIENT_ID,
         delivery: {
           deliveryAddress: "Москва, Складская, 1",
           latitude: 55.75,
           longitude: 37.62,
           contactPhone: "+79990000000",
-          comment: "Позвонить за час",
+          comment: "Доставить после обеда",
           acceptableDeliveryDates: ["2026-08-15"],
         },
         idempotencyKey: expect.any(String),
       })
     )
-    expect(await screen.findByText(replacementClient.displayName)).toBeTruthy()
-    expect(toast.success).toHaveBeenCalledWith("Бронирование изменено.")
+    expect(await screen.findByText("Доставить после обеда")).toBeTruthy()
+    expect(toast.success).toHaveBeenCalledWith("Данные доставки сохранены.")
   })
 
   it("labels draft deletion as a logical cancellation and releases reservations", async () => {

@@ -59,7 +59,8 @@ import {
   setOrderRentalTerms,
 } from "@/features/orders/api/orders-api"
 import { OrderCommandIdentityRegistry } from "@/features/orders/api/order-command-identity"
-import { EditOrderDialog } from "@/features/orders/components/edit-order-dialog"
+import { OrderDeliveryDialog } from "@/features/orders/components/order-delivery-dialog"
+import { isOrderDeliveryComplete } from "@/features/orders/domain/order-delivery-readiness"
 import { OrderUnitDossierEvidence } from "@/features/orders/components/order-unit-dossier-evidence"
 import {
   OrderUnitContentsView,
@@ -322,7 +323,7 @@ export function OrderDetailPage() {
     () => new Map<string, number>()
   )
   const [contentsUnitId, setContentsUnitId] = useState<string | null>(null)
-  const [editDialogOpen, setEditDialogOpen] = useState(false)
+  const [deliveryDialogOpen, setDeliveryDialogOpen] = useState(false)
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false)
   const [rentalMonthsDraft, setRentalMonthsDraft] =
     useState<VersionedMonthsDraft>({ orderVersion: -1, values: {} })
@@ -334,6 +335,7 @@ export function OrderDetailPage() {
       unitIds: new Set<string>(),
     })
   const commandIdentity = useRef(new OrderCommandIdentityRegistry())
+  const rentalTermsSectionRef = useRef<HTMLElement>(null)
   const subjectId = currentUser?.id ?? "unknown-user"
   const detailQueryKey = [
     ...ORDERS_QUERY_KEY,
@@ -615,14 +617,12 @@ export function OrderDetailPage() {
       commandIdentity.current.confirm(fingerprint)
       applyProjection(projection)
       toast.success(
-        "Бронирование сохранено. Создайте отгрузку в разделе «Задания» логистики."
+        "Заказ сохранён. Откройте «Задания», чтобы создать отгрузку; сохранение само не создаёт рейс."
       )
     },
     onError: (error) => {
       toast.error(
-        error instanceof Error
-          ? error.message
-          : "Не удалось сохранить бронирование."
+        error instanceof Error ? error.message : "Не удалось сохранить заказ."
       )
       if (error instanceof ApiError && error.status === 409) {
         refreshOrderBoundary()
@@ -787,6 +787,14 @@ export function OrderDetailPage() {
     (order?.status === "SAVED" || order?.status === "FULFILLED") &&
     extensionEligibleUnitIds.size > 0
 
+  function focusRentalTerms() {
+    const termsSection = rentalTermsSectionRef.current
+    if (!termsSection) return
+
+    termsSection.scrollIntoView({ behavior: "smooth", block: "start" })
+    termsSection.focus({ preventScroll: true })
+  }
+
   const contentsCandidate =
     selectedUnits.find((candidate) => candidate.unit.id === contentsUnitId) ??
     null
@@ -888,8 +896,30 @@ export function OrderDetailPage() {
   const warehouseLocked = order.unitCount > 0
   const acceptableDeliveryDates = order.acceptableDeliveryDates ?? []
   const orderMovements = order.movements ?? []
-  const saveActionLabel =
-    order.status === "SAVED" ? "Создать заказ" : "Сохранить бронирование"
+  const isDraft = order.status === "DRAFT"
+  const deliveryComplete = isOrderDeliveryComplete(order)
+  const warehouseSelected = order.warehouseId !== null
+  const cabinsSelected = selectedUnits.length > 0
+  const rentalTermsPersisted = rentalTermsConfigured && !rentalTermsDirty
+  const draftReady =
+    deliveryComplete &&
+    warehouseSelected &&
+    cabinsSelected &&
+    rentalTermsPersisted
+  const deliveryActionLabel = deliveryComplete
+    ? "Изменить адрес"
+    : "Добавить адрес"
+  const rentalTermsActionLabel =
+    rentalTermsDirty && rentalTermsReady
+      ? "Перейти к сохранению сроков"
+      : "Указать сроки аренды"
+  const rentalTermsReadinessText = !cabinsSelected
+    ? "Сначала добавьте бытовку в бронирование."
+    : rentalTermsPersisted
+      ? "Срок для каждой выбранной бытовки сохранён."
+      : rentalTermsDirty && rentalTermsReady
+        ? "Изменённые сроки аренды ещё не сохранены."
+        : "Укажите срок аренды для каждой бытовки."
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-auto pr-1">
@@ -912,39 +942,43 @@ export function OrderDetailPage() {
 
       {canEdit ? (
         <div className="flex flex-wrap justify-end gap-2">
-          <Button
-            type="button"
-            disabled={
-              saveMutation.isPending ||
-              order.unitCount === 0 ||
-              order.warehouseId === null ||
-              !rentalTermsConfigured ||
-              rentalTermsDirty
-            }
-            onClick={() =>
-              saveMutation.mutate({
-                expectedVersion: order.version,
-                fingerprint: `save:${order.id}:${order.version}`,
-              })
-            }
-          >
-            {saveMutation.isPending ? (
-              <HugeiconsIcon
-                icon={Loading03Icon}
-                data-icon="inline-start"
-                className="animate-spin"
-              />
-            ) : null}
-            {saveMutation.isPending ? "Сохраняем…" : saveActionLabel}
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setEditDialogOpen(true)}
-          >
-            <HugeiconsIcon icon={PencilEdit01Icon} data-icon="inline-start" />
-            Редактировать бронирование
-          </Button>
+          {isDraft ? (
+            <Button
+              type="button"
+              disabled={!draftReady || saveMutation.isPending}
+              aria-describedby="order-draft-readiness-description"
+              onClick={() =>
+                saveMutation.mutate({
+                  expectedVersion: order.version,
+                  fingerprint: `save:${order.id}:${order.version}`,
+                })
+              }
+            >
+              {saveMutation.isPending ? (
+                <HugeiconsIcon
+                  icon={Loading03Icon}
+                  data-icon="inline-start"
+                  className="animate-spin"
+                />
+              ) : null}
+              {saveMutation.isPending ? "Сохраняем…" : "Сохранить заказ"}
+            </Button>
+          ) : null}
+          {order.status === "SAVED" ? (
+            <Button asChild>
+              <Link to="/logistics/order-tasks">Перейти к заданиям</Link>
+            </Button>
+          ) : null}
+          {(!isDraft || deliveryComplete) && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setDeliveryDialogOpen(true)}
+            >
+              <HugeiconsIcon icon={PencilEdit01Icon} data-icon="inline-start" />
+              {deliveryActionLabel}
+            </Button>
+          )}
           {canCancel ? (
             <Button
               type="button"
@@ -956,6 +990,92 @@ export function OrderDetailPage() {
             </Button>
           ) : null}
         </div>
+      ) : null}
+
+      {isDraft ? (
+        <Card size="sm" aria-labelledby="order-draft-readiness-title">
+          <CardHeader>
+            <h2
+              id="order-draft-readiness-title"
+              className="leading-none font-semibold"
+            >
+              Готовность к сохранению
+            </h2>
+            <CardDescription id="order-draft-readiness-description">
+              Черновик можно сохранить после заполнения каждого пункта ниже.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ul className="flex flex-col gap-3">
+              <li className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3">
+                <div>
+                  <p className="font-medium">Адрес и приёмка</p>
+                  <p className="text-sm text-muted-foreground">
+                    {deliveryComplete
+                      ? "Адрес, координаты, телефон и дата приёмки заполнены."
+                      : "Укажите адрес, координаты, телефон и дату приёмки."}
+                  </p>
+                </div>
+                {deliveryComplete ? (
+                  <Badge variant="outline">Готово</Badge>
+                ) : canEdit ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => setDeliveryDialogOpen(true)}
+                  >
+                    Добавить адрес
+                  </Button>
+                ) : (
+                  <Badge variant="secondary">Не заполнено</Badge>
+                )}
+              </li>
+              <li className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3">
+                <div>
+                  <p className="font-medium">Склад</p>
+                  <p className="text-sm text-muted-foreground">
+                    {warehouseSelected
+                      ? "Склад выбран."
+                      : "Выберите склад для бронирования."}
+                  </p>
+                </div>
+                <Badge variant={warehouseSelected ? "outline" : "secondary"}>
+                  {warehouseSelected ? "Готово" : "Не выбран"}
+                </Badge>
+              </li>
+              <li className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3">
+                <div>
+                  <p className="font-medium">Бытовки</p>
+                  <p className="text-sm text-muted-foreground">
+                    {cabinsSelected
+                      ? `Выбрано бытовок: ${selectedUnits.length}.`
+                      : "Добавьте хотя бы одну бытовку в бронирование."}
+                  </p>
+                </div>
+                <Badge variant={cabinsSelected ? "outline" : "secondary"}>
+                  {cabinsSelected ? "Готово" : "Не выбраны"}
+                </Badge>
+              </li>
+              <li className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3">
+                <div>
+                  <p className="font-medium">Сроки аренды</p>
+                  <p className="text-sm text-muted-foreground">
+                    {rentalTermsReadinessText}
+                  </p>
+                </div>
+                {rentalTermsPersisted ? (
+                  <Badge variant="outline">Готово</Badge>
+                ) : cabinsSelected && canEdit ? (
+                  <Button type="button" size="sm" onClick={focusRentalTerms}>
+                    {rentalTermsActionLabel}
+                  </Button>
+                ) : (
+                  <Badge variant="secondary">Не заполнены</Badge>
+                )}
+              </li>
+            </ul>
+          </CardContent>
+        </Card>
       ) : null}
 
       <Card size="sm">
@@ -1285,12 +1405,19 @@ export function OrderDetailPage() {
           </p>
         </div>
         {selectedUnits.length > 0 ? (
-          <div className="rounded-lg border bg-muted/20 p-3">
+          <section
+            ref={rentalTermsSectionRef}
+            tabIndex={-1}
+            className="rounded-lg border bg-muted/20 p-3"
+            aria-labelledby="rental-terms-title"
+          >
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h3 className="font-medium">Сроки аренды</h3>
+                <h3 id="rental-terms-title" className="font-medium">
+                  Сроки аренды
+                </h3>
                 <p className="text-sm text-muted-foreground">
-                  Укажите срок для каждой бытовки до сохранения бронирования.
+                  Укажите срок для каждой бытовки до сохранения заказа.
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -1394,7 +1521,7 @@ export function OrderDetailPage() {
               </p>
             ) : canEdit && rentalTermsDirty ? (
               <p className="mt-2 text-sm text-muted-foreground">
-                Сначала сохраните изменённые сроки аренды, затем создавайте
+                Сначала сохраните изменённые сроки аренды, затем сохраните
                 заказ.
               </p>
             ) : null}
@@ -1406,7 +1533,7 @@ export function OrderDetailPage() {
                 бытовки.
               </p>
             ) : null}
-          </div>
+          </section>
         ) : null}
         {selectedUnits.length === 0 ? (
           <Card size="sm">
@@ -1668,10 +1795,10 @@ export function OrderDetailPage() {
         onConflict={refreshOrderBoundary}
       />
 
-      <EditOrderDialog
-        open={editDialogOpen}
+      <OrderDeliveryDialog
+        open={deliveryDialogOpen}
         order={order}
-        onOpenChange={setEditDialogOpen}
+        onOpenChange={setDeliveryDialogOpen}
         onUpdated={applyProjection}
         onConflict={refreshOrderBoundary}
       />

@@ -121,6 +121,9 @@ class RentalOrderShipmentService {
     values.add(orderId.toString());
     values.add(Long.toString(request.expectedVersion()));
     values.add(request.driverSnapshot().trim());
+    if (request.driverWorkerId() != null) {
+      values.add(request.driverWorkerId().toString());
+    }
     values.add(request.scheduledDate().toString());
     request.unitIds().stream().sorted().map(UUID::toString).forEach(values::add);
     return OrderCommandChecksum.sha256("CREATE_RENTAL_ORDER_SHIPMENT", values);

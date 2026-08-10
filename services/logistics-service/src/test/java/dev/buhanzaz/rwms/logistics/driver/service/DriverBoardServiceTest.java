@@ -12,6 +12,7 @@ import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardLa
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.MoveDriverBoardTaskRequest;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.ReturnCapitalRepairRequest;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskAudienceMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskPlanningMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
@@ -72,7 +73,7 @@ class DriverBoardServiceTest {
     when(dependencies.readDriverTask(task.getExternalTaskId()))
         .thenReturn(scheduled, promoted);
     when(dependencies.moveDriverTask(
-            task.getExternalTaskId(), 1, 0, "CURRENT", today, 0))
+            task.getExternalTaskId(), 1, 0, "CURRENT", today, 0, null))
         .thenReturn(reordered);
 
     var response =
@@ -84,7 +85,7 @@ class DriverBoardServiceTest {
     verify(scheduler).promoteRequested(task.getId());
     verify(dependencies)
         .moveDriverTask(
-            task.getExternalTaskId(), 1, 0, "CURRENT", today, 0);
+            task.getExternalTaskId(), 1, 0, "CURRENT", today, 0, null);
     assertThat(response.lane()).isEqualTo("CURRENT");
     assertThat(response.position()).isZero();
   }
@@ -126,7 +127,7 @@ class DriverBoardServiceTest {
     when(tasks.saveAndFlush(task)).thenReturn(task);
     when(dependencies.readDriverTask(task.getExternalTaskId())).thenReturn(current);
     when(dependencies.moveDriverTask(
-            task.getExternalTaskId(), 1, 0, "SCHEDULED", targetDate, 2))
+            task.getExternalTaskId(), 1, 0, "SCHEDULED", targetDate, 2, null))
         .thenReturn(moved);
     when(dependencies.readRepairPlaces(warehouseId))
         .thenReturn(repairPlaces());
@@ -157,6 +158,126 @@ class DriverBoardServiceTest {
     assertThat(task.getFixedDateLowerBound()).isEqualTo(targetDate);
     verify(processor).processUntilIdle(task.getId());
     verify(tasks).saveAndFlush(task);
+  }
+
+  @Test
+  void transferMovePreservesIdentityFreeWarehouseAudience() {
+    DriverLogisticsTask task = transferTask();
+    LogisticsDependencyGateway.DriverBoardTask current =
+        boardTask(task, 1, 0, "SCHEDULED", 0);
+    LocalDate targetDate = today.plusDays(1);
+    LogisticsDependencyGateway.DriverBoardTask moved =
+        boardTask(task, 2, 1, "SCHEDULED", 0, targetDate);
+    when(tasks.findForUpdateByExternalTaskId(task.getExternalTaskId()))
+        .thenReturn(Optional.of(task));
+    when(tasks.findById(task.getId())).thenReturn(Optional.of(task));
+    when(dependencies.readDriverTask(task.getExternalTaskId())).thenReturn(current);
+    when(dependencies.moveDriverTask(
+            task.getExternalTaskId(),
+            1,
+            0,
+            "SCHEDULED",
+            targetDate,
+            0,
+            null))
+        .thenReturn(moved);
+
+    service.move(
+        task.getExternalTaskId(),
+        new MoveDriverBoardTaskRequest(
+            warehouseId,
+            1L,
+            0L,
+            DriverBoardLane.SCHEDULED,
+            targetDate,
+            0));
+
+    verify(dependencies)
+        .moveDriverTask(
+            task.getExternalTaskId(),
+            1,
+            0,
+            "SCHEDULED",
+            targetDate,
+            0,
+            null);
+  }
+
+  @Test
+  void shipmentCanOnlyBeReorderedInsideItsAssignedDriverDateAndLane() {
+    UUID driverId = UUID.randomUUID();
+    DriverLogisticsTask task = shipmentTask(driverId);
+    LogisticsDependencyGateway.DriverTaskAudience assigned =
+        new LogisticsDependencyGateway.DriverTaskAudience(
+            DriverTaskAudienceMode.ASSIGNED_DRIVER, driverId, "Петров Пётр");
+    LogisticsDependencyGateway.DriverBoardTask current =
+        boardTask(task, 1, 0, "SCHEDULED", 3, today, assigned);
+    LogisticsDependencyGateway.DriverBoardTask moved =
+        boardTask(task, 2, 1, "SCHEDULED", 1, today, assigned);
+    when(tasks.findForUpdateByExternalTaskId(task.getExternalTaskId()))
+        .thenReturn(Optional.of(task));
+    when(tasks.findById(task.getId())).thenReturn(Optional.of(task));
+    when(dependencies.readDriverTask(task.getExternalTaskId())).thenReturn(current);
+    when(dependencies.moveDriverTask(
+            task.getExternalTaskId(), 1, 0, "SCHEDULED", today, 1, null))
+        .thenReturn(moved);
+
+    var response =
+        service.move(
+            task.getExternalTaskId(),
+            new MoveDriverBoardTaskRequest(
+                warehouseId, 1L, 0L, DriverBoardLane.SCHEDULED, today, 1));
+
+    assertThat(response.position()).isEqualTo(1);
+    assertThat(response.driverAudience().workerId()).isEqualTo(driverId);
+    verify(dependencies)
+        .moveDriverTask(task.getExternalTaskId(), 1, 0, "SCHEDULED", today, 1, null);
+  }
+
+  @Test
+  void shipmentCannotMoveToAnotherDateOrLane() {
+    UUID driverId = UUID.randomUUID();
+    DriverLogisticsTask task = shipmentTask(driverId);
+    LogisticsDependencyGateway.DriverTaskAudience assigned =
+        new LogisticsDependencyGateway.DriverTaskAudience(
+            DriverTaskAudienceMode.ASSIGNED_DRIVER, driverId, "Петров Пётр");
+    LogisticsDependencyGateway.DriverBoardTask current =
+        boardTask(task, 1, 0, "SCHEDULED", 3, today, assigned);
+    when(tasks.findForUpdateByExternalTaskId(task.getExternalTaskId()))
+        .thenReturn(Optional.of(task));
+    when(dependencies.readDriverTask(task.getExternalTaskId())).thenReturn(current);
+
+    assertThatThrownBy(
+            () ->
+                service.move(
+                    task.getExternalTaskId(),
+                    new MoveDriverBoardTaskRequest(
+                        warehouseId,
+                        1L,
+                        0L,
+                        DriverBoardLane.SCHEDULED,
+                        today.plusDays(1),
+                        0)))
+        .isInstanceOf(LogisticsConflictException.class)
+        .hasMessageContaining("только внутри своей очереди");
+    assertThatThrownBy(
+            () ->
+                service.move(
+                    task.getExternalTaskId(),
+                    new MoveDriverBoardTaskRequest(
+                        warehouseId, 1L, 0L, DriverBoardLane.CURRENT, today, 0)))
+        .isInstanceOf(LogisticsConflictException.class)
+        .hasMessageContaining("только внутри своей очереди");
+
+    verify(dependencies, never())
+        .moveDriverTask(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.anyLong(),
+            org.mockito.ArgumentMatchers.anyLong(),
+            org.mockito.ArgumentMatchers.anyString(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.anyInt(),
+            org.mockito.ArgumentMatchers.any());
   }
 
   @Test
@@ -490,6 +611,60 @@ class DriverBoardServiceTest {
     return task;
   }
 
+  private DriverLogisticsTask transferTask() {
+    DriverLogisticsTask task =
+        DriverLogisticsTask.create(
+            warehouseId,
+            UUID.randomUUID(),
+            null,
+            DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE,
+            UUID.randomUUID(),
+            DriverTaskKind.TRANSFER,
+            DriverTaskPlanningMode.FIXED_DATE,
+            today,
+            3,
+            "Перемещение между складами",
+            "БЫТ-ПЕР",
+            UUID.randomUUID(),
+            DriverTaskAudienceMode.WAREHOUSE_DRIVERS,
+            null,
+            null,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            "c".repeat(64));
+    ReflectionTestUtils.setField(task, "id", UUID.randomUUID());
+    task.registerBoardTask(
+        UUID.randomUUID(), 1, UUID.randomUUID(), "WAITING", "SCHEDULED", null);
+    return task;
+  }
+
+  private DriverLogisticsTask shipmentTask(UUID driverId) {
+    DriverLogisticsTask task =
+        DriverLogisticsTask.create(
+            warehouseId,
+            UUID.randomUUID(),
+            null,
+            DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE,
+            UUID.randomUUID(),
+            DriverTaskKind.SHIPMENT,
+            DriverTaskPlanningMode.FIXED_DATE,
+            today,
+            3,
+            "Отгрузка бытовки",
+            "БЫТ-ОТГ",
+            UUID.randomUUID(),
+            DriverTaskAudienceMode.ASSIGNED_DRIVER,
+            driverId,
+            "Петров Пётр",
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            "d".repeat(64));
+    ReflectionTestUtils.setField(task, "id", UUID.randomUUID());
+    task.registerBoardTask(
+        UUID.randomUUID(), 1, UUID.randomUUID(), "WAITING", "SCHEDULED", null);
+    return task;
+  }
+
   private LogisticsDependencyGateway.DriverBoardTask boardTask(
       DriverLogisticsTask task,
       long taskVersion,
@@ -506,6 +681,25 @@ class DriverBoardServiceTest {
       String lane,
       int position,
       LocalDate scheduledDate) {
+    return boardTask(
+        task,
+        taskVersion,
+        entryVersion,
+        lane,
+        position,
+        scheduledDate,
+        new LogisticsDependencyGateway.DriverTaskAudience(
+            DriverTaskAudienceMode.WAREHOUSE_DRIVERS, null, null));
+  }
+
+  private LogisticsDependencyGateway.DriverBoardTask boardTask(
+      DriverLogisticsTask task,
+      long taskVersion,
+      long entryVersion,
+      String lane,
+      int position,
+      LocalDate scheduledDate,
+      LogisticsDependencyGateway.DriverTaskAudience audience) {
     return new LogisticsDependencyGateway.DriverBoardTask(
         task.getTaskBoardTaskId(),
         taskVersion,
@@ -514,6 +708,7 @@ class DriverBoardServiceTest {
         "Доставить бытовку в ремонт",
         task.getUnitNumber(),
         "Доставить бытовку в ремонт",
+        audience,
         "ACTIVE",
         scheduledDate,
         lane,

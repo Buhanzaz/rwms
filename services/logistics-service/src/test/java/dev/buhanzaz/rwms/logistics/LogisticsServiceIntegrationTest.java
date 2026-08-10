@@ -2,18 +2,22 @@ package dev.buhanzaz.rwms.logistics;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateReturnRequest;
-import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateShipmentRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentLineRequest;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionEvidence;
-import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseOperationMarkStore;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
-import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseOperationMarkStore;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -33,6 +37,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 @SpringBootTest
@@ -42,6 +47,10 @@ class LogisticsServiceIntegrationTest {
   private static final UUID WAREHOUSE = UUID.fromString("00000000-0000-0000-0000-000000000301");
   private static final UUID SUBJECT = UUID.fromString("00000000-0000-0000-0000-000000000302");
   private static final UUID CORRELATION = UUID.fromString("00000000-0000-0000-0000-000000000303");
+  private static final UUID DRIVER_QUEUE_DEFINITION =
+      UUID.fromString("00000000-0000-0000-0000-000000000308");
+  private static final UUID DRIVER_QUEUE_CATEGORY =
+      UUID.fromString("00000000-0000-0000-0000-000000000309");
   private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
   static {
@@ -53,6 +62,7 @@ class LogisticsServiceIntegrationTest {
   @Autowired LogisticsWarehouseLifecycleStore warehouseLifecycleStore;
   @Autowired PlatformTransactionManager transactionManager;
   @Autowired JdbcTemplate jdbc;
+  @MockitoBean LogisticsDependencyGateway dependencies;
 
   @DynamicPropertySource
   static void database(DynamicPropertyRegistry properties) {
@@ -69,12 +79,28 @@ class LogisticsServiceIntegrationTest {
 
   @BeforeEach
   void cleanFixtures() {
+    reset(dependencies);
+    when(dependencies.readWarehouseDriverQueue(WAREHOUSE))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseDriverQueue(
+                WAREHOUSE, DRIVER_QUEUE_DEFINITION, DRIVER_QUEUE_CATEGORY));
+    when(dependencies.readRentalItemSnapshot(any()))
+        .thenAnswer(
+            invocation ->
+                new LogisticsDependencyGateway.RentalItemSnapshot(
+                    invocation.getArgument(0),
+                    7,
+                    WAREHOUSE,
+                    "БТ-QA",
+                    "FREE",
+                    List.of()));
     jdbc.update("delete from logistics_warehouse_readiness_fence");
     jdbc.update("delete from logistics_warehouse_admission_intent");
     jdbc.execute("truncate table warehouse_operation_mark_recovery_audit");
     jdbc.update("delete from warehouse_operation_mark_outbox");
     jdbc.update("delete from logistics_idempotency_record");
     jdbc.update("delete from logistics_external_attempt");
+    jdbc.update("delete from driver_logistics_task");
     jdbc.update("delete from logistics_document_line");
     jdbc.update("delete from logistics_document");
     jdbc.update("delete from rental_order");

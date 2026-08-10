@@ -154,8 +154,17 @@ public final class OrderApiModels {
   public record CreateOrderRentalShipmentRequest(
       @NotNull @Min(0) Long expectedVersion,
       @NotBlank @Size(max = 512) String driverSnapshot,
+      UUID driverWorkerId,
       @NotNull LocalDate scheduledDate,
-      @NotNull @Size(min = 1, max = 100) List<@NotNull UUID> unitIds) {}
+      @NotNull @Size(min = 1, max = 100) List<@NotNull UUID> unitIds) {
+    public CreateOrderRentalShipmentRequest(
+        Long expectedVersion,
+        String driverSnapshot,
+        LocalDate scheduledDate,
+        List<UUID> unitIds) {
+      this(expectedVersion, driverSnapshot, null, scheduledDate, unitIds);
+    }
+  }
 
   /**
    * Logistics-owned rental-client projection. A historical responsible-manager display snapshot

@@ -28,7 +28,6 @@ const document: TransferDocument = {
   warehouseId: SOURCE_WAREHOUSE_ID,
   destinationWarehouseId: DESTINATION_WAREHOUSE_ID,
   partySnapshot: null,
-  driverSnapshot: null,
   clientId: null,
   equipmentMovementTaskId: EQUIPMENT_TASK_ID,
   scheduledDate: "2026-07-19",
@@ -150,7 +149,6 @@ describe("HttpWarehouseTransferClient", () => {
       accessToken: "transfer-token",
       warehouseId: SOURCE_WAREHOUSE_ID,
       destinationWarehouseId: DESTINATION_WAREHOUSE_ID,
-      driverSnapshot: "Иванов Иван",
       scheduledDate: "2026-07-19",
       idempotencyKey: IDEMPOTENCY_KEY,
       lines: [{ assetId: ASSET_ID, assetVersion: 8 }],
@@ -178,7 +176,6 @@ describe("HttpWarehouseTransferClient", () => {
       expect(JSON.parse(init.body as string)).toEqual({
         warehouseId: SOURCE_WAREHOUSE_ID,
         destinationWarehouseId: DESTINATION_WAREHOUSE_ID,
-        driverSnapshot: command.driverSnapshot,
         scheduledDate: command.scheduledDate,
         lines: command.lines,
         furnitureReplacements: command.furnitureReplacements,

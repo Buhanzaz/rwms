@@ -2,11 +2,14 @@ package dev.buhanzaz.rwms.logistics.eventing;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateReturnRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateShipmentRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentLineRequest;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import java.util.List;
 import java.util.UUID;
@@ -18,6 +21,7 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.testcontainers.junit.jupiter.Container;
@@ -45,6 +49,10 @@ class LogisticsEventStoreReplayIntegrationTest {
       UUID.fromString("00000000-0000-0000-0000-000000000902");
   private static final UUID CORRELATION =
       UUID.fromString("00000000-0000-0000-0000-000000000903");
+  private static final UUID DRIVER_QUEUE_DEFINITION =
+      UUID.fromString("00000000-0000-0000-0000-000000000904");
+  private static final UUID DRIVER_QUEUE_CATEGORY =
+      UUID.fromString("00000000-0000-0000-0000-000000000905");
 
   @Container @ServiceConnection
   static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
@@ -52,12 +60,29 @@ class LogisticsEventStoreReplayIntegrationTest {
   @Autowired LogisticsDocumentService documents;
   @Autowired LogisticsReplayVerifier replay;
   @Autowired JdbcTemplate jdbc;
+  @MockitoBean LogisticsDependencyGateway dependencies;
 
   @BeforeEach
   void reset() {
+    org.mockito.Mockito.reset(dependencies);
+    when(dependencies.readWarehouseDriverQueue(WAREHOUSE))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseDriverQueue(
+                WAREHOUSE, DRIVER_QUEUE_DEFINITION, DRIVER_QUEUE_CATEGORY));
+    when(dependencies.readRentalItemSnapshot(any()))
+        .thenAnswer(
+            invocation ->
+                new LogisticsDependencyGateway.RentalItemSnapshot(
+                    invocation.getArgument(0),
+                    7,
+                    WAREHOUSE,
+                    "БТ-QA",
+                    "FREE",
+                    List.of()));
     jdbc.execute(
         """
         truncate table
+          driver_logistics_task,
           logistics_document,
           event_stream_head,
           domain_event,

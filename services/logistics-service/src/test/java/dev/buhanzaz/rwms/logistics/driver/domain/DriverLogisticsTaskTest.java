@@ -390,6 +390,44 @@ class DriverLogisticsTaskTest {
     assertThat(task.isRepairPlaceEffectApplied()).isTrue();
   }
 
+  @Test
+  void identityFreeDeliveryIsUnassignedWhileMovementRemainsShared() {
+    DriverLogisticsTask shipment =
+        create(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            null,
+            DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE,
+            UUID.randomUUID(),
+            DriverTaskKind.SHIPMENT);
+    DriverLogisticsTask returnTask =
+        create(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            null,
+            DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE,
+            UUID.randomUUID(),
+            DriverTaskKind.RETURN);
+    DriverLogisticsTask transfer =
+        create(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            null,
+            DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE,
+            UUID.randomUUID(),
+            DriverTaskKind.TRANSFER);
+
+    assertThat(shipment.getDriverAudienceMode())
+        .isEqualTo(DriverTaskAudienceMode.UNASSIGNED);
+    assertThat(returnTask.getDriverAudienceMode())
+        .isEqualTo(DriverTaskAudienceMode.UNASSIGNED);
+    assertThat(transfer.getDriverAudienceMode())
+        .isEqualTo(DriverTaskAudienceMode.WAREHOUSE_DRIVERS);
+    assertThat(shipment.getPlannedDriverWorkerId()).isNull();
+    assertThat(returnTask.getPlannedDriverWorkerId()).isNull();
+    assertThat(transfer.getPlannedDriverWorkerId()).isNull();
+  }
+
   private static DriverLogisticsTask create(
       UUID warehouseId,
       UUID cabinId,

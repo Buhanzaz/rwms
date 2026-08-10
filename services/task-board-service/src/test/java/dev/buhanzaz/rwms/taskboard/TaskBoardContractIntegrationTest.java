@@ -116,6 +116,10 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
     var queueEntryFact = schema.required("$defs").required("queueEntryFact");
     assertThat(queueEntryFact.required("properties").has("externalTaskId")).isFalse();
     assertThat(queueEntryFact.required("required").toString()).contains("taskId", "routeIndex");
+    var boardTaskFact = schema.required("$defs").required("boardTaskFact");
+    assertThat(boardTaskFact.required("properties").toString())
+        .contains("driverAudience", "plannedDriverWorkerId")
+        .doesNotContain("plannedDriverName", "workerName");
   }
 
   @Test
@@ -449,6 +453,13 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
                 "audienceModes",
                 "groupIds",
                 "resultPhotoMinCount"));
+    assertThat(
+            ((List<?>) child(schemas, "WorkerFeedEntry").get("required")).stream()
+                .map(String::valueOf)
+                .toList())
+        .contains("driverAudience");
+    assertThat(child(child(schemas, "WorkerFeedEntry"), "properties"))
+        .containsKey("driverAudience");
     assertThat(child(schemas, "WorkerContext").get("required"))
         .asList()
         .contains("kpiPalette");
@@ -518,7 +529,16 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
     Map<String, Object> externalTaskProperties =
         child(child(schemas, "RegisterExternalTaskRequest"), "properties");
     assertThat(createTaskProperties).doesNotContainKey("dailyCapacity");
-    assertThat(externalTaskProperties).containsKeys("dailyCapacity", "source");
+    assertThat(externalTaskProperties)
+        .containsKeys("dailyCapacity", "source", "driverAudience");
+    assertThat(schemas)
+        .containsKeys("DriverTaskAudienceMode", "DriverTaskAudience");
+    assertThat(child(schemas, "DriverTaskAudienceMode").get("enum"))
+        .isEqualTo(List.of("UNASSIGNED", "ASSIGNED_DRIVER", "WAREHOUSE_DRIVERS"));
+    assertThat(child(schemas, "DriverTaskAudience").toString())
+        .contains("WAREHOUSE_DRIVERS", "workerId={type=null}", "workerName={type=null}");
+    assertThat(child(child(schemas, "MoveExternalLogisticsTaskRequest"), "properties"))
+        .containsKey("targetDriverAudience");
     assertThat(child(schemas, "PreStartCancellationOutcome").get("enum"))
         .isEqualTo(List.of("CANCELLED", "ALREADY_CANCELLED", "STARTED", "VERSION_CONFLICT"));
     assertThat(child(schemas, "PreStartCancellationResult").get("required"))

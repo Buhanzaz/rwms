@@ -56,6 +56,12 @@ const assistantApi = vi.hoisted(() => ({
   updateAssistantSelection: vi.fn(),
 }))
 
+const assistantSearchResultsLifecycle = vi.hoisted(() => ({
+  nextInstance: 0,
+  mounted: [] as number[],
+  unmounted: [] as number[],
+}))
+
 const filterSuggestions = {
   cabinTypes: ["БК-1"],
   finishes: ["ДВП"],
@@ -130,61 +136,87 @@ vi.mock("@/features/assistant/components/manager-booking-alert-dialog", () => ({
   ManagerBookingAlertDialog: () => null,
 }))
 
-vi.mock("@/features/assistant/components/assistant-search-results", () => ({
-  AssistantSearchResults: ({
-    result,
-    selectedIds,
-    onSelectionChange,
-    collapsed,
-    onCollapsedChange,
-  }: {
-    result: {
-      groups: readonly {
-        cabins: readonly { id: string }[]
-      }[]
-    }
-    selectedIds: ReadonlySet<string>
-    onSelectionChange: (next: Set<string>) => void
-    collapsed?: boolean
-    onCollapsedChange?: (collapsed: boolean) => void
-  }) => (
-    <div data-slot="assistant-search-results">
-      <button
-        type="button"
-        aria-label={
-          collapsed ? "Развернуть подбор бытовок" : "Скрыть подбор бытовок"
+vi.mock(
+  "@/features/assistant/components/assistant-search-results",
+  async () => {
+    const React = await import("react")
+
+    return {
+      AssistantSearchResults: ({
+        result,
+        selectedIds,
+        onSelectionChange,
+        collapsed,
+        onCollapsedChange,
+      }: {
+        result: {
+          groups: readonly {
+            cabins: readonly { id: string }[]
+          }[]
         }
-        onClick={() => onCollapsedChange?.(!collapsed)}
-      />
-      {!collapsed ? (
-        <>
-          Найдено групп: {result.groups.length}
-          <span data-slot="assistant-search-result-cabins">
-            Найдено:{" "}
-            {result.groups
-              .flatMap((group) => group.cabins)
-              .map((cabin) => cabin.id)
-              .join(", ")}
-          </span>
-          <span data-slot="assistant-selected-ids">
-            Выбрано: {[...selectedIds].join(", ")}
-          </span>
-          {result.groups
-            .flatMap((group) => group.cabins)
-            .map((cabin) => (
-              <button
-                key={cabin.id}
-                type="button"
-                onClick={() => onSelectionChange(new Set([cabin.id]))}
-              >
-                Выбрать {cabin.id}
-              </button>
-            ))}
-        </>
-      ) : null}
-    </div>
-  ),
-}))
+        selectedIds: ReadonlySet<string>
+        onSelectionChange: (next: Set<string>) => void
+        collapsed?: boolean
+        onCollapsedChange?: (collapsed: boolean) => void
+      }) => {
+        const instanceRef = React.useRef(0)
+        if (instanceRef.current === 0) {
+          instanceRef.current = ++assistantSearchResultsLifecycle.nextInstance
+        }
+        const instanceId = instanceRef.current
+        React.useEffect(() => {
+          assistantSearchResultsLifecycle.mounted.push(instanceId)
+          return () => {
+            assistantSearchResultsLifecycle.unmounted.push(instanceId)
+          }
+        }, [instanceId])
+
+        return (
+          <div
+            data-slot="assistant-search-results"
+            data-assistant-search-instance={instanceId}
+          >
+            <button
+              type="button"
+              aria-label={
+                collapsed
+                  ? "Развернуть подбор бытовок"
+                  : "Скрыть подбор бытовок"
+              }
+              onClick={() => onCollapsedChange?.(!collapsed)}
+            />
+            {!collapsed ? (
+              <>
+                Найдено групп: {result.groups.length}
+                <span data-slot="assistant-search-result-cabins">
+                  Найдено:{" "}
+                  {result.groups
+                    .flatMap((group) => group.cabins)
+                    .map((cabin) => cabin.id)
+                    .join(", ")}
+                </span>
+                <span data-slot="assistant-selected-ids">
+                  Выбрано: {[...selectedIds].join(", ")}
+                </span>
+                {result.groups
+                  .flatMap((group) => group.cabins)
+                  .map((cabin) => (
+                    <button
+                      key={cabin.id}
+                      type="button"
+                      onClick={() => onSelectionChange(new Set([cabin.id]))}
+                    >
+                      Выбрать {cabin.id}
+                    </button>
+                  ))}
+              </>
+            ) : null}
+          </div>
+        )
+      },
+    }
+  }
+)
 
 vi.mock("@/components/ui/message-scroller", () => ({
   MessageScrollerProvider: ({ children }: { children: ReactNode }) => (
@@ -330,6 +362,9 @@ function composer() {
 
 describe("AssistantPage composer", () => {
   beforeEach(() => {
+    assistantSearchResultsLifecycle.nextInstance = 0
+    assistantSearchResultsLifecycle.mounted = []
+    assistantSearchResultsLifecycle.unmounted = []
     queryFixtures.conversations = [conversation]
     queryFixtures.detail = conversationDetail(activeSearchResult())
     queryFixtures.client = null
@@ -717,6 +752,71 @@ describe("AssistantPage composer", () => {
       ["assistant-conversations", conversation.id],
       expect.any(Function)
     )
+
+    await act(async () => finishTurn?.())
+  })
+
+  it("keeps the result surface mounted while an SSE selection update changes its content", async () => {
+    const initial = activeSearchResult(2)
+    queryFixtures.detail = conversationDetail(initial)
+    const retained = initial.groups[0].cabins[1]
+    let finishTurn: (() => void) | undefined
+    assistantApi.streamAssistantTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: AssistantTurnEvent) => void }) => {
+        onEvent({
+          event: "selection.updated",
+          conversationId: conversation.id,
+          toolCallId: "tool-remove-1",
+          result: {
+            tool: "remove_selected_cabins",
+            data: {
+              inquiryId: conversation.rentalInquiryId,
+              warehouseId: initial.warehouseId,
+              expiresAt: new Date(Date.now() + 20 * 60_000).toISOString(),
+              rentalItemIds: [retained.id],
+              items: [retained],
+              removedRentalItemIds: [initial.groups[0].cabins[0].id],
+            },
+          },
+        })
+        await new Promise<void>((resolve) => {
+          finishTurn = () => {
+            onEvent({
+              event: "turn.completed",
+              conversationId: conversation.id,
+            })
+            resolve()
+          }
+        })
+      }
+    )
+
+    render(
+      <MemoryRouter>
+        <AssistantPage />
+      </MemoryRouter>
+    )
+    const resultSurface = document.querySelector(
+      '[data-slot="assistant-search-results"]'
+    )
+    expect(resultSurface?.getAttribute("data-assistant-search-instance")).toBe(
+      "1"
+    )
+
+    fireEvent.change(
+      screen.getByPlaceholderText("Напишите, какие бытовки подобрать…"),
+      { target: { value: "Удали БЫТ-1 из выборки" } }
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Отправить сообщение" }))
+
+    await waitFor(() =>
+      expect(screen.getByText("Найдено: cabin-2")).toBeTruthy()
+    )
+    expect(
+      document.querySelector('[data-slot="assistant-search-results"]')
+    ).toBe(resultSurface)
+    expect(assistantSearchResultsLifecycle.mounted).toEqual([1])
+    expect(assistantSearchResultsLifecycle.unmounted).toEqual([])
 
     await act(async () => finishTurn?.())
   })

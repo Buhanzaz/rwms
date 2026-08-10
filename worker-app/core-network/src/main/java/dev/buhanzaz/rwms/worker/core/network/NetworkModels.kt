@@ -128,6 +128,20 @@ data class WorkerAssignmentDto(
 
 @Serializable
 /**
+ * Server-owned driver visibility attached to one worker-feed entry.
+ *
+ * The authenticated feed is already authorization-filtered. WorkerApp uses
+ * only the mode to place an entry in the personal logistics or shared
+ * movement table; it never broadens visibility locally.
+ */
+data class WorkerDriverTaskAudienceDto(
+    val mode: String,
+    val workerId: String?,
+    val workerName: String?,
+)
+
+@Serializable
+/**
  * Public-worker-gateway response/read payload for WorkerFeedEntryDto. It is a transport boundary model, not persisted domain state.
  */
 data class WorkerFeedEntryDto(
@@ -150,6 +164,7 @@ data class WorkerFeedEntryDto(
     val assignments: List<WorkerAssignmentDto>,
     val readyEvidenceCount: Int,
     val resultPhotoMinCount: Int,
+    val driverAudience: WorkerDriverTaskAudienceDto?,
     // Older persisted feed fixtures have no schedule-aware timer. Null keeps
     // them decodable, but the UI does not continue their wall-clock timer.
     val timerSnapshot: WorkerTaskTimerSnapshotDto? = null,

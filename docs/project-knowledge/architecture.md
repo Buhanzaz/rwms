@@ -389,10 +389,11 @@ entered; extracted collaborators do not introduce a second transaction policy.
 | --- | --- |
 | Manager `ManagerViewModel` | Workspace/auth, inventory, shipment, return, transfer, maintenance catalog/read/editor/persistence and media coordinators connected through narrow ports |
 | Asset application | Rental items, logistics effects, equipment, maintenance and classifiers; separate inventory capture/projection/furniture/source, HTML-import and property-disposition facades |
-| Task board | Read projection, external registration/mutation, logistics tasks, worker execution and ordering; workforce profile, credential and group owners |
+| Task board | Read projection, external registration/mutation, logistics tasks, driver-audience validation/visibility, worker execution and ordering; workforce profile, credential and group owners |
 | Inventory | Session, read, finding/validation/review, planning, completion, statistics, publication and projection owners |
 | Maintenance | Catalog, estimate, repair, transfer, inbound and reconciliation owners; separate inventory maintenance/publication and property-disposition facades |
-| Logistics | Return, shipment, transfer, reconciliation and rental-order document hooks; rental-order read/create/lifecycle/reservation/terms/shipment owners |
+| Logistics | Return, shipment, transfer, reconciliation and rental-order document hooks; one document-line driver-intent planner; rental-order read/create/lifecycle/reservation/terms/shipment owners |
+| Worker task UI | Server-scoped personal-logistics/shared-movement, group-role and qualification-only panels, with adaptive two-pane presentation and existing task-detail/camera/upload navigation; the stored audience mode is presentational and grants no access |
 | Assistant | Conversation creation store, durable clarification branches, cabin search/reference tools and selection delegation; logistics and asset remain the command owners |
 | Private HTTP adapters | Logistics and maintenance gateway facades delegate by remote owner to warehouse, asset, task-board, logistics, maintenance or media clients over one technical OAuth/HTTP transport each |
 

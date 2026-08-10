@@ -179,6 +179,11 @@ function card(
     taskText: null,
     unitNumber: "БТ-100",
     kind: "DELIVER_TO_REPAIR",
+    driverAudience: {
+      mode: "UNASSIGNED",
+      workerId: null,
+      workerName: null,
+    },
     workflowState: "SCHEDULED",
     taskStatus: "ACTIVE",
     entryStatus: "WAITING",
@@ -356,6 +361,67 @@ describe("DriverBoardPage", () => {
     ).toBeTruthy()
   })
 
+  it("shows one shared movement queue without logistics cards or driver sections", async () => {
+    const movement = card("00000000-0000-4000-8000-000000000044", {
+      title: "Переставить бытовку",
+      unitNumber: "БТ-ПЕР",
+      driverAudience: {
+        mode: "ASSIGNED_DRIVER",
+        workerId: "00000000-0000-4000-8000-000000000045",
+        workerName: "Иванов Иван",
+      },
+    })
+    const shipment = card("00000000-0000-4000-8000-000000000046", {
+      title: "Отгрузить бытовку",
+      unitNumber: "БТ-ОТГ",
+      kind: "SHIPMENT",
+      position: 1,
+    })
+    const returnTask = card("00000000-0000-4000-8000-000000000047", {
+      title: "Вернуть бытовку",
+      unitNumber: "БТ-ВОЗ",
+      kind: "RETURN",
+      lane: "CURRENT",
+      workflowState: "CURRENT",
+    })
+    renderPage({
+      ...board,
+      current: [returnTask],
+      dates: [{ date: board.currentDate, tasks: [movement, shipment] }],
+    })
+
+    expect(
+      await screen.findByTestId(`scheduled-task-${movement.externalTaskId}`)
+    ).toBeTruthy()
+    expect(
+      screen.queryByTestId(`scheduled-task-${shipment.externalTaskId}`)
+    ).toBeNull()
+    expect(
+      screen.queryByTestId(`current-task-${returnTask.externalTaskId}`)
+    ).toBeNull()
+    expect(screen.queryByText("Иванов Иван")).toBeNull()
+    expect(screen.queryByLabelText(/Очередь водителя:/)).toBeNull()
+  })
+
+  it("filters scheduled columns by a chosen date and restores all dates", async () => {
+    const actor = userEvent.setup()
+    renderPage()
+
+    await screen.findByLabelText(/^Задания на .*1 августа/i)
+    fireEvent.change(screen.getByLabelText("Дата заданий"), {
+      target: { value: "2026-08-02" },
+    })
+
+    expect(screen.queryByLabelText(/^Задания на .*1 августа/i)).toBeNull()
+    expect(screen.getByLabelText(/^Задания на .*2 августа/i)).toBeTruthy()
+    expect(screen.getByTestId("driver-new-date-drop-zone")).toBeTruthy()
+
+    await actor.click(screen.getByRole("button", { name: "Все даты" }))
+
+    expect(screen.getByLabelText(/^Задания на .*1 августа/i)).toBeTruthy()
+    expect(screen.getByLabelText(/^Задания на .*2 августа/i)).toBeTruthy()
+  })
+
   it("keeps a scheduled repair delivery out of the empty repair-place list", async () => {
     const actor = userEvent.setup()
     renderPage({
@@ -383,9 +449,7 @@ describe("DriverBoardPage", () => {
       "Ремонтные места: 0 из 6 занято"
     )
     expect(within(repairPlaces).getByText("0 из 6")).toBeTruthy()
-    expect(
-      within(repairPlaces).getByText("Физически свободно: 6")
-    ).toBeTruthy()
+    expect(within(repairPlaces).getByText("Физически свободно: 6")).toBeTruthy()
     expect(
       screen.getByTestId(`scheduled-task-${SCHEDULED_EXTERNAL_ID}`).textContent
     ).toContain("БТ-064")

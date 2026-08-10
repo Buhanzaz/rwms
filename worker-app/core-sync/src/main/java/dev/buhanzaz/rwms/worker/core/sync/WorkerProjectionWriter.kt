@@ -400,6 +400,7 @@ class WorkerProjectionWriter @Inject constructor(
         timerState = timerSnapshot?.timerState,
         timerNextTransitionAt = timerSnapshot?.nextTransitionAt,
         timerServerTime = timerSnapshot?.serverTime,
+        driverAudienceMode = driverAudience?.mode,
     )
 
     private fun WorkerAssignmentDto.toEntity(userId: String, entryId: String) =

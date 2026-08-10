@@ -29,6 +29,8 @@ import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
@@ -57,6 +59,8 @@ class TaskBoardExternalMutationService {
   private final WarehouseLifecycleFence warehouseLifecycleFence;
   private final TransactionTemplate lifecycleMutations;
   private final TaskBoardQueuePositionCoordinator queuePositions;
+  private final DriverTaskAudienceService driverAudiences;
+  private final WorkerInvalidationHub workerInvalidations;
 
   TaskBoardExternalMutationService(
       BoardTaskRepository tasks,
@@ -72,7 +76,9 @@ class TaskBoardExternalMutationService {
       TaskBoardWorkerExecutionService workerExecutions,
       WarehouseLifecycleFence warehouseLifecycleFence,
       PlatformTransactionManager transactionManager,
-      TaskBoardQueuePositionCoordinator queuePositions) {
+      TaskBoardQueuePositionCoordinator queuePositions,
+      DriverTaskAudienceService driverAudiences,
+      WorkerInvalidationHub workerInvalidations) {
     this.tasks = tasks;
     this.entries = entries;
     this.queues = queues;
@@ -87,6 +93,8 @@ class TaskBoardExternalMutationService {
     this.warehouseLifecycleFence = warehouseLifecycleFence;
     this.lifecycleMutations = new TransactionTemplate(transactionManager);
     this.queuePositions = queuePositions;
+    this.driverAudiences = driverAudiences;
+    this.workerInvalidations = workerInvalidations;
   }
 
   BoardTask requireOwnedExternalTask(String sourceClientId, UUID externalTaskId) {
@@ -204,20 +212,25 @@ class TaskBoardExternalMutationService {
       throw new ConflictException("Задача не относится к очереди водителей");
     }
     QueueEntry entry = route.getFirst();
+    BoardTaskRegistrationDto result;
     if (request.targetLane() == TaskLane.CURRENT) {
-      return moveExternalLogisticsTaskToCurrent(task, entry, request);
+      result = moveExternalLogisticsTaskToCurrent(task, entry, request);
+    } else {
+      move(
+          task.getWarehouseId(),
+          entry.getId(),
+          new MoveEntryRequest(
+              request.expectedEntryVersion(),
+              request.expectedTaskVersion(),
+              entry.getQueue().getId(),
+              request.targetIndex(),
+              request.targetDate()),
+          true,
+          request.targetDriverAudience());
+      result = registrationDto(task);
     }
-    move(
-        task.getWarehouseId(),
-        entry.getId(),
-        new MoveEntryRequest(
-            request.expectedEntryVersion(),
-            request.expectedTaskVersion(),
-            entry.getQueue().getId(),
-            request.targetIndex(),
-            request.targetDate()),
-        true);
-    return registrationDto(task);
+    publishWorkerFeedChangedAfterCommit();
+    return result;
   }
 
   private BoardTaskRegistrationDto moveExternalLogisticsTaskToCurrent(
@@ -243,7 +256,10 @@ class TaskBoardExternalMutationService {
     Map<TaskBoardEventStore.StreamRef, Long> streamVersions =
         queuePositions.lockTaskAndEntryStreams(task, positionCandidates);
     boolean laneChanged = task.getLane() != TaskLane.CURRENT;
-    if (laneChanged) {
+    DriverTaskAudienceDto audienceBefore = driverAudiences.dto(task);
+    driverAudiences.replace(task, queue, request.targetDriverAudience());
+    boolean audienceChanged = !Objects.equals(audienceBefore, driverAudiences.dto(task));
+    if (laneChanged || audienceChanged) {
       task.setLane(TaskLane.CURRENT);
       task = projectionWriter.saveAndFlush(tasks, task);
     }
@@ -290,7 +306,7 @@ class TaskBoardExternalMutationService {
               ? TaskBoardEventTypes.QUEUE_ENTRY_MOVED
               : TaskBoardEventTypes.QUEUE_ENTRY_CHANGED);
     }
-    if (laneChanged) {
+    if (laneChanged || audienceChanged) {
       eventSourcing.taskChanged(
           task,
           queuePositions.streamVersion(
@@ -442,6 +458,7 @@ class TaskBoardExternalMutationService {
             task.getScheduledDate(),
             task.getPriority(),
             task.getLane(),
+            driverAudiences.dto(task),
             jdbc));
     task = projectionWriter.saveAndFlush(tasks, task);
 
@@ -537,6 +554,15 @@ class TaskBoardExternalMutationService {
             "Очередь целевого склада должна быть активна и видима: " + definitionId);
       }
       targetByDefinitionId.put(definitionId, target);
+    }
+    DriverTaskAudienceDto retainedAudience = driverAudiences.dto(task);
+    if (retainedAudience != null) {
+      targetByDefinitionId.values().stream()
+          .distinct()
+          .forEach(
+              target ->
+                  driverAudiences.requireCompatibleWarehouse(
+                      targetWarehouseId, target, retainedAudience));
     }
 
     queuePositions.lockQueuePositions(
@@ -743,7 +769,8 @@ class TaskBoardExternalMutationService {
       UUID warehouseId,
       UUID entryId,
       MoveEntryRequest request,
-      boolean allowCurrentLogistics) {
+      boolean allowCurrentLogistics,
+      DriverTaskAudienceDto targetDriverAudience) {
     queuePositions.lockQueueMutation(warehouseId);
     var entry = requireEntry(warehouseId, entryId);
     BoardTask task = entry.getTask();
@@ -821,7 +848,10 @@ class TaskBoardExternalMutationService {
     }
     boolean dateChanged = !oldDate.equals(request.targetDate());
     boolean laneChanged = currentLogisticsEntry;
-    if (dateChanged || laneChanged) {
+    DriverTaskAudienceDto audienceBefore = driverAudiences.dto(task);
+    driverAudiences.replace(task, target, targetDriverAudience);
+    boolean audienceChanged = !Objects.equals(audienceBefore, driverAudiences.dto(task));
+    if (dateChanged || laneChanged || audienceChanged) {
       task.setScheduledDate(request.targetDate());
       if (laneChanged) task.setLane(TaskLane.SCHEDULED);
       projectionWriter.saveAndFlush(tasks, task);
@@ -862,7 +892,7 @@ class TaskBoardExternalMutationService {
                 : TaskBoardEventTypes.QUEUE_ENTRY_CHANGED);
       }
     }
-    if (dateChanged || laneChanged) {
+    if (dateChanged || laneChanged || audienceChanged) {
       eventSourcing.taskChanged(
           task,
           queuePositions.streamVersion(streamVersions, TaskBoardAggregateType.BOARD_TASK, task.getId()),
@@ -906,6 +936,33 @@ class TaskBoardExternalMutationService {
     return OffsetDateTime.now(ZoneOffset.UTC);
   }
 
+  /**
+   * Invalidates every connected worker feed only after the atomic move and audience change commit.
+   * This is deliberately projection-only because an audience change may revoke entry discovery.
+   */
+  private void publishWorkerFeedChangedAfterCommit() {
+    Runnable dispatch = () -> workerInvalidations.feedChanged(workerRevision());
+    if (TransactionSynchronizationManager.isSynchronizationActive()) {
+      TransactionSynchronizationManager.registerSynchronization(
+          new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+              dispatch.run();
+            }
+          });
+    } else {
+      dispatch.run();
+    }
+  }
+
+  private long workerRevision() {
+    Long revision =
+        jdbc.queryForObject(
+            "select coalesce(sum(current_version + 1), 0)::bigint from event_stream_head",
+            Long.class);
+    return revision == null ? 0 : revision;
+  }
+
   private BoardTaskRegistrationDto registrationDto(BoardTask task) {
     var route =
         entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId()).stream()
@@ -939,6 +996,7 @@ class TaskBoardExternalMutationService {
         task.getLane(),
         task.getPriority(),
         task.isPinned(),
+        driverAudiences.dto(task),
         task.getDoneAt(),
         route);
   }

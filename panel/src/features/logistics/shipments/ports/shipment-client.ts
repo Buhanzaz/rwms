@@ -12,6 +12,7 @@ export type ShipmentCreateCommand = {
   rentalOrderId: string
   partySnapshot: string
   driverSnapshot: string
+  driverWorkerId: string
   lines: ShipmentPlanLine[]
   idempotencyKey: string
 }
@@ -21,6 +22,7 @@ export type ShipmentPlanCommand = {
   documentId: string
   expectedVersion: number
   driverSnapshot: string
+  driverWorkerId: string | null
   scheduledDate: string
   idempotencyKey: string
 }

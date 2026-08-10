@@ -141,7 +141,7 @@ public class WorkerTaskBoardService {
     access
         .categories()
         .forEach(queue -> categories.put(queue.id(), category(queue, access)));
-    TaskBoardSnapshot snapshot = taskBoard.workerSnapshot(warehouseId);
+    TaskBoardSnapshot snapshot = taskBoard.workerSnapshot(warehouseId, workerId);
     List<CategoryEntry> visible = new ArrayList<>();
     for (BoardColumnDto column : snapshot.columns()) {
       WorkerCategory workerCategory = categories.get(column.queueId());
@@ -183,7 +183,7 @@ public class WorkerTaskBoardService {
   /** Returns task detail after verifying that the worker may see the entry. */
   public WorkerTaskDetail detail(UUID workerId, UUID warehouseId, UUID entryId) {
     WorkerAccess access = access(workerId, warehouseId);
-    BoardEntryDto entry = taskBoard.entry(warehouseId, entryId);
+    BoardEntryDto entry = taskBoard.workerEntry(warehouseId, entryId, workerId);
     WorkQueueDto queue =
         access.categories().stream()
             .filter(candidate -> candidate.id().equals(entry.queueId()))
@@ -364,7 +364,7 @@ public class WorkerTaskBoardService {
           "Добавить новую фотографию можно только к заданию в работе");
     }
 
-    BoardEntryDto entry = taskBoard.entry(warehouseId, entryId);
+    BoardEntryDto entry = taskBoard.workerEntry(warehouseId, entryId, workerId);
     UUID workerGroupId =
         current.assignments().stream()
             .filter(assignment -> workerId.equals(assignment.workerId()))
@@ -550,7 +550,7 @@ public class WorkerTaskBoardService {
 
     WorkerAccess access = access(workerId, warehouseId);
     UUID currentGroupId = access.worker().currentGroupId();
-    BoardEntryDto commandEntry = taskBoard.entry(warehouseId, entryId);
+    BoardEntryDto commandEntry = taskBoard.workerEntry(warehouseId, entryId, workerId);
     boolean individualLogistics =
         commandEntry.queuePurpose() == QueuePurpose.LOGISTICS_DRIVER;
     if (request.action() == WorkerAction.TAKE) {
@@ -768,6 +768,7 @@ public class WorkerTaskBoardService {
         entry.queuePosition(),
         entry.status().name(),
         availabilityMode(category, entry.status().name()),
+        entry.driverAudience(),
         entry.plannedDurationMinutes(),
         entry.activeStartedAt(),
         entry.activeWorkSeconds(),

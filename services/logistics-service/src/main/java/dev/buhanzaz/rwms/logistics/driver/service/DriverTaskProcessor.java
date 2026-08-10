@@ -58,7 +58,8 @@ public class DriverTaskProcessor {
                 value.description(),
                 value.queueDefinitionId(),
                 value.scheduledDate(),
-                value.priority()));
+                value.priority(),
+                value.driverAudience()));
         return;
       }
       if (work instanceof DriverTaskWorkflowStore.StatusWork value) {
@@ -76,7 +77,7 @@ public class DriverTaskProcessor {
         store.confirmCover(
             value.taskId(),
             dependencies.setCabinCoverFromTaskEvidence(
-                derivedKey("cover", value.taskId()),
+                coverKey(value),
                 value.cabinId(),
                 value.taskBoardEntryId(),
                 value.evidenceMediaId()));
@@ -135,5 +136,15 @@ public class DriverTaskProcessor {
   private static UUID derivedKey(String operation, UUID taskId) {
     return UUID.nameUUIDFromBytes(
         ("driver-task:" + operation + ":" + taskId).getBytes(StandardCharsets.UTF_8));
+  }
+
+  /**
+   * Preserves the legacy one-cabin cover key while giving each grouped cabin its own durable
+   * media command key. Media-service rejects a reused key for a different cabin.
+   */
+  private static UUID coverKey(DriverTaskWorkflowStore.CoverWork work) {
+    return work.groupedShipment()
+        ? derivedKey("cover:" + work.cabinId(), work.taskId())
+        : derivedKey("cover", work.taskId());
   }
 }

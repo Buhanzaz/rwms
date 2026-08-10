@@ -54,6 +54,10 @@ public class TaskBoardEventPayloadPolicy {
       TaskBoardAggregateType.TASK_BOARD_ENTRY_OWNER_PROOF, "ownerId",
       TaskBoardAggregateType.TASK_EVIDENCE, "evidenceId",
       TaskBoardAggregateType.GROUP_KPI_DAY, "evidenceId");
+  private static final Map<Class<?>, Set<String>> OPTIONAL_COMPATIBILITY_FIELDS =
+      Map.of(
+          BoardTaskFact.class,
+          Set.of("driverAudience", "plannedDriverWorkerId"));
 
   private final ObjectMapper objectMapper;
   private final ObjectMapper strictObjectMapper;
@@ -102,12 +106,27 @@ public class TaskBoardEventPayloadPolicy {
     }
   }
 
+  /**
+   * Requires the exact current fact shape except for audience fields omitted by board-task events
+   * stored before that compatible contract addition.
+   */
   private static void requireCanonicalRecordShape(Class<?> recordType, JsonNode payload) {
     if (!recordType.isRecord() || !payload.isObject()) {
       throw new IllegalArgumentException("Task-board event payload must use a record object");
     }
+    if (recordType == BoardTaskFact.class
+        && payload.has("plannedDriverWorkerId")
+        && !payload.has("driverAudience")) {
+      throw new IllegalArgumentException(
+          "Task-board planned driver event identity requires an audience mode");
+    }
+    Set<String> compatibilityFields =
+        OPTIONAL_COMPATIBILITY_FIELDS.getOrDefault(recordType, Set.of());
     for (var component : recordType.getRecordComponents()) {
       if (!payload.has(component.getName())) {
+        if (compatibilityFields.contains(component.getName())) {
+          continue;
+        }
         throw new IllegalArgumentException(
             "Task-board event payload misses canonical field " + component.getName());
       }

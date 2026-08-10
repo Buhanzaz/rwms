@@ -293,7 +293,7 @@ public final class DossierEnvelopeValidator {
       }
     }
 
-    Set<String> boardTask = Set.of("boardTaskId", "warehouseId", "externalTaskId", "status", "scheduledDate", "lane", "priority", "pinned", "plannedDurationMinutes", "deadlineAt", "doneAt", "deleted");
+    Set<String> boardTask = Set.of("boardTaskId", "warehouseId", "externalTaskId", "status", "scheduledDate", "lane", "priority", "pinned", "driverAudience", "plannedDriverWorkerId", "plannedDurationMinutes", "deadlineAt", "doneAt", "deleted");
     Set<String> requiredBoardTask = Set.of("boardTaskId", "warehouseId", "externalTaskId", "status", "lane", "plannedDurationMinutes", "deadlineAt", "doneAt", "deleted");
     for (String suffix : Set.of("created", "changed", "completed", "cancelled")) {
       add(result, "rwms.task-board.board-task.v1", "BOARD_TASK", SubjectKind.NONE, boardTask, requiredBoardTask, "boardTaskId", null, "task-board.board-task." + suffix + ".v1");

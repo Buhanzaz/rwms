@@ -26,7 +26,10 @@ import { LogisticsReturnsPage } from "@/features/logistics/logistics-returns-pag
 import { LogisticsShipmentsPage } from "@/features/logistics/logistics-shipments-page"
 import { LogisticsOrderTasksPage } from "@/features/logistics/logistics-order-tasks-page"
 import { WarehouseTransfersPage } from "@/features/logistics/warehouse-transfers/warehouse-transfers-page"
-import { DriverBoardPage } from "@/features/logistics/driver-board"
+import {
+  DriverBoardPage,
+  LogisticsBoardPage,
+} from "@/features/logistics/driver-board"
 import { LogisticsSettingsPage } from "@/features/settings/logistics"
 import { OrdersRoutes } from "@/features/orders/orders-routes"
 import { ClientsRoutes } from "@/features/clients/clients-routes"
@@ -62,9 +65,14 @@ const pages: PageConfig[] = [
   },
   {
     path: "/logistics/tasks",
-    title: "Перемещение",
+    title: "Перемещения",
     description:
       "Текущая и плановая очередь перемещений, загрузка ремонтных мест и капитальные ремонты.",
+  },
+  {
+    path: "/logistics/board",
+    title: "Доска логистики",
+    description: "Отгрузки и возвраты по датам в личных очередях водителей.",
   },
   {
     path: "/logistics/returns",
@@ -269,6 +277,7 @@ function AppLayout() {
               <Route path="/task-board" element={<TaskBoardPage />} />
               <Route path="/acceptance" element={<AcceptancePage />} />
               <Route path="/logistics/tasks" element={<DriverBoardPage />} />
+              <Route path="/logistics/board" element={<LogisticsBoardPage />} />
               <Route
                 path="/logistics/order-tasks"
                 element={<LogisticsOrderTasksPage />}
@@ -330,6 +339,7 @@ function AppLayout() {
                       "/task-board",
                       "/acceptance",
                       "/logistics/tasks",
+                      "/logistics/board",
                       "/logistics/order-tasks",
                       "/logistics/returns",
                       "/logistics/shipments",

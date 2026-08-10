@@ -274,6 +274,24 @@ Every stateful service owns one PostgreSQL database. Cross-database foreign
 keys, joins, shared tables, shared repositories, shared JPA entities and shared
 mutable domain models are forbidden.
 
+## Android Download-Site Ownership
+
+- `worker-download-site/` is the sole download surface for WorkerApp from
+  `worker-app/` (`dev.buhanzaz.rwms.worker`). It publishes only WorkerApp
+  release metadata and APKs. Its `release.json` is the rendered release source;
+  a pending manifest must not expose a download link.
+- `manager-download-site/` is the separate download surface for ManagerApp from
+  `app/` (`dev.buhanzaz.rwms.manager`). It publishes only ManagerApp release
+  metadata and APKs.
+- Never place, link, mirror or describe a WorkerApp APK in
+  `manager-download-site/`, or a ManagerApp APK in `worker-download-site/`.
+  Do not use the panel or either Android app as a release-file host.
+- Each site is deployed independently. Before an authorized publish, identify
+  the exact source revision, reviewed APK, immutable public artifact URL,
+  package/version/signing identity and SHA-256 for that application's own
+  download site. A WorkerApp public URL does not exist until such a release is
+  actually published and verified.
+
 ## Domain Ownership
 
 | Flow                                                                                 | Owner                                                            |
@@ -394,12 +412,13 @@ editing.
 - Documentation-only change: validate links/references and run whitespace or
   formatting checks available in the repository.
 - Android or Android-consumed contract change: run affected unit/contract
-  tests, build the exact APK and update `/download`. Before claiming end-to-end
-  validation, install that APK on an emulator or device, authenticate against
-  the intended public gateway and verify the first workspace request plus the
-  changed flow. Capture a UI tree or screenshot and filtered logcat. If the
-  gateway or credentials are unavailable, report the blocker and do not claim
-  end-to-end validation.
+  tests, build the exact APK and update only its owned download site:
+  `worker-download-site/` for WorkerApp or `manager-download-site/` for
+  ManagerApp. Before claiming end-to-end validation, install that APK on an
+  emulator or device, authenticate against the intended public gateway and
+  verify the first workspace request plus the changed flow. Capture a UI tree
+  or screenshot and filtered logcat. If the gateway or credentials are
+  unavailable, report the blocker and do not claim end-to-end validation.
 
 Use full Testcontainers, browser automation, Kafka outage/replay or
 cross-service suites when risk requires them, focused checks reveal a wider
@@ -411,8 +430,26 @@ Use one primary agent by default. Additional agents are allowed only for
 concrete parallel coding lanes with explicit, non-overlapping file ownership,
 frozen contracts and independent focused verification. Do not create separate
 discovery, planning, documentation, reviewer, status or QA agents, except for
-the required read-only Luna web UI verification agent below. Additional agents
-must not create their own subagents.
+the required read-only Luna web UI verification agent below and the lightweight
+operational delegation described next. Additional agents must not create their
+own subagents.
+
+### Lightweight Operational Delegation To Luna
+
+For a bounded, low-risk operational action, start a separate
+`gpt-5.6-luna` agent instead of consuming primary-agent context. This includes
+restarting or starting an already understood service, running a known focused
+command, collecting status or logs, and moving a known file when the source and
+destination are explicit. Give Luna the exact command or file operation,
+expected result, permitted scope and any required verification.
+
+This delegation does not transfer product decisions or safety authority. The
+primary agent must retain actions that change code or contracts, resolve
+conflicts, touch protected dirty files, choose runtime targets, perform
+destructive operations, handle secrets or external writes, or require
+investigation beyond the specified operation. Luna reports the raw command
+output and changed paths; the primary agent validates the result before
+proceeding.
 
 ### Web UI Verification With Luna
 

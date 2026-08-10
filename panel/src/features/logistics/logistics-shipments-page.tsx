@@ -405,18 +405,21 @@ export function LogisticsShipmentsPage() {
     mutationFn: ({
       document,
       driverSnapshot,
+      driverWorkerId,
       scheduledDate,
     }: {
       document: ShipmentDocument
       driverSnapshot: string
+      driverWorkerId: string | null
       scheduledDate: string
     }) => {
-      const signature = `schedule:${document.id}:${document.version}:${driverSnapshot}:${scheduledDate}`
+      const signature = `schedule:${document.id}:${document.version}:${driverWorkerId ?? "unassigned"}:${driverSnapshot}:${scheduledDate}`
       return replaceShipmentPlan({
         accessToken: accessToken!,
         documentId: document.id,
         expectedVersion: document.version,
         driverSnapshot,
+        driverWorkerId,
         scheduledDate,
         idempotencyKey: keyFor(signature),
       })
@@ -430,7 +433,7 @@ export function LogisticsShipmentsPage() {
     onError: (cause, variables) => {
       if (cause instanceof ApiError && cause.status === 409) {
         commandKeys.current.delete(
-          `schedule:${variables.document.id}:${variables.document.version}:${variables.driverSnapshot}:${variables.scheduledDate}`
+          `schedule:${variables.document.id}:${variables.document.version}:${variables.driverWorkerId ?? "unassigned"}:${variables.driverSnapshot}:${variables.scheduledDate}`
         )
         void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
       }
@@ -474,12 +477,13 @@ export function LogisticsShipmentsPage() {
         throw new Error("Для отгрузки не указан водитель")
       }
       const scheduledDate = new Date().toISOString().slice(0, 10)
-      const planSignature = `schedule:${shipment.id}:${shipment.version}:${shipment.driverSnapshot}:${scheduledDate}`
+      const planSignature = `schedule:${shipment.id}:${shipment.version}:${shipment.driverWorkerId ?? "unassigned"}:${shipment.driverSnapshot}:${scheduledDate}`
       const planned = await replaceShipmentPlan({
         accessToken: accessToken!,
         documentId: shipment.id,
         expectedVersion: shipment.version,
         driverSnapshot: shipment.driverSnapshot,
+        driverWorkerId: shipment.driverWorkerId,
         scheduledDate,
         idempotencyKey: keyFor(planSignature),
       })
@@ -986,13 +990,14 @@ export function LogisticsShipmentsPage() {
           pending={
             confirmMutation.isPending || rescheduleAndConfirmMutation.isPending
           }
-          onOpenChange={(open) =>
-            !open && setShipmentDateDecisionTarget(null)
-          }
+          onOpenChange={(open) => !open && setShipmentDateDecisionTarget(null)}
           onKeepDate={() => {
             const target = shipmentDateDecisionTarget
             setShipmentDateDecisionTarget(null)
-            confirmMutation.mutate({ shipment: target, keepScheduledDate: true })
+            confirmMutation.mutate({
+              shipment: target,
+              keepScheduledDate: true,
+            })
           }}
           onUseToday={() =>
             rescheduleAndConfirmMutation.mutate(shipmentDateDecisionTarget)
@@ -1050,8 +1055,7 @@ function ShipmentDateDecisionDialog({
         <DialogHeader>
           <DialogTitle>Дата отгрузки отличается</DialogTitle>
           <DialogDescription>
-            Назначенная дата: {formatDate(shipment.scheduledDate!)}. Сегодня
-            {" "}
+            Назначенная дата: {formatDate(shipment.scheduledDate!)}. Сегодня{" "}
             {formatDate(new Date().toISOString().slice(0, 10))}. Выберите, как
             сохранить дату задания.
           </DialogDescription>
@@ -1087,7 +1091,11 @@ function ShipmentScheduleDialog({
   futureDateWarning: boolean
   pending: boolean
   onOpenChange: (open: boolean) => void
-  onSubmit: (input: { driverSnapshot: string; scheduledDate: string }) => void
+  onSubmit: (input: {
+    driverSnapshot: string
+    driverWorkerId: string | null
+    scheduledDate: string
+  }) => void
 }) {
   const [driver, setDriver] = useState<RepairTaskWorkerSnapshotDto | null>(null)
   const [scheduledDate, setScheduledDate] = useState(
@@ -1108,7 +1116,11 @@ function ShipmentScheduleDialog({
       setError("Укажите дату отгрузки.")
       return
     }
-    onSubmit({ driverSnapshot, scheduledDate })
+    onSubmit({
+      driverSnapshot,
+      driverWorkerId: driver?.id ?? document.driverWorkerId,
+      scheduledDate,
+    })
   }
 
   return (

@@ -51,6 +51,11 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -150,6 +155,9 @@ const kindLabels: Record<DriverTaskKind, string> = {
   REMOVE_FROM_REPAIR: "Вывезти после ремонта",
   CAPITAL_TO_PRODUCTION: "Переместить на производство",
   GENERAL_MOVEMENT: "Свободное перемещение",
+  SHIPMENT: "Отгрузка",
+  RETURN: "Возврат",
+  TRANSFER: "Перемещение",
 }
 
 type RepairPlaceDisplayStatus = {
@@ -240,6 +248,31 @@ function isTaskMovable(card: DriverBoardCard) {
   return card.taskStatus === "ACTIVE" && card.entryStatus === "WAITING"
 }
 
+function isMovementTask(card: DriverBoardCard) {
+  return card.kind !== "SHIPMENT" && card.kind !== "RETURN"
+}
+
+function queueTargetIndex(
+  allCards: DriverBoardCard[],
+  visibleCards: DriverBoardCard[],
+  visibleIndex: number
+) {
+  if (visibleCards.length === 0) return allCards.length
+  const boundedIndex = Math.max(0, Math.min(visibleIndex, visibleCards.length))
+  if (boundedIndex < visibleCards.length) {
+    const targetCard = visibleCards[boundedIndex]
+    const targetIndex = allCards.findIndex(
+      (card) => card.externalTaskId === targetCard?.externalTaskId
+    )
+    return targetIndex < 0 ? allCards.length : targetIndex
+  }
+  const finalCard = visibleCards.at(-1)
+  const finalIndex = allCards.findIndex(
+    (card) => card.externalTaskId === finalCard?.externalTaskId
+  )
+  return finalIndex < 0 ? allCards.length : finalIndex + 1
+}
+
 function normalizeCardPositions(cards: DriverBoardCard[]) {
   return cards.map((card, position) =>
     card.position === position ? card : { ...card, position }
@@ -255,10 +288,10 @@ function moveCardOptimistically(
   board: DriverBoard,
   { item, targetLane, targetDate, targetIndex }: DriverBoardMove
 ): DriverBoard {
-  const current = [...board.current]
+  const current = orderCards(board.current)
   const dates = board.dates.map((column) => ({
     ...column,
-    tasks: [...column.tasks],
+    tasks: orderCards(column.tasks),
   }))
   const source =
     item.lane === "CURRENT"
@@ -316,6 +349,11 @@ function pendingCapitalCard(schedule: CapitalRepairSchedule): DriverBoardCard {
     taskText: "Переместить бытовку на производство",
     unitNumber: schedule.repair.unitNumber,
     kind: "CAPITAL_TO_PRODUCTION",
+    driverAudience: {
+      mode: "UNASSIGNED",
+      workerId: null,
+      workerName: null,
+    },
     workflowState: "REGISTERING",
     taskStatus: "ACTIVE",
     entryStatus: "WAITING",
@@ -388,26 +426,54 @@ function resolveOptimisticCapitalSchedule(
   }
 }
 
-function DriverTaskCardContent({
+function DriverTaskDetailsCard({
   card,
+  className,
   dragHandle,
   onPin,
   pinDisabled = false,
 }: {
   card: DriverBoardCard
+  className?: string
   dragHandle?: ReactNode
   onPin?: () => void
   pinDisabled?: boolean
 }) {
+  const [expanded, setExpanded] = useState(true)
+
   return (
-    <>
-      <CardHeader>
-        <CardTitle className="line-clamp-2 pr-10">{taskTitle(card)}</CardTitle>
-        <CardDescription>
-          Бытовка {card.unitNumber || "без номера"}
-        </CardDescription>
-        {dragHandle || onPin ? (
+    <Collapsible open={expanded} onOpenChange={setExpanded} asChild>
+      <Card size="sm" className={className}>
+        <CardHeader>
+          <CardTitle className="line-clamp-2 pr-10">
+            {taskTitle(card)}
+          </CardTitle>
+          <CardDescription>
+            Бытовка {card.unitNumber || "без номера"}
+          </CardDescription>
           <CardAction className="flex items-center gap-1">
+            <CollapsibleTrigger asChild>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                aria-label={
+                  expanded
+                    ? `Свернуть задание бытовки ${card.unitNumber || "без номера"}`
+                    : `Развернуть задание бытовки ${card.unitNumber || "без номера"}`
+                }
+                onPointerDown={(event) => event.stopPropagation()}
+                onKeyDown={(event) => event.stopPropagation()}
+              >
+                <HugeiconsIcon
+                  icon={ChevronDownIcon}
+                  className={cn(
+                    "transition-transform",
+                    expanded && "rotate-180"
+                  )}
+                />
+              </Button>
+            </CollapsibleTrigger>
             {onPin ? (
               <Button
                 type="button"
@@ -432,28 +498,37 @@ function DriverTaskCardContent({
             ) : null}
             {dragHandle}
           </CardAction>
-        ) : null}
-      </CardHeader>
-      <CardContent className="flex flex-col gap-2">
-        <p className="text-xs text-muted-foreground">
-          {taskKindLabel(card.kind)}
-        </p>
-        {card.taskText?.trim() && card.taskText.trim() !== card.title.trim() ? (
-          <p className="text-sm whitespace-pre-wrap">{card.taskText.trim()}</p>
-        ) : null}
-        <div className="flex flex-wrap gap-1">
-          <Badge
-            variant={card.entryStatus === "IN_PROGRESS" ? "default" : "outline"}
-          >
-            {entryStatusLabels[card.entryStatus]}
-          </Badge>
-          <Badge variant={card.priority <= 2 ? "default" : "secondary"}>
-            Приоритет {card.priority}
-          </Badge>
-          {card.pinned ? <Badge variant="secondary">Закреплено</Badge> : null}
-        </div>
-      </CardContent>
-    </>
+        </CardHeader>
+        <CollapsibleContent asChild>
+          <CardContent className="flex flex-col gap-2">
+            <p className="text-xs text-muted-foreground">
+              {taskKindLabel(card.kind)}
+            </p>
+            {card.taskText?.trim() &&
+            card.taskText.trim() !== card.title.trim() ? (
+              <p className="text-sm whitespace-pre-wrap">
+                {card.taskText.trim()}
+              </p>
+            ) : null}
+            <div className="flex flex-wrap gap-1">
+              <Badge
+                variant={
+                  card.entryStatus === "IN_PROGRESS" ? "default" : "outline"
+                }
+              >
+                {entryStatusLabels[card.entryStatus]}
+              </Badge>
+              <Badge variant={card.priority <= 2 ? "default" : "secondary"}>
+                Приоритет {card.priority}
+              </Badge>
+              {card.pinned ? (
+                <Badge variant="secondary">Закреплено</Badge>
+              ) : null}
+            </div>
+          </CardContent>
+        </CollapsibleContent>
+      </Card>
+    </Collapsible>
   )
 }
 
@@ -536,21 +611,20 @@ function CurrentTaskCard({
       {...listeners}
       aria-label={`Переместить задание бытовки ${card.unitNumber || "без номера"}`}
     >
-      <Card size="sm" className={taskCardClassName(card)}>
-        <DriverTaskCardContent
-          card={card}
-          onPin={() => onPin(card)}
-          pinDisabled={disabled}
-          dragHandle={
-            <span
-              className="flex size-8 items-center justify-center text-muted-foreground"
-              aria-hidden="true"
-            >
-              <HugeiconsIcon icon={DragDropVerticalIcon} />
-            </span>
-          }
-        />
-      </Card>
+      <DriverTaskDetailsCard
+        card={card}
+        className={taskCardClassName(card)}
+        onPin={() => onPin(card)}
+        pinDisabled={disabled}
+        dragHandle={
+          <span
+            className="flex size-8 items-center justify-center text-muted-foreground"
+            aria-hidden="true"
+          >
+            <HugeiconsIcon icon={DragDropVerticalIcon} />
+          </span>
+        }
+      />
     </div>
   )
 }
@@ -606,21 +680,20 @@ function ScheduledTaskCard({
       {...listeners}
       aria-label={`Переместить задание бытовки ${card.unitNumber || "без номера"}`}
     >
-      <Card size="sm" className={taskCardClassName(card)}>
-        <DriverTaskCardContent
-          card={card}
-          onPin={() => onPin(card)}
-          pinDisabled={disabled}
-          dragHandle={
-            <span
-              className="flex size-8 items-center justify-center text-muted-foreground"
-              aria-hidden="true"
-            >
-              <HugeiconsIcon icon={DragDropVerticalIcon} />
-            </span>
-          }
-        />
-      </Card>
+      <DriverTaskDetailsCard
+        card={card}
+        className={taskCardClassName(card)}
+        onPin={() => onPin(card)}
+        pinDisabled={disabled}
+        dragHandle={
+          <span
+            className="flex size-8 items-center justify-center text-muted-foreground"
+            aria-hidden="true"
+          >
+            <HugeiconsIcon icon={DragDropVerticalIcon} />
+          </span>
+        }
+      />
     </div>
   )
 }
@@ -673,15 +746,18 @@ function InsertionSlot({
 
 function DateColumn({
   date,
+  allTasks,
   tasks,
   disabled,
   onPin,
 }: {
   date: string
+  allTasks: DriverBoardCard[]
   tasks: DriverBoardCard[]
   disabled: boolean
   onPin: (card: DriverBoardCard) => void
 }) {
+  const orderedTasks = orderCards(tasks)
   const { setNodeRef, isOver } = useDroppable({
     id: `driver-date:${date}`,
     disabled,
@@ -701,34 +777,39 @@ function DateColumn({
         <h2 className="font-heading text-sm font-medium capitalize">
           {formatDate(date)}
         </h2>
-        <Badge variant="outline">{tasks.length}</Badge>
+        <Badge variant="outline">{orderedTasks.length}</Badge>
       </header>
       <SortableContext
-        items={tasks.map((card) => `driver-task:${card.externalTaskId}`)}
+        items={orderedTasks.map((card) => `driver-task:${card.externalTaskId}`)}
         strategy={verticalListSortingStrategy}
       >
-        {tasks.map((card, index) => (
-          <div key={card.externalTaskId}>
-            <InsertionSlot
-              lane="SCHEDULED"
-              date={date}
-              index={index}
-              disabled={disabled}
-            />
-            <ScheduledTaskCard
-              card={card}
-              date={date}
-              index={index}
-              disabled={disabled}
-              onPin={onPin}
-            />
-          </div>
-        ))}
+        {orderedTasks.map((card, visibleIndex) => {
+          const globalIndex = allTasks.findIndex(
+            (candidate) => candidate.externalTaskId === card.externalTaskId
+          )
+          return (
+            <div key={card.externalTaskId}>
+              <InsertionSlot
+                lane="SCHEDULED"
+                date={date}
+                index={queueTargetIndex(allTasks, orderedTasks, visibleIndex)}
+                disabled={disabled}
+              />
+              <ScheduledTaskCard
+                card={card}
+                date={date}
+                index={globalIndex}
+                disabled={disabled}
+                onPin={onPin}
+              />
+            </div>
+          )
+        })}
       </SortableContext>
       <InsertionSlot
         lane="SCHEDULED"
         date={date}
-        index={tasks.length}
+        index={queueTargetIndex(allTasks, orderedTasks, orderedTasks.length)}
         disabled={disabled}
       />
     </section>
@@ -855,7 +936,8 @@ function CurrentColumn({
   onPin: (card: DriverBoardCard) => void
 }) {
   const currentDate = board.currentDate
-  const currentTasks = orderCards(board.current)
+  const allCurrentTasks = orderCards(board.current)
+  const currentTasks = allCurrentTasks.filter(isMovementTask)
   const physicalRepairPlaces = board.repairPlaces.filter(isPhysicalRepairPlace)
   const [repairPlacesExpanded, setRepairPlacesExpanded] = useState(false)
   const { setNodeRef, isOver } = useDroppable({
@@ -865,7 +947,11 @@ function CurrentColumn({
       type: "current",
       lane: "CURRENT",
       date: currentDate,
-      index: currentTasks.length,
+      index: queueTargetIndex(
+        allCurrentTasks,
+        currentTasks,
+        currentTasks.length
+      ),
     },
   })
 
@@ -972,34 +1058,48 @@ function CurrentColumn({
         >
           {currentTasks.length > 0 ? (
             <div className="flex flex-col gap-2">
-              {currentTasks.map((card, index) => (
-                <div key={card.externalTaskId}>
-                  <InsertionSlot
-                    lane="CURRENT"
-                    date={currentDate}
-                    index={index}
-                    disabled={disabled}
-                  />
-                  <CurrentTaskCard
-                    card={card}
-                    date={currentDate}
-                    index={index}
-                    disabled={disabled}
-                    onPin={onPin}
-                  />
-                </div>
-              ))}
+              {currentTasks.map((card, visibleIndex) => {
+                const globalIndex = allCurrentTasks.findIndex(
+                  (candidate) =>
+                    candidate.externalTaskId === card.externalTaskId
+                )
+                return (
+                  <div key={card.externalTaskId}>
+                    <InsertionSlot
+                      lane="CURRENT"
+                      date={currentDate}
+                      index={queueTargetIndex(
+                        allCurrentTasks,
+                        currentTasks,
+                        visibleIndex
+                      )}
+                      disabled={disabled}
+                    />
+                    <CurrentTaskCard
+                      card={card}
+                      date={currentDate}
+                      index={globalIndex}
+                      disabled={disabled}
+                      onPin={onPin}
+                    />
+                  </div>
+                )
+              })}
               <InsertionSlot
                 lane="CURRENT"
                 date={currentDate}
-                index={currentTasks.length}
+                index={queueTargetIndex(
+                  allCurrentTasks,
+                  currentTasks,
+                  currentTasks.length
+                )}
                 disabled={disabled}
               />
             </div>
           ) : (
             <div className="flex h-full min-h-40 flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
               <HugeiconsIcon icon={TruckDeliveryIcon} className="size-6" />
-              Водитель ожидает следующее задание
+              Общая очередь перемещений пуста
             </div>
           )}
         </SortableContext>
@@ -1093,7 +1193,15 @@ function DragCardOverlay({ item }: { item: DriverDragItem }) {
         taskCardClassName(item.card)
       )}
     >
-      <DriverTaskCardContent card={item.card} />
+      <CardHeader>
+        <CardTitle>{taskTitle(item.card)}</CardTitle>
+        <CardDescription>
+          Бытовка {item.card.unitNumber || "без номера"}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Badge variant="outline">{taskKindLabel(item.card.kind)}</Badge>
+      </CardContent>
     </Card>
   )
 }
@@ -1366,6 +1474,7 @@ export function DriverBoardPage() {
     null
   )
   const [manualMovementOpen, setManualMovementOpen] = useState(false)
+  const [selectedScheduledDate, setSelectedScheduledDate] = useState("")
   const [commandError, setCommandError] = useState<unknown>(null)
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -1565,13 +1674,23 @@ export function DriverBoardPage() {
   const nonEmptyDates = useMemo(
     () =>
       board?.dates
-        .filter((column) => column.tasks.length > 0)
         .map((column) => ({
           ...column,
-          tasks: orderCards(column.tasks),
+          allTasks: orderCards(column.tasks),
+          tasks: orderCards(column.tasks.filter(isMovementTask)),
         }))
+        .filter((column) => column.tasks.length > 0)
         .sort((left, right) => left.date.localeCompare(right.date)) ?? [],
     [board?.dates]
+  )
+  const displayedDates = useMemo(
+    () =>
+      selectedScheduledDate
+        ? nonEmptyDates.filter(
+            (column) => column.date === selectedScheduledDate
+          )
+        : nonEmptyDates,
+    [nonEmptyDates, selectedScheduledDate]
   )
   const disabled =
     !canEdit ||
@@ -1817,7 +1936,31 @@ export function DriverBoardPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
-      <div className="flex items-center justify-end gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <label
+            htmlFor="driver-board-date-filter"
+            className="text-sm font-medium"
+          >
+            Дата заданий
+          </label>
+          <Input
+            id="driver-board-date-filter"
+            type="date"
+            className="w-auto"
+            value={selectedScheduledDate}
+            onChange={(event) => setSelectedScheduledDate(event.target.value)}
+          />
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={!selectedScheduledDate}
+            onClick={() => setSelectedScheduledDate("")}
+          >
+            Все даты
+          </Button>
+        </div>
         {canEdit ? (
           <Button
             type="button"
@@ -1858,10 +2001,11 @@ export function DriverBoardPage() {
             aria-label="Запланированные задания по датам"
           >
             <div className="flex min-h-full min-w-full items-stretch gap-3">
-              {nonEmptyDates.map((column) => (
+              {displayedDates.map((column) => (
                 <DateColumn
                   key={column.date}
                   date={column.date}
+                  allTasks={column.allTasks}
                   tasks={column.tasks}
                   disabled={disabled}
                   onPin={(card) => pinMutation.mutate(card)}

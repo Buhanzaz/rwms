@@ -20,6 +20,7 @@ const document: ReturnDocument = {
   destinationWarehouseId: null,
   partySnapshot: null,
   driverSnapshot: "Иванов Иван",
+  driverWorkerId: null,
   clientId: "33333333-3333-4333-8333-333333333333",
   equipmentMovementTaskId: null,
   scheduledDate: "2026-07-29",

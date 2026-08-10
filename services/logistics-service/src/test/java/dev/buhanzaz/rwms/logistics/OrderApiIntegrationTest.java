@@ -85,6 +85,10 @@ class OrderApiIntegrationTest {
       UUID.fromString("00000000-0000-0000-0000-000000009302");
   private static final UUID EQUIPMENT =
       UUID.fromString("00000000-0000-0000-0000-000000009401");
+  private static final UUID DRIVER_QUEUE_DEFINITION =
+      UUID.fromString("00000000-0000-0000-0000-000000009501");
+  private static final UUID DRIVER_QUEUE_CATEGORY =
+      UUID.fromString("00000000-0000-0000-0000-000000009502");
   private static final AtomicInteger NEXT_TEST_PHONE = new AtomicInteger(1_000_000);
 
   @Container
@@ -112,6 +116,8 @@ class OrderApiIntegrationTest {
     jdbc.execute(
         """
         truncate table
+          shipment_task_settings,
+          driver_logistics_task,
           logistics_warehouse_admission_intent,
           warehouse_operation_mark_outbox,
           rental_order_command_receipt,
@@ -126,6 +132,20 @@ class OrderApiIntegrationTest {
     releaseAllReceipts.clear();
     equipmentReservations.clear();
     reset(dependencies);
+    when(dependencies.readWarehouseDriverQueue(WAREHOUSE_1))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseDriverQueue(
+                WAREHOUSE_1, DRIVER_QUEUE_DEFINITION, DRIVER_QUEUE_CATEGORY));
+    when(dependencies.readRentalItemSnapshot(any()))
+        .thenAnswer(
+            invocation ->
+                new LogisticsDependencyGateway.RentalItemSnapshot(
+                    invocation.getArgument(0),
+                    7,
+                    WAREHOUSE_1,
+                    "БТ-QA",
+                    "FREE",
+                    List.of()));
     when(dependencies.productionReady()).thenReturn(true);
     when(
             dependencies.warehouseAdmission(
@@ -876,6 +896,110 @@ class OrderApiIntegrationTest {
                 orderId,
                 UNIT_1))
         .isEqualTo(firstDate.plusMonths(3).toString());
+  }
+
+  @Test
+  void savedOrderShipmentRejectsMoreCabinsThanTheWarehouseTaskCapBeforeCreatingTheDocument()
+      throws Exception {
+    LocalDate shipmentDate = LocalDate.parse(futureDate(1));
+    UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент лимита отгрузки");
+    selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
+    addUnit(orderId, MANAGER_1, UNIT_1, 1);
+    addUnit(orderId, MANAGER_1, UNIT_2, 2);
+    setRentalTerms(orderId, MANAGER_1, 3, Map.of(UNIT_1, 2L, UNIT_2, 3L));
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/save", orderId)
+                .param("expectedVersion", "4")
+                .header("Idempotency-Key", UUID.randomUUID())
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.version").value(5));
+    jdbc.update(
+        """
+        insert into shipment_task_settings(
+          warehouse_id, version, max_cabins_per_shipment_task, updated_by_subject_id, updated_at)
+        values (?, 0, 1, ?, clock_timestamp())
+        """,
+        WAREHOUSE_1,
+        MANAGER_1);
+
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/shipments", orderId)
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {
+                      "expectedVersion": 5,
+                      "driverSnapshot": "Водитель",
+                      "scheduledDate": "%s",
+                      "unitIds": ["%s", "%s"]
+                    }
+                    """
+                        .formatted(shipmentDate, UNIT_1, UNIT_2))
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("LOGISTICS_CONFLICT"))
+        .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("больше 1 бытовок")));
+
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_document where rental_order_id=?", Long.class, orderId))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from warehouse_operation_mark_outbox where operation_id=?",
+                Long.class,
+                orderId))
+        .isZero();
+  }
+
+  @Test
+  void warehouseShipmentTaskSettingsUseReadManageScopesAndOptimisticVersioning()
+      throws Exception {
+    mvc.perform(
+            get("/api/logistics/v1/warehouses/{warehouseId}/shipment-task-settings", WAREHOUSE_1)
+                .with(admin()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.warehouseId").value(WAREHOUSE_1.toString()))
+        .andExpect(jsonPath("$.version").value(0))
+        .andExpect(jsonPath("$.maxCabinsPerShipmentTask").value(1))
+        .andExpect(jsonPath("$.updatedBy").value(ADMIN.toString()));
+
+    mvc.perform(
+            put("/api/logistics/v1/warehouses/{warehouseId}/shipment-task-settings", WAREHOUSE_1)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":0,\"maxCabinsPerShipmentTask\":3}")
+                .with(admin()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.warehouseId").value(WAREHOUSE_1.toString()))
+        .andExpect(jsonPath("$.version").value(1))
+        .andExpect(jsonPath("$.maxCabinsPerShipmentTask").value(3));
+
+    mvc.perform(
+            get("/api/logistics/v1/warehouses/{warehouseId}/shipment-task-settings", WAREHOUSE_1)
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.maxCabinsPerShipmentTask").value(3));
+    mvc.perform(
+            put("/api/logistics/v1/warehouses/{warehouseId}/shipment-task-settings", WAREHOUSE_1)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1,\"maxCabinsPerShipmentTask\":4}")
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isForbidden());
+    mvc.perform(
+            put("/api/logistics/v1/warehouses/{warehouseId}/shipment-task-settings", WAREHOUSE_1)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":0,\"maxCabinsPerShipmentTask\":4}")
+                .with(admin()))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("LOGISTICS_CONFLICT"));
+    mvc.perform(
+            put("/api/logistics/v1/warehouses/{warehouseId}/shipment-task-settings", WAREHOUSE_1)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1,\"maxCabinsPerShipmentTask\":101}")
+                .with(admin()))
+        .andExpect(status().isBadRequest());
   }
 
   @Test

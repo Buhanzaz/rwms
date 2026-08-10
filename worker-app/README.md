@@ -18,6 +18,13 @@ Russian version: [README.ru.md](README.ru.md).
 - The worker principal and the server-issued worker context define visible
   assignments, warehouse scope, groups, and permissions. Client filtering or an
   offline cache is not authorization.
+- The application and round launcher icon resolve to the adaptive
+  [`ic_launcher_worker.xml`](app/src/main/res/mipmap-anydpi-v26/ic_launcher_worker.xml)
+  resource on Android 8+. Its
+  [full-bleed artwork](app/src/main/res/drawable-nodpi/ic_launcher_worker_artwork.png)
+  contains no baked-in mask or outer white margin, so the operating system alone
+  applies the final circle or squircle. Earlier Android versions use the
+  full-bleed bitmap alias under `mipmap-anydpi`.
 
 ### Transport contract gate
 
@@ -43,14 +50,27 @@ projections, Problem Details, media payloads, and every other DTO.
 
 The root menu contains Work, Downloads, and Profile. Work displays only the
 categories, groups, assignments, KPI palette, task identifiers, materials,
-works, comments, and media references supplied in the worker feed. The task
-screen captures a work result and its JPEG evidence; it does not decide a task
-transition locally.
+works, comments, and media references supplied in the worker feed. Task-board
+filters logistics work before it reaches the device: an assigned driver sees
+their own task, while every qualified warehouse driver can see an unclaimed
+warehouse-shared movement. Unassigned dispatcher work is not exposed.
 
-The UI is adaptive: group columns are sequential on a narrow screen and can be
-shown together on a wider screen. Server-provided KPI ranges determine the
-colors; no local green/yellow/red policy is invented. Worker-facing work data
-does not expose price/cost fields.
+The server-issued driver audience splits a driver's work into two independently
+collapsible tables. “Logistics” contains only work assigned to the authenticated
+driver; “Movements” contains warehouse-shared driver work. After another driver
+takes a shared movement it disappears from other feeds, because task-board —
+not the client — owns that visibility transition. Other group-bound roles and
+qualification-only categories keep their own panels; queues and task cards can
+also collapse. Panels stack on a narrow screen and use a two-pane horizontal
+board from 720 dp. A card shows cabin, scheduled date and authoritative elapsed
+time; its expanded state adds status, optional budget timer and photo count.
+“Photos and details” opens the existing task detail, CameraX evidence capture
+and durable upload flow. The Downloads screen remains the recovery surface for
+failed or pending uploads and explicit retry. The task screen records a work
+result and JPEG evidence but never decides a task transition locally.
+
+Server-provided KPI ranges determine colors; no local green/yellow/red policy
+is invented. Worker-facing work data does not expose price/cost fields.
 
 ## Offline store, outbox, sync, and realtime
 
@@ -130,6 +150,9 @@ flow; a successful build or an HTTP 200 alone is insufficient.
 
 ## Known limitations
 
+- The current Room projection does not persist qualification display names or
+  queue-to-worker-class bindings. A qualification-only panel therefore uses the
+  authoritative category name rather than guessing a role label.
 - The worker SSE endpoint currently treats a new subscription as a fresh
   invalidation and does not implement a usable 'Last-Event-ID' replay path.
   Foreground polling reduces the stale window but is not event replay.

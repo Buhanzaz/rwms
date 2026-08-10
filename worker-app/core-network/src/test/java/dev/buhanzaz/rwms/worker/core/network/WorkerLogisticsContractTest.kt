@@ -38,6 +38,45 @@ class WorkerLogisticsContractTest {
     }
 
     @Test
+    fun `worker feed entry decodes server owned driver audience`() {
+        val entry = json.decodeFromString<WorkerFeedEntryDto>(
+            """
+            {
+              "entryId":"entry",
+              "version":4,
+              "taskId":"task",
+              "routeIndex":0,
+              "title":"Отгрузить бытовку",
+              "unitNumber":"БТ-1",
+              "taskText":null,
+              "scheduledDate":"2026-08-10",
+              "deadlineAt":null,
+              "priority":3,
+              "queuePosition":0,
+              "status":"WAITING",
+              "availabilityMode":"AVAILABLE",
+              "plannedDurationMinutes":null,
+              "activeStartedAt":null,
+              "activeWorkSeconds":0,
+              "assignments":[],
+              "readyEvidenceCount":0,
+              "resultPhotoMinCount":1,
+              "driverAudience":{
+                "mode":"ASSIGNED_DRIVER",
+                "workerId":"11111111-1111-1111-1111-111111111111",
+                "workerName":"Водитель"
+              },
+              "timerSnapshot":null
+            }
+            """.trimIndent(),
+        )
+
+        assertThat(entry.driverAudience?.mode).isEqualTo("ASSIGNED_DRIVER")
+        assertThat(entry.driverAudience?.workerId)
+            .isEqualTo("11111111-1111-1111-1111-111111111111")
+    }
+
+    @Test
     fun `complete action sends the selected ready evidence`() {
         val request = WorkerActionRequestDto(
             operationId = "operation",

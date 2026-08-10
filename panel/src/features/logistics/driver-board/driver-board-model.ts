@@ -3,6 +3,18 @@ export type DriverTaskKind =
   | "REMOVE_FROM_REPAIR"
   | "CAPITAL_TO_PRODUCTION"
   | "GENERAL_MOVEMENT"
+  | "SHIPMENT"
+  | "RETURN"
+  | "TRANSFER"
+
+export type DriverTaskAudienceMode =
+  "UNASSIGNED" | "ASSIGNED_DRIVER" | "WAREHOUSE_DRIVERS"
+
+export type DriverTaskAudience = {
+  mode: DriverTaskAudienceMode
+  workerId: string | null
+  workerName: string | null
+}
 
 export type DriverTaskWorkflowState =
   | "REGISTERING"
@@ -27,6 +39,7 @@ export type DriverBoardCard = {
   taskText: string | null
   unitNumber: string | null
   kind: DriverTaskKind | null
+  driverAudience: DriverTaskAudience
   workflowState: DriverTaskWorkflowState | null
   taskStatus: "ACTIVE" | "DONE" | "CANCELLED"
   entryStatus: DriverBoardEntryStatus

@@ -51,6 +51,7 @@ class TaskBoardWorkerExecutionService {
   private final WarehouseKpiClock kpiClock;
   private final GroupKpiEvidenceService kpiEvidence;
   private final TaskBoardQueuePositionCoordinator queuePositions;
+  private final DriverTaskAudienceService driverAudiences;
 
   TaskBoardWorkerExecutionService(
       BoardTaskRepository tasks,
@@ -67,7 +68,8 @@ class TaskBoardWorkerExecutionService {
       TaskBoardEntryOwnerProofService ownerProofs,
       WarehouseKpiClock kpiClock,
       GroupKpiEvidenceService kpiEvidence,
-      TaskBoardQueuePositionCoordinator queuePositions) {
+      TaskBoardQueuePositionCoordinator queuePositions,
+      DriverTaskAudienceService driverAudiences) {
     this.tasks = tasks;
     this.entries = entries;
     this.bindings = bindings;
@@ -83,6 +85,7 @@ class TaskBoardWorkerExecutionService {
     this.kpiClock = kpiClock;
     this.kpiEvidence = kpiEvidence;
     this.queuePositions = queuePositions;
+    this.driverAudiences = driverAudiences;
   }
 
   CancelledTaskDto cancelTask(
@@ -284,7 +287,6 @@ class TaskBoardWorkerExecutionService {
         && entry.getTask().getLane() != TaskLane.CURRENT) {
       throw new ConflictException("Водитель может взять только текущее логистическое задание");
     }
-    if (!joiningSecondary) ensureFirstAvailable(entry);
     if (request.workerGroupId() == null && request.workerId() == null)
       throw new ConflictException("Выберите группу или рабочего");
     WorkerGroup group =
@@ -321,6 +323,20 @@ class TaskBoardWorkerExecutionService {
       throw new ConflictException("Группа временно недоступна");
     }
     if (selected != null && !selected.isActive()) throw new ConflictException("Рабочий неактивен");
+    if (entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER) {
+      if (joiningSecondary) {
+        throw new ConflictException(
+            "К логистическому заданию нельзя присоединить второго водителя");
+      }
+      if (selected == null || group != null) {
+        throw new ConflictException(
+            "Логистическое задание назначается одному водителю без бригады");
+      }
+      driverAudiences.requireExecutableBy(entry, selected);
+    }
+    if (!joiningSecondary) {
+      ensureFirstAvailable(entry, selected == null ? null : selected.getId());
+    }
     WorkerGroup assignedGroup = group;
     var queueBindings =
         bindings.findAllByQueueIdOrderByBindingOrderAscIdAsc(entry.getQueue().getId());
@@ -608,7 +624,7 @@ class TaskBoardWorkerExecutionService {
 
 
 
-  private void ensureFirstAvailable(QueueEntry entry) {
+  private void ensureFirstAvailable(QueueEntry entry, UUID workerId) {
     var first =
         entries
             .findAllByQueueIdAndStatusInOrderByQueuePositionAsc(
@@ -618,6 +634,7 @@ class TaskBoardWorkerExecutionService {
                 candidate ->
                     entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER
                         ? candidate.getTask().getLane() == TaskLane.CURRENT
+                            && driverAudiences.isVisibleTo(candidate, workerId)
                         : candidate
                             .getTask()
                             .getScheduledDate()

@@ -27,10 +27,6 @@ export function assistantSearchGroupLabel(
   return filters.join(" · ") || `Подборка ${index + 1}`
 }
 
-export function assistantSearchResultKey(result: CabinSearchResult) {
-  return JSON.stringify(result)
-}
-
 export function selectionGroups(
   result: CabinSearchResult,
   selectedIds: ReadonlySet<string>

@@ -15,6 +15,12 @@ spring:
         registration:
           auth-service:
             client-secret: ${TASK_BOARD_CLIENT_SECRET:task-board-dev-secret}
+          warehouse-lifecycle-read:
+            client-secret: ${TASK_BOARD_CLIENT_SECRET:task-board-dev-secret}
+          warehouse-lifecycle-confirm:
+            client-secret: ${TASK_BOARD_CLIENT_SECRET:task-board-dev-secret}
+          warehouse-timezone-read:
+            client-secret: ${TASK_BOARD_CLIENT_SECRET:task-board-dev-secret}
         provider:
           auth-service:
             token-uri: ${AUTH_TOKEN_URI:http://localhost:9000/oauth2/token}

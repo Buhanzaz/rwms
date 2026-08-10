@@ -1628,6 +1628,38 @@ components:
     TaskLane:
       type: string
       enum: [SCHEDULED, CURRENT]
+    DriverTaskAudienceMode:
+      type: string
+      enum: [UNASSIGNED, ASSIGNED_DRIVER, WAREHOUSE_DRIVERS]
+    DriverTaskAudience:
+      type: object
+      required: [mode]
+      description: >-
+        Worker visibility for a logistics driver task. ASSIGNED_DRIVER carries
+        the exact worker identity. UNASSIGNED and WAREHOUSE_DRIVERS never carry
+        a worker identity; shared visibility narrows only to the actual assignee
+        after take.
+      properties:
+        mode: { $ref: '#/components/schemas/DriverTaskAudienceMode' }
+        workerId:
+          oneOf: [{ type: string, format: uuid }, { type: 'null' }]
+        workerName:
+          oneOf: [{ type: string, maxLength: 512 }, { type: 'null' }]
+      allOf:
+        - if:
+            properties: { mode: { const: ASSIGNED_DRIVER } }
+            required: [mode]
+          then:
+            required: [workerId]
+            properties: { workerId: { type: string, format: uuid } }
+        - if:
+            properties: { mode: { enum: [UNASSIGNED, WAREHOUSE_DRIVERS] } }
+            required: [mode]
+          then:
+            properties:
+              workerId: { type: 'null' }
+              workerName: { type: 'null' }
+      additionalProperties: false
     QueueBinding:
       type: object
       required: [id, version, workerClass, order, primary, stopTaskOnTake, participationPolicy, notifyOnPrimaryTake]
@@ -1911,7 +1943,7 @@ components:
       additionalProperties: false
     BoardEntry:
       type: object
-      required: [id, version, taskId, externalTaskId, source, taskVersion, title, unitNumber, taskStatus, scheduledDate, lane, priority, pinned, queueId, queuePurpose, routeIndex, queuePosition, entryType, status, taskText, plannedDurationMinutes, activeStartedAt, pausedAt, activeWorkSeconds, audienceSelectors, assignments, timerSnapshot]
+      required: [id, version, taskId, externalTaskId, source, taskVersion, title, unitNumber, taskStatus, scheduledDate, lane, priority, pinned, driverAudience, queueId, queuePurpose, routeIndex, queuePosition, entryType, status, taskText, plannedDurationMinutes, activeStartedAt, pausedAt, activeWorkSeconds, audienceSelectors, assignments, timerSnapshot]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64 }
@@ -1926,6 +1958,13 @@ components:
         lane: { $ref: '#/components/schemas/TaskLane' }
         priority: { type: integer, minimum: 1, maximum: 5 }
         pinned: { type: boolean }
+        driverAudience:
+          description: >-
+            Always present. Null only for ordinary work outside a logistics
+            driver queue.
+          oneOf:
+            - { $ref: '#/components/schemas/DriverTaskAudience' }
+            - { type: 'null' }
         queueId: { type: string, format: uuid }
         queuePurpose: { $ref: '#/components/schemas/QueuePurpose' }
         routeIndex: { type: integer }
@@ -2014,6 +2053,11 @@ components:
         targetLane: { $ref: '#/components/schemas/TaskLane' }
         targetDate: { type: string, format: date }
         targetIndex: { type: integer, minimum: 0 }
+        targetDriverAudience:
+          description: Omitted to preserve the task's current driver audience.
+          oneOf:
+            - { $ref: '#/components/schemas/DriverTaskAudience' }
+            - { type: 'null' }
       additionalProperties: false
     TimeEvent:
       type: object
@@ -2275,6 +2319,13 @@ components:
           oneOf:
             - { $ref: '#/components/schemas/TaskLane' }
             - { type: 'null' }
+        driverAudience:
+          description: >-
+            Allowed only for a logistics-service LOGISTICS_DRIVER_TASK. When
+            omitted for that source, defaults to WAREHOUSE_DRIVERS.
+          oneOf:
+            - { $ref: '#/components/schemas/DriverTaskAudience' }
+            - { type: 'null' }
         priority: { oneOf: [{ type: integer, minimum: 1, maximum: 5 }, { type: 'null' }] }
         dailyCapacity:
           description: >-
@@ -2469,7 +2520,7 @@ components:
       additionalProperties: false
     BoardTaskRegistration:
       type: object
-      required: [taskId, taskVersion, warehouseId, externalTaskId, title, unitNumber, description, status, plannedDurationMinutes, deadlineAt, scheduledDate, lane, priority, pinned, doneAt, route]
+      required: [taskId, taskVersion, warehouseId, externalTaskId, title, unitNumber, description, status, plannedDurationMinutes, deadlineAt, scheduledDate, lane, priority, pinned, driverAudience, doneAt, route]
       properties:
         taskId: { type: string, format: uuid }
         taskVersion: { type: integer, format: int64, minimum: 0 }
@@ -2485,6 +2536,13 @@ components:
         lane: { $ref: '#/components/schemas/TaskLane' }
         priority: { type: integer, minimum: 1, maximum: 5 }
         pinned: { type: boolean }
+        driverAudience:
+          description: >-
+            Always present. Null only for ordinary work outside a logistics
+            driver queue.
+          oneOf:
+            - { $ref: '#/components/schemas/DriverTaskAudience' }
+            - { type: 'null' }
         doneAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
         route:
           type: array
@@ -2625,7 +2683,7 @@ components:
       additionalProperties: false
     WorkerFeedEntry:
       type: object
-      required: [entryId, version, taskId, routeIndex, title, unitNumber, taskText, scheduledDate, deadlineAt, priority, queuePosition, status, availabilityMode, plannedDurationMinutes, activeStartedAt, activeWorkSeconds, timerSnapshot, assignments, readyEvidenceCount, resultPhotoMinCount]
+      required: [entryId, version, taskId, routeIndex, title, unitNumber, taskText, scheduledDate, deadlineAt, priority, queuePosition, status, availabilityMode, driverAudience, plannedDurationMinutes, activeStartedAt, activeWorkSeconds, timerSnapshot, assignments, readyEvidenceCount, resultPhotoMinCount]
       properties:
         entryId: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
@@ -2640,6 +2698,13 @@ components:
         queuePosition: { type: integer, minimum: 0 }
         status: { type: string, enum: [WAITING, IN_PROGRESS, PAUSED, DONE, CANCELLED] }
         availabilityMode: { type: string, enum: [AVAILABLE, MANDATORY, SECONDARY_PENDING, REQUIRED_JOIN, OPTIONAL_JOIN] }
+        driverAudience:
+          description: >-
+            Server-owned classification for WorkerApp tables. Null denotes
+            ordinary work; a non-null value denotes logistics driver work.
+          oneOf:
+            - { $ref: '#/components/schemas/DriverTaskAudience' }
+            - { type: 'null' }
         plannedDurationMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
         activeStartedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
         activeWorkSeconds: { type: integer, format: int64, minimum: 0 }

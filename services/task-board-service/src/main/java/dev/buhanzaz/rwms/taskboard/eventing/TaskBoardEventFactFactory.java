@@ -122,7 +122,8 @@ public class TaskBoardEventFactFactory {
     return new BoardTaskFact(
         value.getId(), value.getWarehouseId(), value.getExternalTaskId(), value.getStatus(),
         value.getScheduledDate(), value.getLane(), value.getPriority(), value.isPinned(),
-        value.getPlannedDurationMinutes(), value.getDeadlineAt(), value.getDoneAt(), deleted);
+        value.getPlannedDurationMinutes(), value.getDeadlineAt(), value.getDoneAt(),
+        value.getDriverAudienceMode(), value.getPlannedDriverWorkerId(), deleted);
   }
 
   @Transactional(readOnly = true)

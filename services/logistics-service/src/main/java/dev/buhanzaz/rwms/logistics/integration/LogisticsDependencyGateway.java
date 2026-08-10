@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.integration;
 
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskAudienceMode;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -292,6 +293,30 @@ public interface LogisticsDependencyGateway {
       UUID queueDefinitionId,
       LocalDate scheduledDate,
       int priority) {
+    return registerDriverTask(
+        warehouseId,
+        externalTaskId,
+        sourceId,
+        title,
+        unitNumber,
+        description,
+        queueDefinitionId,
+        scheduledDate,
+        priority,
+        new DriverTaskAudience(DriverTaskAudienceMode.WAREHOUSE_DRIVERS, null, null));
+  }
+
+  default DriverBoardTask registerDriverTask(
+      UUID warehouseId,
+      UUID externalTaskId,
+      UUID sourceId,
+      String title,
+      String unitNumber,
+      String description,
+      UUID queueDefinitionId,
+      LocalDate scheduledDate,
+      int priority,
+      DriverTaskAudience driverAudience) {
     throw unavailable("Driver task registration is not configured");
   }
 
@@ -330,6 +355,24 @@ public interface LogisticsDependencyGateway {
       String targetLane,
       LocalDate targetDate,
       int targetIndex) {
+    return moveDriverTask(
+        externalTaskId,
+        expectedTaskVersion,
+        expectedEntryVersion,
+        targetLane,
+        targetDate,
+        targetIndex,
+        null);
+  }
+
+  default DriverBoardTask moveDriverTask(
+      UUID externalTaskId,
+      long expectedTaskVersion,
+      long expectedEntryVersion,
+      String targetLane,
+      LocalDate targetDate,
+      int targetIndex,
+      DriverTaskAudience targetDriverAudience) {
     throw unavailable("Driver task movement is not configured");
   }
 
@@ -785,6 +828,10 @@ public interface LogisticsDependencyGateway {
   record WarehouseDriverQueue(
       UUID warehouseId, UUID queueDefinitionId, UUID workQueueId) {}
 
+  /** Task-board audience transported without introducing a worker aggregate in logistics. */
+  record DriverTaskAudience(
+      DriverTaskAudienceMode mode, UUID workerId, String workerName) {}
+
   record DriverBoardTask(
       UUID taskId,
       long taskVersion,
@@ -793,6 +840,7 @@ public interface LogisticsDependencyGateway {
       String title,
       String unitNumber,
       String taskText,
+      DriverTaskAudience driverAudience,
       String status,
       LocalDate scheduledDate,
       String lane,
@@ -802,7 +850,46 @@ public interface LogisticsDependencyGateway {
       UUID entryId,
       long entryVersion,
       String entryStatus,
-      int queuePosition) {}
+      int queuePosition) {
+    public DriverBoardTask(
+        UUID taskId,
+        long taskVersion,
+        UUID warehouseId,
+        UUID externalTaskId,
+        String title,
+        String unitNumber,
+        String taskText,
+        String status,
+        LocalDate scheduledDate,
+        String lane,
+        int priority,
+        boolean pinned,
+        OffsetDateTime doneAt,
+        UUID entryId,
+        long entryVersion,
+        String entryStatus,
+        int queuePosition) {
+      this(
+          taskId,
+          taskVersion,
+          warehouseId,
+          externalTaskId,
+          title,
+          unitNumber,
+          taskText,
+          new DriverTaskAudience(DriverTaskAudienceMode.WAREHOUSE_DRIVERS, null, null),
+          status,
+          scheduledDate,
+          lane,
+          priority,
+          pinned,
+          doneAt,
+          entryId,
+          entryVersion,
+          entryStatus,
+          queuePosition);
+    }
+  }
 
   enum DriverTaskPreStartCancellationOutcome {
     CANCELLED,

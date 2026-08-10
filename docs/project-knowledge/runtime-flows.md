@@ -438,6 +438,55 @@ Evidence:
 and
 [`order dossier evidence`](../../panel/src/features/orders/components/order-unit-dossier-evidence.tsx).
 
+### Logistics document to driver work
+
+1. A manager creates or schedules a shipment or return with a calendar date,
+   cabin lines and an optional task-board worker ID plus display snapshot.
+   Logistics stores the ID as opaque identity and never resolves it from the
+   snapshot. Transfer creation carries the calendar date and lines but no
+   driver identity.
+2. Before it creates a shipment, logistics reads the warehouse-local maximum
+   group size (1–100; an unconfigured warehouse defaults to one) and rejects a
+   selected set above that value. A newly created shipment then persists one
+   idempotent document-owned driver intent with immutable cabin members and the
+   client snapshot; the full cabin list is its task text. Existing shipment
+   line intents remain supported, while return and transfer continue to create
+   one intent per line. Shipment/return intents are assigned when the ID exists
+   and otherwise unassigned. Transfer intents are warehouse-shared and have
+   neither worker ID nor name snapshot.
+3. The existing logistics driver relay registers each committed intent through
+   the private task-board boundary. Task-board validates the source, warehouse,
+   active worker and primary driver qualification, replaces the supplied name
+   with its authoritative snapshot, and stores the audience with the task.
+4. The panel's Logistics route reads the board and active driver directory
+   separately, then presents shipment/return date columns with collapsible
+   assigned-driver and unassigned sections. A grouped shipment displays its
+   cabin count, client and complete cabin list without a priority badge.
+   Dragging a card sends task/entry fences and a queue index only inside the
+   same driver/date/lane section; it cannot reassign or reschedule the card.
+   The separate Movements route shows warehouse-shared work without driver
+   controls.
+5. Worker feed reads are filtered in task-board. Assigned work reaches only its
+   selected driver; unassigned work reaches none; an unclaimed shared Current
+   entry reaches every qualified warehouse driver and becomes assignee-only
+   after take. Only the first visible waiting Current entry is actionable.
+6. WorkerApp uses the required nullable worker-feed audience to split the
+   logistics-driver category into two collapsible tables: personal Logistics
+   (`ASSIGNED_DRIVER`) and shared warehouse Movements (`WAREHOUSE_DRIVERS`). It
+   also keeps separately collapsible group-role and qualification-only panels.
+   A grouped shipment shows the cabin count and exposes its client/cabin list
+   in details. Cards show cabin, date, authoritative elapsed time and photo
+   state; details reuse the existing camera, durable evidence upload and
+   Downloads retry flows.
+
+Evidence:
+[`DocumentDriverTaskPlanner.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DocumentDriverTaskPlanner.java),
+[`DriverTaskAudienceService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/DriverTaskAudienceService.java),
+[`TaskBoardReadProjectionService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardReadProjectionService.java),
+[`logistics-board-page.tsx`](../../panel/src/features/logistics/driver-board/logistics-board-page.tsx),
+and
+[`TasksScreen.kt`](../../worker-app/feature-tasks/src/main/java/dev/buhanzaz/rwms/worker/feature/tasks/TasksScreen.kt).
+
 ### Assistant booking-fact inbox and recovery
 
 1. The assistant accepts only the exact rental-inquiry booking

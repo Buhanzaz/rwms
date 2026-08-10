@@ -137,7 +137,8 @@ final class LogisticsTaskBoardDependencyClient {
       String description,
       UUID queueDefinitionId,
       LocalDate scheduledDate,
-      int priority) {
+      int priority,
+      DriverTaskAudience driverAudience) {
     DriverBoardTaskResponse response =
         transport.postWithoutIdempotency(
             taskBoardTaskBase,
@@ -154,7 +155,8 @@ final class LogisticsTaskBoardDependencyClient {
                 priority,
                 null,
                 new DriverTaskSourceRequest("LOGISTICS_DRIVER_TASK", sourceId),
-                "SCHEDULED"),
+                "SCHEDULED",
+                audienceRequest(driverAudience)),
             DriverBoardTaskResponse.class,
             TASK_BOARD_CLIENT,
             TASK_BOARD_SCOPE,
@@ -271,12 +273,18 @@ final class LogisticsTaskBoardDependencyClient {
       long expectedEntryVersion,
       String targetLane,
       LocalDate targetDate,
-      int targetIndex) {
+      int targetIndex,
+      DriverTaskAudience targetDriverAudience) {
     return driverBoardTask(
         transport.postWithoutIdempotency(
             taskBoardDriverTaskBase + "/" + externalTaskId + "/move",
             new MoveDriverTaskRequest(
-                expectedTaskVersion, expectedEntryVersion, targetLane, targetDate, targetIndex),
+                expectedTaskVersion,
+                expectedEntryVersion,
+                targetLane,
+                targetDate,
+                targetIndex,
+                targetDriverAudience == null ? null : audienceRequest(targetDriverAudience)),
             DriverBoardTaskResponse.class,
             TASK_BOARD_CLIENT,
             TASK_BOARD_SCOPE,
@@ -374,6 +382,7 @@ final class LogisticsTaskBoardDependencyClient {
         response.title(),
         response.unitNumber(),
         entry.taskText(),
+        audience(response.driverAudience()),
         response.status(),
         response.scheduledDate(),
         response.lane(),
@@ -448,6 +457,7 @@ final class LogisticsTaskBoardDependencyClient {
         response.title(),
         response.unitNumber(),
         response.taskText(),
+        audience(response.driverAudience()),
         response.taskStatus(),
         response.scheduledDate(),
         response.lane(),
@@ -521,6 +531,12 @@ final class LogisticsTaskBoardDependencyClient {
   /** Logistics source aggregate identity attached to a driver task for idempotent correlation. */
   private record DriverTaskSourceRequest(String type, UUID sourceId) {}
 
+  /** Planned audience sent to task-board; only assigned work carries a driver snapshot. */
+  private record DriverTaskAudienceRequest(String mode, UUID workerId, String workerName) {}
+
+  /** Planned task audience echoed by task-board. */
+  private record DriverTaskAudienceResponse(String mode, UUID workerId, String workerName) {}
+
   /** Desired task-board route step with queue, text, and planned effort. */
   private record DriverRouteStepRequest(
       UUID queueDefinitionId, String taskText, Integer plannedDurationMinutes) {}
@@ -542,7 +558,8 @@ final class LogisticsTaskBoardDependencyClient {
       Integer priority,
       Integer dailyCapacity,
       DriverTaskSourceRequest source,
-      String lane) {}
+      String lane,
+      DriverTaskAudienceRequest driverAudience) {}
 
   /** Version-fenced command changing only a driver task's operational lane. */
   private record SetDriverTaskLaneRequest(long expectedTaskVersion, String lane) {}
@@ -576,6 +593,7 @@ final class LogisticsTaskBoardDependencyClient {
       String title,
       String unitNumber,
       String description,
+      DriverTaskAudienceResponse driverAudience,
       String status,
       Integer plannedDurationMinutes,
       OffsetDateTime deadlineAt,
@@ -597,6 +615,7 @@ final class LogisticsTaskBoardDependencyClient {
       String title,
       String unitNumber,
       String taskText,
+      DriverTaskAudienceResponse driverAudience,
       String taskStatus,
       LocalDate scheduledDate,
       String lane,
@@ -629,7 +648,30 @@ final class LogisticsTaskBoardDependencyClient {
       long expectedEntryVersion,
       String targetLane,
       LocalDate targetDate,
-      int targetIndex) {}
+      int targetIndex,
+      DriverTaskAudienceRequest targetDriverAudience) {}
+
+  private static DriverTaskAudienceRequest audienceRequest(DriverTaskAudience audience) {
+    if (audience == null || audience.mode() == null) {
+      throw new IllegalArgumentException("Driver task audience is required");
+    }
+    return new DriverTaskAudienceRequest(
+        audience.mode().name(), audience.workerId(), audience.workerName());
+  }
+
+  private static DriverTaskAudience audience(DriverTaskAudienceResponse response) {
+    if (response == null || response.mode() == null) {
+      throw malformed("Task-board returned no driver audience");
+    }
+    try {
+      return new DriverTaskAudience(
+          dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskAudienceMode.valueOf(response.mode()),
+          response.workerId(),
+          response.workerName());
+    } catch (IllegalArgumentException exception) {
+      throw malformed("Task-board returned an unknown driver audience");
+    }
+  }
 
   /**
    * Completion evidence correlation that pins the task-board entry to an exact media generation

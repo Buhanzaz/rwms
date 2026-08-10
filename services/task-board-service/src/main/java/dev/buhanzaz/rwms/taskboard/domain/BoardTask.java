@@ -33,6 +33,17 @@ import org.hibernate.annotations.Check;
     name = "ck_board_task_request_fingerprint",
     constraints = "request_fingerprint is null or request_fingerprint ~ '^[0-9a-f]{64}$'")
 @Check(name = "ck_board_task_priority", constraints = "priority between 1 and 5")
+@Check(
+    name = "ck_board_task_driver_audience",
+    constraints =
+        "(driver_audience_mode is null and planned_driver_worker_id is null and "
+            + "planned_driver_name_snapshot is null) or "
+            + "(driver_audience_mode = 'UNASSIGNED' and planned_driver_worker_id is null and "
+            + "planned_driver_name_snapshot is null) or "
+            + "(driver_audience_mode = 'ASSIGNED_DRIVER' and planned_driver_worker_id is not null "
+            + "and planned_driver_name_snapshot is not null) or "
+            + "(driver_audience_mode = 'WAREHOUSE_DRIVERS' and planned_driver_worker_id is null "
+            + "and planned_driver_name_snapshot is null)")
 public class BoardTask extends AbstractVersionedEntity {
   @NotNull
   @Column(name = "warehouse_id", nullable = false)
@@ -84,6 +95,16 @@ public class BoardTask extends AbstractVersionedEntity {
 
   @Column(name = "done_at")
   private OffsetDateTime doneAt;
+
+  @Enumerated(EnumType.STRING)
+  @Column(name = "driver_audience_mode", length = 32)
+  private DriverTaskAudienceMode driverAudienceMode;
+
+  @Column(name = "planned_driver_worker_id")
+  private UUID plannedDriverWorkerId;
+
+  @Column(name = "planned_driver_name_snapshot", length = 512)
+  private String plannedDriverNameSnapshot;
 
   public UUID getWarehouseId() {
     return warehouseId;
@@ -208,5 +229,29 @@ public class BoardTask extends AbstractVersionedEntity {
 
   public void setDoneAt(OffsetDateTime v) {
     doneAt = v;
+  }
+
+  public DriverTaskAudienceMode getDriverAudienceMode() {
+    return driverAudienceMode;
+  }
+
+  public void setDriverAudienceMode(DriverTaskAudienceMode value) {
+    driverAudienceMode = value;
+  }
+
+  public UUID getPlannedDriverWorkerId() {
+    return plannedDriverWorkerId;
+  }
+
+  public void setPlannedDriverWorkerId(UUID value) {
+    plannedDriverWorkerId = value;
+  }
+
+  public String getPlannedDriverNameSnapshot() {
+    return plannedDriverNameSnapshot;
+  }
+
+  public void setPlannedDriverNameSnapshot(String value) {
+    plannedDriverNameSnapshot = value;
   }
 }

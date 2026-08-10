@@ -10,6 +10,7 @@ export type ReturnCreateCommand = {
   warehouseId: string
   clientId: string
   driverSnapshot: string
+  driverWorkerId: string
   lines: CreateReturnLine[]
   idempotencyKey: string
 }
@@ -23,6 +24,7 @@ export type ReturnVersionedCommand = {
 
 export type ReturnPickupCommand = ReturnVersionedCommand & {
   driverSnapshot: string
+  driverWorkerId: string
   scheduledDate: string
 }
 

@@ -44,6 +44,7 @@ export type ShipmentDocument = {
   destinationWarehouseId: null
   partySnapshot: string
   driverSnapshot: string | null
+  driverWorkerId: string | null
   clientId: string | null
   equipmentMovementTaskId: string | null
   scheduledDate: string | null

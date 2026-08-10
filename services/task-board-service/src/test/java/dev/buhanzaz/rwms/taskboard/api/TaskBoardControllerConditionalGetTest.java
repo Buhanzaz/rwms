@@ -1,10 +1,12 @@
 package dev.buhanzaz.rwms.taskboard.api;
 
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
+import static dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerFeedEntry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import dev.buhanzaz.rwms.taskboard.domain.EntryStatus;
 import dev.buhanzaz.rwms.taskboard.domain.EntryType;
 import dev.buhanzaz.rwms.taskboard.domain.QueuePurpose;
@@ -91,6 +93,70 @@ class TaskBoardControllerConditionalGetTest {
     assertThat(paused).isNotEqualTo(standard);
   }
 
+  @Test
+  void ordinaryBoardAndRegistrationDtosAlwaysSerializeTheNullableAudienceField() {
+    JsonMapper mapper =
+        JsonMapper.builder()
+            .findAndAddModules()
+            .changeDefaultPropertyInclusion(
+                value -> value.withValueInclusion(JsonInclude.Include.NON_NULL))
+            .build();
+    var boardJson = mapper.valueToTree(snapshot(120, "2026-07-30T10:00:00Z", TimerState.WORKING));
+    var entryJson = boardJson.required("columns").get(0).required("entries").get(0);
+    assertThat(entryJson.has("driverAudience")).isTrue();
+    assertThat(entryJson.required("driverAudience").isNull()).isTrue();
+
+    var registration =
+        new BoardTaskRegistrationDto(
+            TASK,
+            3,
+            WAREHOUSE,
+            null,
+            "Покраска",
+            "БТ-1",
+            null,
+            TaskStatus.ACTIVE,
+            10,
+            null,
+            DATE,
+            TaskLane.SCHEDULED,
+            3,
+            false,
+            null,
+            null,
+            List.of());
+    var registrationJson = mapper.valueToTree(registration);
+    assertThat(registrationJson.has("driverAudience")).isTrue();
+    assertThat(registrationJson.required("driverAudience").isNull()).isTrue();
+
+    var feedEntry =
+        new WorkerFeedEntry(
+            ENTRY,
+            2,
+            TASK,
+            0,
+            "Покраска",
+            "БТ-1",
+            "Покраска суриком",
+            DATE,
+            null,
+            3,
+            0,
+            "WAITING",
+            "AVAILABLE",
+            null,
+            10,
+            null,
+            0,
+            null,
+            List.of(),
+            0,
+            1);
+    var feedJson = mapper.valueToTree(feedEntry);
+    assertThat(feedJson.has("driverAudience")).isTrue();
+    assertThat(feedJson.required("driverAudience").isNull()).isTrue();
+  }
+
   private ResponseEntity<TaskBoardSnapshot> get(
       LocalDate requestedDate, boolean includeShadow, String ifNoneMatch) {
     MockHttpServletRequest request =
@@ -143,6 +209,7 @@ class TaskBoardControllerConditionalGetTest {
             0,
             List.of(),
             timer,
+            null,
             null);
     return new TaskBoardSnapshot(
         WAREHOUSE,

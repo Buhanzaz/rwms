@@ -39,6 +39,7 @@ class TaskBoardRoutePayloadCodec {
       LocalDate scheduledDate,
       int priority,
       TaskLane lane,
+      DriverTaskAudienceDto driverAudience,
       JdbcTemplate jdbc) {
     ObjectNode payload =
         taskFingerprintPayload(
@@ -51,7 +52,8 @@ class TaskBoardRoutePayloadCodec {
             request.deadlineAt(),
             scheduledDate,
             priority,
-            lane);
+            lane,
+            driverAudience);
     ArrayNode route = payload.putArray("route");
     for (RouteStepRequest step : request.route()) {
       ObjectNode item = route.addObject();
@@ -78,7 +80,11 @@ class TaskBoardRoutePayloadCodec {
             task.getDeadlineAt(),
             task.getScheduledDate(),
             task.getPriority(),
-            task.getLane());
+            task.getLane(),
+            task.getDriverAudienceMode() == null
+                ? null
+                : new DriverTaskAudienceDto(
+                    task.getDriverAudienceMode(), task.getPlannedDriverWorkerId(), null));
     ArrayNode route = payload.putArray("route");
     for (QueueEntry entry : routeEntries) {
       ObjectNode item = route.addObject();
@@ -115,7 +121,8 @@ class TaskBoardRoutePayloadCodec {
       OffsetDateTime deadlineAt,
       LocalDate scheduledDate,
       int priority,
-      TaskLane lane) {
+      TaskLane lane,
+      DriverTaskAudienceDto driverAudience) {
     ObjectNode payload = objectMapper.createObjectNode();
     setFingerprintValue(payload, "warehouseId", warehouseId);
     setFingerprintValue(payload, "externalTaskId", externalTaskId);
@@ -127,6 +134,10 @@ class TaskBoardRoutePayloadCodec {
     setFingerprintValue(payload, "scheduledDate", scheduledDate);
     setFingerprintValue(payload, "lane", lane);
     setFingerprintValue(payload, "priority", priority);
+    if (driverAudience != null) {
+      setFingerprintValue(payload, "driverAudienceMode", driverAudience.mode());
+      setFingerprintValue(payload, "plannedDriverWorkerId", driverAudience.workerId());
+    }
     return payload;
   }
 

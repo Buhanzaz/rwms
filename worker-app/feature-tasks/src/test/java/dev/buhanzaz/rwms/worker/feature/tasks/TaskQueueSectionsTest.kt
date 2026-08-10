@@ -81,6 +81,7 @@ class TaskQueueSectionsTest {
 
         assertThat(timer).isEqualTo(
             QueueTaskTimerPresentation(
+                elapsed = "0:20:00",
                 remaining = "0:40:00",
                 percent = "66.7%",
                 state = "Перерыв · таймер остановлен",
@@ -89,23 +90,61 @@ class TaskQueueSectionsTest {
     }
 
     @Test
-    fun `two groups create exactly two columns and personal work is a section of the first`() {
-        val groups = listOf(group("repair", "Ремонтники"), group("electric", "Электрики"))
-        val groupTask = task("repair-task", "repair-queue", "Ремонты", 10, 0)
-        val personalTask = task("driver-task", "driver-queue", "Водители", 20, 0)
+    fun `group roles and qualification-only categories create independent columns`() {
+        val groups = listOf(group("general", "Разнорабочие"))
+        val groupTask = task("general-task", "general-queue", "Общие работы", 10, 0)
+        val personalTask = task("slinger-task", "slinger-queue", "Стропальщики", 20, 0)
         val columns = buildWorkBoardColumns(
             groups = groups,
             categories = listOf(
-                category("repair-queue", "Ремонты", 10, groupIds = listOf("repair")),
-                category("driver-queue", "Водители", 20, groupIds = emptyList()),
+                category("general-queue", "Общие работы", 10, groupIds = listOf("general")),
+                category("slinger-queue", "Стропальщики", 20, groupIds = emptyList()),
             ),
             tasks = listOf(groupTask, personalTask),
             assignments = emptyList(),
         )
 
-        assertThat(columns.map { it.name }).containsExactly("Ремонтники", "Электрики").inOrder()
-        assertThat(columns.first().sections.last().name).isEqualTo("Личные задания")
-        assertThat(columns.first().sections.last().tasks.map { it.entryId }).containsExactly("driver-task")
+        assertThat(columns.map { it.name })
+            .containsExactly("Разнорабочие", "Стропальщики")
+            .inOrder()
+        assertThat(columns.last().id).isEqualTo("qualification-slinger-queue")
+        assertThat(columns.last().personal).isTrue()
+        assertThat(columns.last().sections.single().tasks.map { it.entryId })
+            .containsExactly("slinger-task")
+        assertThat(columns.first().sections.flatMap { it.tasks }.map { it.entryId })
+            .containsExactly("general-task")
+    }
+
+    @Test
+    fun `driver audience creates separate personal logistics and shared movement tables`() {
+        val driverCategory = category(
+            queueId = "drivers",
+            name = "Водители",
+            sortOrder = 5,
+            queuePurpose = "LOGISTICS_DRIVER",
+        )
+        val assigned = task("shipment", "drivers", "Водители", 5, 0)
+            .copy(driverAudienceMode = "ASSIGNED_DRIVER")
+        val shared = task("movement", "drivers", "Водители", 5, 1)
+            .copy(driverAudienceMode = "WAREHOUSE_DRIVERS")
+        val legacyUnclassified = task("legacy", "drivers", "Водители", 5, 2)
+
+        val columns = buildWorkBoardColumns(
+            groups = emptyList(),
+            categories = listOf(driverCategory),
+            tasks = listOf(shared, legacyUnclassified, assigned),
+            assignments = emptyList(),
+        )
+
+        assertThat(columns.map { it.name })
+            .containsExactly("Логистика", "Перемещения")
+            .inOrder()
+        assertThat(columns[0].description).isEqualTo("Только назначенные вам задания")
+        assertThat(columns[0].sections.single().tasks.map { it.entryId })
+            .containsExactly("shipment")
+        assertThat(columns[1].description).isEqualTo("Общие задания водителей склада")
+        assertThat(columns[1].sections.single().tasks.map { it.entryId })
+            .containsExactly("movement")
     }
 
     @Test
@@ -123,18 +162,27 @@ class TaskQueueSectionsTest {
         assertThat(columns[1].sections.flatMap { it.tasks }.map { it.entryId }).containsExactly("assigned")
     }
 
+    @Test
+    fun `shows authoritative elapsed work when a budget timer is unavailable`() {
+        val task = task("elapsed", "repair", "Ремонты", 10, 0).copy(activeWorkSeconds = 3_661)
+
+        assertThat(queueTaskTimerPresentation(task)).isNull()
+        assertThat(queueTaskElapsedLabel(task)).isEqualTo("1:01:01")
+    }
+
     private fun category(
         queueId: String,
         name: String,
         sortOrder: Int,
         groupIds: List<String> = emptyList(),
+        queuePurpose: String = "GENERAL",
     ) = WorkerCategoryEntity(
         localId = "$USER_ID:$queueId",
         userId = USER_ID,
         queueId = queueId,
         name = name,
         type = "REPAIR",
-        queuePurpose = "GENERAL",
+        queuePurpose = queuePurpose,
         groupIdsKey = groupIds.joinToString("\u001F"),
         sortOrder = sortOrder,
         audienceModesKey = "AVAILABLE",

@@ -5,6 +5,7 @@ import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardCa
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardDateColumnResponse;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardLane;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardRepairPlaceCardResponse;
+import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverTaskAudienceResponse;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardResponse;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.MoveDriverBoardTaskRequest;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.ReturnCapitalRepairRequest;
@@ -19,15 +20,15 @@ import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
+import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.time.LocalDate;
-import java.time.OffsetDateTime;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -109,6 +110,7 @@ public class DriverBoardService {
       throw new LogisticsConflictException(
           "Задание не принадлежит выбранному складу");
     }
+    requirePublicMoveScope(local, current, request);
     LocalDate today = warehouseToday(request.warehouseId());
     if (request.targetDate().isBefore(today)) {
       throw new IllegalArgumentException(
@@ -129,19 +131,24 @@ public class DriverBoardService {
             request.expectedEntryVersion(),
             request.targetLane().name(),
             request.targetDate(),
-            request.targetIndex());
+            request.targetIndex(),
+            null);
     workflowStore.confirmStatus(local.getId(), moved);
     local = tasks.findById(local.getId()).orElseThrow();
     if ("CURRENT".equals(current.lane()) && "SCHEDULED".equals(moved.lane())) {
-      LogisticsDependencyGateway.RepairPlaceProjection places =
-          dependencies.readRepairPlaces(request.warehouseId());
-      // A manual date choice is durable scheduling intent. The timed hold prevents an immediate
-      // refill; FIXED_DATE prevents the rolling reflow from pulling this exact task back to today.
       local.markFixedDate(moved.scheduledDate());
-      local.markManualPromotionHold(places.automaticRefillDelayMinutes());
+      if (local.getKind().consumesRepairPlace()) {
+        LogisticsDependencyGateway.RepairPlaceProjection places =
+            dependencies.readRepairPlaces(request.warehouseId());
+        // A repair delivery additionally releases its reserved place. The timed hold prevents an
+        // immediate refill while that recoverable effect is being confirmed.
+        local.markManualPromotionHold(places.automaticRefillDelayMinutes());
+      }
       tasks.saveAndFlush(local);
-      processor.processUntilIdle(local.getId());
-      local = tasks.findById(local.getId()).orElseThrow();
+      if (local.getKind().consumesRepairPlace()) {
+        processor.processUntilIdle(local.getId());
+        local = tasks.findById(local.getId()).orElseThrow();
+      }
     }
     if ("SCHEDULED".equals(current.lane())
         && "SCHEDULED".equals(moved.lane())
@@ -222,7 +229,8 @@ public class DriverBoardService {
               scheduled.entryVersion(),
               DriverBoardLane.SCHEDULED.name(),
               request.targetDate(),
-              request.targetIndex());
+              request.targetIndex(),
+              null);
       workflowStore.confirmStatus(local.getId(), scheduled);
       local = tasks.findById(local.getId()).orElseThrow();
     }
@@ -287,7 +295,8 @@ public class DriverBoardService {
             promoted.entryVersion(),
             DriverBoardLane.CURRENT.name(),
             request.targetDate(),
-            request.targetIndex());
+            request.targetIndex(),
+            null);
     workflowStore.confirmStatus(local.getId(), moved);
     DriverLogisticsTask refreshed =
         tasks.findById(local.getId()).orElseThrow();
@@ -414,6 +423,10 @@ public class DriverBoardService {
         board.taskText(),
         board.unitNumber(),
         local == null ? null : local.getKind(),
+        new DriverTaskAudienceResponse(
+            board.driverAudience().mode(),
+            board.driverAudience().workerId(),
+            board.driverAudience().workerName()),
         local == null ? null : local.getState(),
         board.status(),
         board.entryStatus(),
@@ -422,6 +435,33 @@ public class DriverBoardService {
         board.priority(),
         board.pinned(),
         board.queuePosition());
+  }
+
+  /**
+   * Restricts document delivery work to ordering inside its current driver/date/lane section.
+   * Movement work retains the existing broader date/lane scheduling policy, but the public
+   * command never changes either kind's server-owned audience.
+   */
+  private static void requirePublicMoveScope(
+      DriverLogisticsTask task,
+      LogisticsDependencyGateway.DriverBoardTask current,
+      MoveDriverBoardTaskRequest request) {
+    if (task.getKind() != DriverTaskKind.SHIPMENT
+        && task.getKind() != DriverTaskKind.RETURN) {
+      return;
+    }
+    if (!request.targetLane().name().equals(current.lane())
+        || !request.targetDate().equals(current.scheduledDate())) {
+      throw new LogisticsConflictException(
+          "Отгрузку или возврат можно переставлять только внутри своей очереди водителя и даты");
+    }
+    if (current.driverAudience() == null
+        || current.driverAudience().mode() != task.getDriverAudienceMode()
+        || !java.util.Objects.equals(
+            current.driverAudience().workerId(), task.getPlannedDriverWorkerId())) {
+      throw new LogisticsConflictException(
+          "Аудитория задания водителя изменилась; обновите доску");
+    }
   }
 
   public record CapitalRepairScheduleResult(

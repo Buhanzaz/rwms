@@ -78,6 +78,7 @@ class LogisticsContractFoundationTest {
             "/api/logistics/v1/rental-inquiries/{inquiryId}/cabin-availability",
             "/api/logistics/v1/rental-inquiries/{inquiryId}/client-presentation",
             "/api/logistics/v1/settings/rental",
+            "/api/logistics/v1/warehouses/{warehouseId}/shipment-task-settings",
             "/api/logistics/public/v1/client-presentations/{token}",
             "/api/logistics/public/v1/client-presentations/{token}/bookings",
             "/api/logistics/public/v1/client-presentations/{token}/bookings/{bookingId}",
@@ -138,6 +139,8 @@ class LogisticsContractFoundationTest {
             "PublicClientPresentation",
             "PresentationBooking",
             "RentalSettings",
+            "ShipmentTaskSettings",
+            "UpdateShipmentTaskSettingsRequest",
             "LogisticsDocument",
             "LogisticsLine",
             "ReconcileRequest");
@@ -288,6 +291,8 @@ class LogisticsContractFoundationTest {
             "actOnRentalBookingAlert",
             "getRentalSettings",
             "updateRentalSettings",
+            "getShipmentTaskSettings",
+            "updateShipmentTaskSettings",
             "getPublicClientPresentation",
             "confirmPublicClientPresentation",
             "getPublicClientPresentationBooking",
@@ -369,6 +374,55 @@ class LogisticsContractFoundationTest {
             "manualBookingHoldMinutes",
             "presentationHoldMinutes",
             "draftReservationHoldMinutes");
+  }
+
+  @Test
+  void shipmentTaskSettingsAreWarehouseScopedVersionFencedAndBounded() throws Exception {
+    Map<String, Object> document = openApi();
+    Map<String, Object> paths = child(document, "paths");
+    Map<String, Object> schemas = child(child(document, "components"), "schemas");
+    Map<String, Object> endpoint =
+        child(paths, "/api/logistics/v1/warehouses/{warehouseId}/shipment-task-settings");
+    Map<String, Object> get = child(endpoint, "get");
+    Map<String, Object> put = child(endpoint, "put");
+    Map<String, Object> response = child(schemas, "ShipmentTaskSettings");
+    Map<String, Object> update = child(schemas, "UpdateShipmentTaskSettingsRequest");
+
+    assertThat(endpoint.get("parameters"))
+        .isEqualTo(
+            List.of(
+                Map.of(
+                    "name", "warehouseId",
+                    "in", "path",
+                    "required", true,
+                    "schema", Map.of("type", "string", "format", "uuid"))));
+    assertThat(get.get("operationId")).isEqualTo("getShipmentTaskSettings");
+    assertThat(child(get, "responses")).containsKeys("200", "401", "403");
+    assertThat(put.get("operationId")).isEqualTo("updateShipmentTaskSettings");
+    assertThat(child(put, "responses")).containsKeys("200", "400", "401", "403", "409");
+    assertThat(
+            child(
+                    child(child(put, "requestBody"), "content"),
+                    "application/json")
+                .get("schema"))
+        .isEqualTo(Map.of("$ref", "#/components/schemas/UpdateShipmentTaskSettingsRequest"));
+    assertThat(response.get("required"))
+        .isEqualTo(
+            List.of("warehouseId", "version", "maxCabinsPerShipmentTask", "updatedBy", "updatedAt"));
+    assertThat(child(response, "properties"))
+        .containsOnlyKeys(
+            "warehouseId", "version", "maxCabinsPerShipmentTask", "updatedBy", "updatedAt");
+    assertThat(child(child(response, "properties"), "maxCabinsPerShipmentTask"))
+        .containsEntry("minimum", 1)
+        .containsEntry("maximum", 100);
+    assertThat(update.get("required"))
+        .isEqualTo(List.of("expectedVersion", "maxCabinsPerShipmentTask"));
+    assertThat(child(child(update, "properties"), "expectedVersion"))
+        .containsEntry("minimum", 0);
+    assertThat(child(child(update, "properties"), "maxCabinsPerShipmentTask"))
+        .containsEntry("minimum", 1)
+        .containsEntry("maximum", 100);
+    assertThat(child(child(schemas, "DriverBoardCard"), "properties")).containsKey("priority");
   }
 
   @Test
@@ -474,7 +528,8 @@ class LogisticsContractFoundationTest {
     List<String> transferRequired =
         ((List<?>) createTransfer.get("required")).stream().map(String.class::cast).toList();
     assertThat(transferRequired).contains("scheduledDate", "furnitureReplacements");
-    assertThat(child(createTransfer, "properties")).doesNotContainKey("scheduledAt");
+    assertThat(child(createTransfer, "properties"))
+        .doesNotContainKeys("scheduledAt", "driverSnapshot", "driverWorkerId");
     assertThat(child(child(createTransfer, "properties"), "scheduledDate").get("format"))
         .isEqualTo("date");
     assertThat(cabinFurnitureTask.get("required"))
@@ -485,6 +540,8 @@ class LogisticsContractFoundationTest {
         .isEqualTo("date");
     assertThat(child(child(document, "properties"), "scheduledAt").get("format"))
         .isEqualTo("date-time");
+    assertThat(child(child(schemas, "MoveDriverBoardTaskRequest"), "properties"))
+        .doesNotContainKey("targetDriverAudience");
   }
 
   @Test

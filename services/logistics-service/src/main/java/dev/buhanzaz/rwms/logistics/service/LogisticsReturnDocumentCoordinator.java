@@ -16,6 +16,7 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsReturnShortageSnapshot;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsTargetService;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventStore;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventType;
+import dev.buhanzaz.rwms.logistics.driver.service.DocumentDriverTaskPlanner;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
@@ -64,6 +65,7 @@ class LogisticsReturnDocumentCoordinator {
   private final LogisticsDocumentReadProjection readProjection;
   private final LogisticsDocumentAttemptWriter attemptWriter;
   private final LogisticsRentalOrderBindingPolicy rentalOrderBinding;
+  private final DocumentDriverTaskPlanner driverTaskPlanner;
 
   LogisticsDocumentCommandResult createReturn(
       UUID subjectId, UUID idempotencyKey, UUID correlationId, CreateReturnRequest request) {
@@ -110,6 +112,7 @@ class LogisticsReturnDocumentCoordinator {
                 request.clientId(),
                 returnOrder == null ? null : returnOrder.getClient().getDisplayName(),
                 request.driverSnapshot(),
+                request.driverWorkerId(),
                 subjectId,
                 correlationId));
     List<LogisticsDocumentLine> lines =
@@ -145,14 +148,15 @@ class LogisticsReturnDocumentCoordinator {
       long expectedDocumentVersion,
       ReturnPickupRequest request) {
     requireReturnCommand(documentId, correlationId, expectedDocumentVersion, request);
-    String checksum =
-        LogisticsCommandChecksum.sha256(
-            REGISTER_RETURN,
-            List.of(
-                documentId.toString(),
-                Long.toString(expectedDocumentVersion),
-                request.driverSnapshot().trim(),
-                request.scheduledDate().toString()));
+    List<String> fingerprintValues = new ArrayList<>();
+    fingerprintValues.add(documentId.toString());
+    fingerprintValues.add(Long.toString(expectedDocumentVersion));
+    fingerprintValues.add(request.driverSnapshot().trim());
+    if (request.driverWorkerId() != null) {
+      fingerprintValues.add(request.driverWorkerId().toString());
+    }
+    fingerprintValues.add(request.scheduledDate().toString());
+    String checksum = LogisticsCommandChecksum.sha256(REGISTER_RETURN, fingerprintValues);
     idempotency.acquireLock(subjectId, REGISTER_RETURN, idempotencyKey);
     LogisticsDocument replay = idempotency.replay(subjectId, idempotencyKey, REGISTER_RETURN, checksum);
     if (replay != null) return result(replay, true);
@@ -163,9 +167,11 @@ class LogisticsReturnDocumentCoordinator {
     }
     List<LogisticsDocumentLine> lines = readProjection.linesRequired(documentId);
 
-    document.scheduleReturn(request.driverSnapshot(), request.scheduledDate());
+    document.scheduleReturn(
+        request.driverSnapshot(), request.driverWorkerId(), request.scheduledDate());
     document.beginReturnRegistration();
     documentRepository.saveAndFlush(document);
+    driverTaskPlanner.plan(document, lines);
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
     attemptWriter.createDocumentAttempt(
         document,
@@ -608,6 +614,9 @@ class LogisticsReturnDocumentCoordinator {
     values.add(request.warehouseId().toString());
     values.add(request.clientId() == null ? null : request.clientId().toString());
     values.add(optionalTrimSnapshot(request.driverSnapshot()));
+    if (request.driverWorkerId() != null) {
+      values.add(request.driverWorkerId().toString());
+    }
     for (var line : request.lines()) {
       values.add(line.assetId().toString());
       values.add(Long.toString(line.assetVersion()));

@@ -54,6 +54,18 @@ Source-owned task использует stable external identity, поэтому 
 contract-defined version и status. Route order, eligibility, assignment и
 terminal transitions остаются server-owned.
 
+Logistics driver task дополнительно несёт одну сохранённую аудиторию:
+`UNASSIGNED`, `ASSIGNED_DRIVER` или `WAREHOUSE_DRIVERS`. Задавать её может
+только точный driver-task source logistics-service. Только назначенная работа содержит worker
+identity; этот worker должен быть активен на том же складе и иметь primary qualification
+водительской очереди. Task-board игнорирует переданное caller-ом display name и сохраняет
+авторитетный worker snapshot. Неназначенная задача остаётся работой диспетчера. Назначенную видит
+только этот водитель. Ожидающую identity-free общую задачу видят все квалифицированные водители
+склада до take, после чего доступ остаётся только у фактического исполнителя. Worker feed всегда
+выдаёт nullable `driverAudience`: null классифицирует обычную работу, non-null — logistics driver
+work. Только private source replan boundary может заменить audience под общим task/entry version
+fence; public board move её не меняет.
+
 ## Внутренняя структура приложения
 
 `TaskBoardService` — стабильный transactional facade над шестью collaborators.
@@ -70,6 +82,7 @@ terminal transitions остаются server-owned.
 | `TaskBoardOrderingService` | Manager-owned move, swap, pin и rollover operations |
 | `TaskBoardQueuePositionCoordinator` | Только advisory locks, stream fences и persisted queue/pin ordering |
 | `TaskBoardRoutePayloadCodec` | Единственный canonical route JSON и fingerprint codec |
+| `DriverTaskAudienceService` | Shape аудитории logistics-driver, qualification, visibility и execution authorization |
 | `WorkforceService` | Стабильный фасад worker/group API над тремя владельцами lifecycle |
 | `WorkforceProfileService` | Изменение worker profile и qualifications с сохранением credential lock span |
 | `WorkforceCredentialLifecycleService` | Durable auth credential intents, completion/failure fencing, reconciliation и deletion recovery |
@@ -146,6 +159,18 @@ board task, queue entry, owner-proof, task-evidence и group-KPI-day facts. Се
 получает warehouse facts для metadata/lifecycle projection и media facts для
 worker evidence.
 
+Migration
+[`V28__driver_task_audience.sql`](src/main/resources/db/migration/V28__driver_task_audience.sql)
+добавляет в `board_task` аудиторию и snapshot назначенного worker. Существующие logistics driver tasks backfill-ятся как общие для
+водителей склада. Board-task events получают только необязательные поля
+аудитории и worker ID, поэтому сохранённые V1 events без них остаются валидными;
+display names в этих событиях не публикуются.
+
+Migration
+[`V29__remove_shared_driver_identity.sql`](src/main/resources/db/migration/V29__remove_shared_driver_identity.sql)
+очищает устаревшие worker IDs/names у задач `WAREHOUSE_DRIVERS` и усиливает DB constraint, чтобы
+общая и неназначенная аудитории всегда оставались identity-free.
+
 ## Безопасность и изоляция
 
 - Все API chains валидируют JWT issuer/audience; worker routes требуют узкий
@@ -158,6 +183,10 @@ worker evidence.
   operational workflow state, нужный для reconciliation.
 - CORS использует explicit panel/worker origins. Browser/mobile clients идут
   через gateway; сервисы — по private routes с client credentials.
+- OAuth registrations для worker credentials, warehouse lifecycle read/confirm
+  и warehouse timezone используют один `TASK_BOARD_CLIENT_SECRET`. Профиль
+  `dev` передаёт одинаковый local fallback во все registrations; в
+  base/production fallback отсутствует и обязателен deployment secret.
 - Dev auth bypass разрешён только в explicit dev profile и запрещён вне
   local/test.
 

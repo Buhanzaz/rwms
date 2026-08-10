@@ -3,11 +3,14 @@ package dev.buhanzaz.rwms.taskboard.eventing;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import dev.buhanzaz.rwms.taskboard.domain.BoardTask;
+import dev.buhanzaz.rwms.taskboard.domain.DriverTaskAudienceMode;
 import dev.buhanzaz.rwms.taskboard.domain.TaskLane;
 import dev.buhanzaz.rwms.taskboard.domain.TaskStatus;
 import dev.buhanzaz.rwms.taskboard.domain.WorkerClass;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.BoardTaskFact;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.WorkerClassFact;
+import dev.buhanzaz.rwms.taskboard.repository.BoardTaskRepository;
 import dev.buhanzaz.rwms.taskboard.repository.WorkerClassRepository;
 import java.time.Duration;
 import java.time.LocalDate;
@@ -47,6 +50,7 @@ class TaskBoardEventingRuntimeIntegrationTest {
   @Autowired TaskBoardReplayVerifier replayVerifier;
   @Autowired TaskBoardProjectionWriter projectionWriter;
   @Autowired TaskBoardEventSourcing eventSourcing;
+  @Autowired BoardTaskRepository boardTasks;
   @Autowired WorkerClassRepository workerClasses;
 
   @DynamicPropertySource
@@ -428,6 +432,57 @@ class TaskBoardEventingRuntimeIntegrationTest {
     assertThat(replay.version()).isEqualTo(workerClass.getVersion());
     assertThat(replay.factCount()).isOne();
     assertThat(replay.payloadSha256()).hasSize(64);
+
+    BoardTask legacyTask =
+        tx.execute(
+            ignored -> {
+              var task = new BoardTask();
+              task.setWarehouseId(UUID.randomUUID());
+              task.setExternalTaskId(UUID.randomUUID());
+              task.setTitle("Legacy audience replay projection");
+              task.setScheduledDate(LocalDate.of(2026, 7, 24));
+              task.setDriverAudienceMode(DriverTaskAudienceMode.WAREHOUSE_DRIVERS);
+              task = projectionWriter.saveAndFlush(boardTasks, task);
+              projectionWriter.refresh(task);
+              return task;
+            });
+    UUID legacyEventId = UUID.randomUUID();
+    String legacyPayload =
+        """
+        {"boardTaskId":"%s","warehouseId":"%s","externalTaskId":"%s","status":"ACTIVE","scheduledDate":"2026-07-24","lane":"SCHEDULED","priority":3,"pinned":false,"plannedDurationMinutes":null,"deadlineAt":null,"doneAt":null,"deleted":false}
+        """
+            .formatted(
+                legacyTask.getId(),
+                legacyTask.getWarehouseId(),
+                legacyTask.getExternalTaskId());
+    jdbc.update(
+        """
+        insert into event_stream_head(
+          aggregate_type,aggregate_id,current_version,last_event_id,updated_at)
+        values ('BOARD_TASK',?,0,?,clock_timestamp())
+        """,
+        legacyTask.getId().toString(),
+        legacyEventId);
+    jdbc.update(
+        """
+        insert into domain_event(
+          event_id,aggregate_type,aggregate_id,aggregate_version,event_type,event_version,
+          occurred_at,recorded_at,correlation_id,causation_id,actor_ref,payload,
+          payload_sha256,baseline)
+        values (?,'BOARD_TASK',?,0,'task-board.board-task.baseline.v1',1,
+          null,clock_timestamp(),?,null,null,?::jsonb,
+          encode(sha256(convert_to((?::jsonb)::text,'UTF8')),'hex'),true)
+        """,
+        legacyEventId,
+        legacyTask.getId().toString(),
+        UUID.randomUUID(),
+        legacyPayload,
+        legacyPayload);
+
+    var legacyReplay =
+        replayVerifier.verify(TaskBoardAggregateType.BOARD_TASK, legacyTask.getId());
+    assertThat(legacyReplay.version()).isEqualTo(legacyTask.getVersion());
+    assertThat(legacyReplay.factCount()).isOne();
   }
 
   private WorkerClassFact workerClassFact(UUID id) {

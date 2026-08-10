@@ -13,6 +13,7 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnPickupRequest;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
+import dev.buhanzaz.rwms.logistics.driver.service.DocumentDriverTaskPlanner;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsExternalAttemptClaimService;
@@ -63,6 +64,7 @@ class ReturnRegistrationSagaIntegrationTest {
   @Autowired JdbcTemplate jdbc;
 
   @MockitoBean LogisticsDependencyGateway dependencies;
+  @MockitoBean DocumentDriverTaskPlanner driverTaskPlanner;
 
   @BeforeEach
   void reset() {
@@ -77,7 +79,7 @@ class ReturnRegistrationSagaIntegrationTest {
           outbox_event
         cascade
         """);
-    org.mockito.Mockito.reset(dependencies);
+    org.mockito.Mockito.reset(dependencies, driverTaskPlanner);
   }
 
   @Test

@@ -1,6 +1,8 @@
 package dev.buhanzaz.rwms.taskboard.api;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import dev.buhanzaz.rwms.taskboard.api.ApiModels.DriverTaskAudienceDto;
 import dev.buhanzaz.rwms.taskboard.api.ApiModels.TaskTimerSnapshot;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -122,6 +124,12 @@ public final class WorkerApiModels {
       OffsetDateTime pausedAt,
       OffsetDateTime finishedAt) {}
 
+  /**
+   * One worker-visible route entry with a server-owned classification for ordinary versus
+   * logistics-driver tables.
+   *
+   * @param driverAudience logistics driver audience, or {@code null} for ordinary work
+   */
   public record WorkerFeedEntry(
       UUID entryId,
       long version,
@@ -136,6 +144,7 @@ public final class WorkerApiModels {
       int queuePosition,
       String status,
       String availabilityMode,
+      @JsonInclude(JsonInclude.Include.ALWAYS) DriverTaskAudienceDto driverAudience,
       Integer plannedDurationMinutes,
       OffsetDateTime activeStartedAt,
       long activeWorkSeconds,

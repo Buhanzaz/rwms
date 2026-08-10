@@ -52,7 +52,7 @@ vi.mock("@/features/auth/use-auth", () => ({
 
 vi.mock("@/hooks/use-warehouse", () => ({
   useWarehouse: () => ({
-    selectedWarehouse: { id: WAREHOUSE_ID },
+    selectedWarehouse: { id: WAREHOUSE_ID, name: "Тестовый склад" },
   }),
 }))
 
@@ -64,6 +64,20 @@ vi.mock(
   "@/features/settings/logistics/inventory-planning-settings-card",
   () => ({ InventoryPlanningSettingsCard: () => null })
 )
+
+vi.mock("@/features/settings/logistics/shipment-task-settings-card", () => ({
+  ShipmentTaskSettingsCard: ({
+    warehouseId,
+    warehouseName,
+  }: {
+    warehouseId: string
+    warehouseName: string
+  }) => (
+    <div data-testid="shipment-task-settings-card">
+      {warehouseId}:{warehouseName}
+    </div>
+  ),
+}))
 
 vi.mock("@/features/settings/task-board/api/task-board-settings-api", () => ({
   taskBoardSettingsClient: {
@@ -461,6 +475,7 @@ describe("LogisticsSettingsPage", () => {
         "К складу подключено несколько очередей водителей. Должна остаться ровно одна."
       )
     ).toBeTruthy()
+    expect(screen.getByTestId("shipment-task-settings-card")).toBeTruthy()
     expect(mocks.updateDriverQueue).not.toHaveBeenCalled()
   })
 
@@ -473,6 +488,9 @@ describe("LogisticsSettingsPage", () => {
     expect(
       await screen.findByText("Подключить очередь перемещений")
     ).toBeTruthy()
+    expect(screen.getByTestId("shipment-task-settings-card").textContent).toBe(
+      `${WAREHOUSE_ID}:Тестовый склад`
+    )
     await user.click(screen.getByRole("button", { name: "Подключить очередь" }))
 
     await waitFor(() =>

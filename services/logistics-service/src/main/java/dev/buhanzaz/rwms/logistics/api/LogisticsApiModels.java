@@ -26,14 +26,23 @@ public final class LogisticsApiModels {
       @NotNull UUID warehouseId,
       UUID clientId,
       @Size(max = 512) String driverSnapshot,
+      UUID driverWorkerId,
       @NotNull @Size(min = 1, max = 100) List<@Valid ReturnLineRequest> lines) {
     public CreateReturnRequest(
+        UUID warehouseId,
+        UUID clientId,
+        String driverSnapshot,
+        List<ReturnLineRequest> lines) {
+      this(warehouseId, clientId, driverSnapshot, null, lines);
+    }
+
+    public CreateReturnRequest(
         UUID warehouseId, UUID clientId, List<ReturnLineRequest> lines) {
-      this(warehouseId, clientId, null, lines);
+      this(warehouseId, clientId, null, null, lines);
     }
 
     public CreateReturnRequest(UUID warehouseId, List<ReturnLineRequest> lines) {
-      this(warehouseId, null, null, lines);
+      this(warehouseId, null, null, null, lines);
     }
   }
 
@@ -53,19 +62,42 @@ public final class LogisticsApiModels {
       UUID rentalOrderId,
       @NotBlank @Size(max = 512) String partySnapshot,
       @NotBlank @Size(max = 512) String driverSnapshot,
+      UUID driverWorkerId,
       @NotNull @Size(min = 1, max = 100) List<@Valid ShipmentLineRequest> lines) {
+    public CreateShipmentRequest(
+        UUID warehouseId,
+        UUID clientId,
+        UUID rentalOrderId,
+        String partySnapshot,
+        String driverSnapshot,
+        List<ShipmentLineRequest> lines) {
+      this(
+          warehouseId,
+          clientId,
+          rentalOrderId,
+          partySnapshot,
+          driverSnapshot,
+          null,
+          lines);
+    }
+
     public CreateShipmentRequest(
         UUID warehouseId,
         String partySnapshot,
         String driverSnapshot,
         List<ShipmentLineRequest> lines) {
-      this(warehouseId, null, null, partySnapshot, driverSnapshot, lines);
+      this(warehouseId, null, null, partySnapshot, driverSnapshot, null, lines);
     }
   }
 
   public record ShipmentPlanRequest(
       @NotBlank @Size(max = 512) String driverSnapshot,
-      @NotNull LocalDate scheduledDate) {}
+      UUID driverWorkerId,
+      @NotNull LocalDate scheduledDate) {
+    public ShipmentPlanRequest(String driverSnapshot, LocalDate scheduledDate) {
+      this(driverSnapshot, null, scheduledDate);
+    }
+  }
 
   public record ShipmentFurnitureTaskView(
       UUID rentalItemId, String unitNumber, UUID taskId, int lineCount) {}
@@ -100,7 +132,12 @@ public final class LogisticsApiModels {
 
   public record ReturnPickupRequest(
       @NotBlank @Size(max = 512) String driverSnapshot,
-      @NotNull LocalDate scheduledDate) {}
+      UUID driverWorkerId,
+      @NotNull LocalDate scheduledDate) {
+    public ReturnPickupRequest(String driverSnapshot, LocalDate scheduledDate) {
+      this(driverSnapshot, null, scheduledDate);
+    }
+  }
 
   public record EquipmentAllocationRequest(
       @NotNull UUID equipmentId, @Min(1) long quantity, @Min(0) long expectedStockVersion) {}
@@ -135,7 +172,6 @@ public final class LogisticsApiModels {
   public record CreateTransferRequest(
       @NotNull UUID warehouseId,
       @NotNull UUID destinationWarehouseId,
-      @Size(max = 512) String driverSnapshot,
       @NotNull LocalDate scheduledDate,
       @NotNull @Size(min = 1, max = 100) List<@Valid TransferLineRequest> lines,
       @NotNull
@@ -229,6 +265,7 @@ public final class LogisticsApiModels {
       UUID destinationWarehouseId,
       String partySnapshot,
       String driverSnapshot,
+      UUID driverWorkerId,
       UUID clientId,
       UUID equipmentMovementTaskId,
       LocalDate scheduledDate,
@@ -257,6 +294,7 @@ public final class LogisticsApiModels {
       UUID destinationWarehouseId,
       String partySnapshot,
       String driverSnapshot,
+      UUID driverWorkerId,
       UUID clientId,
       UUID equipmentMovementTaskId,
       LocalDate scheduledDate,

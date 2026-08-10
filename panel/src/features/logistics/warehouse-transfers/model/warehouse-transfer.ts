@@ -43,7 +43,6 @@ export type TransferDocument = {
   warehouseId: string
   destinationWarehouseId: string
   partySnapshot: null
-  driverSnapshot: string | null
   clientId: null
   equipmentMovementTaskId: string | null
   scheduledDate: string

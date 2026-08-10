@@ -37,6 +37,7 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -84,6 +85,10 @@ class LogisticsWarehouseLifecycleIntegrationTest {
       UUID.fromString("00000000-0000-0000-0000-00000000a302");
   private static final UUID ASSET =
       UUID.fromString("00000000-0000-0000-0000-00000000a303");
+  private static final UUID DRIVER_QUEUE_DEFINITION =
+      UUID.fromString("00000000-0000-0000-0000-00000000a305");
+  private static final UUID DRIVER_QUEUE_CATEGORY =
+      UUID.fromString("00000000-0000-0000-0000-00000000a306");
   private static final OffsetDateTime TIME_ZONE_EFFECTIVE_FROM =
       OffsetDateTime.parse("2020-01-01T00:00:00Z");
   @Container
@@ -104,9 +109,11 @@ class LogisticsWarehouseLifecycleIntegrationTest {
   @BeforeEach
   void clean() {
     reset(dependencies);
+    stubDocumentDriverPlanning();
     jdbc.execute(
         """
         truncate table
+          driver_logistics_task,
           logistics_warehouse_readiness_fence,
           logistics_warehouse_admission_intent,
           warehouse_operation_mark_recovery_audit,
@@ -209,6 +216,18 @@ class LogisticsWarehouseLifecycleIntegrationTest {
         documents.createReturn(SUBJECT, idempotencyKey, UUID.randomUUID(), request, admitted);
 
     assertThat(created.replayed()).isFalse();
+    assertThat(storedCommandChecksum("CREATE_RETURN", idempotencyKey))
+        .isEqualTo(
+            LogisticsCommandChecksum.sha256(
+                "CREATE_RETURN",
+                Arrays.asList(
+                    request.warehouseId().toString(),
+                    null,
+                    null,
+                    request.lines().getFirst().assetId().toString(),
+                    Long.toString(request.lines().getFirst().assetVersion()),
+                    request.lines().getFirst().tenantSnapshot(),
+                    null)));
     assertThat(admitted.kind()).isEqualTo(AdmissionKind.REMOTE_ADMISSION);
     assertThat(admitted.admissionEvidence())
         .containsExactly(
@@ -476,6 +495,18 @@ class LogisticsWarehouseLifecycleIntegrationTest {
     LogisticsDocumentService.CreateResult created =
         documents.createShipment(
             SUBJECT, idempotencyKey, UUID.randomUUID(), request, admission);
+    assertThat(storedCommandChecksum("CREATE_SHIPMENT", idempotencyKey))
+        .isEqualTo(
+            LogisticsCommandChecksum.sha256(
+                "CREATE_SHIPMENT",
+                Arrays.asList(
+                    request.warehouseId().toString(),
+                    null,
+                    null,
+                    request.partySnapshot(),
+                    request.driverSnapshot(),
+                    request.lines().getFirst().assetId().toString(),
+                    Long.toString(request.lines().getFirst().assetVersion()))));
 
     reset(dependencies);
     when(dependencies.productionReady()).thenReturn(false);
@@ -505,6 +536,16 @@ class LogisticsWarehouseLifecycleIntegrationTest {
     LogisticsDocumentService.CreateResult created =
         documents.createTransfer(
             SUBJECT, idempotencyKey, UUID.randomUUID(), request, admission);
+    assertThat(storedCommandChecksum("CREATE_TRANSFER", idempotencyKey))
+        .isEqualTo(
+            LogisticsCommandChecksum.sha256(
+                "CREATE_TRANSFER",
+                List.of(
+                    request.warehouseId().toString(),
+                    request.destinationWarehouseId().toString(),
+                    request.scheduledDate().toString(),
+                    request.lines().getFirst().assetId().toString(),
+                    Long.toString(request.lines().getFirst().assetVersion()))));
     Map<String, Object> documentBefore =
         jdbc.queryForMap(
             """
@@ -534,7 +575,6 @@ class LogisticsWarehouseLifecycleIntegrationTest {
         new CreateTransferRequest(
             request.destinationWarehouseId(),
             request.warehouseId(),
-            request.driverSnapshot(),
             request.scheduledDate(),
             request.lines(),
             request.furnitureReplacements());
@@ -744,6 +784,7 @@ class LogisticsWarehouseLifecycleIntegrationTest {
 
   private void stubAdmission(
       UUID warehouseId, WarehouseOperationDirection direction, long version) {
+    stubDocumentDriverPlanning();
     when(dependencies.productionReady()).thenReturn(true);
     when(dependencies.warehouseAdmission(warehouseId, direction))
         .thenReturn(
@@ -755,6 +796,17 @@ class LogisticsWarehouseLifecycleIntegrationTest {
                 true));
     when(dependencies.warehouseTimeZoneAt(eq(warehouseId), any(OffsetDateTime.class)))
         .thenReturn(new WarehouseTimeZone(warehouseId, "UTC", TIME_ZONE_EFFECTIVE_FROM));
+  }
+
+  private void stubDocumentDriverPlanning() {
+    when(dependencies.readWarehouseDriverQueue(WAREHOUSE))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseDriverQueue(
+                WAREHOUSE, DRIVER_QUEUE_DEFINITION, DRIVER_QUEUE_CATEGORY));
+    when(dependencies.readRentalItemSnapshot(ASSET))
+        .thenReturn(
+            new LogisticsDependencyGateway.RentalItemSnapshot(
+                ASSET, 7, WAREHOUSE, "БТ-QA", "FREE", List.of()));
   }
 
   private ResultActions performCreate(UUID idempotencyKey, CreateReturnRequest request)
@@ -829,7 +881,6 @@ class LogisticsWarehouseLifecycleIntegrationTest {
                 {
                   "warehouseId": "%s",
                   "destinationWarehouseId": "%s",
-                  "driverSnapshot": "%s",
                   "scheduledDate": "%s",
                   "lines": [{"assetId":"%s","assetVersion":%d}],
                   "furnitureReplacements": []
@@ -838,7 +889,6 @@ class LogisticsWarehouseLifecycleIntegrationTest {
                     .formatted(
                         request.warehouseId(),
                         request.destinationWarehouseId(),
-                        request.driverSnapshot(),
                         request.scheduledDate(),
                         request.lines().getFirst().assetId(),
                         request.lines().getFirst().assetVersion()))
@@ -897,7 +947,6 @@ class LogisticsWarehouseLifecycleIntegrationTest {
     return new CreateTransferRequest(
         WAREHOUSE,
         DESTINATION_WAREHOUSE,
-        "Driver A",
         LocalDate.now(ZoneOffset.UTC).plusDays(2),
         List.of(new TransferLineRequest(ASSET, assetVersion)),
         List.of());
@@ -918,5 +967,18 @@ class LogisticsWarehouseLifecycleIntegrationTest {
   private long count(String table) {
     Long value = jdbc.queryForObject("select count(*) from " + table, Long.class);
     return value == null ? 0 : value;
+  }
+
+  private String storedCommandChecksum(String operation, UUID idempotencyKey) {
+    return jdbc.queryForObject(
+        """
+        select request_sha256
+          from logistics_idempotency_record
+         where subject_id=? and operation_name=? and idempotency_key=?
+        """,
+        String.class,
+        SUBJECT,
+        operation,
+        idempotencyKey);
   }
 }

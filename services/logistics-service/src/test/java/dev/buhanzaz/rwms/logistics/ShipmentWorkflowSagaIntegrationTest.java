@@ -17,6 +17,7 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentFurnitureReadi
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRentalShipmentRequest;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
+import dev.buhanzaz.rwms.logistics.driver.service.DocumentDriverTaskPlanner;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
@@ -86,6 +87,7 @@ class ShipmentWorkflowSagaIntegrationTest {
   @Autowired ShipmentFurnitureTaskService shipmentFurnitureTasks;
 
   @MockitoBean LogisticsDependencyGateway dependencies;
+  @MockitoBean DocumentDriverTaskPlanner driverTaskPlanner;
 
   @BeforeEach
   void reset() {
@@ -104,7 +106,7 @@ class ShipmentWorkflowSagaIntegrationTest {
           outbox_event
         cascade
         """);
-    org.mockito.Mockito.reset(dependencies);
+    org.mockito.Mockito.reset(dependencies, driverTaskPlanner);
   }
 
   @Test

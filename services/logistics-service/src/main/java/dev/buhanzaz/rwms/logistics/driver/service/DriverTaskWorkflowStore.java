@@ -47,10 +47,14 @@ class DriverTaskWorkflowStore {
               task.getExternalTaskId(),
               task.getDriverQueueDefinitionId(),
               task.getUnitNumber(),
-              title(task.getKind()),
+              title(task),
               description(task),
               task.getScheduledDate(),
-              task.getPriority()));
+              task.getPriority(),
+              new LogisticsDependencyGateway.DriverTaskAudience(
+                  task.getDriverAudienceMode(),
+                  task.getPlannedDriverWorkerId(),
+                  task.getPlannedDriverNameSnapshot())));
       case SCHEDULED ->
           task.hasManualPromotionHold()
                   && task.getKind().consumesRepairPlace()
@@ -85,6 +89,10 @@ class DriverTaskWorkflowStore {
         board.entryStatus(),
         board.lane(),
         board.doneAt());
+    task.observeAudience(
+        board.driverAudience().mode(),
+        board.driverAudience().workerId(),
+        board.driverAudience().workerName());
     tasks.saveAndFlush(task);
   }
 
@@ -109,6 +117,10 @@ class DriverTaskWorkflowStore {
         board.lane(),
         board.status(),
         board.doneAt());
+    task.observeAudience(
+        board.driverAudience().mode(),
+        board.driverAudience().workerId(),
+        board.driverAudience().workerName());
     tasks.saveAndFlush(task);
   }
 
@@ -125,6 +137,11 @@ class DriverTaskWorkflowStore {
         || !Objects.equals(task.getTaskBoardEntryStatus(), board.entryStatus())
         || !Objects.equals(task.getTaskBoardDoneAt(), board.doneAt())
         || !Objects.equals(task.getScheduledDate(), board.scheduledDate())
+        || task.getDriverAudienceMode() != board.driverAudience().mode()
+        || !Objects.equals(
+            task.getPlannedDriverWorkerId(), board.driverAudience().workerId())
+        || !Objects.equals(
+            task.getPlannedDriverNameSnapshot(), board.driverAudience().workerName())
         || task.getRetryCount() != 0
         || task.getFailureCode() != null) {
       return false;
@@ -159,10 +176,19 @@ class DriverTaskWorkflowStore {
       UUID taskId, LogisticsDependencyGateway.CabinCoverChange cover) {
     DriverLogisticsTask task = locked(taskId);
     if (task.getState() != DriverTaskState.FINALIZING || task.isCoverApplied()) return;
-    if (!task.getCabinId().equals(cover.cabinId())
-        || !task.getWarehouseId().equals(cover.warehouseId())
+    if (!task.getWarehouseId().equals(cover.warehouseId())
         || !task.getCompletionMediaId().equals(cover.coverMediaId())
         || !task.getCompletionEntryId().equals(cover.taskBoardEntryId())) {
+      throw new LogisticsConflictException(
+          "Media-service returned a mismatched cabin cover result");
+    }
+    if (task.isGroupedShipment()) {
+      task.markGroupedShipmentMemberCoverApplied(
+          cover.cabinId(), cover.coverMediaId(), cover.taskBoardEntryId());
+      tasks.saveAndFlush(task);
+      return;
+    }
+    if (!task.getCabinId().equals(cover.cabinId())) {
       throw new LogisticsConflictException(
           "Media-service returned a mismatched cabin cover result");
     }
@@ -291,12 +317,27 @@ class DriverTaskWorkflowStore {
       return Optional.of(new EvidenceWork(task.getId(), task.getExternalTaskId()));
     }
     if (!task.isCoverApplied()) {
+      if (task.isGroupedShipment()) {
+        var member = task.nextUncoveredGroupedShipmentMember();
+        if (member == null) {
+          throw new LogisticsConflictException(
+              "Групповая отгрузка не синхронизировала общий checkpoint бытовок");
+        }
+        return Optional.of(
+            new CoverWork(
+                task.getId(),
+                member.getCabinId(),
+                task.getCompletionEntryId(),
+                task.getCompletionMediaId(),
+                true));
+      }
       return Optional.of(
           new CoverWork(
               task.getId(),
               task.getCabinId(),
               task.getCompletionEntryId(),
-              task.getCompletionMediaId()));
+              task.getCompletionMediaId(),
+              false));
     }
     if (!task.isRepairPlaceEffectApplied()) {
       if (task.getRepairPlaceAllocationVersion() == null || task.getRepairId() == null) {
@@ -332,17 +373,23 @@ class DriverTaskWorkflowStore {
     }
   }
 
-  private static String title(DriverTaskKind kind) {
-    return switch (kind) {
+  private static String title(DriverLogisticsTask task) {
+    if (task.isGroupedShipment()) {
+      return "Отгрузить бытовки";
+    }
+    return switch (task.getKind()) {
       case DELIVER_TO_REPAIR -> "Доставить бытовку в ремонт";
       case REMOVE_FROM_REPAIR -> "Переместить бытовку с ремонта";
       case CAPITAL_TO_PRODUCTION -> "Переместить бытовку на производство";
       case GENERAL_MOVEMENT -> "Переместить бытовку";
+      case SHIPMENT -> "Отгрузить бытовку";
+      case RETURN -> "Забрать бытовку";
+      case TRANSFER -> "Переместить бытовку между складами";
     };
   }
 
   private static String description(DriverLogisticsTask task) {
-    return task.getComment() == null ? title(task.getKind()) : task.getComment();
+    return task.getComment() == null ? title(task) : task.getComment();
   }
 
   private static OffsetDateTime now() {
@@ -366,7 +413,8 @@ class DriverTaskWorkflowStore {
       String title,
       String description,
       java.time.LocalDate scheduledDate,
-      int priority)
+      int priority,
+      LogisticsDependencyGateway.DriverTaskAudience driverAudience)
       implements Work {}
 
   record StatusWork(UUID taskId, UUID externalTaskId) implements Work {}
@@ -374,7 +422,11 @@ class DriverTaskWorkflowStore {
   record EvidenceWork(UUID taskId, UUID externalTaskId) implements Work {}
 
   record CoverWork(
-      UUID taskId, UUID cabinId, UUID taskBoardEntryId, UUID evidenceMediaId)
+      UUID taskId,
+      UUID cabinId,
+      UUID taskBoardEntryId,
+      UUID evidenceMediaId,
+      boolean groupedShipment)
       implements Work {}
 
   record RepairPlaceEffectWork(

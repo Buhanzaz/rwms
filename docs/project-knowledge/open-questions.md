@@ -164,20 +164,25 @@ work.
   source revision and expose a verifiable version, signature and checksum.
 - Conflicting contract or invariant: the manager download site has two manually
   kept HTML implementations and publishes a mutable debug APK with hand-entered
-  version/date/size metadata. The worker site has one validated release
-  manifest but is deliberately pending because no reviewed worker APK exists.
-  There is no shared release registry or organization-wide
-  checksum-verification flow.
+  version/date/size metadata. The worker site now separately publishes a
+  reviewed signed 0.1.11 APK through one validated manifest, a versioned
+  Worker-owned download route and a SHA-256 check, but there is still no shared
+  release registry, documented signing authority/retention policy or
+  organization-wide checksum-verification flow.
 - Evidence:
   [`manager app build`](../../app/build.gradle.kts),
   [`download preparation`](../../manager-download-site/scripts/prepare-sites-worker.mjs),
   [`Next page`](../../manager-download-site/app/page.jsx),
-  [`static page`](../../manager-download-site/public/index.html).
+  [`static page`](../../manager-download-site/public/index.html),
+  [`worker manifest`](../../worker-download-site/release.json),
+  [`worker route`](../../worker-download-site/scripts/build-site.mjs),
+  [`worker app build`](../../worker-app/app/build.gradle.kts).
 - Smallest decision needed: choose the supported page implementation, release
   signing authority and key custody, artifact repository/retention policy, and
   manifest fields used as the only rendered version source.
-- Resolution and date: none. A coding fix must not publish or replace the
-  existing artifact without an explicit reviewed release scope.
+- Resolution and date: the WorkerApp publication portion was completed on
+  2026-08-10 under an explicit reviewed release scope. The overall question
+  remains open for ManagerApp and the organization-wide release policy.
 
 ## Media Terminal Retry Authorization
 

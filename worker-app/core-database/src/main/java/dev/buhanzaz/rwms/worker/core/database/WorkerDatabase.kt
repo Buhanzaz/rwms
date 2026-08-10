@@ -27,7 +27,7 @@ import javax.inject.Singleton
         WorkerConflictEntity::class,
         WorkerInvalidationEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
 /**
@@ -316,6 +316,17 @@ abstract class WorkerDatabase : RoomDatabase() {
                 )
             }
         }
+
+        /**
+         * Adds the server-issued driver audience used to split personal
+         * logistics from warehouse-shared movements. Legacy cached rows stay
+         * unclassified until the next authoritative full feed refresh.
+         */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `worker_task` ADD COLUMN `driverAudienceMode` TEXT")
+            }
+        }
     }
 }
 
@@ -335,6 +346,7 @@ object WorkerDatabaseModule {
                 WorkerDatabase.MIGRATION_3_4,
                 WorkerDatabase.MIGRATION_4_5,
                 WorkerDatabase.MIGRATION_5_6,
+                WorkerDatabase.MIGRATION_6_7,
             )
             .build()
 }

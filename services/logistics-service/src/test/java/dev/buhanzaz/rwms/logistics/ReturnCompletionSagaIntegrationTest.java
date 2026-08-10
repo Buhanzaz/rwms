@@ -69,6 +69,10 @@ class ReturnCompletionSagaIntegrationTest {
   private static final UUID SUBJECT = UUID.fromString("00000000-0000-0000-0000-000000000702");
   private static final UUID CORRELATION = UUID.fromString("00000000-0000-0000-0000-000000000703");
   private static final UUID ASSET = UUID.fromString("00000000-0000-0000-0000-000000000704");
+  private static final UUID DRIVER_QUEUE_DEFINITION =
+      UUID.fromString("00000000-0000-0000-0000-000000000705");
+  private static final UUID DRIVER_QUEUE_CATEGORY =
+      UUID.fromString("00000000-0000-0000-0000-000000000706");
 
   @Container
   @ServiceConnection
@@ -90,6 +94,7 @@ class ReturnCompletionSagaIntegrationTest {
     jdbc.execute(
         """
         truncate table
+          driver_logistics_task,
           logistics_document,
           rental_order_command_receipt,
           rental_order_audit_event,
@@ -103,6 +108,10 @@ class ReturnCompletionSagaIntegrationTest {
         cascade
         """);
     org.mockito.Mockito.reset(dependencies);
+    when(dependencies.readWarehouseDriverQueue(WAREHOUSE))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseDriverQueue(
+                WAREHOUSE, DRIVER_QUEUE_DEFINITION, DRIVER_QUEUE_CATEGORY));
   }
 
   @Test
@@ -560,6 +569,7 @@ class ReturnCompletionSagaIntegrationTest {
         ASSET,
         version,
         WAREHOUSE,
+        "БТ-704",
         status,
         List.of(new LogisticsDependencyGateway.EquipmentContent(UUID.randomUUID(), 2)));
   }

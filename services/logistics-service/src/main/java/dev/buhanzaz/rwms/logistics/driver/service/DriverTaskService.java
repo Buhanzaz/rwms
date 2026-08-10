@@ -431,7 +431,9 @@ public class DriverTaskService {
         switch (request.kind()) {
           case REMOVE_FROM_REPAIR, CAPITAL_TO_PRODUCTION ->
               WarehouseOperationDirection.OUTGOING;
-          case DELIVER_TO_REPAIR, GENERAL_MOVEMENT -> WarehouseOperationDirection.INCOMING;
+          case DELIVER_TO_REPAIR, GENERAL_MOVEMENT, RETURN ->
+              WarehouseOperationDirection.INCOMING;
+          case SHIPMENT, TRANSFER -> WarehouseOperationDirection.OUTGOING;
         };
     return List.of(new AdmissionRequirement(request.warehouseId(), direction));
   }
@@ -441,6 +443,11 @@ public class DriverTaskService {
   }
 
   private static void validateSource(CreateDriverTaskRequest request) {
+    if (request.sourceType() == DriverTaskSourceType.LOGISTICS_DOCUMENT
+        || request.sourceType() == DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE) {
+      throw new IllegalArgumentException(
+          "Document-derived driver task sources are reserved for logistics document workflows");
+    }
     boolean manualMovement = request.sourceType() == DriverTaskSourceType.MANUAL;
     if (manualMovement != (request.kind() == DriverTaskKind.GENERAL_MOVEMENT)) {
       throw new IllegalArgumentException(
@@ -501,7 +508,8 @@ public class DriverTaskService {
             request.priority().toString(),
             normalizedComment(request.comment()),
             unitNumber,
-            queueDefinitionId.toString()));
+            queueDefinitionId.toString(),
+            request.kind().defaultAudienceMode().name()));
   }
 
   private static String normalizedComment(String value) {

@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.driver.api;
 
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskAudienceMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
 import jakarta.validation.constraints.Min;
@@ -71,6 +72,7 @@ public final class DriverBoardApiModels {
       String taskText,
       String unitNumber,
       DriverTaskKind kind,
+      DriverTaskAudienceResponse driverAudience,
       DriverTaskState workflowState,
       String taskStatus,
       String entryStatus,
@@ -79,6 +81,10 @@ public final class DriverBoardApiModels {
       int priority,
       boolean pinned,
       int position) {}
+
+  /** Planned WorkerApp audience; only ASSIGNED_DRIVER carries a driver identity. */
+  public record DriverTaskAudienceResponse(
+      DriverTaskAudienceMode mode, UUID workerId, String workerName) {}
 
   public record CapitalRepairCardResponse(
       UUID repairId,

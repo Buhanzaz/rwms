@@ -172,7 +172,8 @@ public class TaskBoardReplayVerifier {
       if (liveProjection.isPresent()) {
         JsonNode live = read(write(liveProjection.orElseThrow()));
         JsonNode storedProjection = read(tail.payload());
-        String projectionJson = canonicalJson(write(live));
+        JsonNode comparableLive = replayCompatibleProjection(stream.aggregateType(), live, storedProjection);
+        String projectionJson = canonicalJson(write(comparableLive));
         String storedJson = canonicalJson(write(storedProjection));
         if (!projectionJson.equals(storedJson)) {
           throw new IllegalStateException("Task-board replay tail does not match live projection");
@@ -187,6 +188,22 @@ public class TaskBoardReplayVerifier {
       metrics.replayFailed();
       throw exception;
     }
+  }
+
+  /**
+   * Removes audience fields only when comparing against a legacy board-task tail that predates
+   * those optional event fields. New tails remain subject to exact projection parity.
+   */
+  private JsonNode replayCompatibleProjection(
+      TaskBoardAggregateType type, JsonNode live, JsonNode stored) {
+    if (type != TaskBoardAggregateType.BOARD_TASK || stored.has("driverAudience")) {
+      return live;
+    }
+    tools.jackson.databind.node.ObjectNode compatible =
+        (tools.jackson.databind.node.ObjectNode) live.deepCopy();
+    compatible.remove("driverAudience");
+    compatible.remove("plannedDriverWorkerId");
+    return compatible;
   }
 
   private Optional<Object> liveProjection(TaskBoardAggregateType type, UUID id) {

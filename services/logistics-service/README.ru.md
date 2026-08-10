@@ -22,6 +22,27 @@ document/workflow state, но не агрегатами кабин, оборуд
 используют определённые контрактом `Idempotency-Key` и expected-version field/parameter; callers
 должны обработать канонический конфликт, а не отправлять изменившийся retry.
 
+Команды shipment и return несут необязательный opaque `driverWorkerId` task-board вместе с
+историческим display snapshot; logistics никогда не выводит identity из имени. Команды transfer не
+содержат identity водителя. После планирования каждая новая shipment создаёт одно durable
+document-owned задание водителя с неизменяемым снимком клиента и упорядоченными участниками-бытовками.
+Нейтральный технический priority остаётся деталью task-board; title, summary с количеством и task
+text содержат намерение отгрузки, клиента и полный список номеров. Evidence завершения
+идемпотентно применяет cover checkpoint к каждому участнику, а группа завершается только после всех
+cover. Исторические shipment-задачи по строкам документа не перегруппировываются. Return сохраняют
+по одной задаче на строку и назначаются при наличии ID, иначе остаются неназначенными; transfer и
+прочие movement-задания используют identity-free `WAREHOUSE_DRIVERS`. Public board выдаёт аудиторию
+для группировки по датам и водителям. Public move может только переставлять shipment/return внутри
+текущих водителя, даты и lane. Movement-задания сохраняют существующую политику планирования
+date/lane, при этом public move не может изменить аудиторию.
+
+`GET` и `PUT /api/logistics/v1/warehouses/{warehouseId}/shipment-task-settings` владеют
+warehouse-scoped максимумом бытовок в одном новом shipment-задании. Лениво создаваемое значение по
+умолчанию — одна бытовка; GET требует read/VIEW scope, PUT — write/MANAGE scope и
+`expectedVersion`. Generic и saved-order команды shipment отклоняют уникальный выбранный набор выше
+текущего лимита до создания document или driver task; logistics никогда не делит такой запрос
+автоматически.
+
 `POST /api/logistics/v1/rental-inquiries/{inquiryId}/cabin-searches` является write-authorized
 командой и требует `Idempotency-Key`. Короткая PREPARE transaction блокирует inquiry, повторно
 проверяет текущие ownership/state и warehouse-edit authority, затем сохраняет digest запроса по
@@ -105,6 +126,8 @@ port. Его неизменённый constructor собирает шесть ow
 | `RentalInquiryCabinCatalogService` | Ограниченный facts-only cabin lookup с authorization inquiry, warehouse и owner |
 | `LogisticsDocumentService` | Стабильный facade return/shipment/transfer и rental-order hooks над семью точными owners |
 | Coordinators документов return, shipment и transfer | Независимые document state machines с исходным порядком transaction и recovery |
+| `DocumentDriverTaskPlanner` | Одно idempotent document-owned задание с упорядоченными участниками-бытовками на каждую новую запланированную shipment; legacy line tasks и задачи return/transfer сохраняют per-line planning и pre-start guards replan/cancel |
+| `ShipmentTaskSettingsService` | Warehouse-scoped version-fenced лимит бытовок в новом shipment-задании; атомарно материализует default one и отклоняет over-limit создание до persistence document |
 | Coordinators rental-order shipment/completion и reconciliation | Document hooks для rental shipment, terminal return и команды reconciliation request |
 | Политики document admission, idempotency, attempts, reads и binding | Узкие leaves warehouse, replay, external-attempt, projection и active-order |
 | `RentalOrderService` | Стабильный order facade над reads, creation, lifecycle, reservations, terms и shipment hand-off |
@@ -196,6 +219,25 @@ Migration
 клиента значениями `INDIVIDUAL` и `LEGAL_ENTITY`. Если переклассификация столкнётся с существующим
 юридическим лицом по нормализованному телефону, она останавливается до update и сохраняет все
 записи для ручного разрешения.
+
+Migration
+[`V44__driver_task_audience_and_document_driver.sql`](src/main/resources/db/migration/V44__driver_task_audience_and_document_driver.sql)
+добавляет opaque ID водителя документа, три поля аудитории durable driver task,
+а также source строки документа и kinds shipment/return/transfer. Существующие
+driver tasks сохраняют прежнее общее поведение для водителей склада. Schema
+хранит только ID и snapshots; cross-service foreign key не создаётся.
+
+Migration
+[`V45__correct_driver_task_audience.sql`](src/main/resources/db/migration/V45__correct_driver_task_audience.sql)
+удаляет snapshots/ID водителя у transfer и все hints ответственного у общих задач. Shipment и return
+становятся `ASSIGNED_DRIVER` при наличии ID и `UNASSIGNED` без него; все movement kinds становятся
+identity-free `WAREHOUSE_DRIVERS`. Новые constraints сохраняют эти правила.
+
+Migration
+[`V46__shipment_task_grouping.sql`](src/main/resources/db/migration/V46__shipment_task_grouping.sql)
+добавляет warehouse-local настройки shipment task, source `LOGISTICS_DOCUMENT` driver task и
+упорядоченные cover checkpoints участников shipment. Это только expand: ни одна историческая
+`LOGISTICS_DOCUMENT_LINE` задача не перегруппировывается и не переписывается.
 
 Logistics вместе фиксирует facts, projection checkpoints и transactional outbox. Kafka delivery —
 at-least-once: aggregate IDs являются record keys, event IDs — dedupe identities, а consumers хранят

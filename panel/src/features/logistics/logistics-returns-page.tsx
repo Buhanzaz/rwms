@@ -290,18 +290,21 @@ export function LogisticsReturnsPage() {
     mutationFn: ({
       document,
       driverSnapshot,
+      driverWorkerId,
       scheduledDate,
     }: {
       document: ReturnDocument
       driverSnapshot: string
+      driverWorkerId: string
       scheduledDate: string
     }) => {
-      const signature = `pickup:${document.id}:${document.version}:${driverSnapshot}:${scheduledDate}`
+      const signature = `pickup:${document.id}:${document.version}:${driverWorkerId}:${driverSnapshot}:${scheduledDate}`
       return registerReturn({
         accessToken: accessToken!,
         documentId: document.id,
         expectedVersion: document.version,
         driverSnapshot,
+        driverWorkerId,
         scheduledDate,
         idempotencyKey: keyFor(signature),
       })
@@ -315,7 +318,7 @@ export function LogisticsReturnsPage() {
     onError: (cause, variables) => {
       if (cause instanceof ApiError && cause.status === 409) {
         commandKeys.current.delete(
-          `pickup:${variables.document.id}:${variables.document.version}:${variables.driverSnapshot}:${variables.scheduledDate}`
+          `pickup:${variables.document.id}:${variables.document.version}:${variables.driverWorkerId}:${variables.driverSnapshot}:${variables.scheduledDate}`
         )
         void refresh(variables.document.warehouseId)
       }
@@ -628,7 +631,11 @@ function ReturnPickupDialog({
   document: ReturnDocument
   pending: boolean
   onOpenChange: (open: boolean) => void
-  onSubmit: (input: { driverSnapshot: string; scheduledDate: string }) => void
+  onSubmit: (input: {
+    driverSnapshot: string
+    driverWorkerId: string
+    scheduledDate: string
+  }) => void
 }) {
   const [driver, setDriver] = useState<RepairTaskWorkerSnapshotDto | null>(null)
   const [scheduledDate, setScheduledDate] = useState("")
@@ -645,7 +652,11 @@ function ReturnPickupDialog({
       setError("Укажите дату вывоза.")
       return
     }
-    onSubmit({ driverSnapshot: driver.name.trim(), scheduledDate })
+    onSubmit({
+      driverSnapshot: driver.name.trim(),
+      driverWorkerId: driver.id,
+      scheduledDate,
+    })
   }
 
   return (

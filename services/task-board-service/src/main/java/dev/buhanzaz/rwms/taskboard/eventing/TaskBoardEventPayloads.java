@@ -1,8 +1,10 @@
 package dev.buhanzaz.rwms.taskboard.eventing;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import dev.buhanzaz.rwms.taskboard.domain.AssignmentStatus;
 import dev.buhanzaz.rwms.taskboard.domain.EntryStatus;
 import dev.buhanzaz.rwms.taskboard.domain.EntryType;
+import dev.buhanzaz.rwms.taskboard.domain.DriverTaskAudienceMode;
 import dev.buhanzaz.rwms.taskboard.domain.GroupOperationalStatus;
 import dev.buhanzaz.rwms.taskboard.domain.GroupKpiOpenState;
 import dev.buhanzaz.rwms.taskboard.domain.PauseOrigin;
@@ -118,16 +120,67 @@ public final class TaskBoardEventPayloads {
   public record QueueUsageReferenceFact(UUID queueUsageReferenceId, UUID revisionMarker,
       UUID queueId, QueueReferenceType referenceType, String externalReferenceHash, boolean deleted) {}
 
+  /**
+   * Sanitized board-task state, including the non-PII driver audience and an opaque worker identity
+   * only for explicitly assigned work.
+   */
   public record BoardTaskFact(UUID boardTaskId, UUID warehouseId, UUID externalTaskId,
       TaskStatus status, LocalDate scheduledDate, TaskLane lane, int priority, boolean pinned,
       Integer plannedDurationMinutes, OffsetDateTime deadlineAt, OffsetDateTime doneAt,
+      @JsonInclude(JsonInclude.Include.NON_NULL) DriverTaskAudienceMode driverAudience,
+      @JsonInclude(JsonInclude.Include.NON_NULL) UUID plannedDriverWorkerId,
       boolean deleted) {
+    public BoardTaskFact(
+        UUID boardTaskId,
+        UUID warehouseId,
+        UUID externalTaskId,
+        TaskStatus status,
+        LocalDate scheduledDate,
+        TaskLane lane,
+        int priority,
+        boolean pinned,
+        Integer plannedDurationMinutes,
+        OffsetDateTime deadlineAt,
+        OffsetDateTime doneAt,
+        boolean deleted) {
+      this(
+          boardTaskId,
+          warehouseId,
+          externalTaskId,
+          status,
+          scheduledDate,
+          lane,
+          priority,
+          pinned,
+          plannedDurationMinutes,
+          deadlineAt,
+          doneAt,
+          null,
+          null,
+          deleted);
+    }
+
     public BoardTaskFact {
       if (scheduledDate == null) {
         throw new IllegalArgumentException("Task schedule date is required");
       }
       if (priority < 1 || priority > 5) {
         throw new IllegalArgumentException("Task priority must be between 1 and 5");
+      }
+      if (driverAudience == null && plannedDriverWorkerId != null) {
+        throw new IllegalArgumentException(
+            "A planned driver requires a driver audience mode");
+      }
+      if ((driverAudience == DriverTaskAudienceMode.UNASSIGNED
+              || driverAudience == DriverTaskAudienceMode.WAREHOUSE_DRIVERS)
+          && plannedDriverWorkerId != null) {
+        throw new IllegalArgumentException(
+            "An unassigned or shared driver audience cannot identify a worker");
+      }
+      if (driverAudience == DriverTaskAudienceMode.ASSIGNED_DRIVER
+          && plannedDriverWorkerId == null) {
+        throw new IllegalArgumentException(
+            "An assigned driver audience requires a worker");
       }
     }
   }

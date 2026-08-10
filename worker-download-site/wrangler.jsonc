@@ -1,9 +1,14 @@
 {
-  "$schema": "https://unpkg.com/wrangler@4/config-schema.json",
+  "$schema": "node_modules/wrangler/config-schema.json",
   "name": "rwms-worker-download",
-  "main": ".site/worker.mjs",
+  "main": ".open-next/worker.js",
   "compatibility_date": "2026-08-09",
   "compatibility_flags": [
+    "nodejs_compat",
     "global_fetch_strictly_public"
-  ]
+  ],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  }
 }

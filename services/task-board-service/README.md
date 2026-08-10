@@ -54,6 +54,18 @@ task instead of creating a duplicate. Mutable entry operations are fenced by
 the contract-defined version and status. Route order, eligibility, assignment,
 and terminal transitions remain server-owned.
 
+Logistics driver tasks additionally carry one persisted audience:
+`UNASSIGNED`, `ASSIGNED_DRIVER`, or `WAREHOUSE_DRIVERS`. Only the exact
+logistics-service driver-task source may set it. Only assigned work carries a worker identity; that
+worker must be active in the same warehouse and have the primary qualification of the driver queue.
+Task-board ignores a caller-supplied display name and stores its authoritative worker snapshot.
+Unassigned tasks remain dispatcher work. An assigned task is visible only to that driver. A waiting
+identity-free shared task is visible to every qualified warehouse driver until one takes it, after
+which only the actual assignee retains access. The worker feed always emits nullable
+`driverAudience`: null classifies ordinary work, while a non-null value classifies logistics driver
+work. Only the private source replan boundary may replace audience under the shared task/entry
+version fence; public board movement does not.
+
 ## Internal application structure
 
 `TaskBoardService` is a stable six-collaborator transactional facade. It keeps
@@ -70,6 +82,7 @@ components own the decisions:
 | `TaskBoardOrderingService` | Manager-owned move, swap, pin and rollover operations |
 | `TaskBoardQueuePositionCoordinator` | Advisory locks, stream fences and persisted queue/pin ordering only |
 | `TaskBoardRoutePayloadCodec` | The single canonical route JSON and fingerprint codec |
+| `DriverTaskAudienceService` | Logistics-driver audience shape, qualification, visibility and execution authorization |
 | `WorkforceService` | Stable worker/group API facade over three lifecycle owners |
 | `WorkforceProfileService` | Worker profile and qualification mutation with the credential lock span |
 | `WorkforceCredentialLifecycleService` | Durable auth credential intents, completion/failure fencing, reconciliation and deletion recovery |
@@ -147,6 +160,18 @@ board task, queue entry, owner-proof, task-evidence, and group-KPI-day facts.
 The service consumes warehouse facts for metadata/lifecycle projection and
 media facts for worker evidence.
 
+Migration
+[`V28__driver_task_audience.sql`](src/main/resources/db/migration/V28__driver_task_audience.sql)
+adds the audience and planned assigned-worker snapshot to `board_task`.
+Existing logistics driver tasks are backfilled as warehouse-shared. Board-task
+events add only optional audience and worker-ID fields, so retained V1 events
+without them remain valid; display names are not published in those events.
+
+Migration
+[`V29__remove_shared_driver_identity.sql`](src/main/resources/db/migration/V29__remove_shared_driver_identity.sql)
+clears obsolete worker IDs/names from `WAREHOUSE_DRIVERS` tasks and tightens the database constraint
+so shared and unassigned audiences remain identity-free.
+
 ## Security and isolation
 
 - All API chains validate JWT issuer/audience; worker routes require the narrow
@@ -159,6 +184,10 @@ media facts for worker evidence.
   operational credential workflow state needed for reconciliation.
 - CORS uses explicit panel and worker origins. Browser/mobile clients use the
   gateway; services use private routes and client credentials.
+- The worker-credential, warehouse-lifecycle read/confirm, and warehouse-timezone
+  OAuth registrations all use `TASK_BOARD_CLIENT_SECRET`. The `dev` profile
+  supplies the same local fallback to every registration; the base/production
+  configuration has no fallback and still requires the deployment secret.
 - Dev auth bypass is allowed only with an explicit dev profile and is rejected
   outside local/test operation.
 

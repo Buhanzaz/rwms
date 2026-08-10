@@ -73,7 +73,6 @@ class LogisticsDocumentTest {
                 LogisticsDocument.createTransfer(
                     WAREHOUSE,
                     WAREHOUSE,
-                    null,
                     LocalDate.parse("2026-07-01"),
                     SUBJECT,
                     CORRELATION))
@@ -87,7 +86,6 @@ class LogisticsDocumentTest {
         LogisticsDocument.createTransfer(
             WAREHOUSE,
             DESTINATION,
-            null,
             LocalDate.parse("2026-07-01"),
             SUBJECT,
             CORRELATION);
