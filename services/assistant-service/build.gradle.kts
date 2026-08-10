@@ -14,7 +14,7 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-security-oauth2-resource-server")
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-web")
-    implementation("org.springframework.kafka:spring-kafka")
+    implementation("org.springframework.boot:spring-boot-kafka")
     implementation("io.micrometer:micrometer-tracing-bridge-otel")
 
     runtimeOnly("io.micrometer:micrometer-registry-prometheus")

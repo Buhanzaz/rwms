@@ -38,6 +38,7 @@ public class RentalInquiryBookedKafkaConsumer {
    * persistence failures propagate so Kafka cannot acknowledge incomplete recovery evidence.
    */
   @KafkaListener(
+      id = "assistantRentalInquiryBookedListener",
       topics = "${rwms.assistant.kafka.rental-inquiry-topic}",
       groupId = "assistant-service-rental-inquiry-v1")
   public void consume(ConsumerRecord<String, String> record) throws InterruptedException {

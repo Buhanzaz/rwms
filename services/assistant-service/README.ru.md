@@ -122,8 +122,12 @@ Responsible manager остаётся во владении logistics и не м�
 Flyway владеет service-local schema; Hibernate только валидирует её.
 Conversation records используют optimistic versioning; только короткая local
 creation finalization берёт transaction-scoped advisory lock для одного
-conversation ID. Booking
-listener принимает только точную booking shape `DomainEventEnvelopeV2` из
+conversation ID. Booking listener регистрируется Boot Kafka как
+`assistantRentalInquiryBookedListener`. После archive conversation остаётся доступной как
+история, но больше не читает live holds и не показывает live clarifications. Если terminal
+inquiry прочитан до прихода его Kafka booking fact в inbox, та же local conversation
+согласованно помечается archived вместо сообщения об upstream outage. Booking listener
+принимает только точную booking shape `DomainEventEnvelopeV2` из
 `rwms.logistics.rental-inquiry.events.v1`: duplicate или additional object
 fields, изменённые producer/type/version, invalid coordinates, не-UUID
 `aggregateId` либо Kafka key/correlation ID, отличный от

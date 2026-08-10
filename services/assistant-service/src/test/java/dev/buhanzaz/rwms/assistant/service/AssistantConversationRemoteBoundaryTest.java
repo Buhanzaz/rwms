@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.assistant.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -107,6 +108,39 @@ class AssistantConversationRemoteBoundaryTest {
     assertThat(result.rentalItemIds()).containsExactly(fixture.rentalItemId);
   }
 
+  @Test
+  void archivedDetailKeepsHistoryWithoutReadingLiveLogisticsState() {
+    Fixture fixture = new Fixture();
+    fixture.conversation.archive();
+
+    AssistantApiModels.ConversationDetailResponse detail =
+        fixture.service.detail(fixture.ownerId, fixture.conversationId, "bearer");
+
+    assertThat(detail.conversation().archived()).isTrue();
+    assertThat(detail.lastSearchResult()).isNull();
+    assertThat(detail.clarifications()).isEmpty();
+    assertThat(detail.currentSelection()).isNull();
+    verify(fixture.logistics, never()).readCabinSelection(fixture.inquiryId, "bearer");
+    verify(fixture.clarifications, never()).current(fixture.conversationId);
+  }
+
+  @Test
+  void terminalSelectionReadArchivesTheConversationAndReturnsReadOnlyHistory() {
+    Fixture fixture = new Fixture();
+    when(fixture.logistics.readCabinSelection(fixture.inquiryId, "bearer"))
+        .thenThrow(new AssistantInquiryArchivedException());
+
+    AssistantApiModels.ConversationDetailResponse detail =
+        fixture.service.detail(fixture.ownerId, fixture.conversationId, "bearer");
+
+    assertThat(detail.conversation().archived()).isTrue();
+    assertThat(detail.lastSearchResult()).isNull();
+    assertThat(detail.clarifications()).isEmpty();
+    assertThat(detail.currentSelection()).isNull();
+    verify(fixture.conversations).save(fixture.conversation);
+    verify(fixture.clarifications, never()).current(fixture.conversationId);
+  }
+
   /** Minimal owner-scoped conversation fixture with a real selection boundary adapter. */
   private static final class Fixture {
     private final UUID ownerId = UUID.randomUUID();
@@ -117,6 +151,10 @@ class AssistantConversationRemoteBoundaryTest {
     private final LogisticsClient logistics = mock(LogisticsClient.class);
     private final AssistantConversationCreationStore creationStore =
         mock(AssistantConversationCreationStore.class);
+    private final AssistantConversationRepository conversations =
+        mock(AssistantConversationRepository.class);
+    private final AssistantClarificationService clarifications =
+        mock(AssistantClarificationService.class);
     private final AssistantConversation conversation;
     private final AssistantConversationService service;
 
@@ -129,32 +167,32 @@ class AssistantConversationRemoteBoundaryTest {
               inquiryId,
               "INDIVIDUAL",
               "Иван Иванов");
-      AssistantConversationRepository conversations =
-          mock(AssistantConversationRepository.class);
       AssistantMessageRepository messages = mock(AssistantMessageRepository.class);
       AssistantToolCallRepository toolCalls = mock(AssistantToolCallRepository.class);
       AssistantResponseMapper responseMapper = mock(AssistantResponseMapper.class);
-      AssistantClarificationService clarifications = mock(AssistantClarificationService.class);
       when(conversations.findByIdAndOwnerSubjectId(conversationId, ownerId))
           .thenReturn(Optional.of(conversation));
+      when(conversations.findById(conversationId)).thenReturn(Optional.of(conversation));
+      when(conversations.save(conversation)).thenReturn(conversation);
       when(messages.findByConversationIdOrderByCreatedAtAscIdAsc(conversationId))
           .thenReturn(List.of());
       when(toolCalls.findByConversationIdOrderByCreatedAtAscIdAsc(conversationId))
           .thenReturn(List.of());
       when(clarifications.current(conversationId)).thenReturn(List.of());
       when(responseMapper.toConversationResponse(conversation))
-          .thenReturn(
-              new AssistantApiModels.ConversationResponse(
-                  conversationId,
-                  0,
-                  conversation.getClientId(),
-                  inquiryId,
-                  "INDIVIDUAL",
-                  "Иван Иванов",
-                  false,
-                  null,
-                  null,
-                  null));
+          .thenAnswer(
+              ignored ->
+                  new AssistantApiModels.ConversationResponse(
+                      conversationId,
+                      0,
+                      conversation.getClientId(),
+                      inquiryId,
+                      "INDIVIDUAL",
+                      "Иван Иванов",
+                      conversation.isArchived(),
+                      null,
+                      null,
+                      null));
       service =
           new AssistantConversationService(
               conversations,

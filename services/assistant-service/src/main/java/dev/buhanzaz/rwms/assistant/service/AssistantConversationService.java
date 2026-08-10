@@ -121,6 +121,9 @@ public class AssistantConversationService {
   /**
    * Reads owner-scoped history and then reconciles its carousel with logistics after repository
    * read transactions have closed, so an upstream call never holds an assistant database session.
+   * Archived conversations are immutable history: they expose neither live holds nor unresolved
+   * clarification controls. A terminal logistics response closes the same local conversation when
+   * Kafka delivery has not reached its inbox yet.
    */
   public AssistantApiModels.ConversationDetailResponse detail(
       UUID ownerSubjectId, UUID conversationId, String bearerToken) {
@@ -136,10 +139,18 @@ public class AssistantConversationService {
                             ? noticesByTurn.get(message.getId())
                             : null))
             .toList();
-    AssistantApiModels.CabinSelectionResponse currentSelection =
-        bearerToken == null
-            ? null
-            : selections.current(conversation.getRentalInquiryId(), bearerToken);
+    if (conversation.isArchived()) return archivedDetail(conversation, responseMessages);
+
+    AssistantApiModels.CabinSelectionResponse currentSelection;
+    try {
+      currentSelection =
+          bearerToken == null
+              ? null
+              : selections.current(conversation.getRentalInquiryId(), bearerToken);
+    } catch (AssistantInquiryArchivedException terminal) {
+      archiveFromRentalInquiry(conversation.getId(), conversation.getRentalInquiryId());
+      return archivedDetail(owned(conversationId, ownerSubjectId), responseMessages);
+    }
     JsonNode recovered = mergedLastSearchResult(conversationId);
     JsonNode lastSearchResult =
         bearerToken == null
@@ -151,6 +162,13 @@ public class AssistantConversationService {
         lastSearchResult,
         clarifications.current(conversationId),
         currentSelection);
+  }
+
+  private AssistantApiModels.ConversationDetailResponse archivedDetail(
+      AssistantConversation conversation,
+      List<AssistantApiModels.MessageResponse> responseMessages) {
+    return new AssistantApiModels.ConversationDetailResponse(
+        mapper.toConversationResponse(conversation), responseMessages, null, List.of(), null);
   }
 
   /**

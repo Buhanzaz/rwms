@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.assistant.api;
 
 import dev.buhanzaz.rwms.assistant.service.AssistantConflictException;
+import dev.buhanzaz.rwms.assistant.service.AssistantInquiryArchivedException;
 import dev.buhanzaz.rwms.assistant.service.AssistantNotFoundException;
 import dev.buhanzaz.rwms.assistant.service.AssistantUpstreamException;
 import java.net.URI;
@@ -22,6 +23,14 @@ public class AssistantApiExceptionHandler {
   @ExceptionHandler(AssistantConflictException.class)
   ProblemDetail conflict(AssistantConflictException failure) {
     return problem(HttpStatus.CONFLICT, "ASSISTANT_CONVERSATION_CONFLICT", "Conversation is immutable");
+  }
+
+  @ExceptionHandler(AssistantInquiryArchivedException.class)
+  ProblemDetail inquiryArchived(AssistantInquiryArchivedException failure) {
+    return problem(
+        HttpStatus.CONFLICT,
+        "ASSISTANT_INQUIRY_ARCHIVED",
+        "The rental inquiry is already completed");
   }
 
   @ExceptionHandler(AssistantUpstreamException.class)

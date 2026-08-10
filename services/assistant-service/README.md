@@ -133,8 +133,12 @@ request bodies or provider credentials.
 
 Flyway owns the service-local schema; Hibernate validates it only. Conversation
 records use optimistic versioning; only the short local creation finalization
-takes a transaction-scoped advisory lock for one conversation ID. The booking listener
-accepts only the exact `DomainEventEnvelopeV2` booking shape from
+takes a transaction-scoped advisory lock for one conversation ID. The booking listener is
+registered by Boot Kafka as `assistantRentalInquiryBookedListener`. Once archived, a
+conversation remains readable as history but never re-reads live holds or exposes live
+clarifications. If a terminal inquiry is read before its Kafka booking fact reaches the inbox,
+the same local conversation is reconciled to archived instead of reporting an upstream outage.
+The booking listener accepts only the exact `DomainEventEnvelopeV2` booking shape from
 `rwms.logistics.rental-inquiry.events.v1`: duplicate or additional object
 fields, changed producer/type/version, invalid coordinates, a non-UUID
 `aggregateId`, or a Kafka key/correlation ID different from
