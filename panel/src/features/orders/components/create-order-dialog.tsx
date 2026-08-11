@@ -36,7 +36,10 @@ import {
 import { OrderCommandIdentityRegistry } from "@/features/orders/api/order-command-identity"
 import type { OrderDetail } from "@/features/orders/domain/orders"
 import { useOrdersModule } from "@/features/orders/orders-module-context"
-import { clientNeedsContactPerson } from "@/features/clients/domain/clients"
+import {
+  clientNeedsContactPerson,
+  parseAdditionalContacts,
+} from "@/features/clients/domain/clients"
 import { OrderDeliveryFields } from "@/features/orders/components/order-delivery-fields"
 import {
   emptyOrderDeliveryDraft,
@@ -173,10 +176,18 @@ function CreateOrderDialogContent({
       setErrorText("Укажите основное контактное лицо нового клиента.")
       return
     }
+    const parsedNewClientContacts =
+      choice.kind === "new"
+        ? parseAdditionalContacts(choice.additionalContacts)
+        : null
+    if (parsedNewClientContacts && !parsedNewClientContacts.contacts) {
+      setErrorText("Проверьте дополнительные контакты нового клиента.")
+      return
+    }
     const parsedDelivery = parseOrderDeliveryDraft(delivery)
     setDeliveryErrors(parsedDelivery.errors)
     if (!parsedDelivery.input) {
-      setErrorText("Проверьте обязательные поля доставки и приёмки.")
+      setErrorText("Проверьте контактный телефон заказа.")
       return
     }
 
@@ -192,6 +203,7 @@ function CreateOrderDialogContent({
               email: choice.email,
               comment: choice.comment,
               source: choice.source,
+              additionalContacts: parsedNewClientContacts!.contacts!,
             },
             ...parsedDelivery.input,
           }

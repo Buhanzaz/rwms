@@ -31,7 +31,6 @@ const document: TransferDocument = {
   clientId: null,
   equipmentMovementTaskId: EQUIPMENT_TASK_ID,
   scheduledDate: "2026-07-19",
-  scheduledAt: null,
   rentalOrderId: null,
   lines: [
     {

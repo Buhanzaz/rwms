@@ -34,9 +34,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-/**
- * HTTP boundary for authenticated rental-inquiry and manager booking operations.
- */
+/** HTTP boundary for authenticated rental-inquiry and manager booking operations. */
 @RestController
 @Validated
 @RequestMapping("/api/logistics/v1")
@@ -61,9 +59,14 @@ public class RentalInquiryController {
         .body(inquiries.create(access.writeActor(jwt), idempotencyKey, request));
   }
 
+  @GetMapping("/rental-inquiries")
+  public List<RentalInquiryResponse> listForOrder(
+      @AuthenticationPrincipal Jwt jwt, @RequestParam UUID rentalOrderId) {
+    return inquiries.listForOrder(access.readActor(jwt), rentalOrderId);
+  }
+
   @GetMapping("/rental-inquiries/{inquiryId}")
-  public RentalInquiryResponse get(
-      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID inquiryId) {
+  public RentalInquiryResponse get(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID inquiryId) {
     return inquiries.get(access.readActor(jwt), inquiryId);
   }
 
@@ -102,8 +105,7 @@ public class RentalInquiryController {
       @PathVariable UUID inquiryId,
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody CabinSelectionRequest request) {
-    return cabinSelections.replace(
-        access.writeActor(jwt), inquiryId, idempotencyKey, request);
+    return cabinSelections.replace(access.writeActor(jwt), inquiryId, idempotencyKey, request);
   }
 
   @GetMapping("/rental-inquiries/{inquiryId}/cabin-catalog")
@@ -114,8 +116,7 @@ public class RentalInquiryController {
       @RequestParam(defaultValue = "") @Size(max = 255) String query,
       @RequestParam(defaultValue = "0") @Min(0) int page,
       @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
-    return cabinCatalog.search(
-        access.readActor(jwt), inquiryId, warehouseId, query, page, size);
+    return cabinCatalog.search(access.readActor(jwt), inquiryId, warehouseId, query, page, size);
   }
 
   @PostMapping("/rental-inquiries/{inquiryId}/cabin-availability")
@@ -132,8 +133,7 @@ public class RentalInquiryController {
       @PathVariable UUID inquiryId,
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody PublishClientPresentationRequest request) {
-    return presentations.publish(
-        access.writeActor(jwt), inquiryId, idempotencyKey, request);
+    return presentations.publish(access.writeActor(jwt), inquiryId, idempotencyKey, request);
   }
 
   @GetMapping("/manual-booking-drafts/{draftId}/holds")
@@ -150,8 +150,7 @@ public class RentalInquiryController {
       @PathVariable UUID draftId,
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody ManualBookingDraftHoldsRequest request) {
-    return manualBookingDrafts.replace(
-        access.writeActor(jwt), idempotencyKey, draftId, request);
+    return manualBookingDrafts.replace(access.writeActor(jwt), idempotencyKey, draftId, request);
   }
 
   @GetMapping("/rental-inquiries/{inquiryId}/client-presentation")
@@ -191,8 +190,7 @@ public class RentalInquiryController {
 
   @PutMapping("/settings/rental")
   public RentalSettingsResponse updateSettings(
-      @AuthenticationPrincipal Jwt jwt,
-      @Valid @RequestBody UpdateRentalSettingsRequest request) {
+      @AuthenticationPrincipal Jwt jwt, @Valid @RequestBody UpdateRentalSettingsRequest request) {
     return settings.update(access.writeActor(jwt), request);
   }
 }

@@ -63,6 +63,24 @@ existing-client replay may return the already validated local row. Remote
 success and local persistence failure are not one atomic cross-service
 transaction, so recovery uses the same conversation ID rather than a new key.
 
+An optional `rentalOrderId` links the conversation to an existing order and
+requires its existing `clientId`. Assistant-service forwards both identities to
+logistics-service and does not duplicate the logistics-owned editable-order,
+client or warehouse checks. `GET /api/assistant/v1/conversations?rentalOrderId=...`
+returns the owner-scoped active link. A partial unique database index permits
+only one non-archived conversation for an order: an active conversation is
+reopened, while archiving it permits a new linked conversation. The local
+order-scoped finalization lock resolves concurrent creates to that one active
+link. Before an order-filtered list or create reuses that link, assistant-service
+reads its exact inquiry/client/order context from logistics outside a local
+transaction. `ACTIVE` is reusable; `BOOKED` or `ARCHIVED` archives only that
+exact local conversation under the existing order lock, after which create can
+open a fresh linked inquiry while list returns no terminal chat. A different
+winner observed under the lock is rechecked outside the transaction; bounded
+churn, an unknown state, an identity mismatch or a dependency failure fails
+closed. The unfiltered history list performs one local query and no per-row
+logistics reconciliation.
+
 For a cabin search, the already-persisted `AssistantToolCall.id` is the durable
 attempt root. A direct search uses that UUID; each bounded logical probe and the
 final selection derive a distinct deterministic UUID from the same root and
@@ -83,13 +101,15 @@ facet related to the chosen type. When the type is missing, dimension-compatible
 types alone become the type buttons; unrelated modules or security posts are
 never invented.
 
-Clarification questions are stored in the V5 assistant schema with stable
-question, option and branch identities. Several branches, such as OSB and LDSP,
-remain independently `PENDING`/`ANSWERED` and may be answered in either order.
-A button turn accepts only the persisted `questionId` and `optionId`; the
-visible stored user message contains the question and selected label, not its
-technical branch key. `clarification.requested` and
-`clarification.answered` SSE events carry the same reloadable question shape.
+Clarification questions have stable question and option identities and a
+durable conversation-wide sequence. One batch may contain several questions,
+but only its oldest `PENDING` head is actionable and visible; later `QUEUED`
+questions remain hidden. A button turn accepts only the head's persisted
+`questionId` and `optionId`. Answering an intermediate head activates and emits
+the next question without calling the provider; provider/tool execution resumes
+exactly once after the batch's last answer. Answered and superseded history
+remains reloadable in sequence. The visible stored user message contains the
+question and selected label, not its technical branch key.
 
 `lookup_cabin_catalog` is a separate read-only help path. It can explain the
 current type, finish, characteristic and size relations or request one bounded
@@ -105,6 +125,13 @@ IDs and `FREE` item snapshots come from logistics. The public selection PUT and
 replaces the logistics selection and therefore resets/releases the removed
 asset holds. Assistant-service stores no parallel hold truth.
 
+Before each tool execution the service reads the current logistics inquiry
+context. A logistics-fixed warehouse scopes the returned facet list and every
+search, clarification, catalog and selection mutation; a mismatched model
+argument is rejected before the downstream operation. The warehouse is never
+cached or persisted by assistant-service, so later order warehouse fixation is
+observed on the next tool call and logistics still revalidates every mutation.
+
 ## Public API, authorization and isolation
 
 Interactive clients call the public gateway routes below, never a private
@@ -113,11 +140,15 @@ service origin:
 | Public route | Meaning | Authorization |
 | --- | --- | --- |
 | POST /api/assistant/v1/conversations | Create or replay a conversation and delegated inquiry | Authenticated JWT with rentalAccess |
+| GET /api/assistant/v1/conversations | List owner history or locate the active conversation by optional `rentalOrderId` | Authenticated JWT with rentalAccess |
 | GET or DELETE /api/assistant/v1/conversations/{conversationId} | Read or archive one owner-scoped conversation | Same owner-scoped rental access |
 | POST /api/assistant/v1/conversations/{conversationId}/turns | SSE stream for one persisted user turn | Same owner-scoped rental access |
 | PUT /api/assistant/v1/conversations/{conversationId}/selection | Keep exact current cabin IDs and immediately release removals | Same owner-scoped rental access plus Idempotency-Key |
 
 Conversation creation accepts exactly one of `clientId` or `newClient`.
+Supplying `rentalOrderId` additionally requires `clientId`; logistics-service
+decides whether that current order is in any state its current rules declare
+editable and rejects a client mismatch.
 `newClient` contains `clientType`, `displayName`, `phone`, optional `email`,
 `comment` and `source`, plus required `contactPerson` for a legal entity. The
 responsible manager remains logistics-owned and cannot be
@@ -131,13 +162,19 @@ request bodies or provider credentials.
 
 ## Persistence, event delivery and failures
 
-Flyway owns the service-local schema; Hibernate validates it only. Conversation
-records use optimistic versioning; only the short local creation finalization
-takes a transaction-scoped advisory lock for one conversation ID. The booking listener is
+Flyway owns the service-local schema; Hibernate validates it only. V6 adds the
+nullable order link, the active-order partial uniqueness constraint and the
+ordered clarification sequence. Existing questions are ranked without loss;
+when old data has several `PENDING` rows, only the oldest stays actionable and
+the rest become `QUEUED`. Conversation records use optimistic versioning; only
+the short local creation and clarification transitions take transaction-scoped
+advisory locks for one order/conversation identity. The booking listener is
 registered by Boot Kafka as `assistantRentalInquiryBookedListener`. Once archived, a
 conversation remains readable as history but never re-reads live holds or exposes live
 clarifications. If a terminal inquiry is read before its Kafka booking fact reaches the inbox,
 the same local conversation is reconciled to archived instead of reporting an upstream outage.
+The reconciliation fence includes both conversation and inquiry identity, so a late booking event
+for the archived inquiry is idempotent and cannot archive a newer conversation for the order.
 The booking listener accepts only the exact `DomainEventEnvelopeV2` booking shape from
 `rwms.logistics.rental-inquiry.events.v1`: duplicate or additional object
 fields, changed producer/type/version, invalid coordinates, a non-UUID

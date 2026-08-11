@@ -453,6 +453,127 @@ describe("RepairTaskEditorWorkspace queue retry", () => {
     await waitFor(() => expect(onSaved).toHaveBeenCalledWith(queuedTask))
   })
 
+  it("shows the booked-cabin replacement warning and keeps the persisted draft fencing", async () => {
+    const user = userEvent.setup()
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    })
+    repairTasksApi.queueRepairTask
+      .mockRejectedValueOnce(
+        new RepairTaskQueueDraftPersistedError({
+          taskId: repairId,
+          expectedVersion: 7,
+          code: "BOOKED_UNIT_REPLACEMENT_REQUIRED",
+          message: `Черновик ремонта ${repairId} сохранён, но бытовка забронирована.`,
+        })
+      )
+      .mockResolvedValueOnce(queuedTask)
+
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={queryClient}>
+          <RepairTaskEditorWorkspace
+            accessToken="maintenance-token"
+            warehouseId={warehouseId}
+            task={null}
+            initialRentalItemId={rentalItemId}
+            onClose={vi.fn()}
+            onSaved={vi.fn()}
+          />
+        </QueryClientProvider>
+      </MemoryRouter>
+    )
+
+    await user.click(screen.getByRole("button", { name: "Добавить работу" }))
+    await user.click(screen.getByRole("button", { name: "Завершить" }))
+    await user.click(
+      screen.getByRole("button", { name: "Подтвердить постановку" })
+    )
+
+    const warning = await screen.findByRole("alert")
+    expect(within(warning).getByText("Бытовка забронирована")).toBeTruthy()
+    expect(warning.textContent).toContain(
+      "Её необходимо заменить перед ремонтом"
+    )
+    expect(warning.textContent).toContain(
+      "Запустите замену в существующем заказе"
+    )
+    expect(
+      within(warning)
+        .getByRole("link", { name: "К заказам" })
+        .getAttribute("href")
+    ).toBe("/orders")
+    expect(repairTasksApi.queueRepairTask).toHaveBeenCalledTimes(1)
+
+    await user.click(screen.getByRole("button", { name: "Завершить" }))
+    await user.click(
+      screen.getByRole("button", { name: "Подтвердить постановку" })
+    )
+
+    await waitFor(() =>
+      expect(repairTasksApi.queueRepairTask).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          draft: expect.objectContaining({
+            taskId: repairId,
+            expectedVersion: 7,
+          }),
+        })
+      )
+    )
+  })
+
+  it("keeps an unrelated dependency conflict on the generic error path", async () => {
+    const user = userEvent.setup()
+    repairTasksApi.queueRepairTask.mockRejectedValueOnce(
+      new RepairTaskQueueDraftPersistedError({
+        taskId: repairId,
+        expectedVersion: 7,
+        code: "MAINTENANCE_DEPENDENCY_UNAVAILABLE",
+        message: "Черновик сохранён, но зависимость временно недоступна.",
+      })
+    )
+
+    render(
+      <MemoryRouter>
+        <QueryClientProvider
+          client={
+            new QueryClient({
+              defaultOptions: {
+                queries: { retry: false },
+                mutations: { retry: false },
+              },
+            })
+          }
+        >
+          <RepairTaskEditorWorkspace
+            accessToken="maintenance-token"
+            warehouseId={warehouseId}
+            task={null}
+            initialRentalItemId={rentalItemId}
+            onClose={vi.fn()}
+            onSaved={vi.fn()}
+          />
+        </QueryClientProvider>
+      </MemoryRouter>
+    )
+
+    await user.click(screen.getByRole("button", { name: "Добавить работу" }))
+    await user.click(screen.getByRole("button", { name: "Завершить" }))
+    await user.click(
+      screen.getByRole("button", { name: "Подтвердить постановку" })
+    )
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Черновик сохранён, но зависимость временно недоступна."
+    )
+    expect(screen.queryByText("Бытовка забронирована")).toBeNull()
+    expect(screen.queryByRole("link", { name: "К заказам" })).toBeNull()
+  })
+
   it("saves a queued pre-start repair as changes without queueing it again", async () => {
     const user = userEvent.setup()
     const onSaved = vi.fn()

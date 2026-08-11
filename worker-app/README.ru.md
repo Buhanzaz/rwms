@@ -28,8 +28,8 @@ English version: [README.md](README.md).
 ### Проверка transport-контракта
 
 [`WorkerGatewayApiContractBoundaryTest.kt`](core-network/src/test/java/dev/buhanzaz/rwms/worker/core/network/WorkerGatewayApiContractBoundaryTest.kt)
-фиксирует все 11 объявленных методов `WorkerGatewayApi` на их канонический
-публичный OpenAPI-источник: девять фиксированных gateway routes и ровно два
+фиксирует все 12 объявленных методов `WorkerGatewayApi` на их канонический
+публичный OpenAPI-источник: десять фиксированных gateway routes и ровно два
 разрешённых динамических media routes. Тест запрещает internal/private
 namespaces и service origins, заранее разрешает каждый request/response
 converter Retrofit/kotlinx.serialization и проверяет каждую активную JSON-root
@@ -68,6 +68,16 @@ feed, потому что переходом видимости владеет t
 durable upload flow. Экран «Загрузки» остаётся recovery-поверхностью для
 неудачных или ожидающих upload и явного retry. Экран задачи записывает результат
 работы и JPEG evidence, но локально не решает переход задачи.
+
+Если immutable source detail из task-board равен `LOGISTICS_DRIVER_TASK`, экран
+detail следует по этому source ID через публичный logistics driver-task GET и
+показывает актуальные данные сгруппированной ходки: операцию, клиента, адрес и
+координаты, основной и дополнительные контакты, комментарии, желаемые клиентом
+даты, отдельно назначенную дату и отдельную карточку наполнения/готовности
+для каждой бытовки. Эти logistics-данные не копируются в Room. Ошибка logistics
+read не скрывает обычный detail задачи и действия, а показывает явный retry;
+переход на другое задание или non-logistics source очищает временное состояние
+ходки.
 
 Серверные KPI ranges определяют цвета; локальная green/yellow/red политика не
 выдумывается. Данные работы для рабочего не раскрывают price/cost поля.

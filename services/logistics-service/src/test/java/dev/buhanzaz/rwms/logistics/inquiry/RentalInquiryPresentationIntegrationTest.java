@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
@@ -18,6 +19,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
+import dev.buhanzaz.rwms.logistics.inquiry.domain.ClientPresentationMode;
 import dev.buhanzaz.rwms.logistics.inquiry.domain.PresentationBookingManagerAction;
 import dev.buhanzaz.rwms.logistics.inquiry.service.ClientPresentationService;
 import dev.buhanzaz.rwms.logistics.inquiry.service.ManualBookingDraftService;
@@ -30,12 +34,22 @@ import dev.buhanzaz.rwms.logistics.inquiry.service.RentalInquiryService;
 import dev.buhanzaz.rwms.logistics.inquiry.service.RentalSettingsService;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AdditionalContactInput;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRequest;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.DesiredDeliveryWindowInput;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.NewClientInput;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderDetailResponse;
 import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
 import dev.buhanzaz.rwms.logistics.order.security.OrderActor;
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
+import dev.buhanzaz.rwms.logistics.order.service.RentalOrderService;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -88,23 +102,18 @@ import tools.jackson.databind.ObjectMapper;
 @AutoConfigureMockMvc
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class RentalInquiryPresentationIntegrationTest {
-  private static final UUID MANAGER =
-      UUID.fromString("00000000-0000-4000-8000-000000007101");
-  private static final UUID OTHER_MANAGER =
-      UUID.fromString("00000000-0000-4000-8000-000000007102");
-  private static final UUID WAREHOUSE =
-      UUID.fromString("00000000-0000-4000-8000-000000007201");
-  private static final UUID CABIN_1 =
-      UUID.fromString("00000000-0000-4000-8000-000000007301");
-  private static final UUID CABIN_2 =
-      UUID.fromString("00000000-0000-4000-8000-000000007302");
-  private static final UUID PHOTO =
-      UUID.fromString("00000000-0000-4000-8000-000000007401");
+  private static final UUID MANAGER = UUID.fromString("00000000-0000-4000-8000-000000007101");
+  private static final UUID OTHER_MANAGER = UUID.fromString("00000000-0000-4000-8000-000000007102");
+  private static final UUID WAREHOUSE = UUID.fromString("00000000-0000-4000-8000-000000007201");
+  private static final UUID OTHER_WAREHOUSE =
+      UUID.fromString("00000000-0000-4000-8000-000000007202");
+  private static final UUID CABIN_1 = UUID.fromString("00000000-0000-4000-8000-000000007301");
+  private static final UUID CABIN_2 = UUID.fromString("00000000-0000-4000-8000-000000007302");
+  private static final UUID CABIN_3 = UUID.fromString("00000000-0000-4000-8000-000000007303");
+  private static final UUID PHOTO = UUID.fromString("00000000-0000-4000-8000-000000007401");
 
-  @Container
-  @ServiceConnection
-  static final PostgreSQLContainer POSTGRES =
-      new PostgreSQLContainer("postgres:17-alpine");
+  @Container @ServiceConnection
+  static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
   @Autowired RentalInquiryService inquiries;
   @Autowired RentalInquiryCabinCatalogService cabinCatalog;
@@ -115,16 +124,19 @@ class RentalInquiryPresentationIntegrationTest {
   @Autowired RentalBookingAlertService bookingAlerts;
   @Autowired RentalSettingsService settings;
   @Autowired ManualBookingDraftService manualBookingDrafts;
+  @Autowired RentalOrderService rentalOrders;
   @Autowired JdbcTemplate jdbc;
   @Autowired ObjectMapper json;
   @Autowired MockMvc mockMvc;
+  @Autowired LogisticsDocumentRepository logisticsDocuments;
+  @Autowired LogisticsDocumentLineRepository logisticsDocumentLines;
   @MockitoBean LogisticsDependencyGateway dependencies;
 
-  private final Map<UUID, List<LogisticsDependencyGateway.OrderUnitReservation>>
-      orderReservations = new LinkedHashMap<>();
+  private final Map<UUID, List<LogisticsDependencyGateway.OrderUnitReservation>> orderReservations =
+      new LinkedHashMap<>();
   private final Map<UUID, List<UUID>> releasedCabinsByOrder = new LinkedHashMap<>();
-  private final Map<UUID, LogisticsDependencyGateway.PresentationHolds>
-      presentationHolds = new LinkedHashMap<>();
+  private final Map<UUID, LogisticsDependencyGateway.PresentationHolds> presentationHolds =
+      new LinkedHashMap<>();
   private final OrderActor actor =
       new OrderActor(
           MANAGER,
@@ -153,6 +165,8 @@ class RentalInquiryPresentationIntegrationTest {
     jdbc.execute(
         """
         truncate table
+          logistics_document_line,
+          logistics_document,
           rental_inquiry_selection_receipt,
           rental_inquiry_search_attempt,
           rental_inquiry_outbox,
@@ -184,16 +198,10 @@ class RentalInquiryPresentationIntegrationTest {
     when(dependencies.readWarehouseIdentity(WAREHOUSE))
         .thenReturn(
             new LogisticsDependencyGateway.WarehouseIdentity(
-                WAREHOUSE,
-                0,
-                true,
-                "Санкт-Петербург",
-                "Санкт-Петербург",
-                "Europe/Moscow"));
+                WAREHOUSE, 0, true, "Санкт-Петербург", "Санкт-Петербург", "Europe/Moscow"));
     when(dependencies.readOrderUnits(any()))
         .thenAnswer(
-            invocation ->
-                orderReservations.getOrDefault(invocation.getArgument(0), List.of()));
+            invocation -> orderReservations.getOrDefault(invocation.getArgument(0), List.of()));
     when(dependencies.readCabinSnapshots(eq(WAREHOUSE), anyList()))
         .thenAnswer(
             invocation -> {
@@ -214,9 +222,8 @@ class RentalInquiryPresentationIntegrationTest {
                                       PHOTO, 1, 0, List.of("SMALL", "LARGE")))))
                   .toList();
             });
-    when(
-            dependencies.replacePresentationHolds(
-                any(), any(), eq(WAREHOUSE), anyList(), any(), eq(MANAGER), eq("RENTAL_MANAGER")))
+    when(dependencies.replacePresentationHolds(
+            any(), any(), eq(WAREHOUSE), anyList(), any(), eq(MANAGER), eq("RENTAL_MANAGER")))
         .thenAnswer(
             invocation -> {
               UUID presentationId = invocation.getArgument(1);
@@ -240,16 +247,15 @@ class RentalInquiryPresentationIntegrationTest {
                   OffsetDateTime.parse(command.get("expiresAt").stringValue()),
                   null);
             });
-    when(
-            dependencies.replacePresentationHolds(
-                any(),
-                any(),
-                eq(WAREHOUSE),
-                anyList(),
-                any(),
-                eq(MANAGER),
-                eq("RENTAL_MANAGER"),
-                any()))
+    when(dependencies.replacePresentationHolds(
+            any(),
+            any(),
+            eq(WAREHOUSE),
+            anyList(),
+            any(),
+            eq(MANAGER),
+            eq("RENTAL_MANAGER"),
+            any()))
         .thenAnswer(
             invocation ->
                 replaceHolds(
@@ -263,8 +269,7 @@ class RentalInquiryPresentationIntegrationTest {
               UUID scopeId = invocation.getArgument(0);
               return presentationHolds.getOrDefault(
                   scopeId,
-                  new LogisticsDependencyGateway.PresentationHolds(
-                      scopeId, null, List.of()));
+                  new LogisticsDependencyGateway.PresentationHolds(scopeId, null, List.of()));
             });
     when(dependencies.readPresentationHolds(any(), eq(MANAGER), eq("RENTAL_MANAGER")))
         .thenAnswer(
@@ -272,20 +277,19 @@ class RentalInquiryPresentationIntegrationTest {
               UUID scopeId = invocation.getArgument(0);
               return presentationHolds.getOrDefault(
                   scopeId,
-                  new LogisticsDependencyGateway.PresentationHolds(
-                      scopeId, null, List.of()));
+                  new LogisticsDependencyGateway.PresentationHolds(scopeId, null, List.of()));
             });
-    when(
-            dependencies.convertPresentationHolds(
-                any(),
-                any(),
-                any(),
-                eq(WAREHOUSE),
-                anyList(),
-                any(),
-                anyString(),
-                eq(MANAGER),
-                eq("RENTAL_MANAGER")))
+    when(dependencies.convertPresentationHolds(
+            any(),
+            any(),
+            any(),
+            eq(WAREHOUSE),
+            anyList(),
+            any(),
+            anyString(),
+            eq(MANAGER),
+            eq("RENTAL_MANAGER"),
+            anyList()))
         .thenAnswer(
             invocation -> {
               UUID presentationId = invocation.getArgument(1);
@@ -293,24 +297,42 @@ class RentalInquiryPresentationIntegrationTest {
               List<UUID> selected = invocation.getArgument(4);
               List<LogisticsDependencyGateway.OrderUnitReservation> reservations =
                   selected.stream().map(id -> reservation(orderId, id)).toList();
-              orderReservations.put(orderId, reservations);
-              List<UUID> released =
-                  List.of(CABIN_1, CABIN_2).stream()
-                      .filter(id -> !selected.contains(id))
+              List<LogisticsDependencyGateway.OrderUnitReservation> all =
+                  java.util.stream.Stream.concat(
+                          orderReservations.getOrDefault(orderId, List.of()).stream(),
+                          reservations.stream())
+                      .collect(
+                          java.util.stream.Collectors.toMap(
+                              LogisticsDependencyGateway.OrderUnitReservation::unitId,
+                              value -> value,
+                              (existing, added) -> added,
+                              LinkedHashMap::new))
+                      .values()
+                      .stream()
                       .toList();
+              orderReservations.put(orderId, all);
+              List<UUID> held =
+                  presentationHolds
+                      .getOrDefault(
+                          presentationId,
+                          new LogisticsDependencyGateway.PresentationHolds(
+                              presentationId, null, List.of()))
+                      .holds()
+                      .stream()
+                      .map(LogisticsDependencyGateway.PresentationHold::rentalItemId)
+                      .toList();
+              List<UUID> released = held.stream().filter(id -> !selected.contains(id)).toList();
               releasedCabinsByOrder.put(orderId, released);
               return new LogisticsDependencyGateway.ConvertedPresentationHolds(
                   presentationId, orderId, reservations, released);
             });
-    when(dependencies.releaseAllOrderUnits(any(), any(), any(), anyString()))
-        .thenReturn(List.of());
+    when(dependencies.releaseAllOrderUnits(any(), any(), any(), anyString())).thenReturn(List.of());
     when(dependencies.releasePresentationHolds(any(), any(), any(), anyString()))
         .thenAnswer(
             invocation -> {
               UUID scopeId = invocation.getArgument(1);
               presentationHolds.remove(scopeId);
-              return new LogisticsDependencyGateway.PresentationHolds(
-                  scopeId, null, List.of());
+              return new LogisticsDependencyGateway.PresentationHolds(scopeId, null, List.of());
             });
     when(dependencies.releasePresentationHoldsExact(any(), any(), anyString()))
         .thenAnswer(
@@ -318,20 +340,15 @@ class RentalInquiryPresentationIntegrationTest {
               assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
               UUID scopeId = invocation.getArgument(1);
               presentationHolds.remove(scopeId);
-              return new LogisticsDependencyGateway.PresentationHolds(
-                  scopeId, null, List.of());
+              return new LogisticsDependencyGateway.PresentationHolds(scopeId, null, List.of());
             });
   }
 
   @Test
   void cabinSearchUsesConfiguredHoldOwnedByTheInquiryAndExactCategory() throws Exception {
-    jdbc.update(
-        "update rental_settings set chat_selection_hold_minutes=17");
+    jdbc.update("update rental_settings set chat_selection_hold_minutes=17");
     RentalInquiryResponse inquiry = createInquiry();
-    when(
-            dependencies.searchAvailableCabins(
-                any(),
-                anyString()))
+    when(dependencies.searchAvailableCabins(any(), anyString()))
         .thenAnswer(
             invocation -> {
               LogisticsDependencyGateway.CabinSearchCommand command =
@@ -343,8 +360,7 @@ class RentalInquiryPresentationIntegrationTest {
               assertThat(command.actorRole()).isEqualTo("RENTAL_MANAGER");
               assertThat(command.resultMode())
                   .isEqualTo(LogisticsDependencyGateway.CabinSearchResultMode.REPLACE);
-              LogisticsDependencyGateway.CabinSearchGroup group =
-                  command.groups().getFirst();
+              LogisticsDependencyGateway.CabinSearchGroup group = command.groups().getFirst();
               assertThat(group.category()).isEqualTo("Новая");
               return new LogisticsDependencyGateway.CabinSearchResult(
                   WAREHOUSE,
@@ -364,9 +380,7 @@ class RentalInquiryPresentationIntegrationTest {
                 publicKey,
                 new CabinSearchRequest(
                     WAREHOUSE,
-                    List.of(
-                        new CabinSearchGroup(
-                            "БК-1", "ДВП", null, "Новая", null, null, 2))))
+                    List.of(new CabinSearchGroup("БК-1", "ДВП", null, "Новая", null, null, 2))))
             .response();
 
     assertThat(result.expiresAt())
@@ -390,15 +404,11 @@ class RentalInquiryPresentationIntegrationTest {
   void cabinSearchPreservesRichGroupsAndQuantitiesThroughThePublicBoundary() throws Exception {
     RentalInquiryResponse inquiry = createInquiry();
     CabinSearchGroup first =
-        new CabinSearchGroup(
-            "БК-1", "ДВП", "6x2.4", "Новая", "Утеплённая с электрикой", true, 6);
+        new CabinSearchGroup("БК-1", "ДВП", "6x2.4", "Новая", "Утеплённая с электрикой", true, 6);
     CabinSearchGroup second =
         new CabinSearchGroup(
             "БК-2", "OSB", "6x2.4", "ИТР", "С дополнительной вентиляцией", false, 6);
-    when(
-            dependencies.searchAvailableCabins(
-                any(),
-                anyString()))
+    when(dependencies.searchAvailableCabins(any(), anyString()))
         .thenAnswer(
             invocation -> {
               LogisticsDependencyGateway.CabinSearchCommand command =
@@ -411,21 +421,9 @@ class RentalInquiryPresentationIntegrationTest {
               assertThat(groups)
                   .containsExactly(
                       new LogisticsDependencyGateway.CabinSearchGroup(
-                          "БК-1",
-                          "ДВП",
-                          "6x2.4",
-                          "Новая",
-                          "Утеплённая с электрикой",
-                          true,
-                          6),
+                          "БК-1", "ДВП", "6x2.4", "Новая", "Утеплённая с электрикой", true, 6),
                       new LogisticsDependencyGateway.CabinSearchGroup(
-                          "БК-2",
-                          "OSB",
-                          "6x2.4",
-                          "ИТР",
-                          "С дополнительной вентиляцией",
-                          false,
-                          6));
+                          "БК-2", "OSB", "6x2.4", "ИТР", "С дополнительной вентиляцией", false, 6));
               return new LogisticsDependencyGateway.CabinSearchResult(
                   WAREHOUSE,
                   command.expiresAt(),
@@ -458,37 +456,27 @@ class RentalInquiryPresentationIntegrationTest {
   }
 
   @Test
-  void cabinSearchLostResponseResumesExactBytesAndThenReplaysFrozenSuccess()
-      throws Exception {
+  void cabinSearchLostResponseResumesExactBytesAndThenReplaysFrozenSuccess() throws Exception {
     RentalInquiryResponse inquiry = createInquiry();
     UUID publicKey = UUID.randomUUID();
     CabinSearchRequest request =
         new CabinSearchRequest(
             WAREHOUSE,
-            List.of(
-                new CabinSearchGroup(
-                    "БК-1", "ДВП", null, "Новая", "Электрика", true, 2)));
+            List.of(new CabinSearchGroup("БК-1", "ДВП", null, "Новая", "Электрика", true, 2)));
     AtomicInteger remoteCalls = new AtomicInteger();
     AtomicReference<UUID> frozenDownstreamKey = new AtomicReference<>();
     AtomicReference<String> frozenBody = new AtomicReference<>();
     when(dependencies.readWarehouseIdentity(WAREHOUSE))
         .thenAnswer(
             ignored -> {
-              assertThat(TransactionSynchronizationManager.isActualTransactionActive())
-                  .isFalse();
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
               return new LogisticsDependencyGateway.WarehouseIdentity(
-                  WAREHOUSE,
-                  0,
-                  true,
-                  "Санкт-Петербург",
-                  "Санкт-Петербург",
-                  "Europe/Moscow");
+                  WAREHOUSE, 0, true, "Санкт-Петербург", "Санкт-Петербург", "Europe/Moscow");
             });
     when(dependencies.searchAvailableCabins(any(), anyString()))
         .thenAnswer(
             invocation -> {
-              assertThat(TransactionSynchronizationManager.isActualTransactionActive())
-                  .isFalse();
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
               UUID downstreamKey = invocation.getArgument(0);
               String exactBody = invocation.getArgument(1);
               int call = remoteCalls.incrementAndGet();
@@ -496,8 +484,7 @@ class RentalInquiryPresentationIntegrationTest {
                 frozenDownstreamKey.set(downstreamKey);
                 frozenBody.set(exactBody);
                 throw new LogisticsDependencyException(
-                    LogisticsDependencyException.FailureKind.TRANSIENT,
-                    "Simulated lost response");
+                    LogisticsDependencyException.FailureKind.TRANSIENT, "Simulated lost response");
               }
               if (call == 2) {
                 assertThat(downstreamKey).isEqualTo(frozenDownstreamKey.get());
@@ -506,9 +493,7 @@ class RentalInquiryPresentationIntegrationTest {
                 assertThat(downstreamKey).isNotEqualTo(frozenDownstreamKey.get());
               }
               LogisticsDependencyGateway.CabinSearchCommand command =
-                  json.readValue(
-                      exactBody,
-                      LogisticsDependencyGateway.CabinSearchCommand.class);
+                  json.readValue(exactBody, LogisticsDependencyGateway.CabinSearchCommand.class);
               return new LogisticsDependencyGateway.CabinSearchResult(
                   command.warehouseId(),
                   command.expiresAt(),
@@ -517,8 +502,7 @@ class RentalInquiryPresentationIntegrationTest {
                           command.groups().getFirst(), List.of(cabin(CABIN_1)))));
             });
 
-    assertThatThrownBy(
-            () -> cabinSearches.search(actor, inquiry.id(), publicKey, request))
+    assertThatThrownBy(() -> cabinSearches.search(actor, inquiry.id(), publicKey, request))
         .isInstanceOfSatisfying(
             OrderProblemException.class,
             failure -> assertThat(failure.code()).isEqualTo("CABIN_SEARCH_UNAVAILABLE"));
@@ -552,9 +536,7 @@ class RentalInquiryPresentationIntegrationTest {
                         .digest(frozenBody.get().getBytes(StandardCharsets.UTF_8))));
     assertThat(
             jdbc.queryForObject(
-                "select warehouse_id from rental_inquiry where id=?",
-                UUID.class,
-                inquiry.id()))
+                "select warehouse_id from rental_inquiry where id=?", UUID.class, inquiry.id()))
         .isNull();
     OrderActor revokedWarehouseAuthority =
         new OrderActor(
@@ -568,9 +550,7 @@ class RentalInquiryPresentationIntegrationTest {
             true,
             true);
     assertThatThrownBy(
-            () ->
-                cabinSearches.search(
-                    revokedWarehouseAuthority, inquiry.id(), publicKey, request))
+            () -> cabinSearches.search(revokedWarehouseAuthority, inquiry.id(), publicKey, request))
         .isInstanceOf(AccessDeniedException.class);
     assertThat(remoteCalls).hasValue(1);
     OrderActor currentElevatedAuthority =
@@ -589,8 +569,7 @@ class RentalInquiryPresentationIntegrationTest {
         cabinSearches.search(currentElevatedAuthority, inquiry.id(), publicKey, request);
     assertThat(resumed.replayed()).isFalse();
     assertThat(
-            json.readValue(
-                    frozenBody.get(), LogisticsDependencyGateway.CabinSearchCommand.class)
+            json.readValue(frozenBody.get(), LogisticsDependencyGateway.CabinSearchCommand.class)
                 .actorRole())
         .isEqualTo("RENTAL_MANAGER");
     assertThat(resumed.response().groups().getFirst().cabins())
@@ -612,8 +591,7 @@ class RentalInquiryPresentationIntegrationTest {
                     new CabinSearchRequest(
                         WAREHOUSE,
                         List.of(
-                            new CabinSearchGroup(
-                                "БК-2", "ДВП", null, "Новая", null, null, 1)))))
+                            new CabinSearchGroup("БК-2", "ДВП", null, "Новая", null, null, 1)))))
         .isInstanceOfSatisfying(
             OrderProblemException.class,
             failure -> assertThat(failure.code()).isEqualTo("IDEMPOTENCY_KEY_REUSED"));
@@ -637,8 +615,7 @@ class RentalInquiryPresentationIntegrationTest {
     RentalInquiryResponse inquiry = createInquiry();
     CabinSearchRequest request =
         new CabinSearchRequest(
-            WAREHOUSE,
-            List.of(new CabinSearchGroup(null, null, null, null, null, null, 1)));
+            WAREHOUSE, List.of(new CabinSearchGroup(null, null, null, null, null, null, 1)));
     OrderActor readOnly =
         new OrderActor(
             MANAGER,
@@ -663,14 +640,9 @@ class RentalInquiryPresentationIntegrationTest {
             true);
 
     assertThatThrownBy(
-            () ->
-                cabinSearches.search(
-                    readOnly, inquiry.id(), UUID.randomUUID(), request))
+            () -> cabinSearches.search(readOnly, inquiry.id(), UUID.randomUUID(), request))
         .isInstanceOf(AccessDeniedException.class);
-    assertThatThrownBy(
-            () ->
-                cabinSearches.search(
-                    viewer, inquiry.id(), UUID.randomUUID(), request))
+    assertThatThrownBy(() -> cabinSearches.search(viewer, inquiry.id(), UUID.randomUUID(), request))
         .isInstanceOf(AccessDeniedException.class);
     assertThat(
             jdbc.queryForObject(
@@ -680,9 +652,7 @@ class RentalInquiryPresentationIntegrationTest {
         .isZero();
     assertThat(
             jdbc.queryForObject(
-                "select warehouse_id from rental_inquiry where id=?",
-                UUID.class,
-                inquiry.id()))
+                "select warehouse_id from rental_inquiry where id=?", UUID.class, inquiry.id()))
         .isNull();
     verify(dependencies, never()).readWarehouseIdentity(any());
     verify(dependencies, never()).searchAvailableCabins(any(), anyString());
@@ -700,9 +670,7 @@ class RentalInquiryPresentationIntegrationTest {
 
     mockMvc
         .perform(
-            post(
-                    "/api/logistics/v1/rental-inquiries/{inquiryId}/cabin-searches",
-                    inquiry.id())
+            post("/api/logistics/v1/rental-inquiries/{inquiryId}/cabin-searches", inquiry.id())
                 .with(
                     jwt()
                         .jwt(
@@ -728,9 +696,7 @@ class RentalInquiryPresentationIntegrationTest {
         .andExpect(status().isForbidden());
     mockMvc
         .perform(
-            post(
-                    "/api/logistics/v1/rental-inquiries/{inquiryId}/cabin-searches",
-                    inquiry.id())
+            post("/api/logistics/v1/rental-inquiries/{inquiryId}/cabin-searches", inquiry.id())
                 .with(
                     jwt()
                         .jwt(
@@ -763,9 +729,7 @@ class RentalInquiryPresentationIntegrationTest {
         .isZero();
     assertThat(
             jdbc.queryForObject(
-                "select warehouse_id from rental_inquiry where id=?",
-                UUID.class,
-                inquiry.id()))
+                "select warehouse_id from rental_inquiry where id=?", UUID.class, inquiry.id()))
         .isNull();
     verify(dependencies, never()).readWarehouseIdentity(any());
     verify(dependencies, never()).searchAvailableCabins(any(), anyString());
@@ -797,9 +761,7 @@ class RentalInquiryPresentationIntegrationTest {
 
     mockMvc
         .perform(
-            post(
-                    "/api/logistics/v1/rental-inquiries/{inquiryId}/cabin-searches",
-                    inquiry.id())
+            post("/api/logistics/v1/rental-inquiries/{inquiryId}/cabin-searches", inquiry.id())
                 .with(
                     jwt()
                         .jwt(
@@ -827,9 +789,7 @@ class RentalInquiryPresentationIntegrationTest {
 
     mockMvc
         .perform(
-            post(
-                    "/api/logistics/v1/rental-inquiries/{inquiryId}/cabin-searches",
-                    inquiry.id())
+            post("/api/logistics/v1/rental-inquiries/{inquiryId}/cabin-searches", inquiry.id())
                 .with(
                     jwt()
                         .jwt(
@@ -865,8 +825,7 @@ class RentalInquiryPresentationIntegrationTest {
     UUID publicKey = UUID.randomUUID();
     CabinSearchRequest request =
         new CabinSearchRequest(
-            WAREHOUSE,
-            List.of(new CabinSearchGroup("БК-1", null, null, null, null, null, 1)));
+            WAREHOUSE, List.of(new CabinSearchGroup("БК-1", null, null, null, null, null, 1)));
     long versionBefore =
         Objects.requireNonNull(
             jdbc.queryForObject(
@@ -882,8 +841,7 @@ class RentalInquiryPresentationIntegrationTest {
               String exactBody = invocation.getArgument(1);
               exactBodies.add(exactBody);
               LogisticsDependencyGateway.CabinSearchCommand command =
-                  json.readValue(
-                      exactBody, LogisticsDependencyGateway.CabinSearchCommand.class);
+                  json.readValue(exactBody, LogisticsDependencyGateway.CabinSearchCommand.class);
               bothRemoteCallsEntered.countDown();
               if (!releaseRemoteCalls.await(10, TimeUnit.SECONDS)) {
                 throw new AssertionError("Timed out waiting to release exact-key searches");
@@ -906,10 +864,7 @@ class RentalInquiryPresentationIntegrationTest {
               () -> cabinSearches.search(actor, inquiry.id(), publicKey, request), executor);
       assertThat(bothRemoteCallsEntered.await(10, TimeUnit.SECONDS)).isTrue();
       releaseRemoteCalls.countDown();
-      outcomes =
-          List.of(
-              first.get(10, TimeUnit.SECONDS),
-              second.get(10, TimeUnit.SECONDS));
+      outcomes = List.of(first.get(10, TimeUnit.SECONDS), second.get(10, TimeUnit.SECONDS));
     } finally {
       releaseRemoteCalls.countDown();
     }
@@ -934,9 +889,7 @@ class RentalInquiryPresentationIntegrationTest {
         .isEqualTo("COMPLETED");
     assertThat(
             jdbc.queryForObject(
-                "select warehouse_id from rental_inquiry where id=?",
-                UUID.class,
-                inquiry.id()))
+                "select warehouse_id from rental_inquiry where id=?", UUID.class, inquiry.id()))
         .isEqualTo(WAREHOUSE);
     assertThat(
             jdbc.queryForObject(
@@ -947,13 +900,11 @@ class RentalInquiryPresentationIntegrationTest {
   }
 
   @Test
-  void aDistinctSearchConflictsWhileAnotherPreparedReceiptIsRemotelyInFlight()
-      throws Exception {
+  void aDistinctSearchConflictsWhileAnotherPreparedReceiptIsRemotelyInFlight() throws Exception {
     RentalInquiryResponse inquiry = createInquiry();
     CabinSearchRequest request =
         new CabinSearchRequest(
-            WAREHOUSE,
-            List.of(new CabinSearchGroup("БК-1", null, null, null, null, null, 1)));
+            WAREHOUSE, List.of(new CabinSearchGroup("БК-1", null, null, null, null, null, 1)));
     CountDownLatch remoteEntered = new CountDownLatch(1);
     CountDownLatch releaseRemote = new CountDownLatch(1);
     when(dependencies.searchAvailableCabins(any(), anyString()))
@@ -978,21 +929,16 @@ class RentalInquiryPresentationIntegrationTest {
     try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
       CompletableFuture<RentalInquiryCabinSearchService.CabinSearchOutcome> first =
           CompletableFuture.supplyAsync(
-              () ->
-                  cabinSearches.search(
-                      actor, inquiry.id(), UUID.randomUUID(), request),
+              () -> cabinSearches.search(actor, inquiry.id(), UUID.randomUUID(), request),
               executor);
       assertThat(remoteEntered.await(10, TimeUnit.SECONDS)).isTrue();
       assertThatThrownBy(
-              () ->
-                  cabinSearches.search(
-                      actor, inquiry.id(), UUID.randomUUID(), request))
+              () -> cabinSearches.search(actor, inquiry.id(), UUID.randomUUID(), request))
           .isInstanceOfSatisfying(
               OrderProblemException.class,
               failure -> assertThat(failure.code()).isEqualTo("CABIN_SEARCH_IN_PROGRESS"));
       releaseRemote.countDown();
-      assertThat(first.get(10, TimeUnit.SECONDS).response().warehouseId())
-          .isEqualTo(WAREHOUSE);
+      assertThat(first.get(10, TimeUnit.SECONDS).response().warehouseId()).isEqualTo(WAREHOUSE);
     } finally {
       releaseRemote.countDown();
     }
@@ -1005,20 +951,13 @@ class RentalInquiryPresentationIntegrationTest {
     UUID publicKey = UUID.randomUUID();
     CabinSearchRequest request =
         new CabinSearchRequest(
-            WAREHOUSE,
-            List.of(new CabinSearchGroup(null, null, null, null, null, null, 1)));
+            WAREHOUSE, List.of(new CabinSearchGroup(null, null, null, null, null, null, 1)));
     when(dependencies.readWarehouseIdentity(WAREHOUSE))
         .thenReturn(
             new LogisticsDependencyGateway.WarehouseIdentity(
-                WAREHOUSE,
-                3,
-                false,
-                "Санкт-Петербург",
-                "Санкт-Петербург",
-                "Europe/Moscow"));
+                WAREHOUSE, 3, false, "Санкт-Петербург", "Санкт-Петербург", "Europe/Moscow"));
 
-    assertThatThrownBy(
-            () -> cabinSearches.search(actor, inquiry.id(), publicKey, request))
+    assertThatThrownBy(() -> cabinSearches.search(actor, inquiry.id(), publicKey, request))
         .isInstanceOfSatisfying(
             OrderProblemException.class,
             failure -> assertThat(failure.code()).isEqualTo("WAREHOUSE_UNAVAILABLE"));
@@ -1032,8 +971,7 @@ class RentalInquiryPresentationIntegrationTest {
         .containsEntry("state", "REJECTED")
         .containsEntry("rejection_code", "WAREHOUSE_UNAVAILABLE")
         .containsEntry("response_body", null);
-    assertThatThrownBy(
-            () -> cabinSearches.search(actor, inquiry.id(), publicKey, request))
+    assertThatThrownBy(() -> cabinSearches.search(actor, inquiry.id(), publicKey, request))
         .isInstanceOfSatisfying(
             OrderProblemException.class,
             failure -> assertThat(failure.code()).isEqualTo("WAREHOUSE_UNAVAILABLE"));
@@ -1047,8 +985,7 @@ class RentalInquiryPresentationIntegrationTest {
     UUID publicKey = UUID.randomUUID();
     CabinSearchRequest request =
         new CabinSearchRequest(
-            WAREHOUSE,
-            List.of(new CabinSearchGroup("БК-1", null, null, null, null, null, 1)));
+            WAREHOUSE, List.of(new CabinSearchGroup("БК-1", null, null, null, null, null, 1)));
     when(dependencies.searchAvailableCabins(any(), anyString()))
         .thenThrow(
             new LogisticsDependencyException(
@@ -1057,8 +994,7 @@ class RentalInquiryPresentationIntegrationTest {
                 "Sanitized asset conflict",
                 new IllegalStateException("Unpersisted remote Problem body")));
 
-    assertThatThrownBy(
-            () -> cabinSearches.search(actor, inquiry.id(), publicKey, request))
+    assertThatThrownBy(() -> cabinSearches.search(actor, inquiry.id(), publicKey, request))
         .isInstanceOfSatisfying(
             OrderProblemException.class,
             failure -> assertThat(failure.code()).isEqualTo("UNIT_PRESENTATION_HELD"));
@@ -1074,13 +1010,10 @@ class RentalInquiryPresentationIntegrationTest {
         .containsEntry("response_body", null);
     assertThat(
             jdbc.queryForObject(
-                "select warehouse_id from rental_inquiry where id=?",
-                UUID.class,
-                inquiry.id()))
+                "select warehouse_id from rental_inquiry where id=?", UUID.class, inquiry.id()))
         .isNull();
 
-    assertThatThrownBy(
-            () -> cabinSearches.search(actor, inquiry.id(), publicKey, request))
+    assertThatThrownBy(() -> cabinSearches.search(actor, inquiry.id(), publicKey, request))
         .isInstanceOfSatisfying(
             OrderProblemException.class,
             failure -> assertThat(failure.code()).isEqualTo("UNIT_PRESENTATION_HELD"));
@@ -1089,29 +1022,22 @@ class RentalInquiryPresentationIntegrationTest {
   }
 
   @Test
-  void expiredPreparedReceiptReleasesTheInquirySlotButItsOwnKeyStaysTerminal()
-      throws Exception {
+  void expiredPreparedReceiptReleasesTheInquirySlotButItsOwnKeyStaysTerminal() throws Exception {
     RentalInquiryResponse inquiry = createInquiry();
     UUID expiredKey = UUID.randomUUID();
     CabinSearchRequest request =
         new CabinSearchRequest(
-            WAREHOUSE,
-            List.of(new CabinSearchGroup("БК-1", null, null, null, null, null, 1)));
+            WAREHOUSE, List.of(new CabinSearchGroup("БК-1", null, null, null, null, null, 1)));
     when(dependencies.searchAvailableCabins(any(), anyString()))
         .thenThrow(
             new LogisticsDependencyException(
-                LogisticsDependencyException.FailureKind.TRANSIENT,
-                "Simulated unknown response"));
+                LogisticsDependencyException.FailureKind.TRANSIENT, "Simulated unknown response"));
 
-    assertThatThrownBy(
-            () -> cabinSearches.search(actor, inquiry.id(), expiredKey, request))
+    assertThatThrownBy(() -> cabinSearches.search(actor, inquiry.id(), expiredKey, request))
         .isInstanceOfSatisfying(
             OrderProblemException.class,
             failure -> assertThat(failure.code()).isEqualTo("CABIN_SEARCH_UNAVAILABLE"));
-    assertThatThrownBy(
-            () ->
-                cabinSearches.search(
-                    actor, inquiry.id(), UUID.randomUUID(), request))
+    assertThatThrownBy(() -> cabinSearches.search(actor, inquiry.id(), UUID.randomUUID(), request))
         .isInstanceOfSatisfying(
             OrderProblemException.class,
             failure -> assertThat(failure.code()).isEqualTo("CABIN_SEARCH_IN_PROGRESS"));
@@ -1125,8 +1051,7 @@ class RentalInquiryPresentationIntegrationTest {
         """,
         inquiry.id());
 
-    assertThatThrownBy(
-            () -> cabinSearches.search(actor, inquiry.id(), expiredKey, request))
+    assertThatThrownBy(() -> cabinSearches.search(actor, inquiry.id(), expiredKey, request))
         .isInstanceOfSatisfying(
             OrderProblemException.class,
             failure -> assertThat(failure.code()).isEqualTo("CABIN_SEARCH_EXPIRED"));
@@ -1661,8 +1586,7 @@ class RentalInquiryPresentationIntegrationTest {
             problem -> assertThat(problem.status().value()).isEqualTo(404));
     verify(dependencies, times(1)).readCabinCatalog(WAREHOUSE, "СПБ-001", 0, 20);
     verify(dependencies, never())
-        .replacePresentationHolds(
-            any(), any(), any(), anyList(), any(), any(), anyString());
+        .replacePresentationHolds(any(), any(), any(), anyList(), any(), any(), anyString());
     verify(dependencies, never()).releasePresentationHolds(any(), any(), any(), anyString());
     verify(dependencies, never()).replacePresentationHoldsExact(any(), any(), anyString());
     verify(dependencies, never()).releasePresentationHoldsExact(any(), any(), anyString());
@@ -1718,8 +1642,7 @@ class RentalInquiryPresentationIntegrationTest {
 
     RentalSettingsResponse updated =
         settings.update(
-            administrator,
-            new UpdateRentalSettingsRequest(initial.version(), 12, 75, 90, 2_880));
+            administrator, new UpdateRentalSettingsRequest(initial.version(), 12, 75, 90, 2_880));
 
     assertThat(updated.version()).isEqualTo(initial.version() + 1);
     assertThat(updated.chatSelectionHoldMinutes()).isEqualTo(12);
@@ -1740,8 +1663,7 @@ class RentalInquiryPresentationIntegrationTest {
             actor,
             UUID.randomUUID(),
             draftId,
-            new ManualBookingDraftHoldsRequest(
-                WAREHOUSE, List.of(CABIN_1, CABIN_2)));
+            new ManualBookingDraftHoldsRequest(WAREHOUSE, List.of(CABIN_1, CABIN_2)));
 
     assertThat(held.draftId()).isEqualTo(draftId);
     assertThat(held.warehouseId()).isEqualTo(WAREHOUSE);
@@ -1749,8 +1671,7 @@ class RentalInquiryPresentationIntegrationTest {
     assertThat(held.expiresAt())
         .isAfter(startedAt.plusMinutes(44))
         .isBefore(startedAt.plusMinutes(46));
-    assertThat(manualBookingDrafts.get(actor, draftId, WAREHOUSE))
-        .isEqualTo(held);
+    assertThat(manualBookingDrafts.get(actor, draftId, WAREHOUSE)).isEqualTo(held);
   }
 
   @Test
@@ -1760,8 +1681,7 @@ class RentalInquiryPresentationIntegrationTest {
         actor,
         UUID.randomUUID(),
         draftId,
-        new ManualBookingDraftHoldsRequest(
-            WAREHOUSE, List.of(CABIN_1, CABIN_2)));
+        new ManualBookingDraftHoldsRequest(WAREHOUSE, List.of(CABIN_1, CABIN_2)));
     RentalInquiryResponse inquiry = createInquiry();
 
     ClientPresentationResponse published =
@@ -1771,9 +1691,7 @@ class RentalInquiryPresentationIntegrationTest {
             UUID.randomUUID(),
             new PublishClientPresentationRequest(
                 WAREHOUSE,
-                List.of(
-                    new PresentationGroupInput(
-                        "bk-1", "БК-1", List.of(CABIN_1))),
+                List.of(new PresentationGroupInput("bk-1", "БК-1", List.of(CABIN_1))),
                 draftId));
 
     assertThat(published.groups())
@@ -1800,6 +1718,212 @@ class RentalInquiryPresentationIntegrationTest {
   }
 
   @Test
+  void publishingFirstLinkedNormalPresentationFixesItsUnassignedDraftWarehouseBeforeHoldTransfer() {
+    OrderDetailResponse draft = createDraftOrder();
+    RentalInquiryResponse inquiry =
+        inquiries.create(
+            actor,
+            UUID.randomUUID(),
+            new CreateRentalInquiryRequest(null, draft.client().id(), null, draft.id()));
+    AtomicReference<UUID> warehouseAtHoldTransfer = new AtomicReference<>();
+    when(dependencies.replacePresentationHolds(
+            any(),
+            eq(inquiry.id()),
+            eq(WAREHOUSE),
+            eq(List.of(CABIN_1)),
+            any(),
+            eq(MANAGER),
+            eq("RENTAL_MANAGER"),
+            eq(null)))
+        .thenAnswer(
+            invocation -> {
+              warehouseAtHoldTransfer.set(rentalOrders.get(actor, draft.id()).warehouseId());
+              return replaceHolds(
+                  invocation.getArgument(1),
+                  invocation.getArgument(3),
+                  invocation.getArgument(4),
+                  invocation.getArgument(7));
+            });
+
+    ClientPresentationResponse published = publish(inquiry.id(), List.of(CABIN_1));
+
+    assertThat(published.warehouseId()).isEqualTo(WAREHOUSE);
+    assertThat(warehouseAtHoldTransfer).hasValue(WAREHOUSE);
+    assertThat(published.desiredDeliveryWindows()).isEmpty();
+    assertThat(rentalOrders.get(actor, draft.id()).warehouseId()).isEqualTo(WAREHOUSE);
+    verify(dependencies)
+        .replacePresentationHolds(
+            any(),
+            eq(inquiry.id()),
+            eq(WAREHOUSE),
+            eq(List.of(CABIN_1)),
+            any(),
+            eq(MANAGER),
+            eq("RENTAL_MANAGER"),
+            eq(null));
+  }
+
+  @Test
+  void linkedNormalPresentationRejectsChangedOrderWarehouseBeforeHoldTransfer() {
+    OrderDetailResponse draft = createDraftOrder();
+    RentalInquiryResponse inquiry =
+        inquiries.create(
+            actor,
+            UUID.randomUUID(),
+            new CreateRentalInquiryRequest(null, draft.client().id(), null, draft.id()));
+    OrderActor managerAcrossWarehouses =
+        new OrderActor(
+            MANAGER,
+            "RENTAL_MANAGER",
+            "Менеджер аренды",
+            Set.of(WAREHOUSE, OTHER_WAREHOUSE),
+            Set.of(WAREHOUSE, OTHER_WAREHOUSE),
+            false,
+            false,
+            true,
+            true);
+    when(dependencies.readWarehouseIdentity(OTHER_WAREHOUSE))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseIdentity(
+                OTHER_WAREHOUSE, 0, true, "Москва", "Москва", "Europe/Moscow"));
+    rentalOrders.selectWarehouseForPresentation(
+        managerAcrossWarehouses,
+        draft.id(),
+        UUID.randomUUID(),
+        draft.version(),
+        OTHER_WAREHOUSE);
+
+    assertThatThrownBy(
+            () ->
+                presentations.publish(
+                    managerAcrossWarehouses,
+                    inquiry.id(),
+                    UUID.randomUUID(),
+                    new PublishClientPresentationRequest(
+                        WAREHOUSE,
+                        List.of(
+                            new PresentationGroupInput("bk-1", "БК-1", List.of(CABIN_1))),
+                        null)))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            failure -> assertThat(failure.code()).isEqualTo("ORDER_WAREHOUSE_LOCKED"));
+    verify(dependencies, never())
+        .replacePresentationHolds(
+            any(), any(), any(), anyList(), any(), any(), anyString(), any());
+  }
+
+  @Test
+  void blockedLinkedPresentationRepublishDoesNotFixOrderWarehouse() {
+    OrderDetailResponse draft = createDraftOrder();
+    RentalInquiryResponse inquiry =
+        inquiries.create(
+            actor,
+            UUID.randomUUID(),
+            new CreateRentalInquiryRequest(null, draft.client().id(), null, draft.id()));
+    ClientPresentationResponse published = publish(inquiry.id(), List.of(CABIN_1));
+    when(dependencies.convertPresentationHolds(
+            any(),
+            eq(inquiry.id()),
+            eq(draft.id()),
+            eq(WAREHOUSE),
+            anyList(),
+            any(),
+            anyString(),
+            eq(MANAGER),
+            eq("RENTAL_MANAGER"),
+            anyList()))
+        .thenThrow(
+            new LogisticsDependencyException(
+                LogisticsDependencyException.FailureKind.TRANSIENT,
+                "Simulated pending conversion"));
+    PresentationBookingResponse pending =
+        bookings.confirm(token(published), UUID.randomUUID(), linkedConfirmation(CABIN_1));
+    assertThat(pending.state()).isEqualTo("PENDING");
+    assertThat(jdbc.update("update rental_order set warehouse_id=null where id=?", draft.id()))
+        .isOne();
+    clearInvocations(dependencies);
+
+    assertThatThrownBy(() -> publish(inquiry.id(), List.of(CABIN_2)))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            problem -> assertThat(problem.code()).isEqualTo("PRESENTATION_BOOKING_STARTED"));
+
+    assertThat(rentalOrders.get(actor, draft.id()).warehouseId()).isNull();
+    verify(dependencies, never()).readWarehouseIdentity(WAREHOUSE);
+  }
+
+  @Test
+  void publishUsesOnlyAtomicallyHeldCabinContentsAndKeepsZeroGlobalAvailabilityMetadata() {
+    RentalInquiryResponse inquiry = createInquiry();
+    UUID bed = UUID.randomUUID();
+    LogisticsDependencyGateway.AvailableCabin source = cabin(CABIN_1);
+    LogisticsDependencyGateway.AvailableCabin heldCabin =
+        new LogisticsDependencyGateway.AvailableCabin(
+            source.id(),
+            source.version(),
+            source.warehouseId(),
+            source.status(),
+            source.number(),
+            source.rentalType(),
+            source.dimensions(),
+            source.finishing(),
+            source.category(),
+            source.characteristics(),
+            source.linoleum(),
+            source.passport(),
+            source.tags(),
+            List.of(
+                new LogisticsDependencyGateway.OrderEquipmentContent(
+                    bed, "Кровать", 4, "CABIN_NON_RENTED")),
+            source.updatedAt());
+    when(dependencies.replacePresentationHolds(
+            any(),
+            eq(inquiry.id()),
+            eq(WAREHOUSE),
+            eq(List.of(CABIN_1)),
+            any(),
+            eq(MANAGER),
+            eq("RENTAL_MANAGER"),
+            eq(null)))
+        .thenAnswer(
+            invocation -> {
+              LogisticsDependencyGateway.PresentationHolds base =
+                  replaceHolds(inquiry.id(), List.of(CABIN_1), invocation.getArgument(4), null);
+              LogisticsDependencyGateway.PresentationHolds receipt =
+                  new LogisticsDependencyGateway.PresentationHolds(
+                      base.presentationId(), base.expiresAt(), base.holds(), List.of(heldCabin));
+              presentationHolds.put(inquiry.id(), receipt);
+              return receipt;
+            });
+    when(dependencies.readLogisticsEquipmentAvailability(WAREHOUSE))
+        .thenReturn(
+            List.of(
+                new LogisticsDependencyGateway.EquipmentWarehouseAvailability(
+                    bed, "Кровать", true, 0, 4)));
+
+    ClientPresentationResponse published = publish(inquiry.id(), List.of(CABIN_1));
+    PublicClientPresentationResponse publicView =
+        presentations.publicPresentation(token(published));
+
+    assertThat(publicView.equipmentAvailability())
+        .singleElement()
+        .satisfies(
+            equipment -> {
+              assertThat(equipment.equipmentId()).isEqualTo(bed);
+              assertThat(equipment.availableQuantity()).isZero();
+              assertThat(equipment.maximumPerCabin()).isEqualTo(4);
+            });
+    assertThat(publicView.groups().getFirst().cabins().getFirst().currentContents())
+        .singleElement()
+        .satisfies(
+            content -> {
+              assertThat(content.equipmentId()).isEqualTo(bed);
+              assertThat(content.quantity()).isEqualTo(4);
+            });
+    verify(dependencies, never()).readCabinSnapshots(any(), anyList());
+  }
+
+  @Test
   void publishedSelectionCreatesOneDraftForOriginalManagerAndArchivesInquiry() {
     RentalInquiryResponse inquiry = createInquiry();
     ClientPresentationResponse published = publish(inquiry.id(), List.of(CABIN_1, CABIN_2));
@@ -1807,26 +1931,29 @@ class RentalInquiryPresentationIntegrationTest {
 
     PublicClientPresentationResponse publicView = presentations.publicPresentation(token);
     assertThat(publicView.viewOnly()).isFalse();
-    assertThat(publicView.groups()).singleElement().satisfies(
-        group -> {
-          assertThat(group.label()).isEqualTo("БК-1");
-          assertThat(group.cabins()).hasSize(2);
-          assertThat(group.cabins().getFirst().passport())
-              .containsEntry("wall", "ДВП")
-              .doesNotContainKey("authorAction");
-          assertThat(group.cabins().getFirst().photos())
-              .singleElement()
-              .satisfies(
-                  photo -> {
-                    assertThat(photo.thumbnailUrl()).contains(token, "/SMALL");
-                    assertThat(photo.contentUrl()).contains(token, "/LARGE");
-                  });
-        });
+    assertThat(publicView.requiresDesiredDeliveryWindows()).isTrue();
+    assertThat(publicView.desiredDeliveryWindows()).isEmpty();
+    assertThat(publicView.groups())
+        .singleElement()
+        .satisfies(
+            group -> {
+              assertThat(group.label()).isEqualTo("БК-1");
+              assertThat(group.cabins()).hasSize(2);
+              assertThat(group.cabins().getFirst().passport())
+                  .containsEntry("wall", "ДВП")
+                  .doesNotContainKey("authorAction");
+              assertThat(group.cabins().getFirst().photos())
+                  .singleElement()
+                  .satisfies(
+                      photo -> {
+                        assertThat(photo.thumbnailUrl()).contains(token, "/SMALL");
+                        assertThat(photo.contentUrl()).contains(token, "/LARGE");
+                      });
+            });
 
     UUID bookingKey = UUID.randomUUID();
     PresentationBookingResponse booking =
-        bookings.confirm(
-            token, bookingKey, new ConfirmClientPresentationRequest(List.of(CABIN_1)));
+        bookings.confirm(token, bookingKey, confirmation(CABIN_1));
 
     assertThat(booking.state()).isEqualTo("COMPLETED");
     assertThat(booking.orderId()).isNotNull();
@@ -1842,17 +1969,33 @@ class RentalInquiryPresentationIntegrationTest {
         .containsEntry("manager_id", MANAGER)
         .containsEntry("client_id", inquiry.client().id())
         .containsEntry("warehouse_id", WAREHOUSE);
+    assertThat(rentalOrders.get(actor, booking.orderId()).desiredDeliveryWindows())
+        .singleElement()
+        .satisfies(
+            window -> {
+              assertThat(window.startDate()).isEqualTo(LocalDate.of(2026, 8, 11));
+              assertThat(window.endDate()).isEqualTo(LocalDate.of(2026, 8, 11));
+            });
     assertThat(
             jdbc.queryForObject(
-                "select state from rental_inquiry where id=?",
-                String.class,
-                inquiry.id()))
+                "select rental_months from rental_order_unit_term where order_id=? and rental_item_id=?",
+                Long.class,
+                booking.orderId(),
+                CABIN_1))
+        .isEqualTo(2L);
+    assertThat(
+            jdbc.queryForObject(
+                "select rental_months from presentation_booking where id=?",
+                Long.class,
+                booking.bookingId()))
+        .isEqualTo(2L);
+    assertThat(
+            jdbc.queryForObject(
+                "select state from rental_inquiry where id=?", String.class, inquiry.id()))
         .isEqualTo("BOOKED");
     assertThat(
             jdbc.queryForObject(
-                "select state from client_presentation where id=?",
-                String.class,
-                published.id()))
+                "select state from client_presentation where id=?", String.class, published.id()))
         .isEqualTo("BOOKED");
     assertThat(
             jdbc.queryForObject(
@@ -1861,9 +2004,7 @@ class RentalInquiryPresentationIntegrationTest {
                 booking.orderId()))
         .isOne();
 
-    PresentationBookingResponse replay =
-        bookings.confirm(
-            token, bookingKey, new ConfirmClientPresentationRequest(List.of(CABIN_1)));
+    PresentationBookingResponse replay = bookings.confirm(token, bookingKey, confirmation(CABIN_1));
     assertThat(replay.bookingId()).isEqualTo(booking.bookingId());
     assertThat(replay.orderId()).isEqualTo(booking.orderId());
     verify(dependencies, times(1))
@@ -1876,18 +2017,530 @@ class RentalInquiryPresentationIntegrationTest {
             eq(inquiry.client().id()),
             eq("ООО Север"),
             eq(MANAGER),
-            eq("RENTAL_MANAGER"));
+            eq("RENTAL_MANAGER"),
+            anyList());
+    assertThatThrownBy(() -> bookings.confirm(token, bookingKey, confirmation(CABIN_1, 3L)))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            failure ->
+                assertThat(failure.code()).isEqualTo("CLIENT_PRESENTATION_ALREADY_SUBMITTED"));
+    assertThatThrownBy(
+            () ->
+                bookings.confirm(
+                    token,
+                    bookingKey,
+                    confirmation(CABIN_1, LocalDate.of(2026, 8, 12), 2L)))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            failure ->
+                assertThat(failure.code()).isEqualTo("CLIENT_PRESENTATION_ALREADY_SUBMITTED"));
+    assertThatThrownBy(() -> bookings.confirm(token, UUID.randomUUID(), confirmation(CABIN_2)))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            failure ->
+                assertThat(failure.code()).isEqualTo("CLIENT_PRESENTATION_ALREADY_SUBMITTED"));
+  }
+
+  @Test
+  void normalPresentationRequiresOneClientDateAddressAndPositiveRentalMonths() {
+    RentalInquiryResponse inquiry = createInquiry();
+    ClientPresentationResponse published = publish(inquiry.id(), List.of(CABIN_1));
+    String token = token(published);
+    List<PresentationCabinSelectionInput> selections =
+        List.of(new PresentationCabinSelectionInput(CABIN_1, List.of()));
+
     assertThatThrownBy(
             () ->
                 bookings.confirm(
                     token,
                     UUID.randomUUID(),
-                    new ConfirmClientPresentationRequest(List.of(CABIN_2))))
+                    new ConfirmClientPresentationRequest(selections, List.of(), 2L)))
         .isInstanceOfSatisfying(
             OrderProblemException.class,
             failure ->
+                assertThat(failure.code()).isEqualTo("CLIENT_PRESENTATION_DELIVERY_WINDOW_REQUIRED"));
+    assertThatThrownBy(
+            () ->
+                bookings.confirm(
+                    token,
+                    UUID.randomUUID(),
+                    new ConfirmClientPresentationRequest(
+                        selections,
+                        List.of(
+                            new DesiredDeliveryWindowInput(
+                                LocalDate.of(2026, 8, 11),
+                                LocalDate.of(2026, 8, 12))),
+                        2L)))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            failure ->
+                assertThat(failure.code()).isEqualTo("CLIENT_PRESENTATION_DELIVERY_WINDOW_INVALID"));
+    assertThatThrownBy(
+            () ->
+                bookings.confirm(
+                    token,
+                    UUID.randomUUID(),
+                    new ConfirmClientPresentationRequest(
+                        selections,
+                        List.of(
+                            new DesiredDeliveryWindowInput(
+                                LocalDate.of(2026, 8, 11),
+                                LocalDate.of(2026, 8, 11))),
+                        null)))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            failure ->
+                assertThat(failure.code()).isEqualTo("CLIENT_PRESENTATION_RENTAL_MONTHS_REQUIRED"));
+    assertThatThrownBy(
+            () ->
+                bookings.confirm(
+                    token,
+                    UUID.randomUUID(),
+                    new ConfirmClientPresentationRequest(
+                        selections,
+                        List.of(
+                            new DesiredDeliveryWindowInput(
+                                LocalDate.of(2026, 8, 11), LocalDate.of(2026, 8, 11))),
+                        2L,
+                        null,
+                        null,
+                        null,
+                        null)))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            failure ->
+                assertThat(failure.code()).isEqualTo("CLIENT_PRESENTATION_DELIVERY_ADDRESS_REQUIRED"));
+    assertThatThrownBy(
+            () ->
+                bookings.confirm(
+                    token,
+                    UUID.randomUUID(),
+                    new ConfirmClientPresentationRequest(
+                        selections,
+                        List.of(
+                            new DesiredDeliveryWindowInput(
+                                LocalDate.of(2026, 8, 11), LocalDate.of(2026, 8, 11))),
+                        2L,
+                        "Санкт-Петербург, Тестовая улица, 1",
+                        new BigDecimal("59.9343"),
+                        null,
+                        null)))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            failure ->
+                assertThat(failure.code()).isEqualTo("CLIENT_PRESENTATION_COORDINATES_INVALID"));
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from presentation_booking where presentation_id=?",
+                Integer.class,
+                published.id()))
+        .isZero();
+    PresentationBookingResponse accepted =
+        bookings.confirm(token, UUID.randomUUID(), confirmation(CABIN_1));
+    assertThat(rentalOrders.get(actor, accepted.orderId()).additionalContacts()).isEmpty();
+    assertThat(
+            jdbc.queryForObject(
+                "select additional_contacts_json::text from presentation_booking where id=?",
+                String.class,
+                accepted.bookingId()))
+        .isEqualTo("[]");
+  }
+
+  @Test
+  void normalConfirmationStoresDateOnlyDeliveryFactsAndFencesEveryReceiptField()
+      throws Exception {
+    RentalInquiryResponse inquiry = createInquiry();
+    ClientPresentationResponse published = publish(inquiry.id(), List.of(CABIN_1));
+    String token = token(published);
+    UUID bookingKey = UUID.randomUUID();
+    LocalDate date = LocalDate.of(2026, 8, 11);
+    ConfirmClientPresentationRequest request =
+        confirmation(
+            CABIN_1,
+            date,
+            2L,
+            " Санкт-Петербург, Тестовая улица, 1 ",
+            new BigDecimal("59.934300"),
+            new BigDecimal("30.335100"),
+            List.of(new AdditionalContactInput(" Анна Северова ", "8 (999) 123-45-67")));
+
+    PresentationBookingResponse booking = bookings.confirm(token, bookingKey, request);
+
+    OrderDetailResponse order = rentalOrders.get(actor, booking.orderId());
+    assertThat(order.deliveryAddress()).isEqualTo("Санкт-Петербург, Тестовая улица, 1");
+    assertThat(order.latitude()).isEqualByComparingTo("59.9343");
+    assertThat(order.longitude()).isEqualByComparingTo("30.3351");
+    assertThat(order.additionalContacts())
+        .containsExactly(new dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AdditionalContactResponse(
+            "Анна Северова", "+79991234567"));
+    assertThat(order.desiredDeliveryWindows())
+        .containsExactly(
+            new dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.DesiredDeliveryWindowResponse(
+                date, date));
+    assertThat(json.writeValueAsString(order)).doesNotContain("timeFrom", "timeTo");
+    assertThat(
+            jdbc.queryForObject(
+                "select desired_delivery_windows_json::text from presentation_booking where id=?",
+                String.class,
+                booking.bookingId()))
+        .contains("startDate", "endDate")
+        .doesNotContain("timeFrom", "timeTo");
+
+    assertSubmittedConflict(
+        () ->
+            bookings.confirm(
+                token,
+                bookingKey,
+                confirmation(
+                    CABIN_1,
+                    date,
+                    2L,
+                    "Другой адрес",
+                    new BigDecimal("59.9343"),
+                    new BigDecimal("30.3351"),
+                    List.of(new AdditionalContactInput("Анна Северова", "8 (999) 123-45-67")))));
+    assertSubmittedConflict(
+        () ->
+            bookings.confirm(
+                token,
+                bookingKey,
+                confirmation(
+                    CABIN_1,
+                    date.plusDays(1),
+                    2L,
+                    "Санкт-Петербург, Тестовая улица, 1",
+                    new BigDecimal("59.9343"),
+                    new BigDecimal("30.3351"),
+                    List.of(new AdditionalContactInput("Анна Северова", "8 (999) 123-45-67")))));
+    assertSubmittedConflict(
+        () ->
+            bookings.confirm(
+                token,
+                bookingKey,
+                confirmation(
+                    CABIN_1,
+                    date,
+                    3L,
+                    "Санкт-Петербург, Тестовая улица, 1",
+                    new BigDecimal("59.9343"),
+                    new BigDecimal("30.3351"),
+                    List.of(new AdditionalContactInput("Анна Северова", "8 (999) 123-45-67")))));
+    assertSubmittedConflict(
+        () ->
+            bookings.confirm(
+                token,
+                bookingKey,
+                confirmation(
+                    CABIN_1,
+                    date,
+                    2L,
+                    "Санкт-Петербург, Тестовая улица, 1",
+                    new BigDecimal("59.9343"),
+                    new BigDecimal("30.3352"),
+                    List.of(new AdditionalContactInput("Анна Северова", "8 (999) 123-45-67")))));
+    assertSubmittedConflict(
+        () ->
+            bookings.confirm(
+                token,
+                bookingKey,
+                confirmation(
+                    CABIN_1,
+                    date,
+                    2L,
+                    "Санкт-Петербург, Тестовая улица, 1",
+                    new BigDecimal("59.9343"),
+                    new BigDecimal("30.3351"),
+                    List.of(new AdditionalContactInput("Иван Север", "8 (999) 123-45-68")))));
+
+    jdbc.update(
+        """
+        update presentation_booking
+        set desired_delivery_windows_json=?::jsonb,
+            delivery_address=null,
+            latitude=null,
+            longitude=null,
+            additional_contacts_json=null
+        where id=?
+        """,
+        "[{\"startDate\":\"2026-08-11\",\"endDate\":\"2026-08-11\",\"timeFrom\":\"10:00\",\"timeTo\":\"13:00\"}]",
+        booking.bookingId());
+
+    PresentationBookingResponse legacyReplay = bookings.confirm(token, bookingKey, request);
+    assertThat(legacyReplay.bookingId()).isEqualTo(booking.bookingId());
+    assertThat(json.writeValueAsString(rentalOrders.get(actor, booking.orderId())))
+        .doesNotContain("timeFrom", "timeTo");
+    assertThat(rentalOrders.get(actor, booking.orderId()).deliveryAddress())
+        .isEqualTo("Санкт-Петербург, Тестовая улица, 1");
+  }
+
+  @Test
+  void orderFilterRediscoversManualAndAssistantInquiriesWithoutDetachedOrUnauthorizedRows() {
+    RentalInquiryResponse detached = createInquiry();
+    ClientPresentationResponse published = publish(detached.id(), List.of(CABIN_1));
+    PresentationBookingResponse booking =
+        bookings.confirm(token(published), UUID.randomUUID(), confirmation(CABIN_1));
+    UUID manualKey = UUID.randomUUID();
+    RentalInquiryResponse manual =
+        inquiries.create(
+            actor,
+            manualKey,
+            new CreateRentalInquiryRequest(null, detached.client().id(), null, booking.orderId()));
+    UUID conversationId = UUID.randomUUID();
+    RentalInquiryResponse assistant =
+        inquiries.create(
+            actor,
+            conversationId,
+            new CreateRentalInquiryRequest(
+                conversationId, detached.client().id(), null, booking.orderId()));
+
+    assertThat(inquiries.listForOrder(actor, booking.orderId()))
+        .extracting(RentalInquiryResponse::id)
+        .containsExactly(assistant.id(), manual.id())
+        .doesNotContain(detached.id());
+    assertThatThrownBy(() -> inquiries.listForOrder(otherManager, booking.orderId()))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            problem -> assertThat(problem.code()).isEqualTo("ORDER_NOT_FOUND"));
+    OrderActor warehouseManager =
+        new OrderActor(
+            OTHER_MANAGER,
+            "WAREHOUSE_MANAGER",
+            "Руководитель склада",
+            Set.of(WAREHOUSE),
+            Set.of(WAREHOUSE),
+            false,
+            true,
+            true,
+            true);
+    assertThat(inquiries.listForOrder(warehouseManager, booking.orderId()))
+        .extracting(RentalInquiryResponse::id)
+        .containsExactly(assistant.id(), manual.id());
+  }
+
+  @Test
+  void manualAndRepeatedAssistantBookingsAppendToOneOrderWithConversationOutboxOnly() {
+    RentalInquiryResponse original = createInquiry();
+    ClientPresentationResponse firstPresentation = publish(original.id(), List.of(CABIN_1));
+    PresentationBookingResponse first =
+        bookings.confirm(token(firstPresentation), UUID.randomUUID(), confirmation(CABIN_1));
+    UUID manualKey = UUID.randomUUID();
+    RentalInquiryResponse manual =
+        inquiries.create(
+            actor,
+            manualKey,
+            new CreateRentalInquiryRequest(null, original.client().id(), null, first.orderId()));
+    ClientPresentationResponse manualPresentation = publish(manual.id(), List.of(CABIN_2));
+    PublicClientPresentationResponse manualPublic =
+        presentations.publicPresentation(token(manualPresentation));
+    assertThat(manualPublic.requiresDesiredDeliveryWindows()).isTrue();
+    assertThat(manualPublic.desiredDeliveryWindows()).isEmpty();
+    PresentationBookingResponse manualBooking =
+        bookings.confirm(token(manualPresentation), UUID.randomUUID(), linkedConfirmation(CABIN_2));
+    UUID conversationId = UUID.randomUUID();
+    RentalInquiryResponse assistant =
+        inquiries.create(
+            actor,
+            conversationId,
+            new CreateRentalInquiryRequest(
+                conversationId, original.client().id(), null, first.orderId()));
+    ClientPresentationResponse assistantPresentation = publish(assistant.id(), List.of(CABIN_3));
+    UUID assistantBookingKey = UUID.randomUUID();
+    PresentationBookingResponse assistantBooking =
+        bookings.confirm(
+            token(assistantPresentation), assistantBookingKey, linkedConfirmation(CABIN_3));
+    PresentationBookingResponse replay =
+        bookings.confirm(
+            token(assistantPresentation), assistantBookingKey, linkedConfirmation(CABIN_3));
+
+    assertThat(manualBooking.orderId()).isEqualTo(first.orderId());
+    assertThat(assistantBooking.orderId()).isEqualTo(first.orderId());
+    assertThat(replay.bookingId()).isEqualTo(assistantBooking.bookingId());
+    assertThat(orderReservations.get(first.orderId()))
+        .extracting(LogisticsDependencyGateway.OrderUnitReservation::unitId)
+        .containsExactly(CABIN_1, CABIN_2, CABIN_3);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from rental_inquiry_outbox where inquiry_id=?",
+                Integer.class,
+                manual.id()))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from rental_inquiry_outbox where order_id=?",
+                Integer.class,
+                first.orderId()))
+        .isEqualTo(2);
+  }
+
+  @Test
+  void linkedNormalPresentationAddsOnlyUnassignedPhysicalOrderFurnitureToSharedAvailability() {
+    UUID bed = UUID.randomUUID();
+    RentalInquiryResponse original = createInquiry();
+    ClientPresentationResponse initial = publish(original.id(), List.of(CABIN_1));
+    PresentationBookingResponse first =
+        bookings.confirm(token(initial), UUID.randomUUID(), confirmation(CABIN_1));
+    LogisticsDependencyGateway.OrderUnitReservation existing =
+        orderReservations.get(first.orderId()).getFirst();
+    orderReservations.put(
+        first.orderId(),
+        List.of(
+            withContents(
+                existing,
+                List.of(
+                    new LogisticsDependencyGateway.OrderEquipmentContent(
+                        bed, "Кровать", 4, "CABIN_NON_RENTED")))));
+    when(dependencies.readLogisticsEquipmentAvailability(WAREHOUSE))
+        .thenReturn(
+            List.of(
+                new LogisticsDependencyGateway.EquipmentWarehouseAvailability(
+                    bed, "Кровать", true, 0, 4)));
+    RentalInquiryResponse linked =
+        inquiries.create(
+            actor,
+            UUID.randomUUID(),
+            new CreateRentalInquiryRequest(null, original.client().id(), null, first.orderId()));
+
+    ClientPresentationResponse presentation = publish(linked.id(), List.of(CABIN_2));
+
+    assertThat(presentation.equipmentAvailability())
+        .singleElement()
+        .extracting(PresentationEquipmentAvailability::availableQuantity)
+        .isEqualTo(4L);
+    jdbc.update(
+        """
+        insert into rental_order_equipment_requirement(
+          id,version,order_id,rental_item_id,equipment_id,equipment_name,quantity,created_at,updated_at
+        ) values (?,?,?, ?,?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        UUID.randomUUID(),
+        0,
+        first.orderId(),
+        CABIN_1,
+        bed,
+        "Кровать",
+        4);
+
+    assertThat(presentations.publicPresentation(token(presentation)).equipmentAvailability())
+        .singleElement()
+        .extracting(PresentationEquipmentAvailability::availableQuantity)
+        .isEqualTo(0L);
+  }
+
+  @Test
+  void replacementPresentationHoldsOnlyAlternativesForExactPreStartTargets() {
+    RentalInquiryResponse original = createInquiry();
+    ClientPresentationResponse firstPresentation = publish(original.id(), List.of(CABIN_1));
+    PresentationBookingResponse first =
+        bookings.confirm(token(firstPresentation), UUID.randomUUID(), confirmation(CABIN_1));
+    RentalInquiryResponse addition =
+        inquiries.create(
+            actor,
+            UUID.randomUUID(),
+            new CreateRentalInquiryRequest(null, original.client().id(), null, first.orderId()));
+    ClientPresentationResponse additionalPresentation = publish(addition.id(), List.of(CABIN_2));
+    bookings.confirm(token(additionalPresentation), UUID.randomUUID(), linkedConfirmation(CABIN_2));
+    startedShipment(first.orderId(), original.client().id(), CABIN_1);
+    OrderActor warehouseManager =
+        new OrderActor(
+            MANAGER,
+            "WAREHOUSE_MANAGER",
+            "Руководитель склада",
+            Set.of(WAREHOUSE),
+            Set.of(WAREHOUSE),
+            false,
+            true,
+            true,
+            true);
+    when(dependencies.replacePresentationHolds(
+            any(),
+            any(),
+            eq(WAREHOUSE),
+            anyList(),
+            any(),
+            eq(MANAGER),
+            eq("WAREHOUSE_MANAGER"),
+            eq(null)))
+        .thenAnswer(
+            invocation ->
+                replaceHolds(
+                    invocation.getArgument(1),
+                    invocation.getArgument(3),
+                    invocation.getArgument(4),
+                    null));
+    RentalInquiryResponse pendingTarget =
+        inquiries.create(
+            warehouseManager,
+            UUID.randomUUID(),
+            new CreateRentalInquiryRequest(null, original.client().id(), null, first.orderId()));
+
+    ClientPresentationResponse pending =
+        presentations.publish(
+            warehouseManager,
+            pendingTarget.id(),
+            UUID.randomUUID(),
+            new PublishClientPresentationRequest(
+                WAREHOUSE,
+                List.of(new PresentationGroupInput("replacement", "Замена", List.of(CABIN_3))),
+                null,
+                ClientPresentationMode.REPLACEMENT,
+                List.of(CABIN_2)));
+
+    assertThat(pending.requiredSelectionCount()).isOne();
+    assertThat(pending.replacementUnitIds()).containsExactly(CABIN_2);
+    PublicClientPresentationResponse replacementPublic =
+        presentations.publicPresentation(token(pending));
+    assertThat(replacementPublic.requiresDesiredDeliveryWindows()).isFalse();
+    assertThat(replacementPublic.desiredDeliveryWindows())
+        .singleElement()
+        .satisfies(
+            window -> {
+              assertThat(window.startDate()).isEqualTo(LocalDate.of(2026, 8, 11));
+              assertThat(window.endDate()).isEqualTo(LocalDate.of(2026, 8, 11));
+            });
+    assertThatThrownBy(
+            () -> bookings.confirm(token(pending), UUID.randomUUID(), confirmation(CABIN_3)))
+                .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            failure ->
                 assertThat(failure.code())
-                    .isEqualTo("CLIENT_PRESENTATION_ALREADY_SUBMITTED"));
+                    .isEqualTo("REPLACEMENT_CLIENT_CONFIRMATION_FIELDS_FORBIDDEN"));
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from presentation_booking where presentation_id=?",
+                Integer.class,
+                pending.id()))
+        .isZero();
+    clearInvocations(dependencies);
+    RentalInquiryResponse startedTarget =
+        inquiries.create(
+            warehouseManager,
+            UUID.randomUUID(),
+            new CreateRentalInquiryRequest(null, original.client().id(), null, first.orderId()));
+    assertThatThrownBy(
+            () ->
+                presentations.publish(
+                    warehouseManager,
+                    startedTarget.id(),
+                    UUID.randomUUID(),
+                    new PublishClientPresentationRequest(
+                        WAREHOUSE,
+                        List.of(
+                            new PresentationGroupInput("replacement", "Замена", List.of(CABIN_3))),
+                        null,
+                        ClientPresentationMode.REPLACEMENT,
+                        List.of(CABIN_1))))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            problem -> assertThat(problem.code()).isEqualTo("REPLACEMENT_SHIPMENT_STARTED"));
+    verify(dependencies, never())
+        .replacePresentationHolds(
+            any(), eq(startedTarget.id()), any(), anyList(), any(), any(), anyString(), any());
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from client_presentation where inquiry_id=?",
+                Integer.class,
+                startedTarget.id()))
+        .isZero();
   }
 
   @Test
@@ -1895,10 +2548,7 @@ class RentalInquiryPresentationIntegrationTest {
     RentalInquiryResponse inquiry = createInquiry();
     ClientPresentationResponse published = publish(inquiry.id(), List.of(CABIN_1, CABIN_2));
     PresentationBookingResponse booking =
-        bookings.confirm(
-            token(published),
-            UUID.randomUUID(),
-            new ConfirmClientPresentationRequest(List.of(CABIN_1)));
+        bookings.confirm(token(published), UUID.randomUUID(), confirmation(CABIN_1));
 
     RentalBookingAlertResponse alert = bookingAlerts.list(actor).getFirst();
     assertThat(bookingAlerts.list(actor)).hasSize(1);
@@ -1908,9 +2558,7 @@ class RentalInquiryPresentationIntegrationTest {
     assertThat(alert.client().id()).isEqualTo(inquiry.client().id());
     assertThat(alert.client().displayName()).isEqualTo("ООО Север");
     assertThat(alert.confirmedAt()).isNotNull();
-    assertThat(alert.cabins())
-        .extracting(RentalBookingAlertCabin::id)
-        .containsExactly(CABIN_1);
+    assertThat(alert.cabins()).extracting(RentalBookingAlertCabin::id).containsExactly(CABIN_1);
     assertThat(alert.cabins())
         .singleElement()
         .satisfies(
@@ -2010,8 +2658,7 @@ class RentalInquiryPresentationIntegrationTest {
         .isInstanceOfSatisfying(
             OrderProblemException.class,
             failure ->
-                assertThat(failure.code())
-                    .isEqualTo("PRESENTATION_BOOKING_ALERT_ACTION_CONFLICT"));
+                assertThat(failure.code()).isEqualTo("PRESENTATION_BOOKING_ALERT_ACTION_CONFLICT"));
   }
 
   @Test
@@ -2075,10 +2722,7 @@ class RentalInquiryPresentationIntegrationTest {
             published.id(), inquiryScoped.expiresAt(), legacyHolds));
 
     PresentationBookingResponse booking =
-        bookings.confirm(
-            token(published),
-            UUID.randomUUID(),
-            new ConfirmClientPresentationRequest(List.of(CABIN_1)));
+        bookings.confirm(token(published), UUID.randomUUID(), confirmation(CABIN_1));
 
     assertThat(booking.state()).isEqualTo("COMPLETED");
     verify(dependencies)
@@ -2091,43 +2735,95 @@ class RentalInquiryPresentationIntegrationTest {
             eq(inquiry.client().id()),
             eq("ООО Север"),
             eq(MANAGER),
-            eq("RENTAL_MANAGER"));
+            eq("RENTAL_MANAGER"),
+            anyList());
   }
 
   @Test
   void incompleteAssetConversionRejectsBookingInsteadOfFabricatingSuccess() {
     RentalInquiryResponse inquiry = createInquiry();
     ClientPresentationResponse published = publish(inquiry.id(), List.of(CABIN_1, CABIN_2));
-    when(
-            dependencies.convertPresentationHolds(
-                any(),
-                eq(inquiry.id()),
-                any(),
-                eq(WAREHOUSE),
-                anyList(),
-                any(),
-                anyString(),
-                eq(MANAGER),
-                eq("RENTAL_MANAGER")))
+    when(dependencies.convertPresentationHolds(
+            any(),
+            eq(inquiry.id()),
+            any(),
+            eq(WAREHOUSE),
+            anyList(),
+            any(),
+            anyString(),
+            eq(MANAGER),
+            eq("RENTAL_MANAGER"),
+            anyList()))
         .thenAnswer(
             invocation ->
                 new LogisticsDependencyGateway.ConvertedPresentationHolds(
                     inquiry.id(), invocation.getArgument(2), List.of(), List.of(CABIN_2)));
 
     PresentationBookingResponse rejected =
-        bookings.confirm(
-            token(published),
-            UUID.randomUUID(),
-            new ConfirmClientPresentationRequest(List.of(CABIN_1)));
+        bookings.confirm(token(published), UUID.randomUUID(), confirmation(CABIN_1));
 
     assertThat(rejected.state()).isEqualTo("REJECTED");
     assertThat(rejected.errorCode()).isEqualTo("PRESENTATION_CONVERSION_INVALID");
     assertThat(
             jdbc.queryForObject(
-                "select state from client_presentation where id=?",
-                String.class,
-                published.id()))
+                "select state from client_presentation where id=?", String.class, published.id()))
         .isEqualTo("REVOKED");
+
+    ClientPresentationResponse republished = publish(inquiry.id(), List.of(CABIN_2));
+    assertThat(republished.id()).isEqualTo(published.id());
+    assertThat(republished.revision()).isEqualTo(published.revision() + 1);
+    assertThat(republished.state()).isEqualTo("ACTIVE");
+    assertThat(republished.groups().getFirst().cabins())
+        .extracting(PresentationCabin::id)
+        .containsExactly(CABIN_2);
+    assertThat(presentationHolds.get(inquiry.id()).holds())
+        .extracting(LogisticsDependencyGateway.PresentationHold::rentalItemId)
+        .containsExactly(CABIN_2);
+  }
+
+  @Test
+  void pendingBookingStillBlocksRepublishingItsInquiry() {
+    RentalInquiryResponse pendingInquiry = createInquiry();
+    ClientPresentationResponse pendingPresentation = publish(pendingInquiry.id(), List.of(CABIN_1));
+    when(dependencies.convertPresentationHolds(
+            any(),
+            eq(pendingInquiry.id()),
+            any(),
+            eq(WAREHOUSE),
+            anyList(),
+            any(),
+            anyString(),
+            eq(MANAGER),
+            eq("RENTAL_MANAGER"),
+            anyList()))
+        .thenThrow(
+            new LogisticsDependencyException(
+                LogisticsDependencyException.FailureKind.TRANSIENT,
+                "Simulated pending conversion"));
+    PresentationBookingResponse pending =
+        bookings.confirm(token(pendingPresentation), UUID.randomUUID(), confirmation(CABIN_1));
+    assertThat(pending.state()).isEqualTo("PENDING");
+    clearInvocations(dependencies);
+    assertThatThrownBy(() -> publish(pendingInquiry.id(), List.of(CABIN_2)))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            problem -> assertThat(problem.code()).isEqualTo("PRESENTATION_BOOKING_STARTED"));
+    verify(dependencies, never())
+        .replacePresentationHolds(any(), any(), any(), anyList(), any(), any(), anyString(), any());
+  }
+
+  @Test
+  void completedBookingStillBlocksRepublishingItsArchivedInquiry() {
+    RentalInquiryResponse completedInquiry = createInquiry();
+    ClientPresentationResponse completedPresentation =
+        publish(completedInquiry.id(), List.of(CABIN_1));
+    PresentationBookingResponse completed =
+        bookings.confirm(token(completedPresentation), UUID.randomUUID(), confirmation(CABIN_1));
+    assertThat(completed.state()).isEqualTo("COMPLETED");
+    assertThatThrownBy(() -> publish(completedInquiry.id(), List.of(CABIN_2)))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            problem -> assertThat(problem.code()).isEqualTo("INQUIRY_ARCHIVED"));
   }
 
   @Test
@@ -2145,16 +2841,10 @@ class RentalInquiryPresentationIntegrationTest {
         published.id());
 
     assertThat(presentations.publicPresentation(token).viewOnly()).isTrue();
-    assertThatThrownBy(
-            () ->
-                bookings.confirm(
-                    token,
-                    UUID.randomUUID(),
-                    new ConfirmClientPresentationRequest(List.of(CABIN_1))))
+    assertThatThrownBy(() -> bookings.confirm(token, UUID.randomUUID(), confirmation(CABIN_1)))
         .isInstanceOfSatisfying(
             OrderProblemException.class,
-            failure ->
-                assertThat(failure.code()).isEqualTo("CLIENT_PRESENTATION_VIEW_ONLY"));
+            failure -> assertThat(failure.code()).isEqualTo("CLIENT_PRESENTATION_VIEW_ONLY"));
 
     jdbc.update(
         """
@@ -2188,15 +2878,84 @@ class RentalInquiryPresentationIntegrationTest {
                 null)));
   }
 
+  private OrderDetailResponse createDraftOrder() {
+    return rentalOrders
+        .create(
+            actor,
+            UUID.randomUUID(),
+            new CreateOrderRequest(
+                null,
+                new NewClientInput(
+                    ClientType.LEGAL_ENTITY,
+                    "ООО Север",
+                    "+79991234567",
+                    "Анна Северова",
+                    null,
+                    null,
+                    null),
+                "+79991234567",
+                null))
+        .response();
+  }
+
+  private ConfirmClientPresentationRequest confirmation(UUID cabinId) {
+    return confirmation(cabinId, LocalDate.of(2026, 8, 11), 2L);
+  }
+
+  private ConfirmClientPresentationRequest confirmation(UUID cabinId, long rentalMonths) {
+    return confirmation(cabinId, LocalDate.of(2026, 8, 11), rentalMonths);
+  }
+
+  private ConfirmClientPresentationRequest confirmation(
+      UUID cabinId, LocalDate date, long rentalMonths) {
+    return confirmation(
+        cabinId,
+        date,
+        rentalMonths,
+        "Санкт-Петербург, Тестовая улица, 1",
+        null,
+        null,
+        null);
+  }
+
+  private ConfirmClientPresentationRequest confirmation(
+      UUID cabinId,
+      LocalDate date,
+      long rentalMonths,
+      String deliveryAddress,
+      BigDecimal latitude,
+      BigDecimal longitude,
+      List<AdditionalContactInput> additionalContacts) {
+    return new ConfirmClientPresentationRequest(
+        List.of(new PresentationCabinSelectionInput(cabinId, List.of())),
+        List.of(new DesiredDeliveryWindowInput(date, date)),
+        rentalMonths,
+        deliveryAddress,
+        latitude,
+        longitude,
+        additionalContacts);
+  }
+
+  private static void assertSubmittedConflict(
+      org.assertj.core.api.ThrowableAssert.ThrowingCallable command) {
+    assertThatThrownBy(command)
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            failure ->
+                assertThat(failure.code()).isEqualTo("CLIENT_PRESENTATION_ALREADY_SUBMITTED"));
+  }
+
+  private ConfirmClientPresentationRequest linkedConfirmation(UUID cabinId) {
+    return confirmation(cabinId);
+  }
+
   private ClientPresentationResponse publish(UUID inquiryId, List<UUID> ids) {
     return presentations.publish(
         actor,
         inquiryId,
         UUID.randomUUID(),
         new PublishClientPresentationRequest(
-            WAREHOUSE,
-            List.of(new PresentationGroupInput("bk-1", "БК-1", ids)),
-            null));
+            WAREHOUSE, List.of(new PresentationGroupInput("bk-1", "БК-1", ids)), null));
   }
 
   private LogisticsDependencyGateway.AvailableCabin cabin(UUID id) {
@@ -2218,10 +2977,7 @@ class RentalInquiryPresentationIntegrationTest {
   }
 
   private LogisticsDependencyGateway.PresentationHolds replaceHolds(
-      UUID presentationId,
-      List<UUID> ids,
-      OffsetDateTime expiresAt,
-      UUID sourceHoldScopeId) {
+      UUID presentationId, List<UUID> ids, OffsetDateTime expiresAt, UUID sourceHoldScopeId) {
     if (sourceHoldScopeId != null) presentationHolds.remove(sourceHoldScopeId);
     List<LogisticsDependencyGateway.PresentationHold> holds = new ArrayList<>();
     for (UUID id : ids) {
@@ -2240,13 +2996,12 @@ class RentalInquiryPresentationIntegrationTest {
     }
     LogisticsDependencyGateway.PresentationHolds result =
         new LogisticsDependencyGateway.PresentationHolds(
-            presentationId, expiresAt, List.copyOf(holds));
+            presentationId, expiresAt, List.copyOf(holds), ids.stream().map(this::cabin).toList());
     presentationHolds.put(presentationId, result);
     return result;
   }
 
-  private LogisticsDependencyGateway.OrderUnitReservation reservation(
-      UUID orderId, UUID cabinId) {
+  private LogisticsDependencyGateway.OrderUnitReservation reservation(UUID orderId, UUID cabinId) {
     OffsetDateTime timestamp = now();
     return new LogisticsDependencyGateway.OrderUnitReservation(
         UUID.randomUUID(),
@@ -2278,13 +3033,63 @@ class RentalInquiryPresentationIntegrationTest {
             timestamp));
   }
 
+  private static LogisticsDependencyGateway.OrderUnitReservation withContents(
+      LogisticsDependencyGateway.OrderUnitReservation reservation,
+      List<LogisticsDependencyGateway.OrderEquipmentContent> contents) {
+    LogisticsDependencyGateway.OrderRentalItem unit = reservation.unit();
+    return new LogisticsDependencyGateway.OrderUnitReservation(
+        reservation.reservationId(),
+        reservation.reservationVersion(),
+        reservation.orderId(),
+        reservation.unitId(),
+        reservation.warehouseId(),
+        reservation.state(),
+        reservation.addedBySubjectId(),
+        reservation.addedByRole(),
+        reservation.createdAt(),
+        reservation.releasedAt(),
+        reservation.replayed(),
+        new LogisticsDependencyGateway.OrderRentalItem(
+            unit.id(),
+            unit.version(),
+            unit.warehouseId(),
+            unit.number(),
+            unit.status(),
+            unit.rentalType(),
+            unit.dimensions(),
+            unit.finishing(),
+            unit.category(),
+            unit.characteristics(),
+            unit.linoleum(),
+            unit.tags(),
+            contents,
+            unit.createdAt(),
+            unit.updatedAt()));
+  }
+
+  private void startedShipment(UUID orderId, UUID clientId, UUID cabinId) {
+    LogisticsDocument document =
+        LogisticsDocument.createRentalOrderShipment(
+            WAREHOUSE, clientId, orderId, "ООО Север", MANAGER, UUID.randomUUID());
+    document.scheduleShipment("Водитель", LocalDate.of(2026, 8, 12));
+    document.beginShipmentPreparation();
+    document.awaitShipmentConfirmation();
+    document.beginShipmentConfirmation();
+    document.ship();
+    document = logisticsDocuments.saveAndFlush(document);
+    LogisticsDocumentLine line =
+        LogisticsDocumentLine.create(document, 1, cabinId, 1, "ООО Север", orderId);
+    line.beginDeparture();
+    line.markDeparted();
+    logisticsDocumentLines.saveAndFlush(line);
+  }
+
   private static String token(ClientPresentationResponse presentation) {
     return presentation.publicPath().substring("/offer/".length());
   }
 
   private void assertMalformedCatalog(UUID inquiryId) {
-    assertThatThrownBy(
-            () -> cabinCatalog.search(actor, inquiryId, WAREHOUSE, "СПБ", 0, 20))
+    assertThatThrownBy(() -> cabinCatalog.search(actor, inquiryId, WAREHOUSE, "СПБ", 0, 20))
         .isInstanceOfSatisfying(
             OrderProblemException.class,
             problem -> {

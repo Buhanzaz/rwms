@@ -81,11 +81,13 @@ public class MaintenanceCatalogUseCases {
     return catalogModelSupport.catalogResponse(catalogModelSupport.requireCatalog(id));
   }
 
+  /** Returns catalog nodes enriched synchronously with their live asset-owned furniture settings. */
   public List<CatalogNodeResponse> catalogNodes(UUID id) {
     catalogModelSupport.requireCatalog(id);
-    return catalogNodes.findAllByCatalogVersionIdOrderByNameAscIdAsc(id).stream()
-        .map(catalogModelSupport::catalogNodeResponse)
-        .toList();
+    return furnitureEquipmentLinks.enrich(
+        catalogNodes.findAllByCatalogVersionIdOrderByNameAscIdAsc(id).stream()
+            .map(catalogModelSupport::catalogNodeResponse)
+            .toList());
   }
 
   public List<CatalogLinkResponse> catalogLinks(UUID id) {

@@ -11,17 +11,20 @@ import type { PropertyDispositionDecision } from "@/features/write-offs/property
 export class RepairTaskQueueDraftPersistedError extends Error {
   readonly taskId: string
   readonly expectedVersion: number
+  readonly code: string | null
 
   constructor(params: {
     taskId: string
     expectedVersion: number
     message: string
+    code?: string | null
     cause?: unknown
   }) {
     super(params.message, { cause: params.cause })
     this.name = "RepairTaskQueueDraftPersistedError"
     this.taskId = params.taskId
     this.expectedVersion = params.expectedVersion
+    this.code = params.code ?? null
   }
 }
 

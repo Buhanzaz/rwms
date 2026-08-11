@@ -6,23 +6,24 @@ import dev.buhanzaz.rwms.logistics.equipment.api.EquipmentMovementTaskApiModels.
 import dev.buhanzaz.rwms.logistics.equipment.api.EquipmentMovementTaskApiModels.EquipmentMovementLineRequest;
 import dev.buhanzaz.rwms.logistics.equipment.api.EquipmentMovementTaskApiModels.EquipmentMovementTaskResponse;
 import dev.buhanzaz.rwms.logistics.equipment.api.EquipmentMovementTaskApiModels.MaintenanceEquipmentMovementLineRequest;
-import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTask;
-import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskLine;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementLocationKind;
+import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTask;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskLimits;
+import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskLine;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskOwnerType;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
 import dev.buhanzaz.rwms.logistics.equipment.mapper.EquipmentMovementTaskResponseMapper;
 import dev.buhanzaz.rwms.logistics.equipment.repository.EquipmentMovementTaskLineRepository;
 import dev.buhanzaz.rwms.logistics.equipment.repository.EquipmentMovementTaskRepository;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsNotFoundException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseOperationMarkStore;
-import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -68,26 +69,156 @@ public class EquipmentMovementTaskService {
   }
 
   public EquipmentMovementTask required(UUID taskId) {
-    return tasks
-        .findById(taskId)
-        .orElseThrow(LogisticsNotFoundException::new);
+    return tasks.findById(taskId).orElseThrow(LogisticsNotFoundException::new);
+  }
+
+  /** Prevents the ordinary reservation relay from racing the atomic replacement pre-hold. */
+  @Transactional
+  public void deferReplacementPreparation(UUID taskId) {
+    EquipmentMovementTask task =
+        tasks.findForUpdate(taskId).orElseThrow(LogisticsNotFoundException::new);
+    task.deferReplacementPreparation(OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(5));
+    tasks.saveAndFlush(task);
+  }
+
+  /** Persists direct source-balance identities from the asset replacement plan by line order. */
+  @Transactional
+  public void freezeReplacementSources(
+      UUID taskId, List<LogisticsDependencyGateway.OrderFurnitureMovementPlanLine> planLines) {
+    EquipmentMovementTask task =
+        tasks.findForUpdate(taskId).orElseThrow(LogisticsNotFoundException::new);
+    List<EquipmentMovementTaskLine> taskLines = lines.findAllByTask_IdOrderByLineNumberAsc(taskId);
+    if (task.getState() != EquipmentMovementTaskState.RESERVING
+        || planLines == null
+        || planLines.size() != taskLines.size()) {
+      throw new LogisticsConflictException("Replacement movement plan no longer matches its task");
+    }
+    for (int index = 0; index < taskLines.size(); index++) {
+      EquipmentMovementTaskLine line = taskLines.get(index);
+      LogisticsDependencyGateway.OrderFurnitureMovementPlanLine plan = planLines.get(index);
+      if (!line.getEquipmentId().equals(plan.equipmentId())
+          || line.getExpectedSourceBalanceVersion() != plan.expectedSourceBalanceVersion()
+          || line.getQuantity() != plan.quantity()
+          || plan.sourceBalanceId() == null) {
+        throw new LogisticsConflictException(
+            "Replacement movement plan line no longer matches its task");
+      }
+      line.freezeReplacementSourceBalance(plan.sourceBalanceId());
+    }
+    lines.saveAllAndFlush(taskLines);
+  }
+
+  /** Rebuilds the exact movement bundle required by the idempotent asset replacement replay. */
+  public LogisticsDependencyGateway.OrderUnitReplacementMovement replacementMovement(
+      UUID taskId, UUID replacementRentalItemId) {
+    EquipmentMovementTask task = required(taskId);
+    List<EquipmentMovementTaskLine> taskLines = lines.findAllByTask_IdOrderByLineNumberAsc(taskId);
+    if (taskLines.isEmpty()
+        || taskLines.stream().anyMatch(line -> line.getSourceBalanceId() == null)) {
+      throw new LogisticsConflictException("Replacement movement has no exact source balance");
+    }
+    return new LogisticsDependencyGateway.OrderUnitReplacementMovement(
+        task.getId(),
+        task.getDeadlineAt(),
+        taskLines.stream()
+            .map(
+                line ->
+                    new LogisticsDependencyGateway.OrderUnitReplacementMovementLine(
+                        line.getId(),
+                        line.getEquipmentId(),
+                        line.getSourceBalanceId(),
+                        line.getExpectedSourceBalanceVersion(),
+                        replacementRentalItemId,
+                        line.getQuantity()))
+            .toList());
+  }
+
+  /**
+   * Attaches the exact reservations pre-created by asset-service and opens the unchanged task-board
+   * registration phase. This participates in the caller's local replacement transaction.
+   */
+  @Transactional(readOnly = true)
+  public void validateReplacementReservations(
+      UUID taskId, List<LogisticsDependencyGateway.EquipmentMovementReservation> reservations) {
+    EquipmentMovementTask task =
+        tasks.findById(taskId).orElseThrow(LogisticsNotFoundException::new);
+    if (task.getState() != EquipmentMovementTaskState.RESERVING) return;
+    validateReplacementReservations(
+        task, lines.findAllByTask_IdOrderByLineNumberAsc(taskId), reservations);
+  }
+
+  /**
+   * Opens the ordinary line-acquisition relay after the atomic swap returned validated pre-holds.
+   * Each line then replays its exact asset reservation with the released old-cabin reservation
+   * identity instead of attaching a remote receipt without an idempotent dependency call.
+   */
+  @Transactional
+  public void resumeReplacementReservationReplay(UUID taskId) {
+    EquipmentMovementTask task =
+        tasks.findForUpdate(taskId).orElseThrow(LogisticsNotFoundException::new);
+    if (task.getState() != EquipmentMovementTaskState.RESERVING) return;
+    task.scheduleImmediately();
+    tasks.saveAndFlush(task);
+  }
+
+  private static void validateReplacementReservations(
+      EquipmentMovementTask task,
+      List<EquipmentMovementTaskLine> taskLines,
+      List<LogisticsDependencyGateway.EquipmentMovementReservation> reservations) {
+    if (reservations == null || reservations.size() != taskLines.size()) {
+      throw new LogisticsConflictException(
+          "Asset-service returned incomplete replacement movement reservations");
+    }
+    java.util.Map<UUID, LogisticsDependencyGateway.EquipmentMovementReservation> byLine =
+        reservations.stream()
+            .collect(
+                java.util.stream.Collectors.toMap(
+                    LogisticsDependencyGateway.EquipmentMovementReservation::lineId,
+                    value -> value));
+    for (EquipmentMovementTaskLine line : taskLines) {
+      LogisticsDependencyGateway.EquipmentMovementReservation reservation =
+          byLine.get(line.getId());
+      if (reservation == null
+          || !task.getId().equals(reservation.movementId())
+          || !line.getEquipmentId().equals(reservation.equipmentId())
+          || !line.getSourceWarehouseId().equals(reservation.sourceWarehouseId())
+          || !java.util.Objects.equals(
+              line.getSourceRentalItemId(), reservation.sourceRentalItemId())
+          || !line.getSourceLocationKind().name().equals(reservation.sourceLocationKind())
+          || line.getQuantity() != reservation.quantity()
+          || !"ACTIVE".equals(reservation.state())
+          || reservation.reservedUntil() == null
+          || reservation.reservedUntil().isAfter(task.getDeadlineAt())) {
+        throw new LogisticsConflictException(
+            "Asset-service returned a mismatched replacement movement reservation");
+      }
+    }
+  }
+
+  /** Terminates a prepared replacement movement after a permanent atomic-swap rejection. */
+  @Transactional
+  public void rejectReplacementPreparation(UUID taskId, String code) {
+    EquipmentMovementTask task =
+        tasks.findForUpdate(taskId).orElseThrow(LogisticsNotFoundException::new);
+    if (!task.getState().isTerminal()) {
+      task.beginCancellation(EquipmentMovementTaskState.CONFLICT, code);
+      tasks.saveAndFlush(task);
+    }
   }
 
   @Transactional
   public CreateResult create(
       UUID actorSubjectId, UUID idempotencyKey, CreateEquipmentMovementTaskRequest request) {
     if (actorSubjectId == null || idempotencyKey == null || request == null) {
-      throw new IllegalArgumentException("Movement actor, request and Idempotency-Key are required");
+      throw new IllegalArgumentException(
+          "Movement actor, request and Idempotency-Key are required");
     }
     return create(
         actorSubjectId,
         idempotencyKey,
         request,
         warehouseLifecycle.disabledTicket(
-            actorSubjectId,
-            CREATE_OPERATION,
-            idempotencyKey,
-            admissionRequirements(request)));
+            actorSubjectId, CREATE_OPERATION, idempotencyKey, admissionRequirements(request)));
   }
 
   @Transactional
@@ -97,7 +228,8 @@ public class EquipmentMovementTaskService {
       CreateEquipmentMovementTaskRequest request,
       AdmissionTicket admission) {
     if (actorSubjectId == null || idempotencyKey == null || request == null) {
-      throw new IllegalArgumentException("Movement actor, request and Idempotency-Key are required");
+      throw new IllegalArgumentException(
+          "Movement actor, request and Idempotency-Key are required");
     }
     return createInternal(
         actorSubjectId,
@@ -176,7 +308,8 @@ public class EquipmentMovementTaskService {
     String checksum = creationChecksum(request, ownerType, ownerId);
     if (ownerType == EquipmentMovementTaskOwnerType.MAINTENANCE_DISPOSITION) {
       transactionLock.acquire("equipment-movement:maintenance-disposition:" + ownerId);
-      EquipmentMovementTask owned = tasks.findByOwnerTypeAndOwnerId(ownerType, ownerId).orElse(null);
+      EquipmentMovementTask owned =
+          tasks.findByOwnerTypeAndOwnerId(ownerType, ownerId).orElse(null);
       if (owned != null) {
         if (!owned.matchesRequest(checksum)) {
           throw new LogisticsConflictException(
@@ -188,10 +321,13 @@ public class EquipmentMovementTaskService {
     }
     transactionLock.acquire("equipment-movement:create:" + actorSubjectId + ":" + idempotencyKey);
     EquipmentMovementTask replay =
-        tasks.findByCreatedBySubjectIdAndIdempotencyKey(actorSubjectId, idempotencyKey).orElse(null);
+        tasks
+            .findByCreatedBySubjectIdAndIdempotencyKey(actorSubjectId, idempotencyKey)
+            .orElse(null);
     if (replay != null) {
       if (!matchesCreateRequest(replay, request, ownerType, ownerId, checksum)) {
-        throw new LogisticsConflictException("Idempotency-Key is already used for a different movement task");
+        throw new LogisticsConflictException(
+            "Idempotency-Key is already used for a different movement task");
       }
       return new CreateResult(
           response(replay, lines.findAllByTask_IdOrderByLineNumberAsc(replay.getId())), true);
@@ -258,17 +394,15 @@ public class EquipmentMovementTaskService {
       UUID idempotencyKey,
       CancelEquipmentMovementTaskRequest request) {
     if (actorSubjectId == null || idempotencyKey == null || request == null) {
-      throw new IllegalArgumentException("Movement cancellation actor, request and Idempotency-Key are required");
+      throw new IllegalArgumentException(
+          "Movement cancellation actor, request and Idempotency-Key are required");
     }
     String checksum =
         EquipmentMovementTaskChecksum.sha256(
-            CANCEL_OPERATION,
-            List.of(taskId.toString(), Long.toString(request.expectedVersion())));
+            CANCEL_OPERATION, List.of(taskId.toString(), Long.toString(request.expectedVersion())));
     transactionLock.acquire("equipment-movement:cancel:" + actorSubjectId + ":" + idempotencyKey);
     EquipmentMovementTask task =
-        tasks
-            .findForUpdate(taskId)
-            .orElseThrow(LogisticsNotFoundException::new);
+        tasks.findForUpdate(taskId).orElseThrow(LogisticsNotFoundException::new);
     if (task.matchesCancellationRequest(actorSubjectId, idempotencyKey, checksum)) {
       return new MutationResult(
           response(task, lines.findAllByTask_IdOrderByLineNumberAsc(taskId)), true);
@@ -340,13 +474,10 @@ public class EquipmentMovementTaskService {
         throw new IllegalArgumentException("Equipment movement line is invalid");
       }
       String sourceKey =
-          line.equipmentId()
-              + ":"
-              + line.sourceRentalItemId()
-              + ":"
-              + line.sourceLocationKind();
+          line.equipmentId() + ":" + line.sourceRentalItemId() + ":" + line.sourceLocationKind();
       if (!uniqueSources.add(sourceKey)) {
-        throw new IllegalArgumentException("Equipment movement may contain each source balance only once");
+        throw new IllegalArgumentException(
+            "Equipment movement may contain each source balance only once");
       }
       workerOperationCount +=
           line.sourceLocationKind() == EquipmentMovementLocationKind.STOCK
@@ -416,12 +547,10 @@ public class EquipmentMovementTaskService {
         request.targetWarehouseId() == null ? request.warehouseId() : request.targetWarehouseId();
     if (request.warehouseId().equals(target)) {
       return List.of(
-          new AdmissionRequirement(
-              request.warehouseId(), WarehouseOperationDirection.OUTGOING));
+          new AdmissionRequirement(request.warehouseId(), WarehouseOperationDirection.OUTGOING));
     }
     return List.of(
-        new AdmissionRequirement(
-            request.warehouseId(), WarehouseOperationDirection.OUTGOING),
+        new AdmissionRequirement(request.warehouseId(), WarehouseOperationDirection.OUTGOING),
         new AdmissionRequirement(target, WarehouseOperationDirection.INCOMING));
   }
 
@@ -464,10 +593,12 @@ public class EquipmentMovementTaskService {
   private static List<String> requestChecksumValues(CreateEquipmentMovementTaskRequest request) {
     List<String> values = new ArrayList<>();
     values.add(request.warehouseId().toString());
-    values.add(
-        request.targetWarehouseId() == null ? null : request.targetWarehouseId().toString());
+    values.add(request.targetWarehouseId() == null ? null : request.targetWarehouseId().toString());
     values.add(request.unitNumber());
-    values.add(request.plannedDurationMinutes() == null ? null : request.plannedDurationMinutes().toString());
+    values.add(
+        request.plannedDurationMinutes() == null
+            ? null
+            : request.plannedDurationMinutes().toString());
     values.add(request.deadlineAt().toString());
     for (EquipmentMovementLineRequest line : request.lines()) {
       values.add(line.equipmentId().toString());
@@ -481,7 +612,9 @@ public class EquipmentMovementTaskService {
     return values;
   }
 
+  /** Equipment-movement task create result with stable idempotency replay truth. */
   public record CreateResult(EquipmentMovementTaskResponse response, boolean replayed) {}
 
+  /** Equipment-movement task mutation result with stable command replay truth. */
   public record MutationResult(EquipmentMovementTaskResponse response, boolean replayed) {}
 }

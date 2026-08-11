@@ -131,6 +131,11 @@ emits a `FEED_CHANGED` signal when a client subscribes and for subsequent
 changes; the worker app also performs periodic authoritative REST refresh.
 Payloads are not a complete task projection.
 
+`WorkerTaskDetail.source` always appears and is null for ordinary work. For source-owned work it
+contains only the existing immutable source type and ID. A worker client can use a
+`LOGISTICS_DRIVER_TASK` ID to load the logistics-owned trip details; task-board does not copy that
+payload or its business state.
+
 The worker action path validates the worker identity, current assignment,
 entry version, action/status transition, and offline lease where applicable.
 Evidence is first reserved with a stable client reference, then uploaded to

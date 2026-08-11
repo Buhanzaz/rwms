@@ -103,8 +103,18 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
 
   @Override
   public FurnitureEquipmentSnapshot ensureFurnitureEquipment(
-      UUID catalogNodeId, String equipmentName) {
-    return asset.ensureFurnitureEquipment(catalogNodeId, equipmentName);
+      UUID catalogNodeId,
+      String equipmentName,
+      Long expectedEquipmentVersion,
+      Integer maximumPerCabin) {
+    return asset.ensureFurnitureEquipment(
+        catalogNodeId, equipmentName, expectedEquipmentVersion, maximumPerCabin);
+  }
+
+  @Override
+  public List<FurnitureEquipmentSnapshot> furnitureEquipmentSnapshots(
+      List<UUID> catalogNodeIds) {
+    return asset.furnitureEquipmentSnapshots(catalogNodeIds);
   }
 
   @Override

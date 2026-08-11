@@ -4,10 +4,11 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsLineState;
+import dev.buhanzaz.rwms.logistics.driver.service.DocumentDriverTaskPlanner;
+import dev.buhanzaz.rwms.logistics.driver.settings.service.ShipmentTaskSettingsService;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventStore;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventType;
-import dev.buhanzaz.rwms.logistics.driver.settings.service.ShipmentTaskSettingsService;
-import dev.buhanzaz.rwms.logistics.driver.service.DocumentDriverTaskPlanner;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRentalShipmentRequest;
@@ -45,6 +46,7 @@ class LogisticsRentalOrderShipmentCoordinator {
   private final LogisticsDocumentLineRepository lineRepository;
   private final RentalOrderUnitTermRepository rentalTerms;
   private final ShipmentFurnitureMovementTaskRepository shipmentFurnitureTaskRepository;
+  private final ShipmentFurnitureTaskService shipmentFurnitureTasks;
   private final LogisticsEventStore eventStore;
   private final LogisticsDocumentWarehouseAdmission warehouseAdmission;
   private final LogisticsDocumentIdempotency idempotency;
@@ -116,7 +118,8 @@ class LogisticsRentalOrderShipmentCoordinator {
     warehouseAdmission.requireAdmission(
         admission,
         List.of(
-            new AdmissionRequirement(order.getWarehouseId(), WarehouseOperationDirection.OUTGOING)));
+            new AdmissionRequirement(
+                order.getWarehouseId(), WarehouseOperationDirection.OUTGOING)));
     if (request.scheduledDate().isBefore(admission.localDate(order.getWarehouseId()))) {
       throw new LogisticsConflictException("Дата отгрузки не может быть в прошлом");
     }
@@ -165,11 +168,14 @@ class LogisticsRentalOrderShipmentCoordinator {
             subjectId,
             correlationId);
     document.scheduleShipment(
-        request.driverSnapshot(), request.driverWorkerId(), request.scheduledDate());
+        request.driverSnapshot(),
+        request.driverWorkerId(),
+        request.scheduledDate());
     document = documentRepository.saveAndFlush(document);
     List<LogisticsDocumentLine> lines =
         lineRepository.saveAllAndFlush(
             rentalOrderShipmentLines(document, order, reservationsByUnit, selectedUnitIds));
+    shipmentFurnitureTasks.attachReplacementMovementsToShipment(document, selectedUnitIds);
     driverTaskPlanner.plan(document, lines);
     for (RentalOrderUnitTerm term : terms) {
       term.assignShipment(document.getId(), request.scheduledDate());
@@ -190,6 +196,43 @@ class LogisticsRentalOrderShipmentCoordinator {
         .stream()
         .filter(document -> document.getState() != LogisticsDocumentState.CANCELLED)
         .allMatch(this::isRentalOrderShipmentDraftEditable);
+  }
+
+  /**
+   * Returns whether at least one active order cabin is unassigned or belongs only to pending lines
+   * of non-departed shipments. A started earlier batch does not hide replacement for a later cabin,
+   * while the exact command still applies its task-board cancellation fence.
+   */
+  boolean hasRentalOrderReplaceableUnit(UUID orderId, Set<UUID> activeUnitIds) {
+    if (orderId == null || activeUnitIds == null || activeUnitIds.isEmpty()) return false;
+    Set<UUID> ineligible = new HashSet<>();
+    for (LogisticsDocument document :
+        documentRepository.findAllByDocumentTypeAndRentalOrderIdOrderByCreatedAtAscIdAsc(
+            LogisticsDocumentType.SHIPMENT, orderId)) {
+      if (document.getState() == LogisticsDocumentState.CANCELLED) continue;
+      boolean documentPreStart = replacementPreStartState(document.getState());
+      for (LogisticsDocumentLine line :
+          lineRepository.findAllByDocument_IdOrderByLineNumber(document.getId())) {
+        if (activeUnitIds.contains(line.getAssetId())
+            && (!documentPreStart || line.getState() != LogisticsLineState.PENDING)) {
+          ineligible.add(line.getAssetId());
+        }
+      }
+    }
+    return activeUnitIds.stream().anyMatch(unitId -> !ineligible.contains(unitId));
+  }
+
+  boolean isRentalOrderUnitReplacementPreStart(UUID orderId, UUID unitId) {
+    return unitId != null && hasRentalOrderReplaceableUnit(orderId, Set.of(unitId));
+  }
+
+  private static boolean replacementPreStartState(LogisticsDocumentState state) {
+    return Set.of(
+            LogisticsDocumentState.DRAFT,
+            LogisticsDocumentState.PREPARING,
+            LogisticsDocumentState.AWAITING_CONFIRMATION,
+            LogisticsDocumentState.CONFIRMING_PREPARATION)
+        .contains(state);
   }
 
   boolean lockRentalOrderShipmentDraftForOrderEditing(UUID orderId) {
@@ -237,7 +280,8 @@ class LogisticsRentalOrderShipmentCoordinator {
     return shipment.getDocumentType() == LogisticsDocumentType.SHIPMENT
         && shipment.getRentalOrderId() != null
         && shipment.getState() == LogisticsDocumentState.DRAFT
-        && !shipmentFurnitureTaskRepository.existsByDocument_Id(shipment.getId());
+        && shipment.getScheduledDate() == null
+        && !shipmentFurnitureTaskRepository.existsOperationalByDocumentId(shipment.getId());
   }
 
   private static List<UUID> sortedSelectedUnitIds(List<UUID> unitIds) {

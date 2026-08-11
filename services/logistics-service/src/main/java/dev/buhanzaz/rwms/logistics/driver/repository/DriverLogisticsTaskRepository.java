@@ -10,16 +10,21 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 /**
- * Spring Data persistence boundary for logistics-owned driver tasks and their locked workflow reads.
+ * Spring Data persistence boundary for logistics-owned driver tasks and their locked workflow
+ * reads.
  */
-public interface DriverLogisticsTaskRepository
-    extends JpaRepository<DriverLogisticsTask, UUID> {
+public interface DriverLogisticsTaskRepository extends JpaRepository<DriverLogisticsTask, UUID> {
+  @EntityGraph(attributePaths = "members")
+  @Query("select task from DriverLogisticsTask task where task.id = :id")
+  Optional<DriverLogisticsTask> findWithMembersById(@Param("id") UUID id);
+
   Optional<DriverLogisticsTask> findByCreatedBySubjectIdAndIdempotencyKey(
       UUID createdBySubjectId, UUID idempotencyKey);
 
@@ -95,13 +100,12 @@ public interface DriverLogisticsTaskRepository
       @Param("repairId") UUID repairId, @Param("kind") DriverTaskKind kind);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)
-  @Query(
-      "select task from DriverLogisticsTask task where task.externalTaskId = :externalTaskId")
+  @Query("select task from DriverLogisticsTask task where task.externalTaskId = :externalTaskId")
   Optional<DriverLogisticsTask> findForUpdateByExternalTaskId(
       @Param("externalTaskId") UUID externalTaskId);
 
-  List<DriverLogisticsTask> findAllByWarehouseIdOrderByCreatedAtAscIdAsc(
-      UUID warehouseId);
+  @EntityGraph(attributePaths = "members")
+  List<DriverLogisticsTask> findAllByWarehouseIdOrderByCreatedAtAscIdAsc(UUID warehouseId);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select task from DriverLogisticsTask task where task.id = :id")
@@ -116,8 +120,7 @@ public interface DriverLogisticsTaskRepository
       order by task.nextAttemptAt asc nulls first, task.id asc
       """)
   List<UUID> findDueIds(
-      @Param("states") Collection<DriverTaskState> states,
-      @Param("now") OffsetDateTime now);
+      @Param("states") Collection<DriverTaskState> states, @Param("now") OffsetDateTime now);
 
   @Query(
       """
@@ -128,14 +131,14 @@ public interface DriverLogisticsTaskRepository
       """)
   List<UUID> findActiveWarehouseIds(@Param("states") Collection<DriverTaskState> states);
 
-  boolean existsByWarehouseIdAndStateIn(
-      UUID warehouseId, Collection<DriverTaskState> states);
+  boolean existsByWarehouseIdAndStateIn(UUID warehouseId, Collection<DriverTaskState> states);
 
   boolean existsByWarehouseIdAndStateAndManualPromotionHoldUntilAfter(
       UUID warehouseId, DriverTaskState state, OffsetDateTime value);
 
-  List<DriverLogisticsTask> findAllByWarehouseIdAndStateAndManualPromotionHoldUntilAfterOrderByManualPromotionHoldUntilAscIdAsc(
-      UUID warehouseId, DriverTaskState state, OffsetDateTime value);
+  List<DriverLogisticsTask>
+      findAllByWarehouseIdAndStateAndManualPromotionHoldUntilAfterOrderByManualPromotionHoldUntilAscIdAsc(
+          UUID warehouseId, DriverTaskState state, OffsetDateTime value);
 
   @Query(
       """
@@ -146,7 +149,5 @@ public interface DriverLogisticsTaskRepository
       order by task.completedAt desc nulls last, task.id desc
       """)
   List<DriverLogisticsTask> findRecentByWarehouseAndState(
-      @Param("warehouseId") UUID warehouseId,
-      @Param("state") DriverTaskState state);
-
+      @Param("warehouseId") UUID warehouseId, @Param("state") DriverTaskState state);
 }

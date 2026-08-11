@@ -183,7 +183,7 @@ describe("rental presentation API", () => {
     await getPublicPresentation("opaque-token")
     await confirmPublicPresentation({
       token: "opaque-token",
-      selectedRentalItemIds: [CABIN_ID],
+      selections: [{ rentalItemId: CABIN_ID, equipment: [] }],
       idempotencyKey: IDEMPOTENCY_KEY,
     })
 
@@ -194,6 +194,65 @@ describe("rental presentation API", () => {
     expect(new Headers(confirmInit.headers).get("Idempotency-Key")).toBe(
       IDEMPOTENCY_KEY
     )
+    expect(JSON.parse(String(confirmInit.body))).toEqual({
+      selections: [{ rentalItemId: CABIN_ID, equipment: [] }],
+    })
+  })
+
+  it("sends normal client date, duration and delivery details exactly once", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          bookingId: "66666666-6666-4666-8666-666666666666",
+          state: "PENDING",
+          orderId: null,
+          statusPath: "/status",
+          errorCode: null,
+        }),
+        { status: 202, headers: { "Content-Type": "application/json" } }
+      )
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await confirmPublicPresentation({
+      token: "opaque-token",
+      selections: [{ rentalItemId: CABIN_ID, equipment: [] }],
+      desiredDeliveryWindows: [
+        {
+          startDate: "2026-08-14",
+          endDate: "2026-08-14",
+        },
+      ],
+      rentalMonths: 6,
+      deliveryAddress: "Санкт-Петербург, Невский проспект, 1",
+      latitude: 59.9343,
+      longitude: 30.3351,
+      additionalContacts: [{ name: "Иван", phone: "+79990000000" }],
+      idempotencyKey: IDEMPOTENCY_KEY,
+    })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new URL(url).pathname).toBe(
+      "/api/logistics/public/v1/client-presentations/opaque-token/bookings"
+    )
+    expect(new Headers(init.headers).get("Authorization")).toBeNull()
+    expect(new Headers(init.headers).get("Idempotency-Key")).toBe(
+      IDEMPOTENCY_KEY
+    )
+    expect(JSON.parse(String(init.body))).toEqual({
+      selections: [{ rentalItemId: CABIN_ID, equipment: [] }],
+      desiredDeliveryWindows: [
+        {
+          startDate: "2026-08-14",
+          endDate: "2026-08-14",
+        },
+      ],
+      rentalMonths: 6,
+      deliveryAddress: "Санкт-Петербург, Невский проспект, 1",
+      latitude: 59.9343,
+      longitude: 30.3351,
+      additionalContacts: [{ name: "Иван", phone: "+79990000000" }],
+    })
   })
 
   it("returns a typed rejected booking from the public 409 response", async () => {
@@ -216,7 +275,7 @@ describe("rental presentation API", () => {
     await expect(
       confirmPublicPresentation({
         token: "opaque-token",
-        selectedRentalItemIds: [CABIN_ID],
+        selections: [{ rentalItemId: CABIN_ID, equipment: [] }],
         idempotencyKey: IDEMPOTENCY_KEY,
       })
     ).resolves.toMatchObject({ state: "REJECTED" })

@@ -1,7 +1,8 @@
 package dev.buhanzaz.rwms.assistant.domain;
 
-/** Describes whether an interactive question can still accept a server-validated option. */
+/** Describes one durable state in the ordered clarification queue. */
 public enum AssistantClarificationStatus {
+  QUEUED,
   PENDING,
   ANSWERED,
   SUPERSEDED

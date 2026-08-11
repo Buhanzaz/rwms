@@ -545,6 +545,8 @@ describe("maintenance-backed repair catalog store", () => {
     const equipment = {
       equipmentId: "00000000-0000-4000-8000-000000000021",
       equipmentName: "Стол",
+      equipmentVersion: 2,
+      maximumPerCabin: 4,
     }
     const savedNode = {
       ...node,

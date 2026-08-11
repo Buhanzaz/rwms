@@ -11,6 +11,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateReturnRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnLineRequest;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import java.util.List;
@@ -137,13 +139,64 @@ class ReturnRegistrationApiIntegrationTest {
         .andExpect(jsonPath("$.version").value(1))
         .andExpect(jsonPath("$.state").value("REGISTERING"))
         .andExpect(jsonPath("$.scheduledDate").value("2026-07-22"))
-        .andExpect(jsonPath("$.scheduledAt").isEmpty());
+        .andExpect(jsonPath("$.scheduledTime").doesNotExist())
+        .andExpect(jsonPath("$.scheduledAt").doesNotExist());
 
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from logistics_external_attempt where operation_type='RETURN_WAREHOUSE_IDENTITY'",
                 Long.class))
         .isOne();
+  }
+
+  @Test
+  void rejectsRetiredScheduledTimeBeforeChangingTheReturnDocument() throws Exception {
+    LogisticsDocumentService.CreateResult created =
+        documents.createReturn(
+            SUBJECT,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            new CreateReturnRequest(
+                WAREHOUSE,
+                List.of(new ReturnLineRequest(UUID.randomUUID(), 0, "Tenant snapshot"))));
+
+    mvc.perform(
+            post("/api/logistics/v1/returns/{documentId}/register", created.response().id())
+                .param("expectedVersion", "0")
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {
+                      "driverSnapshot": "Водитель возврата",
+                      "scheduledDate": "2026-07-22",
+                      "scheduledTime": "10:15"
+                    }
+                    """)
+                .with(
+                    jwt()
+                        .jwt(
+                            jwt ->
+                                jwt.subject(SUBJECT.toString())
+                                    .claim("principal_type", "USER")
+                                    .claim("scope", "rwms.write")
+                                    .claim(
+                                        "warehouse_access",
+                                        List.of(
+                                            Map.of(
+                                                "warehouseId",
+                                                WAREHOUSE.toString(),
+                                                "level",
+                                                "EDIT"))))))
+        .andExpect(status().isBadRequest());
+
+    assertThat(documents.get(created.response().id(), LogisticsDocumentType.RETURN).state())
+        .isEqualTo(LogisticsDocumentState.DRAFT);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_external_attempt where operation_type='RETURN_WAREHOUSE_IDENTITY'",
+                Long.class))
+        .isZero();
   }
 
   @Test

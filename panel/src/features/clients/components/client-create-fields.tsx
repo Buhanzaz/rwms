@@ -11,10 +11,13 @@ import {
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { AdditionalContactsFields } from "@/features/clients/components/additional-contacts-fields"
 import {
   CLIENT_TYPES,
   CLIENT_TYPE_LABELS,
   clientNeedsContactPerson,
+  type AdditionalContact,
+  type AdditionalContactErrors,
   type ClientType,
 } from "@/features/clients/domain/clients"
 
@@ -27,12 +30,13 @@ export type ClientCreateFieldsValue = {
   email: string
   comment: string
   source: string
+  additionalContacts: AdditionalContact[]
 }
 
 /** Inline validation messages shared by the standalone and embedded client forms. */
 export type ClientCreateFieldsErrors = Partial<
   Record<"displayName" | "phone" | "contactPerson", string>
->
+> & { additionalContacts?: AdditionalContactErrors[] }
 
 /** Optional refs let a parent move keyboard focus to the first invalid client field. */
 export type ClientCreateFieldsRefs = {
@@ -93,7 +97,7 @@ export function ClientCreateFields({
   value,
   responsibleManagerDisplayName,
   errors = {},
-  refs = {},
+  refs: inputRefs = {},
   disabled = false,
   showClientType = true,
   showDisplayName = true,
@@ -145,7 +149,11 @@ export function ClientCreateFields({
             </FieldLabel>
             <Input
               id={`${idPrefix}-client-display-name`}
-              ref={refs.displayName}
+              ref={(element) => {
+                if (inputRefs.displayName) {
+                  inputRefs.displayName.current = element
+                }
+              }}
               name="displayName"
               value={value.displayName}
               required
@@ -168,7 +176,9 @@ export function ClientCreateFields({
           </FieldLabel>
           <Input
             id={`${idPrefix}-client-phone`}
-            ref={refs.phone}
+            ref={(element) => {
+              if (inputRefs.phone) inputRefs.phone.current = element
+            }}
             name="phone"
             type="tel"
             value={value.phone}
@@ -195,7 +205,11 @@ export function ClientCreateFields({
             </FieldLabel>
             <Input
               id={`${idPrefix}-client-contact-person`}
-              ref={refs.contactPerson}
+              ref={(element) => {
+                if (inputRefs.contactPerson) {
+                  inputRefs.contactPerson.current = element
+                }
+              }}
               name="contactPerson"
               value={value.contactPerson}
               required
@@ -285,6 +299,17 @@ export function ClientCreateFields({
           />
         </Field>
       </div>
+
+      <AdditionalContactsFields
+        idPrefix={`${idPrefix}-client`}
+        value={value.additionalContacts}
+        errors={errors.additionalContacts}
+        disabled={disabled}
+        ownerLabel="клиента"
+        onChange={(additionalContacts) =>
+          update("additionalContacts", additionalContacts)
+        }
+      />
     </>
   )
 }

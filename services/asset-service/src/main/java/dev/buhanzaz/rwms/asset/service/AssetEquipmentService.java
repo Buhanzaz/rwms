@@ -91,6 +91,7 @@ final class AssetEquipmentService {
     Map<UUID, List<EquipmentAllocationPolicy.SourceAvailability>> sources =
         allocationPolicy.sourcesAtWarehouse(warehouseId);
     Map<UUID, Long> reservations = activeOrderReservedAtWarehouse(warehouseId);
+    Map<UUID, Long> outstanding = activeOrderOutstandingAtWarehouse(warehouseId);
     Set<UUID> historicalEquipment = equipmentHistoryAtWarehouse(warehouseId);
     return items.stream()
         .filter(item -> item.isActive() || historicalEquipment.contains(item.getId()))
@@ -102,7 +103,8 @@ final class AssetEquipmentService {
                         item.getId(),
                         warehouseId,
                         sources.getOrDefault(item.getId(), List.of()),
-                        reservations.getOrDefault(item.getId(), 0L))))
+                        reservations.getOrDefault(item.getId(), 0L),
+                        outstanding.getOrDefault(item.getId(), 0L))))
         .toList();
   }
 
@@ -110,7 +112,76 @@ final class AssetEquipmentService {
     catalog.require(equipmentId);
     List<EquipmentAllocationPolicy.SourceAvailability> availability =
         allocationPolicy.sources(equipmentId, warehouseId);
-    return totals(equipmentId, warehouseId, availability, activeOrderReserved(equipmentId, warehouseId));
+    return totals(
+        equipmentId,
+        warehouseId,
+        availability,
+        activeOrderReserved(equipmentId, warehouseId),
+        activeOrderOutstanding(equipmentId, warehouseId));
+  }
+
+  /**
+   * Computes own-order edit capacity without subtracting furniture already fulfilling that order.
+   * Physical content in active order cabins satisfies the aggregate reserve once, while only other
+   * orders' unfulfilled quantities fence the allocatable pool.
+   */
+  AssetService.OrderEquipmentCapacity orderCapacity(
+      UUID equipmentId, UUID warehouseId, UUID orderId) {
+    List<EquipmentAllocationPolicy.SourceAvailability> availability =
+        allocationPolicy.sources(equipmentId, warehouseId);
+    long allocatable =
+        availability.stream()
+            .mapToLong(EquipmentAllocationPolicy.SourceAvailability::availableQuantity)
+            .sum();
+    Long orderPhysical =
+        jdbc.queryForObject(
+            """
+            select coalesce(sum(balance.quantity),0)
+            from order_unit_reservation unit_reservation
+            join equipment_balance balance
+              on balance.rental_item_id=unit_reservation.rental_item_id
+             and balance.equipment_id=?
+             and balance.warehouse_id=?
+             and balance.location_kind in ('CABIN_NON_RENTED','CABIN_RENTED')
+            where unit_reservation.order_id=?
+              and unit_reservation.warehouse_id=?
+              and unit_reservation.state='ACTIVE'
+            """,
+            Long.class,
+            equipmentId,
+            warehouseId,
+            orderId,
+            warehouseId);
+    Long outstandingOther =
+        jdbc.queryForObject(
+            """
+            select coalesce(sum(greatest(
+              reservation.quantity - coalesce((
+                select sum(balance.quantity)
+                from order_unit_reservation unit_reservation
+                join equipment_balance balance
+                  on balance.rental_item_id=unit_reservation.rental_item_id
+                 and balance.equipment_id=reservation.equipment_id
+                 and balance.warehouse_id=reservation.warehouse_id
+                 and balance.location_kind in ('CABIN_NON_RENTED','CABIN_RENTED')
+                where unit_reservation.order_id=reservation.order_id
+                  and unit_reservation.warehouse_id=reservation.warehouse_id
+                  and unit_reservation.state='ACTIVE'
+              ),0), 0)),0)
+            from order_equipment_reservation reservation
+            where reservation.equipment_id=?
+              and reservation.warehouse_id=?
+              and reservation.order_id<>?
+              and reservation.state='ACTIVE'
+            """,
+            Long.class,
+            equipmentId,
+            warehouseId,
+            orderId);
+    return new AssetService.OrderEquipmentCapacity(
+        allocatable,
+        orderPhysical == null ? 0 : orderPhysical,
+        outstandingOther == null ? 0 : outstandingOther);
   }
 
   List<EquipmentDispositionResponse> dispositions(UUID warehouseId) {
@@ -500,6 +571,11 @@ final class AssetEquipmentService {
     holds.expireDue();
   }
 
+  /**
+   * Executes a direct ledger move after locking both cabin identities and rejecting active leases or
+   * presentation snapshots on either side. These identity locks serialize the hold-vs-move race
+   * before any balance is changed or an idempotency receipt is stored.
+   */
   private AssetService.CreateResult<MovementResponse> move(
       UUID subjectId,
       UUID key,
@@ -528,6 +604,7 @@ final class AssetEquipmentService {
             .toList();
     cabins.forEach(leases::lockRentalItem);
     cabins.forEach(leases::assertNoActive);
+    cabins.forEach(leases::assertNoActivePresentationHold);
     ledger.validateLocation(
         request.sourceWarehouseId(), request.sourceRentalItemId(), request.sourceLocationKind());
     ledger.validateLocation(
@@ -633,11 +710,16 @@ final class AssetEquipmentService {
     return new AssetService.CreateResult<>(response, false);
   }
 
+  /**
+   * Reports global free quantity as allocatable physical stock minus only outstanding order
+   * reservations, avoiding a second subtraction for contents already in active order cabins.
+   */
   private EquipmentTotalsResponse totals(
       UUID equipmentId,
       UUID warehouseId,
       List<EquipmentAllocationPolicy.SourceAvailability> availability,
-      long reserved) {
+      long reserved,
+      long outstanding) {
     List<AssetBalanceRow> rows =
         availability.stream()
             .map(
@@ -665,7 +747,7 @@ final class AssetEquipmentService {
         availability.stream().map(AssetEquipmentLedgerService::response).toList();
     long physicalAvailable =
         availability.stream().mapToLong(EquipmentAllocationPolicy.SourceAvailability::availableQuantity).sum();
-    long available = Math.max(0, Math.subtractExact(physicalAvailable, reserved));
+    long available = Math.max(0, Math.subtractExact(physicalAvailable, outstanding));
     long availableStock =
         availability.stream()
             .filter(source -> source.locationKind() == BalanceLocationKind.STOCK)
@@ -702,6 +784,34 @@ final class AssetEquipmentService {
     return result == null ? 0 : result;
   }
 
+  private long activeOrderOutstanding(UUID equipmentId, UUID warehouseId) {
+    Long result =
+        jdbc.queryForObject(
+            """
+            select coalesce(sum(greatest(
+              reservation.quantity - coalesce((
+                select sum(balance.quantity)
+                from order_unit_reservation unit_reservation
+                join equipment_balance balance
+                  on balance.rental_item_id=unit_reservation.rental_item_id
+                 and balance.equipment_id=reservation.equipment_id
+                 and balance.warehouse_id=reservation.warehouse_id
+                 and balance.location_kind in ('CABIN_NON_RENTED','CABIN_RENTED')
+                where unit_reservation.order_id=reservation.order_id
+                  and unit_reservation.warehouse_id=reservation.warehouse_id
+                  and unit_reservation.state='ACTIVE'
+              ),0), 0)),0)
+            from order_equipment_reservation reservation
+            where reservation.equipment_id=?
+              and reservation.warehouse_id=?
+              and reservation.state='ACTIVE'
+            """,
+            Long.class,
+            equipmentId,
+            warehouseId);
+    return result == null ? 0 : result;
+  }
+
   private Map<UUID, Long> activeOrderReservedAtWarehouse(UUID warehouseId) {
     Map<UUID, Long> values = new LinkedHashMap<>();
     jdbc.query(
@@ -716,6 +826,38 @@ final class AssetEquipmentService {
                 Map.entry(
                     result.getObject("equipment_id", UUID.class),
                     result.getLong("reserved_quantity")),
+            warehouseId)
+        .forEach(entry -> values.put(entry.getKey(), entry.getValue()));
+    return Map.copyOf(values);
+  }
+
+  private Map<UUID, Long> activeOrderOutstandingAtWarehouse(UUID warehouseId) {
+    Map<UUID, Long> values = new LinkedHashMap<>();
+    jdbc.query(
+            """
+            select reservation.equipment_id,
+              coalesce(sum(greatest(
+                reservation.quantity - coalesce((
+                  select sum(balance.quantity)
+                  from order_unit_reservation unit_reservation
+                  join equipment_balance balance
+                    on balance.rental_item_id=unit_reservation.rental_item_id
+                   and balance.equipment_id=reservation.equipment_id
+                   and balance.warehouse_id=reservation.warehouse_id
+                   and balance.location_kind in ('CABIN_NON_RENTED','CABIN_RENTED')
+                  where unit_reservation.order_id=reservation.order_id
+                    and unit_reservation.warehouse_id=reservation.warehouse_id
+                    and unit_reservation.state='ACTIVE'
+                ),0), 0)),0) outstanding_quantity
+            from order_equipment_reservation reservation
+            where reservation.warehouse_id=? and reservation.state='ACTIVE'
+            group by reservation.equipment_id
+            order by reservation.equipment_id
+            """,
+            (result, row) ->
+                Map.entry(
+                    result.getObject("equipment_id", UUID.class),
+                    result.getLong("outstanding_quantity")),
             warehouseId)
         .forEach(entry -> values.put(entry.getKey(), entry.getValue()));
     return Map.copyOf(values);

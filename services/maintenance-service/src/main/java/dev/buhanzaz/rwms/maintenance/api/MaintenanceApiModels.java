@@ -26,6 +26,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -165,9 +166,19 @@ public final class MaintenanceApiModels {
       queueType = queueType.trim().toUpperCase(java.util.Locale.ROOT);
     }
   }
+  /**
+   * Asset-owned furniture identity and editable versioned maximum shown in the maintenance catalog.
+   * A null identity/version is allowed only while a newly submitted durable link intent is pending.
+   */
   public record FurnitureEquipmentReference(
-      @NotNull UUID equipmentId,
-      @NotBlank @Size(max = 255) String equipmentName) {}
+      UUID equipmentId,
+      @NotBlank @Size(max = 255) String equipmentName,
+      @Min(0) Long equipmentVersion,
+      @Positive Integer maximumPerCabin) {
+    public FurnitureEquipmentReference(UUID equipmentId, String equipmentName) {
+      this(equipmentId, equipmentName, null, null);
+    }
+  }
   public record CabinCharacteristicReference(
       @NotNull UUID characteristicId,
       @NotBlank @Size(max = 255) String characteristicName) {}

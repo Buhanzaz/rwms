@@ -31,6 +31,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 class DriverTaskServiceTest {
   private final DriverLogisticsTaskRepository tasks = mock(DriverLogisticsTaskRepository.class);
   private final DriverTaskResponseMapper mapper = mock(DriverTaskResponseMapper.class);
+  private final DriverTripProjectionService tripProjection =
+      mock(DriverTripProjectionService.class);
   private final LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
   private final LogisticsWarehouseLifecycle warehouseLifecycle =
       mock(LogisticsWarehouseLifecycle.class);
@@ -39,7 +41,13 @@ class DriverTaskServiceTest {
   private final LogisticsTransactionLock transactionLock = mock(LogisticsTransactionLock.class);
   private final DriverTaskService service =
       new DriverTaskService(
-          tasks, mapper, dependencies, warehouseLifecycle, warehouseOperationMarks, transactionLock);
+          tasks,
+          mapper,
+          tripProjection,
+          dependencies,
+          warehouseLifecycle,
+          warehouseOperationMarks,
+          transactionLock);
 
   @Test
   void rediscoveryReusesExistingCurrentRemovalDespiteChecksumDrift() {
@@ -53,7 +61,8 @@ class DriverTaskServiceTest {
         .thenReturn(Optional.of(existing));
     when(mapper.toResponse(existing)).thenReturn(response);
 
-    DriverTaskService.CreateResult result = service.ensureRemovalTask(warehouseId, repairId, cabinId, 1);
+    DriverTaskService.CreateResult result =
+        service.ensureRemovalTask(warehouseId, repairId, cabinId, 1);
 
     assertThat(result.replayed()).isTrue();
     assertThat(result.activateNow()).isFalse();
@@ -81,7 +90,8 @@ class DriverTaskServiceTest {
         .thenReturn(Optional.of(existing));
     when(mapper.toResponse(existing)).thenReturn(response);
 
-    DriverTaskService.CreateResult result = service.ensureRemovalTask(warehouseId, repairId, cabinId, 2);
+    DriverTaskService.CreateResult result =
+        service.ensureRemovalTask(warehouseId, repairId, cabinId, 2);
 
     assertThat(result.replayed()).isTrue();
     assertThat(result.response()).isSameAs(response);
@@ -97,8 +107,7 @@ class DriverTaskServiceTest {
     when(tasks.findByCreatedBySubjectIdAndIdempotencyKey(any(), any()))
         .thenReturn(Optional.of(conflicting));
 
-    assertThatThrownBy(
-            () -> service.ensureRemovalTask(warehouseId, repairId, UUID.randomUUID(), 3))
+    assertThatThrownBy(() -> service.ensureRemovalTask(warehouseId, repairId, UUID.randomUUID(), 3))
         .isInstanceOf(LogisticsConflictException.class)
         .hasMessageContaining("не совпадает");
 
@@ -123,8 +132,7 @@ class DriverTaskServiceTest {
     verifyNoInteractions(tasks, dependencies);
   }
 
-  private static DriverLogisticsTask currentRemoval(
-      UUID warehouseId, UUID repairId, UUID cabinId) {
+  private static DriverLogisticsTask currentRemoval(UUID warehouseId, UUID repairId, UUID cabinId) {
     DriverLogisticsTask task =
         DriverLogisticsTask.create(
             warehouseId,
@@ -143,8 +151,7 @@ class DriverTaskServiceTest {
             UUID.randomUUID(),
             "b".repeat(64));
     ReflectionTestUtils.setField(task, "id", UUID.randomUUID());
-    ReflectionTestUtils.setField(
-        task, "scheduledDate", LocalDate.now(ZoneOffset.UTC).minusDays(1));
+    ReflectionTestUtils.setField(task, "scheduledDate", LocalDate.now(ZoneOffset.UTC).minusDays(1));
     task.registerBoardTask(UUID.randomUUID(), 3, UUID.randomUUID(), "WAITING", "CURRENT", null);
     return task;
   }

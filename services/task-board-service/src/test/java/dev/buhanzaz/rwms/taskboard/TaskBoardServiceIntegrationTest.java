@@ -690,6 +690,14 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         .containsExactly(second.taskId());
     assertThat(secondFeedEntries.getFirst().driverAudience().workerId())
         .isEqualTo(secondDriver.id());
+    BoardEntryDto secondEntry =
+        board.logisticsSnapshot(W1).current().stream()
+            .filter(entry -> entry.taskId().equals(secondTaskId))
+            .findFirst()
+            .orElseThrow();
+    assertThat(workerBoard.detail(secondDriver.id(), W1, secondEntry.id()).source())
+        .isEqualTo(secondEntry.source());
+    assertThat(secondEntry.source().type()).isEqualTo(TaskSourceType.LOGISTICS_DRIVER_TASK);
 
     var unqualifiedFirstDriver =
         workforce.updateWorker(
@@ -712,11 +720,6 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                 .map(entry -> entry.taskId()))
         .doesNotContain(first.taskId());
 
-    BoardEntryDto secondEntry =
-        board.logisticsSnapshot(W1).current().stream()
-            .filter(entry -> entry.taskId().equals(secondTaskId))
-            .findFirst()
-            .orElseThrow();
     BoardEntryDto taken =
         board.take(
             W1,
@@ -2872,8 +2875,9 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             .findFirst()
             .orElseThrow();
 
-    assertThat(workerBoard.detail(slinger.id(), W1, waiting.id()).availabilityMode())
-        .isEqualTo("SECONDARY_PENDING");
+    var waitingDetail = workerBoard.detail(slinger.id(), W1, waiting.id());
+    assertThat(waitingDetail.availabilityMode()).isEqualTo("SECONDARY_PENDING");
+    assertThat(waitingDetail.source()).isNull();
     var started =
         board.take(
             W1,

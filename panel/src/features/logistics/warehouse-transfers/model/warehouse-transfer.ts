@@ -47,8 +47,6 @@ export type TransferDocument = {
   equipmentMovementTaskId: string | null
   scheduledDate: string
   /** Compatibility field returned as null by logistics-service. */
-  scheduledAt: null
-  /** Compatibility field returned as null by logistics-service. */
   rentalOrderId: null
   lines: TransferLine[]
   createdAt: string

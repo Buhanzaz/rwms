@@ -32,12 +32,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  Field,
-  FieldError,
-  FieldGroup,
-  FieldLabel,
-} from "@/components/ui/field"
+import { FieldError, FieldGroup } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
@@ -47,6 +42,8 @@ import {
   type LogisticsDocumentFiltersState,
 } from "@/features/logistics/logistics-document-filters"
 import { LogisticsDriverPicker } from "@/features/logistics/logistics-driver-picker"
+import { DesiredTripScheduleFields } from "@/features/logistics/desired-trip-schedule-fields"
+import { DRIVER_BOARD_QUERY_KEY } from "@/features/logistics/driver-board/driver-board-api"
 import {
   logisticsAssetLabel,
   logisticsOrderLabel,
@@ -67,6 +64,7 @@ import {
 } from "@/features/logistics/returns/model"
 import { StartReturnEstimatesDialog } from "@/features/logistics/returns/start-return-estimates-dialog"
 import type { RepairTaskWorkerSnapshotDto } from "@/features/repair-tasks/model/repair-task"
+import type { DesiredDeliveryWindow } from "@/features/orders/domain/orders"
 import { useResponsiveFiltersOpen } from "@/hooks/use-responsive-filters-open"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { ApiError } from "@/lib/api-client"
@@ -93,6 +91,10 @@ function formatDate(value: string) {
   return new Intl.DateTimeFormat("ru-RU", {
     dateStyle: "medium",
   }).format(new Date(`${value}T00:00:00`))
+}
+
+function formatSchedule(date: string | null) {
+  return date ? formatDate(date) : "Не назначена"
 }
 
 function matchesDateRange(
@@ -137,6 +139,15 @@ function errorMessage(cause: unknown, fallback: string) {
 
 function returnListQueryKey(warehouseId: string) {
   return [...RETURNS_QUERY_KEY, warehouseId] as const
+}
+
+function desiredWindowsForReturn(
+  referenceLabels: LogisticsReferenceLabels,
+  document: ReturnDocument
+) {
+  if (!document.rentalOrderId) return []
+  const order = referenceLabels.orders.get(document.rentalOrderId)
+  return order?.status === "available" ? order.order.desiredDeliveryWindows : []
 }
 
 function storeServiceProjection(
@@ -314,6 +325,7 @@ export function LogisticsReturnsPage() {
       setPickupTarget(null)
       setCommandError(null)
       void refresh(result.warehouseId)
+      void queryClient.invalidateQueries({ queryKey: DRIVER_BOARD_QUERY_KEY })
     },
     onError: (cause, variables) => {
       if (cause instanceof ApiError && cause.status === 409) {
@@ -468,10 +480,7 @@ export function LogisticsReturnsPage() {
                 label: "Дата вывоза",
                 className: "w-48",
                 getSortValue: (document) => document.scheduledDate ?? "",
-                render: (document) =>
-                  document.scheduledDate
-                    ? formatDate(document.scheduledDate)
-                    : "Не назначена",
+                render: (document) => formatSchedule(document.scheduledDate),
               },
               {
                 id: "party",
@@ -522,9 +531,7 @@ export function LogisticsReturnsPage() {
               <CardHeader>
                 <CardTitle>{document.partySnapshot ?? "Возврат"}</CardTitle>
                 <CardDescription>
-                  {document.scheduledDate
-                    ? formatDate(document.scheduledDate)
-                    : "Дата вывоза не назначена"}
+                  {formatSchedule(document.scheduledDate)}
                   {` · ${document.driverSnapshot ?? "водитель не назначен"}`}
                 </CardDescription>
                 <CardAction>
@@ -563,6 +570,10 @@ export function LogisticsReturnsPage() {
         <ReturnPickupDialog
           accessToken={accessToken}
           document={pickupTarget}
+          desiredDeliveryWindows={desiredWindowsForReturn(
+            referenceLabels,
+            pickupTarget
+          )}
           pending={registerMutation.isPending}
           onOpenChange={(open) => !open && setPickupTarget(null)}
           onSubmit={(input) =>
@@ -623,12 +634,14 @@ export function LogisticsReturnsPage() {
 function ReturnPickupDialog({
   accessToken,
   document,
+  desiredDeliveryWindows,
   pending,
   onOpenChange,
   onSubmit,
 }: {
   accessToken: string
   document: ReturnDocument
+  desiredDeliveryWindows: readonly DesiredDeliveryWindow[]
   pending: boolean
   onOpenChange: (open: boolean) => void
   onSubmit: (input: {
@@ -666,8 +679,8 @@ function ReturnPickupDialog({
           <DialogHeader>
             <DialogTitle>Создать вывоз</DialogTitle>
             <DialogDescription>
-              Назначьте водителя и дату. После запуска бытовки перейдут в
-              состояние «После аренды», а возврат — к осмотру.
+              Назначьте водителя и фактическую дату вывоза. Пожелания клиента
+              остаются отдельным ориентиром логиста.
             </DialogDescription>
           </DialogHeader>
           <FieldGroup>
@@ -678,19 +691,17 @@ function ReturnPickupDialog({
               warehouseId={document.warehouseId}
               onChange={setDriver}
             />
-            <Field data-invalid={Boolean(error) || undefined}>
-              <FieldLabel htmlFor="return-scheduled-date">
-                Дата вывоза
-              </FieldLabel>
-              <Input
-                id="return-scheduled-date"
-                type="date"
-                value={scheduledDate}
-                aria-invalid={Boolean(error) || undefined}
-                onChange={(event) => setScheduledDate(event.target.value)}
-              />
-              {error ? <FieldError>{error}</FieldError> : null}
-            </Field>
+            <DesiredTripScheduleFields
+              dateLabel="Фактическая дата вывоза"
+              scheduledDate={scheduledDate}
+              desiredDeliveryWindows={desiredDeliveryWindows}
+              disabled={pending}
+              error={error}
+              onDateChange={(value) => {
+                setScheduledDate(value)
+                setError(null)
+              }}
+            />
           </FieldGroup>
           <DialogFooter>
             <Button

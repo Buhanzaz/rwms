@@ -8,9 +8,19 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
-/** Repository for owner-scoped conversation lookup and transaction-scoped advisory locking during initial creation. */
-public interface AssistantConversationRepository extends JpaRepository<AssistantConversation, UUID> {
+/**
+ * Repository for owner-scoped conversation lookup and transaction-scoped advisory locking during
+ * initial creation.
+ */
+public interface AssistantConversationRepository
+    extends JpaRepository<AssistantConversation, UUID> {
   List<AssistantConversation> findByOwnerSubjectIdOrderByUpdatedAtDesc(UUID ownerSubjectId);
+
+  List<AssistantConversation>
+      findByOwnerSubjectIdAndRentalOrderIdAndArchivedFalseOrderByUpdatedAtDesc(
+          UUID ownerSubjectId, UUID rentalOrderId);
+
+  Optional<AssistantConversation> findByRentalOrderIdAndArchivedFalse(UUID rentalOrderId);
 
   Optional<AssistantConversation> findByIdAndOwnerSubjectId(UUID id, UUID ownerSubjectId);
 
@@ -19,8 +29,7 @@ public interface AssistantConversationRepository extends JpaRepository<Assistant
 
   /** Serializes only the short local finalization after remote idempotent inquiry creation. */
   @Query(
-      value =
-          "select 1 from pg_advisory_xact_lock(hashtextextended(cast(:lockKey as text), 0))",
+      value = "select 1 from pg_advisory_xact_lock(hashtextextended(cast(:lockKey as text), 0))",
       nativeQuery = true)
   Integer acquireTransactionLock(@Param("lockKey") String lockKey);
 }

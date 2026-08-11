@@ -11,9 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-/**
- * Appends logistics-local audit facts for rental-order transitions.
- */
+/** Appends logistics-local audit facts for rental-order transitions. */
 @Service
 @RequiredArgsConstructor
 public class OrderAuditService {
@@ -59,18 +57,5 @@ public class OrderAuditService {
             subjectId,
             previousValues,
             newValues));
-  }
-
-  @Transactional(propagation = Propagation.REQUIRES_NEW)
-  public void appendUnitConflict(
-      UUID orderId, UUID unitId, OrderActor actor, String conflictCode) {
-    append(
-        orderId,
-        OrderAuditEventType.UNIT_ADD_CONFLICT,
-        actor,
-        "RENTAL_ITEM",
-        unitId.toString(),
-        null,
-        Map.of("unitId", unitId.toString(), "conflictCode", conflictCode));
   }
 }

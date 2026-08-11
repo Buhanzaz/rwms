@@ -13,16 +13,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type {
   AssistantConversation,
   AssistantConversationDetail,
+  ClarificationQuestion,
   AssistantMessage,
   AssistantTurnEvent,
   CabinSearchNotice,
   CabinSearchResult,
 } from "@/features/assistant/api/assistant-api"
+import { ApiError } from "@/lib/api-client"
 
 const queryFixtures = vi.hoisted(() => ({
   conversations: [] as unknown[],
   detail: null as unknown,
   client: null as unknown,
+  order: null as unknown,
 }))
 
 const authFixture = vi.hoisted(() => ({
@@ -73,7 +76,7 @@ const filterSuggestions = {
 vi.mock("@tanstack/react-query", () => ({
   useQuery: ({ queryKey }: { queryKey: readonly unknown[] }) => {
     if (queryKey[0] === "assistant-conversations") {
-      return queryKey.length === 1
+      return queryKey[1] === "all" || queryKey[1] === "order-1"
         ? {
             data: queryFixtures.conversations,
             isPending: false,
@@ -90,6 +93,14 @@ vi.mock("@tanstack/react-query", () => ({
     if (queryKey[0] === "rental-clients") {
       return {
         data: queryFixtures.client,
+        isPending: false,
+        isError: false,
+        error: null,
+      }
+    }
+    if (queryKey[0] === "orders") {
+      return {
+        data: queryFixtures.order,
         isPending: false,
         isError: false,
         error: null,
@@ -246,6 +257,7 @@ const conversation: AssistantConversation = {
   version: 1,
   clientId: "client-1",
   rentalInquiryId: "inquiry-1",
+  rentalOrderId: null,
   clientType: "COMPANY",
   clientDisplayName: "ООО Север",
   archived: false,
@@ -360,6 +372,22 @@ function composer() {
   return value
 }
 
+const pendingClarification: ClarificationQuestion = {
+  id: "clarification-1",
+  branchKey: "search:first",
+  sequenceNumber: 1,
+  kind: "DIMENSIONS",
+  prompt: "Какой размер нужен?",
+  status: "PENDING",
+  options: [
+    { id: "option-1", label: "6x2.4", value: "6x2.4" },
+    { id: "option-2", label: "8x2.4", value: "8x2.4" },
+  ],
+  answeredOptionId: null,
+  createdAt: "2026-08-09T10:00:00Z",
+  answeredAt: null,
+}
+
 describe("AssistantPage composer", () => {
   beforeEach(() => {
     assistantSearchResultsLifecycle.nextInstance = 0
@@ -368,6 +396,7 @@ describe("AssistantPage composer", () => {
     queryFixtures.conversations = [conversation]
     queryFixtures.detail = conversationDetail(activeSearchResult())
     queryFixtures.client = null
+    queryFixtures.order = null
     queryRuntime.detailRefetch.mockReset()
     queryRuntime.detailRefetch.mockResolvedValue({ data: queryFixtures.detail })
     queryRuntime.invalidateQueries.mockReset()
@@ -433,6 +462,35 @@ describe("AssistantPage composer", () => {
     ).toBeTruthy()
   })
 
+  it("opens the fresh conversation returned for the linked order without a client chooser", () => {
+    const linkedConversation = {
+      ...conversation,
+      rentalOrderId: "order-1",
+    }
+    queryFixtures.order = {
+      id: "order-1",
+      client: { id: "client-1" },
+      permissions: { canEdit: true },
+    }
+    queryFixtures.conversations = [linkedConversation]
+    queryFixtures.detail = {
+      ...conversationDetail(null),
+      conversation: linkedConversation,
+    }
+
+    render(
+      <MemoryRouter
+        initialEntries={["/assistant?clientId=client-1&orderId=order-1"]}
+      >
+        <AssistantPage />
+      </MemoryRouter>
+    )
+
+    expect(screen.getAllByText("ООО Север").length).toBeGreaterThan(0)
+    expect(screen.queryByText("Выбор клиента")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Новый диалог" })).toBeNull()
+  })
+
   it("keeps closed chats in history and lets the manager hide the cabin results", () => {
     const archivedConversation: AssistantConversation = {
       ...conversation,
@@ -462,6 +520,63 @@ describe("AssistantPage composer", () => {
       screen.getByRole("button", { name: "Развернуть подбор бытовок" })
     )
     expect(screen.getByText("Найдено групп: 1")).toBeTruthy()
+  })
+
+  it("renders only the first pending clarification and disables free text", () => {
+    queryFixtures.detail = {
+      ...conversationDetail(null),
+      clarifications: [
+        {
+          ...pendingClarification,
+          id: "clarification-2",
+          branchKey: "search:second",
+          sequenceNumber: 2,
+          prompt: "Какой тип нужен?",
+          status: "QUEUED",
+        },
+        pendingClarification,
+      ],
+    }
+
+    render(
+      <MemoryRouter>
+        <AssistantPage />
+      </MemoryRouter>
+    )
+
+    expect(screen.getByText("Какой размер нужен?")).toBeTruthy()
+    expect(screen.queryByText("Какой тип нужен?")).toBeNull()
+    expect(
+      screen.getByPlaceholderText("Сначала ответьте на уточнение выше")
+    ).toHaveProperty("disabled", true)
+    expect(
+      screen.getByRole("button", { name: "Отправить сообщение" })
+    ).toHaveProperty("disabled", true)
+  })
+
+  it("refreshes the authoritative clarification after an out-of-order conflict", async () => {
+    queryFixtures.detail = {
+      ...conversationDetail(null),
+      clarifications: [pendingClarification],
+    }
+    assistantApi.streamAssistantTurn.mockRejectedValue(
+      new ApiError("Уточнение уже изменилось", 409, "STALE_CLARIFICATION")
+    )
+
+    render(
+      <MemoryRouter>
+        <AssistantPage />
+      </MemoryRouter>
+    )
+
+    fireEvent.click(screen.getByRole("radio", { name: "6x2.4" }))
+
+    await waitFor(() => expect(queryRuntime.detailRefetch).toHaveBeenCalled())
+    expect(
+      screen.getByText(
+        "Уточнение уже изменилось. Показан текущий вопрос сервера."
+      )
+    ).toBeTruthy()
   })
 
   it("refreshes active conversations after a completed turn and leaves an archived selection", async () => {

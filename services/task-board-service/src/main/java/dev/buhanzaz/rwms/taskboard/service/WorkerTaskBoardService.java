@@ -291,6 +291,7 @@ public class WorkerTaskBoardService {
         entry.id(),
         entry.version(),
         entry.taskId(),
+        entry.source(),
         entry.routeIndex(),
         entry.title(),
         task == null ? null : task.description(),

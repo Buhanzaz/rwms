@@ -37,18 +37,16 @@ class RentalOrderShipmentService {
   }
 
   /**
-   * Returns the warehouse needed for admission without applying the mutable SAVED-state gate.
-   * That keeps a retry replayable after later order changes while still rejecting callers that
-   * lack write access to the warehouse before any admission intent is reserved.
+   * Returns the warehouse needed for admission without applying the mutable SAVED-state gate. That
+   * keeps a retry replayable after later order changes while still rejecting callers that lack
+   * write access to the warehouse before any admission intent is reserved.
    */
-  UUID rentalShipmentAdmissionWarehouse(
-      OrderActor actor, UUID orderId, LocalDate scheduledDate) {
+  UUID rentalShipmentAdmissionWarehouse(OrderActor actor, UUID orderId, LocalDate scheduledDate) {
     if (actor == null || orderId == null || scheduledDate == null) {
       throw new IllegalArgumentException("Rental shipment admission identity is invalid");
     }
     RentalOrder order = store.requiredOrder(orderId);
     access.requireVisible(actor, order);
-    requireAcceptableDate(order, scheduledDate);
     UUID warehouseId = order.getWarehouseId();
     if (!actor.writeScope()
         || warehouseId == null
@@ -82,8 +80,7 @@ class RentalOrderShipmentService {
     if (replay != null) {
       if (!orderId.equals(replay.response().rentalOrderId())) {
         throw RentalOrderProblems.conflict(
-            "IDEMPOTENCY_KEY_REUSED",
-            "Idempotency-Key уже использован для другого заказа");
+            "IDEMPOTENCY_KEY_REUSED", "Idempotency-Key уже использован для другого заказа");
       }
       RentalOrder replayedOrder = store.requiredOrder(replay.response().rentalOrderId());
       access.requireVisible(actor, replayedOrder);
@@ -92,18 +89,19 @@ class RentalOrderShipmentService {
 
     RentalOrder order = store.lockedOrder(orderId);
     access.requireRentalShipmentCreation(actor, order);
+    try {
+      order.requireFulfillmentDetails();
+      order.requireDesiredDeliveryWindows();
+    } catch (IllegalStateException exception) {
+      throw RentalOrderProblems.conflict(
+          "ORDER_DELIVERY_PREFERENCES_REQUIRED",
+          "Перед назначением отгрузки получите от клиента адрес и желаемую дату");
+    }
     RentalOrderProblems.requireVersion(order, request.expectedVersion());
-    requireAcceptableDate(order, request.scheduledDate());
     List<LogisticsDependencyGateway.OrderUnitReservation> units = reads.readUnits(order);
     return admission == null
         ? documents.createRentalOrderShipment(
-            actor.subjectId(),
-            idempotencyKey,
-            correlationId,
-            order,
-            units,
-            request,
-            checksum)
+            actor.subjectId(), idempotencyKey, correlationId, order, units, request, checksum)
         : documents.createRentalOrderShipment(
             actor.subjectId(),
             idempotencyKey,
@@ -127,15 +125,5 @@ class RentalOrderShipmentService {
     values.add(request.scheduledDate().toString());
     request.unitIds().stream().sorted().map(UUID::toString).forEach(values::add);
     return OrderCommandChecksum.sha256("CREATE_RENTAL_ORDER_SHIPMENT", values);
-  }
-
-  private static void requireAcceptableDate(RentalOrder order, LocalDate scheduledDate) {
-    try {
-      order.requireAcceptableDeliveryDate(scheduledDate);
-    } catch (IllegalStateException exception) {
-      throw RentalOrderProblems.conflict(
-          "ORDER_DELIVERY_DATE_NOT_ACCEPTABLE",
-          "Дата отгрузки не входит в дни, когда клиент может принять заказ");
-    }
   }
 }

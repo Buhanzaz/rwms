@@ -42,6 +42,7 @@ const order: OrderDetail = {
     responsibleManagerDisplayName: "Менеджер",
     comment: null,
     source: null,
+    additionalContacts: [],
     createdAt: "2026-07-19T08:00:00Z",
     updatedAt: "2026-07-19T08:00:00Z",
   },
@@ -55,13 +56,24 @@ const order: OrderDetail = {
   longitude: 37.62,
   contactPhone: "+79990000000",
   comment: "Позвонить за час",
-  acceptableDeliveryDates: ["2026-08-15"],
+  additionalContacts: [{ name: "Прораб", phone: "+79990000001" }],
+  desiredDeliveryWindows: [
+    {
+      startDate: "2026-08-15",
+      endDate: "2026-08-15",
+    },
+  ],
   unitCount: 0,
   createdAt: "2026-07-19T08:00:00Z",
   updatedAt: "2026-07-19T09:00:00Z",
   units: [],
   movements: [],
-  permissions: { canEdit: true, canViewOtherManagers: false },
+  permissions: {
+    canEdit: true,
+    canReplaceUnits: false,
+    canExtendRentalTerms: false,
+    canViewOtherManagers: false,
+  },
 }
 
 const updatedOrder: OrderDetail = {
@@ -109,40 +121,46 @@ afterEach(() => {
 })
 
 describe("OrderDeliveryDialog", () => {
-  it("names an incomplete delivery action as adding an address", () => {
+  it("names a missing manager contact action as adding order data", () => {
     renderDialog({
       order: {
         ...order,
-        deliveryAddress: null,
-        latitude: null,
-        longitude: null,
         contactPhone: null,
-        acceptableDeliveryDates: [],
+        desiredDeliveryWindows: [],
       },
     })
 
-    expect(screen.getByRole("heading", { name: "Добавить адрес" })).toBeTruthy()
+    expect(
+      screen.getByRole("heading", { name: "Добавить данные заказа" })
+    ).toBeTruthy()
     expect(
       screen.getByText(
-        "Укажите адрес, координаты, контактный телефон и дату приёмки. Эти данные необходимы, чтобы сохранить черновик заказа."
+        "Контактный телефон и комментарий сохраняются в заказе. Адрес, координаты и дополнительные контакты клиент укажет в представлении."
       )
+    ).toBeTruthy()
+    expect(screen.queryByLabelText("Адрес доставки")).toBeNull()
+    expect(screen.queryByLabelText("Широта")).toBeNull()
+    expect(screen.queryByLabelText("Долгота")).toBeNull()
+  })
+
+  it("names a complete manager contact action as changing order data", () => {
+    renderDialog()
+
+    expect(
+      screen.getByRole("heading", { name: "Изменить данные заказа" })
     ).toBeTruthy()
   })
 
-  it("names a complete delivery action as changing an address", () => {
-    renderDialog()
-
-    expect(screen.getByRole("heading", { name: "Изменить адрес" })).toBeTruthy()
-  })
-
-  it("keeps the existing client while saving changed delivery fields", async () => {
+  it("keeps the existing client while saving changed manager fields", async () => {
     const callbacks = renderDialog()
     const user = userEvent.setup()
 
     const comment = screen.getByLabelText("Комментарий к заказу")
     await user.clear(comment)
     await user.type(comment, "Новый комментарий")
-    await user.click(screen.getByRole("button", { name: "Сохранить адрес" }))
+    await user.click(
+      screen.getByRole("button", { name: "Сохранить данные заказа" })
+    )
 
     await waitFor(() =>
       expect(ordersApi.updateOrder).toHaveBeenCalledWith({
@@ -151,34 +169,39 @@ describe("OrderDeliveryDialog", () => {
         expectedVersion: 4,
         clientId: CLIENT_ID,
         delivery: {
-          deliveryAddress: "Москва, Складская, 1",
-          latitude: 55.75,
-          longitude: 37.62,
           contactPhone: "+79990000000",
           comment: "Новый комментарий",
-          acceptableDeliveryDates: ["2026-08-15"],
         },
         idempotencyKey: expect.any(String),
       })
     )
     expect(callbacks.onUpdated).toHaveBeenCalledWith(updatedOrder)
     expect(callbacks.onOpenChange).toHaveBeenCalledWith(false)
-    expect(toast.success).toHaveBeenCalledWith("Данные доставки сохранены.")
-  })
+    expect(toast.success).toHaveBeenCalledWith("Данные заказа сохранены.")
+    const updateInput = ordersApi.updateOrder.mock.calls[0]?.[0].delivery
+    expect(updateInput).not.toHaveProperty("deliveryAddress")
+    expect(updateInput).not.toHaveProperty("latitude")
+    expect(updateInput).not.toHaveProperty("longitude")
+    expect(updateInput).not.toHaveProperty("additionalContacts")
+  }, 15_000)
 
-  it("validates incomplete delivery fields before sending an update", async () => {
+  it("validates a missing manager contact before sending an update", async () => {
     renderDialog()
     const user = userEvent.setup()
 
-    await user.clear(screen.getByLabelText("Адрес доставки"))
-    await user.click(screen.getByRole("button", { name: "Сохранить адрес" }))
+    await user.clear(screen.getByLabelText("Контактный телефон заказа"))
+    await user.click(
+      screen.getByRole("button", { name: "Сохранить данные заказа" })
+    )
 
-    expect(await screen.findByText("Укажите адрес доставки.")).toBeTruthy()
     expect(
-      screen.getByText("Проверьте обязательные поля доставки и приёмки.")
+      await screen.findByText("Укажите контактный телефон заказа.")
+    ).toBeTruthy()
+    expect(
+      screen.getByText("Проверьте контактный телефон заказа.")
     ).toBeTruthy()
     expect(ordersApi.updateOrder).not.toHaveBeenCalled()
-  })
+  }, 15_000)
 
   it("keeps the dialog open and refreshes the order boundary after a stale update", async () => {
     ordersApi.updateOrder.mockRejectedValue(
@@ -190,7 +213,9 @@ describe("OrderDeliveryDialog", () => {
     const comment = screen.getByLabelText("Комментарий к заказу")
     await user.clear(comment)
     await user.type(comment, "Обновлённый комментарий")
-    await user.click(screen.getByRole("button", { name: "Сохранить адрес" }))
+    await user.click(
+      screen.getByRole("button", { name: "Сохранить данные заказа" })
+    )
 
     expect(
       await screen.findByText(
@@ -200,10 +225,12 @@ describe("OrderDeliveryDialog", () => {
     expect(callbacks.onConflict).toHaveBeenCalledOnce()
     expect(callbacks.onOpenChange).not.toHaveBeenCalledWith(false)
 
-    await user.click(screen.getByRole("button", { name: "Сохранить адрес" }))
+    await user.click(
+      screen.getByRole("button", { name: "Сохранить данные заказа" })
+    )
     await waitFor(() => expect(ordersApi.updateOrder).toHaveBeenCalledTimes(2))
     expect(ordersApi.updateOrder.mock.calls[0][0].idempotencyKey).toBe(
       ordersApi.updateOrder.mock.calls[1][0].idempotencyKey
     )
-  })
+  }, 15_000)
 })

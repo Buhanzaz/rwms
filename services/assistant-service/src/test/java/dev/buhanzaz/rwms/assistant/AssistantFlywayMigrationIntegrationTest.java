@@ -15,10 +15,11 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
-/** Validates clean assistant schema creation and supported Flyway upgrade paths through V5. */
+/** Validates clean assistant schema creation and supported Flyway upgrade paths through V6. */
 @Testcontainers
 class AssistantFlywayMigrationIntegrationTest {
-  @Container static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
+  @Container
+  static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
   private JdbcTemplate jdbc;
 
@@ -115,7 +116,7 @@ class AssistantFlywayMigrationIntegrationTest {
         }
         """);
 
-    assertThat(flyway().load().migrate().migrationsExecuted).isEqualTo(4);
+    assertThat(flyway().load().migrate().migrationsExecuted).isEqualTo(5);
 
     String result =
         jdbc.queryForObject(
@@ -123,11 +124,7 @@ class AssistantFlywayMigrationIntegrationTest {
             String.class);
     assertThat(result)
         .doesNotContain(
-            "legacy",
-            "old-panel-rental-items-v1",
-            "locationNodeId",
-            "hasPhotos",
-            "photoCount")
+            "legacy", "old-panel-rental-items-v1", "locationNodeId", "hasPhotos", "photoCount")
         .contains("БЫТ-042", "45000", "2026-05-12", "ООО Строй");
     String technicalOnlyResult =
         jdbc.queryForObject(
@@ -213,16 +210,18 @@ class AssistantFlywayMigrationIntegrationTest {
         {"code":"LOGISTICS_UNAVAILABLE"}
         """);
 
-    assertThat(flyway().load().migrate().migrationsExecuted).isEqualTo(3);
+    assertThat(flyway().load().migrate().migrationsExecuted).isEqualTo(4);
 
     String facets =
         jdbc.queryForObject(
-            "select result_payload::text from assistant_tool_call where provider_call_id='call-facets'",
+            "select result_payload::text from assistant_tool_call where"
+                + " provider_call_id='call-facets'",
             String.class);
     assertThat(facets).doesNotContain("\"code\"", "MSK-1").contains("Moscow", "6m");
     String failure =
         jdbc.queryForObject(
-            "select result_payload::text from assistant_tool_call where provider_call_id='call-failure'",
+            "select result_payload::text from assistant_tool_call where"
+                + " provider_call_id='call-failure'",
             String.class);
     assertThat(failure).contains("\"code\"", "LOGISTICS_UNAVAILABLE");
   }
@@ -244,7 +243,7 @@ class AssistantFlywayMigrationIntegrationTest {
         UUID.randomUUID(),
         UUID.randomUUID());
 
-    assertThat(flyway().load().migrate().migrationsExecuted).isEqualTo(2);
+    assertThat(flyway().load().migrate().migrationsExecuted).isEqualTo(3);
 
     Map<String, Object> legacy =
         jdbc.queryForMap(
@@ -271,8 +270,8 @@ class AssistantFlywayMigrationIntegrationTest {
   }
 
   @Test
-  void upgradeFromV4CreatesDurableIndependentClarificationState() {
-    flyway().target(MigrationVersion.fromVersion("4")).load().migrate();
+  void upgradeFromV5SerializesQuestionsAndAddsOneActiveConversationPerOrder() {
+    flyway().target(MigrationVersion.fromVersion("5")).load().migrate();
     UUID conversationId = UUID.randomUUID();
     UUID messageId = UUID.randomUUID();
     UUID toolCallId = UUID.randomUUID();
@@ -306,8 +305,8 @@ class AssistantFlywayMigrationIntegrationTest {
         conversationId,
         messageId);
 
-    assertThat(flyway().load().migrate().migrationsExecuted).isOne();
     UUID firstQuestionId = UUID.randomUUID();
+    UUID secondQuestionId = UUID.randomUUID();
     String options =
         """
         [{"id":"%s","label":"Модуль","value":"Модуль"},
@@ -320,7 +319,7 @@ class AssistantFlywayMigrationIntegrationTest {
           id,version,conversation_id,turn_message_id,tool_call_id,branch_key,kind,
           prompt,warehouse_id,options_payload,status,created_at)
         values (?,0,?,?,?,'finish:osb','CABIN_TYPE','Выберите тип',?,?::jsonb,
-          'PENDING',clock_timestamp())
+          'PENDING','2026-08-10T10:00:00Z')
         """,
         firstQuestionId,
         conversationId,
@@ -328,29 +327,74 @@ class AssistantFlywayMigrationIntegrationTest {
         toolCallId,
         UUID.randomUUID(),
         options);
+    jdbc.update(
+        """
+        insert into assistant_clarification_question(
+          id,version,conversation_id,turn_message_id,tool_call_id,branch_key,kind,
+          prompt,warehouse_id,options_payload,status,created_at)
+        values (?,0,?,?,?,'finish:ldsp','CABIN_TYPE','Выберите второй тип',?,?::jsonb,
+          'PENDING','2026-08-10T10:01:00Z')
+        """,
+        secondQuestionId,
+        conversationId,
+        messageId,
+        toolCallId,
+        UUID.randomUUID(),
+        options);
 
+    assertThat(flyway().load().migrate().migrationsExecuted).isOne();
+    assertThat(
+            jdbc.queryForList(
+                """
+                select id,status,sequence_number
+                from assistant_clarification_question
+                where conversation_id=?
+                order by sequence_number
+                """,
+                conversationId))
+        .containsExactly(
+            Map.of("id", firstQuestionId, "status", "PENDING", "sequence_number", 1),
+            Map.of("id", secondQuestionId, "status", "QUEUED", "sequence_number", 2));
+
+    UUID rentalOrderId = UUID.randomUUID();
+    jdbc.update(
+        "update assistant_conversation set rental_order_id=? where id=?",
+        rentalOrderId,
+        conversationId);
+    UUID secondConversationId = UUID.randomUUID();
     assertThatThrownBy(
             () ->
                 jdbc.update(
                     """
-                    insert into assistant_clarification_question(
-                      id,version,conversation_id,turn_message_id,tool_call_id,branch_key,kind,
-                      prompt,warehouse_id,options_payload,status,created_at)
-                    values (?,0,?,?,?,'finish:osb','CABIN_TYPE','Другой вопрос',?,?::jsonb,
-                      'PENDING',clock_timestamp())
+                    insert into assistant_conversation(
+                      id,version,owner_subject_id,client_id,rental_inquiry_id,rental_order_id,
+                      archived,created_at,updated_at)
+                    values (?,?,?,?,?,?,false,clock_timestamp(),clock_timestamp())
                     """,
+                    secondConversationId,
+                    0,
                     UUID.randomUUID(),
-                    conversationId,
-                    messageId,
-                    toolCallId,
                     UUID.randomUUID(),
-                    options))
+                    UUID.randomUUID(),
+                    rentalOrderId))
         .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    jdbc.update(
+        "update assistant_conversation set archived=true,archived_at=clock_timestamp() where id=?",
+        conversationId);
     assertThat(
-            jdbc.queryForObject(
-                "select count(*) from assistant_clarification_question where conversation_id=?",
-                Integer.class,
-                conversationId))
+            jdbc.update(
+                """
+                insert into assistant_conversation(
+                  id,version,owner_subject_id,client_id,rental_inquiry_id,rental_order_id,
+                  archived,created_at,updated_at)
+                values (?,?,?,?,?,?,false,clock_timestamp(),clock_timestamp())
+                """,
+                secondConversationId,
+                0,
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                rentalOrderId))
         .isOne();
   }
 

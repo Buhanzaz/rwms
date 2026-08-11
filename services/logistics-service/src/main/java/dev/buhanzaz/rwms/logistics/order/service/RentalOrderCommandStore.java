@@ -52,7 +52,8 @@ class RentalOrderCommandStore {
   /**
    * Acquires the existing actor/operation/key advisory lock before looking up a completed receipt.
    */
-  OrderCommandReceipt replay(OrderActor actor, String operation, UUID key, String checksum) {
+  OrderCommandReceipt replay(
+      OrderActor actor, String operation, UUID key, String checksum, String... compatibleChecksums) {
     if (actor == null || key == null) {
       throw new IllegalArgumentException("Order actor and Idempotency-Key are required");
     }
@@ -63,7 +64,12 @@ class RentalOrderCommandStore {
             .findByActorSubjectIdAndOperationNameAndIdempotencyKey(
                 actor.subjectId(), operation, key)
             .orElse(null);
-    if (receipt != null && !receipt.matches(checksum)) {
+    boolean compatible =
+        receipt != null
+            && java.util.Arrays.stream(compatibleChecksums)
+                .filter(java.util.Objects::nonNull)
+                .anyMatch(receipt::matches);
+    if (receipt != null && !receipt.matches(checksum) && !compatible) {
       throw RentalOrderProblems.conflict(
           "IDEMPOTENCY_KEY_REUSED", "Idempotency-Key уже использован для другой команды");
     }

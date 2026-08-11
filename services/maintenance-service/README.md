@@ -48,6 +48,29 @@ task-board, media, logistics and warehouse-service. Do not make a remote call wh
 transaction holds maintenance locks. The application flow commits local preparation before remote
 preflight/effects, then continues local fenced state through durable recovery records.
 
+## Furniture settings and booked-cabin conflicts
+
+The existing maintenance furniture editor exposes the asset-owned nullable maximum per cabin below
+the cabin-characteristic mapping. Maintenance persists only the durable catalog-node link intent,
+the expected asset version and the last confirmed observation; it does not own a second equipment
+catalogue or balance. A save completes local preparation, synchronously runs the existing private
+asset ensure/update command outside the local write transaction, and confirms the returned version
+and maximum before the catalog mutation succeeds. Catalog reads enrich confirmed links with current
+asset-owned values. Migration `V42__furniture_equipment_maximum_sync.sql` expands that existing link
+intent; asset-service remains the source of truth.
+
+When asset-service rejects a maintenance lease or fenced status command because the cabin still has
+an active order reservation, `MaintenanceHttpTransport` allow-lists only the exact upstream `409`
+code `BOOKED_UNIT_REPLACEMENT_REQUIRED`. The public maintenance Problem Details keeps that code and
+a replacement-oriented message. All other dependency codes, including unknown upstream `409`
+values, remain `MAINTENANCE_DEPENDENCY_UNAVAILABLE`; maintenance does not create or decide a cabin
+replacement workflow.
+
+After an atomic cabin replacement, asset-service also rejects maintenance lease acquisition while
+the existing replacement furniture movement has a live source hold. Maintenance does not copy that
+readiness state or create another task type; after the existing movement executes (or its hold is no
+longer live), the same maintenance acquisition may be retried.
+
 ## Internal application structure
 
 `MaintenanceApplicationService` is a stable six-collaborator compatibility facade. It preserves

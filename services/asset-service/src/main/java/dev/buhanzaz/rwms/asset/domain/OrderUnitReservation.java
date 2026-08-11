@@ -133,6 +133,27 @@ public class OrderUnitReservation {
     return reservation;
   }
 
+  /** Copies the order/client/draft projection while assigning a replacement cabin and actor. */
+  public static OrderUnitReservation replace(
+      OrderUnitReservation previous,
+      UUID replacementRentalItemId,
+      UUID actorSubjectId,
+      String actorRole) {
+    Objects.requireNonNull(previous, "previous");
+    if (!previous.isActive()) {
+      throw new IllegalArgumentException("Only an active order reservation can be replaced");
+    }
+    return createInternal(
+        previous.orderId,
+        Objects.requireNonNull(replacementRentalItemId, "replacementRentalItemId"),
+        previous.warehouseId,
+        previous.clientId,
+        previous.tenantSnapshot,
+        previous.draftReservationExpiresAt,
+        actorSubjectId,
+        actorRole);
+  }
+
   public boolean updateClientProjection(UUID nextClientId, String nextTenantSnapshot) {
     UUID requiredClientId = Objects.requireNonNull(nextClientId, "clientId");
     String requiredTenantSnapshot = requireTenantSnapshot(nextTenantSnapshot);

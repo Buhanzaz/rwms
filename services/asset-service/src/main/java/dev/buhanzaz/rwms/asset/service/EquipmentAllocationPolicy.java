@@ -15,9 +15,9 @@ import org.springframework.stereotype.Component;
  *
  * <p>Stock is allocatable. Furniture inside a cabin is allocatable only while
  * the cabin is explicitly FREE or WAREHOUSE and has neither an active order
- * reservation nor a live operation lease. Workflow, rented, sale, own-needs
- * and terminal cabins remain visible in totals but never contribute to
- * availability.
+ * reservation, live client-presentation hold or live operation lease. Workflow,
+ * rented, sale, own-needs and terminal cabins remain visible in totals but never
+ * contribute to availability.
  */
 @Component
 public class EquipmentAllocationPolicy {
@@ -51,6 +51,13 @@ public class EquipmentAllocationPolicy {
               from order_unit_reservation reservation
               where reservation.rental_item_id=balance.rental_item_id
                 and reservation.state='ACTIVE'
+            )
+            and not exists (
+              select 1
+              from presentation_unit_hold presentation_hold
+              where presentation_hold.rental_item_id=balance.rental_item_id
+                and presentation_hold.state='ACTIVE'
+                and presentation_hold.expires_at>clock_timestamp()
             )
             and not exists (
               select 1

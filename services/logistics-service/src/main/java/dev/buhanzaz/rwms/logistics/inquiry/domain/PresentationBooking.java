@@ -9,6 +9,8 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
+import jakarta.validation.constraints.Min;
+import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.Objects;
 import java.util.UUID;
@@ -16,12 +18,10 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.JdbcTypeCode;
-import org.hibernate.type.SqlTypes;
 import org.hibernate.proxy.HibernateProxy;
+import org.hibernate.type.SqlTypes;
 
-/**
- * JPA persistence model for Presentation Booking in the logistics-owned database.
- */
+/** JPA persistence model for Presentation Booking in the logistics-owned database. */
 @Entity
 @Table(name = "presentation_booking")
 @Getter
@@ -51,6 +51,32 @@ public class PresentationBooking {
   @JdbcTypeCode(SqlTypes.JSON)
   @Column(name = "selected_item_ids_json", nullable = false, columnDefinition = "jsonb")
   private String selectedItemIdsJson;
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "desired_delivery_windows_json", nullable = false, columnDefinition = "jsonb")
+  private String desiredDeliveryWindowsJson;
+
+  /** Client-selected initial duration for NORMAL bookings; historical and replacement rows keep null. */
+  @Min(1)
+  @Column(name = "rental_months")
+  private Long rentalMonths;
+
+  /**
+   * Durable normalized NORMAL-confirmation snapshot used only to replay the same booking into the
+   * existing order after an interrupted asset conversion. It is not an order source of truth.
+   */
+  @Column(name = "delivery_address", length = 1_000)
+  private String deliveryAddress;
+
+  @Column(name = "latitude", precision = 9, scale = 6)
+  private BigDecimal latitude;
+
+  @Column(name = "longitude", precision = 10, scale = 6)
+  private BigDecimal longitude;
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "additional_contacts_json", columnDefinition = "jsonb")
+  private String additionalContactsJson;
 
   @Enumerated(EnumType.STRING)
   @Column(name = "state", nullable = false, length = 16)
@@ -86,6 +112,12 @@ public class PresentationBooking {
       long presentationRevision,
       UUID idempotencyKey,
       String selectedItemIdsJson,
+      String desiredDeliveryWindowsJson,
+      Long rentalMonths,
+      String deliveryAddress,
+      BigDecimal latitude,
+      BigDecimal longitude,
+      String additionalContactsJson,
       OffsetDateTime now) {
     if (presentationRevision < 1) {
       throw new IllegalArgumentException("presentationRevision is invalid");
@@ -95,6 +127,12 @@ public class PresentationBooking {
     booking.presentationRevision = presentationRevision;
     booking.idempotencyKey = Objects.requireNonNull(idempotencyKey, "idempotencyKey");
     booking.selectedItemIdsJson = requireJson(selectedItemIdsJson);
+    booking.desiredDeliveryWindowsJson = requireJson(desiredDeliveryWindowsJson);
+    booking.rentalMonths = optionalRentalMonths(rentalMonths);
+    booking.deliveryAddress = optionalText(deliveryAddress, 1_000, "deliveryAddress");
+    booking.latitude = latitude;
+    booking.longitude = longitude;
+    booking.additionalContactsJson = optionalJson(additionalContactsJson);
     booking.state = PresentationBookingState.PENDING;
     booking.createdAt = Objects.requireNonNull(now, "now");
     booking.updatedAt = now;
@@ -143,9 +181,7 @@ public class PresentationBooking {
   }
 
   public void recordManagerAction(
-      PresentationBookingManagerAction action,
-      UUID actionIdempotencyKey,
-      OffsetDateTime now) {
+      PresentationBookingManagerAction action, UUID actionIdempotencyKey, OffsetDateTime now) {
     if (state != PresentationBookingState.COMPLETED) {
       throw new IllegalStateException("Only a completed booking can be acknowledged");
     }
@@ -172,10 +208,32 @@ public class PresentationBooking {
     return normalized;
   }
 
+  private static String optionalJson(String value) {
+    if (value == null) return null;
+    return requireJson(value);
+  }
+
+  private static String optionalText(String value, int maximum, String field) {
+    if (value == null) return null;
+    String normalized = value.trim();
+    if (normalized.isEmpty() || normalized.length() > maximum) {
+      throw new IllegalArgumentException(field + " is invalid");
+    }
+    return normalized;
+  }
+
   private static String optionalCode(String value) {
     if (value == null || value.isBlank()) return null;
     String normalized = value.trim();
     return normalized.length() > 64 ? normalized.substring(0, 64) : normalized;
+  }
+
+  private static Long optionalRentalMonths(Long value) {
+    if (value == null) return null;
+    if (value < 1) {
+      throw new IllegalArgumentException("rentalMonths is invalid");
+    }
+    return value;
   }
 
   @Override

@@ -35,8 +35,10 @@ export type RepairEstimateCatalogRoutingDto = {
 }
 
 export type RepairEstimateFurnitureEquipmentReferenceDto = {
-  equipmentId: string
+  equipmentId: string | null
   equipmentName: string
+  equipmentVersion: number | null
+  maximumPerCabin: number | null
 }
 
 export type RepairEstimateCabinCharacteristicReferenceDto = {

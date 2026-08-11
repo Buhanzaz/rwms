@@ -11,15 +11,16 @@ import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateShipmentRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.EquipmentAllocationRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentFurnitureReadinessState;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentPlanRequest;
-import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentFurnitureReadinessState;
-import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRentalShipmentRequest;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.driver.service.DocumentDriverTaskPlanner;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRentalShipmentRequest;
 import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
+import dev.buhanzaz.rwms.logistics.order.domain.DesiredDeliveryWindow;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderEquipmentRequirement;
@@ -28,8 +29,8 @@ import dev.buhanzaz.rwms.logistics.order.repository.OrderClientRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderEquipmentRequirementRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderUnitTermRepository;
-import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
+import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsExternalAttemptClaimService;
 import dev.buhanzaz.rwms.logistics.service.ShipmentFurnitureTaskService;
 import dev.buhanzaz.rwms.logistics.service.ShipmentProcessor;
@@ -72,8 +73,7 @@ class ShipmentWorkflowSagaIntegrationTest {
   private static final UUID ASSET = UUID.fromString("00000000-0000-0000-0000-000000000804");
   private static final UUID EQUIPMENT = UUID.fromString("00000000-0000-0000-0000-000000000805");
 
-  @Container
-  @ServiceConnection
+  @Container @ServiceConnection
   static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
   @Autowired LogisticsDocumentService documents;
@@ -112,8 +112,7 @@ class ShipmentWorkflowSagaIntegrationTest {
   @Test
   void preparesAndConfirmsShipmentAfterHoldsAndFencedAssetEffects() {
     ShipmentLineRequest line =
-        new ShipmentLineRequest(
-            ASSET, 7, List.of(new EquipmentAllocationRequest(EQUIPMENT, 2, 4)));
+        new ShipmentLineRequest(ASSET, 7, List.of(new EquipmentAllocationRequest(EQUIPMENT, 2, 4)));
     LogisticsDocumentService.CreateResult created =
         documents.createShipment(
             SUBJECT,
@@ -134,8 +133,7 @@ class ShipmentWorkflowSagaIntegrationTest {
             eq(documentId),
             eq(lineId)))
         .thenReturn(activeLease(leaseId));
-    when(dependencies.acquireEquipmentHold(
-            any(), any(), any(), any(), any(), anyLong(), anyLong()))
+    when(dependencies.acquireEquipmentHold(any(), any(), any(), any(), any(), anyLong(), anyLong()))
         .thenReturn(activeHold(holdId));
 
     assertThat(created.response().state()).isEqualTo(LogisticsDocumentState.PREPARING);
@@ -144,11 +142,10 @@ class ShipmentWorkflowSagaIntegrationTest {
     long awaitingVersion = documents.get(documentId, LogisticsDocumentType.SHIPMENT).version();
     assertThat(
             jdbc.queryForList(
-                "select operation_type || ':' || result from logistics_external_attempt order by operation_type",
+                "select operation_type || ':' || result from logistics_external_attempt order by"
+                    + " operation_type",
                 String.class))
-        .contains(
-            "SHIPMENT_ASSET_SNAPSHOT:CONFIRMED",
-            "SHIPMENT_ASSET_LEASE_ACQUIRE:CONFIRMED");
+        .contains("SHIPMENT_ASSET_SNAPSHOT:CONFIRMED", "SHIPMENT_ASSET_LEASE_ACQUIRE:CONFIRMED");
     assertThat(documents.get(documentId, LogisticsDocumentType.SHIPMENT).state())
         .isEqualTo(LogisticsDocumentState.AWAITING_CONFIRMATION);
     assertThat(
@@ -201,7 +198,9 @@ class ShipmentWorkflowSagaIntegrationTest {
         .isEqualTo(LogisticsDocumentState.SHIPPED);
     assertThat(
             jdbc.queryForObject(
-                "select count(*) from logistics_equipment_hold_reference where hold_state='COMMITTED'", Long.class))
+                "select count(*) from logistics_equipment_hold_reference where"
+                    + " hold_state='COMMITTED'",
+                Long.class))
         .isOne();
     assertThat(
             jdbc.queryForObject(
@@ -209,7 +208,8 @@ class ShipmentWorkflowSagaIntegrationTest {
         .isOne();
     assertThat(
             jdbc.queryForObject(
-                "select count(*) from domain_event where event_type='logistics.shipment.preparation-confirmed.v1'",
+                "select count(*) from domain_event where"
+                    + " event_type='logistics.shipment.preparation-confirmed.v1'",
                 Long.class))
         .isOne();
     verify(dependencies)
@@ -242,6 +242,7 @@ class ShipmentWorkflowSagaIntegrationTest {
                 "Dispatcher",
                 null,
                 null,
+                List.of(),
                 SUBJECT,
                 UUID.randomUUID(),
                 "0".repeat(64)));
@@ -254,34 +255,37 @@ class ShipmentWorkflowSagaIntegrationTest {
             SUBJECT,
             "Dispatcher",
             "RENTAL_MANAGER",
-            "Moscow, linked address",
-            new BigDecimal("55.750000"),
-            new BigDecimal("37.620000"),
             "+79990000002",
             null,
-            List.of(LocalDate.now().plusDays(1)),
             UUID.randomUUID(),
             "1".repeat(64));
+    order.replaceClientDeliveryDetails(
+        "Moscow, linked address",
+        new BigDecimal("55.750000"),
+        new BigDecimal("37.620000"),
+        List.of());
+    order.replaceClientDesiredDeliveryWindow(
+        DesiredDeliveryWindow.create(LocalDate.now().plusDays(1), LocalDate.now().plusDays(1)));
     order.selectWarehouse(WAREHOUSE);
     order.saveForFulfillment();
     order = orders.saveAndFlush(order);
     rentalTerms.saveAndFlush(RentalOrderUnitTerm.create(order, ASSET, 1));
     equipmentRequirements.saveAndFlush(
-        RentalOrderEquipmentRequirement.create(
-            order, ASSET, EQUIPMENT, "Стол", 2));
+        RentalOrderEquipmentRequirement.create(order, ASSET, EQUIPMENT, "Стол", 2));
     LogisticsDependencyGateway.OrderUnitReservation reservation = reservation(order.getId());
     LocalDate plannedShipmentDate = LocalDate.now().plusDays(1);
 
     var created =
-        documents.createRentalOrderShipment(
-            SUBJECT,
-            UUID.randomUUID(),
-            CORRELATION,
-            order,
-            List.of(reservation),
-            new CreateOrderRentalShipmentRequest(
-                order.getVersion(), "Driver linked", plannedShipmentDate, List.of(ASSET)),
-            "a".repeat(64))
+        documents
+            .createRentalOrderShipment(
+                SUBJECT,
+                UUID.randomUUID(),
+                CORRELATION,
+                order,
+                List.of(reservation),
+                new CreateOrderRentalShipmentRequest(
+                    order.getVersion(), "Driver linked", plannedShipmentDate, List.of(ASSET)),
+                "a".repeat(64))
             .response();
     UUID documentId = created.id();
     UUID lineId = created.lines().getFirst().id();
@@ -302,8 +306,15 @@ class ShipmentWorkflowSagaIntegrationTest {
             eq(order.getId()),
             eq(WAREHOUSE),
             eq(ASSET),
+            eq(null),
             eq(List.of(new LogisticsDependencyGateway.OrderEquipmentRequirement(EQUIPMENT, 2))),
-            eq(List.of(new LogisticsDependencyGateway.OrderEquipmentRequirement(EQUIPMENT, 2)))))
+            eq(
+                List.of(
+                    new LogisticsDependencyGateway.OrderUnitEquipmentRequirements(
+                        ASSET,
+                        List.of(
+                            new LogisticsDependencyGateway.OrderEquipmentRequirement(
+                                EQUIPMENT, 2)))))))
         .thenReturn(
             new LogisticsDependencyGateway.OrderFurnitureMovementPlan(
                 order.getId(), ASSET, "CAB-801", List.of()));
@@ -358,7 +369,8 @@ class ShipmentWorkflowSagaIntegrationTest {
         .isEqualTo("FULFILLED");
     assertThat(
             jdbc.queryForObject(
-                "select count(*) from rental_order_audit_event where order_id=? and event_type='ORDER_FULFILLED'",
+                "select count(*) from rental_order_audit_event where order_id=? and"
+                    + " event_type='ORDER_FULFILLED'",
                 Long.class,
                 order.getId()))
         .isOne();
@@ -377,7 +389,9 @@ class ShipmentWorkflowSagaIntegrationTest {
         .containsEntry("scheduled_at", null);
     assertThat(
             jdbc.queryForObject(
-                "select count(*) from logistics_document_line line join logistics_document document on document.id=line.document_id where document.document_type='RETURN' and document.rental_order_id=? and line.asset_id=?",
+                "select count(*) from logistics_document_line line join logistics_document document"
+                    + " on document.id=line.document_id where document.document_type='RETURN' and"
+                    + " document.rental_order_id=? and line.asset_id=?",
                 Long.class,
                 order.getId(),
                 ASSET))
@@ -409,6 +423,7 @@ class ShipmentWorkflowSagaIntegrationTest {
                 "Dispatcher",
                 null,
                 null,
+                List.of(),
                 SUBJECT,
                 UUID.randomUUID(),
                 "2".repeat(64)));
@@ -421,21 +436,24 @@ class ShipmentWorkflowSagaIntegrationTest {
             SUBJECT,
             "Dispatcher",
             "RENTAL_MANAGER",
-            "Moscow, furniture address",
-            new BigDecimal("55.750000"),
-            new BigDecimal("37.620000"),
             "+79990000003",
             null,
-            List.of(LocalDate.now()),
             UUID.randomUUID(),
             "3".repeat(64));
+    order.replaceClientDeliveryDetails(
+        "Moscow, furniture address",
+        new BigDecimal("55.750000"),
+        new BigDecimal("37.620000"),
+        List.of());
+    order.replaceClientDesiredDeliveryWindow(
+        DesiredDeliveryWindow.create(LocalDate.now(), LocalDate.now()));
     order.selectWarehouse(WAREHOUSE);
     order.saveForFulfillment();
     order = orders.saveAndFlush(order);
     rentalTerms.saveAndFlush(RentalOrderUnitTerm.create(order, ASSET, 1));
     equipmentRequirements.saveAndFlush(
-        RentalOrderEquipmentRequirement.create(
-            order, ASSET, EQUIPMENT, "Стол", 2));
+        RentalOrderEquipmentRequirement.create(order, ASSET, EQUIPMENT, "Стол", 2));
+    LogisticsDependencyGateway.OrderUnitReservation activeReservation = reservation(order.getId());
 
     var shipment =
         documents
@@ -444,11 +462,12 @@ class ShipmentWorkflowSagaIntegrationTest {
                 UUID.randomUUID(),
                 CORRELATION,
                 order,
-                List.of(reservation(order.getId())),
+                List.of(activeReservation),
                 new CreateOrderRentalShipmentRequest(
                     order.getVersion(), "Driver linked", LocalDate.now(), List.of(ASSET)),
                 "b".repeat(64))
             .response();
+    when(dependencies.readOrderUnits(order.getId())).thenReturn(List.of(activeReservation));
     LogisticsDependencyGateway.OrderFurnitureMovementPlan plan =
         new LogisticsDependencyGateway.OrderFurnitureMovementPlan(
             order.getId(),
@@ -471,8 +490,15 @@ class ShipmentWorkflowSagaIntegrationTest {
             eq(order.getId()),
             eq(WAREHOUSE),
             eq(ASSET),
+            eq(null),
             eq(List.of(new LogisticsDependencyGateway.OrderEquipmentRequirement(EQUIPMENT, 2))),
-            eq(List.of(new LogisticsDependencyGateway.OrderEquipmentRequirement(EQUIPMENT, 2)))))
+            eq(
+                List.of(
+                    new LogisticsDependencyGateway.OrderUnitEquipmentRequirements(
+                        ASSET,
+                        List.of(
+                            new LogisticsDependencyGateway.OrderEquipmentRequirement(
+                                EQUIPMENT, 2)))))))
         .thenReturn(plan);
 
     var created =
@@ -494,14 +520,11 @@ class ShipmentWorkflowSagaIntegrationTest {
                 Long.class,
                 shipment.id()))
         .isOne();
-    assertThat(
-            jdbc.queryForObject(
-                "select count(*) from equipment_movement_task", Long.class))
+    assertThat(jdbc.queryForObject("select count(*) from equipment_movement_task", Long.class))
         .isOne();
     assertThat(
             jdbc.queryForObject(
-                "select planned_duration_minutes from equipment_movement_task",
-                Integer.class))
+                "select planned_duration_minutes from equipment_movement_task", Integer.class))
         .isEqualTo(60);
 
     assertThat(shipmentFurnitureTasks.readiness(shipment.id()).state())
@@ -527,8 +550,15 @@ class ShipmentWorkflowSagaIntegrationTest {
             eq(order.getId()),
             eq(WAREHOUSE),
             eq(ASSET),
+            eq(null),
             eq(List.of(new LogisticsDependencyGateway.OrderEquipmentRequirement(EQUIPMENT, 2))),
-            eq(List.of(new LogisticsDependencyGateway.OrderEquipmentRequirement(EQUIPMENT, 2))));
+            eq(
+                List.of(
+                    new LogisticsDependencyGateway.OrderUnitEquipmentRequirements(
+                        ASSET,
+                        List.of(
+                            new LogisticsDependencyGateway.OrderEquipmentRequirement(
+                                EQUIPMENT, 2))))));
   }
 
   @Test
@@ -549,7 +579,8 @@ class ShipmentWorkflowSagaIntegrationTest {
         .isEqualTo(LogisticsDocumentState.CONFLICT);
     assertThat(
             jdbc.queryForObject(
-                "select count(*) from logistics_external_attempt where result='PERMANENT_REJECTION'",
+                "select count(*) from logistics_external_attempt where"
+                    + " result='PERMANENT_REJECTION'",
                 Long.class))
         .isOne();
     assertThat(
@@ -575,24 +606,12 @@ class ShipmentWorkflowSagaIntegrationTest {
         null,
         false,
         new LogisticsDependencyGateway.OrderRentalItem(
-            ASSET,
-            7,
-            WAREHOUSE,
-            "CAB-801",
-            "FREE",
-            "RENT",
-            null,
-            null,
-            null,
-            null,
-            null,
-            List.of(),
-            List.of(),
-            now,
-            now));
+            ASSET, 7, WAREHOUSE, "CAB-801", "FREE", "RENT", null, null, null, null, null, List.of(),
+            List.of(), now, now));
   }
 
-  private static LogisticsDependencyGateway.RentalItemSnapshot snapshot(long version, String status) {
+  private static LogisticsDependencyGateway.RentalItemSnapshot snapshot(
+      long version, String status) {
     return new LogisticsDependencyGateway.RentalItemSnapshot(
         ASSET,
         version,
@@ -603,22 +622,12 @@ class ShipmentWorkflowSagaIntegrationTest {
 
   private static LogisticsDependencyGateway.OperationLease activeLease(UUID leaseId) {
     return new LogisticsDependencyGateway.OperationLease(
-        leaseId,
-        3,
-        ASSET,
-        11,
-        "ACTIVE",
-        OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(5));
+        leaseId, 3, ASSET, 11, "ACTIVE", OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(5));
   }
 
   private static LogisticsDependencyGateway.OperationLease releasedLease(UUID leaseId) {
     return new LogisticsDependencyGateway.OperationLease(
-        leaseId,
-        4,
-        ASSET,
-        11,
-        "RELEASED",
-        OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(5));
+        leaseId, 4, ASSET, 11, "RELEASED", OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(5));
   }
 
   private static LogisticsDependencyGateway.EquipmentHold activeHold(UUID holdId) {

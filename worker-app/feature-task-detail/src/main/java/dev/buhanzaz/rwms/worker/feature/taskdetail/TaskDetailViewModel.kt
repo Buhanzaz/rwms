@@ -13,6 +13,7 @@ import dev.buhanzaz.rwms.worker.core.database.WorkerAssignmentEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerLocalStore
 import dev.buhanzaz.rwms.worker.core.database.WorkerSessionEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerTaskEntity
+import dev.buhanzaz.rwms.worker.core.network.DriverTripDetailsDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerGatewayClient
 import dev.buhanzaz.rwms.worker.core.network.WorkerKpiPaletteDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerTaskDetailDto
@@ -20,7 +21,9 @@ import dev.buhanzaz.rwms.worker.core.sync.WorkerProjectionWriter
 import dev.buhanzaz.rwms.worker.core.sync.WorkerSyncScheduler
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,6 +40,83 @@ import kotlinx.serialization.json.Json
 
 private data class DetailKey(val userId: String, val entryId: String)
 
+/** Ephemeral live logistics projection bound to one visible worker detail key. */
+private data class TripUiSnapshot(
+    val key: DetailKey? = null,
+    val loading: Boolean = false,
+    val complete: Boolean = false,
+    val details: DriverTripDetailsDto? = null,
+    val error: String? = null,
+)
+
+/** Result of one fenced task-board detail and optional logistics detail refresh. */
+internal data class TaskDetailRefreshOutcome(
+    val accepted: Boolean,
+    val ordinaryError: String? = null,
+    val logisticsRequested: Boolean = false,
+    val tripDetails: DriverTripDetailsDto? = null,
+    val tripError: String? = null,
+)
+
+/**
+ * Refreshes task-board first, persists that authoritative detail, and only then follows a
+ * logistics source reference. The caller-provided fence prevents a response for an obsolete
+ * screen key or refresh generation from entering UI state.
+ */
+internal suspend fun loadTaskDetail(
+    fetchDetail: suspend () -> WorkerTaskDetailDto,
+    persistDetail: suspend (WorkerTaskDetailDto) -> Unit,
+    fetchLogisticsTrip: suspend (String) -> DriverTripDetailsDto?,
+    isCurrent: () -> Boolean,
+    onLogisticsFetchStarted: () -> Unit = {},
+): TaskDetailRefreshOutcome {
+    val detail = try {
+        fetchDetail()
+    } catch (exception: CancellationException) {
+        throw exception
+    } catch (_: Exception) {
+        return TaskDetailRefreshOutcome(
+            accepted = isCurrent(),
+            ordinaryError = "Не удалось обновить карточку. Повторим при синхронизации.",
+        )
+    }
+    try {
+        persistDetail(detail)
+    } catch (exception: CancellationException) {
+        throw exception
+    } catch (_: Exception) {
+        return TaskDetailRefreshOutcome(
+            accepted = isCurrent(),
+            ordinaryError = "Не удалось сохранить обновлённую карточку.",
+        )
+    }
+    if (!isCurrent()) return TaskDetailRefreshOutcome(accepted = false)
+
+    val source = detail.source
+    if (source?.type != LOGISTICS_DRIVER_TASK_SOURCE_TYPE) {
+        return TaskDetailRefreshOutcome(accepted = true)
+    }
+
+    onLogisticsFetchStarted()
+    val tripDetails = try {
+        fetchLogisticsTrip(source.sourceId)
+    } catch (exception: CancellationException) {
+        throw exception
+    } catch (_: Exception) {
+        return TaskDetailRefreshOutcome(
+            accepted = isCurrent(),
+            logisticsRequested = true,
+            tripError = "Не удалось обновить данные ходки.",
+        )
+    }
+    if (!isCurrent()) return TaskDetailRefreshOutcome(accepted = false)
+    return TaskDetailRefreshOutcome(
+        accepted = true,
+        logisticsRequested = true,
+        tripDetails = tripDetails,
+    )
+}
+
 /**
  * Defines worker feature UI state; server data and authorization remain authoritative.
  */
@@ -49,6 +129,10 @@ data class TaskDetailUiState(
     val evidence: List<TaskEvidenceEntity> = emptyList(),
     val retryableEvidenceIds: Set<String> = emptySet(),
     val kpiPalette: WorkerKpiPaletteDto? = null,
+    val tripDetails: DriverTripDetailsDto? = null,
+    val tripRefreshInProgress: Boolean = false,
+    val tripRefreshComplete: Boolean = false,
+    val tripRefreshError: String? = null,
     val error: String? = null,
 )
 
@@ -75,6 +159,8 @@ class TaskDetailViewModel @Inject constructor(
 ) : ViewModel() {
     private val key = MutableStateFlow<DetailKey?>(null)
     private val errors = MutableStateFlow<String?>(null)
+    private val tripSnapshot = MutableStateFlow(TripUiSnapshot())
+    private val refreshGeneration = AtomicLong()
 
     val uiState: StateFlow<TaskDetailUiState> = key.flatMapLatest { requested ->
         if (requested == null) {
@@ -131,8 +217,10 @@ class TaskDetailViewModel @Inject constructor(
                 localStore.observeDetail(requested.userId, requested.entryId),
                 supportingState,
                 errors,
-            ) { tasks, detailRow, evidenceWithRetry, error ->
+                tripSnapshot,
+            ) { tasks, detailRow, evidenceWithRetry, error, trip ->
                 val task = tasks.firstOrNull { it.entryId == requested.entryId }
+                val currentTrip = trip.takeIf { it.key == requested }
                 TaskDetailUiState(
                     task = task,
                     detail = detailRow?.sanitizedDetailJson?.let { raw ->
@@ -144,6 +232,10 @@ class TaskDetailViewModel @Inject constructor(
                     evidence = evidenceWithRetry.evidence.filter { it.entryId == requested.entryId },
                     retryableEvidenceIds = evidenceWithRetry.retryableEvidenceIds,
                     kpiPalette = evidenceWithRetry.kpiPalette,
+                    tripDetails = currentTrip?.details,
+                    tripRefreshInProgress = currentTrip?.loading == true,
+                    tripRefreshComplete = currentTrip?.complete == true,
+                    tripRefreshError = currentTrip?.error,
                     error = error,
                 )
             }
@@ -153,19 +245,44 @@ class TaskDetailViewModel @Inject constructor(
     fun bind(userId: String, entryId: String) {
         val next = DetailKey(userId, entryId)
         if (key.value == next) return
+        refreshGeneration.incrementAndGet()
         key.value = next
+        errors.value = null
+        tripSnapshot.value = TripUiSnapshot(key = next)
         refresh()
     }
 
     fun refresh() {
         val current = key.value ?: return
+        val generation = refreshGeneration.incrementAndGet()
+        errors.value = null
+        tripSnapshot.value = TripUiSnapshot(key = current)
         viewModelScope.launch {
-            runCatching { gateway.detail(current.entryId) }
-                .onSuccess {
-                    projections.applyDetail(current.userId, it)
-                    errors.value = null
-                }
-                .onFailure { errors.value = "Не удалось обновить карточку. Повторим при синхронизации." }
+            val isCurrent = {
+                key.value == current && refreshGeneration.get() == generation
+            }
+            val outcome = loadTaskDetail(
+                fetchDetail = { gateway.detail(current.entryId) },
+                persistDetail = { projections.applyDetail(current.userId, it) },
+                fetchLogisticsTrip = gateway::logisticsTripDetails,
+                isCurrent = isCurrent,
+                onLogisticsFetchStarted = {
+                    if (isCurrent()) {
+                        tripSnapshot.value = TripUiSnapshot(
+                            key = current,
+                            loading = true,
+                        )
+                    }
+                },
+            )
+            if (!outcome.accepted || !isCurrent()) return@launch
+            errors.value = outcome.ordinaryError
+            tripSnapshot.value = TripUiSnapshot(
+                key = current,
+                complete = outcome.logisticsRequested,
+                details = outcome.tripDetails,
+                error = outcome.tripError,
+            )
         }
     }
 
@@ -257,6 +374,8 @@ class TaskDetailViewModel @Inject constructor(
         }
     }
 }
+
+private const val LOGISTICS_DRIVER_TASK_SOURCE_TYPE = "LOGISTICS_DRIVER_TASK"
 
 private fun String.statusAfterAction(): String = when (this) {
     "TAKE", "JOIN", "RESUME" -> "IN_PROGRESS"

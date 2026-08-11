@@ -25,6 +25,7 @@ import {
   ClientTypeField,
   type ClientCreateFieldsValue,
 } from "@/features/clients/components/client-create-fields"
+import type { AdditionalContact } from "@/features/clients/domain/clients"
 import {
   listOrderClients,
   ORDERS_QUERY_KEY,
@@ -50,6 +51,7 @@ export type OrderClientChoice =
       email: string | null
       comment: string | null
       source: string | null
+      additionalContacts: AdditionalContact[]
     }
 
 type ExistingClientOption = {
@@ -79,6 +81,7 @@ function emptyClientValue(
     email: "",
     comment: "",
     source: "",
+    additionalContacts: [],
   }
 }
 
@@ -197,6 +200,7 @@ export function OrderClientChooser({
         email: clientValue.email.trim() || null,
         comment: clientValue.comment.trim() || null,
         source: clientValue.source.trim() || null,
+        additionalContacts: clientValue.additionalContacts,
       })
       return
     }

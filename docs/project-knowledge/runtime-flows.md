@@ -372,16 +372,21 @@ and
 
 1. The assistant reads logistics facets before executing an availability
    search. Every requested group must have an exact current cabin type and
-   finish. Missing or ambiguous fields become persisted, branch-specific
-   button questions; no hold is created at this stage.
+   finish. Missing or ambiguous fields become one durable ordered queue of
+   exact button questions; no hold is created at this stage. The queue head is
+   `PENDING`, later questions are `QUEUED` and hidden, and at most one question
+   is actionable in a conversation.
 2. Type-to-dimension relations are the only size authority. One related size
    is resolved automatically, several become exact buttons, and approximate
    six-metre input narrows only through a current 6x2.4 relation. Category,
    characteristics and linoleum remain explicit optional filters.
 3. A read-only catalog tool answers questions by cabin number, type or text and
    exposes current relations and characteristics without changing selection
-   expiry. Independent ОСБ/ЛДСП branches can be answered in either order and
-   remain after conversation reload.
+   expiry. A clarification answer is accepted only for the visible queue head,
+   then activates the next exact question. Intermediate answers park the turn;
+   only the final answer resumes assistant continuation. `branchKey` remains
+   immutable history metadata and never creates an independently advancing
+   dialogue branch. Ordered history and the sole visible head survive reload.
 4. Search `REPLACE` is the default; `APPEND` is explicit. The browser renders
    each logical group as a switchable tab, while logistics/asset state remains
    authoritative for selected IDs and expiry.
@@ -391,12 +396,22 @@ and
    key/bytes; a confirmed empty selection releases all holds. Partial removal
    replaces the complete retained set, releases removed holds immediately and
    resets the retained selection lifetime.
+6. Order-filtered assistant list/create reads the exact linked logistics
+   inquiry/client/order context outside its local transaction. `ACTIVE` reopens;
+   a terminal `BOOKED`/`ARCHIVED` pair is archived under the order fence, after
+   which a fresh conversation/inquiry can open immediately without waiting for
+   Kafka. A late booking fact names the old conversation and inquiry together,
+   so it replays idempotently and cannot archive the newer order conversation.
 
 Evidence:
 [`AssistantCabinSearchTool.java`](../../services/assistant-service/src/main/java/dev/buhanzaz/rwms/assistant/service/AssistantCabinSearchTool.java),
 [`AssistantClarificationService.java`](../../services/assistant-service/src/main/java/dev/buhanzaz/rwms/assistant/service/AssistantClarificationService.java),
+[`AssistantTurnService.java`](../../services/assistant-service/src/main/java/dev/buhanzaz/rwms/assistant/service/AssistantTurnService.java),
+[`AssistantConversationService.java`](../../services/assistant-service/src/main/java/dev/buhanzaz/rwms/assistant/service/AssistantConversationService.java),
+[`AssistantConversationCreationStore.java`](../../services/assistant-service/src/main/java/dev/buhanzaz/rwms/assistant/service/AssistantConversationCreationStore.java),
 [`AssistantCabinReferenceTool.java`](../../services/assistant-service/src/main/java/dev/buhanzaz/rwms/assistant/service/AssistantCabinReferenceTool.java),
 [`RentalInquiryCabinSelectionStore.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/RentalInquiryCabinSelectionStore.java),
+[`V6__order_linked_sequential_conversations.sql`](../../services/assistant-service/src/main/resources/db/migration/V6__order_linked_sequential_conversations.sql),
 and
 [`PresentationHoldService.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/PresentationHoldService.java).
 
@@ -409,18 +424,56 @@ and
    entity. Idempotent replay returns the same record; invisible duplicates do
    not disclose an identifier. V43 reclassifies historical sole proprietors as
    legal entities, but stops before any ambiguous same-phone reclassification.
-2. A draft order records one existing or inline-created client, delivery
-   address, coordinate pair, contact phone, optional comment and one to 31
-   unique acceptable dates. A manual order, warehouse booking or assistant
-   conversation can be entered from the same client detail without a browser
-   saga.
-3. Order detail combines logistics-owned units and document movements with
+2. The client keeps its primary contact plus any number of validated
+   name/phone additional contacts. An order stores its own additional contacts
+   separately. Driver/task projections build a deterministic full snapshot in
+   primary, client-owned, then order-owned order; no contact is silently
+   collapsed into another owner.
+3. A draft order records one existing or inline-created client, primary phone
+   and optional comment. Create and ordinary update do not accept delivery
+   address, coordinates, order-owned additional contacts or client delivery
+   wishes. Desired windows remain readable order state: legacy physical time
+   columns may retain historical values but are never exposed. A draft can save
+   with none, and a rental shipment cannot be created until client confirmation
+   supplies an address, primary phone and one desired delivery day. Wishes
+   remain advisory and do not constrain the document's actual `scheduledDate`.
+4. “Add cabins” creates an idempotent inquiry linked to the current `DRAFT` or
+   normally editable `SAVED` order. The assistant branch retains a conversation
+   ID; the manual branch uses the same inquiry/presentation entities with a
+   null conversation ID. Repeating the action creates another inquiry for the
+   same order, and the order-filtered inquiry collection makes manual and
+   assistant presentations rediscoverable after reload. The first selected
+   cabin fixes the order warehouse for every later search and confirmation.
+5. A normal presentation publishes atomically held cabin snapshots and live
+   equipment metadata. Its public confirmation requires exactly one same-day
+   client date, a positive initial rental duration, delivery address, optional
+   complete latitude/longitude pair and nullable additional contacts normalized
+   to an empty list, without prefill from a linked order. Confirmation stores
+   those normalized facts with the existing durable booking receipt, carries
+   furniture quantities per cabin, atomically converts all selected holds plus
+   the authoritative all-order furniture composition, then writes the one
+   desired order date and terms only for newly converted cabins in the same
+   local transition. The receipt and local command checksum fence every delivery
+   fact and duration on replay; they never rewrite existing terms. Selected
+   cabins append to the target order instead of creating another order. A
+   replacement presentation exposes existing order facts read-only, rejects all
+   normal-only fields and retains current terms. A rejected booking may
+   be republished as a new presentation revision, while pending or completed
+   booking work fences the current revision.
+6. Warehouse managers replace unavailable pre-start cabins either with an
+   exact-cardinality replacement presentation or the direct order command. One
+   ordered asset batch swaps every reservation, then one local transaction
+   moves the existing order requirements and document/task members. Existing
+   furniture movement tasks cancel unfinished old-cabin filling before the
+   swap; completed physical contents use the same movement-task mechanism for
+   an exact old-to-new move and remain not ready until that task completes.
+7. Order detail combines logistics-owned units and document movements with
    read-only dossier activity. The panel labels dossier evidence incomplete
    until every page is loaded and complete; it never turns an error or partial
    projection into “no estimate/repair”. The evidence lower bound is the latest
    actual return for that cabin, with order creation only as an explicit
    fallback.
-4. The panel reuses one client-field surface in explicit client creation and
+8. The panel reuses one client-field surface in explicit client creation and
    inline order, booking and assistant entry. It visibly shows the
    session-derived responsible manager as read-only and never sends it as
    browser-owned client data. The booking catalogue uses bounded pages and a
@@ -431,6 +484,9 @@ and
 Evidence:
 [`OrderClientService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/OrderClientService.java),
 [`RentalOrderService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderService.java),
+[`ClientPresentationService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/ClientPresentationService.java),
+[`PresentationBookingService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/PresentationBookingService.java),
+[`RentalOrderUnitReplacementService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderUnitReplacementService.java),
 [`client detail page`](../../panel/src/features/clients/pages/client-detail-page.tsx),
 [`shared client fields`](../../panel/src/features/clients/components/client-create-fields.tsx),
 [`booking catalogue`](../../panel/src/features/booking/booking-catalog-page.tsx),
@@ -440,37 +496,40 @@ and
 
 ### Logistics document to driver work
 
-1. A manager creates or schedules a shipment or return with a calendar date,
-   cabin lines and an optional task-board worker ID plus display snapshot.
-   Logistics stores the ID as opaque identity and never resolves it from the
-   snapshot. Transfer creation carries the calendar date and lines but no
-   driver identity.
-2. Before it creates a shipment, logistics reads the warehouse-local maximum
-   group size (1–100; an unconfigured warehouse defaults to one) and rejects a
-   selected set above that value. A newly created shipment then persists one
-   idempotent document-owned driver intent with immutable cabin members and the
-   client snapshot; the full cabin list is its task text. Existing shipment
-   line intents remain supported, while return and transfer continue to create
-   one intent per line. Shipment/return intents are assigned when the ID exists
-   and otherwise unassigned. Transfer intents are warehouse-shared and have
-   neither worker ID nor name snapshot.
+1. A manager schedules a shipment, return or transfer with an actual calendar
+   date and cabin lines. Shipment and return may
+   carry an opaque task-board worker ID plus display snapshot; transfer remains
+   warehouse-shared and identity-free. Client desired windows remain a separate
+   advisory order value.
+2. Before it creates any new document trip, logistics reuses the one
+   warehouse-local maximum group size (1–100; an unconfigured warehouse
+   defaults to one) and rejects a selected set above it. Each shipment, return
+   or transfer then persists one idempotent `LOGISTICS_DOCUMENT` driver intent
+   with a stable order trip number, immutable ordered cabin members and client
+   snapshot. No new document-line driver tasks are created. Waiting historical
+   line tasks are atomically cancelled before grouping; any started historical
+   member prevents regrouping.
 3. The existing logistics driver relay registers each committed intent through
    the private task-board boundary. Task-board validates the source, warehouse,
    active worker and primary driver qualification, replaces the supplied name
    with its authoritative snapshot, and stores the audience with the task.
-4. The panel's Logistics route reads the board and active driver directory
-   separately, then presents shipment/return date columns with collapsible
-   assigned-driver and unassigned sections. A grouped shipment displays its
-   cabin count, client and complete cabin list without a priority badge.
-   Dragging a card sends task/entry fences and a queue index only inside the
-   same driver/date/lane section; it cannot reassign or reschedule the card.
-   The separate Movements route shows warehouse-shared work without driver
-   controls.
-5. Worker feed reads are filtered in task-board. Assigned work reaches only its
+4. The logistics board reads task-board placement plus a batched logistics trip
+   projection. Every card/detail includes operation, address/coordinates,
+   primary and additional contacts, client wishes, actual scheduled date, cabins and
+   per-cabin desired/actual furniture, movement-task state and readiness. Board
+   enrichment performs at most one asset order read per distinct rental order;
+   an unavailable owner snapshot is explicit rather than false readiness.
+5. Dragging a card always moves the whole grouped task. A locked local
+   pre-start check runs before task-board; after version-fenced remote success
+   logistics synchronizes the owning document date while preserving the desired
+   delivery date. A lost local confirmation converges from the
+   existing task status poll. Members cannot be reordered independently and
+   the move never changes audience.
+6. Worker feed reads are filtered in task-board. Assigned work reaches only its
    selected driver; unassigned work reaches none; an unclaimed shared Current
    entry reaches every qualified warehouse driver and becomes assignee-only
    after take. Only the first visible waiting Current entry is actionable.
-6. WorkerApp uses the required nullable worker-feed audience to split the
+7. WorkerApp uses the required nullable worker-feed audience to split the
    logistics-driver category into two collapsible tables: personal Logistics
    (`ASSIGNED_DRIVER`) and shared warehouse Movements (`WAREHOUSE_DRIVERS`). It
    also keeps separately collapsible group-role and qualification-only panels.
@@ -481,6 +540,8 @@ and
 
 Evidence:
 [`DocumentDriverTaskPlanner.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DocumentDriverTaskPlanner.java),
+[`DriverBoardService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverBoardService.java),
+[`DriverTripProjectionService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverTripProjectionService.java),
 [`DriverTaskAudienceService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/DriverTaskAudienceService.java),
 [`TaskBoardReadProjectionService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardReadProjectionService.java),
 [`logistics-board-page.tsx`](../../panel/src/features/logistics/driver-board/logistics-board-page.tsx),

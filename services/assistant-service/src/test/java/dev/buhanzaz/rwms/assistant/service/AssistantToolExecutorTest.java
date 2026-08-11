@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.assistant.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -39,15 +40,14 @@ class AssistantToolExecutorTest {
     UUID toolCallId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
     AssistantConversationService conversations = mock(AssistantConversationService.class);
-    LogisticsClient logistics = mock(LogisticsClient.class);
+    LogisticsClient logistics = activeLogistics();
     AssistantToolCall persistedCall = mock(AssistantToolCall.class);
     when(persistedCall.getId()).thenReturn(toolCallId);
     when(conversations.startToolCall(any(), any(), any(), anyString(), anyString(), any()))
         .thenReturn(persistedCall);
     when(logistics.listAvailableCabinFacets(inquiryId, "current-user-bearer"))
         .thenReturn(facets(warehouseId, List.of("БК-1"), List.of("ДВП"), List.of("6x2.4")));
-    when(logistics.searchAvailableCabins(
-            eq(inquiryId), any(), any(), eq("current-user-bearer")))
+    when(logistics.searchAvailableCabins(eq(inquiryId), any(), any(), eq("current-user-bearer")))
         .thenReturn(
             mapper.readTree(
                 """
@@ -55,7 +55,8 @@ class AssistantToolExecutorTest {
                   {"group":{"category":"Новая","quantity":1},
                    "cabins":[{"id":"%s","status":"FREE"}]}
                 ]}
-                """.formatted(warehouseId, UUID.randomUUID())));
+                """
+                    .formatted(warehouseId, UUID.randomUUID())));
     ArrayList<AssistantApiModels.TurnEvent> events = new ArrayList<>();
 
     AssistantToolExecutor.ToolExecution execution =
@@ -72,7 +73,8 @@ class AssistantToolExecutorTest {
                     {"warehouseId":"%s","groups":[
                       {"cabinType":"БК-1","finish":"ДВП","dimensions":"6x2.4","category":"Новая","characteristics":"с верандой","linoleum":false,"quantity":1}
                     ]}
-                    """.formatted(warehouseId)),
+                    """
+                        .formatted(warehouseId)),
                 "current-user-bearer",
                 events::add);
 
@@ -104,9 +106,132 @@ class AssistantToolExecutorTest {
                 .path("status")
                 .asText())
         .isEqualTo("FREE");
-    assertThat(events).extracting(AssistantApiModels.TurnEvent::event)
+    assertThat(events)
+        .extracting(AssistantApiModels.TurnEvent::event)
         .containsExactly("tool.started", "search.result", "tool.completed");
     verify(conversations).completeToolCall(toolCallId, execution.result());
+  }
+
+  @Test
+  void rejectsAnotherWarehouseFromCurrentInquiryContextBeforeSearching() {
+    UUID conversationId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID toolCallId = UUID.randomUUID();
+    UUID fixedWarehouseId = UUID.randomUUID();
+    UUID otherWarehouseId = UUID.randomUUID();
+    AssistantConversationService conversations = mock(AssistantConversationService.class);
+    AssistantToolCall persistedCall = mock(AssistantToolCall.class);
+    when(persistedCall.getId()).thenReturn(toolCallId);
+    when(conversations.startToolCall(any(), any(), any(), anyString(), anyString(), any()))
+        .thenReturn(persistedCall);
+    LogisticsClient logistics = activeLogistics();
+    when(logistics.readRentalInquiryContext(inquiryId, "bearer"))
+        .thenReturn(
+            new LogisticsClient.RentalInquiryContext(
+                inquiryId, UUID.randomUUID(), UUID.randomUUID(), fixedWarehouseId, "ACTIVE"));
+
+    AssistantToolExecutor.ToolExecution execution =
+        executor(conversations, logistics)
+            .execute(
+                UUID.randomUUID(),
+                conversationId,
+                inquiryId,
+                UUID.randomUUID(),
+                new ChatCompletionClient.ProviderToolCall(
+                    "other-warehouse",
+                    AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS,
+                    """
+                    {"warehouseId":"%s","groups":[{"cabinType":"БК-1","quantity":1}]}
+                    """
+                        .formatted(otherWarehouseId)),
+                "bearer",
+                ignored -> {});
+
+    assertThat(execution.result().path("code").asText()).isEqualTo("TOOL_ARGUMENTS_INVALID");
+    verify(logistics, never()).listAvailableCabinFacets(any(), any());
+    verify(logistics, never()).searchAvailableCabins(any(), any(), any(), any());
+  }
+
+  @Test
+  void exposesOnlyTheCurrentInquiryWarehouseWhenListingFacets() {
+    UUID inquiryId = UUID.randomUUID();
+    UUID fixedWarehouseId = UUID.randomUUID();
+    UUID otherWarehouseId = UUID.randomUUID();
+    UUID toolCallId = UUID.randomUUID();
+    AssistantConversationService conversations = mock(AssistantConversationService.class);
+    AssistantToolCall persistedCall = mock(AssistantToolCall.class);
+    when(persistedCall.getId()).thenReturn(toolCallId);
+    when(conversations.startToolCall(any(), any(), any(), anyString(), anyString(), any()))
+        .thenReturn(persistedCall);
+    LogisticsClient logistics = activeLogistics();
+    when(logistics.readRentalInquiryContext(inquiryId, "bearer"))
+        .thenReturn(
+            new LogisticsClient.RentalInquiryContext(
+                inquiryId, UUID.randomUUID(), UUID.randomUUID(), fixedWarehouseId, "ACTIVE"));
+    ObjectNode returnedFacets =
+        (ObjectNode) facets(fixedWarehouseId, List.of("БК-1"), List.of("ДВП"), List.of("6x2.4"));
+    returnedFacets
+        .withArray("warehouses")
+        .addAll(
+            facets(otherWarehouseId, List.of("БК-2"), List.of("ОСБ"), List.of("5x2.4"))
+                .withArray("warehouses"));
+    when(logistics.listAvailableCabinFacets(inquiryId, "bearer")).thenReturn(returnedFacets);
+
+    AssistantToolExecutor.ToolExecution execution =
+        executor(conversations, logistics)
+            .execute(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                inquiryId,
+                UUID.randomUUID(),
+                new ChatCompletionClient.ProviderToolCall(
+                    "fixed-facets", AssistantToolDefinitions.LIST_AVAILABLE_CABIN_FACETS, "{}"),
+                "bearer",
+                ignored -> {});
+
+    assertThat(execution.result().path("data").path("warehouses"))
+        .singleElement()
+        .satisfies(
+            warehouse ->
+                assertThat(warehouse.path("warehouseId").asText())
+                    .isEqualTo(fixedWarehouseId.toString()));
+    assertThat(execution.result().toString()).doesNotContain(otherWarehouseId.toString());
+  }
+
+  @Test
+  void rejectsAnotherWarehouseFromCurrentInquiryContextBeforeCatalogLookup() {
+    UUID inquiryId = UUID.randomUUID();
+    UUID fixedWarehouseId = UUID.randomUUID();
+    UUID otherWarehouseId = UUID.randomUUID();
+    UUID toolCallId = UUID.randomUUID();
+    AssistantConversationService conversations = mock(AssistantConversationService.class);
+    AssistantToolCall persistedCall = mock(AssistantToolCall.class);
+    when(persistedCall.getId()).thenReturn(toolCallId);
+    when(conversations.startToolCall(any(), any(), any(), anyString(), anyString(), any()))
+        .thenReturn(persistedCall);
+    LogisticsClient logistics = activeLogistics();
+    when(logistics.readRentalInquiryContext(inquiryId, "bearer"))
+        .thenReturn(
+            new LogisticsClient.RentalInquiryContext(
+                inquiryId, UUID.randomUUID(), UUID.randomUUID(), fixedWarehouseId, "ACTIVE"));
+
+    AssistantToolExecutor.ToolExecution execution =
+        executor(conversations, logistics)
+            .execute(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                inquiryId,
+                UUID.randomUUID(),
+                new ChatCompletionClient.ProviderToolCall(
+                    "other-catalog",
+                    AssistantToolDefinitions.LOOKUP_CABIN_CATALOG,
+                    "{\"warehouseId\":\"%s\",\"query\":\"БК-1\"}".formatted(otherWarehouseId)),
+                "bearer",
+                ignored -> {});
+
+    assertThat(execution.result().path("code").asText()).isEqualTo("TOOL_ARGUMENTS_INVALID");
+    verify(logistics, never()).listAvailableCabinFacets(any(), any());
+    verify(logistics, never()).lookupCabinCatalog(any(), any(), any(), anyInt(), anyInt(), any());
   }
 
   @Test
@@ -116,7 +241,7 @@ class AssistantToolExecutorTest {
     UUID inquiryId = UUID.randomUUID();
     UUID turnMessageId = UUID.randomUUID();
     AssistantConversationService conversations = mock(AssistantConversationService.class);
-    LogisticsClient logistics = mock(LogisticsClient.class);
+    LogisticsClient logistics = activeLogistics();
     AssistantToolCall persistedCall = mock(AssistantToolCall.class);
     UUID toolCallId = UUID.randomUUID();
     when(persistedCall.getId()).thenReturn(toolCallId);
@@ -136,7 +261,8 @@ class AssistantToolExecutorTest {
                     AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS,
                     """
                     {"warehouseId":"%s","groups":[{"condition":"removed","quantity":1}]}
-                    """.formatted(UUID.randomUUID())),
+                    """
+                        .formatted(UUID.randomUUID())),
                 "current-user-bearer",
                 events::add);
 
@@ -157,7 +283,7 @@ class AssistantToolExecutorTest {
     UUID toolCallId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
     AssistantConversationService conversations = mock(AssistantConversationService.class);
-    LogisticsClient logistics = mock(LogisticsClient.class);
+    LogisticsClient logistics = activeLogistics();
     AssistantToolCall persistedCall = mock(AssistantToolCall.class);
     when(persistedCall.getId()).thenReturn(toolCallId);
     when(conversations.startToolCall(any(), any(), any(), anyString(), anyString(), any()))
@@ -175,7 +301,8 @@ class AssistantToolExecutorTest {
                     AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS,
                     """
                     {"warehouseId":"%s","code":"MSK-1","groups":[{"quantity":1}]}
-                    """.formatted(warehouseId)),
+                    """
+                        .formatted(warehouseId)),
                 "current-user-bearer",
                 ignored -> {});
 
@@ -193,7 +320,7 @@ class AssistantToolExecutorTest {
     UUID toolCallId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
     AssistantConversationService conversations = mock(AssistantConversationService.class);
-    LogisticsClient logistics = mock(LogisticsClient.class);
+    LogisticsClient logistics = activeLogistics();
     AssistantToolCall persistedCall = mock(AssistantToolCall.class);
     when(persistedCall.getId()).thenReturn(toolCallId);
     when(conversations.startToolCall(any(), any(), any(), anyString(), anyString(), any()))
@@ -203,7 +330,8 @@ class AssistantToolExecutorTest {
             mapper.readTree(
                 """
                 {"warehouses":[{"warehouseId":"%s","code":"MSK-1","name":"Moscow","city":"Moscow","cabinTypes":["6m"],"finishes":["basic"],"dimensions":["6x2.4"],"categories":["Новая"]}]}
-                """.formatted(warehouseId)));
+                """
+                    .formatted(warehouseId)));
     ArrayList<AssistantApiModels.TurnEvent> events = new ArrayList<>();
 
     AssistantToolExecutor.ToolExecution execution =
@@ -222,8 +350,7 @@ class AssistantToolExecutorTest {
 
     assertThat(execution.result().path("code").asText()).isEqualTo("LOGISTICS_UNAVAILABLE");
     assertThat(execution.result().toString()).doesNotContain("MSK-1");
-    verify(conversations)
-        .failToolCall(toolCallId, "LOGISTICS_UNAVAILABLE", execution.result());
+    verify(conversations).failToolCall(toolCallId, "LOGISTICS_UNAVAILABLE", execution.result());
     verify(conversations, never()).completeToolCall(any(), any());
     assertThat(events.getLast().code()).isEqualTo("LOGISTICS_UNAVAILABLE");
   }
@@ -237,15 +364,14 @@ class AssistantToolExecutorTest {
     UUID toolCallId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
     AssistantConversationService conversations = mock(AssistantConversationService.class);
-    LogisticsClient logistics = mock(LogisticsClient.class);
+    LogisticsClient logistics = activeLogistics();
     AssistantToolCall persistedCall = mock(AssistantToolCall.class);
     when(persistedCall.getId()).thenReturn(toolCallId);
     when(conversations.startToolCall(any(), any(), any(), anyString(), anyString(), any()))
         .thenReturn(persistedCall);
     when(logistics.listAvailableCabinFacets(inquiryId, "current-user-bearer"))
         .thenReturn(facets(warehouseId, List.of("БК-1"), List.of("ДВП"), List.of("6x2.4")));
-    when(logistics.searchAvailableCabins(
-            eq(inquiryId), any(), any(), eq("current-user-bearer")))
+    when(logistics.searchAvailableCabins(eq(inquiryId), any(), any(), eq("current-user-bearer")))
         .thenReturn(mapper.readTree("{\"groups\":[]}"));
 
     executor(conversations, logistics)
@@ -263,15 +389,15 @@ class AssistantToolExecutorTest {
                   {"cabinType":"БК-1","finish":"ДВП","dimensions":"6x2.4","category":"Обычная","quantity":2},
                   {"cabinType":"БК-1","finish":"ДВП","dimensions":"6x2.4","quantity":30}
                 ]}
-                """.formatted(warehouseId)),
+                """
+                    .formatted(warehouseId)),
             "current-user-bearer",
             ignored -> {});
 
     ArgumentCaptor<LogisticsClient.CabinSearch> search =
         ArgumentCaptor.forClass(LogisticsClient.CabinSearch.class);
     verify(logistics)
-        .searchAvailableCabins(
-            eq(inquiryId), any(), search.capture(), eq("current-user-bearer"));
+        .searchAvailableCabins(eq(inquiryId), any(), search.capture(), eq("current-user-bearer"));
     assertThat(search.getValue().groups())
         .extracting(LogisticsClient.CabinSearchGroup::category)
         .containsExactly("ИТР", "Обычная", null);
@@ -286,21 +412,15 @@ class AssistantToolExecutorTest {
     UUID warehouseId = UUID.randomUUID();
     UUID toolCallId = UUID.randomUUID();
     AssistantConversationService conversations = mock(AssistantConversationService.class);
-    LogisticsClient logistics = mock(LogisticsClient.class);
+    LogisticsClient logistics = activeLogistics();
     AssistantToolCall persistedCall = mock(AssistantToolCall.class);
     when(persistedCall.getId()).thenReturn(toolCallId);
     when(conversations.startToolCall(any(), any(), any(), anyString(), anyString(), any()))
         .thenReturn(persistedCall);
     when(logistics.listAvailableCabinFacets(inquiryId, "current-user-bearer"))
-        .thenReturn(
-            facets(
-                warehouseId,
-                List.of("БК-1", "БК-2"),
-                List.of("ДВП"),
-                List.of("6x2.4")));
+        .thenReturn(facets(warehouseId, List.of("БК-1", "БК-2"), List.of("ДВП"), List.of("6x2.4")));
     AtomicInteger calls = new AtomicInteger();
-    when(logistics.searchAvailableCabins(
-            eq(inquiryId), any(), any(), eq("current-user-bearer")))
+    when(logistics.searchAvailableCabins(eq(inquiryId), any(), any(), eq("current-user-bearer")))
         .thenAnswer(
             invocation -> {
               LogisticsClient.CabinSearch request = invocation.getArgument(2);
@@ -333,7 +453,8 @@ class AssistantToolExecutorTest {
                       {"cabinType":"БК-1","finish":"ДВП","dimensions":"6x2.4","categories":["Обычная","ИТР"]},
                       {"cabinType":"БК-2","finish":"ДВП","dimensions":"6x2.4","categories":["Обычная","ИТР"]}
                     ]}
-                    """.formatted(warehouseId)),
+                    """
+                        .formatted(warehouseId)),
                 "current-user-bearer",
                 ignored -> {});
 
@@ -381,21 +502,15 @@ class AssistantToolExecutorTest {
     UUID turnMessageId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
     AssistantConversationService conversations = mock(AssistantConversationService.class);
-    LogisticsClient logistics = mock(LogisticsClient.class);
+    LogisticsClient logistics = activeLogistics();
     AssistantToolCall persistedCall = mock(AssistantToolCall.class);
     when(persistedCall.getId()).thenReturn(UUID.randomUUID());
     when(conversations.startToolCall(any(), any(), any(), anyString(), anyString(), any()))
         .thenReturn(persistedCall);
     when(logistics.listAvailableCabinFacets(inquiryId, "current-user-bearer"))
-        .thenReturn(
-            facets(
-                warehouseId,
-                List.of("БК-1", "БК-2"),
-                List.of("ДВП"),
-                List.of("6x2.4")));
+        .thenReturn(facets(warehouseId, List.of("БК-1", "БК-2"), List.of("ДВП"), List.of("6x2.4")));
     AtomicInteger calls = new AtomicInteger();
-    when(logistics.searchAvailableCabins(
-            eq(inquiryId), any(), any(), eq("current-user-bearer")))
+    when(logistics.searchAvailableCabins(eq(inquiryId), any(), any(), eq("current-user-bearer")))
         .thenAnswer(
             invocation -> {
               LogisticsClient.CabinSearch request = invocation.getArgument(2);
@@ -428,15 +543,15 @@ class AssistantToolExecutorTest {
                       {"cabinType":"БК-1","finish":"ДВП","dimensions":"6x2.4","categories":["Обычная","ИТР"]},
                       {"cabinType":"БК-2","finish":"ДВП","dimensions":"6x2.4","categories":["Обычная","ИТР"]}
                     ]}
-                    """.formatted(warehouseId)),
+                    """
+                        .formatted(warehouseId)),
                 "current-user-bearer",
                 ignored -> {});
 
     ArgumentCaptor<LogisticsClient.CabinSearch> requests =
         ArgumentCaptor.forClass(LogisticsClient.CabinSearch.class);
     verify(logistics, times(3))
-        .searchAvailableCabins(
-            eq(inquiryId), any(), requests.capture(), eq("current-user-bearer"));
+        .searchAvailableCabins(eq(inquiryId), any(), requests.capture(), eq("current-user-bearer"));
     assertThat(totalRequested(requests.getAllValues().getLast())).isEqualTo(6);
     JsonNode groups = execution.result().path("data").path("groups");
     assertThat(groups).hasSize(2);
@@ -446,7 +561,9 @@ class AssistantToolExecutorTest {
     assertThat(notice.path("code").asText()).isEqualTo("CABINS_PARTIALLY_FOUND");
     assertThat(notice.path("requestedQuantity").intValue()).isEqualTo(10);
     assertThat(notice.path("foundQuantity").intValue()).isEqualTo(6);
-    notice.path("groups").forEach(group -> assertThat(group.path("quantity").intValue()).isPositive());
+    notice
+        .path("groups")
+        .forEach(group -> assertThat(group.path("quantity").intValue()).isPositive());
   }
 
   @Test
@@ -458,19 +575,16 @@ class AssistantToolExecutorTest {
     UUID warehouseId = UUID.randomUUID();
     UUID toolCallId = UUID.randomUUID();
     AssistantConversationService conversations = mock(AssistantConversationService.class);
-    LogisticsClient logistics = mock(LogisticsClient.class);
+    LogisticsClient logistics = activeLogistics();
     AssistantToolCall persistedCall = mock(AssistantToolCall.class);
     when(persistedCall.getId()).thenReturn(toolCallId);
     when(conversations.startToolCall(any(), any(), any(), anyString(), anyString(), any()))
         .thenReturn(persistedCall);
     when(logistics.listAvailableCabinFacets(inquiryId, "current-user-bearer"))
         .thenReturn(facets(warehouseId, List.of("БК-1"), List.of("ДВП"), List.of("6x2.4")));
-    when(logistics.searchAvailableCabins(
-            eq(inquiryId), any(), any(), eq("current-user-bearer")))
+    when(logistics.searchAvailableCabins(eq(inquiryId), any(), any(), eq("current-user-bearer")))
         .thenAnswer(
-            invocation ->
-                cabinSearchResponse(
-                    warehouseId, invocation.getArgument(2), List.of(0)));
+            invocation -> cabinSearchResponse(warehouseId, invocation.getArgument(2), List.of(0)));
 
     AssistantToolExecutor.ToolExecution execution =
         executor(conversations, logistics)
@@ -486,7 +600,8 @@ class AssistantToolExecutorTest {
                     {"warehouseId":"%s","resultMode":"APPEND","groups":[
                       {"cabinType":"БК-1","finish":"ДВП","dimensions":"6x2.4","quantity":2}
                     ]}
-                    """.formatted(warehouseId)),
+                    """
+                        .formatted(warehouseId)),
                 "current-user-bearer",
                 ignored -> {});
 
@@ -504,7 +619,7 @@ class AssistantToolExecutorTest {
   void rejectsObsoleteMergeConfirmationToolWithoutCallingLogistics() {
     UUID toolCallId = UUID.randomUUID();
     AssistantConversationService conversations = mock(AssistantConversationService.class);
-    LogisticsClient logistics = mock(LogisticsClient.class);
+    LogisticsClient logistics = activeLogistics();
     AssistantToolCall persistedCall = mock(AssistantToolCall.class);
     when(persistedCall.getId()).thenReturn(toolCallId);
     when(conversations.startToolCall(any(), any(), any(), anyString(), anyString(), any()))
@@ -534,7 +649,7 @@ class AssistantToolExecutorTest {
     UUID inquiryId = UUID.randomUUID();
     UUID turnMessageId = UUID.randomUUID();
     AssistantConversationService conversations = mock(AssistantConversationService.class);
-    LogisticsClient logistics = mock(LogisticsClient.class);
+    LogisticsClient logistics = activeLogistics();
     AssistantToolCall persistedCall = mock(AssistantToolCall.class);
     UUID toolCallId = UUID.randomUUID();
     when(persistedCall.getId()).thenReturn(toolCallId);
@@ -553,7 +668,8 @@ class AssistantToolExecutorTest {
                     AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS,
                     """
                     {"warehouseId":"%s","totalQuantity":10,"groups":[{"quantity":10}]}
-                    """.formatted(UUID.randomUUID())),
+                    """
+                        .formatted(UUID.randomUUID())),
                 "current-user-bearer",
                 ignored -> {});
 
@@ -569,7 +685,7 @@ class AssistantToolExecutorTest {
     UUID inquiryId = UUID.randomUUID();
     UUID turnMessageId = UUID.randomUUID();
     AssistantConversationService conversations = mock(AssistantConversationService.class);
-    LogisticsClient logistics = mock(LogisticsClient.class);
+    LogisticsClient logistics = activeLogistics();
     AssistantToolCall persistedCall = mock(AssistantToolCall.class);
     UUID toolCallId = UUID.randomUUID();
     when(persistedCall.getId()).thenReturn(toolCallId);
@@ -578,8 +694,7 @@ class AssistantToolExecutorTest {
     UUID warehouseId = UUID.randomUUID();
     when(logistics.listAvailableCabinFacets(inquiryId, "current-user-bearer"))
         .thenReturn(facets(warehouseId, List.of("БК-1"), List.of("ДВП"), List.of("6x2.4")));
-    when(logistics.searchAvailableCabins(
-            eq(inquiryId), any(), any(), eq("current-user-bearer")))
+    when(logistics.searchAvailableCabins(eq(inquiryId), any(), any(), eq("current-user-bearer")))
         .thenThrow(new AssistantInquiryArchivedException());
 
     AssistantToolExecutor.ToolExecution execution =
@@ -594,7 +709,8 @@ class AssistantToolExecutorTest {
                     AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS,
                     """
                     {"warehouseId":"%s","groups":[{"cabinType":"БК-1","finish":"ДВП","dimensions":"6x2.4","quantity":1}]}
-                    """.formatted(warehouseId)),
+                    """
+                        .formatted(warehouseId)),
                 "current-user-bearer",
                 ignored -> {});
 
@@ -657,10 +773,7 @@ class AssistantToolExecutorTest {
   }
 
   private JsonNode facets(
-      UUID warehouseId,
-      List<String> cabinTypes,
-      List<String> finishes,
-      List<String> dimensions) {
+      UUID warehouseId, List<String> cabinTypes, List<String> finishes, List<String> dimensions) {
     ObjectNode root = mapper.createObjectNode();
     ObjectNode warehouse = root.putArray("warehouses").addObject();
     warehouse.put("warehouseId", warehouseId.toString());
@@ -670,8 +783,7 @@ class AssistantToolExecutorTest {
     finishes.forEach(warehouse.putArray("finishes")::add);
     dimensions.forEach(warehouse.putArray("dimensions")::add);
     List.of("Новая", "ИТР", "Обычная").forEach(warehouse.putArray("categories")::add);
-    List.of("с верандой", "Линолеум")
-        .forEach(warehouse.putArray("characteristics")::add);
+    List.of("с верандой", "Линолеум").forEach(warehouse.putArray("characteristics")::add);
     ArrayNode relations = warehouse.putArray("typeDimensions");
     for (String cabinType : cabinTypes) {
       ObjectNode relation = relations.addObject();
@@ -679,6 +791,17 @@ class AssistantToolExecutorTest {
       dimensions.forEach(relation.putArray("dimensions")::add);
     }
     return root;
+  }
+
+  /** Creates an active inquiry mock whose warehouse remains unfixed unless a test overrides it. */
+  private static LogisticsClient activeLogistics() {
+    LogisticsClient logistics = mock(LogisticsClient.class);
+    when(logistics.readRentalInquiryContext(any(), any()))
+        .thenAnswer(
+            invocation ->
+                new LogisticsClient.RentalInquiryContext(
+                    invocation.getArgument(0), UUID.randomUUID(), null, null, "ACTIVE"));
+    return logistics;
   }
 
   private AssistantToolExecutor executor(

@@ -1,31 +1,27 @@
 package dev.buhanzaz.rwms.logistics.order.api;
 
-import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AddOrderUnitRequest;
-import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRentalShipmentRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.LogisticsDocumentView;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.ClientPageResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.ClientResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateClientRequest;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRentalShipmentRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRequest;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.ExtendOrderRentalTermsRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderDetailResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderHistoryEventResponse;
-import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.ExtendOrderRentalTermsRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderPageResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderUnitPageResponse;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.ReplaceOrderUnitRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.SetOrderUnitDesiredEquipmentRequest;
-import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.SetOrderRentalTermsRequest;
-import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.SelectWarehouseRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.UpdateOrderRequest;
 import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import dev.buhanzaz.rwms.logistics.order.security.OrderActor;
 import dev.buhanzaz.rwms.logistics.order.security.OrderAuthorizer;
-import dev.buhanzaz.rwms.logistics.order.service.OrderAuditService;
-import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.LogisticsDocumentView;
 import dev.buhanzaz.rwms.logistics.order.service.OrderClientService;
-import dev.buhanzaz.rwms.logistics.order.service.OrderUnitConflictException;
 import dev.buhanzaz.rwms.logistics.order.service.RentalOrderService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
-import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
 import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
@@ -37,11 +33,11 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
-import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -54,9 +50,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-/**
- * HTTP boundary for authenticated rental-order commands and reads.
- */
+/** HTTP boundary for authenticated rental-order commands and reads. */
 @RestController
 @Validated
 @RequestMapping("/api/logistics/v1")
@@ -65,7 +59,6 @@ public class OrderController {
   private final RentalOrderService orders;
   private final OrderClientService clients;
   private final OrderAuthorizer access;
-  private final OrderAuditService audit;
   private final LogisticsWarehouseLifecycle warehouseLifecycle;
 
   @GetMapping("/orders")
@@ -79,11 +72,9 @@ public class OrderController {
       @RequestParam(required = false) List<RentalOrderStatus> status,
       @RequestParam(required = false) List<ClientType> clientType,
       @RequestParam(required = false) List<UUID> warehouseId,
-      @RequestParam(required = false)
-          @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
+      @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
           OffsetDateTime createdFrom,
-      @RequestParam(required = false)
-          @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
+      @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
           OffsetDateTime createdTo) {
     return orders.list(
         access.readActor(jwt),
@@ -113,8 +104,7 @@ public class OrderController {
   }
 
   @GetMapping("/orders/{orderId}")
-  public OrderDetailResponse get(
-      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID orderId) {
+  public OrderDetailResponse get(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID orderId) {
     return orders.get(access.readActor(jwt), orderId);
   }
 
@@ -157,17 +147,6 @@ public class OrderController {
     return response(result.response(), result.replayed(), HttpStatus.OK);
   }
 
-  @PutMapping("/orders/{orderId}/rental-terms")
-  public ResponseEntity<OrderDetailResponse> setRentalTerms(
-      @AuthenticationPrincipal Jwt jwt,
-      @PathVariable UUID orderId,
-      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
-      @Valid @RequestBody SetOrderRentalTermsRequest request) {
-    RentalOrderService.MutationResult result =
-        orders.setRentalTerms(access.writeActor(jwt), orderId, idempotencyKey, request);
-    return response(result.response(), result.replayed(), HttpStatus.OK);
-  }
-
   @PostMapping("/orders/{orderId}/rental-terms/extend")
   public ResponseEntity<OrderDetailResponse> extendRentalTerms(
       @AuthenticationPrincipal Jwt jwt,
@@ -195,30 +174,11 @@ public class OrderController {
             actor.subjectId(),
             "CREATE_RENTAL_ORDER_SHIPMENT",
             idempotencyKey,
-            List.of(
-                new AdmissionRequirement(
-                    warehouseId, WarehouseOperationDirection.OUTGOING)));
+            List.of(new AdmissionRequirement(warehouseId, WarehouseOperationDirection.OUTGOING)));
     LogisticsDocumentService.CreateResult result =
         orders.createRentalShipment(
-            actor,
-            orderId,
-            idempotencyKey,
-            correlationId(servletRequest),
-            request,
-            admission);
+            actor, orderId, idempotencyKey, correlationId(servletRequest), request, admission);
     return documentResponse(result.response(), result.replayed());
-  }
-
-  @PutMapping("/orders/{orderId}/warehouse")
-  public ResponseEntity<OrderDetailResponse> selectWarehouse(
-      @AuthenticationPrincipal Jwt jwt,
-      @PathVariable UUID orderId,
-      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
-      @Valid @RequestBody SelectWarehouseRequest request) {
-    RentalOrderService.MutationResult result =
-        orders.selectWarehouse(
-            access.writeActor(jwt), orderId, idempotencyKey, request);
-    return response(result.response(), result.replayed(), HttpStatus.OK);
   }
 
   @GetMapping("/orders/{orderId}/available-units")
@@ -231,28 +191,6 @@ public class OrderController {
     return orders.availableUnits(access.readActor(jwt), orderId, page, size, search);
   }
 
-  @PostMapping("/orders/{orderId}/units")
-  public ResponseEntity<OrderDetailResponse> addUnit(
-      @AuthenticationPrincipal Jwt jwt,
-      @PathVariable UUID orderId,
-      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
-      @Valid @RequestBody AddOrderUnitRequest request) {
-    OrderActor actor = access.writeActor(jwt);
-    try {
-      RentalOrderService.MutationResult result =
-          orders.addUnit(actor, orderId, idempotencyKey, request);
-      return response(
-          result.response(),
-          result.replayed(),
-          result.replayed() ? HttpStatus.OK : HttpStatus.CREATED);
-    } catch (OrderUnitConflictException exception) {
-      // The service transaction (and its order row lock) has ended before this append.
-      audit.appendUnitConflict(
-          exception.orderId(), exception.unitId(), actor, exception.code());
-      throw exception;
-    }
-  }
-
   @DeleteMapping("/orders/{orderId}/units/{unitId}")
   public ResponseEntity<OrderDetailResponse> removeUnit(
       @AuthenticationPrincipal Jwt jwt,
@@ -261,8 +199,19 @@ public class OrderController {
       @RequestParam @Min(0) long expectedVersion,
       @RequestHeader("Idempotency-Key") UUID idempotencyKey) {
     RentalOrderService.MutationResult result =
-        orders.removeUnit(
-            access.writeActor(jwt), orderId, unitId, expectedVersion, idempotencyKey);
+        orders.removeUnit(access.writeActor(jwt), orderId, unitId, expectedVersion, idempotencyKey);
+    return response(result.response(), result.replayed(), HttpStatus.OK);
+  }
+
+  @PostMapping("/orders/{orderId}/units/{unitId}/replace")
+  public ResponseEntity<OrderDetailResponse> replaceUnit(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID orderId,
+      @PathVariable UUID unitId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody ReplaceOrderUnitRequest request) {
+    RentalOrderService.MutationResult result =
+        orders.replaceUnit(access.writeActor(jwt), orderId, unitId, idempotencyKey, request);
     return response(result.response(), result.replayed(), HttpStatus.OK);
   }
 
@@ -312,11 +261,9 @@ public class OrderController {
       @RequestParam(defaultValue = "DESC") String direction,
       @RequestParam(required = false) List<RentalOrderStatus> status,
       @RequestParam(required = false) List<UUID> warehouseId,
-      @RequestParam(required = false)
-          @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
+      @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
           OffsetDateTime createdFrom,
-      @RequestParam(required = false)
-          @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
+      @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
           OffsetDateTime createdTo) {
     return clients.orders(
         access.readActor(jwt),

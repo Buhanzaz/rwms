@@ -234,7 +234,6 @@ class RwmsApiContractBoundaryTest {
               "clientId":null,
               "equipmentMovementTaskId":null,
               "scheduledDate":"2026-08-10",
-              "scheduledAt":null,
               "rentalOrderId":null,
               "rentalShipmentId":null,
               "lines":[],
@@ -256,6 +255,7 @@ class RwmsApiContractBoundaryTest {
         assertThat(document.documentType).isEqualTo("TRANSFER")
         assertThat(document.destinationWarehouseId)
             .isEqualTo("66666666-6666-6666-6666-666666666666")
+        assertThat(document.scheduledDate).isEqualTo("2026-08-10")
         assertThat(encoded).contains("\"driverSnapshot\":null")
         assertThat(encoded).contains("\"assetVersion\":5")
     }

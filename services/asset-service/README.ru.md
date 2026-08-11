@@ -46,6 +46,49 @@ facts lookup по warehouse и обязательному query. Он ищет n
 dimension, category, characteristics и linoleum среди всех current statuses;
 он не проверяет availability и не создаёт, не продлевает и не освобождает hold.
 
+## Мебель заказа и замена бытовок
+
+`equipment_catalog_item.maximum_per_cabin` — nullable asset-owned лимит одной позиции оборудования
+в одной бытовке, добавленный Flyway V36; `null` сохраняет прежнее поведение без лимита. Команды
+оборудования заказа
+получают требования, сгруппированные по активным бытовкам заказа, проверяют каждый заданный лимит,
+агрегируют тот же order-wide reservation и сериализуют состав бытовок/мебели общим advisory lock
+заказа. Общая availability вычитает только часть reservations, ещё не обеспеченную физической
+мебелью в активных бытовках соответствующего заказа, поэтому booked contents не учитываются дважды.
+
+Конвертация представления может передавать авторитетный полный post-conversion состав бытовок и их
+требования. Она материализует reservations выбранных бытовок и заменяет order-wide equipment
+reservation в одной transaction; конфликт остатка или лимита оставляет presentation holds
+активными. Snapshots `AvailableCabin` содержат физические `contents`, поэтому consumer
+представления может прибавить к общей availability только содержимое действительно выбранных held
+бытовок, но не всех альтернатив.
+`ReplacePresentationHoldsResponse.cabins` фиксирует эти snapshots после canonical locks и в порядке
+запрошенных бытовок. Пока presentation hold активен, direct transfer и команды acquire/execute
+перемещения оборудования отклоняют эту бытовку как source или известный target, поэтому
+опубликованные contents не меняются до conversion или release.
+
+Стандартный equipment movement plan заказа сначала использует физический избыток другой активной
+бытовки того же заказа на складе с location `CABIN_NON_RENTED`, а затем legacy allocatable sources.
+При acquire такой линии вместе передаются `orderId`, `targetRentalItemId` и авторитетная коллекция
+`units`. Существующий allocation hold хранит этот nullable order/target/unit context и optional
+provenance освобождённой source reservation для атомарной замены; поля добавлены Flyway V37. Общий
+порядок order/equipment/balance locks ограничивает hold одновременно избытком источника и дефицитом
+цели с учётом прежних active source и inbound holds. Содержимое `CABIN_RENTED` может обеспечивать
+агрегированный reserve, но никогда не предлагается как складской источник перемещения.
+
+`POST /api/internal/asset/v1/logistics/orders/{orderId}/units/replace` атомарно заменяет одну или
+несколько упорядоченных пар old/new внутри того же заказа. Команда проверяет полный post-swap
+состав, требует, чтобы каждая старая бытовка всё ещё имела статус `BOOKED`, конвертирует выбранные
+presentation holds и освобождает все невыбранные альтернативы того же scope, глобально блокирует
+все старые источники мебели и заранее создаёт существующие reservations типа
+`LOGISTICS_EQUIPMENT_MOVEMENT` до освобождения любой старой reservation заказа. Каждая такая линия
+durable хранит post-swap состав и освобождённую старую reservation; обычный acquire может только
+повторно получить её, а execute заново проверяет released source, active target, склад и order-wide
+reserve мебели. Ошибка в любой паре откатывает весь batch и все переходы presentation holds. Старая
+бытовка остаётся непредлагаемой в статусе `BOOKED` без активной reservation заказа. Live hold
+перемещения мебели блокирует maintenance acquisition до выполнения существующего movement
+(истёкший hold не считается live); order-wide furniture reservation при замене не освобождается.
+
 ## Внутренняя структура приложения
 
 `AssetService` — стабильный controller-facing фасад с пятью точными application

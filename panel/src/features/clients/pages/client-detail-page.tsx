@@ -1,10 +1,8 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import {
-  AiChat02Icon,
   ArrowLeft01Icon,
   ClipboardListIcon,
-  PackageSearchIcon,
   RefreshIcon,
 } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -138,21 +136,6 @@ export function ClientDetailPage() {
           </Link>
         </Button>
         <div className="flex flex-wrap gap-2">
-          <Button asChild size="sm" variant="outline">
-            <Link to={`/assistant?clientId=${clientQueryValue}`}>
-              <HugeiconsIcon icon={AiChat02Icon} data-icon="inline-start" />
-              Новый заказ через чат
-            </Link>
-          </Button>
-          <Button asChild size="sm" variant="outline">
-            <Link to={`/booking?clientId=${clientQueryValue}`}>
-              <HugeiconsIcon
-                icon={PackageSearchIcon}
-                data-icon="inline-start"
-              />
-              Подобрать по складу
-            </Link>
-          </Button>
           <Button asChild size="sm">
             <Link to={`/orders/new?clientId=${clientQueryValue}`}>
               <HugeiconsIcon
@@ -198,6 +181,24 @@ export function ClientDetailPage() {
               value={formatOrderDateTime(client.updatedAt)}
             />
           </dl>
+          <div className="mt-5 flex flex-col gap-2">
+            <p className="text-xs text-muted-foreground">
+              Дополнительные контакты клиента
+            </p>
+            {client.additionalContacts.length === 0 ? (
+              <p className="text-sm font-medium">Не указаны</p>
+            ) : (
+              <dl className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {client.additionalContacts.map((contact, index) => (
+                  <DetailValue
+                    key={`${contact.name}:${contact.phone}:${index}`}
+                    label={contact.name}
+                    value={contact.phone}
+                  />
+                ))}
+              </dl>
+            )}
+          </div>
         </CardContent>
       </Card>
 

@@ -30,12 +30,15 @@ class LogisticsRentalOrderBindingPolicy {
     RentalOrder first = null;
     for (var line : request.lines()) {
       if (line.rentalOrderId() == null) {
-        throw new IllegalArgumentException(
-            "rentalOrderId is required for every bound return line");
+        throw new IllegalArgumentException("rentalOrderId is required for every bound return line");
       }
       RentalOrder order =
           requireActiveRentalOrder(line.rentalOrderId(), request.clientId(), request.warehouseId());
       if (first == null) first = order;
+      else if (!first.getId().equals(order.getId())) {
+        throw new LogisticsConflictException(
+            "Одна ходка возврата может относиться только к одному заказу");
+      }
     }
     return first;
   }
@@ -47,10 +50,12 @@ class LogisticsRentalOrderBindingPolicy {
       throw new IllegalArgumentException(
           "clientId and rentalOrderId are required for a bound rental shipment");
     }
-    return requireActiveRentalOrder(request.rentalOrderId(), request.clientId(), request.warehouseId());
+    return requireActiveRentalOrder(
+        request.rentalOrderId(), request.clientId(), request.warehouseId());
   }
 
-  private RentalOrder requireActiveRentalOrder(UUID rentalOrderId, UUID clientId, UUID warehouseId) {
+  private RentalOrder requireActiveRentalOrder(
+      UUID rentalOrderId, UUID clientId, UUID warehouseId) {
     RentalOrder order =
         rentalOrders
             .findWithClientById(rentalOrderId)

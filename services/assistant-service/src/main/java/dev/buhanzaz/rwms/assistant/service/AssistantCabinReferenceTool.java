@@ -40,7 +40,17 @@ public class AssistantCabinReferenceTool {
    * path is deliberately separate from availability search and therefore creates no hold.
    */
   public JsonNode execute(UUID rentalInquiryId, JsonNode arguments, String bearerToken) {
+    return execute(rentalInquiryId, arguments, null, bearerToken);
+  }
+
+  /** Executes a read-only lookup after enforcing the current fixed inquiry warehouse. */
+  public JsonNode execute(
+      UUID rentalInquiryId, JsonNode arguments, UUID fixedWarehouseId, String bearerToken) {
     UUID warehouseId = requiredUuid(arguments.get("warehouseId"), "warehouseId");
+    if (fixedWarehouseId != null && !fixedWarehouseId.equals(warehouseId)) {
+      throw new AssistantConflictException(
+          "The rental inquiry is already fixed to another warehouse");
+    }
     JsonNode facets = logistics.listAvailableCabinFacets(rentalInquiryId, bearerToken);
     AssistantCabinFacetMetadata metadata = AssistantCabinFacetMetadata.from(facets, warehouseId);
     String query = optionalText(arguments.get("query"), "query", 255);
@@ -79,8 +89,7 @@ public class AssistantCabinReferenceTool {
     }
     JsonNode content = page.path("content");
     long totalElements = page.path("totalElements").longValue();
-    long expectedTotalPages =
-        totalElements / PAGE_SIZE + (totalElements % PAGE_SIZE == 0 ? 0 : 1);
+    long expectedTotalPages = totalElements / PAGE_SIZE + (totalElements % PAGE_SIZE == 0 ? 0 : 1);
     long expectedContentSize = Math.min(PAGE_SIZE, totalElements);
     if (expectedTotalPages > Integer.MAX_VALUE
         || page.path("totalPages").intValue() != expectedTotalPages

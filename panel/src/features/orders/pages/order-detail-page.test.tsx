@@ -1,41 +1,23 @@
-import {
-  focusManager,
-  QueryClient,
-  QueryClientProvider,
-} from "@tanstack/react-query"
-import {
-  act,
-  cleanup,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { cleanup, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { MemoryRouter, Route, Routes } from "react-router-dom"
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-
-import { ApiError } from "@/lib/api-client"
 
 const ordersApi = vi.hoisted(() => ({
   getOrder: vi.fn(),
-  listAvailableOrderUnits: vi.fn(),
   listOrderHistory: vi.fn(),
-  addOrderUnit: vi.fn(),
-  removeOrderUnit: vi.fn(),
-  selectOrderWarehouse: vi.fn(),
   deleteOrder: vi.fn(),
-  updateOrder: vi.fn(),
+  removeOrderUnit: vi.fn(),
+  listOrderReplacementCandidates: vi.fn(),
+  replaceOrderUnit: vi.fn(),
   saveOrder: vi.fn(),
-  setOrderRentalTerms: vi.fn(),
   extendOrderRentalTerms: vi.fn(),
   createOrderIdempotencyKey: vi.fn(
     () => "99999999-9999-4999-8999-999999999999"
   ),
 }))
-const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
 
-vi.mock("sonner", () => ({ toast }))
 vi.mock("@/features/orders/api/orders-api", () => ({
   ORDERS_QUERY_KEY: ["orders"],
   ...ordersApi,
@@ -45,190 +27,193 @@ vi.mock("@/features/orders/orders-module-context", () => ({
     accessToken: "orders-token",
     currentUser: {
       id: "11111111-1111-4111-8111-111111111111",
+      displayName: "Мария Менеджер",
       globalRole: "RENTAL_MANAGER",
     },
     warehouses: [
       {
         id: "22222222-2222-4222-8222-222222222222",
-        name: "Москва",
-        city: "Москва",
+        name: "СПб",
+        city: "Санкт-Петербург",
         address: "Складская, 1",
       },
     ],
   }),
 }))
-vi.mock("@/features/orders/components/order-warehouse-unit-selection", () => ({
-  OrderWarehouseUnitSelection: ({
-    candidates,
-    conflictingUnitIds,
-    onAdd,
-    onEditContents,
-  }: {
-    candidates: Array<{
-      added: boolean
-      unit: { id: string; number: string }
-    }>
-    conflictingUnitIds: ReadonlySet<string>
-    onAdd: (candidate: {
-      added: boolean
-      unit: { id: string; number: string }
-    }) => void
-    onEditContents: (candidate: {
-      added: boolean
-      unit: { id: string; number: string }
-    }) => void
-  }) => {
-    const candidate = candidates[0]!
-    const conflicting = conflictingUnitIds.has(candidate.unit.id)
-    if (candidate.added) {
-      return (
-        <>
-          <button type="button" disabled>
-            Добавлено
-          </button>
-          <button
-            type="button"
-            aria-label={`Изменить наполнение ${candidate.unit.number}`}
-            onClick={() => onEditContents(candidate)}
-          >
-            +
-          </button>
-        </>
-      )
-    }
-
-    return (
-      <button
-        type="button"
-        disabled={conflicting}
-        onClick={() => onAdd(candidate)}
-      >
-        {conflicting ? "Уже занята" : "Добавить"}
-      </button>
-    )
-  },
+vi.mock("@/features/orders/components/order-unit-dossier-evidence", () => ({
+  OrderUnitDossierEvidence: () => <div>Досье бытовок</div>,
 }))
 vi.mock("@/features/orders/components/order-unit-contents", () => ({
-  OrderUnitContentsView: () => null,
+  OrderUnitContentsView: () => <div>Фактическое наполнение</div>,
   OrderUnitEquipmentDialog: () => null,
 }))
-vi.mock("@/features/orders/components/order-unit-dossier-evidence", () => ({
-  OrderUnitDossierEvidence: () => null,
+vi.mock("@/features/rental-items/rental-item-status-badge", () => ({
+  RentalItemStatusBadge: () => <span>Забронирована</span>,
+}))
+vi.mock("sonner", () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
 }))
 
 import { OrderDetailPage } from "@/features/orders/pages/order-detail-page"
+import type { OrderDetail } from "@/features/orders/domain/orders"
 
 const ORDER_ID = "33333333-3333-4333-8333-333333333333"
 const CLIENT_ID = "44444444-4444-4444-8444-444444444444"
 const UNIT_ID = "55555555-5555-4555-8555-555555555555"
-const WAREHOUSE_ID = "22222222-2222-4222-8222-222222222222"
+const REPLACEMENT_UNIT_ID = "99999999-9999-4999-8999-999999999999"
 
-const detail = {
+const baseOrder: OrderDetail = {
   id: ORDER_ID,
-  version: 4,
-  number: "ORD-000001",
-  status: "DRAFT" as const,
+  version: 3,
+  number: "ORD-000042",
+  status: "DRAFT",
   client: {
     id: CLIENT_ID,
     version: 1,
-    type: "LEGAL_ENTITY" as const,
-    displayName: "ООО Тест",
+    type: "LEGAL_ENTITY",
+    displayName: "ООО Клиент",
     phone: "+79990000000",
     contactPerson: "Иван Иванов",
     email: null,
     responsibleManagerId: "11111111-1111-4111-8111-111111111111",
-    responsibleManagerDisplayName: "Менеджер",
+    responsibleManagerDisplayName: "Мария Менеджер",
     comment: null,
     source: null,
-    createdAt: "2026-07-19T08:00:00Z",
-    updatedAt: "2026-07-19T08:00:00Z",
+    additionalContacts: [{ name: "Бухгалтер", phone: "+79990000001" }],
+    createdAt: "2026-08-10T08:00:00Z",
+    updatedAt: "2026-08-10T09:00:00Z",
   },
   managerId: "11111111-1111-4111-8111-111111111111",
-  managerDisplayName: "Менеджер",
+  managerDisplayName: "Мария Менеджер",
   createdBy: "11111111-1111-4111-8111-111111111111",
-  createdByDisplayName: "Менеджер",
-  warehouseId: WAREHOUSE_ID,
-  deliveryAddress: "Москва, Складская, 1",
-  latitude: 55.75,
-  longitude: 37.62,
-  contactPhone: "+79990000000",
-  comment: "Позвонить за час",
-  acceptableDeliveryDates: ["2026-08-15"],
+  createdByDisplayName: "Мария Менеджер",
+  warehouseId: null,
+  deliveryAddress: "Санкт-Петербург, Невский проспект, 1",
+  latitude: 59.93,
+  longitude: 30.33,
+  contactPhone: "+79990000002",
+  comment: "Позвонить заранее",
+  additionalContacts: [{ name: "Прораб", phone: "+79990000003" }],
+  desiredDeliveryWindows: [
+    {
+      startDate: "2026-08-15",
+      endDate: "2026-08-17",
+    },
+  ],
   unitCount: 0,
-  createdAt: "2026-07-19T08:00:00Z",
-  updatedAt: "2026-07-19T09:00:00Z",
+  createdAt: "2026-08-10T08:00:00Z",
+  updatedAt: "2026-08-10T09:00:00Z",
   units: [],
   movements: [],
-  permissions: { canEdit: true, canViewOtherManagers: false },
+  permissions: {
+    canEdit: true,
+    canReplaceUnits: false,
+    canExtendRentalTerms: false,
+    canViewOtherManagers: false,
+  },
 }
 
-const candidate = {
-  reservationId: null,
-  added: false,
-  desiredContents: [],
+const selectedUnit: OrderDetail["units"][number] = {
+  reservationId: "66666666-6666-4666-8666-666666666666",
+  added: true,
+  reservationState: "ACTIVE",
+  desiredContents: [
+    {
+      equipmentId: "77777777-7777-4777-8777-777777777777",
+      equipmentName: "Кровать",
+      quantity: 4,
+      reservationState: "ACTIVE",
+    },
+  ],
+  rentalTerm: { rentalMonths: 3, shipmentDate: null, returnDate: null },
   unit: {
     id: UNIT_ID,
     version: 1,
-    warehouseId: WAREHOUSE_ID,
+    warehouseId: "22222222-2222-4222-8222-222222222222",
     number: "БЫТ-001",
-    status: "FREE" as const,
-    rentalType: null,
-    dimensions: null,
+    status: "BOOKED",
+    rentalType: "БК-1",
+    dimensions: "6×2,4",
     finishing: null,
     category: null,
     characteristics: null,
     linoleum: null,
     tags: [],
     contents: [],
-    createdAt: "2026-07-19T08:00:00Z",
-    updatedAt: "2026-07-19T08:00:00Z",
+    createdAt: "2026-08-10T08:00:00Z",
+    updatedAt: "2026-08-10T09:00:00Z",
   },
 }
 
-function renderPage() {
+const availableReplacement: OrderDetail["units"][number] = {
+  reservationId: null,
+  added: false,
+  reservationState: null,
+  desiredContents: [],
+  rentalTerm: null,
+  unit: {
+    ...selectedUnit.unit,
+    id: REPLACEMENT_UNIT_ID,
+    number: "БЫТ-099",
+    status: "FREE",
+  },
+}
+
+const shippedUnit: OrderDetail["units"][number] = {
+  ...selectedUnit,
+  rentalTerm: {
+    rentalMonths: 3,
+    shipmentDate: "2026-08-20",
+    returnDate: "2026-11-20",
+  },
+  unit: {
+    ...selectedUnit.unit,
+    status: "RENTED",
+    contents: [
+      {
+        equipmentId: "88888888-8888-4888-8888-888888888888",
+        equipmentName: "Стол",
+        quantity: 1,
+        locationKind: "CABIN_RENTED",
+      },
+    ],
+  },
+}
+
+function LocationProbe() {
+  const location = useLocation()
+  return (
+    <output aria-label="Текущий маршрут">
+      {location.pathname + location.search}
+    </output>
+  )
+}
+
+function renderPage(order: OrderDetail) {
+  ordersApi.getOrder.mockResolvedValue(order)
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
-  return {
-    queryClient,
-    ...render(
-      <MemoryRouter initialEntries={[`/orders/${ORDER_ID}`]}>
-        <QueryClientProvider client={queryClient}>
-          <Routes>
-            <Route path="/orders/:orderId" element={<OrderDetailPage />} />
-          </Routes>
-        </QueryClientProvider>
-      </MemoryRouter>
-    ),
-  }
+  return render(
+    <MemoryRouter initialEntries={[`/orders/${ORDER_ID}`]}>
+      <QueryClientProvider client={queryClient}>
+        <Routes>
+          <Route path="/orders/:orderId" element={<OrderDetailPage />} />
+          <Route path="*" element={<LocationProbe />} />
+        </Routes>
+      </QueryClientProvider>
+    </MemoryRouter>
+  )
 }
 
 beforeEach(() => {
-  ordersApi.getOrder.mockResolvedValue(detail)
-  ordersApi.listAvailableOrderUnits.mockResolvedValue({
-    content: [candidate],
+  ordersApi.listOrderHistory.mockResolvedValue([])
+  ordersApi.listOrderReplacementCandidates.mockResolvedValue({
+    content: [availableReplacement],
     page: 0,
-    size: 40,
+    size: 50,
     totalElements: 1,
     totalPages: 1,
-  })
-  ordersApi.listOrderHistory.mockResolvedValue([])
-  ordersApi.addOrderUnit.mockRejectedValue(
-    new ApiError("Бытовка уже зарезервирована", 409, "UNIT_ALREADY_RESERVED")
-  )
-  ordersApi.updateOrder.mockResolvedValue(detail)
-  ordersApi.saveOrder.mockResolvedValue({
-    ...detail,
-    version: 5,
-    status: "SAVED",
-    permissions: { ...detail.permissions, canEdit: false },
-  })
-  ordersApi.setOrderRentalTerms.mockResolvedValue(detail)
-  ordersApi.extendOrderRentalTerms.mockResolvedValue(detail)
-  ordersApi.deleteOrder.mockResolvedValue({
-    ...detail,
-    version: 5,
-    status: "CANCELLED",
   })
 })
 
@@ -237,664 +222,296 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-describe("OrderDetailPage reservation conflict", () => {
-  it("removes a newly occupied candidate on visible polling and keeps this order unit", async () => {
-    const selectedCandidate = {
-      ...candidate,
-      reservationId: "66666666-6666-4666-8666-666666666666",
-      added: true,
-      unit: {
-        ...candidate.unit,
-        id: "77777777-7777-4777-8777-777777777777",
-        number: "БЫТ-002",
-      },
-    }
-    ordersApi.getOrder.mockResolvedValue({
-      ...detail,
-      unitCount: 1,
-      units: [selectedCandidate],
-    })
-    const polledPage = {
-      content: [selectedCandidate],
-      page: 0,
-      size: 40,
-      totalElements: 1,
-      totalPages: 1,
-    }
-    let resolvePolledPage!: (page: typeof polledPage) => void
-    const polledResponse = new Promise<typeof polledPage>((resolve) => {
-      resolvePolledPage = resolve
-    })
-    ordersApi.listAvailableOrderUnits
-      .mockReset()
-      .mockResolvedValueOnce({
-        content: [candidate, selectedCandidate],
-        page: 0,
-        size: 40,
-        totalElements: 2,
-        totalPages: 1,
-      })
-      .mockImplementation(() => polledResponse)
-
-    renderPage()
-
-    await waitFor(
-      () => expect(ordersApi.listAvailableOrderUnits).toHaveBeenCalledTimes(1),
-      { timeout: 3_500 }
-    )
-    expect(
-      await screen.findByRole(
-        "button",
-        { name: "Добавить" },
-        { timeout: 3_500 }
-      )
-    ).toBeTruthy()
-    await waitFor(
-      () =>
-        expect(
-          ordersApi.listAvailableOrderUnits.mock.calls.length
-        ).toBeGreaterThanOrEqual(2),
-      { timeout: 3_500 }
-    )
-    await act(async () => {
-      resolvePolledPage(polledPage)
-      await polledResponse
-    })
-    await waitFor(
-      () =>
-        expect(screen.queryByRole("button", { name: "Добавить" })).toBeNull(),
-      { timeout: 3_500 }
-    )
-    expect(screen.getByRole("button", { name: "Добавлено" })).toBeTruthy()
-    expect(screen.getAllByText("БЫТ-002").length).toBeGreaterThan(0)
-    expect(
-      ordersApi.listAvailableOrderUnits.mock.calls.length
-    ).toBeGreaterThanOrEqual(2)
-  })
-
-  it("does not keep availability polling active in a hidden page", async () => {
-    focusManager.setFocused(false)
-    const { unmount } = renderPage()
-
-    try {
-      await waitFor(() =>
-        expect(ordersApi.listAvailableOrderUnits).toHaveBeenCalledTimes(1)
-      )
-      await new Promise((resolve) => window.setTimeout(resolve, 2_200))
-      expect(ordersApi.listAvailableOrderUnits).toHaveBeenCalledTimes(1)
-    } finally {
-      unmount()
-      focusManager.setFocused(undefined)
-    }
-  })
-
-  it("shows the confirmed reservation immediately from the command projection", async () => {
+describe("OrderDetailPage cabin entry", () => {
+  it("removes the old inline grid and offers exactly two order-linked paths", async () => {
     const user = userEvent.setup()
-    const addedCandidate = {
-      ...candidate,
-      reservationId: "66666666-6666-4666-8666-666666666666",
-      added: true,
-    }
-    ordersApi.addOrderUnit.mockResolvedValueOnce({
-      ...detail,
-      version: 5,
-      unitCount: 1,
-      units: [addedCandidate],
-    })
-
-    renderPage()
-    await user.click(await screen.findByRole("button", { name: "Добавить" }))
+    renderPage(baseOrder)
 
     expect(
-      await screen.findByRole("button", { name: "Добавлено" })
+      await screen.findByRole("button", { name: "Добавить бытовки" })
     ).toBeTruthy()
+    expect(screen.queryByText("Выбор бытовок")).toBeNull()
+    expect(screen.queryByLabelText("Склад бронирования")).toBeNull()
+
+    await user.click(
+      screen.getAllByRole("button", { name: "Добавить бытовки" })[0]
+    )
+    const assistant = screen.getByRole("link", { name: "Открыть AI-чат" })
+    const booking = screen.getByRole("link", {
+      name: "Открыть бронирование",
+    })
+    expect(assistant.getAttribute("href")).toBe(
+      `/assistant?clientId=${CLIENT_ID}&orderId=${ORDER_ID}`
+    )
+    expect(booking.getAttribute("href")).toBe(
+      `/booking?clientId=${CLIENT_ID}&orderId=${ORDER_ID}`
+    )
     expect(
-      screen.getAllByRole("button", {
-        name: "Изменить наполнение БЫТ-001",
-      }).length
-    ).toBeGreaterThan(0)
-    expect(screen.queryByRole("button", { name: "Добавить" })).toBeNull()
+      screen.getAllByRole("link", {
+        name: /Открыть (AI-чат|бронирование)/,
+      })
+    ).toHaveLength(2)
   })
 
-  it("rolls back the action state, explains the conflict and refreshes projections", async () => {
-    ordersApi.listAvailableOrderUnits
-      .mockResolvedValueOnce({
-        content: [candidate],
-        page: 0,
-        size: 40,
-        totalElements: 1,
-        totalPages: 1,
+  it.each(["DRAFT", "SAVED"] as const)(
+    "keeps Add cabins available for an editable %s order after the first booking",
+    async (status) => {
+      renderPage({
+        ...baseOrder,
+        status,
+        warehouseId: selectedUnit.unit.warehouseId,
+        unitCount: 1,
+        units: [selectedUnit],
       })
-      .mockResolvedValue({
-        content: [],
-        page: 0,
-        size: 40,
-        totalElements: 0,
-        totalPages: 0,
-      })
-    const user = userEvent.setup()
-    renderPage()
 
-    await user.click(await screen.findByRole("button", { name: "Добавить" }))
-
-    await waitFor(() => expect(ordersApi.addOrderUnit).toHaveBeenCalledTimes(1))
-    expect(toast.error).toHaveBeenCalledWith(
-      "Бытовка уже занята другим бронированием. Список доступных бытовок обновлён."
-    )
-    await waitFor(() => {
-      expect(ordersApi.getOrder.mock.calls.length).toBeGreaterThanOrEqual(2)
       expect(
-        ordersApi.listAvailableOrderUnits.mock.calls.length
-      ).toBeGreaterThanOrEqual(2)
-      expect(
-        ordersApi.listOrderHistory.mock.calls.length
-      ).toBeGreaterThanOrEqual(2)
-    })
-    expect(screen.queryByRole("button", { name: "Добавить" })).toBeNull()
-  })
-
-  it("allows a later server-confirmed free unit after an earlier conflict", async () => {
-    const freePage = {
-      content: [candidate],
-      page: 0,
-      size: 40,
-      totalElements: 1,
-      totalPages: 1,
+        await screen.findByRole("button", { name: "Добавить бытовки" })
+      ).toBeTruthy()
+      expect(screen.getByText(/Резерв бытовки:/).textContent).toContain(
+        "активен"
+      )
+      expect(screen.getByText(/Кровать × 4/).textContent).toContain(
+        "резерв активен"
+      )
+      expect(screen.queryByText("Выбор бытовок")).toBeNull()
     }
-    ordersApi.listAvailableOrderUnits
-      .mockResolvedValueOnce(freePage)
-      .mockResolvedValueOnce({
-        content: [],
-        page: 0,
-        size: 40,
-        totalElements: 0,
-        totalPages: 0,
-      })
-      .mockResolvedValue(freePage)
-    const user = userEvent.setup()
-    const { queryClient } = renderPage()
+  )
 
-    await user.click(await screen.findByRole("button", { name: "Добавить" }))
-    await waitFor(() =>
-      expect(ordersApi.listAvailableOrderUnits).toHaveBeenCalledTimes(2)
-    )
-    expect(screen.queryByRole("button", { name: "Добавить" })).toBeNull()
-
-    await act(async () => {
-      await queryClient.invalidateQueries({
-        queryKey: ["orders", "available-units"],
+  it.each(["DRAFT", "SAVED"] as const)(
+    "opens both cabin paths without desired windows for an editable %s order",
+    async (status) => {
+      const user = userEvent.setup()
+      renderPage({
+        ...baseOrder,
+        status,
+        desiredDeliveryWindows: [],
       })
+
+      await user.click(
+        await screen.findByRole("button", { name: "Добавить бытовки" })
+      )
+      expect(
+        await screen.findByText(
+          /Клиент укажет желаемые дату и срок аренды в представлении/
+        )
+      ).toBeTruthy()
+      expect(screen.getByRole("link", { name: "Открыть AI-чат" })).toBeTruthy()
+      expect(
+        screen.getByRole("link", { name: "Открыть бронирование" })
+      ).toBeTruthy()
+    }
+  )
+
+  it("uses server canEdit and hides the cabin command when editing is closed", async () => {
+    renderPage({
+      ...baseOrder,
+      status: "FULFILLED",
+      permissions: { ...baseOrder.permissions, canEdit: false },
     })
 
-    expect(await screen.findByRole("button", { name: "Добавить" })).toBeTruthy()
-  })
-})
-
-describe("OrderDetailPage draft actions", () => {
-  it("keeps the return control and order metadata in the page toolbar", async () => {
-    renderPage()
-
-    const back = await screen.findByRole("link", { name: "Назад" })
-    expect(back.getAttribute("href")).toBe("/orders")
-    expect(screen.getByText("Черновик")).toBeTruthy()
-    expect(screen.getByText(/Изменён/)).toBeTruthy()
-    expect(screen.getByRole("button", { name: "Сохранить заказ" })).toBeTruthy()
-    expect(screen.getByRole("button", { name: "Изменить адрес" })).toBeTruthy()
+    expect(await screen.findByText("Исполнен")).toBeTruthy()
     expect(
-      screen.getByRole("heading", { name: "Готовность к сохранению" })
-    ).toBeTruthy()
+      screen.queryByRole("button", { name: "Добавить бытовки" })
+    ).toBeNull()
     expect(
-      screen.queryByRole("heading", { name: "Бронирование ORD-000001" })
+      screen.queryByRole("button", { name: "Заменить бытовки" })
     ).toBeNull()
   })
 
-  it("offers adding an address when delivery details are incomplete", async () => {
-    ordersApi.getOrder.mockResolvedValue({
-      ...detail,
-      deliveryAddress: null,
-      latitude: null,
-      longitude: null,
-      contactPhone: null,
-      acceptableDeliveryDates: [],
+  it("keeps extension available for a shipped fulfilled cabin when ordinary editing is closed", async () => {
+    renderPage({
+      ...baseOrder,
+      status: "FULFILLED",
+      warehouseId: shippedUnit.unit.warehouseId,
+      unitCount: 1,
+      units: [shippedUnit],
+      permissions: {
+        ...baseOrder.permissions,
+        canEdit: false,
+        canExtendRentalTerms: true,
+      },
     })
-    const user = userEvent.setup()
-    renderPage()
 
     expect(
-      await screen.findByText(
-        "Укажите адрес, координаты, телефон и дату приёмки."
-      )
+      await screen.findByRole("button", { name: "Продлить аренду" })
     ).toBeTruthy()
-    await user.click(screen.getByRole("button", { name: "Добавить адрес" }))
-    expect(screen.getByRole("heading", { name: "Добавить адрес" })).toBeTruthy()
+    expect(
+      screen.queryByRole("button", { name: "Добавить бытовки" })
+    ).toBeNull()
   })
 
-  it("shows delivery metadata and the planned/actual logistics timeline", async () => {
-    ordersApi.getOrder.mockResolvedValue({
-      ...detail,
+  it("requires the server extension permission for a shipped cabin", async () => {
+    renderPage({
+      ...baseOrder,
+      status: "FULFILLED",
+      warehouseId: shippedUnit.unit.warehouseId,
+      unitCount: 1,
+      units: [shippedUnit],
+      permissions: {
+        ...baseOrder.permissions,
+        canEdit: false,
+        canExtendRentalTerms: false,
+      },
+    })
+
+    expect(await screen.findByText("Исполнен")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Продлить аренду" })).toBeNull()
+  })
+
+  it("uses server canReplaceUnits independently of canEdit and role inference", async () => {
+    renderPage({
+      ...baseOrder,
+      status: "SAVED",
+      warehouseId: selectedUnit.unit.warehouseId,
+      unitCount: 1,
+      units: [selectedUnit],
+      permissions: {
+        ...baseOrder.permissions,
+        canEdit: false,
+        canReplaceUnits: true,
+      },
       movements: [
         {
-          documentId: "99999999-9999-4999-8999-999999999991",
+          documentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
           documentType: "SHIPMENT",
-          state: "COMPLETED",
-          scheduledDate: "2026-08-15",
-          actualAt: "2026-08-15T08:30:00Z",
-          rentalShipmentId: "99999999-9999-4999-8999-999999999992",
-          createdAt: "2026-08-14T08:00:00Z",
-          updatedAt: "2026-08-15T08:30:00Z",
-          cabins: [],
-        },
-        {
-          documentId: "99999999-9999-4999-8999-999999999993",
-          documentType: "RETURN",
-          state: "PLANNED",
-          scheduledDate: "2026-09-15",
+          state: "WAITING",
+          scheduledDate: "2026-08-20",
           actualAt: null,
           rentalShipmentId: null,
-          createdAt: "2026-08-15T09:00:00Z",
-          updatedAt: "2026-08-15T09:00:00Z",
-          cabins: [],
+          createdAt: "2026-08-10T08:00:00Z",
+          updatedAt: "2026-08-10T09:00:00Z",
+          cabins: [{ rentalItemId: UNIT_ID, lineState: "WAITING" }],
         },
       ],
     })
 
-    renderPage()
-
-    expect(await screen.findByText("Москва, Складская, 1")).toBeTruthy()
-    expect(screen.getByText("Координаты: 55.75, 37.62")).toBeTruthy()
-    expect(screen.getByText("+79990000000")).toBeTruthy()
-    expect(screen.getByText("Позвонить за час")).toBeTruthy()
-    expect(screen.getAllByText("15.08.2026").length).toBeGreaterThan(0)
-    expect(screen.getByText("Отвоз клиенту")).toBeTruthy()
-    expect(screen.getByText("Возврат от клиента")).toBeTruthy()
-    expect(screen.getByText("Ещё не выполнено")).toBeTruthy()
-  })
-
-  it("shows only human-readable order data and history", async () => {
-    const actorId = "66666666-6666-4666-8666-666666666666"
-    const equipmentId = "77777777-7777-4777-8777-777777777777"
-    ordersApi.listOrderHistory.mockResolvedValue([
-      {
-        id: "88888888-8888-4888-8888-888888888888",
-        orderId: ORDER_ID,
-        eventType: "ORDER_CREATED",
-        actorSubjectId: actorId,
-        actorRole: "RENTAL_MANAGER",
-        subjectType: "ORDER",
-        subjectId: ORDER_ID,
-        previousValues: null,
-        newValues: {
-          number: "ORD-000001",
-          status: "DRAFT",
-          managerId: actorId,
-        },
-        occurredAt: "2026-07-19T08:00:00Z",
-      },
-      {
-        id: "99999999-9999-4999-8999-999999999999",
-        orderId: ORDER_ID,
-        eventType: "EQUIPMENT_INCREASED",
-        actorSubjectId: actorId,
-        actorRole: "RENTAL_MANAGER",
-        subjectType: "EQUIPMENT",
-        subjectId: equipmentId,
-        previousValues: {
-          unitNumber: "БЫТ-001",
-          equipmentName: "Стол",
-          quantity: 1,
-        },
-        newValues: {
-          unitNumber: "БЫТ-001",
-          equipmentName: "Стол",
-          quantity: 2,
-          equipmentId,
-        },
-        occurredAt: "2026-07-19T09:00:00Z",
-      },
-    ])
-
-    renderPage()
-
-    expect((await screen.findAllByText("Менеджер")).length).toBeGreaterThan(0)
-    expect(await screen.findByText("Бронирование создано")).toBeTruthy()
-    expect(screen.getByText("Автор")).toBeTruthy()
     expect(
-      screen.getAllByText(/Номер бронирования: ORD-000001/).length
-    ).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Статус: Черновик/).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Бытовка: БЫТ-001/).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Мебель: Стол/).length).toBeGreaterThan(0)
-    expect(screen.queryByText(actorId)).toBeNull()
-    expect(screen.queryByText(equipmentId)).toBeNull()
-    expect(screen.queryByText("Manager ID")).toBeNull()
-    expect(screen.queryByText("Actor:")).toBeNull()
-  })
-
-  it("keeps a saved booking editable while its shipment is still a draft", async () => {
-    const selectedCandidate = {
-      ...candidate,
-      reservationId: "66666666-6666-4666-8666-666666666666",
-      added: true,
-      rentalTerm: {
-        rentalMonths: 3,
-        shipmentDate: null,
-        returnDate: null,
-      },
-    }
-    ordersApi.getOrder.mockResolvedValue({
-      ...detail,
-      unitCount: 1,
-      units: [selectedCandidate],
-    })
-    ordersApi.saveOrder.mockResolvedValue({
-      ...detail,
-      version: 5,
-      status: "SAVED",
-      unitCount: 1,
-      units: [selectedCandidate],
-      permissions: { ...detail.permissions, canEdit: true },
-    })
-    const user = userEvent.setup()
-    renderPage()
-
-    await user.click(
-      await screen.findByRole("button", { name: "Сохранить заказ" })
-    )
-
-    await waitFor(() =>
-      expect(ordersApi.saveOrder).toHaveBeenCalledWith({
-        accessToken: "orders-token",
-        orderId: ORDER_ID,
-        expectedVersion: 4,
-        idempotencyKey: "99999999-9999-4999-8999-999999999999",
-      })
-    )
-    expect(toast.success).toHaveBeenCalledWith(
-      "Заказ сохранён. Откройте «Задания», чтобы создать отгрузку; сохранение само не создаёт рейс."
-    )
-    expect(screen.getByRole("button", { name: "Изменить адрес" })).toBeTruthy()
+      await screen.findByRole("button", { name: "Заменить бытовки" })
+    ).toBeTruthy()
     expect(
-      screen
-        .getByRole("link", { name: "Перейти к заданиям" })
-        .getAttribute("href")
-    ).toBe("/logistics/order-tasks")
-    expect(screen.queryByRole("button", { name: "Создать заказ" })).toBeNull()
-    expect(screen.queryByRole("button", { name: "Сохранить заказ" })).toBeNull()
-    expect(
-      screen.queryByRole("button", { name: "Удалить черновик" })
+      screen.queryByRole("button", { name: "Добавить бытовки" })
     ).toBeNull()
   })
 
-  it("saves the complete rental-term vector before the draft can be saved", async () => {
-    const selectedCandidate = {
-      ...candidate,
-      reservationId: "66666666-6666-4666-8666-666666666666",
-      added: true,
-      rentalTerm: null,
+  it("renders the completed replacement projection with transferred furniture", async () => {
+    const replacementUnit: OrderDetail["units"][number] = {
+      ...selectedUnit,
+      reservationId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      unit: {
+        ...availableReplacement.unit,
+        status: "BOOKED",
+      },
     }
-    ordersApi.getOrder.mockResolvedValue({
-      ...detail,
+    const replacementOrder: OrderDetail = {
+      ...baseOrder,
+      version: 4,
+      status: "SAVED",
+      warehouseId: selectedUnit.unit.warehouseId,
       unitCount: 1,
-      units: [selectedCandidate],
+      units: [replacementUnit],
+      permissions: {
+        ...baseOrder.permissions,
+        canEdit: false,
+        canReplaceUnits: true,
+      },
+    }
+    ordersApi.replaceOrderUnit.mockResolvedValue(replacementOrder)
+    const user = userEvent.setup()
+    renderPage({
+      ...replacementOrder,
+      version: 3,
+      units: [selectedUnit],
     })
-    ordersApi.setOrderRentalTerms.mockResolvedValue({
-      ...detail,
-      version: 5,
-      unitCount: 1,
-      units: [
+
+    await user.click(
+      await screen.findByRole("button", { name: "Заменить бытовки" })
+    )
+    await user.click(
+      screen.getByRole("checkbox", { name: "Заменить бытовку БЫТ-001" })
+    )
+    await user.click(
+      screen.getByRole("button", {
+        name: "Выбрать замену самостоятельно",
+      })
+    )
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Выбрать заменяющую бытовку БЫТ-099",
+      })
+    )
+    await user.type(screen.getByLabelText("Причина замены"), "Протечка")
+    await user.click(screen.getByRole("button", { name: "Подтвердить замену" }))
+
+    expect(await screen.findByText("БЫТ-099")).toBeTruthy()
+    expect(screen.queryByText("БЫТ-001")).toBeNull()
+    expect(screen.getByText(/Кровать × 4/).textContent).toContain(
+      "резерв активен"
+    )
+  })
+
+  it("shows client and order contacts plus wishes separately from the actual date", async () => {
+    renderPage({
+      ...baseOrder,
+      movements: [
         {
-          ...selectedCandidate,
-          rentalTerm: {
-            rentalMonths: 18,
-            shipmentDate: null,
-            returnDate: null,
-          },
+          documentId: "88888888-8888-4888-8888-888888888888",
+          documentType: "SHIPMENT",
+          state: "DRAFT",
+          scheduledDate: "2026-08-20",
+          actualAt: null,
+          rentalShipmentId: null,
+          createdAt: "2026-08-10T08:00:00Z",
+          updatedAt: "2026-08-10T09:00:00Z",
+          cabins: [],
         },
       ],
     })
-    const user = userEvent.setup()
 
-    renderPage()
-
-    const term = await screen.findByRole("combobox", {
-      name: "Срок аренды в месяцах для БЫТ-001",
-    })
-    expect((term as HTMLSelectElement).disabled).toBe(false)
     expect(
-      screen.getByText("Укажите срок аренды для каждой бытовки.")
+      await screen.findByText("Основное контактное лицо клиента")
     ).toBeTruthy()
-    const rentalTerms = screen.getByRole("region", {
-      name: "Сроки аренды",
-    })
-    const scrollIntoView = vi.fn()
-    Object.defineProperty(rentalTerms, "scrollIntoView", {
-      configurable: true,
-      value: scrollIntoView,
-    })
-    await user.click(
-      screen.getByRole("button", { name: "Указать сроки аренды" })
-    )
-    expect(scrollIntoView).toHaveBeenCalledWith({
-      behavior: "smooth",
-      block: "start",
-    })
-    expect(document.activeElement).toBe(rentalTerms)
-    expect(within(term).getByRole("option", { name: "1 месяц" })).toBeTruthy()
+    expect(screen.getByText("Иван Иванов")).toBeTruthy()
+    expect(screen.getByText("+79990000000")).toBeTruthy()
+    expect(screen.getByText("Дополнительные контакты клиента")).toBeTruthy()
+    expect(screen.getByText(/Бухгалтер: \+79990000001/)).toBeTruthy()
+    expect(screen.getByText("Дополнительные контакты заказа")).toBeTruthy()
+    expect(screen.getByText(/Прораб: \+79990000003/)).toBeTruthy()
+    expect(screen.getByText("Выбрано клиентом в представлении")).toBeTruthy()
+    expect(screen.getByText(/15\.08\.2026 — 17\.08\.2026/)).toBeTruthy()
     expect(
-      within(term).getByRole("option", { name: "Другое положительное целое" })
-    ).toBeTruthy()
-    expect(
-      screen.getByRole("button", { name: "Сохранить заказ" })
-    ).toHaveProperty("disabled", true)
-
-    await user.selectOptions(term, "custom")
-    const customTerm = screen.getByRole("spinbutton", {
-      name: "Срок аренды в месяцах для БЫТ-001: произвольное значение",
-    })
-    await user.type(customTerm, "18")
-    await user.click(
-      screen.getByRole("button", { name: "Сохранить сроки аренды" })
-    )
-
-    await waitFor(() =>
-      expect(ordersApi.setOrderRentalTerms).toHaveBeenCalledWith({
-        accessToken: "orders-token",
-        orderId: ORDER_ID,
-        expectedVersion: 4,
-        terms: [{ unitId: UNIT_ID, rentalMonths: 18 }],
-        idempotencyKey: "99999999-9999-4999-8999-999999999999",
-      })
-    )
-    expect(toast.success).toHaveBeenCalledWith("Сроки аренды сохранены.")
-    expect(await screen.findByText("18 месяцев")).toBeTruthy()
-    expect(screen.getAllByText("Не назначена")).toHaveLength(2)
-    expect(
-      screen.getByRole("button", { name: "Сохранить заказ" })
-    ).toHaveProperty("disabled", false)
-  })
-
-  it("extends one or several shipped cabins and shows their return dates", async () => {
-    const secondUnitId = "77777777-7777-4777-8777-777777777777"
-    const firstShippedCandidate = {
-      ...candidate,
-      reservationId: "66666666-6666-4666-8666-666666666666",
-      added: true,
-      unit: {
-        ...candidate.unit,
-        status: "RENTED" as const,
-      },
-      rentalTerm: {
-        rentalMonths: 3,
-        shipmentDate: "2026-07-20",
-        returnDate: "2026-10-20",
-      },
-    }
-    const secondShippedCandidate = {
-      ...candidate,
-      reservationId: "88888888-8888-4888-8888-888888888888",
-      added: true,
-      unit: {
-        ...candidate.unit,
-        id: secondUnitId,
-        number: "БЫТ-002",
-        status: "RENTED" as const,
-      },
-      rentalTerm: {
-        rentalMonths: 6,
-        shipmentDate: "2026-07-22",
-        returnDate: "2027-01-22",
-      },
-    }
-    const shippedDetail = {
-      ...detail,
-      version: 8,
-      status: "FULFILLED" as const,
-      unitCount: 2,
-      units: [firstShippedCandidate, secondShippedCandidate],
-      permissions: { ...detail.permissions, canEdit: false },
-    }
-    ordersApi.getOrder.mockResolvedValue(shippedDetail)
-    ordersApi.extendOrderRentalTerms.mockResolvedValue({
-      ...shippedDetail,
-      version: 9,
-      units: [
-        {
-          ...firstShippedCandidate,
-          rentalTerm: {
-            ...firstShippedCandidate.rentalTerm,
-            rentalMonths: 4,
-            returnDate: "2026-11-20",
-          },
-        },
-        {
-          ...secondShippedCandidate,
-          rentalTerm: {
-            ...secondShippedCandidate.rentalTerm,
-            rentalMonths: 12,
-            returnDate: "2027-07-22",
-          },
-        },
-      ],
-    })
-    const user = userEvent.setup()
-
-    renderPage()
-
-    expect(await screen.findByText("20.10.2026")).toBeTruthy()
-    expect(screen.getByText("22.01.2027")).toBeTruthy()
-    await user.click(
-      screen.getByRole("checkbox", {
-        name: "Выбрать бытовку БЫТ-001 для продления",
-      })
-    )
-    await user.click(
-      screen.getByRole("checkbox", {
-        name: "Выбрать бытовку БЫТ-002 для продления",
-      })
-    )
-    await user.selectOptions(
-      screen.getByRole("combobox", {
-        name: "Продление в месяцах для БЫТ-001",
-      }),
-      "1"
-    )
-    await user.selectOptions(
-      screen.getByRole("combobox", {
-        name: "Продление в месяцах для БЫТ-002",
-      }),
-      "6"
-    )
-    await user.click(
-      screen.getByRole("button", { name: "Продлить выбранные бытовки" })
-    )
-
-    await waitFor(() =>
-      expect(ordersApi.extendOrderRentalTerms).toHaveBeenCalledWith({
-        accessToken: "orders-token",
-        orderId: ORDER_ID,
-        expectedVersion: 8,
-        terms: [
-          { unitId: UNIT_ID, additionalMonths: 1 },
-          { unitId: secondUnitId, additionalMonths: 6 },
-        ],
-        idempotencyKey: "99999999-9999-4999-8999-999999999999",
-      })
-    )
-    expect(toast.success).toHaveBeenCalledWith("Срок аренды продлён.")
-    expect(await screen.findByText("20.11.2026")).toBeTruthy()
-    expect(screen.getByText("22.07.2027")).toBeTruthy()
-  })
-
-  it("updates the detail projection after changing delivery data", async () => {
-    ordersApi.updateOrder.mockResolvedValue({
-      ...detail,
-      version: 5,
-      comment: "Доставить после обеда",
-    })
-    const user = userEvent.setup()
-    renderPage()
-
-    await user.click(
-      await screen.findByRole("button", { name: "Изменить адрес" })
-    )
-    const comment = screen.getByLabelText("Комментарий к заказу")
-    await user.clear(comment)
-    await user.type(comment, "Доставить после обеда")
-    await user.click(screen.getByRole("button", { name: "Сохранить адрес" }))
-
-    await waitFor(() =>
-      expect(ordersApi.updateOrder).toHaveBeenCalledWith({
-        accessToken: "orders-token",
-        orderId: ORDER_ID,
-        expectedVersion: 4,
-        clientId: CLIENT_ID,
-        delivery: {
-          deliveryAddress: "Москва, Складская, 1",
-          latitude: 55.75,
-          longitude: 37.62,
-          contactPhone: "+79990000000",
-          comment: "Доставить после обеда",
-          acceptableDeliveryDates: ["2026-08-15"],
-        },
-        idempotencyKey: expect.any(String),
-      })
-    )
-    expect(await screen.findByText("Доставить после обеда")).toBeTruthy()
-    expect(toast.success).toHaveBeenCalledWith("Данные доставки сохранены.")
-  })
-
-  it("labels draft deletion as a logical cancellation and releases reservations", async () => {
-    const user = userEvent.setup()
-    renderPage()
-
-    await user.click(
-      await screen.findByRole("button", { name: "Удалить черновик" })
-    )
-
-    const confirmation = await screen.findByRole("alertdialog")
-    expect(
-      within(confirmation).getByText(
-        "Это логическое удаление: бронирование будет отменено, а все активные резервирования бытовок будут освобождены. Действие фиксируется в истории."
+      screen.getByText(
+        "Желаемые даты доступны только для просмотра и не являются назначенным расписанием ходки."
       )
     ).toBeTruthy()
+    expect(screen.queryByLabelText("Время с")).toBeNull()
+    expect(screen.queryByText(/10:00/)).toBeNull()
+    expect(screen.queryByText(/15:30/)).toBeNull()
+    expect(screen.getByText(/20\.08\.2026/)).toBeTruthy()
+  })
+
+  it("keeps only shipped rental terms as read-only projections and opens extension", async () => {
+    renderPage({
+      ...baseOrder,
+      status: "SAVED",
+      warehouseId: shippedUnit.unit.warehouseId,
+      unitCount: 1,
+      units: [shippedUnit],
+      permissions: {
+        ...baseOrder.permissions,
+        canExtendRentalTerms: true,
+      },
+    })
+
     expect(
-      within(confirmation).getByRole("button", { name: "Не удалять" })
+      await screen.findByRole("button", { name: "Продлить аренду" })
     ).toBeTruthy()
-
-    await user.click(
-      within(confirmation).getByRole("button", { name: "Удалить черновик" })
-    )
-
-    await waitFor(() =>
-      expect(ordersApi.deleteOrder).toHaveBeenCalledWith({
-        accessToken: "orders-token",
-        orderId: ORDER_ID,
-        expectedVersion: 4,
-        idempotencyKey: "99999999-9999-4999-8999-999999999999",
-      })
-    )
-    expect(toast.success).toHaveBeenCalledWith(
-      "Черновик удалён: бронирование логически отменено, резервирования освобождены."
-    )
+    expect(screen.getByText("Длительность")).toBeTruthy()
+    expect(screen.getByText("Дата отгрузки")).toBeTruthy()
+    expect(screen.getByText("Расчётная дата возврата")).toBeTruthy()
+    expect(screen.getByText("20.11.2026")).toBeTruthy()
+    expect(screen.queryByText("Сохранить сроки аренды")).toBeNull()
+    expect(
+      screen.queryByLabelText("Срок аренды в месяцах для БЫТ-001")
+    ).toBeNull()
   })
 })

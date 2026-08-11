@@ -6,6 +6,7 @@ import dev.buhanzaz.rwms.logistics.driver.service.DriverQueueScheduler;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverTaskProcessor;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverTaskService;
 import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
+import dev.buhanzaz.rwms.logistics.service.LogisticsNotFoundException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
 import jakarta.validation.Valid;
 import java.util.List;
@@ -14,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
@@ -27,7 +29,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * HTTP boundary for authenticated driver-task transitions, including their version and idempotency fencing.
+ * HTTP boundary for authenticated driver-task transitions, including their version and idempotency
+ * fencing.
  */
 @RestController
 @Validated
@@ -49,18 +52,14 @@ public class DriverTaskController {
     UUID subjectId = access.subjectId(jwt);
     var admission =
         warehouseLifecycle.prepareDriverTask(
-            subjectId,
-            idempotencyKey,
-            DriverTaskService.admissionRequirements(request));
+            subjectId, idempotencyKey, DriverTaskService.admissionRequirements(request));
     DriverTaskService.CreateResult result =
         service.create(subjectId, idempotencyKey, request, admission);
     processor.processUntilIdle(result.response().id());
     if (result.activateNow()) scheduler.promoteRequested(result.response().id());
     DriverTaskResponse response = service.get(result.response().id());
     return response(
-        response,
-        result.replayed() ? HttpStatus.OK : HttpStatus.CREATED,
-        result.replayed());
+        response, result.replayed() ? HttpStatus.OK : HttpStatus.CREATED, result.replayed());
   }
 
   @GetMapping
@@ -71,11 +70,17 @@ public class DriverTaskController {
   }
 
   @GetMapping("/{taskId}")
-  public DriverTaskResponse get(
-      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID taskId) {
-    DriverTaskResponse response = service.get(taskId);
-    access.requireRead(jwt, response.warehouseId());
-    return response;
+  public DriverTaskResponse get(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID taskId) {
+    var task = service.required(taskId);
+    try {
+      access.requireRead(jwt, task.getWarehouseId());
+    } catch (AccessDeniedException exception) {
+      if (!access.isExactAssignedDriver(
+          jwt, task.getDriverAudienceMode().name(), task.getPlannedDriverWorkerId())) {
+        throw new LogisticsNotFoundException();
+      }
+    }
+    return service.get(taskId);
   }
 
   @PostMapping("/{taskId}/promote")

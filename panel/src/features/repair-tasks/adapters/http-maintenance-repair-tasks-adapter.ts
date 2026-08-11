@@ -971,6 +971,7 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
       taskId: persistedDraft.id,
       expectedVersion: persistedDraft.version,
       message: `Черновик ремонта ${persistedDraft.id} сохранён, но постановка в очередь не выполнена: ${queueError instanceof Error ? queueError.message : "неизвестная ошибка"}`,
+      code: queueError instanceof ApiError ? queueError.code : null,
       cause: queueError,
     })
   }

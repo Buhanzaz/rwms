@@ -8,8 +8,8 @@ import org.springframework.security.oauth2.client.OAuth2AuthorizedClientManager;
 import org.springframework.web.client.RestClient;
 
 /**
- * Direct client-credentials transport for only the approved Stage 8 private
- * boundaries. It intentionally has no access to the incoming user JWT.
+ * Direct client-credentials transport for only the approved Stage 8 private boundaries. It
+ * intentionally has no access to the incoming user JWT.
  *
  * <p>This public package seam is intentionally only a facade: each delegated remote-owner client
  * owns its wire mapping and validation, while the shared leaf owns OAuth and HTTP failure policy.
@@ -64,7 +64,8 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   }
 
   @Override
-  public WarehouseLifecycleReadinessWorkPage warehouseLifecycleReadinessWork(UUID after, int limit) {
+  public WarehouseLifecycleReadinessWorkPage warehouseLifecycleReadinessWork(
+      UUID after, int limit) {
     return warehouse.warehouseLifecycleReadinessWork(after, limit);
   }
 
@@ -97,11 +98,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
 
   @Override
   public OperationLease acquireReturnLease(
-      UUID idempotencyKey,
-      UUID assetId,
-      long expectedAssetVersion,
-      UUID documentId,
-      UUID lineId) {
+      UUID idempotencyKey, UUID assetId, long expectedAssetVersion, UUID documentId, UUID lineId) {
     return assetOperations.acquireReturnLease(
         idempotencyKey, assetId, expectedAssetVersion, documentId, lineId);
   }
@@ -159,13 +156,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID documentId,
       UUID lineId) {
     return assetOperations.applyReturnIntake(
-        idempotencyKey,
-        assetId,
-        expectedAssetVersion,
-        leaseId,
-        fencingToken,
-        documentId,
-        lineId);
+        idempotencyKey, assetId, expectedAssetVersion, leaseId, fencingToken, documentId, lineId);
   }
 
   @Override
@@ -261,12 +252,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID sourceWarehouseId,
       UUID targetWarehouseId) {
     return maintenance.prepareTransferDeparture(
-        idempotencyKey,
-        transferId,
-        lineId,
-        rentalItemId,
-        sourceWarehouseId,
-        targetWarehouseId);
+        idempotencyKey, transferId, lineId, rentalItemId, sourceWarehouseId, targetWarehouseId);
   }
 
   @Override
@@ -311,13 +297,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID documentId,
       UUID lineId) {
     return assetOperations.releaseOperationLease(
-        idempotencyKey,
-        leaseId,
-        expectedLeaseVersion,
-        fencingToken,
-        ownerType,
-        documentId,
-        lineId);
+        idempotencyKey, leaseId, expectedLeaseVersion, fencingToken, ownerType, documentId, lineId);
   }
 
   @Override
@@ -426,6 +406,74 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
         quantity,
         reservedUntil,
         purpose);
+  }
+
+  @Override
+  public EquipmentMovementReservation acquireEquipmentMovementReservation(
+      UUID idempotencyKey,
+      UUID movementId,
+      UUID lineId,
+      UUID equipmentId,
+      UUID sourceWarehouseId,
+      UUID sourceRentalItemId,
+      String sourceLocationKind,
+      long expectedSourceBalanceVersion,
+      long quantity,
+      OffsetDateTime reservedUntil,
+      EquipmentMovementPurpose purpose,
+      UUID orderId,
+      UUID targetRentalItemId,
+      List<OrderUnitEquipmentRequirements> units) {
+    return assetOperations.acquireEquipmentMovementReservation(
+        idempotencyKey,
+        movementId,
+        lineId,
+        equipmentId,
+        sourceWarehouseId,
+        sourceRentalItemId,
+        sourceLocationKind,
+        expectedSourceBalanceVersion,
+        quantity,
+        reservedUntil,
+        purpose,
+        orderId,
+        targetRentalItemId,
+        units);
+  }
+
+  @Override
+  public EquipmentMovementReservation acquireEquipmentMovementReservation(
+      UUID idempotencyKey,
+      UUID movementId,
+      UUID lineId,
+      UUID equipmentId,
+      UUID sourceWarehouseId,
+      UUID sourceRentalItemId,
+      String sourceLocationKind,
+      long expectedSourceBalanceVersion,
+      long quantity,
+      OffsetDateTime reservedUntil,
+      EquipmentMovementPurpose purpose,
+      UUID orderId,
+      UUID targetRentalItemId,
+      List<OrderUnitEquipmentRequirements> units,
+      UUID replacementSourceReservationId) {
+    return assetOperations.acquireEquipmentMovementReservation(
+        idempotencyKey,
+        movementId,
+        lineId,
+        equipmentId,
+        sourceWarehouseId,
+        sourceRentalItemId,
+        sourceLocationKind,
+        expectedSourceBalanceVersion,
+        quantity,
+        reservedUntil,
+        purpose,
+        orderId,
+        targetRentalItemId,
+        units,
+        replacementSourceReservationId);
   }
 
   @Override
@@ -582,10 +630,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
 
   @Override
   public CabinCoverChange setCabinCoverFromTaskEvidence(
-      UUID idempotencyKey,
-      UUID cabinId,
-      UUID taskBoardEntryId,
-      UUID evidenceMediaId) {
+      UUID idempotencyKey, UUID cabinId, UUID taskBoardEntryId, UUID evidenceMediaId) {
     return media.setCabinCoverFromTaskEvidence(
         idempotencyKey, cabinId, taskBoardEntryId, evidenceMediaId);
   }
@@ -626,11 +671,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
 
   @Override
   public OrderUnitReservation releaseOrderUnit(
-      UUID idempotencyKey,
-      UUID orderId,
-      UUID unitId,
-      UUID actorSubjectId,
-      String actorRole) {
+      UUID idempotencyKey, UUID orderId, UUID unitId, UUID actorSubjectId, String actorRole) {
     return assetOrderPresentation.releaseOrderUnit(
         idempotencyKey, orderId, unitId, actorSubjectId, actorRole);
   }
@@ -643,15 +684,20 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   }
 
   @Override
+  public List<EquipmentWarehouseAvailability> readLogisticsEquipmentAvailability(UUID warehouseId) {
+    return assetOrderPresentation.readLogisticsEquipmentAvailability(warehouseId);
+  }
+
+  @Override
   public List<OrderEquipmentReservation> replaceOrderEquipmentReservations(
       UUID idempotencyKey,
       UUID orderId,
       UUID warehouseId,
       UUID actorSubjectId,
       String actorRole,
-      List<OrderEquipmentRequirement> requirements) {
+      List<OrderUnitEquipmentRequirements> units) {
     return assetOrderPresentation.replaceOrderEquipmentReservations(
-        idempotencyKey, orderId, warehouseId, actorSubjectId, actorRole, requirements);
+        idempotencyKey, orderId, warehouseId, actorSubjectId, actorRole, units);
   }
 
   @Override
@@ -659,17 +705,37 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID orderId,
       UUID warehouseId,
       UUID unitId,
+      UUID replacementForRentalItemId,
       List<OrderEquipmentRequirement> unitRequirements,
-      List<OrderEquipmentRequirement> orderRequirements) {
+      List<OrderUnitEquipmentRequirements> units) {
     return assetOrderPresentation.planOrderFurnitureMovements(
-        orderId, warehouseId, unitId, unitRequirements, orderRequirements);
+        orderId, warehouseId, unitId, replacementForRentalItemId, unitRequirements, units);
+  }
+
+  @Override
+  public OrderUnitsReplacementReceipt replaceOrderUnits(
+      UUID idempotencyKey,
+      UUID orderId,
+      UUID warehouseId,
+      UUID presentationId,
+      UUID actorSubjectId,
+      String actorRole,
+      List<OrderUnitEquipmentRequirements> units,
+      List<OrderUnitReplacement> replacements) {
+    return assetOrderPresentation.replaceOrderUnits(
+        idempotencyKey,
+        orderId,
+        warehouseId,
+        presentationId,
+        actorSubjectId,
+        actorRole,
+        units,
+        replacements);
   }
 
   @Override
   public CabinFurnitureMovementPlan planCabinFurnitureMovements(
-      UUID warehouseId,
-      UUID rentalItemId,
-      List<CabinFurnitureRequirement> requirements) {
+      UUID warehouseId, UUID rentalItemId, List<CabinFurnitureRequirement> requirements) {
     return assetOrderPresentation.planCabinFurnitureMovements(
         warehouseId, rentalItemId, requirements);
   }
@@ -680,16 +746,14 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   }
 
   @Override
-  public CabinCatalogPage readCabinCatalog(
-      UUID warehouseId, String query, int page, int size) {
+  public CabinCatalogPage readCabinCatalog(UUID warehouseId, String query, int page, int size) {
     return assetOrderPresentation.readCabinCatalog(warehouseId, query, page, size);
   }
 
   @Override
   public CabinSearchResult searchAvailableCabins(
       UUID downstreamIdempotencyKey, String exactRequestBody) {
-    return assetOrderPresentation.searchAvailableCabins(
-        downstreamIdempotencyKey, exactRequestBody);
+    return assetOrderPresentation.searchAvailableCabins(downstreamIdempotencyKey, exactRequestBody);
   }
 
   @Override
@@ -762,10 +826,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
 
   @Override
   public PresentationHolds releasePresentationHolds(
-      UUID idempotencyKey,
-      UUID presentationId,
-      UUID actorSubjectId,
-      String actorRole) {
+      UUID idempotencyKey, UUID presentationId, UUID actorSubjectId, String actorRole) {
     return assetOrderPresentation.releasePresentationHolds(
         idempotencyKey, presentationId, actorSubjectId, actorRole);
   }
@@ -787,7 +848,8 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID clientId,
       String tenantSnapshot,
       UUID actorSubjectId,
-      String actorRole) {
+      String actorRole,
+      List<OrderUnitEquipmentRequirements> units) {
     return assetOrderPresentation.convertPresentationHolds(
         idempotencyKey,
         presentationId,
@@ -797,22 +859,18 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
         clientId,
         tenantSnapshot,
         actorSubjectId,
-        actorRole);
+        actorRole,
+        units);
   }
 
   @Override
-  public List<CabinMediaSnapshot> readCabinMediaSnapshots(
-      UUID warehouseId, List<UUID> cabinIds) {
+  public List<CabinMediaSnapshot> readCabinMediaSnapshots(UUID warehouseId, List<UUID> cabinIds) {
     return media.readCabinMediaSnapshots(warehouseId, cabinIds);
   }
 
   @Override
   public MediaContent readCabinPresentationMedia(
-      UUID warehouseId,
-      UUID cabinId,
-      UUID mediaId,
-      long generation,
-      String variant) {
+      UUID warehouseId, UUID cabinId, UUID mediaId, long generation, String variant) {
     return media.readCabinPresentationMedia(warehouseId, cabinId, mediaId, generation, variant);
   }
 

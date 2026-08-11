@@ -9,6 +9,7 @@ export type AssistantConversation = {
   version: number
   clientId: string
   rentalInquiryId: string
+  rentalOrderId: string | null
   clientType: string | null
   clientDisplayName: string | null
   archived: boolean
@@ -41,7 +42,8 @@ export type AssistantConversationDetail = {
 export type ClarificationKind =
   "CABIN_TYPE" | "FINISH" | "DIMENSIONS" | "CATEGORY" | "SEARCH_MERGE"
 
-export type ClarificationStatus = "PENDING" | "ANSWERED" | "SUPERSEDED"
+export type ClarificationStatus =
+  "QUEUED" | "PENDING" | "ANSWERED" | "SUPERSEDED"
 
 export type ClarificationOption = {
   id: string
@@ -52,6 +54,7 @@ export type ClarificationOption = {
 export type ClarificationQuestion = {
   id: string
   branchKey: string
+  sequenceNumber: number
   kind: ClarificationKind
   prompt: string
   status: ClarificationStatus
@@ -198,11 +201,13 @@ function conversationsEndpoint(path = "") {
   return `${getGatewayRuntimeConfig().assistantApiBaseUrl}/v1/conversations${path}`
 }
 
-export function listAssistantConversations(accessToken: string) {
-  return bearerRequest<AssistantConversation[]>(
-    accessToken,
-    conversationsEndpoint()
-  )
+export function listAssistantConversations(
+  accessToken: string,
+  rentalOrderId?: string
+) {
+  const endpoint = new URL(conversationsEndpoint())
+  if (rentalOrderId) endpoint.searchParams.set("rentalOrderId", rentalOrderId)
+  return bearerRequest<AssistantConversation[]>(accessToken, endpoint)
 }
 
 export async function getAssistantConversation(
@@ -232,6 +237,7 @@ export async function createAssistantConversation(params: {
   accessToken: string
   conversationId: string
   choice: OrderClientChoice
+  rentalOrderId?: string
 }) {
   const client =
     params.choice.kind === "existing"
@@ -260,6 +266,7 @@ export async function createAssistantConversation(params: {
     body: JSON.stringify({
       conversationId: params.conversationId,
       ...client,
+      rentalOrderId: params.rentalOrderId,
     }),
   })
 }
@@ -496,6 +503,7 @@ function parseAssistantConversation(
     version,
     clientId,
     rentalInquiryId,
+    rentalOrderId,
     clientType,
     clientDisplayName,
     archived,
@@ -508,6 +516,7 @@ function parseAssistantConversation(
     !isNonNegativeInteger(version) ||
     typeof clientId !== "string" ||
     typeof rentalInquiryId !== "string" ||
+    !isNullableString(rentalOrderId) ||
     !isNullableString(clientType) ||
     !isNullableString(clientDisplayName) ||
     typeof archived !== "boolean" ||
@@ -522,6 +531,7 @@ function parseAssistantConversation(
     version,
     clientId,
     rentalInquiryId,
+    rentalOrderId,
     clientType,
     clientDisplayName,
     archived,
@@ -569,6 +579,7 @@ function parseClarificationQuestion(
   const {
     id,
     branchKey,
+    sequenceNumber,
     kind,
     prompt,
     status,
@@ -580,6 +591,7 @@ function parseClarificationQuestion(
   if (
     typeof id !== "string" ||
     typeof branchKey !== "string" ||
+    !isPositiveInteger(sequenceNumber) ||
     !isClarificationKind(kind) ||
     typeof prompt !== "string" ||
     !isClarificationStatus(status) ||
@@ -598,6 +610,7 @@ function parseClarificationQuestion(
   return {
     id,
     branchKey,
+    sequenceNumber,
     kind,
     prompt,
     status,
@@ -929,7 +942,12 @@ function isClarificationKind(value: unknown): value is ClarificationKind {
 }
 
 function isClarificationStatus(value: unknown): value is ClarificationStatus {
-  return value === "PENDING" || value === "ANSWERED" || value === "SUPERSEDED"
+  return (
+    value === "QUEUED" ||
+    value === "PENDING" ||
+    value === "ANSWERED" ||
+    value === "SUPERSEDED"
+  )
 }
 
 export function isCabinSearchResultActive(

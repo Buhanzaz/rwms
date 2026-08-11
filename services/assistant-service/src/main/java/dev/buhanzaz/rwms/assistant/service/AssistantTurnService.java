@@ -65,10 +65,10 @@ public class AssistantTurnService {
       Every availability group must have an exact current cabinType and finish
       before any result or hold. A finish such as ЛДСП, ОСБ or ДВП is not a cabin
       type: for “покажи 2 ЛДСП”, preserve finish ЛДСП and quantity 2, then ask
-      which cabin type is needed. If ОСБ and ЛДСП each need a choice, create two
-      independent questions with different stable branchKey values. Never combine
-      those branches; either may be answered first while the other stays pending.
-      Use only options returned by current metadata.
+      which cabin type is needed. If several exact choices are needed, request
+      them in deterministic order. Only the first question is shown and answered;
+      the next one is shown only after that answer. Never create or continue two
+      independent clarification branches. Use only current metadata options.
 
       Dimensions must be related to the selected exact type. If that type has one
       current size, omission may resolve to it. If it has several, ask with exact
@@ -133,9 +133,9 @@ public class AssistantTurnService {
   }
 
   /**
-   * Schedules a provider turn on the bounded assistant executor and returns immediately. The
-   * worker owns message persistence and SSE completion, so callers must not treat this call as a
-   * completed assistant response.
+   * Persists and validates the user input synchronously, then schedules provider work on the
+   * bounded executor. Stale or out-of-order clarification answers therefore fail as an HTTP
+   * conflict before an SSE stream is accepted.
    */
   public void stream(
       UUID ownerSubjectId,
@@ -158,31 +158,24 @@ public class AssistantTurnService {
       AssistantApiModels.TurnRequest request,
       String bearerToken,
       SseEmitter emitter) {
-    executor.execute(
-        () -> runTurn(ownerSubjectId, conversationId, request, bearerToken, emitter));
+    AssistantConversationService.TurnStart started =
+        request.clarificationAnswer() == null
+            ? conversations.beginTurn(ownerSubjectId, conversationId, request.message())
+            : conversations.beginTurn(ownerSubjectId, conversationId, request);
+    executor.execute(() -> runTurn(ownerSubjectId, conversationId, started, bearerToken, emitter));
   }
 
   private void runTurn(
       UUID ownerSubjectId,
       UUID conversationId,
-      AssistantApiModels.TurnRequest request,
+      AssistantConversationService.TurnStart started,
       String bearerToken,
       SseEmitter emitter) {
     try {
-      AssistantConversationService.TurnStart started =
-          request.clarificationAnswer() == null
-              ? conversations.beginTurn(ownerSubjectId, conversationId, request.message())
-              : conversations.beginTurn(ownerSubjectId, conversationId, request);
       emit(
           emitter,
           new AssistantApiModels.TurnEvent(
-              "turn.started",
-              conversationId,
-              started.userMessageId(),
-              null,
-              null,
-              null,
-              null));
+              "turn.started", conversationId, started.userMessageId(), null, null, null, null));
       if (started.answeredClarification() != null) {
         emit(
             emitter,
@@ -196,10 +189,30 @@ public class AssistantTurnService {
                 null,
                 started.answeredClarification()));
       }
+      if (started.nextClarification() != null) {
+        emit(
+            emitter,
+            new AssistantApiModels.TurnEvent(
+                "clarification.requested",
+                conversationId,
+                null,
+                started.nextClarificationToolCallId(),
+                null,
+                null,
+                null,
+                started.nextClarification()));
+        completeParkedClarificationTurn(conversationId, emitter);
+        return;
+      }
 
       boolean hasActiveSearchResult =
           conversations.hasActiveSearchResult(ownerSubjectId, conversationId, bearerToken);
-      List<ChatMessage> history = history(ownerSubjectId, conversationId, hasActiveSearchResult);
+      List<ChatMessage> history =
+          history(
+              ownerSubjectId,
+              conversationId,
+              hasActiveSearchResult,
+              started.rentalOrderId() != null);
       StringBuilder completeText = new StringBuilder();
       List<ToolDefinition> toolDefinitions = definitions.definitions(hasActiveSearchResult);
       OutcomeToolGuard outcome = new OutcomeToolGuard();
@@ -257,6 +270,10 @@ public class AssistantTurnService {
                     event -> emit(emitter, event));
             suppressAvailabilityExplanations |= hasAvailabilityFeedback(execution.result());
             history.add(ChatMessage.tool(call.id(), serialize(execution.result())));
+            if (isClarificationRequested(execution.result())) {
+              completeParkedClarificationTurn(conversationId, emitter);
+              return;
+            }
             if (isInquiryArchived(execution.result())) {
               completeArchivedInquiryTurn(ownerSubjectId, conversationId, emitter);
               return;
@@ -284,25 +301,13 @@ public class AssistantTurnService {
         emit(
             emitter,
             new AssistantApiModels.TurnEvent(
-                "assistant.delta",
-                conversationId,
-                null,
-                null,
-                assistantText,
-                null,
-                null));
+                "assistant.delta", conversationId, null, null, assistantText, null, null));
         var assistant =
             conversations.completeAssistantTurn(ownerSubjectId, conversationId, assistantText);
         emit(
             emitter,
             new AssistantApiModels.TurnEvent(
-                "turn.completed",
-                conversationId,
-                assistant.getId(),
-                null,
-                null,
-                null,
-                null));
+                "turn.completed", conversationId, assistant.getId(), null, null, null, null));
         emitter.complete();
         return;
       }
@@ -317,9 +322,18 @@ public class AssistantTurnService {
   }
 
   private List<ChatMessage> history(
-      UUID ownerSubjectId, UUID conversationId, boolean hasActiveSearchResult) {
+      UUID ownerSubjectId,
+      UUID conversationId,
+      boolean hasActiveSearchResult,
+      boolean orderLinked) {
     List<ChatMessage> result = new ArrayList<>();
-    result.add(ChatMessage.system(SYSTEM_PROMPT + "\n\n" + selectionContext(hasActiveSearchResult)));
+    result.add(
+        ChatMessage.system(
+            SYSTEM_PROMPT
+                + "\n\n"
+                + selectionContext(hasActiveSearchResult)
+                + "\n\n"
+                + orderContext(orderLinked)));
     for (AssistantConversationService.PromptMessage message :
         conversations.promptMessages(ownerSubjectId, conversationId)) {
       switch (message.role()) {
@@ -336,7 +350,8 @@ public class AssistantTurnService {
         }
         case "assistant" -> {
           if (!message.toolCalls().isEmpty()) {
-            throw new AssistantProviderException("Persisted tool calls are not attached to a user turn");
+            throw new AssistantProviderException(
+                "Persisted tool calls are not attached to a user turn");
           }
           result.add(ChatMessage.assistant(message.content()));
         }
@@ -356,20 +371,38 @@ public class AssistantTurnService {
             + "trigger a merge question.";
   }
 
+  private static String orderContext(boolean orderLinked) {
+    return orderLinked
+        ? "DYNAMIC ORDER CONTEXT: This conversation amends one existing rental order. "
+            + "Its client and any selected warehouse are immutable logistics-owned facts. "
+            + "Use only the inquiry-scoped tools and never propose another warehouse."
+        : "DYNAMIC ORDER CONTEXT: This conversation is not linked to an existing rental order.";
+  }
+
+  private static boolean isClarificationRequested(tools.jackson.databind.JsonNode result) {
+    return AssistantToolDefinitions.REQUEST_CABIN_CLARIFICATIONS.equals(
+            result.path("tool").asText())
+        && result.path("data").path("questions").isArray()
+        && !result.path("data").path("questions").isEmpty();
+  }
+
+  private static void completeParkedClarificationTurn(UUID conversationId, SseEmitter emitter) {
+    emit(
+        emitter,
+        new AssistantApiModels.TurnEvent(
+            "turn.completed", conversationId, null, null, null, null, null));
+    emitter.complete();
+  }
+
   private void completeArchivedInquiryTurn(
       UUID ownerSubjectId, UUID conversationId, SseEmitter emitter) {
     emit(
         emitter,
         new AssistantApiModels.TurnEvent(
-            "assistant.delta",
-            conversationId,
-            null,
-            null,
-            ARCHIVED_INQUIRY_MESSAGE,
-            null,
-            null));
+            "assistant.delta", conversationId, null, null, ARCHIVED_INQUIRY_MESSAGE, null, null));
     var assistant =
-        conversations.completeAssistantTurn(ownerSubjectId, conversationId, ARCHIVED_INQUIRY_MESSAGE);
+        conversations.completeAssistantTurn(
+            ownerSubjectId, conversationId, ARCHIVED_INQUIRY_MESSAGE);
     // Persist the final user-facing message before hiding the conversation from
     // active lists; future turns then fail beginTurn's archived=false predicate.
     conversations.archive(ownerSubjectId, conversationId);
@@ -393,8 +426,7 @@ public class AssistantTurnService {
     }
     for (tools.jackson.databind.JsonNode notice : result.path("notices")) {
       String noticeCode = notice.path("code").asText();
-      if ("CABINS_NOT_FOUND".equals(noticeCode)
-          || "CABINS_PARTIALLY_FOUND".equals(noticeCode)) {
+      if ("CABINS_NOT_FOUND".equals(noticeCode) || "CABINS_PARTIALLY_FOUND".equals(noticeCode)) {
         return true;
       }
     }
@@ -418,8 +450,7 @@ public class AssistantTurnService {
     return mapper.writeValueAsString(result);
   }
 
-  private static void addOutcomeReminder(
-      List<ChatMessage> history, OutcomeToolGuard outcome) {
+  private static void addOutcomeReminder(List<ChatMessage> history, OutcomeToolGuard outcome) {
     if (outcome.required()) history.add(ChatMessage.system(OUTCOME_TOOL_REMINDER));
   }
 

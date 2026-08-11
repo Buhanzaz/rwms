@@ -15,9 +15,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateReturnRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateShipmentRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateTransferRequest;
-import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateReturnRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferLineRequest;
@@ -49,13 +49,13 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -77,22 +77,19 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 @Testcontainers
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class LogisticsWarehouseLifecycleIntegrationTest {
-  private static final UUID WAREHOUSE =
-      UUID.fromString("00000000-0000-0000-0000-00000000a301");
+  private static final UUID WAREHOUSE = UUID.fromString("00000000-0000-0000-0000-00000000a301");
   private static final UUID DESTINATION_WAREHOUSE =
       UUID.fromString("00000000-0000-0000-0000-00000000a304");
-  private static final UUID SUBJECT =
-      UUID.fromString("00000000-0000-0000-0000-00000000a302");
-  private static final UUID ASSET =
-      UUID.fromString("00000000-0000-0000-0000-00000000a303");
+  private static final UUID SUBJECT = UUID.fromString("00000000-0000-0000-0000-00000000a302");
+  private static final UUID ASSET = UUID.fromString("00000000-0000-0000-0000-00000000a303");
   private static final UUID DRIVER_QUEUE_DEFINITION =
       UUID.fromString("00000000-0000-0000-0000-00000000a305");
   private static final UUID DRIVER_QUEUE_CATEGORY =
       UUID.fromString("00000000-0000-0000-0000-00000000a306");
   private static final OffsetDateTime TIME_ZONE_EFFECTIVE_FROM =
       OffsetDateTime.parse("2020-01-01T00:00:00Z");
-  @Container
-  @ServiceConnection
+
+  @Container @ServiceConnection
   static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
   @Autowired MockMvc mvc;
@@ -167,11 +164,7 @@ class LogisticsWarehouseLifecycleIntegrationTest {
       when(dependencies.warehouseAdmission(WAREHOUSE, WarehouseOperationDirection.INCOMING))
           .thenReturn(
               new WarehouseOperationAdmission(
-                  WAREHOUSE,
-                  11,
-                  state,
-                  WarehouseOperationDirection.INCOMING,
-                  false));
+                  WAREHOUSE, 11, state, WarehouseOperationDirection.INCOMING, false));
 
       performCreate(UUID.randomUUID(), request(7))
           .andExpect(status().isConflict())
@@ -198,8 +191,7 @@ class LogisticsWarehouseLifecycleIntegrationTest {
     when(dependencies.warehouseTimeZoneAt(eq(WAREHOUSE), any(OffsetDateTime.class)))
         .thenThrow(
             new LogisticsDependencyException(
-                LogisticsDependencyException.FailureKind.TRANSIENT,
-                "warehouse timezone timed out"))
+                LogisticsDependencyException.FailureKind.TRANSIENT, "warehouse timezone timed out"))
         .thenReturn(new WarehouseTimeZone(WAREHOUSE, "Europe/Moscow", TIME_ZONE_EFFECTIVE_FROM));
 
     assertThatThrownBy(() -> prepare(idempotencyKey))
@@ -231,11 +223,9 @@ class LogisticsWarehouseLifecycleIntegrationTest {
     assertThat(admitted.kind()).isEqualTo(AdmissionKind.REMOTE_ADMISSION);
     assertThat(admitted.admissionEvidence())
         .containsExactly(
-            new AdmissionEvidence(
-                WAREHOUSE, WarehouseOperationDirection.INCOMING, 13));
+            new AdmissionEvidence(WAREHOUSE, WarehouseOperationDirection.INCOMING, 13));
     assertThat(count("logistics_warehouse_admission_intent")).isZero();
-    verify(dependencies)
-        .warehouseAdmission(WAREHOUSE, WarehouseOperationDirection.INCOMING);
+    verify(dependencies).warehouseAdmission(WAREHOUSE, WarehouseOperationDirection.INCOMING);
     assertThat(
             jdbc.queryForMap(
                 """
@@ -259,16 +249,14 @@ class LogisticsWarehouseLifecycleIntegrationTest {
     assertThat(count("logistics_warehouse_admission_intent")).isZero();
     verify(dependencies, never())
         .warehouseAdmission(any(UUID.class), any(WarehouseOperationDirection.class));
-    verify(dependencies, never())
-        .warehouseTimeZoneAt(any(UUID.class), any(OffsetDateTime.class));
+    verify(dependencies, never()).warehouseTimeZoneAt(any(UUID.class), any(OffsetDateTime.class));
 
     AdmissionTicket replayAdmission = prepare(idempotencyKey);
     LogisticsDocumentService.CreateResult replayed =
         documents.createReturn(
             SUBJECT, idempotencyKey, UUID.randomUUID(), request, replayAdmission);
 
-    assertThat(replayAdmission.kind())
-        .isEqualTo(AdmissionKind.EVIDENCED_REPLAY_CANDIDATE);
+    assertThat(replayAdmission.kind()).isEqualTo(AdmissionKind.EVIDENCED_REPLAY_CANDIDATE);
     assertThat(replayAdmission.bypassed()).isTrue();
     assertThat(replayed.replayed()).isTrue();
     assertThat(replayed.response().id()).isEqualTo(created.response().id());
@@ -296,14 +284,12 @@ class LogisticsWarehouseLifecycleIntegrationTest {
   }
 
   @Test
-  void legacyNullAdmissionEvidenceReturnsServiceUnavailableWithoutRemoteCalls()
-      throws Exception {
+  void legacyNullAdmissionEvidenceReturnsServiceUnavailableWithoutRemoteCalls() throws Exception {
     UUID idempotencyKey = UUID.randomUUID();
     stubAdmissionSuccess();
     AdmissionTicket admitted = prepare(idempotencyKey);
     LogisticsDocumentService.CreateResult created =
-        documents.createReturn(
-            SUBJECT, idempotencyKey, UUID.randomUUID(), request(7), admitted);
+        documents.createReturn(SUBJECT, idempotencyKey, UUID.randomUUID(), request(7), admitted);
     jdbc.update(
         """
         update warehouse_operation_mark_outbox
@@ -333,8 +319,7 @@ class LogisticsWarehouseLifecycleIntegrationTest {
     UUID idempotencyKey = UUID.randomUUID();
     when(dependencies.productionReady()).thenReturn(false);
     LogisticsDocumentService.CreateResult created =
-        documents.createReturn(
-            SUBJECT, idempotencyKey, UUID.randomUUID(), request(7));
+        documents.createReturn(SUBJECT, idempotencyKey, UUID.randomUUID(), request(7));
 
     assertThat(
             jdbc.queryForMap(
@@ -363,11 +348,7 @@ class LogisticsWarehouseLifecycleIntegrationTest {
     stubAdmissionSuccess();
     LogisticsDocumentService.CreateResult created =
         documents.createReturn(
-            SUBJECT,
-            idempotencyKey,
-            UUID.randomUUID(),
-            request(7),
-            prepare(idempotencyKey));
+            SUBJECT, idempotencyKey, UUID.randomUUID(), request(7), prepare(idempotencyKey));
     jdbc.update(
         "delete from warehouse_operation_mark_outbox where warehouse_id=? and operation_id=?",
         WAREHOUSE,
@@ -405,8 +386,7 @@ class LogisticsWarehouseLifecycleIntegrationTest {
                     SUBJECT,
                     UUID.randomUUID(),
                     List.of(
-                        new AdmissionRequirement(
-                            WAREHOUSE, WarehouseOperationDirection.OUTGOING))))
+                        new AdmissionRequirement(WAREHOUSE, WarehouseOperationDirection.OUTGOING))))
         .isInstanceOf(LogisticsDependencyException.class)
         .hasMessageContaining("not ready");
     assertThat(count("warehouse_operation_mark_outbox")).isOne();
@@ -422,11 +402,7 @@ class LogisticsWarehouseLifecycleIntegrationTest {
     stubAdmissionSuccess();
     LogisticsDocumentService.CreateResult created =
         documents.createReturn(
-            SUBJECT,
-            idempotencyKey,
-            UUID.randomUUID(),
-            request(7),
-            prepare(idempotencyKey));
+            SUBJECT, idempotencyKey, UUID.randomUUID(), request(7), prepare(idempotencyKey));
     jdbc.update(
         """
         update warehouse_operation_mark_outbox
@@ -452,11 +428,7 @@ class LogisticsWarehouseLifecycleIntegrationTest {
     UUID idempotencyKey = UUID.randomUUID();
     stubAdmissionSuccess();
     documents.createReturn(
-        SUBJECT,
-        idempotencyKey,
-        UUID.randomUUID(),
-        request(7),
-        prepare(idempotencyKey));
+        SUBJECT, idempotencyKey, UUID.randomUUID(), request(7), prepare(idempotencyKey));
     jdbc.update(
         """
         update logistics_idempotency_record
@@ -482,19 +454,15 @@ class LogisticsWarehouseLifecycleIntegrationTest {
   void exactShipmentReplaySucceedsWhileAdmissionDependencyIsUnavailable() throws Exception {
     UUID idempotencyKey = UUID.randomUUID();
     CreateShipmentRequest request = shipmentRequest();
-    stubAdmission(
-        WAREHOUSE, WarehouseOperationDirection.OUTGOING, 17);
+    stubAdmission(WAREHOUSE, WarehouseOperationDirection.OUTGOING, 17);
     AdmissionTicket admission =
         lifecycle.prepareDocument(
             SUBJECT,
             "CREATE_SHIPMENT",
             idempotencyKey,
-            List.of(
-                new AdmissionRequirement(
-                    WAREHOUSE, WarehouseOperationDirection.OUTGOING)));
+            List.of(new AdmissionRequirement(WAREHOUSE, WarehouseOperationDirection.OUTGOING)));
     LogisticsDocumentService.CreateResult created =
-        documents.createShipment(
-            SUBJECT, idempotencyKey, UUID.randomUUID(), request, admission);
+        documents.createShipment(SUBJECT, idempotencyKey, UUID.randomUUID(), request, admission);
     assertThat(storedCommandChecksum("CREATE_SHIPMENT", idempotencyKey))
         .isEqualTo(
             LogisticsCommandChecksum.sha256(
@@ -518,7 +486,8 @@ class LogisticsWarehouseLifecycleIntegrationTest {
     assertThat(count("warehouse_operation_mark_outbox")).isOne();
     assertThat(
             jdbc.queryForObject(
-                "select admission_warehouse_version from warehouse_operation_mark_outbox where operation_id=?",
+                "select admission_warehouse_version from warehouse_operation_mark_outbox where"
+                    + " operation_id=?",
                 Long.class,
                 created.response().id()))
         .isEqualTo(17);
@@ -534,13 +503,12 @@ class LogisticsWarehouseLifecycleIntegrationTest {
     stubTransferAdmission();
     AdmissionTicket admission = prepareTransfer(idempotencyKey);
     LogisticsDocumentService.CreateResult created =
-        documents.createTransfer(
-            SUBJECT, idempotencyKey, UUID.randomUUID(), request, admission);
+        documents.createTransfer(SUBJECT, idempotencyKey, UUID.randomUUID(), request, admission);
     assertThat(storedCommandChecksum("CREATE_TRANSFER", idempotencyKey))
         .isEqualTo(
             LogisticsCommandChecksum.sha256(
                 "CREATE_TRANSFER",
-                List.of(
+                java.util.Arrays.asList(
                     request.warehouseId().toString(),
                     request.destinationWarehouseId().toString(),
                     request.scheduledDate().toString(),
@@ -610,11 +578,7 @@ class LogisticsWarehouseLifecycleIntegrationTest {
     stubTransferAdmission();
     LogisticsDocumentService.CreateResult created =
         documents.createTransfer(
-            SUBJECT,
-            idempotencyKey,
-            UUID.randomUUID(),
-            request,
-            prepareTransfer(idempotencyKey));
+            SUBJECT, idempotencyKey, UUID.randomUUID(), request, prepareTransfer(idempotencyKey));
     jdbc.update(
         "delete from warehouse_operation_mark_outbox where operation_id=? and warehouse_id=?",
         created.response().id(),
@@ -639,11 +603,7 @@ class LogisticsWarehouseLifecycleIntegrationTest {
     stubTransferAdmission();
     LogisticsDocumentService.CreateResult created =
         documents.createTransfer(
-            SUBJECT,
-            idempotencyKey,
-            UUID.randomUUID(),
-            request,
-            prepareTransfer(idempotencyKey));
+            SUBJECT, idempotencyKey, UUID.randomUUID(), request, prepareTransfer(idempotencyKey));
     jdbc.update(
         """
         insert into warehouse_operation_mark_outbox(
@@ -678,18 +638,12 @@ class LogisticsWarehouseLifecycleIntegrationTest {
             admitted.requirements(),
             admitted.occurredAt(),
             admitted.localDates(),
-            List.of(
-                new AdmissionEvidence(
-                    WAREHOUSE, WarehouseOperationDirection.INCOMING, 12)));
+            List.of(new AdmissionEvidence(WAREHOUSE, WarehouseOperationDirection.INCOMING, 12)));
 
     assertThatThrownBy(
             () ->
                 documents.createReturn(
-                    SUBJECT,
-                    idempotencyKey,
-                    UUID.randomUUID(),
-                    request(7),
-                    changedVersion))
+                    SUBJECT, idempotencyKey, UUID.randomUUID(), request(7), changedVersion))
         .isInstanceOf(LogisticsConflictException.class)
         .hasMessageContaining("missing or expired");
     assertNoDocumentOrEvent();
@@ -730,8 +684,7 @@ class LogisticsWarehouseLifecycleIntegrationTest {
     stubAdmissionSuccess();
     AdmissionTicket admitted = prepare(idempotencyKey);
     LogisticsDocumentService.CreateResult created =
-        documents.createReturn(
-            SUBJECT, idempotencyKey, UUID.randomUUID(), request(7), admitted);
+        documents.createReturn(SUBJECT, idempotencyKey, UUID.randomUUID(), request(7), admitted);
 
     LogisticsWarehouseOperationMarkStore.WorkItem work =
         operationMarks.claimNext(Duration.ofSeconds(30)).orElseThrow();
@@ -740,7 +693,8 @@ class LogisticsWarehouseLifecycleIntegrationTest {
     assertThat(work.operationId()).isEqualTo(created.response().id());
     assertThat(
             jdbc.queryForObject(
-                "select state from warehouse_operation_mark_outbox where warehouse_id=? and operation_id=?",
+                "select state from warehouse_operation_mark_outbox where warehouse_id=? and"
+                    + " operation_id=?",
                 String.class,
                 WAREHOUSE,
                 created.response().id()))
@@ -756,9 +710,7 @@ class LogisticsWarehouseLifecycleIntegrationTest {
         SUBJECT,
         "CREATE_RETURN",
         idempotencyKey,
-        List.of(
-            new AdmissionRequirement(
-                WAREHOUSE, WarehouseOperationDirection.INCOMING)));
+        List.of(new AdmissionRequirement(WAREHOUSE, WarehouseOperationDirection.INCOMING)));
   }
 
   private AdmissionTicket prepareTransfer(UUID idempotencyKey) {
@@ -767,10 +719,8 @@ class LogisticsWarehouseLifecycleIntegrationTest {
         "CREATE_TRANSFER",
         idempotencyKey,
         List.of(
-            new AdmissionRequirement(
-                WAREHOUSE, WarehouseOperationDirection.OUTGOING),
-            new AdmissionRequirement(
-                DESTINATION_WAREHOUSE, WarehouseOperationDirection.INCOMING)));
+            new AdmissionRequirement(WAREHOUSE, WarehouseOperationDirection.OUTGOING),
+            new AdmissionRequirement(DESTINATION_WAREHOUSE, WarehouseOperationDirection.INCOMING)));
   }
 
   private void stubAdmissionSuccess() {
@@ -789,11 +739,7 @@ class LogisticsWarehouseLifecycleIntegrationTest {
     when(dependencies.warehouseAdmission(warehouseId, direction))
         .thenReturn(
             new WarehouseOperationAdmission(
-                warehouseId,
-                version,
-                WarehouseLifecycleState.ACTIVE,
-                direction,
-                true));
+                warehouseId, version, WarehouseLifecycleState.ACTIVE, direction, true));
     when(dependencies.warehouseTimeZoneAt(eq(warehouseId), any(OffsetDateTime.class)))
         .thenReturn(new WarehouseTimeZone(warehouseId, "UTC", TIME_ZONE_EFFECTIVE_FROM));
   }
@@ -833,7 +779,8 @@ class LogisticsWarehouseLifecycleIntegrationTest {
                 jwt()
                     .jwt(
                         token ->
-                            token.subject(SUBJECT.toString())
+                            token
+                                .subject(SUBJECT.toString())
                                 .claim("principal_type", "USER")
                                 .claim("scope", "rwms.write")
                                 .claim(
@@ -846,8 +793,8 @@ class LogisticsWarehouseLifecycleIntegrationTest {
                                             "EDIT"))))));
   }
 
-  private ResultActions performShipment(
-      UUID idempotencyKey, CreateShipmentRequest request) throws Exception {
+  private ResultActions performShipment(UUID idempotencyKey, CreateShipmentRequest request)
+      throws Exception {
     return mvc.perform(
         post("/api/logistics/v1/shipments")
             .header("Idempotency-Key", idempotencyKey)
@@ -870,8 +817,8 @@ class LogisticsWarehouseLifecycleIntegrationTest {
             .with(editor()));
   }
 
-  private ResultActions performTransfer(
-      UUID idempotencyKey, CreateTransferRequest request) throws Exception {
+  private ResultActions performTransfer(UUID idempotencyKey, CreateTransferRequest request)
+      throws Exception {
     return mvc.perform(
         post("/api/logistics/v1/transfers")
             .header("Idempotency-Key", idempotencyKey)
@@ -896,17 +843,15 @@ class LogisticsWarehouseLifecycleIntegrationTest {
                 jwt()
                     .jwt(
                         token ->
-                            token.subject(SUBJECT.toString())
+                            token
+                                .subject(SUBJECT.toString())
                                 .claim("principal_type", "USER")
                                 .claim("scope", "rwms.write")
                                 .claim(
                                     "warehouse_access",
                                     List.of(
                                         Map.of(
-                                            "warehouseId",
-                                            WAREHOUSE.toString(),
-                                            "level",
-                                            "EDIT"),
+                                            "warehouseId", WAREHOUSE.toString(), "level", "EDIT"),
                                         Map.of(
                                             "warehouseId",
                                             DESTINATION_WAREHOUSE.toString(),
@@ -914,33 +859,29 @@ class LogisticsWarehouseLifecycleIntegrationTest {
                                             "EDIT"))))));
   }
 
-  private static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.JwtRequestPostProcessor
+  private static org.springframework.security.test.web.servlet.request
+          .SecurityMockMvcRequestPostProcessors.JwtRequestPostProcessor
       editor() {
     return jwt()
         .jwt(
             token ->
-                token.subject(SUBJECT.toString())
+                token
+                    .subject(SUBJECT.toString())
                     .claim("principal_type", "USER")
                     .claim("scope", "rwms.write")
                     .claim(
                         "warehouse_access",
-                        List.of(
-                            Map.of(
-                                "warehouseId", WAREHOUSE.toString(), "level", "EDIT"))));
+                        List.of(Map.of("warehouseId", WAREHOUSE.toString(), "level", "EDIT"))));
   }
 
   private static CreateReturnRequest request(long assetVersion) {
     return new CreateReturnRequest(
-        WAREHOUSE,
-        List.of(new ReturnLineRequest(ASSET, assetVersion, "Tenant A")));
+        WAREHOUSE, List.of(new ReturnLineRequest(ASSET, assetVersion, "Tenant A")));
   }
 
   private static CreateShipmentRequest shipmentRequest() {
     return new CreateShipmentRequest(
-        WAREHOUSE,
-        "Tenant A",
-        "Driver A",
-        List.of(new ShipmentLineRequest(ASSET, 7)));
+        WAREHOUSE, "Tenant A", "Driver A", List.of(new ShipmentLineRequest(ASSET, 7)));
   }
 
   private static CreateTransferRequest transferRequest(long assetVersion) {

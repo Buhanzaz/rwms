@@ -50,7 +50,6 @@ import {
   type AssistantConversation,
   type AssistantConversationDetail,
   type AssistantTurnRequest,
-  type CabinFilterSuggestions,
   type CabinSelection,
   type CabinSearchNotice,
   type CabinSearchResult,
@@ -121,6 +120,9 @@ import {
   clientNeedsContactPerson,
   type RentalClient,
 } from "@/features/clients/domain/clients"
+import { getOrder, ORDERS_QUERY_KEY } from "@/features/orders/api/orders-api"
+import type { OrderDetail } from "@/features/orders/domain/orders"
+import { ApiError } from "@/lib/api-client"
 import { cn } from "@/lib/utils"
 
 export function AssistantPage() {
@@ -128,23 +130,30 @@ export function AssistantPage() {
   const queryClient = useQueryClient()
   const [searchParams] = useSearchParams()
   const requestedClientId = searchParams.get("clientId")
+  const requestedOrderId = searchParams.get("orderId")
   const [selectedConversationId, setSelectedConversationId] = useState<
     string | null
   >(null)
   const [creatingNew, setCreatingNew] = useState(
-    () => requestedClientId !== null
+    () => requestedClientId !== null && requestedOrderId === null
   )
   const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false)
   const conversationsQuery = useQuery({
-    queryKey: ASSISTANT_QUERY_KEY,
-    queryFn: () => listAssistantConversations(accessToken!),
+    queryKey: [...ASSISTANT_QUERY_KEY, requestedOrderId ?? "all"],
+    queryFn: () =>
+      listAssistantConversations(accessToken!, requestedOrderId ?? undefined),
     enabled: Boolean(accessToken && currentUser?.rentalAccess),
   })
   const conversations = conversationsQuery.data ?? []
   const requestedClientQuery = useQuery({
     queryKey: [...CLIENTS_QUERY_KEY, "detail", requestedClientId],
     queryFn: () => getClient(accessToken!, requestedClientId!),
-    enabled: Boolean(accessToken && requestedClientId),
+    enabled: Boolean(accessToken && requestedClientId && !requestedOrderId),
+  })
+  const requestedOrderQuery = useQuery({
+    queryKey: [...ORDERS_QUERY_KEY, "detail", requestedOrderId],
+    queryFn: () => getOrder(accessToken!, requestedOrderId!),
+    enabled: Boolean(accessToken && requestedOrderId),
   })
   const defaultConversationId =
     conversations.find((conversation) => !conversation.archived)?.id ??
@@ -203,6 +212,41 @@ export function AssistantPage() {
       </AssistantPageAlertBoundary>
     )
   }
+  if (requestedOrderId && requestedOrderQuery.isPending) {
+    return (
+      <AssistantPageAlertBoundary>
+        <CenteredState text="Проверяем текущий заказ…" loading />
+      </AssistantPageAlertBoundary>
+    )
+  }
+  if (requestedOrderId && requestedOrderQuery.isError) {
+    return (
+      <AssistantPageAlertBoundary>
+        <CenteredState text="Не удалось открыть заказ для AI-чата." />
+      </AssistantPageAlertBoundary>
+    )
+  }
+  if (
+    requestedOrderId &&
+    (!requestedClientId ||
+      requestedOrderQuery.data?.client.id !== requestedClientId)
+  ) {
+    return (
+      <AssistantPageAlertBoundary>
+        <CenteredState text="Ссылка AI-чата не соответствует клиенту этого заказа." />
+      </AssistantPageAlertBoundary>
+    )
+  }
+  if (
+    requestedOrderQuery.data &&
+    !requestedOrderQuery.data.permissions.canEdit
+  ) {
+    return (
+      <AssistantPageAlertBoundary>
+        <CenteredState text="Обычное дополнение этого заказа через AI-чат уже недоступно." />
+      </AssistantPageAlertBoundary>
+    )
+  }
   if (conversationsQuery.isPending) {
     return (
       <AssistantPageAlertBoundary>
@@ -230,18 +274,20 @@ export function AssistantPage() {
         <aside className="hidden w-64 shrink-0 flex-col border-r bg-muted/20 lg:flex">
           <div className="flex items-center justify-between border-b p-3">
             <span className="text-sm font-semibold">Диалоги</span>
-            <Button
-              type="button"
-              size="icon-sm"
-              variant="ghost"
-              aria-label="Новый диалог"
-              onClick={() => {
-                setCreatingNew(true)
-                setSelectedConversationId(null)
-              }}
-            >
-              <HugeiconsIcon icon={Add01Icon} />
-            </Button>
+            {!requestedOrderId ? (
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                aria-label="Новый диалог"
+                onClick={() => {
+                  setCreatingNew(true)
+                  setSelectedConversationId(null)
+                }}
+              >
+                <HugeiconsIcon icon={Add01Icon} />
+              </Button>
+            ) : null}
           </div>
           <ConversationList
             conversations={conversations}
@@ -298,11 +344,27 @@ export function AssistantPage() {
                 )?.archived
               )}
               onOpenHistory={() => setMobileHistoryOpen(true)}
-              onNew={() => {
-                setCreatingNew(true)
-                setSelectedConversationId(null)
-              }}
+              onNew={
+                requestedOrderId
+                  ? undefined
+                  : () => {
+                      setCreatingNew(true)
+                      setSelectedConversationId(null)
+                    }
+              }
               onTurnCompleted={refreshConversationsAfterTurn}
+            />
+          ) : requestedOrderQuery.data && requestedOrderId ? (
+            <OrderConversationGate
+              accessToken={accessToken}
+              order={requestedOrderQuery.data}
+              onCreated={async (conversationId) => {
+                await queryClient.invalidateQueries({
+                  queryKey: ASSISTANT_QUERY_KEY,
+                })
+                setCreatingNew(false)
+                setSelectedConversationId(conversationId)
+              }}
             />
           ) : (
             <ClientGate
@@ -450,6 +512,77 @@ function AssistantPageAlertBoundary({ children }: { children: ReactNode }) {
       <ManagerBookingAlertDialog />
       {children}
     </>
+  )
+}
+
+function OrderConversationGate({
+  accessToken,
+  order,
+  onCreated,
+}: {
+  accessToken: string
+  order: OrderDetail
+  onCreated: (conversationId: string) => Promise<void>
+}) {
+  const [errorText, setErrorText] = useState<string | null>(null)
+  const command = useRef(new OrderCommandIdentityRegistry())
+  const mutation = useMutation({
+    mutationFn: () => {
+      const fingerprint = JSON.stringify({
+        orderId: order.id,
+        clientId: order.client.id,
+      })
+      return createAssistantConversation({
+        accessToken,
+        conversationId: command.current.keyFor(fingerprint),
+        choice: { kind: "existing", client: order.client },
+        rentalOrderId: order.id,
+      }).then((response) => ({ response, fingerprint }))
+    },
+    onSuccess: async ({ response, fingerprint }) => {
+      command.current.confirm(fingerprint)
+      await onCreated(response.conversation.id)
+    },
+    onError: (error) =>
+      setErrorText(
+        error instanceof Error
+          ? error.message
+          : "Не удалось открыть чат этого заказа."
+      ),
+  })
+
+  return (
+    <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-6">
+      <Card className="w-full max-w-3xl">
+        <CardHeader>
+          <div className="mb-2 flex size-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
+            <HugeiconsIcon icon={AiChat02Icon} className="size-6" />
+          </div>
+          <CardTitle>AI-чат заказа №{order.number}</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Клиент: {order.client.displayName}. Диалог добавит выбранные бытовки
+            и мебель в этот заказ. Склад фиксируется сервером по заказу и первой
+            выбранной бытовке.
+          </p>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          {errorText ? <FieldError>{errorText}</FieldError> : null}
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              disabled={mutation.isPending}
+              onClick={() => mutation.mutate()}
+            >
+              <HugeiconsIcon
+                icon={mutation.isPending ? Loading03Icon : AiChat02Icon}
+                className={cn(mutation.isPending && "animate-spin")}
+              />
+              {mutation.isPending ? "Открываем…" : "Открыть чат заказа"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
   )
 }
 
@@ -610,7 +743,7 @@ function ConversationWorkspace({
   clientName: string
   archived: boolean
   onOpenHistory: () => void
-  onNew: () => void
+  onNew?: () => void
   onTurnCompleted: (conversationId: string) => Promise<void>
 }) {
   const queryClient = useQueryClient()
@@ -625,8 +758,6 @@ function ConversationWorkspace({
   const [errorText, setErrorText] = useState<string | null>(null)
   const [liveSearchResult, setLiveSearchResult] =
     useState<CabinSearchResult | null>(null)
-  const [liveFilterSuggestions, setLiveFilterSuggestions] =
-    useState<CabinFilterSuggestions | null>(null)
   const [liveClarifications, setLiveClarifications] = useState<
     ClarificationQuestion[] | null
   >(null)
@@ -663,10 +794,11 @@ function ConversationWorkspace({
     )
     return () => window.clearTimeout(timeout)
   }, [searchResultCandidate])
-  const filterSuggestions =
-    liveFilterSuggestions ?? persistedSearchEnvelope?.filterSuggestions
   const clarifications =
     liveClarifications ?? detailQuery.data?.clarifications ?? []
+  const pendingClarification = [...clarifications]
+    .filter((question) => question.status === "PENDING")
+    .sort((left, right) => left.sequenceNumber - right.sequenceNumber)[0]
   const currentSelection =
     liveCurrentSelection === undefined
       ? (detailQuery.data?.currentSelection ?? null)
@@ -886,7 +1018,6 @@ function ConversationWorkspace({
           }
           const nextSearch = asCabinSearchResultEnvelope(event)
           if (nextSearch) {
-            setLiveFilterSuggestions(nextSearch.filterSuggestions)
             if (nextSearch.resultMode === "APPEND") {
               turnSearchResultMode = "APPEND"
             } else if (!turnSearchResultMode) {
@@ -940,12 +1071,26 @@ function ConversationWorkspace({
       await onTurnCompleted(conversationId)
       setLocalMessages([])
       setLiveClarifications(null)
-      setLiveFilterSuggestions(null)
       setLiveCurrentSelection(undefined)
     } catch (error) {
-      setErrorText(
-        error instanceof Error ? error.message : "Не удалось получить ответ."
-      )
+      if (
+        error instanceof ApiError &&
+        error.status === 409 &&
+        "clarificationAnswer" in request
+      ) {
+        setLiveClarifications(null)
+        setErrorText(
+          "Уточнение уже изменилось. Показан текущий вопрос сервера."
+        )
+        await queryClient.invalidateQueries({
+          queryKey: [...ASSISTANT_QUERY_KEY, conversationId],
+        })
+        await detailQuery.refetch()
+      } else {
+        setErrorText(
+          error instanceof Error ? error.message : "Не удалось получить ответ."
+        )
+      }
     } finally {
       setToolRunning(false)
       setSending(false)
@@ -953,6 +1098,7 @@ function ConversationWorkspace({
   }
 
   async function sendMessage(messageOverride?: string) {
+    if (pendingClarification) return
     const message = (messageOverride ?? draft).trim()
     if (!message) return
     if (messageOverride === undefined) setDraft("")
@@ -1032,10 +1178,12 @@ function ConversationWorkspace({
               Ссылка клиенту
             </Button>
           ) : null}
-          <Button type="button" variant="outline" size="sm" onClick={onNew}>
-            <HugeiconsIcon icon={Add01Icon} />
-            Новый диалог
-          </Button>
+          {onNew ? (
+            <Button type="button" variant="outline" size="sm" onClick={onNew}>
+              <HugeiconsIcon icon={Add01Icon} />
+              Новый диалог
+            </Button>
+          ) : null}
         </div>
       </header>
 
@@ -1112,8 +1260,6 @@ function ConversationWorkspace({
             selectedIds={selectedIds}
             onSelectionChange={handleSelectionChange}
             selectionPending={selectionMutation.isPending}
-            filterSuggestions={filterSuggestions}
-            onSuggestion={(message) => void sendMessage(message)}
             collapsed={!searchResultsVisible}
             onCollapsedChange={(collapsed) =>
               setSearchResultsVisible(!collapsed)
@@ -1182,8 +1328,12 @@ function ConversationWorkspace({
                 value={draft}
                 rows={1}
                 maxLength={8_000}
-                disabled={sending}
-                placeholder="Напишите, какие бытовки подобрать…"
+                disabled={sending || Boolean(pendingClarification)}
+                placeholder={
+                  pendingClarification
+                    ? "Сначала ответьте на уточнение выше"
+                    : "Напишите, какие бытовки подобрать…"
+                }
                 className="max-h-36 min-h-12 py-3"
                 onChange={(event) => setDraft(event.target.value)}
                 onKeyDown={(event) => {
@@ -1199,7 +1349,9 @@ function ConversationWorkspace({
                   size="icon-sm"
                   variant="default"
                   aria-label="Отправить сообщение"
-                  disabled={sending || !draft.trim()}
+                  disabled={
+                    sending || Boolean(pendingClarification) || !draft.trim()
+                  }
                   className="rounded-full"
                 >
                   <HugeiconsIcon
@@ -1432,7 +1584,7 @@ function mergeClarifications(
 ) {
   const byId = new Map(current.map((question) => [question.id, question]))
   byId.set(next.id, next)
-  return [...byId.values()].sort((left, right) =>
-    left.createdAt.localeCompare(right.createdAt)
+  return [...byId.values()].sort(
+    (left, right) => left.sequenceNumber - right.sequenceNumber
   )
 }

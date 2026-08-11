@@ -13,7 +13,10 @@ import java.util.Objects;
 import java.util.UUID;
 import org.hibernate.proxy.HibernateProxy;
 
-/** Service-owned conversation aggregate record that links one rental user and one logistics-owned inquiry without copying inquiry state. */
+/**
+ * Service-owned conversation aggregate record that links one rental user, one logistics-owned
+ * inquiry and, when supplied, the existing rental order being amended.
+ */
 @Entity
 @Table(name = "assistant_conversation")
 public class AssistantConversation {
@@ -33,6 +36,9 @@ public class AssistantConversation {
 
   @Column(name = "rental_inquiry_id", nullable = false)
   private UUID rentalInquiryId;
+
+  @Column(name = "rental_order_id")
+  private UUID rentalOrderId;
 
   @Column(name = "client_type", length = 64)
   private String clientType;
@@ -54,6 +60,7 @@ public class AssistantConversation {
 
   protected AssistantConversation() {}
 
+  /** Creates an inquiry-only conversation without an existing rental order link. */
   public static AssistantConversation create(
       UUID id,
       UUID ownerSubjectId,
@@ -61,11 +68,25 @@ public class AssistantConversation {
       UUID rentalInquiryId,
       String clientType,
       String clientDisplayName) {
+    return create(
+        id, ownerSubjectId, clientId, rentalInquiryId, null, clientType, clientDisplayName);
+  }
+
+  /** Creates a conversation with immutable client, inquiry and optional rental order links. */
+  public static AssistantConversation create(
+      UUID id,
+      UUID ownerSubjectId,
+      UUID clientId,
+      UUID rentalInquiryId,
+      UUID rentalOrderId,
+      String clientType,
+      String clientDisplayName) {
     AssistantConversation value = new AssistantConversation();
     value.id = require(id, "conversationId");
     value.ownerSubjectId = require(ownerSubjectId, "ownerSubjectId");
     value.clientId = require(clientId, "clientId");
     value.rentalInquiryId = require(rentalInquiryId, "rentalInquiryId");
+    value.rentalOrderId = rentalOrderId;
     value.clientType = optional(clientType, 64);
     value.clientDisplayName = optional(clientDisplayName, 255);
     value.archived = false;
@@ -123,6 +144,10 @@ public class AssistantConversation {
 
   public UUID getRentalInquiryId() {
     return rentalInquiryId;
+  }
+
+  public UUID getRentalOrderId() {
+    return rentalOrderId;
   }
 
   public String getClientType() {

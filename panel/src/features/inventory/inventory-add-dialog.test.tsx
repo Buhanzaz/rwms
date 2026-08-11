@@ -45,6 +45,10 @@ const assetApi = vi.hoisted(() => ({
   createIdempotencyKey: vi.fn(() => "dddddddd-dddd-4ddd-8ddd-dddddddddddd"),
 }))
 
+const rentalItemCreationDialogState = vi.hoisted(() => ({
+  useTestDouble: false,
+}))
+
 vi.mock("@/features/inventory/api/inventory-api", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/features/inventory/api/inventory-api")
@@ -78,6 +82,68 @@ vi.mock("@/features/media/media-service", () => ({
   }),
   createHttpMediaClient: () => mediaApi,
 }))
+
+vi.mock(
+  "@/features/rental-items/rental-item-create-dialog",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/features/rental-items/rental-item-create-dialog")
+      >()
+    const ActualRentalItemCreationDialog = actual.RentalItemCreationDialog
+    type RentalItemCreationDialogProps = Parameters<
+      typeof ActualRentalItemCreationDialog
+    >[0]
+
+    return {
+      ...actual,
+      RentalItemCreationDialog: (props: RentalItemCreationDialogProps) => {
+        if (!rentalItemCreationDialogState.useTestDouble) {
+          return <ActualRentalItemCreationDialog {...props} />
+        }
+
+        return (
+          <section aria-label={props.title} role="dialog">
+            <output data-testid="creation-dialog-number">
+              {props.initialNumber}
+            </output>
+            <output data-testid="creation-dialog-number-read-only">
+              {String(props.numberReadOnly)}
+            </output>
+            <output data-testid="creation-dialog-category-mode">
+              {props.categoryMode}
+            </output>
+            <output data-testid="creation-dialog-photos-enabled">
+              {String(props.photosEnabled)}
+            </output>
+            <button
+              type="button"
+              onClick={() => {
+                void props
+                  .createRentalItem({
+                    idempotencyKey: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                    number: "БУ-901",
+                    rentalTypeId: TYPE_ONE_ID,
+                    dimensionId: DIMENSION_STANDARD_ID,
+                    finishingId: FINISHING_LDSP_ID,
+                    category: "Обычная",
+                    characteristicIds: [CHARACTERISTIC_DOOR_ID],
+                    linoleum: false,
+                  })
+                  .then((result) => {
+                    props.onCompleted?.(result.value, result.createdItem)
+                    props.onOpenChange(false)
+                  })
+              }}
+            >
+              {props.submitLabel}
+            </button>
+          </section>
+        )
+      },
+    }
+  }
+)
 
 import { InventoryAddDialog } from "@/features/inventory/inventory-add-dialog"
 
@@ -144,6 +210,7 @@ function renderDialog(onResolved = vi.fn(), onOpenChange = vi.fn()) {
 }
 
 beforeEach(() => {
+  rentalItemCreationDialogState.useTestDouble = false
   Object.defineProperty(URL, "createObjectURL", {
     configurable: true,
     value: vi.fn(() => "blob:inventory-photo"),
@@ -220,6 +287,7 @@ afterEach(() => {
 describe("InventoryAddDialog", () => {
   it("creates from passport fields without staging cabin photos and resolves the finding", async () => {
     const user = userEvent.setup()
+    rentalItemCreationDialogState.useTestDouble = true
     const { onOpenChange, onResolved, queryClient } = renderDialog()
 
     await user.type(screen.getByLabelText("Номер бытовки"), "бу-901")
@@ -233,38 +301,29 @@ describe("InventoryAddDialog", () => {
       await screen.findByRole("button", { name: "Добавить б/у" })
     )
 
+    const creationDialog = await screen.findByRole("dialog", {
+      name: "Создание б/у бытовки",
+    })
     expect(
-      await screen.findByRole("heading", { name: "Создание б/у бытовки" })
-    ).toBeTruthy()
-    expect(screen.getByText("Характеристики")).toBeTruthy()
-    expect(screen.queryByRole("button", { name: "Загрузить фото" })).toBeNull()
-    expect(screen.queryByLabelText("Фотографии новой бытовки")).toBeNull()
-
-    const numberInput = screen.getByLabelText(
-      "Номер бытовки"
-    ) as HTMLInputElement
-    expect(numberInput.value).toBe("БУ-901")
-    expect(numberInput.readOnly).toBe(true)
-    expect(await screen.findByRole("button", { name: "Обычная" })).toBeTruthy()
+      within(creationDialog).getByTestId("creation-dialog-number").textContent
+    ).toBe("БУ-901")
+    expect(
+      within(creationDialog).getByTestId("creation-dialog-number-read-only")
+        .textContent
+    ).toBe("true")
+    expect(
+      within(creationDialog).getByTestId("creation-dialog-category-mode")
+        .textContent
+    ).toBe("USED")
+    expect(
+      within(creationDialog).getByTestId("creation-dialog-photos-enabled")
+        .textContent
+    ).toBe("false")
 
     await user.click(
-      await screen.findByRole("button", { name: "Выберите тип" })
-    )
-    await user.click(screen.getByRole("button", { name: "БК-1" }))
-
-    await user.click(screen.getByRole("button", { name: "Выберите габариты" }))
-    await user.click(screen.getByRole("button", { name: "2.4x6" }))
-
-    await user.click(screen.getByRole("button", { name: "Выберите отделку" }))
-    await user.click(screen.getByRole("button", { name: "ЛДСП" }))
-    await user.click(screen.getByRole("radio", { name: "Нет" }))
-    await user.click(
-      screen.getByRole("button", { name: "Выбрать характеристики" })
-    )
-    await user.click(screen.getByLabelText("Металлическая дверь"))
-    await user.click(screen.getByRole("button", { name: "Применить" }))
-    await user.click(
-      screen.getByRole("button", { name: "Создать и осмотреть" })
+      within(creationDialog).getByRole("button", {
+        name: "Создать и осмотреть",
+      })
     )
 
     await waitFor(() =>
@@ -291,6 +350,24 @@ describe("InventoryAddDialog", () => {
     )
     expect(mediaApi.uploadFile).not.toHaveBeenCalled()
     expect(onOpenChange).toHaveBeenLastCalledWith(false)
+  })
+
+  it("selects cabin characteristics before creating a used inventory cabin", async () => {
+    const user = userEvent.setup()
+    renderDialog()
+
+    await user.type(screen.getByLabelText("Номер бытовки"), "бу-901")
+    await user.click(screen.getByRole("button", { name: "Найти" }))
+    await user.click(
+      await screen.findByRole("button", { name: "Добавить б/у" })
+    )
+    await user.click(
+      await screen.findByRole("button", { name: "Выбрать характеристики" })
+    )
+    await user.click(screen.getByLabelText("Металлическая дверь"))
+    await user.click(screen.getByRole("button", { name: "Применить" }))
+
+    expect(screen.getByText("Металлическая дверь")).toBeTruthy()
   })
 
   it("uses the resolved session revision for a new cabin", async () => {

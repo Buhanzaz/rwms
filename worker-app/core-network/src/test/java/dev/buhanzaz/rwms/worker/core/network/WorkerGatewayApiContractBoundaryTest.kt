@@ -23,7 +23,8 @@ import retrofit2.http.Url
 
 /**
  * Pins every worker Retrofit operation to the public operations in
- * `contracts/openapi/task-board-service.yaml` and `contracts/openapi/media-service.yaml`.
+ * `contracts/openapi/task-board-service.yaml`, `contracts/openapi/logistics-service.yaml`, and
+ * `contracts/openapi/media-service.yaml`.
  * All active JSON request/response roots have current canonical fixtures. Binary media bodies,
  * `ResponseBody`, and the `Unit` unregister response are converter-checked but intentionally are
  * not represented as JSON fixtures.
@@ -43,7 +44,7 @@ class WorkerGatewayApiContractBoundaryTest {
             .filterNot(Method::isSynthetic)
             .associateBy(Method::getName)
 
-        assertThat(expected).hasSize(11)
+        assertThat(expected).hasSize(12)
         assertWithMessage(
             "WorkerGatewayApi method inventory must stay synchronized with canonical public OpenAPI",
         ).that(methods.keys)
@@ -387,6 +388,7 @@ private fun assertWorkerPublicGatewayPath(
 
 private fun expectedWorkerRoutes(): Map<String, WorkerContractRoute> {
     val taskBoard = "contracts/openapi/task-board-service.yaml"
+    val logistics = "contracts/openapi/logistics-service.yaml"
     val media = "contracts/openapi/media-service.yaml"
     fun route(verb: String, gatewayPath: String, source: String): WorkerContractRoute =
         WorkerContractRoute(verb, gatewayPath, source)
@@ -395,6 +397,7 @@ private fun expectedWorkerRoutes(): Map<String, WorkerContractRoute> {
         "workerContext" to route("GET", "/api/task-board/worker/v1/context", "$taskBoard /worker/v1/context"),
         "workerFeed" to route("GET", "/api/task-board/worker/v1/feed", "$taskBoard /worker/v1/feed"),
         "workerTaskDetail" to route("GET", "/api/task-board/worker/v1/entries/{entryId}", "$taskBoard /worker/v1/entries/{entryId}"),
+        "logisticsDriverTask" to route("GET", "/api/logistics/v1/driver-tasks/{taskId}", "$logistics getDriverTask"),
         "applyAction" to route("POST", "/api/task-board/worker/v1/entries/{entryId}/actions", "$taskBoard /worker/v1/entries/{entryId}/actions"),
         "reserveEvidence" to route("POST", "/api/task-board/worker/v1/entries/{entryId}/evidence-reservations", "$taskBoard /worker/v1/entries/{entryId}/evidence-reservations"),
         "registerDevice" to route("PUT", "/api/task-board/worker/v1/devices/{installationId}", "$taskBoard /worker/v1/devices/{installationId}"),
@@ -412,6 +415,7 @@ private fun canonicalWorkerTaskDetailFixture(): String =
       "entryId":"44444444-4444-4444-4444-444444444444",
       "version":9,
       "taskId":"55555555-5555-5555-5555-555555555555",
+      "source":null,
       "routeIndex":0,
       "title":"Inspect cabin",
       "description":null,

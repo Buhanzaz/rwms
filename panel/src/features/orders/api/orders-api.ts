@@ -8,6 +8,7 @@ import {
   type OrderClientType,
   type OrderDetail,
   type OrderDesiredEquipment,
+  type DesiredDeliveryWindow,
   type OrderEquipmentContent,
   type OrderMovement,
   type OrderPage,
@@ -23,6 +24,7 @@ import {
   parseRentalClient,
 } from "@/features/clients/api/clients-api"
 import type { CreateClientInput } from "@/features/clients/domain/clients"
+import type { AdditionalContact } from "@/features/clients/domain/clients"
 import {
   RENTAL_ITEM_STATUS_LABEL,
   type RentalItemStatus,
@@ -60,12 +62,8 @@ export type CreateOrderInput = (
   OrderDeliveryInput
 
 export type OrderDeliveryInput = {
-  deliveryAddress?: string | null
-  latitude?: number | null
-  longitude?: number | null
   contactPhone?: string | null
   comment?: string | null
-  acceptableDeliveryDates?: string[] | null
 }
 
 function invalidResponse(): never {
@@ -170,12 +168,17 @@ function date(value: unknown): string {
   return parsed
 }
 
-function dates(value: unknown): string[] {
-  const parsed = list(value).map(date)
-  if (parsed.length > 31 || new Set(parsed).size !== parsed.length) {
-    invalidResponse()
-  }
-  return parsed
+function parseAdditionalContact(value: unknown): AdditionalContact {
+  const source = record(value)
+  return { name: text(source.name), phone: text(source.phone) }
+}
+
+function parseDesiredDeliveryWindow(value: unknown): DesiredDeliveryWindow {
+  const source = record(value)
+  const startDate = date(source.startDate)
+  const endDate = date(source.endDate)
+  if (startDate > endDate) invalidResponse()
+  return { startDate, endDate }
 }
 
 function enumValue<T extends string>(value: unknown, allowed: readonly T[]): T {
@@ -209,7 +212,12 @@ function parseOrderSummaryRecord(source: JsonRecord): OrderSummary {
     longitude: nullableNumber(source.longitude),
     contactPhone: nullableText(source.contactPhone),
     comment: nullableText(source.comment),
-    acceptableDeliveryDates: dates(source.acceptableDeliveryDates),
+    additionalContacts: list(source.additionalContacts).map(
+      parseAdditionalContact
+    ),
+    desiredDeliveryWindows: list(source.desiredDeliveryWindows).map(
+      parseDesiredDeliveryWindow
+    ),
     unitCount: nonNegativeInteger(source.unitCount),
     createdAt: timestamp(source.createdAt),
     updatedAt: timestamp(source.updatedAt),
@@ -261,6 +269,7 @@ function parseDesiredEquipment(value: unknown): OrderDesiredEquipment {
     equipmentId: uuid(source.equipmentId),
     equipmentName: text(source.equipmentName),
     quantity,
+    reservationState: enumValue(source.reservationState, ["ACTIVE"]),
   }
 }
 
@@ -292,12 +301,20 @@ function parseOrderUnitCandidate(value: unknown): OrderUnitCandidate {
   const source = record(value)
   const added = boolean(source.added)
   const reservationId = nullableUuid(source.reservationId)
+  const reservationState =
+    source.reservationState === null
+      ? null
+      : enumValue(source.reservationState, ["ACTIVE"])
 
-  if (added && reservationId === null) invalidResponse()
+  if (added && (reservationId === null || reservationState === null)) {
+    invalidResponse()
+  }
+  if (!added && reservationState !== null) invalidResponse()
 
   return {
     reservationId,
     added,
+    reservationState,
     unit: parseRentalUnit(source.unit),
     desiredContents: list(source.desiredContents).map(parseDesiredEquipment),
     rentalTerm:
@@ -326,6 +343,8 @@ export function parseOrderDetail(value: unknown): OrderDetail {
     movements: list(source.movements).map(parseOrderMovement),
     permissions: {
       canEdit: boolean(permissions.canEdit),
+      canReplaceUnits: boolean(permissions.canReplaceUnits),
+      canExtendRentalTerms: boolean(permissions.canExtendRentalTerms),
       canViewOtherManagers: boolean(permissions.canViewOtherManagers),
     },
   }
@@ -514,36 +533,6 @@ function commandRentalMonths(value: number) {
   return value
 }
 
-export async function setOrderRentalTerms(params: {
-  accessToken: string
-  orderId: string
-  expectedVersion: number
-  terms: Array<{ unitId: string; rentalMonths: number }>
-  idempotencyKey: string
-}): Promise<OrderDetail> {
-  if (params.terms.length === 0) {
-    throw new Error("Укажите срок аренды хотя бы для одной бытовки.")
-  }
-
-  return parseOrderDetail(
-    await bearerRequest<unknown>(
-      params.accessToken,
-      ordersEndpoint(orderPath(params.orderId, "/rental-terms")),
-      {
-        method: "PUT",
-        headers: idempotencyHeaders(params.idempotencyKey),
-        body: JSON.stringify({
-          expectedVersion: params.expectedVersion,
-          terms: params.terms.map((term) => ({
-            unitId: uuid(term.unitId),
-            rentalMonths: commandRentalMonths(term.rentalMonths),
-          })),
-        }),
-      }
-    )
-  )
-}
-
 export async function extendOrderRentalTerms(params: {
   accessToken: string
   orderId: string
@@ -587,15 +576,7 @@ export async function listOrderClients(params: {
 export async function createOrderClient(params: {
   accessToken: string
   idempotencyKey: string
-  input: {
-    clientType: OrderClientType
-    displayName: string
-    phone: string
-    contactPerson?: string | null
-    email?: string | null
-    comment?: string | null
-    source?: string | null
-  }
+  input: CreateClientInput
 }): Promise<OrderClientSearchItem> {
   return createClient(params)
 }
@@ -637,30 +618,26 @@ export async function listClientOrders(params: {
   )
 }
 
-export async function selectOrderWarehouse(params: {
+export async function removeOrderUnit(params: {
   accessToken: string
   orderId: string
   expectedVersion: number
-  warehouseId: string
+  unitId: string
   idempotencyKey: string
 }): Promise<OrderDetail> {
+  const suffix = `/units/${encodeURIComponent(uuid(params.unitId))}`
+  const endpoint = new URL(ordersEndpoint(orderPath(params.orderId, suffix)))
+  endpoint.searchParams.set("expectedVersion", String(params.expectedVersion))
+
   return parseOrderDetail(
-    await bearerRequest<unknown>(
-      params.accessToken,
-      ordersEndpoint(orderPath(params.orderId, "/warehouse")),
-      {
-        method: "PUT",
-        headers: idempotencyHeaders(params.idempotencyKey),
-        body: JSON.stringify({
-          expectedVersion: params.expectedVersion,
-          warehouseId: uuid(params.warehouseId),
-        }),
-      }
-    )
+    await bearerRequest<unknown>(params.accessToken, endpoint, {
+      method: "DELETE",
+      headers: idempotencyHeaders(params.idempotencyKey),
+    })
   )
 }
 
-export async function listAvailableOrderUnits(params: {
+export async function listOrderReplacementCandidates(params: {
   accessToken: string
   orderId: string
   page: number
@@ -682,45 +659,39 @@ export async function listAvailableOrderUnits(params: {
   )
 }
 
-export async function addOrderUnit(params: {
+export async function replaceOrderUnit(params: {
   accessToken: string
   orderId: string
   expectedVersion: number
   unitId: string
+  replacementRentalItemId: string
+  reason: string
   idempotencyKey: string
 }): Promise<OrderDetail> {
+  const reason = params.reason.trim()
+  if (reason.length === 0 || reason.length > 2_000) {
+    throw new Error("Причина замены должна содержать от 1 до 2000 символов.")
+  }
+
   return parseOrderDetail(
     await bearerRequest<unknown>(
       params.accessToken,
-      ordersEndpoint(orderPath(params.orderId, "/units")),
+      ordersEndpoint(
+        orderPath(
+          params.orderId,
+          `/units/${encodeURIComponent(uuid(params.unitId))}/replace`
+        )
+      ),
       {
         method: "POST",
         headers: idempotencyHeaders(params.idempotencyKey),
         body: JSON.stringify({
           expectedVersion: params.expectedVersion,
-          unitId: uuid(params.unitId),
+          replacementRentalItemId: uuid(params.replacementRentalItemId),
+          reason,
         }),
       }
     )
-  )
-}
-
-export async function removeOrderUnit(params: {
-  accessToken: string
-  orderId: string
-  expectedVersion: number
-  unitId: string
-  idempotencyKey: string
-}): Promise<OrderDetail> {
-  const suffix = `/units/${encodeURIComponent(uuid(params.unitId))}`
-  const endpoint = new URL(ordersEndpoint(orderPath(params.orderId, suffix)))
-  endpoint.searchParams.set("expectedVersion", String(params.expectedVersion))
-
-  return parseOrderDetail(
-    await bearerRequest<unknown>(params.accessToken, endpoint, {
-      method: "DELETE",
-      headers: idempotencyHeaders(params.idempotencyKey),
-    })
   )
 }
 

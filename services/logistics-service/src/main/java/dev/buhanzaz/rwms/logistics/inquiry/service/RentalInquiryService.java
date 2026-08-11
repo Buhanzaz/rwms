@@ -8,11 +8,14 @@ import dev.buhanzaz.rwms.logistics.inquiry.mapper.RentalInquiryResponseMapper;
 import dev.buhanzaz.rwms.logistics.inquiry.repository.RentalInquiryRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderDetailResponse;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import dev.buhanzaz.rwms.logistics.order.security.OrderActor;
 import dev.buhanzaz.rwms.logistics.order.security.OrderAuthorizer;
 import dev.buhanzaz.rwms.logistics.order.service.OrderClientService;
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
+import dev.buhanzaz.rwms.logistics.order.service.RentalOrderService;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -37,6 +40,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class RentalInquiryService {
   private final RentalInquiryRepository inquiries;
   private final OrderClientService clients;
+  private final RentalOrderService rentalOrders;
   private final RentalInquiryResponseMapper mapper;
   private final LogisticsDependencyGateway dependencies;
   private final OrderAuthorizer access;
@@ -48,16 +52,31 @@ public class RentalInquiryService {
     if (actor == null || idempotencyKey == null || request == null) {
       throw new IllegalArgumentException("Inquiry actor, request and Idempotency-Key are required");
     }
-    if (!request.conversationId().equals(idempotencyKey)) {
+    if (request.conversationId() != null && !request.conversationId().equals(idempotencyKey)) {
       throw new IllegalArgumentException(
           "Idempotency-Key must equal the assistant conversation ID");
     }
-    transactionLock.acquire("rental-inquiry:conversation:" + request.conversationId());
+    transactionLock.acquire("rental-inquiry:create:" + actor.subjectId() + ":" + idempotencyKey);
+    if (request.conversationId() != null) {
+      transactionLock.acquire("rental-inquiry:conversation:" + request.conversationId());
+    }
     RentalInquiry existing =
-        inquiries.findByConversationId(request.conversationId()).orElse(null);
+        inquiries
+            .findByManagerIdAndCreationIdempotencyKey(actor.subjectId(), idempotencyKey)
+            .orElse(null);
+    if (existing == null && request.conversationId() != null) {
+      existing = inquiries.findByConversationId(request.conversationId()).orElse(null);
+    }
     if (existing != null) {
       requireOwner(actor, existing);
+      if (!java.util.Objects.equals(existing.getConversationId(), request.conversationId())) {
+        throw new OrderProblemException(
+            HttpStatus.CONFLICT,
+            "INQUIRY_IDEMPOTENCY_CONFLICT",
+            "Idempotency-Key уже использован для другого диалога аренды");
+      }
       requireSameClient(existing.getClient(), request);
+      requireSameOrder(existing, request.rentalOrderId());
       return mapper.toResponse(existing);
     }
 
@@ -67,20 +86,35 @@ public class RentalInquiryService {
     } else {
       client = clients.createForOrder(actor, idempotencyKey, request.newClient()).client();
     }
+    OrderDetailResponse targetOrder = targetOrder(actor, client, request.rentalOrderId());
     RentalInquiry inquiry =
         inquiries.saveAndFlush(
             RentalInquiry.create(
                 request.conversationId(),
+                idempotencyKey,
                 client,
                 actor.subjectId(),
                 actor.displayName(),
                 actor.role(),
+                targetOrder == null ? null : targetOrder.id(),
+                targetOrder == null ? null : targetOrder.warehouseId(),
                 now()));
     return mapper.toResponse(inquiry);
   }
 
   public RentalInquiryResponse get(OrderActor actor, UUID inquiryId) {
     return mapper.toResponse(requiredOwned(actor, inquiryId));
+  }
+
+  /** Lists every manual and assistant inquiry linked to one order after order-level visibility. */
+  public List<RentalInquiryResponse> listForOrder(OrderActor actor, UUID rentalOrderId) {
+    if (actor == null || rentalOrderId == null) {
+      throw new IllegalArgumentException("Order-linked inquiry filter is required");
+    }
+    rentalOrders.get(actor, rentalOrderId);
+    return inquiries.findAllByRentalOrderIdOrderByCreatedAtDescIdDesc(rentalOrderId).stream()
+        .map(mapper::toResponse)
+        .toList();
   }
 
   /** Reads asset-owned facets only after the owner check finishes without a local transaction. */
@@ -97,9 +131,7 @@ public class RentalInquiryService {
             dependencies.listWarehouseIdentities().stream()
                 .filter(LogisticsDependencyGateway.WarehouseIdentity::active)
                 .map(LogisticsDependencyGateway.WarehouseIdentity::id)
-                .collect(
-                    java.util.stream.Collectors.toCollection(
-                        LinkedHashSet::new));
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
       } catch (LogisticsDependencyException exception) {
         throw dependencyProblem(exception);
       }
@@ -189,8 +221,7 @@ public class RentalInquiryService {
     }
   }
 
-  private static void requireSameClient(
-      OrderClient current, CreateRentalInquiryRequest request) {
+  private static void requireSameClient(OrderClient current, CreateRentalInquiryRequest request) {
     if (request.clientId() != null) {
       if (!current.getId().equals(request.clientId())) {
         throw new OrderProblemException(
@@ -212,6 +243,29 @@ public class RentalInquiryService {
     }
   }
 
+  private static void requireSameOrder(RentalInquiry inquiry, UUID requestedOrderId) {
+    if (!java.util.Objects.equals(inquiry.getRentalOrderId(), requestedOrderId)) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "CONVERSATION_ORDER_IMMUTABLE",
+          "Заказ существующего диалога нельзя изменить");
+    }
+  }
+
+  private OrderDetailResponse targetOrder(
+      OrderActor actor, OrderClient client, UUID rentalOrderId) {
+    if (rentalOrderId == null) return null;
+    OrderDetailResponse order = rentalOrders.get(actor, rentalOrderId);
+    if ((order.status() != RentalOrderStatus.DRAFT && order.status() != RentalOrderStatus.SAVED)
+        || !order.client().id().equals(client.getId())) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "INQUIRY_ORDER_INVALID",
+          "Диалог можно привязать только к действующему заказу этого клиента");
+    }
+    return order;
+  }
+
   private static List<UUID> uniqueIds(List<UUID> values) {
     if (values == null || values.isEmpty() || values.size() > 100) {
       throw new IllegalArgumentException("rentalItemIds size is invalid");
@@ -223,15 +277,11 @@ public class RentalInquiryService {
     return List.copyOf(unique);
   }
 
-  private static OrderProblemException dependencyProblem(
-      LogisticsDependencyException exception) {
-    if (exception.kind()
-        == LogisticsDependencyException.FailureKind.PERMANENT_REJECTION) {
+  private static OrderProblemException dependencyProblem(LogisticsDependencyException exception) {
+    if (exception.kind() == LogisticsDependencyException.FailureKind.PERMANENT_REJECTION) {
       return new OrderProblemException(
           HttpStatus.CONFLICT,
-          exception.dependencyCode() == null
-              ? "CABIN_SEARCH_REJECTED"
-              : exception.dependencyCode(),
+          exception.dependencyCode() == null ? "CABIN_SEARCH_REJECTED" : exception.dependencyCode(),
           "Не удалось выполнить запрос по свободным бытовкам");
     }
     return new OrderProblemException(

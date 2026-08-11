@@ -16,5 +16,7 @@ import org.mapstruct.ReportingPolicy;
 public interface CatalogFurnitureReferenceMapper {
   @Mapping(target = "equipmentId", source = "furnitureEquipmentId")
   @Mapping(target = "equipmentName", source = "furnitureEquipmentName")
+  @Mapping(target = "equipmentVersion", ignore = true)
+  @Mapping(target = "maximumPerCabin", ignore = true)
   FurnitureEquipmentReference toReference(CatalogNode node);
 }

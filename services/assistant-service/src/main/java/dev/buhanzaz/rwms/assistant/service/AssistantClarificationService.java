@@ -7,10 +7,8 @@ import dev.buhanzaz.rwms.assistant.domain.AssistantClarificationStatus;
 import dev.buhanzaz.rwms.assistant.repository.AssistantClarificationQuestionRepository;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -19,11 +17,13 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.JsonNodeFactory;
 
-/** Owns durable independent question branches and exact button-answer transitions. */
+/** Owns the single durable clarification queue and exact button-answer transitions. */
 @Service
 public class AssistantClarificationService {
   private static final int MAX_QUESTIONS_PER_TOOL_CALL = 5;
   private static final int MAX_OPTIONS_PER_QUESTION = 30;
+  private static final List<AssistantClarificationStatus> ACTIVE_STATUSES =
+      List.of(AssistantClarificationStatus.PENDING, AssistantClarificationStatus.QUEUED);
 
   private final AssistantClarificationQuestionRepository questions;
 
@@ -31,7 +31,7 @@ public class AssistantClarificationService {
     this.questions = questions;
   }
 
-  /** Persists one or more exact questions, superseding only the matching pending branch. */
+  /** Persists one ordered batch and exposes only its actionable head. */
   @Transactional
   public List<AssistantApiModels.ClarificationQuestionResponse> create(
       UUID conversationId,
@@ -42,22 +42,28 @@ public class AssistantClarificationService {
     if (drafts == null || drafts.isEmpty() || drafts.size() > MAX_QUESTIONS_PER_TOOL_CALL) {
       throw new IllegalArgumentException("One to five clarification questions are required");
     }
+    acquireQueueLock(conversationId);
+    if (!activeQuestions(conversationId).isEmpty()) {
+      throw new AssistantConflictException(
+          "Answer the current clarification before creating another batch");
+    }
+    AssistantClarificationQuestion latest =
+        questions.findFirstByConversationIdOrderBySequenceNumberDesc(conversationId).orElse(null);
+    int nextSequence = latest == null ? 1 : Math.addExact(latest.getSequenceNumber(), 1);
     List<AssistantClarificationQuestion> created = new ArrayList<>();
     Set<String> branches = new LinkedHashSet<>();
-    for (QuestionDraft draft : drafts) {
+    for (int index = 0; index < drafts.size(); index++) {
+      QuestionDraft draft = drafts.get(index);
       draft.validate();
       if (!branches.add(draft.branchKey())) {
-        throw new IllegalArgumentException("Clarification branches must be unique per tool call");
+        throw new IllegalArgumentException("Clarification keys must be unique per tool call");
       }
-      questions
-          .findByConversationIdAndBranchKeyAndStatusOrderByCreatedAtAscIdAsc(
-              conversationId, draft.branchKey(), AssistantClarificationStatus.PENDING)
-          .forEach(AssistantClarificationQuestion::supersede);
       UUID questionId = UUID.randomUUID();
       ArrayNode options = JsonNodeFactory.instance.arrayNode();
       for (OptionDraft option : draft.options()) {
         UUID optionId = stableOptionId(questionId, option.value());
-        options.addObject()
+        options
+            .addObject()
             .put("id", optionId.toString())
             .put("label", option.label())
             .put("value", option.value());
@@ -69,53 +75,88 @@ public class AssistantClarificationService {
               turnMessageId,
               toolCallId,
               draft.branchKey(),
+              Math.addExact(nextSequence, index),
               draft.kind(),
               draft.prompt(),
               warehouseId,
               draft.cabinType(),
-              options));
+              options,
+              index == 0
+                  ? AssistantClarificationStatus.PENDING
+                  : AssistantClarificationStatus.QUEUED));
     }
-    // Hibernate may execute inserts before dirty managed updates. Flush superseded branches first
-    // so the partial unique index can never observe two PENDING rows for one branch.
-    questions.flush();
     questions.saveAllAndFlush(created);
-    return created.stream().map(AssistantClarificationService::response).toList();
+    return List.of(response(created.getFirst()));
   }
 
-  /** Resolves one owned pending question while leaving every other branch unchanged. */
+  /** Resolves only the queue head and activates the next exact question, if one exists. */
   @Transactional
   public AnsweredQuestion answer(
       UUID conversationId, AssistantApiModels.ClarificationAnswerRequest answer) {
+    acquireQueueLock(conversationId);
+    List<AssistantClarificationQuestion> active = activeQuestions(conversationId);
     AssistantClarificationQuestion question =
-        questions
-            .findByIdAndConversationId(answer.questionId(), conversationId)
-            .orElseThrow(() -> new AssistantNotFoundException("Clarification question was not found"));
+        active.stream()
+            .filter(candidate -> candidate.getStatus() == AssistantClarificationStatus.PENDING)
+            .findFirst()
+            .orElseThrow(() -> new AssistantConflictException("There is no active clarification"));
+    if (!question.getId().equals(answer.questionId())) {
+      throw new AssistantConflictException("Clarification answer is stale or out of order");
+    }
     question.answer(answer.optionId());
-    questions.save(question);
+    AssistantClarificationQuestion next =
+        active.stream()
+            .filter(candidate -> candidate.getStatus() == AssistantClarificationStatus.QUEUED)
+            .findFirst()
+            .orElse(null);
+    if (next != null) next.activate();
+    questions.saveAllAndFlush(active);
     AssistantApiModels.ClarificationQuestionResponse response = response(question);
     AssistantApiModels.ClarificationOptionResponse selected =
         response.options().stream()
             .filter(option -> option.id().equals(answer.optionId()))
             .findFirst()
-            .orElseThrow(() -> new IllegalStateException("Persisted clarification option is corrupt"));
+            .orElseThrow(
+                () -> new IllegalStateException("Persisted clarification option is corrupt"));
     String message =
         "Ответ на уточнение «"
             + question.getPrompt()
             + "»: выбран вариант «"
             + selected.label()
             + "».";
-    return new AnsweredQuestion(response, message);
+    return new AnsweredQuestion(
+        response,
+        message,
+        next == null ? null : response(next),
+        next == null ? null : next.getToolCallId());
   }
 
-  /** Returns the latest durable state for every branch so reload preserves independent choices. */
+  /** Rejects a free-text turn while the ordered queue still requires an exact answer. */
+  @Transactional
+  public void requireNoActiveQuestion(UUID conversationId) {
+    acquireQueueLock(conversationId);
+    if (!activeQuestions(conversationId).isEmpty()) {
+      throw new AssistantConflictException(
+          "Answer the current clarification before sending another message");
+    }
+  }
+
+  /** Returns ordered history plus only the one actionable head; queued entries stay hidden. */
   @Transactional(readOnly = true)
   public List<AssistantApiModels.ClarificationQuestionResponse> current(UUID conversationId) {
-    Map<String, AssistantClarificationQuestion> latestByBranch = new LinkedHashMap<>();
-    questions.findByConversationIdOrderByCreatedAtAscIdAsc(conversationId)
-        .forEach(question -> latestByBranch.put(question.getBranchKey(), question));
-    return latestByBranch.values().stream()
+    return questions.findByConversationIdOrderBySequenceNumberAsc(conversationId).stream()
+        .filter(question -> question.getStatus() != AssistantClarificationStatus.QUEUED)
         .map(AssistantClarificationService::response)
         .toList();
+  }
+
+  private List<AssistantClarificationQuestion> activeQuestions(UUID conversationId) {
+    return questions.findByConversationIdAndStatusInOrderBySequenceNumberAsc(
+        conversationId, ACTIVE_STATUSES);
+  }
+
+  private void acquireQueueLock(UUID conversationId) {
+    questions.acquireTransactionLock("assistant-clarification:" + conversationId);
   }
 
   private static AssistantApiModels.ClarificationQuestionResponse response(
@@ -135,6 +176,7 @@ public class AssistantClarificationService {
     return new AssistantApiModels.ClarificationQuestionResponse(
         question.getId(),
         question.getBranchKey(),
+        question.getSequenceNumber(),
         question.getKind().name(),
         question.getPrompt(),
         question.getStatus().name(),
@@ -158,7 +200,7 @@ public class AssistantClarificationService {
     }
   }
 
-  /** One independent question branch prepared after authoritative facet validation. */
+  /** One ordered question prepared after authoritative facet validation. */
   public record QuestionDraft(
       String branchKey,
       AssistantClarificationKind kind,
@@ -186,9 +228,12 @@ public class AssistantClarificationService {
     }
   }
 
-  /** Answer transition result used both for persistence and structured SSE emission. */
+  /** Answer transition result used for persistence and ordered structured SSE emission. */
   public record AnsweredQuestion(
-      AssistantApiModels.ClarificationQuestionResponse question, String userMessage) {}
+      AssistantApiModels.ClarificationQuestionResponse question,
+      String userMessage,
+      AssistantApiModels.ClarificationQuestionResponse nextQuestion,
+      UUID nextToolCallId) {}
 
   private static String requiredText(String value, String field, int maximumLength) {
     String normalized = optionalText(value, maximumLength);

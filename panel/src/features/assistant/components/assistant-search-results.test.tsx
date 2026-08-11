@@ -191,14 +191,6 @@ function resultWithGroups(): CabinSearchResult {
   }
 }
 
-const exactFilterSuggestions = {
-  cabinTypes: ["БК-1"],
-  finishes: ["ЛДСП"],
-  dimensions: ["6x2.4"],
-  categories: ["ИТР"],
-  characteristics: ["Пластиковое окно"],
-}
-
 function renderResults(count: number) {
   return render(
     <MemoryRouter>
@@ -639,9 +631,7 @@ describe("AssistantSearchResults layout", () => {
     ).toBeNull()
   })
 
-  it("keeps exact filters hidden until the manager explicitly opens them", async () => {
-    const onSuggestion = vi.fn()
-    const user = userEvent.setup()
+  it("does not render a lower exact-search continuation panel", () => {
     render(
       <MemoryRouter>
         <AssistantSearchResults
@@ -649,101 +639,13 @@ describe("AssistantSearchResults layout", () => {
           result={resultWithCabins(1)}
           selectedIds={new Set()}
           onSelectionChange={vi.fn()}
-          filterSuggestions={exactFilterSuggestions}
-          onSuggestion={onSuggestion}
-        />
-      </MemoryRouter>
-    )
-
-    const toggle = screen.getByRole("button", {
-      name: "Продолжить точный поиск",
-    })
-    expect(toggle.getAttribute("aria-expanded")).toBe("false")
-    expect(screen.queryByRole("radio", { name: "Пластиковое окно" })).toBeNull()
-
-    await user.click(toggle)
-    expect(
-      screen
-        .getByRole("button", { name: "Продолжить точный поиск" })
-        .getAttribute("aria-expanded")
-    ).toBe("true")
-    await user.click(screen.getByRole("radio", { name: "Пластиковое окно" }))
-    expect(onSuggestion).toHaveBeenCalledWith(
-      "Уточни выборку: характеристика «Пластиковое окно»."
-    )
-    await user.click(screen.getByRole("radio", { name: "Есть" }))
-    expect(onSuggestion).toHaveBeenCalledWith(
-      "Уточни выборку: только бытовки с линолеумом."
-    )
-    expect(screen.queryByText("Несуществующий тип")).toBeNull()
-  })
-
-  it("persists the manager's exact-filter open and collapsed choices through result rerenders", async () => {
-    const user = userEvent.setup()
-    const initial = resultWithCabins(1)
-    const { rerender } = render(
-      <MemoryRouter>
-        <AssistantSearchResults
-          accessToken="token"
-          result={initial}
-          selectedIds={new Set()}
-          onSelectionChange={vi.fn()}
-          filterSuggestions={exactFilterSuggestions}
-          onSuggestion={vi.fn()}
-        />
-      </MemoryRouter>
-    )
-
-    const toggle = screen.getByRole("button", {
-      name: "Продолжить точный поиск",
-    })
-    await user.click(toggle)
-    const refreshed = {
-      ...initial,
-      expiresAt: new Date(Date.now() + 20 * 60_000).toISOString(),
-    }
-    rerender(
-      <MemoryRouter>
-        <AssistantSearchResults
-          accessToken="token"
-          result={refreshed}
-          selectedIds={new Set()}
-          onSelectionChange={vi.fn()}
-          filterSuggestions={exactFilterSuggestions}
-          onSuggestion={vi.fn()}
         />
       </MemoryRouter>
     )
 
     expect(
-      screen
-        .getByRole("button", { name: "Продолжить точный поиск" })
-        .getAttribute("aria-expanded")
-    ).toBe("true")
-    expect(screen.getByRole("radio", { name: "Пластиковое окно" })).toBeTruthy()
-
-    await user.click(toggle)
-    rerender(
-      <MemoryRouter>
-        <AssistantSearchResults
-          accessToken="token"
-          result={{
-            ...refreshed,
-            expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
-          }}
-          selectedIds={new Set()}
-          onSelectionChange={vi.fn()}
-          filterSuggestions={exactFilterSuggestions}
-          onSuggestion={vi.fn()}
-        />
-      </MemoryRouter>
-    )
-
-    expect(
-      screen
-        .getByRole("button", { name: "Продолжить точный поиск" })
-        .getAttribute("aria-expanded")
-    ).toBe("false")
+      screen.queryByRole("button", { name: "Продолжить точный поиск" })
+    ).toBeNull()
     expect(screen.queryByRole("radio", { name: "Пластиковое окно" })).toBeNull()
   })
 

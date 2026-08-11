@@ -1,8 +1,6 @@
 package dev.buhanzaz.rwms.logistics.order.domain;
 
-/**
- * Enumerates Order Audit Event Type values used by logistics-owned persisted workflow state.
- */
+/** Enumerates Order Audit Event Type values used by logistics-owned persisted workflow state. */
 public enum OrderAuditEventType {
   ORDER_CREATED,
   CLIENT_SELECTED,
@@ -11,6 +9,7 @@ public enum OrderAuditEventType {
   UNIT_ADDED,
   UNIT_ADD_CONFLICT,
   UNIT_REMOVED,
+  UNIT_REPLACED,
   RESERVATION_CREATED,
   RESERVATION_RELEASED,
   EQUIPMENT_ADDED,

@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from "react"
-import { useInfiniteQuery, useMutation } from "@tanstack/react-query"
+import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query"
 import { useLocation, useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 
@@ -26,6 +26,7 @@ import { useSelectedRentalItemsAvailability } from "@/features/booking/use-selec
 import { ManagerBookingAlertDialog } from "@/features/assistant/components/manager-booking-alert-dialog"
 import { useAuth } from "@/features/auth/use-auth"
 import { OrderCommandIdentityRegistry } from "@/features/orders/api/order-command-identity"
+import { getOrder, ORDERS_QUERY_KEY } from "@/features/orders/api/orders-api"
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { ApiError } from "@/lib/api-client"
@@ -77,15 +78,12 @@ export function BookingCatalogPage() {
         Для пользователя не включён доступ к аренде и бронированию.
       </BookingPageMessage>
     )
-  } else if (!selectedWarehouse) {
-    content = <BookingPageMessage>Склад не выбран.</BookingPageMessage>
   } else {
     content = (
-      <BookingCatalogPageState
-        key={selectedWarehouse.id}
+      <BookingCatalogOrderBoundary
         accessToken={accessToken}
         subjectId={currentUser.id}
-        warehouseId={selectedWarehouse.id}
+        selectedWarehouseId={selectedWarehouse?.id ?? null}
       />
     )
   }
@@ -98,14 +96,107 @@ export function BookingCatalogPage() {
   )
 }
 
+function BookingCatalogOrderBoundary({
+  accessToken,
+  subjectId,
+  selectedWarehouseId,
+}: {
+  accessToken: string
+  subjectId: string
+  selectedWarehouseId: string | null
+}) {
+  const location = useLocation()
+  const query = new URLSearchParams(location.search)
+  const orderId = query.get("orderId")
+  const clientId = query.get("clientId")
+  const mode = query.get("mode") === "REPLACEMENT" ? "REPLACEMENT" : "NORMAL"
+  const replacementUnitIds = query.getAll("replacementUnitId")
+  const orderQuery = useQuery({
+    queryKey: [...ORDERS_QUERY_KEY, "detail", orderId],
+    queryFn: () => getOrder(accessToken, orderId!),
+    enabled: Boolean(orderId),
+  })
+
+  if (!orderId || !clientId) {
+    return (
+      <BookingPageMessage>
+        Откройте добавление бытовок из карточки существующего заказа.
+      </BookingPageMessage>
+    )
+  }
+  if (orderQuery.isPending) {
+    return <BookingPageMessage>Проверяем текущий заказ…</BookingPageMessage>
+  }
+  if (orderQuery.isError) {
+    return (
+      <BookingPageMessage>
+        Не удалось открыть заказ для бронирования.
+      </BookingPageMessage>
+    )
+  }
+
+  const order = orderQuery.data
+  if (order.client.id !== clientId) {
+    return (
+      <BookingPageMessage>
+        Ссылка бронирования не соответствует клиенту этого заказа.
+      </BookingPageMessage>
+    )
+  }
+  const warehouseId = order.warehouseId ?? selectedWarehouseId
+  if (!warehouseId) {
+    return <BookingPageMessage>Склад не выбран.</BookingPageMessage>
+  }
+  if (mode === "NORMAL" && !order.permissions.canEdit) {
+    return (
+      <BookingPageMessage>
+        Обычное бронирование для этого заказа уже недоступно.
+      </BookingPageMessage>
+    )
+  }
+  if (
+    mode === "REPLACEMENT" &&
+    (!order.permissions.canReplaceUnits ||
+      replacementUnitIds.length === 0 ||
+      new Set(replacementUnitIds).size !== replacementUnitIds.length ||
+      replacementUnitIds.some(
+        (unitId) =>
+          !order.units.some(
+            (candidate) => candidate.added && candidate.unit.id === unitId
+          )
+      ))
+  ) {
+    return (
+      <BookingPageMessage>
+        Выбранные бытовки нельзя заменить через это представление.
+      </BookingPageMessage>
+    )
+  }
+
+  return (
+    <BookingCatalogPageState
+      key={`${order.id}:${warehouseId}:${mode}`}
+      accessToken={accessToken}
+      subjectId={subjectId}
+      warehouseId={warehouseId}
+      selectionLimit={mode === "REPLACEMENT" ? replacementUnitIds.length : 100}
+      replacement={mode === "REPLACEMENT"}
+    />
+  )
+}
+
 function BookingCatalogPageState({
   accessToken,
   subjectId,
   warehouseId,
+  selectionLimit,
+  replacement,
 }: {
   accessToken: string
   subjectId: string
   warehouseId: string
+  selectionLimit: number
+  replacement: boolean
 }) {
   const navigate = useNavigate()
   const location = useLocation()
@@ -309,10 +400,12 @@ function BookingCatalogPageState({
           if (
             !checkedIds.has(item.id) &&
             !stagedIds.has(item.id) &&
-            checkedIds.size + stagedIds.size >= 100
+            checkedIds.size + stagedIds.size >= selectionLimit
           ) {
             toast.error(
-              "В одно представление можно добавить не более 100 бытовок."
+              replacement
+                ? `Для замены нужно выбрать ровно ${selectionLimit} бытовок.`
+                : "В одно представление можно добавить не более 100 бытовок."
             )
             return
           }
@@ -342,7 +435,11 @@ function BookingCatalogPageState({
             </Button>
             <Button
               type="button"
-              disabled={stagedIds.size === 0 || holdMutation.isPending}
+              disabled={
+                stagedIds.size === 0 ||
+                (replacement && stagedIds.size !== selectionLimit) ||
+                holdMutation.isPending
+              }
               onClick={() => holdMutation.mutate()}
             >
               {holdMutation.isPending

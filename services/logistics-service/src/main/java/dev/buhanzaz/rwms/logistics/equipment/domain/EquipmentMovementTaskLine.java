@@ -17,6 +17,7 @@ import jakarta.persistence.Version;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.Objects;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.Getter;
@@ -27,8 +28,12 @@ import lombok.NoArgsConstructor;
 @Table(
     name = "equipment_movement_task_line",
     uniqueConstraints = {
-      @UniqueConstraint(name = "uk_equipment_movement_task_line_number", columnNames = {"task_id", "line_number"}),
-      @UniqueConstraint(name = "uk_equipment_movement_task_line_reservation", columnNames = "reservation_id")
+      @UniqueConstraint(
+          name = "uk_equipment_movement_task_line_number",
+          columnNames = {"task_id", "line_number"}),
+      @UniqueConstraint(
+          name = "uk_equipment_movement_task_line_reservation",
+          columnNames = "reservation_id")
     })
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
@@ -67,6 +72,10 @@ public class EquipmentMovementTaskLine {
 
   @Column(name = "expected_source_balance_version", nullable = false)
   private long expectedSourceBalanceVersion;
+
+  /** Exact asset balance identity frozen only for an atomic order-unit replacement. */
+  @Column(name = "source_balance_id")
+  private UUID sourceBalanceId;
 
   @Column(name = "target_warehouse_id", nullable = false)
   private UUID targetWarehouseId;
@@ -126,7 +135,8 @@ public class EquipmentMovementTaskLine {
     requireLocation(sourceRentalItemId, sourceLocationKind, "source");
     requireLocation(targetRentalItemId, targetLocationKind, "target");
     if (sourceWarehouseId.equals(targetWarehouseId)
-        && sameLocation(sourceRentalItemId, sourceLocationKind, targetRentalItemId, targetLocationKind)) {
+        && sameLocation(
+            sourceRentalItemId, sourceLocationKind, targetRentalItemId, targetLocationKind)) {
       throw new IllegalArgumentException("Equipment movement source and target must differ");
     }
     EquipmentMovementTaskLine line = new EquipmentMovementTaskLine();
@@ -173,12 +183,26 @@ public class EquipmentMovementTaskLine {
     touch();
   }
 
+  /** Freezes the exact direct old-cabin source returned by asset movement planning. */
+  public void freezeReplacementSourceBalance(UUID nextSourceBalanceId) {
+    UUID required = Objects.requireNonNull(nextSourceBalanceId, "sourceBalanceId");
+    if (state != EquipmentMovementLineState.PENDING_RESERVATION) {
+      throw new IllegalStateException("Replacement source can be frozen only before reservation");
+    }
+    if (sourceBalanceId != null && !sourceBalanceId.equals(required)) {
+      throw new IllegalStateException("Replacement source balance is immutable");
+    }
+    sourceBalanceId = required;
+    touch();
+  }
+
   public void release(long nextReservationVersion, String reservationState) {
     if (reservationId == null
         || reservationVersion == null
         || nextReservationVersion < reservationVersion
         || !"RELEASED".equals(reservationState)) {
-      throw new IllegalArgumentException("Equipment movement reservation release result is invalid");
+      throw new IllegalArgumentException(
+          "Equipment movement reservation release result is invalid");
     }
     if (state != EquipmentMovementLineState.RESERVED) return;
     reservationVersion = nextReservationVersion;
@@ -190,7 +214,8 @@ public class EquipmentMovementTaskLine {
     if (reservationId == null
         || reservationVersion == null
         || nextReservationVersion < reservationVersion) {
-      throw new IllegalArgumentException("Equipment movement reservation execution result is invalid");
+      throw new IllegalArgumentException(
+          "Equipment movement reservation execution result is invalid");
     }
     if (state != EquipmentMovementLineState.RESERVED) {
       throw new IllegalStateException("Only a reserved equipment movement line can execute");

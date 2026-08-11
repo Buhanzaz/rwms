@@ -534,7 +534,6 @@ data class LogisticsDocumentDto(
     val clientId: String? = null,
     val equipmentMovementTaskId: String? = null,
     val scheduledDate: String? = null,
-    val scheduledAt: String? = null,
     val rentalOrderId: String? = null,
     val lines: List<LogisticsLineDto>,
     val createdAt: String,

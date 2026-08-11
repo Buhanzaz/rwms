@@ -1,12 +1,16 @@
 package dev.buhanzaz.rwms.worker.feature.taskdetail
 
 import dev.buhanzaz.rwms.worker.core.database.WorkerTaskEntity
+import dev.buhanzaz.rwms.worker.core.network.DriverTripDetailsDto
+import dev.buhanzaz.rwms.worker.core.network.DriverTripDesiredDeliveryWindowDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerTaskTimerSnapshotDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerMediaReferenceDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerWorkDto
 import java.math.BigDecimal
 import java.time.Duration
 import java.time.Instant
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 /**
@@ -130,6 +134,67 @@ internal fun taskSourceMediaPresentation(
         byWorkId = byWorkId,
     )
 }
+
+/** Worker-facing labels for one cabin member of a logistics trip. */
+internal data class DriverTripCabinPresentation(
+    val cabinId: String,
+    val unitNumber: String,
+    val desiredContents: List<String>,
+    val actualContents: List<String>,
+    val movementTaskCreated: Boolean,
+    val movementTaskCompleted: Boolean,
+    val contentReady: Boolean,
+)
+
+/** Preserves one presentation card per cabin without merging grouped-trip members. */
+internal fun driverTripCabinPresentations(
+    trip: DriverTripDetailsDto,
+): List<DriverTripCabinPresentation> = trip.cabins.map { cabin ->
+    DriverTripCabinPresentation(
+        cabinId = cabin.cabinId,
+        unitNumber = cabin.unitNumber,
+        desiredContents = cabin.desiredContents.map { equipment ->
+            "${equipment.equipmentName}: ${equipment.quantity}"
+        },
+        actualContents = cabin.actualContents.map { equipment ->
+            val name = equipment.equipmentName?.takeIf(String::isNotBlank)
+                ?: "Оборудование ${equipment.equipmentId}"
+            "$name: ${equipment.quantity} · ${equipment.locationKind}"
+        },
+        movementTaskCreated = cabin.movementTaskCreated,
+        movementTaskCompleted = cabin.movementTaskCompleted,
+        contentReady = cabin.contentReady,
+    )
+}
+
+/** Maps existing logistics operation enum names to concise driver-facing wording. */
+internal fun driverTripOperationLabel(operationType: String): String = when (operationType) {
+    "SHIPMENT" -> "Доставка / аренда"
+    "RETURN" -> "Вывоз"
+    "TRANSFER" -> "Перемещение"
+    else -> operationType
+}
+
+/** Formats one advisory client-requested date or date range. */
+internal fun desiredDeliveryWindowLabel(window: DriverTripDesiredDeliveryWindowDto): String {
+    return if (window.startDate == window.endDate) {
+        displayDate(window.startDate)
+    } else {
+        "${displayDate(window.startDate)}–${displayDate(window.endDate)}"
+    }
+}
+
+/** Formats the logistics-assigned date, never substituting a client preference. */
+internal fun scheduledTripLabel(date: String): String = displayDate(date)
+
+internal fun isLogisticsDriverTaskSource(type: String?): Boolean =
+    type == "LOGISTICS_DRIVER_TASK"
+
+private fun displayDate(raw: String): String = runCatching {
+    LocalDate.parse(raw).format(DRIVER_DATE_FORMATTER)
+}.getOrDefault(raw)
+
+private val DRIVER_DATE_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy")
 
 /** Worker-facing work metadata deliberately has no price/cost field. */
 internal fun workPresentation(work: WorkerWorkDto): WorkPresentation = WorkPresentation(

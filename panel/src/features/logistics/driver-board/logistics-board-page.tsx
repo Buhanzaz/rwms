@@ -65,6 +65,10 @@ import type {
   DriverBoardCard,
 } from "@/features/logistics/driver-board/driver-board-model"
 import {
+  DriverTripDetailsDialog,
+  DriverTripDetailsView,
+} from "@/features/logistics/driver-board/driver-trip-details"
+import {
   listRepairWorkerGroups,
   repairWorkerGroupsQueryKey,
 } from "@/features/repair-tasks/api/repair-worker-directory-api"
@@ -148,7 +152,11 @@ function orderCards(cards: DriverBoardCard[]) {
 }
 
 function isLogisticsTask(card: DriverBoardCard) {
-  return card.kind === "SHIPMENT" || card.kind === "RETURN"
+  return (
+    card.kind === "SHIPMENT" ||
+    card.kind === "RETURN" ||
+    (card.kind === "TRANSFER" && card.tripDetails != null)
+  )
 }
 
 function isTaskMovable(card: DriverBoardCard) {
@@ -330,7 +338,11 @@ function LogisticsTaskCard({
 }) {
   const [expanded, setExpanded] = useState(true)
   const dragDisabled = disabled || !isTaskMovable(card)
-  const cabins = cabinSummary(card.unitNumber)
+  const trip = card.tripDetails
+  const cabins = trip
+    ? `Бытовки: ${trip.cabins.length}`
+    : cabinSummary(card.unitNumber)
+  const tripLabel = trip ? `ходку №${trip.tripNumber}` : "логистическое задание"
   const item: LogisticsDragItem = {
     type: "logistics-task",
     card,
@@ -366,7 +378,7 @@ function LogisticsTaskCard({
       className={cn(
         !dragDisabled && "cursor-grab touch-none active:cursor-grabbing"
       )}
-      aria-label={`Переместить логистическое задание: ${cabins}`}
+      aria-label={`Переместить ${tripLabel}: ${cabins}`}
       {...attributes}
       {...listeners}
     >
@@ -379,8 +391,14 @@ function LogisticsTaskCard({
           )}
         >
           <CardHeader>
-            <CardTitle className="line-clamp-2 pr-10">{card.title}</CardTitle>
-            <CardDescription>{cabins}</CardDescription>
+            <CardTitle className="line-clamp-2 pr-10">
+              {trip
+                ? `Задание №${trip.taskNumber} · Ходка №${trip.tripNumber}`
+                : card.title}
+            </CardTitle>
+            <CardDescription>
+              {trip ? `${trip.clientName} · ${cabins}` : cabins}
+            </CardDescription>
             <CardAction className="flex items-center gap-1">
               <CollapsibleTrigger asChild>
                 <Button
@@ -445,8 +463,18 @@ function LogisticsTaskCard({
                 >
                   {entryStatusLabels[card.entryStatus]}
                 </Badge>
+                <Badge variant="outline">
+                  Водитель: {card.driverAudience.workerName ?? "не назначен"}
+                </Badge>
               </div>
-              {card.taskText?.trim() &&
+              {trip ? (
+                <>
+                  <DriverTripDetailsView details={trip} live={false} />
+                  <DriverTripDetailsDialog card={card} />
+                </>
+              ) : null}
+              {!trip &&
+              card.taskText?.trim() &&
               card.taskText.trim() !== card.title.trim() ? (
                 <p
                   aria-label="Детали задания"

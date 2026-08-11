@@ -23,8 +23,8 @@ import lombok.NoArgsConstructor;
 import org.hibernate.proxy.HibernateProxy;
 
 /**
- * A desired catalogue position for one order cabin. The physical furniture
- * remains asset-owned; this is the order's immutable-name snapshot and intent.
+ * A desired catalogue position for one order cabin. The physical furniture remains asset-owned;
+ * this is the order's immutable-name snapshot and intent.
  */
 @Entity
 @Table(
@@ -72,11 +72,7 @@ public class RentalOrderEquipmentRequirement {
   private OffsetDateTime updatedAt;
 
   public static RentalOrderEquipmentRequirement create(
-      RentalOrder order,
-      UUID rentalItemId,
-      UUID equipmentId,
-      String equipmentName,
-      long quantity) {
+      RentalOrder order, UUID rentalItemId, UUID equipmentId, String equipmentName, long quantity) {
     RentalOrderEquipmentRequirement requirement = new RentalOrderEquipmentRequirement();
     requirement.order = Objects.requireNonNull(order, "order");
     requirement.rentalItemId = Objects.requireNonNull(rentalItemId, "rentalItemId");
@@ -91,14 +87,22 @@ public class RentalOrderEquipmentRequirement {
   public boolean change(String nextEquipmentName, long nextQuantity) {
     String name = requireText(nextEquipmentName, 512, "equipmentName");
     long quantity = requireQuantity(nextQuantity);
-    if (Objects.equals(equipmentName, name)
-        && this.quantity == quantity) {
+    if (Objects.equals(equipmentName, name) && this.quantity == quantity) {
       return false;
     }
     equipmentName = name;
     this.quantity = quantity;
     updatedAt = now();
     return true;
+  }
+
+  /** Transfers the unchanged order furniture intent to a same-order replacement cabin. */
+  public void transferToRentalItem(UUID replacementRentalItemId) {
+    UUID replacement = Objects.requireNonNull(replacementRentalItemId, "replacementRentalItemId");
+    if (!replacement.equals(rentalItemId)) {
+      rentalItemId = replacement;
+      updatedAt = now();
+    }
   }
 
   private static long requireQuantity(long value) {

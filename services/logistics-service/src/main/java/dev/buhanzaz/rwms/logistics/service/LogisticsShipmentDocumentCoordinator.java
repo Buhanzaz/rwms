@@ -12,10 +12,9 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsExternalAttempt;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsGuard;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsGuardState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsTargetService;
+import dev.buhanzaz.rwms.logistics.driver.service.DocumentDriverTaskPlanner;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventStore;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventType;
-import dev.buhanzaz.rwms.logistics.driver.settings.service.ShipmentTaskSettingsService;
-import dev.buhanzaz.rwms.logistics.driver.service.DocumentDriverTaskPlanner;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
@@ -45,8 +44,8 @@ import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
- * Owns the shipment state machine from creation and preparation through planning, confirmation,
- * and cancellation. It records each asset/hold effect before the existing relay processes it.
+ * Owns the shipment state machine from creation and preparation through planning, confirmation, and
+ * cancellation. It records each asset/hold effect before the existing relay processes it.
  */
 @Service
 @RequiredArgsConstructor
@@ -69,9 +68,8 @@ class LogisticsShipmentDocumentCoordinator {
   private final LogisticsDocumentIdempotency idempotency;
   private final LogisticsDocumentReadProjection readProjection;
   private final LogisticsDocumentAttemptWriter attemptWriter;
-  private final LogisticsRentalOrderBindingPolicy rentalOrderBinding;
+  private final LogisticsShipmentCreationPolicy creationPolicy;
   private final DocumentDriverTaskPlanner driverTaskPlanner;
-  private final ShipmentTaskSettingsService shipmentTaskSettings;
 
   LogisticsDocumentCommandResult createShipment(
       UUID subjectId, UUID idempotencyKey, UUID correlationId, CreateShipmentRequest request) {
@@ -106,25 +104,30 @@ class LogisticsShipmentDocumentCoordinator {
     if (replay != null) return result(replay, true);
 
     validateShipmentLineInputs(request.lines());
-    shipmentTaskSettings.requireWithinLimit(
-        request.warehouseId(), request.lines().size(), subjectId);
-
+    creationPolicy.requireWithinTaskLimit(request, subjectId);
     warehouseAdmission.requireAdmission(
         admission,
         List.of(
-            new AdmissionRequirement(
-                request.warehouseId(), WarehouseOperationDirection.OUTGOING)));
+            new AdmissionRequirement(request.warehouseId(), WarehouseOperationDirection.OUTGOING)));
 
-    RentalOrder shipmentOrder = rentalOrderBinding.validateShipmentBinding(request);
+    RentalOrder shipmentOrder = creationPolicy.validateRentalBinding(request);
     LogisticsDocument document =
-        LogisticsDocument.createShipment(
-            request.warehouseId(),
-            request.clientId(),
-            shipmentOrder == null ? request.partySnapshot() : shipmentOrder.getClient().getDisplayName(),
-            request.driverSnapshot(),
-            request.driverWorkerId(),
-            subjectId,
-            correlationId);
+        shipmentOrder == null
+            ? LogisticsDocument.createShipment(
+                request.warehouseId(),
+                request.clientId(),
+                request.partySnapshot(),
+                request.driverSnapshot(),
+                request.driverWorkerId(),
+                subjectId,
+                correlationId)
+            : LogisticsDocument.createRentalOrderShipment(
+                request.warehouseId(),
+                request.clientId(),
+                shipmentOrder.getId(),
+                shipmentOrder.getClient().getDisplayName(),
+                subjectId,
+                correlationId);
     document.scheduleShipment(
         request.driverSnapshot(),
         request.driverWorkerId(),
@@ -133,9 +136,7 @@ class LogisticsShipmentDocumentCoordinator {
     List<LogisticsDocumentLine> lines =
         lineRepository.saveAllAndFlush(
             shipmentLines(
-                document,
-                request.lines(),
-                shipmentOrder == null ? null : shipmentOrder.getId()));
+                document, request.lines(), shipmentOrder == null ? null : shipmentOrder.getId()));
     driverTaskPlanner.plan(document, lines);
     eventStore.initialize(document, lines.size(), correlationId, subjectId);
     startShipmentPreparation(document, lines, correlationId, subjectId, now());
@@ -154,12 +155,15 @@ class LogisticsShipmentDocumentCoordinator {
     requireShipmentCommand(documentId, correlationId, expectedDocumentVersion, request);
     String checksum =
         LogisticsCommandChecksum.sha256(
-            PLAN_SHIPMENT, shipmentPlanFingerprintValues(documentId, expectedDocumentVersion, request));
+            PLAN_SHIPMENT,
+            shipmentPlanFingerprintValues(documentId, expectedDocumentVersion, request));
     idempotency.acquireLock(subjectId, PLAN_SHIPMENT, idempotencyKey);
-    LogisticsDocument replay = idempotency.replay(subjectId, idempotencyKey, PLAN_SHIPMENT, checksum);
+    LogisticsDocument replay =
+        idempotency.replay(subjectId, idempotencyKey, PLAN_SHIPMENT, checksum);
     if (replay != null) return result(replay, true);
 
-    LogisticsDocument document = readProjection.document(documentId, LogisticsDocumentType.SHIPMENT);
+    LogisticsDocument document =
+        readProjection.document(documentId, LogisticsDocumentType.SHIPMENT);
     requireExpectedVersion(
         document, expectedDocumentVersion, "Shipment document version changed concurrently");
     boolean startPreparation = document.getState() == LogisticsDocumentState.DRAFT;
@@ -173,9 +177,12 @@ class LogisticsShipmentDocumentCoordinator {
     synchronizeRentalShipmentTerms(document, request.scheduledDate());
     try {
       document.scheduleShipment(
-          request.driverSnapshot(), request.driverWorkerId(), request.scheduledDate());
+          request.driverSnapshot(),
+          request.driverWorkerId(),
+          request.scheduledDate());
     } catch (IllegalStateException exception) {
-      throw new LogisticsConflictException("Shipment plan cannot be changed in its current lifecycle state");
+      throw new LogisticsConflictException(
+          "Shipment plan cannot be changed in its current lifecycle state");
     }
     if (startPreparation) {
       startShipmentPreparation(document, lines, correlationId, subjectId, now());
@@ -295,7 +302,8 @@ class LogisticsShipmentDocumentCoordinator {
         idempotency.replay(subjectId, idempotencyKey, CONFIRM_SHIPMENT, checksum);
     if (replay != null) return result(replay, true);
 
-    LogisticsDocument document = readProjection.document(documentId, LogisticsDocumentType.SHIPMENT);
+    LogisticsDocument document =
+        readProjection.document(documentId, LogisticsDocumentType.SHIPMENT);
     requireExpectedVersion(
         document, expectedDocumentVersion, "Shipment document version changed concurrently");
     if (document.getState() != LogisticsDocumentState.AWAITING_CONFIRMATION) {
@@ -337,12 +345,15 @@ class LogisticsShipmentDocumentCoordinator {
     requireShipmentCommand(documentId, correlationId, expectedDocumentVersion, new Object());
     String checksum =
         LogisticsCommandChecksum.sha256(
-            CANCEL_SHIPMENT, List.of(documentId.toString(), Long.toString(expectedDocumentVersion)));
+            CANCEL_SHIPMENT,
+            List.of(documentId.toString(), Long.toString(expectedDocumentVersion)));
     idempotency.acquireLock(subjectId, CANCEL_SHIPMENT, idempotencyKey);
-    LogisticsDocument replay = idempotency.replay(subjectId, idempotencyKey, CANCEL_SHIPMENT, checksum);
+    LogisticsDocument replay =
+        idempotency.replay(subjectId, idempotencyKey, CANCEL_SHIPMENT, checksum);
     if (replay != null) return result(replay, true);
 
-    LogisticsDocument document = readProjection.document(documentId, LogisticsDocumentType.SHIPMENT);
+    LogisticsDocument document =
+        readProjection.document(documentId, LogisticsDocumentType.SHIPMENT);
     requireExpectedVersion(
         document, expectedDocumentVersion, "Shipment document version changed concurrently");
     boolean cancellingDraft = document.getState() == LogisticsDocumentState.DRAFT;
@@ -352,11 +363,13 @@ class LogisticsShipmentDocumentCoordinator {
       String operation = attempt.getOperationType();
       boolean mutatingPreparation =
           LogisticsDocumentEffectOperations.SHIPMENT_ASSET_LEASE_ACQUIRE.equals(operation)
-              || operation.startsWith(LogisticsDocumentEffectOperations.SHIPMENT_HOLD_ACQUIRE_PREFIX);
+              || operation.startsWith(
+                  LogisticsDocumentEffectOperations.SHIPMENT_HOLD_ACQUIRE_PREFIX);
       if (mutatingPreparation
           && attempt.getResult()
               != dev.buhanzaz.rwms.logistics.domain.LogisticsExternalAttemptResult.CONFIRMED) {
-        throw new LogisticsConflictException("A shipment preparation effect has an unknown outcome");
+        throw new LogisticsConflictException(
+            "A shipment preparation effect has an unknown outcome");
       }
     }
     driverTaskPlanner.cancelBeforeStart(document, lines);
@@ -501,7 +514,8 @@ class LogisticsShipmentDocumentCoordinator {
     LogisticsGuard guard =
         guardRepository
             .findByLine_Id(line.getId())
-            .orElseThrow(() -> new LogisticsConflictException("Return line has no active asset lease"));
+            .orElseThrow(
+                () -> new LogisticsConflictException("Return line has no active asset lease"));
     if (guard.getGuardState() != LogisticsGuardState.ACTIVE
         || guard.getLeaseId() == null
         || guard.getLeaseVersion() == null

@@ -69,7 +69,7 @@ public class AssistantCabinSearchTool {
     parseSearch(arguments);
   }
 
-  /** Validates an explicit independent-choice request against its structural limits. */
+  /** Validates an explicit ordered-choice request against its structural limits. */
   public void validateClarifications(JsonNode arguments) {
     requireObjectFields(
         arguments, CLARIFICATION_ARGUMENT_FIELDS, Set.of("warehouseId", "questions"));
@@ -90,7 +90,29 @@ public class AssistantCabinSearchTool {
       JsonNode arguments,
       String bearerToken,
       Consumer<AssistantApiModels.TurnEvent> events) {
+    return search(
+        conversationId,
+        rentalInquiryId,
+        turnMessageId,
+        toolCallId,
+        arguments,
+        null,
+        bearerToken,
+        events);
+  }
+
+  /** Executes a search after enforcing the current logistics-owned warehouse, when fixed. */
+  public JsonNode search(
+      UUID conversationId,
+      UUID rentalInquiryId,
+      UUID turnMessageId,
+      UUID toolCallId,
+      JsonNode arguments,
+      UUID fixedWarehouseId,
+      String bearerToken,
+      Consumer<AssistantApiModels.TurnEvent> events) {
     LogicalCabinSearch search = parseSearch(arguments);
+    requireFixedWarehouse(fixedWarehouseId, search.warehouseId());
     JsonNode facetResult = logistics.listAvailableCabinFacets(rentalInquiryId, bearerToken);
     SearchPreparation preparation = prepareSearch(search, facetResult);
     if (!preparation.questions().isEmpty()) {
@@ -166,14 +188,12 @@ public class AssistantCabinSearchTool {
           validateExactOptional(category, metadata.categories(), "categories");
         }
       }
-      validateExactOptional(
-          group.characteristics(), metadata.characteristics(), "characteristics");
+      validateExactOptional(group.characteristics(), metadata.characteristics(), "characteristics");
       String cabinType = group.cabinType();
       if (cabinType == null) {
         List<String> compatibleTypes = metadata.cabinTypesCompatibleWith(group.dimensions());
         if (compatibleTypes.isEmpty()) {
-          throw new IllegalArgumentException(
-              "dimensions is not related to any current cabin type");
+          throw new IllegalArgumentException("dimensions is not related to any current cabin type");
         }
         if (compatibleTypes.size() == 1) {
           cabinType = compatibleTypes.getFirst();
@@ -236,16 +256,13 @@ public class AssistantCabinSearchTool {
     }
     LogicalCabinSearch exact =
         new LogicalCabinSearch(
-            resolved,
-            search.warehouseId(),
-            search.totalQuantity(),
-            search.resultMode());
+            resolved, search.warehouseId(), search.totalQuantity(), search.resultMode());
     exact.validateAllocationMode();
     return new SearchPreparation(exact, metadata, List.of());
   }
 
   /**
-   * Creates one or more independent button questions after verifying every option against current
+   * Creates one ordered batch of button questions after verifying every option against current
    * warehouse metadata (or the fixed append/replace pair).
    */
   public JsonNode requestClarifications(
@@ -256,7 +273,29 @@ public class AssistantCabinSearchTool {
       JsonNode arguments,
       String bearerToken,
       Consumer<AssistantApiModels.TurnEvent> events) {
+    return requestClarifications(
+        conversationId,
+        rentalInquiryId,
+        turnMessageId,
+        toolCallId,
+        arguments,
+        null,
+        bearerToken,
+        events);
+  }
+
+  /** Creates an ordered batch after enforcing the current logistics-owned warehouse. */
+  public JsonNode requestClarifications(
+      UUID conversationId,
+      UUID rentalInquiryId,
+      UUID turnMessageId,
+      UUID toolCallId,
+      JsonNode arguments,
+      UUID fixedWarehouseId,
+      String bearerToken,
+      Consumer<AssistantApiModels.TurnEvent> events) {
     UUID warehouseId = requiredUuid(arguments.get("warehouseId"), "warehouseId");
+    requireFixedWarehouse(fixedWarehouseId, warehouseId);
     AssistantCabinFacetMetadata metadata =
         AssistantCabinFacetMetadata.from(
             logistics.listAvailableCabinFacets(rentalInquiryId, bearerToken), warehouseId);
@@ -300,8 +339,7 @@ public class AssistantCabinSearchTool {
               allowed));
     }
     List<AssistantApiModels.ClarificationQuestionResponse> created =
-        clarifications.create(
-            conversationId, turnMessageId, toolCallId, warehouseId, drafts);
+        clarifications.create(conversationId, turnMessageId, toolCallId, warehouseId, drafts);
     emitQuestions(conversationId, toolCallId, created, events);
     return clarificationResult(created);
   }
@@ -395,10 +433,16 @@ public class AssistantCabinSearchTool {
     return "search:" + identity + ':' + kind.name().toLowerCase(Locale.ROOT);
   }
 
-  private static void validateExactOptional(
-      String value, List<String> allowed, String field) {
+  private static void validateExactOptional(String value, List<String> allowed, String field) {
     if (value != null && !allowed.contains(value)) {
       throw new IllegalArgumentException(field + " must be an exact current facet");
+    }
+  }
+
+  private static void requireFixedWarehouse(UUID fixedWarehouseId, UUID requestedWarehouseId) {
+    if (fixedWarehouseId != null && !fixedWarehouseId.equals(requestedWarehouseId)) {
+      throw new AssistantConflictException(
+          "The rental inquiry is already fixed to another warehouse");
     }
   }
 
@@ -496,14 +540,11 @@ public class AssistantCabinSearchTool {
   }
 
   /**
-   * Keeps the LLM-facing logical grouping separate from the logistics contract,
-   * which deliberately accepts one exact nullable category per physical group.
+   * Keeps the LLM-facing logical grouping separate from the logistics contract, which deliberately
+   * accepts one exact nullable category per physical group.
    */
   private CabinSearchExecution executeCabinSearch(
-      UUID toolCallId,
-      UUID rentalInquiryId,
-      LogicalCabinSearch search,
-      String bearerToken) {
+      UUID toolCallId, UUID rentalInquiryId, LogicalCabinSearch search, String bearerToken) {
     if (!search.requiresAllocation()) {
       JsonNode raw =
           logistics.searchAvailableCabins(
@@ -546,7 +587,8 @@ public class AssistantCabinSearchTool {
     }
     int[] allocations =
         search.hasSharedTotal()
-            ? allocateSharedTotal(search.groups().size(), probes, capacities, search.totalQuantity())
+            ? allocateSharedTotal(
+                search.groups().size(), probes, capacities, search.totalQuantity())
             : allocateExplicitQuantities(search.groups(), probes, capacities);
 
     if (sum(allocations) == 0) {
@@ -582,9 +624,9 @@ public class AssistantCabinSearchTool {
   }
 
   /**
-   * The non-allocation request is one logical group per logistics group. Keep its existing
-   * tolerant projection behavior, while deriving structured availability notices from the cabins
-   * that logistics did return.
+   * The non-allocation request is one logical group per logistics group. Keep its existing tolerant
+   * projection behavior, while deriving structured availability notices from the cabins that
+   * logistics did return.
    */
   private static int[] directLogicalFoundCounts(JsonNode raw, int logicalGroupCount) {
     int[] counts = new int[logicalGroupCount];
@@ -617,9 +659,7 @@ public class AssistantCabinSearchTool {
   }
 
   private static LogisticsClient.CabinSearch exactSearch(
-      UUID warehouseId,
-      List<PhysicalCabinSearchGroup> groups,
-      SearchResultMode resultMode) {
+      UUID warehouseId, List<PhysicalCabinSearchGroup> groups, SearchResultMode resultMode) {
     int requestedCabins = groups.stream().mapToInt(PhysicalCabinSearchGroup::quantity).sum();
     if (requestedCabins > 100) {
       throw new IllegalArgumentException("A cabin search cannot hold more than 100 cabins");
@@ -838,9 +878,7 @@ public class AssistantCabinSearchTool {
   }
 
   private static JsonNode normalizeCabinSearchResult(
-      LogicalCabinSearch search,
-      CabinSearchExecution execution,
-      JsonNode filterSuggestions) {
+      LogicalCabinSearch search, CabinSearchExecution execution, JsonNode filterSuggestions) {
     if (execution.data() == null) {
       throw new AssistantUpstreamException("Logistics returned no tool result");
     }
@@ -856,7 +894,8 @@ public class AssistantCabinSearchTool {
   }
 
   /** Structured, display-safe availability gaps. The panel never has to infer them from prose. */
-  private static ArrayNode cabinSearchNotices(LogicalCabinSearch search, int[] foundByLogicalGroup) {
+  private static ArrayNode cabinSearchNotices(
+      LogicalCabinSearch search, int[] foundByLogicalGroup) {
     ArrayNode notices = JsonNodeFactory.instance.arrayNode();
     if (search.hasSharedTotal()) {
       int found = Math.min(search.totalQuantity(), sum(foundByLogicalGroup));
@@ -885,17 +924,15 @@ public class AssistantCabinSearchTool {
   }
 
   private static ObjectNode cabinSearchNotice(
-      String code,
-      List<LogicalCabinSearchGroup> groups,
-      int requestedQuantity,
-      int foundQuantity) {
+      String code, List<LogicalCabinSearchGroup> groups, int requestedQuantity, int foundQuantity) {
     ObjectNode notice = JsonNodeFactory.instance.objectNode();
     notice.put("code", code);
     ArrayNode criteria = notice.putArray("groups");
     for (int index = 0; index < groups.size(); index++) {
       criteria.add(
           logicalNoticeGroup(
-              groups.get(index), materializedNoticeGroupQuantity(groups, requestedQuantity, index)));
+              groups.get(index),
+              materializedNoticeGroupQuantity(groups, requestedQuantity, index)));
     }
     notice.put("requestedQuantity", requestedQuantity);
     notice.put("foundQuantity", foundQuantity);
@@ -956,7 +993,7 @@ public class AssistantCabinSearchTool {
     }
   }
 
-  /** Structurally valid provider request for one independently answerable question. */
+  /** Structurally valid provider request for one question in an ordered batch. */
   private record RequestedQuestion(
       String branchKey,
       AssistantClarificationKind kind,
@@ -987,7 +1024,8 @@ public class AssistantCabinSearchTool {
         }
       }
       if (physicalGroupCount() > MAX_EXACT_GROUPS) {
-        throw new IllegalArgumentException("Logical groups expand to more than twenty exact groups");
+        throw new IllegalArgumentException(
+            "Logical groups expand to more than twenty exact groups");
       }
       if (!sharedTotal && groups.stream().mapToInt(group -> group.quantity()).sum() > 100) {
         throw new IllegalArgumentException("The requested cabin total cannot exceed 100");
@@ -999,7 +1037,8 @@ public class AssistantCabinSearchTool {
     }
 
     boolean requiresAllocation() {
-      return hasSharedTotal() || groups.stream().anyMatch(LogicalCabinSearchGroup::hasMultipleCategories);
+      return hasSharedTotal()
+          || groups.stream().anyMatch(LogicalCabinSearchGroup::hasMultipleCategories);
     }
 
     LogisticsClient.CabinSearch exactSearch() {
@@ -1067,10 +1106,7 @@ public class AssistantCabinSearchTool {
 
   /** One exact group accepted by the logistics search contract. */
   private record PhysicalCabinSearchGroup(
-      int logicalGroupIndex,
-      LogicalCabinSearchGroup logicalGroup,
-      String category,
-      int quantity) {
+      int logicalGroupIndex, LogicalCabinSearchGroup logicalGroup, String category, int quantity) {
     LogisticsClient.CabinSearchGroup exactGroup() {
       return new LogisticsClient.CabinSearchGroup(
           logicalGroup.cabinType(),
@@ -1101,5 +1137,4 @@ public class AssistantCabinSearchTool {
     APPEND,
     REPLACE
   }
-
 }

@@ -30,6 +30,7 @@ export type EquipmentItemDto = {
   name: string
   active: boolean
   comment: string | null
+  maximumPerCabin: number | null
 
   totalQuantity: number
   stockQuantity: number

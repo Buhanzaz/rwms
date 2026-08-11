@@ -25,8 +25,8 @@ import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
- * Deliberately small private REST client. It forwards the current user bearer
- * token only to logistics and never writes request bodies to logs.
+ * Deliberately small private REST client. It forwards the current user bearer token only to
+ * logistics and never writes request bodies to logs.
  */
 @Component
 public class HttpLogisticsClient implements LogisticsClient {
@@ -50,11 +50,25 @@ public class HttpLogisticsClient implements LogisticsClient {
       UUID clientId,
       AssistantApiModels.NewClientRequest newClient,
       String bearerToken) {
+    return createRentalInquiry(conversationId, clientId, newClient, null, bearerToken);
+  }
+
+  @Override
+  public InquiryBootstrap createRentalInquiry(
+      UUID conversationId,
+      UUID clientId,
+      AssistantApiModels.NewClientRequest newClient,
+      UUID rentalOrderId,
+      String bearerToken) {
     if ((clientId == null) == (newClient == null)) {
       throw new IllegalArgumentException("Exactly one of clientId or newClient is required");
     }
+    if (rentalOrderId != null && clientId == null) {
+      throw new IllegalArgumentException("An order-linked inquiry requires an existing client");
+    }
     ObjectNode request = JsonNodeFactory.instance.objectNode();
     request.put("conversationId", conversationId.toString());
+    if (rentalOrderId != null) request.put("rentalOrderId", rentalOrderId.toString());
     if (clientId != null) {
       request.put("clientId", clientId.toString());
     } else {
@@ -86,9 +100,11 @@ public class HttpLogisticsClient implements LogisticsClient {
             response.path("client").path("id"),
             response.path("clientId"),
             clientId == null ? null : JsonNodeFactory.instance.textNode(clientId.toString()));
+    UUID resolvedRentalOrderId = firstUuid(response.path("rentalOrderId"));
     if (inquiryId == null
         || resolvedClientId == null
-        || (clientId != null && !clientId.equals(resolvedClientId))) {
+        || (clientId != null && !clientId.equals(resolvedClientId))
+        || !java.util.Objects.equals(rentalOrderId, resolvedRentalOrderId)) {
       throw new AssistantUpstreamException("Logistics returned an invalid rental inquiry response");
     }
     return new InquiryBootstrap(
@@ -99,7 +115,34 @@ public class HttpLogisticsClient implements LogisticsClient {
             response.path("status"),
             response.path("state")),
         firstText(response.path("client").path("clientType"), response.path("client").path("type")),
-        firstText(response.path("client").path("displayName"), response.path("client").path("name")));
+        firstText(
+            response.path("client").path("displayName"), response.path("client").path("name")));
+  }
+
+  @Override
+  public RentalInquiryContext readRentalInquiryContext(UUID rentalInquiryId, String bearerToken) {
+    JsonNode response =
+        exchange(
+            "GET",
+            "/api/logistics/v1/rental-inquiries/" + rentalInquiryId,
+            null,
+            bearerToken,
+            null);
+    UUID responseInquiryId = firstUuid(response.path("id"), response.path("rentalInquiryId"));
+    UUID clientId = firstUuid(response.path("client").path("id"), response.path("clientId"));
+    UUID rentalOrderId = firstUuid(response.path("rentalOrderId"));
+    UUID warehouseId = firstUuid(response.path("warehouseId"));
+    String state = firstText(response.path("state"), response.path("status"));
+    if (!rentalInquiryId.equals(responseInquiryId) || clientId == null || state == null) {
+      throw new AssistantUpstreamException("Logistics returned an invalid rental inquiry context");
+    }
+    try {
+      return new RentalInquiryContext(
+          responseInquiryId, clientId, rentalOrderId, warehouseId, state);
+    } catch (IllegalArgumentException invalid) {
+      throw new AssistantUpstreamException(
+          "Logistics returned an invalid rental inquiry context", invalid);
+    }
   }
 
   @Override
@@ -114,10 +157,7 @@ public class HttpLogisticsClient implements LogisticsClient {
 
   @Override
   public JsonNode searchAvailableCabins(
-      UUID rentalInquiryId,
-      UUID idempotencyKey,
-      CabinSearch search,
-      String bearerToken) {
+      UUID rentalInquiryId, UUID idempotencyKey, CabinSearch search, String bearerToken) {
     if (idempotencyKey == null) {
       throw new IllegalArgumentException("idempotencyKey is required for a cabin search");
     }
@@ -245,11 +285,7 @@ public class HttpLogisticsClient implements LogisticsClient {
   }
 
   private JsonNode exchange(
-      String method,
-      String path,
-      JsonNode payload,
-      String bearerToken,
-      String idempotencyKey) {
+      String method, String path, JsonNode payload, String bearerToken, String idempotencyKey) {
     return exchange(method, path, payload, bearerToken, idempotencyKey, false, false);
   }
 
@@ -261,8 +297,7 @@ public class HttpLogisticsClient implements LogisticsClient {
       String bearerToken,
       String idempotencyKey,
       boolean notFoundIsEmpty) {
-    return exchange(
-        method, path, payload, bearerToken, idempotencyKey, notFoundIsEmpty, false);
+    return exchange(method, path, payload, bearerToken, idempotencyKey, notFoundIsEmpty, false);
   }
 
   /**

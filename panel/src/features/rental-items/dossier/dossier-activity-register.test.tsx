@@ -5,8 +5,10 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react"
 import type { ReactNode } from "react"
+import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ApiError } from "@/lib/api-client"
@@ -15,7 +17,10 @@ import {
   DossierActivityFiltersPanel,
   DossierActivityRegister,
 } from "@/features/rental-items/dossier/dossier-activity-register"
-import type { CabinDossierPage } from "@/features/rental-items/dossier/model/dossier-service"
+import type {
+  CabinDossierPage,
+  DossierActivity,
+} from "@/features/rental-items/dossier/model/dossier-service"
 
 const viewport = vi.hoisted(() => ({ isMobile: false }))
 
@@ -35,30 +40,33 @@ const ACTOR_ID = "40000000-0000-0000-0000-000000000001"
 const ACTIVITY_ID = "30000000-0000-0000-0000-000000000001"
 const fetchMock = vi.fn()
 
+function activity(overrides: Partial<DossierActivity> = {}): DossierActivity {
+  return {
+    activityId: ACTIVITY_ID,
+    cabinId: CABIN_ID,
+    warehouseId: "20000000-0000-0000-0000-000000000001",
+    activityCode: "CABIN_CREATED",
+    occurredAt: null,
+    recordedAt: "2026-07-18T12:00:00Z",
+    actorRef: {
+      subjectId: ACTOR_ID,
+      principalType: "USER",
+      profileRevision: null,
+    },
+    sourceRef: {
+      producer: "asset-service",
+      aggregateType: "RENTAL_ITEM",
+      aggregateId: CABIN_ID,
+    },
+    media: [],
+    ...overrides,
+  }
+}
+
 function page(overrides: Partial<CabinDossierPage> = {}): CabinDossierPage {
   return {
     cabinId: CABIN_ID,
-    activities: [
-      {
-        activityId: ACTIVITY_ID,
-        cabinId: CABIN_ID,
-        warehouseId: "20000000-0000-0000-0000-000000000001",
-        activityCode: "CABIN_CREATED",
-        occurredAt: null,
-        recordedAt: "2026-07-18T12:00:00Z",
-        actorRef: {
-          subjectId: ACTOR_ID,
-          principalType: "USER",
-          profileRevision: null,
-        },
-        sourceRef: {
-          producer: "asset-service",
-          aggregateType: "RENTAL_ITEM",
-          aggregateId: CABIN_ID,
-        },
-        media: [],
-      },
-    ],
+    activities: [activity()],
     nextCursor: "next-page",
     visibility: "PARTIAL",
     ...overrides,
@@ -70,7 +78,9 @@ function renderWithQueryClient(children: ReactNode) {
     defaultOptions: { queries: { retry: false } },
   })
   return render(
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter>{children}</MemoryRouter>
+    </QueryClientProvider>
   )
 }
 
@@ -213,7 +223,187 @@ describe("DossierActivityRegister", () => {
       </QueryClientProvider>
     )
 
+    fireEvent.click(screen.getByRole("button", { name: /Бытовка создана/ }))
     expect(screen.getByTestId(`technical-actor-${ACTIVITY_ID}`)).toBeTruthy()
+  })
+
+  it("renders past groups in green, the latest group in blue, and orders them chronologically", () => {
+    const repairId = "60000000-0000-0000-0000-000000000001"
+    renderWithQueryClient(
+      <DossierActivityRegister
+        pages={[
+          page({
+            activities: [
+              activity({ recordedAt: "2026-07-18T12:00:00Z" }),
+              activity({
+                activityId: "30000000-0000-0000-0000-000000000002",
+                activityCode: "REPAIR_CREATED",
+                recordedAt: "2026-07-19T12:00:00Z",
+                sourceRef: {
+                  producer: "maintenance-service",
+                  aggregateType: "REPAIR",
+                  aggregateId: repairId,
+                },
+              }),
+            ],
+          }),
+        ]}
+        error={null}
+        isLoading={false}
+        hasNextPage={false}
+        isFetchingNextPage={false}
+        onLoadMore={vi.fn()}
+      />
+    )
+
+    const timeline = screen.getByRole("list", {
+      name: "Хронология операций бытовки",
+    })
+    const triggers = within(timeline).getAllByRole("button")
+    expect(triggers).toHaveLength(2)
+    expect(triggers[0]?.textContent).toContain("Бытовка создана")
+    expect(triggers[1]?.textContent).toContain("Ремонт создан")
+    expect(
+      [...timeline.querySelectorAll("[data-timeline-state]")].map((node) =>
+        node.getAttribute("data-timeline-state")
+      )
+    ).toEqual(["past", "latest"])
+    expect(
+      timeline
+        .querySelector('[data-timeline-state="past"]')
+        ?.classList.contains("bg-history-past")
+    ).toBe(true)
+    expect(
+      timeline
+        .querySelector('[data-timeline-state="latest"]')
+        ?.classList.contains("bg-primary")
+    ).toBe(true)
+  })
+
+  it("groups ready photos from one canonical folder into one compact operation", () => {
+    const folderId = "70000000-0000-0000-0000-000000000001"
+    const firstMediaId = "71000000-0000-0000-0000-000000000001"
+    const secondMediaId = "71000000-0000-0000-0000-000000000002"
+    const findingId = "72000000-0000-0000-0000-000000000001"
+    renderWithQueryClient(
+      <DossierActivityRegister
+        pages={[
+          page({
+            activities: [
+              activity({
+                activityId: "73000000-0000-0000-0000-000000000001",
+                activityCode: "MEDIA_READY",
+                recordedAt: "2026-07-18T12:00:00Z",
+                sourceRef: {
+                  producer: "media-service",
+                  aggregateType: "MEDIA",
+                  aggregateId: firstMediaId,
+                  secondaryId: CABIN_ID,
+                },
+                media: [
+                  {
+                    mediaId: firstMediaId,
+                    folderId,
+                    findingId,
+                    generation: 1,
+                    state: "READY",
+                  },
+                ],
+              }),
+              activity({
+                activityId: "73000000-0000-0000-0000-000000000002",
+                activityCode: "MEDIA_READY",
+                recordedAt: "2026-07-18T12:01:00Z",
+                sourceRef: {
+                  producer: "media-service",
+                  aggregateType: "MEDIA",
+                  aggregateId: secondMediaId,
+                  secondaryId: CABIN_ID,
+                },
+                media: [
+                  {
+                    mediaId: secondMediaId,
+                    folderId,
+                    findingId,
+                    generation: 1,
+                    state: "READY",
+                  },
+                ],
+              }),
+            ],
+          }),
+        ]}
+        error={null}
+        isLoading={false}
+        hasNextPage={false}
+        isFetchingNextPage={false}
+        onLoadMore={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText("Добавлены 2 фотографии")).toBeTruthy()
+    expect(screen.getByText("Групп: 1")).toBeTruthy()
+    const timeline = screen.getByRole("list", {
+      name: "Хронология операций бытовки",
+    })
+    expect(within(timeline).getAllByRole("button")).toHaveLength(1)
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Добавлены 2 фотографии/ })
+    )
+    expect(screen.getByText("2 события, 2 фото")).toBeTruthy()
+    expect(screen.getAllByText("Готово: 1")).toHaveLength(2)
+  })
+
+  it("groups a repair lifecycle and reveals its details and link on click", () => {
+    const repairId = "60000000-0000-0000-0000-000000000001"
+    const repairSource = {
+      producer: "maintenance-service" as const,
+      aggregateType: "REPAIR",
+      aggregateId: repairId,
+    }
+    renderWithQueryClient(
+      <DossierActivityRegister
+        pages={[
+          page({
+            activities: [
+              activity({
+                activityId: "61000000-0000-0000-0000-000000000001",
+                activityCode: "REPAIR_CREATED",
+                recordedAt: "2026-07-18T12:00:00Z",
+                sourceRef: repairSource,
+              }),
+              activity({
+                activityId: "61000000-0000-0000-0000-000000000002",
+                activityCode: "REPAIR_PENDING_ACCEPTANCE",
+                recordedAt: "2026-07-19T12:00:00Z",
+                sourceRef: repairSource,
+              }),
+            ],
+          }),
+        ]}
+        error={null}
+        isLoading={false}
+        hasNextPage={false}
+        isFetchingNextPage={false}
+        onLoadMore={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText("Групп: 1")).toBeTruthy()
+    const repairTrigger = screen.getByRole("button", {
+      name: /Ремонт ожидает приёмки/,
+    })
+    expect(repairTrigger.getAttribute("aria-expanded")).toBe("false")
+
+    fireEvent.click(repairTrigger)
+
+    expect(repairTrigger.getAttribute("aria-expanded")).toBe("true")
+    expect(screen.getByText("Ремонт создан")).toBeTruthy()
+    expect(screen.getAllByText("Ремонт ожидает приёмки")).toHaveLength(2)
+    expect(
+      screen.getByRole("link", { name: /Открыть ремонт/ }).getAttribute("href")
+    ).toBe(`/repairs?repairId=${repairId}`)
   })
 
   it("formats last, first and optional patronymic before email and login without an ID fallback", () => {

@@ -259,6 +259,12 @@ beforeEach(() => {
   ordersApi.getOrder.mockResolvedValue({
     id: ORDER_ID,
     number: ORDER_NUMBER,
+    desiredDeliveryWindows: [
+      {
+        startDate: "2026-07-20",
+        endDate: "2026-07-20",
+      },
+    ],
     units: [
       {
         unit: { id: ASSET_ID, number: ASSET_NUMBER },
@@ -498,8 +504,12 @@ describe("LogisticsShipmentsPage", () => {
       screen.getByRole("combobox", { name: "Водитель" }),
       "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
     )
-    const scheduledDate = "2026-07-20"
-    await user.type(screen.getByLabelText("Дата отгрузки"), scheduledDate)
+    const desiredDay = document.querySelector<HTMLButtonElement>(
+      '[data-day="20.07.2026"][data-desired-window="true"]'
+    )
+    expect(desiredDay).toBeTruthy()
+    await user.click(desiredDay!)
+    expect(screen.queryByLabelText("Фактическое время ходки")).toBeNull()
     await user.click(screen.getByRole("button", { name: "Сохранить дату" }))
 
     await waitFor(() =>
@@ -509,7 +519,7 @@ describe("LogisticsShipmentsPage", () => {
         expectedVersion: 2,
         driverSnapshot: "Иванов Иван",
         driverWorkerId: DRIVER_WORKER_ID,
-        scheduledDate,
+        scheduledDate: "2026-07-20",
         idempotencyKey: SCHEDULE_KEY,
       })
     )
@@ -652,7 +662,7 @@ describe("LogisticsShipmentsPage", () => {
     )
   })
 
-  it("asks whether to keep or change a shipment date from another day", async () => {
+  it("opens a separate schedule command without chaining shipment confirmation", async () => {
     vi.stubGlobal("crypto", { randomUUID: () => CONFIRM_KEY })
     const future = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)
     shipmentApi.listShipments.mockResolvedValue([
@@ -673,17 +683,13 @@ describe("LogisticsShipmentsPage", () => {
     })
     expect(within(dialog).getByText(/Назначенная дата/)).toBeTruthy()
     await user.click(
-      within(dialog).getByRole("button", { name: "Оставить назначенную" })
+      within(dialog).getByRole("button", { name: "Изменить дату отдельно" })
     )
-    await waitFor(() =>
-      expect(shipmentApi.confirmShipmentPreparation).toHaveBeenCalledWith({
-        accessToken: "shipment-token",
-        documentId: AWAITING_ID,
-        expectedVersion: 5,
-        idempotencyKey: CONFIRM_KEY,
-        keepScheduledDate: true,
-      })
-    )
+    expect(
+      screen.getByRole("heading", { name: "Изменить дату отгрузки" })
+    ).toBeTruthy()
+    expect(shipmentApi.confirmShipmentPreparation).not.toHaveBeenCalled()
+    expect(shipmentApi.replaceShipmentPlan).not.toHaveBeenCalled()
   })
 
   it("cancels a preparation through the service workflow with document CAS", async () => {

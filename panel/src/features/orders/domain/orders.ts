@@ -9,6 +9,7 @@ import {
   normalizeClientDisplayName,
   normalizeClientSearch,
   type ClientType,
+  type AdditionalContact,
   type RentalClient,
 } from "@/features/clients/domain/clients"
 
@@ -50,6 +51,13 @@ export type OrderDesiredEquipment = {
   equipmentId: string
   equipmentName: string
   quantity: number
+  reservationState: "ACTIVE"
+}
+
+/** Advisory receiving preference supplied by the client. */
+export type DesiredDeliveryWindow = {
+  startDate: string
+  endDate: string
 }
 
 export type OrderRentalUnit = {
@@ -73,6 +81,7 @@ export type OrderRentalUnit = {
 export type OrderUnitCandidate = {
   reservationId: string | null
   added: boolean
+  reservationState: "ACTIVE" | null
   unit: OrderRentalUnit
   desiredContents: OrderDesiredEquipment[]
   /** Nullable on the wire; optional keeps older read-only fixtures compatible. */
@@ -101,7 +110,8 @@ export type OrderSummary = {
   longitude: number | null
   contactPhone: string | null
   comment: string | null
-  acceptableDeliveryDates: string[]
+  additionalContacts: AdditionalContact[]
+  desiredDeliveryWindows: DesiredDeliveryWindow[]
   unitCount: number
   createdAt: string
   updatedAt: string
@@ -109,6 +119,8 @@ export type OrderSummary = {
 
 export type OrderDetailPermissions = {
   canEdit: boolean
+  canReplaceUnits: boolean
+  canExtendRentalTerms: boolean
   canViewOtherManagers: boolean
 }
 

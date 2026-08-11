@@ -1,31 +1,49 @@
 package dev.buhanzaz.rwms.logistics.inquiry.api;
 
+import dev.buhanzaz.rwms.logistics.inquiry.domain.ClientPresentationMode;
 import dev.buhanzaz.rwms.logistics.inquiry.domain.PresentationBookingManagerAction;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AdditionalContactInput;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.ClientResponse;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.DesiredDeliveryWindowInput;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.DesiredDeliveryWindowResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.NewClientInput;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderEquipmentContentResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.AssertTrue;
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-/**
- * Defines transport models for rental inquiry, presentation and booking HTTP operations.
- */
+/** Defines transport models for rental inquiry, presentation and booking HTTP operations. */
 public final class RentalInquiryApiModels {
   private RentalInquiryApiModels() {}
 
   public record CreateRentalInquiryRequest(
-      @NotNull UUID conversationId, UUID clientId, @Valid NewClientInput newClient) {
+      UUID conversationId, UUID clientId, @Valid NewClientInput newClient, UUID rentalOrderId) {
+    public CreateRentalInquiryRequest(
+        UUID conversationId, UUID clientId, NewClientInput newClient) {
+      this(conversationId, clientId, newClient, null);
+    }
+
     @AssertTrue(message = "Exactly one of clientId or newClient is required")
     public boolean hasExactlyOneClient() {
       return (clientId == null) != (newClient == null);
+    }
+
+    @AssertTrue(message = "Manual inquiry requires an existing client and target order")
+    public boolean hasManualTarget() {
+      return conversationId != null
+          || (rentalOrderId != null && clientId != null && newClient == null);
     }
   }
 
@@ -37,6 +55,7 @@ public final class RentalInquiryApiModels {
       UUID managerId,
       String managerDisplayName,
       String managerRole,
+      UUID rentalOrderId,
       UUID warehouseId,
       String state,
       UUID bookedOrderId,
@@ -105,6 +124,7 @@ public final class RentalInquiryApiModels {
       Boolean linoleum,
       Map<String, Object> passport,
       List<String> tags,
+      List<OrderEquipmentContentResponse> contents,
       OffsetDateTime updatedAt) {}
 
   public record CabinSearchGroupResult(
@@ -115,8 +135,7 @@ public final class RentalInquiryApiModels {
 
   /** Complete desired chat selection; an empty list releases every inquiry hold immediately. */
   public record CabinSelectionRequest(
-      @NotNull UUID warehouseId,
-      @NotNull @Size(max = 100) List<@NotNull UUID> rentalItemIds) {
+      @NotNull UUID warehouseId, @NotNull @Size(max = 100) List<@NotNull UUID> rentalItemIds) {
     @AssertTrue(message = "rentalItemIds must be unique")
     public boolean hasUniqueRentalItemIds() {
       return rentalItemIds == null
@@ -145,11 +164,11 @@ public final class RentalInquiryApiModels {
       @NotNull UUID warehouseId,
       @NotNull @Size(min = 1, max = 100) List<@NotNull UUID> rentalItemIds) {}
 
-  public record CabinAvailabilityItem(
-      UUID rentalItemId, boolean available, String reason) {}
+  /** One asset-owned cabin availability decision and optional sanitized rejection reason. */
+  public record CabinAvailabilityItem(UUID rentalItemId, boolean available, String reason) {}
 
-  public record CabinAvailabilityResponse(
-      UUID warehouseId, List<CabinAvailabilityItem> items) {}
+  /** Warehouse-scoped availability decisions for the exact requested cabin set. */
+  public record CabinAvailabilityResponse(UUID warehouseId, List<CabinAvailabilityItem> items) {}
 
   public record PresentationGroupInput(
       @NotBlank @Size(max = 128) String key,
@@ -158,9 +177,15 @@ public final class RentalInquiryApiModels {
 
   public record PublishClientPresentationRequest(
       @NotNull UUID warehouseId,
-      @NotNull @Size(min = 1, max = 5)
-          List<@NotNull @Valid PresentationGroupInput> groups,
-      UUID manualBookingDraftId) {}
+      @NotNull @Size(min = 1, max = 5) List<@NotNull @Valid PresentationGroupInput> groups,
+      UUID manualBookingDraftId,
+      ClientPresentationMode mode,
+      @Size(max = 100) List<@NotNull UUID> replacementUnitIds) {
+    public PublishClientPresentationRequest(
+        UUID warehouseId, List<PresentationGroupInput> groups, UUID manualBookingDraftId) {
+      this(warehouseId, groups, manualBookingDraftId, null, List.of());
+    }
+  }
 
   public record PresentationPhoto(
       UUID mediaId,
@@ -181,10 +206,15 @@ public final class RentalInquiryApiModels {
       Boolean linoleum,
       Map<String, Object> passport,
       List<String> tags,
+      List<OrderEquipmentContentResponse> currentContents,
       List<PresentationPhoto> photos) {}
 
-  public record PresentationGroup(
-      String key, String label, List<PresentationCabin> cabins) {}
+  /** One immutable presentation group and its held cabin snapshots. */
+  public record PresentationGroup(String key, String label, List<PresentationCabin> cabins) {}
+
+  /** Live asset-owned furniture availability shown uniformly in every presentation read. */
+  public record PresentationEquipmentAvailability(
+      UUID equipmentId, String equipmentName, long availableQuantity, Integer maximumPerCabin) {}
 
   public record ClientPresentationResponse(
       UUID id,
@@ -198,6 +228,12 @@ public final class RentalInquiryApiModels {
       boolean canConfirm,
       String publicPath,
       UUID bookedOrderId,
+      ClientPresentationMode mode,
+      List<UUID> replacementUnitIds,
+      Integer requiredSelectionCount,
+      boolean requiresDesiredDeliveryWindows,
+      List<DesiredDeliveryWindowResponse> desiredDeliveryWindows,
+      List<PresentationEquipmentAvailability> equipmentAvailability,
       List<PresentationGroup> groups) {}
 
   public record RentalSettingsResponse(
@@ -221,13 +257,44 @@ public final class RentalInquiryApiModels {
       @NotNull @Size(min = 1, max = 100) List<@NotNull UUID> rentalItemIds) {}
 
   public record ManualBookingDraftHoldsResponse(
-      UUID draftId,
-      UUID warehouseId,
-      OffsetDateTime expiresAt,
-      List<UUID> rentalItemIds) {}
+      UUID draftId, UUID warehouseId, OffsetDateTime expiresAt, List<UUID> rentalItemIds) {}
+
+  /** One selected furniture quantity associated with one selected cabin. */
+  public record PresentationEquipmentSelectionInput(
+      @NotNull UUID equipmentId, @NotNull @Min(1) Long quantity) {}
+
+  /** One cabin selected from the presentation together with its own furniture composition. */
+  public record PresentationCabinSelectionInput(
+      @NotNull UUID rentalItemId,
+      @NotNull @Size(max = 100)
+          List<@NotNull @Valid PresentationEquipmentSelectionInput> equipment) {}
 
   public record ConfirmClientPresentationRequest(
-      @NotNull @Size(min = 1, max = 100) List<@NotNull UUID> selectedRentalItemIds) {}
+      @NotNull @Size(min = 1, max = 100)
+          List<@NotNull @Valid PresentationCabinSelectionInput> selections,
+      List<@NotNull @Valid DesiredDeliveryWindowInput> desiredDeliveryWindows,
+      @Min(1) Long rentalMonths,
+      @Size(min = 1, max = 1_000) String deliveryAddress,
+      @DecimalMin("-90") @DecimalMax("90") @Digits(integer = 2, fraction = 6) BigDecimal latitude,
+      @DecimalMin("-180") @DecimalMax("180") @Digits(integer = 3, fraction = 6)
+          BigDecimal longitude,
+      List<@NotNull @Valid AdditionalContactInput> additionalContacts) {
+    public ConfirmClientPresentationRequest(List<PresentationCabinSelectionInput> selections) {
+      this(selections, null, null, null, null, null, null);
+    }
+
+    public ConfirmClientPresentationRequest(
+        List<PresentationCabinSelectionInput> selections,
+        List<DesiredDeliveryWindowInput> desiredDeliveryWindows,
+        Long rentalMonths) {
+      this(selections, desiredDeliveryWindows, rentalMonths, null, null, null, null);
+    }
+
+    @AssertTrue(message = "latitude and longitude must be provided together")
+    public boolean hasCoordinatePair() {
+      return (latitude == null) == (longitude == null);
+    }
+  }
 
   public record PublicClientPresentationResponse(
       UUID id,
@@ -236,15 +303,16 @@ public final class RentalInquiryApiModels {
       OffsetDateTime expiresAt,
       OffsetDateTime viewUntil,
       boolean viewOnly,
+      ClientPresentationMode mode,
+      Integer requiredSelectionCount,
+      boolean requiresDesiredDeliveryWindows,
+      List<DesiredDeliveryWindowResponse> desiredDeliveryWindows,
+      List<PresentationEquipmentAvailability> equipmentAvailability,
       List<PresentationGroup> groups,
       UUID bookedOrderId) {}
 
   public record PresentationBookingResponse(
-      UUID bookingId,
-      String state,
-      UUID orderId,
-      String statusPath,
-      String errorCode) {}
+      UUID bookingId, String state, UUID orderId, String statusPath, String errorCode) {}
 
   public record RentalBookingAlertResponse(
       UUID bookingId,
@@ -264,6 +332,5 @@ public final class RentalInquiryApiModels {
       String category) {}
 
   public record RentalBookingAlertActionRequest(
-      @NotNull @Min(0) Long expectedVersion,
-      @NotNull PresentationBookingManagerAction action) {}
+      @NotNull @Min(0) Long expectedVersion, @NotNull PresentationBookingManagerAction action) {}
 }

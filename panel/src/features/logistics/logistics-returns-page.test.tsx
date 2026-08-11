@@ -267,6 +267,12 @@ beforeEach(() => {
   ordersApi.getOrder.mockResolvedValue({
     id: ORDER_ID,
     number: ORDER_NUMBER,
+    desiredDeliveryWindows: [
+      {
+        startDate: "2026-07-23",
+        endDate: "2026-07-23",
+      },
+    ],
     units: [{ unit: { id: ASSET_ID, number: ASSET_NUMBER } }],
   })
   equipmentApi.getEquipmentItems.mockResolvedValue([
@@ -418,7 +424,8 @@ describe("LogisticsReturnsPage", () => {
     )
 
     expect(screen.getByRole("combobox", { name: "Водитель" })).toBeTruthy()
-    expect(screen.getByLabelText("Дата вывоза")).toBeTruthy()
+    expect(screen.getByText("Фактическая дата вывоза")).toBeTruthy()
+    expect(document.querySelector('[data-slot="calendar"]')).toBeTruthy()
   })
 
   it("uses the server document version, driver and date for pickup", async () => {
@@ -435,8 +442,12 @@ describe("LogisticsReturnsPage", () => {
       screen.getByRole("combobox", { name: "Водитель" }),
       "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
     )
-    const scheduledDate = "2026-07-23"
-    await user.type(screen.getByLabelText("Дата вывоза"), scheduledDate)
+    const desiredDay = document.querySelector<HTMLButtonElement>(
+      '[data-day="23.07.2026"][data-desired-window="true"]'
+    )
+    expect(desiredDay).toBeTruthy()
+    await user.click(desiredDay!)
+    expect(screen.queryByLabelText("Фактическое время ходки")).toBeNull()
     await user.click(
       screen.getByRole("dialog").querySelector('button[type="submit"]')!
     )
@@ -448,7 +459,7 @@ describe("LogisticsReturnsPage", () => {
         expectedVersion: 2,
         driverSnapshot: "Иванов Иван",
         driverWorkerId: DRIVER_WORKER_ID,
-        scheduledDate,
+        scheduledDate: "2026-07-23",
         idempotencyKey: IDEMPOTENCY_KEY,
       })
     )

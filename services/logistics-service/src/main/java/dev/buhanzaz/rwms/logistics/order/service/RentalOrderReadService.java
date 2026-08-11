@@ -6,6 +6,7 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.DesiredDeliveryWindowResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderDesiredEquipmentResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderDetailResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderEquipmentContentResponse;
@@ -52,19 +53,14 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 
 /**
- * Owns rental-order reads and the single response projection path. Remote reservation snapshots
- * are validated here before they are exposed to a read or reused by an in-transaction command.
+ * Owns rental-order reads and the single response projection path. Remote reservation snapshots are
+ * validated here before they are exposed to a read or reused by an in-transaction command.
  */
 @Service
 @RequiredArgsConstructor
 class RentalOrderReadService {
   private static final Set<String> ORDER_ACTOR_ROLES =
-      Set.of(
-          "SYSTEM_ADMIN",
-          "WMS_ADMIN",
-          "WAREHOUSE_MANAGER",
-          "RENTAL_MANAGER",
-          "VIEWER");
+      Set.of("SYSTEM_ADMIN", "WMS_ADMIN", "WAREHOUSE_MANAGER", "RENTAL_MANAGER", "VIEWER");
 
   private final RentalOrderRepository orders;
   private final OrderAuditEventRepository auditEvents;
@@ -215,6 +211,70 @@ class RentalOrderReadService {
     return detail(order, actor, readUnits(order));
   }
 
+  /**
+   * Reads only the client delivery wishes that an order-linked public presentation may expose. The
+   * immutable inquiry association supplies the expected client and warehouse so a stale or
+   * corrupted presentation cannot read another order's data.
+   */
+  List<DesiredDeliveryWindowResponse> presentationDesiredDeliveryWindows(
+      UUID orderId, UUID expectedClientId, UUID expectedWarehouseId) {
+    RentalOrder order = order(orderId);
+    if (!order.getClient().getId().equals(expectedClientId)
+        || !java.util.Objects.equals(order.getWarehouseId(), expectedWarehouseId)) {
+      throw RentalOrderProblems.conflict(
+          "PRESENTATION_ORDER_MISMATCH", "Представление больше не соответствует заказу");
+    }
+    return order.getDesiredDeliveryWindows().stream()
+        .map(mapper::toDesiredDeliveryWindowResponse)
+        .toList();
+  }
+
+  /**
+   * Returns furniture physically available for redistribution from active cabins of the linked
+   * order after retaining that order's complete desired composition. This amount may augment the
+   * shared free pool for a normal add-cabin presentation, but never for a detached or replacement
+   * presentation.
+   */
+  Map<UUID, Long> presentationEquipmentSurplus(
+      UUID orderId, UUID expectedClientId, UUID expectedWarehouseId) {
+    RentalOrder order = order(orderId);
+    if (!order.getClient().getId().equals(expectedClientId)
+        || !java.util.Objects.equals(order.getWarehouseId(), expectedWarehouseId)) {
+      throw RentalOrderProblems.conflict(
+          "PRESENTATION_ORDER_MISMATCH", "Представление больше не соответствует заказу");
+    }
+    Map<UUID, Long> actual = new LinkedHashMap<>();
+    for (LogisticsDependencyGateway.OrderUnitReservation reservation : readUnits(order)) {
+      if (reservation.unit().contents() == null) {
+        throw RentalOrderProblems.invalidDependencyResponse();
+      }
+      for (LogisticsDependencyGateway.OrderEquipmentContent content :
+          reservation.unit().contents()) {
+        if (content == null || content.equipmentId() == null || content.quantity() < 0) {
+          throw RentalOrderProblems.invalidDependencyResponse();
+        }
+        if (content.quantity() > 0) {
+          mergeQuantity(actual, content.equipmentId(), content.quantity());
+        }
+      }
+    }
+    Map<UUID, Long> desired = new LinkedHashMap<>();
+    for (RentalOrderEquipmentRequirement requirement :
+        equipmentRequirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(
+            orderId)) {
+      if (requirement.getQuantity() > 0) {
+        mergeQuantity(desired, requirement.getEquipmentId(), requirement.getQuantity());
+      }
+    }
+    Map<UUID, Long> surplus = new LinkedHashMap<>();
+    actual.forEach(
+        (equipmentId, quantity) -> {
+          long unassigned = quantity - desired.getOrDefault(equipmentId, 0L);
+          if (unassigned > 0) surplus.put(equipmentId, unassigned);
+        });
+    return Map.copyOf(surplus);
+  }
+
   OrderUnitPageResponse availableUnits(
       OrderActor actor, UUID orderId, int page, int size, String search) {
     requirePage(page, size);
@@ -246,17 +306,14 @@ class RentalOrderReadService {
                     return new OrderUnitResponse(
                         candidate.reservationId(),
                         candidate.added(),
+                        candidate.added() ? "ACTIVE" : null,
                         rentalItem(candidate.unit()),
                         desiredByUnit.getOrDefault(candidate.unit().id(), List.of()),
                         rentalTermsByUnit.get(candidate.unit().id()));
                   })
               .toList();
       return new OrderUnitPageResponse(
-          content,
-          result.page(),
-          result.size(),
-          result.totalElements(),
-          result.totalPages());
+          content, result.page(), result.size(), result.totalElements(), result.totalPages());
     } catch (LogisticsDependencyException exception) {
       throw RentalOrderProblems.dependencyProblem(exception);
     }
@@ -298,13 +355,26 @@ class RentalOrderReadService {
         summary.longitude(),
         summary.contactPhone(),
         summary.comment(),
-        summary.acceptableDeliveryDates(),
+        summary.additionalContacts(),
+        summary.desiredDeliveryWindows(),
         summary.unitCount(),
         summary.createdAt(),
         summary.updatedAt(),
         units.stream().map(unit -> unit(unit, desiredByUnit, rentalTermsByUnit)).toList(),
         movements(order.getId()),
-        new OrderPermissions(editability.canEdit(actor, order), actor.canViewOtherManagers()));
+        new OrderPermissions(
+            editability.canEdit(actor, order),
+            editability.canReplaceUnits(actor, order, units),
+            access.canExtendRentalTerms(actor, order),
+            actor.canViewOtherManagers()));
+  }
+
+  private static void mergeQuantity(Map<UUID, Long> target, UUID equipmentId, long quantity) {
+    try {
+      target.merge(equipmentId, quantity, Math::addExact);
+    } catch (ArithmeticException exception) {
+      throw RentalOrderProblems.invalidDependencyResponse();
+    }
   }
 
   private List<OrderMovementResponse> movements(UUID orderId) {
@@ -407,6 +477,7 @@ class RentalOrderReadService {
     return new OrderUnitResponse(
         reservation.reservationId(),
         true,
+        reservation.state(),
         rentalItem(reservation.unit()),
         desiredByUnit.getOrDefault(reservation.unitId(), List.of()),
         rentalTermsByUnit.get(reservation.unitId()));
@@ -421,8 +492,7 @@ class RentalOrderReadService {
                 (left, right) -> left));
   }
 
-  private Map<UUID, List<OrderDesiredEquipmentResponse>> desiredContentsByUnit(
-      RentalOrder order) {
+  private Map<UUID, List<OrderDesiredEquipmentResponse>> desiredContentsByUnit(RentalOrder order) {
     Map<UUID, List<OrderDesiredEquipmentResponse>> values = new LinkedHashMap<>();
     for (RentalOrderEquipmentRequirement requirement :
         equipmentRequirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(

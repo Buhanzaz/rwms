@@ -18,6 +18,7 @@ import type {
 } from "@/features/assistant/api/assistant-api"
 
 const STATUS_LABELS: Record<ClarificationQuestion["status"], string> = {
+  QUEUED: "В очереди",
   PENDING: "Ждёт ответа",
   ANSWERED: "Отвечено",
   SUPERSEDED: "Заменено",
@@ -108,7 +109,7 @@ function ClarificationCard({
       <MessageContent>
         <MessageHeader>Ассистент · уточнение</MessageHeader>
         <Bubble variant={pending ? "outline" : "muted"} className="max-w-full">
-          <BubbleContent className="w-full min-w-0 space-y-3 p-3">
+          <BubbleContent className="flex w-full min-w-0 flex-col gap-3 p-3">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant={pending ? "default" : "outline"}>
                 {STATUS_LABELS[question.status]}
@@ -145,17 +146,21 @@ export function AssistantClarifications({
     option: ClarificationOption
   ) => void
 }) {
-  return questions.map((question) => (
+  const pendingQuestion = [...questions]
+    .filter((question) => question.status === "PENDING")
+    .sort((left, right) => left.sequenceNumber - right.sequenceNumber)[0]
+
+  return pendingQuestion ? (
     <MessageScrollerItem
-      key={`clarification:${question.id}`}
-      messageId={`clarification:${question.id}`}
+      key={`clarification:${pendingQuestion.id}`}
+      messageId={`clarification:${pendingQuestion.id}`}
       className="mx-auto w-full max-w-4xl"
     >
       <ClarificationCard
-        question={question}
+        question={pendingQuestion}
         disabled={disabled}
-        onAnswer={(option) => onAnswer(question, option)}
+        onAnswer={(option) => onAnswer(pendingQuestion, option)}
       />
     </MessageScrollerItem>
-  ))
+  ) : null
 }

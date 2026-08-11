@@ -30,11 +30,11 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
-import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Owns manager actions on completed presentation bookings, fenced by expected version and Idempotency-Key.
+ * Owns manager actions on completed presentation bookings, fenced by expected version and
+ * Idempotency-Key.
  */
 @Service
 @RequiredArgsConstructor
@@ -71,7 +71,10 @@ public class RentalBookingAlertService {
       UUID bookingId,
       UUID idempotencyKey,
       RentalBookingAlertActionRequest request) {
-    if (bookingId == null || idempotencyKey == null || request == null || request.action() == null) {
+    if (bookingId == null
+        || idempotencyKey == null
+        || request == null
+        || request.action() == null) {
       throw new IllegalArgumentException("Booking action and Idempotency-Key are required");
     }
     PresentationBooking booking =
@@ -142,14 +145,21 @@ public class RentalBookingAlertService {
 
   private List<UUID> selected(String value) {
     try {
-      List<UUID> selected = json.readValue(value, new TypeReference<List<UUID>>() {});
+      var tree = json.readTree(value);
+      List<UUID> selected = new java.util.ArrayList<>();
+      for (var item : tree) {
+        selected.add(
+            item.isString()
+                ? UUID.fromString(item.stringValue())
+                : UUID.fromString(item.required("rentalItemId").stringValue()));
+      }
       if (selected == null || selected.isEmpty()) throw corrupt("Выбор клиента отсутствует");
       LinkedHashSet<UUID> unique = new LinkedHashSet<>(selected);
       if (unique.size() != selected.size() || unique.contains(null)) {
         throw corrupt("Выбор клиента повреждён");
       }
       return List.copyOf(selected);
-    } catch (JacksonException exception) {
+    } catch (JacksonException | IllegalArgumentException exception) {
       throw corrupt("Выбор клиента повреждён");
     }
   }

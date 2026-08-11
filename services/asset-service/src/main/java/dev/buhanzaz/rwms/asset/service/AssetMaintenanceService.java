@@ -66,6 +66,16 @@ final class AssetMaintenanceService {
     return catalog.ensureMaintenanceFurniture(subjectId, key, request);
   }
 
+  List<MaintenanceFurnitureEquipmentResponse> furnitureEquipmentSnapshots(
+      MaintenanceFurnitureEquipmentSnapshotRequest request) {
+    return catalog.maintenanceFurnitureReferences(request.externalReferenceIds());
+  }
+
+  /**
+   * Acquires maintenance custody only after the rental lock proves there is no active order
+   * reservation and no live replacement furniture source hold. This makes the recognizable booked
+   * replacement conflict and the post-movement retry one atomic pre-start fence.
+   */
   AssetService.CreateResult<OperationLeaseResponse> acquireLease(
       UUID subjectId, UUID key, AcquireMaintenanceOperationLeaseRequest request) {
     String hash = json.hash(request);
@@ -76,7 +86,10 @@ final class AssetMaintenanceService {
     }
     leases.lockRentalItemAndLease(request.rentalItemId());
     leases.assertNoActiveOrderReservation(
-        request.rentalItemId(), "Reserved order unit cannot acquire an operation lease");
+        request.rentalItemId(),
+        "BOOKED_UNIT_REPLACEMENT_REQUIRED",
+        "Забронированную бытовку необходимо заменить в заказе перед складской операцией");
+    leases.assertNoPendingReplacementFurnitureMovement(request.rentalItemId());
     RentalItem item = rentals.require(request.rentalItemId());
     AssetLeaseService.assertVersion(item.getVersion(), request.expectedRentalItemVersion());
     AssetLeaseService.assertRentalItemAllowsLeaseEffects(item);
@@ -124,6 +137,10 @@ final class AssetMaintenanceService {
   AssetService.CreateResult<RentalItemResponse> fencedStatus(
       UUID subjectId, UUID key, UUID id, MaintenanceFencedStatusRequest request) {
     leases.lockRentalItem(id);
+    leases.assertNoActiveOrderReservation(
+        id,
+        "BOOKED_UNIT_REPLACEMENT_REQUIRED",
+        "Забронированную бытовку необходимо заменить в заказе перед складской операцией");
     OperationLease lease = leases.validate(id, request.leaseId(), request.fencingToken());
     assertOwner(lease, request.ownerType(), request.ownerId());
     String hash = json.hash(new MaintenanceLeaseCommand<>(id, request));

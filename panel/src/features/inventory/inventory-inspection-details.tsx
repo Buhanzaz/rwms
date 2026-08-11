@@ -24,10 +24,8 @@ import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import type { InventoryObservation } from "@/features/inventory/model/inventory-service"
-import {
-  RentalItemCompositionFields,
-  type RentalItemCompositionFormValue,
-} from "@/features/rental-items/rental-item-composition-fields"
+import { RentalItemCompositionFields } from "@/features/rental-items/rental-item-composition-fields"
+import type { RentalItemCompositionFormValue } from "@/features/rental-items/rental-item-composition"
 import type {
   CabinCatalogValue,
   RentalItemCreationOptions,
@@ -567,52 +565,23 @@ function initialFurnitureQuantities(
   )
 }
 
-export function InventoryFurnitureObservationDialog({
-  open,
-  step,
-  accessToken,
-  warehouseId,
+function InventoryFurnitureItems({
+  furniture,
   observation,
   contentsSnapshot,
   onOpenChange,
-  onRequestItems,
   onResolved,
 }: {
-  open: boolean
-  step: FurnitureDialogStep
-  accessToken: string | null
-  warehouseId: string
+  furniture: EquipmentItemDto[]
   observation: InventoryObservation
   contentsSnapshot: Record<string, unknown> | unknown[]
   onOpenChange: (open: boolean) => void
-  onRequestItems: () => void
   onResolved: (observation: InventoryObservation) => void
 }) {
-  const equipmentQuery = useQuery({
-    queryKey: ["inventory", "furniture-catalog", warehouseId],
-    queryFn: () => getEquipmentItems(accessToken, { warehouseId }),
-    enabled: open && step === "items" && Boolean(accessToken && warehouseId),
-  })
-  const furniture = useMemo(
-    () =>
-      (equipmentQuery.data ?? [])
-        .filter(isFurniture)
-        .slice()
-        .sort((left, right) =>
-          left.name.localeCompare(right.name, "ru", { sensitivity: "base" })
-        ),
-    [equipmentQuery.data]
+  const [quantities, setQuantities] = useState<Record<string, string>>(() =>
+    initialFurnitureQuantities(furniture, observation, contentsSnapshot)
   )
-  const [quantities, setQuantities] = useState<Record<string, string>>({})
   const [validationError, setValidationError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!open || step !== "items" || furniture.length === 0) return
-    setQuantities(
-      initialFurnitureQuantities(furniture, observation, contentsSnapshot)
-    )
-    setValidationError(null)
-  }, [contentsSnapshot, furniture, observation, open, step])
 
   function changeQuantity(equipmentId: string, value: string) {
     if (value !== "" && !/^\d+$/.test(value)) return
@@ -649,6 +618,108 @@ export function InventoryFurnitureObservationDialog({
         : { presence: "EXPLICIT_EMPTY", value: [] }
     )
   }
+
+  return (
+    <div className="flex flex-col gap-3">
+      {furniture.map((item) => {
+        const current = quantities[item.id] ?? "0"
+        return (
+          <Field key={item.id} orientation="horizontal">
+            <FieldLabel
+              htmlFor={`inventory-furniture-${item.id}`}
+              className="min-w-0 flex-1"
+            >
+              {item.name}
+            </FieldLabel>
+            <div className="flex items-center gap-1">
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="outline"
+                aria-label={`Уменьшить количество ${item.name}`}
+                disabled={(positiveInteger(current) ?? 0) === 0}
+                onClick={() => adjustQuantity(item.id, -1)}
+              >
+                <HugeiconsIcon icon={MinusSignIcon} />
+              </Button>
+              <Input
+                id={`inventory-furniture-${item.id}`}
+                className="w-20 text-center"
+                inputMode="numeric"
+                aria-label={`Количество мебели ${item.name}`}
+                value={current}
+                onChange={(event) =>
+                  changeQuantity(item.id, event.target.value)
+                }
+              />
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="outline"
+                aria-label={`Увеличить количество ${item.name}`}
+                onClick={() => adjustQuantity(item.id, 1)}
+              >
+                <HugeiconsIcon icon={PlusSignIcon} />
+              </Button>
+            </div>
+          </Field>
+        )
+      })}
+      {validationError ? (
+        <FieldError role="alert">{validationError}</FieldError>
+      ) : null}
+      <DialogFooter>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => onOpenChange(false)}
+        >
+          Отмена
+        </Button>
+        <Button type="button" onClick={saveFurniture}>
+          Сохранить мебель
+        </Button>
+      </DialogFooter>
+    </div>
+  )
+}
+
+export function InventoryFurnitureObservationDialog({
+  open,
+  step,
+  accessToken,
+  warehouseId,
+  observation,
+  contentsSnapshot,
+  onOpenChange,
+  onRequestItems,
+  onResolved,
+}: {
+  open: boolean
+  step: FurnitureDialogStep
+  accessToken: string | null
+  warehouseId: string
+  observation: InventoryObservation
+  contentsSnapshot: Record<string, unknown> | unknown[]
+  onOpenChange: (open: boolean) => void
+  onRequestItems: () => void
+  onResolved: (observation: InventoryObservation) => void
+}) {
+  const equipmentQuery = useQuery({
+    queryKey: ["inventory", "furniture-catalog", warehouseId],
+    queryFn: () => getEquipmentItems(accessToken, { warehouseId }),
+    enabled: open && step === "items" && Boolean(accessToken && warehouseId),
+  })
+  const furniture = useMemo(
+    () =>
+      (equipmentQuery.data ?? [])
+        .filter(isFurniture)
+        .slice()
+        .sort((left, right) =>
+          left.name.localeCompare(right.name, "ru", { sensitivity: "base" })
+        ),
+    [equipmentQuery.data]
+  )
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -709,69 +780,20 @@ export function InventoryFurnitureObservationDialog({
                 В каталоге нет активных позиций мебели. Обновите каталог и
                 повторите осмотр.
               </FieldError>
-            ) : (
-              <div className="flex flex-col gap-3">
-                {furniture.map((item) => {
-                  const current = quantities[item.id] ?? "0"
-                  return (
-                    <Field key={item.id} orientation="horizontal">
-                      <FieldLabel
-                        htmlFor={`inventory-furniture-${item.id}`}
-                        className="min-w-0 flex-1"
-                      >
-                        {item.name}
-                      </FieldLabel>
-                      <div className="flex items-center gap-1">
-                        <Button
-                          type="button"
-                          size="icon-sm"
-                          variant="outline"
-                          aria-label={`Уменьшить количество ${item.name}`}
-                          disabled={(positiveInteger(current) ?? 0) === 0}
-                          onClick={() => adjustQuantity(item.id, -1)}
-                        >
-                          <HugeiconsIcon icon={MinusSignIcon} />
-                        </Button>
-                        <Input
-                          id={`inventory-furniture-${item.id}`}
-                          className="w-20 text-center"
-                          inputMode="numeric"
-                          aria-label={`Количество мебели ${item.name}`}
-                          value={current}
-                          onChange={(event) =>
-                            changeQuantity(item.id, event.target.value)
-                          }
-                        />
-                        <Button
-                          type="button"
-                          size="icon-sm"
-                          variant="outline"
-                          aria-label={`Увеличить количество ${item.name}`}
-                          onClick={() => adjustQuantity(item.id, 1)}
-                        >
-                          <HugeiconsIcon icon={PlusSignIcon} />
-                        </Button>
-                      </div>
-                    </Field>
-                  )
+            ) : open ? (
+              <InventoryFurnitureItems
+                key={JSON.stringify({
+                  furniture: furniture.map((item) => [item.id, item.version]),
+                  observation,
+                  contentsSnapshot,
                 })}
-                {validationError ? (
-                  <FieldError role="alert">{validationError}</FieldError>
-                ) : null}
-                <DialogFooter>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => onOpenChange(false)}
-                  >
-                    Отмена
-                  </Button>
-                  <Button type="button" onClick={saveFurniture}>
-                    Сохранить мебель
-                  </Button>
-                </DialogFooter>
-              </div>
-            )}
+                furniture={furniture}
+                observation={observation}
+                contentsSnapshot={contentsSnapshot}
+                onOpenChange={onOpenChange}
+                onResolved={onResolved}
+              />
+            ) : null}
           </>
         )}
       </DialogContent>

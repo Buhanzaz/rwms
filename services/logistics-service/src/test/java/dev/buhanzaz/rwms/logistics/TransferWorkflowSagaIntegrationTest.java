@@ -661,7 +661,6 @@ class TransferWorkflowSagaIntegrationTest {
                 List.of(new TransferLineRequest(ASSET, 7)),
                 List.of()));
     assertThat(created.response().scheduledDate()).isEqualTo(scheduledDate);
-    assertThat(created.response().scheduledAt()).isNull();
     return new TransferFixture(
         created.response().id(),
         created.response().version(),

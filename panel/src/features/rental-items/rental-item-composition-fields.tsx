@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Add01Icon, CheckIcon, UnfoldMoreIcon } from "@hugeicons/core-free-icons"
 
@@ -32,84 +32,18 @@ import type {
   CabinCatalogValue,
   RentalItemCreationOptions,
 } from "@/features/rental-items/api/asset-rental-items-api"
+import {
+  compositionCategoryOptions,
+  dimensionsForRentalType,
+  type RentalItemCompositionCategoryMode,
+  type RentalItemCompositionFormValue,
+} from "@/features/rental-items/rental-item-composition"
 import { cn } from "@/lib/utils"
 
-export type RentalItemCompositionFormValue = {
-  rentalTypeId: string
-  dimensionId: string
-  finishingId: string
-  category: string
-  characteristicIds: string[]
-  linoleum: "" | "yes" | "no"
-}
-
-export type RentalItemCompositionCategoryMode = "NEW" | "USED" | "EDIT"
-
-export function emptyRentalItemComposition(): RentalItemCompositionFormValue {
-  return {
-    rentalTypeId: "",
-    dimensionId: "",
-    finishingId: "",
-    category: "",
-    characteristicIds: [],
-    linoleum: "",
-  }
-}
-
-export function compositionCategoryOptions(
-  options: RentalItemCreationOptions,
-  mode: RentalItemCompositionCategoryMode,
-  currentCategory: string
-) {
-  const values =
-    mode === "NEW"
-      ? [options.newCategory]
-      : mode === "USED"
-        ? options.usedCategories
-        : [
-            currentCategory,
-            ...options.categories.map((category) => category.name),
-          ]
-
-  return Array.from(
-    new Set(values.filter((value) => value.trim() !== ""))
-  )
-}
-
-export function dimensionsForRentalType(
-  options: RentalItemCreationOptions,
-  rentalTypeId: string
-) {
-  if (!rentalTypeId) return []
-
-  const dimensionsById = new Map(
-    options.dimensions.map((dimension) => [dimension.id, dimension])
-  )
-
-  return options.typeDimensions
-    .filter((link) => link.typeId === rentalTypeId)
-    .sort(
-      (left, right) =>
-        left.sortOrder - right.sortOrder ||
-        left.dimensionId.localeCompare(right.dimensionId)
-    )
-    .flatMap((link) => {
-      const dimension = dimensionsById.get(link.dimensionId)
-      return dimension ? [dimension] : []
-    })
-}
-
-export function isRentalItemCompositionComplete(
-  value: RentalItemCompositionFormValue
-) {
-  return (
-    value.rentalTypeId !== "" &&
-    value.dimensionId !== "" &&
-    value.finishingId !== "" &&
-    value.category.trim() !== "" &&
-    value.linoleum !== ""
-  )
-}
+export type {
+  RentalItemCompositionCategoryMode,
+  RentalItemCompositionFormValue,
+} from "@/features/rental-items/rental-item-composition"
 
 function CatalogDropdown({
   value,
@@ -266,10 +200,6 @@ function CharacteristicsDialog({
   onConfirm: (ids: string[]) => void
 }) {
   const [draftIds, setDraftIds] = useState<string[]>(() => [...selectedIds])
-
-  useEffect(() => {
-    if (open) setDraftIds([...selectedIds])
-  }, [open, selectedIds])
 
   function toggleCharacteristic(id: string, checked: boolean) {
     setDraftIds((current) => {

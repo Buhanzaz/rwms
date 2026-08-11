@@ -112,6 +112,7 @@ function cabinEquipment(quantity = 4): EquipmentItemDto {
     name: "Стул",
     active: true,
     comment: null,
+    maximumPerCabin: null,
     totalQuantity: quantity,
     stockQuantity: 0,
     cabinStockQuantity: quantity,

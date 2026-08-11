@@ -46,6 +46,48 @@ facts lookup by warehouse and required query. It searches number, type, finish,
 dimension, category, characteristics and linoleum across all current statuses;
 it does not check availability or create, renew or release a hold.
 
+## Order furniture and cabin replacement
+
+`equipment_catalog_item.maximum_per_cabin` is the nullable asset-owned limit for one equipment
+position in one cabin, introduced by Flyway V36; `null` preserves the earlier unlimited behavior.
+Order equipment commands
+receive requirements grouped by active order cabin, validate every configured limit, aggregate the
+same order-wide reservation and serialize unit/furniture composition with the order advisory lock.
+Shared availability subtracts only reservation quantities not already fulfilled by physical
+furniture inside that order's active cabins, so booked contents are never counted twice.
+
+Presentation conversion may include the authoritative full post-conversion unit requirements. It
+materializes selected cabin reservations and replaces the order-wide equipment reservation in one
+transaction; a capacity or maximum conflict leaves the presentation holds active. `AvailableCabin`
+snapshots include physical `contents`, allowing a presentation consumer to combine shared global
+availability only with contents of the actually selected held cabins, never all alternatives.
+`ReplacePresentationHoldsResponse.cabins` freezes those snapshots after the canonical locks and in
+the requested cabin order. While a presentation hold is live, direct transfer and equipment
+movement acquire/execute commands reject that cabin as a source or known target, so the published
+contents cannot drift before conversion or release.
+
+The standard order equipment movement plan uses warehouse-side physical surplus from another
+active `CABIN_NON_RENTED` unit of the same order before legacy allocatable sources. Acquiring such a
+line supplies `orderId`, `targetRentalItemId` and the authoritative `units` collection together.
+The existing allocation hold stores that nullable order/target/unit context, plus optional released
+source-reservation provenance for an atomic replacement, as introduced by Flyway V37; the shared
+order/equipment/balance lock order caps the hold by both source surplus and target deficit,
+including earlier active source and inbound holds. `CABIN_RENTED` contents may fulfil the aggregate
+reservation but are never offered as a warehouse movement source.
+
+`POST /api/internal/asset/v1/logistics/orders/{orderId}/units/replace` replaces one or more ordered
+old/new pairs atomically in the same order. It validates the complete post-swap composition,
+requires every old cabin to still be `BOOKED`, converts the selected presentation holds and releases
+all unselected alternatives in that scope, globally locks every old furniture source and pre-creates
+the existing `LOGISTICS_EQUIPMENT_MOVEMENT` reservations before releasing any old order reservation.
+Each pre-created line durably records the post-swap composition and released old reservation;
+ordinary acquire can only replay it, and execution revalidates the released source, active target,
+warehouse and order-wide furniture reservation. A failure in any pair rolls back the batch and every
+presentation hold transition. The old cabin remains non-bookable `BOOKED` without an active order
+reservation. A live replacement furniture hold blocks maintenance acquisition until the existing
+movement executes (an expired hold is not treated as live); its furniture reservation remains
+order-wide and is not released during replacement.
+
 ## Internal application structure
 
 `AssetService` is a stable controller-facing facade with five exact application

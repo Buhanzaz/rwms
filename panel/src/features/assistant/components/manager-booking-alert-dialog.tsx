@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react"
+import { useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Loading03Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -26,7 +26,7 @@ import { Button } from "@/components/ui/button"
 const RENTAL_BOOKING_ALERTS_QUERY_KEY = ["rental-booking-alerts"] as const
 const RENTAL_BOOKING_ALERTS_REFETCH_INTERVAL_MS = 10_000
 
-export function rentalBookingAlertsQueryKey(subjectId: string | undefined) {
+function rentalBookingAlertsQueryKey(subjectId: string | undefined) {
   return [
     ...RENTAL_BOOKING_ALERTS_QUERY_KEY,
     subjectId ?? "unknown-user",
@@ -35,15 +35,33 @@ export function rentalBookingAlertsQueryKey(subjectId: string | undefined) {
 
 export function ManagerBookingAlertDialog() {
   const { accessToken, currentUser } = useAuth()
+  return (
+    <ManagerBookingAlertContent
+      key={currentUser?.id ?? "unknown-user"}
+      accessToken={accessToken}
+      subjectId={currentUser?.id}
+      rentalAccess={currentUser?.rentalAccess ?? false}
+    />
+  )
+}
+
+function ManagerBookingAlertContent({
+  accessToken,
+  subjectId,
+  rentalAccess,
+}: {
+  accessToken: string | null
+  subjectId: string | undefined
+  rentalAccess: boolean
+}) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const commandIdentity = useRef(new OrderCommandIdentityRegistry())
-  const handledBookingIds = useRef(new Set<string>())
-  const queryKey = rentalBookingAlertsQueryKey(currentUser?.id)
-  const enabled = Boolean(accessToken && currentUser?.rentalAccess)
-  useEffect(() => {
-    handledBookingIds.current.clear()
-  }, [currentUser?.id])
+  const [handledBookingIds, setHandledBookingIds] = useState(
+    () => new Set<string>()
+  )
+  const queryKey = rentalBookingAlertsQueryKey(subjectId)
+  const enabled = Boolean(accessToken && rentalAccess)
   const alertsQuery = useQuery({
     queryKey,
     queryFn: () => getRentalBookingAlerts(accessToken!),
@@ -53,7 +71,7 @@ export function ManagerBookingAlertDialog() {
       : false,
   })
   const alerts = (alertsQuery.data ?? []).filter(
-    (candidate) => !handledBookingIds.current.has(candidate.bookingId)
+    (candidate) => !handledBookingIds.has(candidate.bookingId)
   )
   const alert = alerts[0]
 
@@ -78,7 +96,11 @@ export function ManagerBookingAlertDialog() {
     },
     onSuccess: ({ alert, action, fingerprint }) => {
       commandIdentity.current.confirm(fingerprint)
-      handledBookingIds.current.add(alert.bookingId)
+      setHandledBookingIds((current) => {
+        const next = new Set(current)
+        next.add(alert.bookingId)
+        return next
+      })
       queryClient.setQueryData<RentalBookingAlert[]>(queryKey, (current) =>
         current?.filter((candidate) => candidate.bookingId !== alert.bookingId)
       )

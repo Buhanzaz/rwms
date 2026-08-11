@@ -2,6 +2,7 @@ import type {
   CreateManualMovement,
   DriverBoard,
   DriverBoardCard,
+  DriverTask,
   MoveDriverBoardTask,
 } from "@/features/logistics/driver-board/driver-board-model"
 import { bearerRequest } from "@/lib/api-client"
@@ -22,6 +23,17 @@ export function getDriverBoard(accessToken: string, warehouseId: string) {
   return bearerRequest<DriverBoard>(
     accessToken,
     `${DRIVER_BOARD_API}?${query.toString()}`
+  )
+}
+
+export function driverTaskQueryKey(driverTaskId: string) {
+  return ["logistics", "driver-task", driverTaskId] as const
+}
+
+export function getDriverTask(accessToken: string, driverTaskId: string) {
+  return bearerRequest<DriverTask>(
+    accessToken,
+    `${DRIVER_TASKS_API}/${encodeURIComponent(driverTaskId)}`
   )
 }
 

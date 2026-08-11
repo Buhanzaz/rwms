@@ -1,23 +1,30 @@
 package dev.buhanzaz.rwms.logistics.order.domain;
 
+import jakarta.persistence.CollectionTable;
 import jakarta.persistence.Column;
+import jakarta.persistence.ElementCollection;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.OrderColumn;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
 import java.sql.Types;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.BatchSize;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.proxy.HibernateProxy;
 
@@ -76,6 +83,14 @@ public class OrderClient {
   @Column(name = "source", length = 255)
   private String source;
 
+  @ElementCollection
+  @CollectionTable(
+      name = "order_client_additional_contact",
+      joinColumns = @JoinColumn(name = "client_id", nullable = false))
+  @OrderColumn(name = "position")
+  @BatchSize(size = 100)
+  private List<AdditionalContact> additionalContacts = new ArrayList<>();
+
   @Column(name = "created_by_subject_id", nullable = false)
   private UUID createdBySubjectId;
 
@@ -95,9 +110,8 @@ public class OrderClient {
   /**
    * Creates a client owned by the authenticated responsible manager.
    *
-   * <p>A contact person is mandatory only for a legal entity. The phone projection is mandatory
-   * for every new client even though historical rows created before V42 can still contain no
-   * phone.</p>
+   * <p>A contact person is mandatory only for a legal entity. The phone projection is mandatory for
+   * every new client even though historical rows created before V42 can still contain no phone.
    */
   public static OrderClient create(
       ClientType clientType,
@@ -112,6 +126,7 @@ public class OrderClient {
       String responsibleManagerDisplayName,
       String comment,
       String source,
+      List<AdditionalContact> additionalContacts,
       UUID actorSubjectId,
       UUID idempotencyKey,
       String requestSha256) {
@@ -136,12 +151,27 @@ public class OrderClient {
         requireText(responsibleManagerDisplayName, 255, "responsibleManagerDisplayName");
     client.comment = optionalText(comment, 2_000, "comment");
     client.source = optionalText(source, 255, "source");
+    client.additionalContacts.addAll(normalizeAdditionalContacts(additionalContacts));
     client.createdBySubjectId = Objects.requireNonNull(actorSubjectId, "actorSubjectId");
     client.creationIdempotencyKey = Objects.requireNonNull(idempotencyKey, "idempotencyKey");
     client.creationRequestSha256 = requireHash(requestSha256);
     client.createdAt = now();
     client.updatedAt = client.createdAt;
     return client;
+  }
+
+  /** Returns the ordered client-owned contacts without exposing the mutable JPA collection. */
+  public List<AdditionalContact> getAdditionalContacts() {
+    return List.copyOf(additionalContacts);
+  }
+
+  private static List<AdditionalContact> normalizeAdditionalContacts(
+      List<AdditionalContact> contacts) {
+    if (contacts == null || contacts.isEmpty()) return List.of();
+    if (contacts.stream().anyMatch(Objects::isNull)) {
+      throw new IllegalArgumentException("additionalContacts are invalid");
+    }
+    return List.copyOf(contacts);
   }
 
   public boolean matchesCreationRequest(String requestSha256) {
@@ -188,9 +218,7 @@ public class OrderClient {
         this instanceof HibernateProxy proxy
             ? proxy.getHibernateLazyInitializer().getPersistentClass()
             : getClass();
-    return thisClass == otherClass
-        && id != null
-        && Objects.equals(id, ((OrderClient) other).id);
+    return thisClass == otherClass && id != null && Objects.equals(id, ((OrderClient) other).id);
   }
 
   @Override

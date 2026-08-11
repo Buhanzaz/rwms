@@ -1,10 +1,12 @@
 package dev.buhanzaz.rwms.asset.api;
 
+import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderUnitEquipmentRequirements;
 import dev.buhanzaz.rwms.asset.domain.BalanceLocationKind;
 import dev.buhanzaz.rwms.asset.domain.CabinCatalogKind;
 import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -147,18 +149,37 @@ public final class AssetApiModels {
   /** Text remains in the service-local append-only store and is never a Kafka fact. */
   public record ManualNoteResponse(UUID id, UUID rentalItemId, String text, OffsetDateTime createdAt) {}
 
+  /** Creates one asset-owned equipment item with an optional per-cabin quantity invariant. */
   public record CreateEquipmentRequest(
       @NotBlank @Size(max = 255) String name,
       @NotNull EquipmentCategory category,
-      @Size(max = 2000) String comment) {}
+      @Size(max = 2000) String comment,
+      @Positive Integer maximumPerCabin) {
+    public CreateEquipmentRequest(String name, EquipmentCategory category, String comment) {
+      this(name, category, comment, null);
+    }
+  }
+  /** Version-fenced equipment mutation; a null maximum explicitly clears the configured limit. */
   public record UpdateEquipmentRequest(
       @NotNull @Min(0) Long expectedVersion,
       @NotBlank @Size(max = 255) String name,
       @NotNull EquipmentCategory category,
       boolean active,
-      @Size(max = 2000) String comment) {}
+      @Size(max = 2000) String comment,
+      @Positive Integer maximumPerCabin) {
+    public UpdateEquipmentRequest(
+        Long expectedVersion,
+        String name,
+        EquipmentCategory category,
+        boolean active,
+        String comment) {
+      this(expectedVersion, name, category, active, comment, null);
+    }
+  }
+  /** Asset-owned equipment catalog truth exposed consistently to every reservation channel. */
   public record EquipmentResponse(UUID id, long version, String name, EquipmentCategory category,
-      boolean active, String comment, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+      boolean active, String comment, Integer maximumPerCabin, OffsetDateTime createdAt,
+      OffsetDateTime updatedAt) {}
 
   public record EquipmentContentResponse(
       UUID equipmentId,
@@ -230,11 +251,30 @@ public final class AssetApiModels {
   /** Read projection exposes the canonical cabin number but excludes passport, comments and equipment. */
   public record MaintenanceRentalItemSnapshot(
       UUID id, long version, UUID warehouseId, String number, RentalItemStatus status) {}
+  /**
+   * Durable maintenance-node ensure command. A null expected version is legacy preserve semantics;
+   * only a version-fenced command may change or clear {@code maximumPerCabin}.
+   */
   public record EnsureMaintenanceFurnitureEquipmentRequest(
       @NotNull UUID externalReferenceId,
-      @NotBlank @Size(max = 255) String equipmentName) {}
+      @NotBlank @Size(max = 255) String equipmentName,
+      @Min(0) Long expectedEquipmentVersion,
+      @Positive Integer maximumPerCabin) {
+    public EnsureMaintenanceFurnitureEquipmentRequest(
+        UUID externalReferenceId, String equipmentName) {
+      this(externalReferenceId, equipmentName, null, null);
+    }
+  }
+  /** Asset-owned furniture identity, version and per-cabin maximum for one maintenance node. */
   public record MaintenanceFurnitureEquipmentResponse(
-      UUID externalReferenceId, UUID equipmentId, String equipmentName) {}
+      UUID externalReferenceId,
+      UUID equipmentId,
+      String equipmentName,
+      long equipmentVersion,
+      Integer maximumPerCabin) {}
+  /** Bounded maintenance read of asset-owned furniture settings by durable catalog-node IDs. */
+  public record MaintenanceFurnitureEquipmentSnapshotRequest(
+      @NotNull @Size(max = 10000) List<@NotNull UUID> externalReferenceIds) {}
   public record AcquireMaintenanceOperationLeaseRequest(
       @NotNull UUID rentalItemId,
       @NotNull MaintenanceLeaseOwnerType ownerType,
@@ -506,8 +546,9 @@ public final class AssetApiModels {
   }
 
   /**
-   * Reserves one exact physical source balance until the task deadline. The
-   * deadline is not a service TTL and therefore is never silently extended.
+   * Reserves one exact physical source balance until the task deadline. The deadline is not a
+   * service TTL and therefore is never silently extended. The optional order context is all-null or
+   * all-present; replacement provenance can only replay a hold pre-created by an atomic cabin swap.
    */
   public record AcquireLogisticsEquipmentMovementReservationRequest(
       @NotNull UUID movementId,
@@ -519,7 +560,82 @@ public final class AssetApiModels {
       @NotNull BalanceLocationKind sourceLocationKind,
       @NotNull @Min(0) Long expectedSourceBalanceVersion,
       @NotNull @Min(1) Long quantity,
-      @NotNull OffsetDateTime reservedUntil) {}
+      @NotNull OffsetDateTime reservedUntil,
+      UUID orderId,
+      UUID targetRentalItemId,
+      @Size(max = 100) List<@NotNull @Valid OrderUnitEquipmentRequirements> units,
+      UUID replacementSourceReservationId) {
+    public AcquireLogisticsEquipmentMovementReservationRequest(
+        UUID movementId,
+        UUID lineId,
+        LogisticsEquipmentMovementPurpose purpose,
+        UUID equipmentId,
+        UUID sourceWarehouseId,
+        UUID sourceRentalItemId,
+        BalanceLocationKind sourceLocationKind,
+        Long expectedSourceBalanceVersion,
+        Long quantity,
+        OffsetDateTime reservedUntil) {
+      this(
+          movementId,
+          lineId,
+          purpose,
+          equipmentId,
+          sourceWarehouseId,
+          sourceRentalItemId,
+          sourceLocationKind,
+          expectedSourceBalanceVersion,
+          quantity,
+          reservedUntil,
+          null,
+          null,
+          null,
+          null);
+    }
+
+    public AcquireLogisticsEquipmentMovementReservationRequest(
+        UUID movementId,
+        UUID lineId,
+        LogisticsEquipmentMovementPurpose purpose,
+        UUID equipmentId,
+        UUID sourceWarehouseId,
+        UUID sourceRentalItemId,
+        BalanceLocationKind sourceLocationKind,
+        Long expectedSourceBalanceVersion,
+        Long quantity,
+        OffsetDateTime reservedUntil,
+        UUID orderId,
+        UUID targetRentalItemId,
+        List<OrderUnitEquipmentRequirements> units) {
+      this(
+          movementId,
+          lineId,
+          purpose,
+          equipmentId,
+          sourceWarehouseId,
+          sourceRentalItemId,
+          sourceLocationKind,
+          expectedSourceBalanceVersion,
+          quantity,
+          reservedUntil,
+          orderId,
+          targetRentalItemId,
+          units,
+          null);
+    }
+
+    /** Requires the complete order context together or preserves the legacy allocatable path. */
+    @AssertTrue
+    public boolean isOrderContextComplete() {
+      boolean absent =
+          orderId == null
+              && targetRentalItemId == null
+              && units == null
+              && replacementSourceReservationId == null;
+      boolean complete = orderId != null && targetRentalItemId != null && units != null;
+      return absent || complete;
+    }
+  }
 
   /** Exact owner and reservation-version CAS used when cancelling a planned move. */
   public record LogisticsEquipmentMovementReservationCommandRequest(

@@ -17,6 +17,7 @@ const questions: ClarificationQuestion[] = [
   {
     id: "11111111-1111-4111-8111-111111111111",
     branchKey: "search:private-id:osb",
+    sequenceNumber: 1,
     kind: "DIMENSIONS",
     prompt: "Какой размер бытовки с отделкой ОСБ нужен?",
     status: "PENDING",
@@ -39,9 +40,10 @@ const questions: ClarificationQuestion[] = [
   {
     id: "44444444-4444-4444-8444-444444444444",
     branchKey: "search:private-id:ldsp",
+    sequenceNumber: 2,
     kind: "CABIN_TYPE",
     prompt: "Какой тип бытовки с отделкой ЛДСП нужен?",
-    status: "PENDING",
+    status: "QUEUED",
     options: [
       {
         id: "55555555-5555-4555-8555-555555555555",
@@ -63,10 +65,10 @@ const questions: ClarificationQuestion[] = [
 afterEach(cleanup)
 
 describe("AssistantClarifications", () => {
-  it("keeps independent branches actionable in either order without exposing branch keys", async () => {
+  it("shows only the first sequential clarification and advances after its answer", async () => {
     const onAnswer = vi.fn()
     const user = userEvent.setup()
-    render(
+    const { rerender } = render(
       <AssistantClarifications
         questions={questions}
         disabled={false}
@@ -75,24 +77,42 @@ describe("AssistantClarifications", () => {
     )
 
     expect(screen.getByText("Размер")).toBeTruthy()
-    expect(screen.getByText("Тип")).toBeTruthy()
+    expect(screen.queryByText("Тип")).toBeNull()
     expect(screen.queryByText(/private-id/)).toBeNull()
     expect(
       screen.getByText("Какой размер бытовки с отделкой ОСБ нужен?")
     ).toBeTruthy()
     expect(
+      screen.queryByText("Какой тип бытовки с отделкой ЛДСП нужен?")
+    ).toBeNull()
+
+    await user.click(screen.getByRole("radio", { name: "6x2.4" }))
+    expect(onAnswer).toHaveBeenCalledWith(questions[0], questions[0].options[0])
+
+    rerender(
+      <AssistantClarifications
+        disabled={false}
+        questions={[
+          {
+            ...questions[0],
+            status: "ANSWERED",
+            answeredOptionId: questions[0].options[0].id,
+            answeredAt: "2026-08-09T10:02:00Z",
+          },
+          { ...questions[1], status: "PENDING" },
+        ]}
+        onAnswer={onAnswer}
+      />
+    )
+
+    expect(screen.queryByText("Размер")).toBeNull()
+    expect(screen.getByText("Тип")).toBeTruthy()
+    expect(
       screen.getByText("Какой тип бытовки с отделкой ЛДСП нужен?")
     ).toBeTruthy()
-
-    await user.click(screen.getByRole("radio", { name: "Пост охраны" }))
-    expect(onAnswer).toHaveBeenCalledWith(questions[1], questions[1].options[1])
-    expect(
-      (screen.getByRole("radio", { name: "6x2.4" }) as HTMLButtonElement)
-        .disabled
-    ).toBe(false)
   })
 
-  it("shows answered and superseded cards as durable read-only history", () => {
+  it("does not render answered, queued, or superseded clarification history", () => {
     render(
       <AssistantClarifications
         disabled={false}
@@ -104,21 +124,20 @@ describe("AssistantClarifications", () => {
             answeredAt: "2026-08-09T10:02:00Z",
           },
           { ...questions[1], status: "SUPERSEDED" },
+          {
+            ...questions[1],
+            id: "77777777-7777-4777-8777-777777777777",
+            sequenceNumber: 3,
+            status: "QUEUED",
+          },
         ]}
         onAnswer={vi.fn()}
       />
     )
 
-    expect(screen.getByText("Отвечено")).toBeTruthy()
-    expect(screen.getByText("Выбрано: 6x2.4")).toBeTruthy()
-    expect(screen.getByText("Заменено")).toBeTruthy()
-    expect(
-      (screen.getByRole("radio", { name: "6x2.4" }) as HTMLButtonElement)
-        .disabled
-    ).toBe(true)
-    expect(
-      (screen.getByRole("radio", { name: "БК-1" }) as HTMLButtonElement)
-        .disabled
-    ).toBe(true)
+    expect(screen.queryByText("Отвечено")).toBeNull()
+    expect(screen.queryByText("Выбрано: 6x2.4")).toBeNull()
+    expect(screen.queryByText("Заменено")).toBeNull()
+    expect(screen.queryAllByRole("radio")).toHaveLength(0)
   })
 })

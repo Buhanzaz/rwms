@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.logistics.order.service;
 
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRequest;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AdditionalContactInput;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderAuditEventType;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
@@ -26,9 +27,7 @@ class RentalOrderCreationService {
   private final OrderAuditService audit;
   private final RentalOrderReadService reads;
 
-  /**
-   * Creates or replays an order under the existing actor-scoped creation advisory lock.
-   */
+  /** Creates or replays an order under the existing actor-scoped creation advisory lock. */
   RentalOrderCommandOutcome create(
       OrderActor actor, UUID idempotencyKey, CreateOrderRequest request) {
     if (actor == null || idempotencyKey == null || request == null) {
@@ -42,8 +41,7 @@ class RentalOrderCreationService {
     if (replay != null) {
       if (!replay.matchesCreationRequest(checksum)) {
         throw RentalOrderProblems.conflict(
-            "IDEMPOTENCY_KEY_REUSED",
-            "Idempotency-Key уже использован для другой команды");
+            "IDEMPOTENCY_KEY_REUSED", "Idempotency-Key уже использован для другой команды");
       }
       return new RentalOrderCommandOutcome(reads.visibleDetail(actor, replay), true);
     }
@@ -69,12 +67,8 @@ class RentalOrderCreationService {
                 actor.subjectId(),
                 actor.displayName(),
                 actor.role(),
-                request.deliveryAddress(),
-                request.latitude(),
-                request.longitude(),
                 request.contactPhone(),
                 request.comment(),
-                request.acceptableDeliveryDates(),
                 scopedKey,
                 checksum));
     if (createdClient != null && !createdClient.replayed()) {
@@ -122,21 +116,13 @@ class RentalOrderCreationService {
       values.add(value(OrderClientService.normalizeEmail(request.newClient().email())));
       values.add(value(request.newClient().comment()));
       values.add(value(request.newClient().source()));
+      appendAdditionalContacts(values, request.newClient().additionalContacts());
     }
-    values.add(value(request.deliveryAddress()));
-    values.add(decimal(request.latitude()));
-    values.add(decimal(request.longitude()));
     values.add(
         request.contactPhone() == null
             ? ""
             : OrderClientService.normalizePhone(request.contactPhone()));
     values.add(value(request.comment()));
-    if (request.acceptableDeliveryDates() != null) {
-      request.acceptableDeliveryDates().stream()
-          .sorted()
-          .map(java.time.LocalDate::toString)
-          .forEach(values::add);
-    }
     return OrderCommandChecksum.sha256(CREATE_ORDER, values);
   }
 
@@ -144,7 +130,14 @@ class RentalOrderCreationService {
     return value == null ? "" : value.trim();
   }
 
-  private static String decimal(java.math.BigDecimal value) {
-    return value == null ? "" : value.stripTrailingZeros().toPlainString();
+  private static void appendAdditionalContacts(
+      List<String> values, List<AdditionalContactInput> contacts) {
+    if (contacts == null) return;
+    contacts.forEach(
+        contact -> {
+          values.add(value(contact.name()));
+          values.add(OrderClientService.normalizePhone(contact.phone()));
+        });
   }
+
 }

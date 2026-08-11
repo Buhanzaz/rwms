@@ -29,15 +29,31 @@ only.
 [`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml)
 defines logistics-owned rental clients, their orders and delivery facts. Client
 creation requires an `Idempotency-Key`; type, name and phone are mandatory,
-while IP/legal entities additionally require a contact person. Order create and
-update carry address, optional coordinate pair, contact phone, optional comment
-and a bounded unique acceptable-date list. Detail exposes logistics document
-movement evidence rather than a browser-owned history.
+while a legal entity additionally requires a contact person. Client and order
+commands carry separate additional-contact lists. Order create/update carries
+only the client, primary phone and optional comment. `NORMAL` public
+presentation confirmation carries exactly one same-day
+`desiredDeliveryWindows[{startDate,endDate}]`, positive `rentalMonths`, required
+`deliveryAddress`, an optional complete latitude/longitude pair and nullable
+`additionalContacts` normalized to an empty list. `REPLACEMENT` rejects all of
+those normal-only fields and preserves existing order facts. Document scheduling
+uses only `scheduledDate`; public requests and projections have no scheduled
+time. Historical database time columns remain physical compatibility data and
+are not transport fields. Detail exposes current date facts plus logistics
+document movement evidence rather than a browser-owned history.
 
 The same contract defines search `resultMode`, characteristic and
 type-dimension facets, paged facts-only catalog lookup, and owner-scoped
 selection GET/PUT. Selection PUT carries the complete requested identifier set
 plus warehouse and `Idempotency-Key`; an empty set is an explicit release.
+`CreateRentalInquiryRequest` has an optional conversation and optional target
+order, and the order-filtered inquiry collection rediscovers both manual and
+assistant flows. A presentation declares `NORMAL` or `REPLACEMENT`, exact
+required selection count, per-cabin current contents, live equipment
+availability and maximum per cabin. Normal confirmation submits equipment
+quantities per selected cabin; replacement confirmation forbids furniture edits
+and preserves the mapped old-cabin requirements. The explicit direct command is
+`POST /api/logistics/v1/orders/{orderId}/units/{unitId}/replace`.
 [`assistant-service.yaml`](../../contracts/openapi/assistant-service.yaml)
 exposes durable clarification questions, exact button-answer turns, structured
 clarification/selection SSE events and an owner-checked selection proxy. It
@@ -54,17 +70,20 @@ and
 
 The logistics HTTP contract carries an optional opaque `driverWorkerId` only
 on shipment and return scheduling commands and document responses. Transfer
-creation has no driver identity. Driver tasks and board cards still expose
+creation has no driver identity. Shipment, return and transfer scheduling use
+only the actual `scheduledDate`. Driver tasks and board cards expose
 `UNASSIGNED`, `ASSIGNED_DRIVER` and `WAREHOUSE_DRIVERS`: shipment/return may be
 unassigned or assigned to exactly one driver, while every transfer is
 warehouse-shared and cannot carry an identity snapshot. The warehouse-scoped
 `shipment-task-settings` GET/PUT contract owns the 1–100 cabin cap and its
-optimistic version. It applies when a new shipment is created: its one local
-driver task is sourced from the document and carries immutable cabin members
-and client/cabin task text. Retained legacy shipment tasks, returns and
-transfers remain document-line sourced. The public logistics move command
-contains no audience replacement; shipment/return moves only reorder inside
-their existing driver/date/lane queue.
+optimistic version. It applies to every newly grouped shipment, return and
+transfer: one local driver task is sourced from the document and carries a
+stable trip number, immutable cabin members and client/cabin task text. New
+document-line tasks are forbidden; pre-start historical line work converges to
+the group, while started history is retained. The public logistics move command
+contains no audience or member replacement and moves the whole group under
+task/entry fences. Structured board/detail responses include contacts, client
+wishes, actual schedule and per-cabin desired/actual furniture readiness.
 
 The task-board private registration and movement boundary accepts the same
 audience for owner-driven reconciliation, but rejects a worker identity on a
@@ -256,9 +275,10 @@ Canonical structure is supplemented by executable implementation inventories.
 Inventory-service and logistics-service parse their owning OpenAPI documents,
 compare every method/path pair with merged Spring controller mappings, and send
 unauthenticated probes through the real owner security filter chain. Inventory
-contains 27 bearer operations. Logistics contains 77
-operations: 73 bearer operations and exactly four anonymous client-presentation
-operations.
+contains 27 bearer operations. Logistics route parity derives its complete
+operation count from the current canonical file and permits exactly four
+anonymous client-presentation operations; every other route is bearer
+protected.
 
 The gateway inventory resolves every canonical domain-public operation through
 the current functional routers and the real edge security chain. It covers 265

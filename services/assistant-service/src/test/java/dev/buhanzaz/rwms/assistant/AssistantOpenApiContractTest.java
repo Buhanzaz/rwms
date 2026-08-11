@@ -43,6 +43,21 @@ class AssistantOpenApiContractTest {
             "/api/assistant/v1/conversations/{conversationId}",
             "/api/assistant/v1/conversations/{conversationId}/turns",
             "/api/assistant/v1/conversations/{conversationId}/selection");
+    Map<String, Object> conversationsPath =
+        (Map<String, Object>) paths.get("/api/assistant/v1/conversations");
+    Map<String, Object> listOperation = (Map<String, Object>) conversationsPath.get("get");
+    assertThat((List<Map<String, Object>>) listOperation.get("parameters"))
+        .singleElement()
+        .satisfies(
+            parameter -> {
+              assertThat(parameter)
+                  .containsEntry("name", "rentalOrderId")
+                  .containsEntry("in", "query")
+                  .containsEntry("required", false);
+              assertThat((Map<String, Object>) parameter.get("schema"))
+                  .containsEntry("type", "string")
+                  .containsEntry("format", "uuid");
+            });
     Map<String, Object> components = (Map<String, Object>) document.get("components");
     Map<String, Object> schemas = (Map<String, Object>) components.get("schemas");
     Map<String, Object> cabinFacetWarehouse =
@@ -101,6 +116,10 @@ class AssistantOpenApiContractTest {
             "linoleum",
             "filterSuggestions",
             "ClarificationQuestion",
+            "sequenceNumber",
+            "QUEUED",
+            "rentalOrderId",
+            "one active conversation linked to that order",
             "CabinSelection",
             "LEGAL_ENTITY",
             "enum: [FREE]");
@@ -114,8 +133,31 @@ class AssistantOpenApiContractTest {
     assertThat((Map<String, Object>) cabinSearchGroup.get("properties"))
         .containsKeys("category", "categories");
     Map<String, Object> message = (Map<String, Object>) schemas.get("Message");
-    assertThat((List<String>) message.get("required"))
-        .contains("searchNotices");
+    assertThat((List<String>) message.get("required")).contains("searchNotices");
+    Map<String, Object> conversation = (Map<String, Object>) schemas.get("Conversation");
+    assertThat((List<String>) conversation.get("required")).contains("rentalOrderId");
+    assertThat((Map<String, Object>) conversation.get("properties")).containsKey("rentalOrderId");
+    Map<String, Object> createConversation =
+        (Map<String, Object>) schemas.get("CreateConversationRequest");
+    assertThat((Map<String, Object>) createConversation.get("properties"))
+        .containsKey("rentalOrderId");
+    assertThat((List<Map<String, Object>>) createConversation.get("allOf"))
+        .singleElement()
+        .satisfies(
+            rule -> {
+              assertThat((Map<String, Object>) rule.get("if"))
+                  .containsEntry("required", List.of("rentalOrderId"));
+              assertThat((Map<String, Object>) rule.get("then"))
+                  .containsEntry("required", List.of("clientId"));
+            });
+    Map<String, Object> clarification = (Map<String, Object>) schemas.get("ClarificationQuestion");
+    assertThat((List<String>) clarification.get("required")).contains("sequenceNumber");
+    assertThat(
+            (List<String>)
+                ((Map<String, Object>)
+                        ((Map<String, Object>) clarification.get("properties")).get("status"))
+                    .get("enum"))
+        .containsExactly("QUEUED", "PENDING", "ANSWERED", "SUPERSEDED");
     Map<String, Object> selection = (Map<String, Object>) schemas.get("CabinSelection");
     Map<String, Object> selectionItems =
         (Map<String, Object>) ((Map<String, Object>) selection.get("properties")).get("items");
@@ -124,8 +166,7 @@ class AssistantOpenApiContractTest {
     Map<String, Object> removeSelection =
         (Map<String, Object>) schemas.get("RemoveSelectedCabinsToolResult");
     Map<String, Object> removeData =
-        (Map<String, Object>)
-            ((Map<String, Object>) removeSelection.get("properties")).get("data");
+        (Map<String, Object>) ((Map<String, Object>) removeSelection.get("properties")).get("data");
     Map<String, Object> removeItems =
         (Map<String, Object>) ((Map<String, Object>) removeData.get("properties")).get("items");
     assertThat((Map<String, Object>) removeItems.get("items"))
@@ -134,7 +175,8 @@ class AssistantOpenApiContractTest {
     Map<String, Object> newClientProperties = (Map<String, Object>) newClient.get("properties");
     assertThat(((Map<String, Object>) newClientProperties.get("clientType")).get("enum"))
         .isEqualTo(List.of("INDIVIDUAL", "LEGAL_ENTITY"));
-    assertThat((Map<String, Object>) ((Map<String, Object>) newClient.get("properties")).get("phone"))
+    assertThat(
+            (Map<String, Object>) ((Map<String, Object>) newClient.get("properties")).get("phone"))
         .containsEntry("pattern", "^(?:\\+|8)[0-9() .-]{6,31}$");
     assertThat(openApiEndpoints(document))
         .containsExactlyInAnyOrderElementsOf(controllerEndpoints());
@@ -180,8 +222,7 @@ class AssistantOpenApiContractTest {
     return endpoints;
   }
 
-  private static void assertAllLocalReferencesResolve(
-      Object node, Map<String, Object> root) {
+  private static void assertAllLocalReferencesResolve(Object node, Map<String, Object> root) {
     if (node instanceof Map<?, ?> object) {
       Object reference = object.get("$ref");
       if (reference instanceof String path && path.startsWith("#/")) {

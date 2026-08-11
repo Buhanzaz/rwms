@@ -17,6 +17,7 @@ final class MaintenanceAssetTransitionPolicy {
           RentalItemStatus.LOST)));
   private static final Set<RentalItemStatus> ESTIMATE_REPAIR_QUEUE_SOURCES = Set.of(
       RentalItemStatus.FREE,
+      RentalItemStatus.BOOKED,
       RentalItemStatus.WAREHOUSE,
       RentalItemStatus.OWN_NEEDS,
       RentalItemStatus.AFTER_RENT,
@@ -37,6 +38,7 @@ final class MaintenanceAssetTransitionPolicy {
       RentalItemStatus.AFTER_RENT);
   private static final Set<RentalItemStatus> WRITE_OFF_SOURCES = Set.of(
       RentalItemStatus.FREE,
+      RentalItemStatus.BOOKED,
       RentalItemStatus.WAREHOUSE,
       RentalItemStatus.OWN_NEEDS,
       RentalItemStatus.AFTER_RENT,

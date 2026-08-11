@@ -93,6 +93,10 @@ final class AssetLeaseService {
   }
 
   void assertNoActiveOrderReservation(UUID rentalItemId, String message) {
+    assertNoActiveOrderReservation(rentalItemId, null, message);
+  }
+
+  void assertNoActiveOrderReservation(UUID rentalItemId, String code, String message) {
     Boolean active =
         jdbc.queryForObject(
             """
@@ -104,7 +108,62 @@ final class AssetLeaseService {
             Boolean.class,
             rentalItemId);
     if (Boolean.TRUE.equals(active)) {
+      if (code != null) {
+        throw new OrderUnitReservationConflictException(code, message);
+      }
       throw new AssetConflictException(message);
+    }
+  }
+
+  /**
+   * Rejects physical cabin mutations while an unexpired client-presentation hold owns the cabin
+   * snapshot. Callers must acquire {@link #lockRentalItem(UUID)} first so hold creation and the
+   * attempted mutation have one serialization point.
+   */
+  void assertNoActivePresentationHold(UUID rentalItemId) {
+    Boolean active =
+        jdbc.queryForObject(
+            """
+            select exists(
+              select 1 from presentation_unit_hold
+              where rental_item_id=?
+                and state='ACTIVE'
+                and expires_at>clock_timestamp()
+            )
+            """,
+            Boolean.class,
+            rentalItemId);
+    if (Boolean.TRUE.equals(active)) {
+      throw new AssetConflictException(
+          "Presentation-held rental item contents cannot change before release or conversion");
+    }
+  }
+
+  /**
+   * Prevents maintenance from taking custody of a replaced cabin while its atomically prepared
+   * old-to-new furniture movement still owns a physical source hold.
+   */
+  void assertNoPendingReplacementFurnitureMovement(UUID rentalItemId) {
+    Boolean pending =
+        jdbc.queryForObject(
+            """
+            select exists(
+              select 1
+              from equipment_allocation_hold movement_hold
+              join equipment_balance source_balance
+                on source_balance.id=movement_hold.source_balance_id
+              where source_balance.rental_item_id=?
+                and movement_hold.owner_type='LOGISTICS_EQUIPMENT_MOVEMENT'
+                and movement_hold.replacement_source_reservation_id is not null
+                and movement_hold.state='ACTIVE'
+                and movement_hold.expires_at>clock_timestamp()
+            )
+            """,
+            Boolean.class,
+            rentalItemId);
+    if (Boolean.TRUE.equals(pending)) {
+      throw new AssetConflictException(
+          "Replacement cabin furniture movement must finish before maintenance starts");
     }
   }
 

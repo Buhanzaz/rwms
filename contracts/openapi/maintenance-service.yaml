@@ -1369,6 +1369,7 @@ components:
             - MAINTENANCE_MEDIA_NOT_READY
             - MAINTENANCE_TASK_SYNC_CONFLICT
             - MAINTENANCE_DEPENDENCY_UNAVAILABLE
+            - BOOKED_UNIT_REPLACEMENT_REQUIRED
             - MAINTENANCE_FORBIDDEN
         violations:
           type: array
@@ -1998,14 +1999,20 @@ components:
         queueType: { type: string, minLength: 1, maxLength: 64 }
     FurnitureEquipmentReference:
       description: >-
-        Immutable snapshot of the asset-service additional-equipment master item. This is never a
-        cross-database foreign key; asset-service validates the live item before applying a loss.
+        Asset-service-owned additional-equipment setting. Catalog reads enrich its live version and
+        maximum; an input may use null identity/version only while creating a new furniture node.
+        This is never a cross-database foreign key.
       type: object
       additionalProperties: false
-      required: [equipmentId, equipmentName]
+      required: [equipmentId, equipmentName, equipmentVersion, maximumPerCabin]
       properties:
-        equipmentId: { type: string, format: uuid }
+        equipmentId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
         equipmentName: { type: string, minLength: 1, maxLength: 255 }
+        equipmentVersion:
+          oneOf: [ { type: integer, format: int64, minimum: 0 }, { type: 'null' } ]
+        maximumPerCabin:
+          oneOf: [ { type: integer, minimum: 1 }, { type: 'null' } ]
     CabinCharacteristicReference:
       description: >-
         Immutable display snapshot of an asset-service cabin characteristic. The UUID remains

@@ -24,24 +24,32 @@ document/workflow state, но не агрегатами кабин, оборуд
 
 Команды shipment и return несут необязательный opaque `driverWorkerId` task-board вместе с
 историческим display snapshot; logistics никогда не выводит identity из имени. Команды transfer не
-содержат identity водителя. После планирования каждая новая shipment создаёт одно durable
-document-owned задание водителя с неизменяемым снимком клиента и упорядоченными участниками-бытовками.
-Нейтральный технический priority остаётся деталью task-board; title, summary с количеством и task
-text содержат намерение отгрузки, клиента и полный список номеров. Evidence завершения
-идемпотентно применяет cover checkpoint к каждому участнику, а группа завершается только после всех
-cover. Исторические shipment-задачи по строкам документа не перегруппировываются. Return сохраняют
-по одной задаче на строку и назначаются при наличии ID, иначе остаются неназначенными; transfer и
-прочие movement-задания используют identity-free `WAREHOUSE_DRIVERS`. Public board выдаёт аудиторию
-для группировки по датам и водителям. Public move может только переставлять shipment/return внутри
-текущих водителя, даты и lane. Movement-задания сохраняют существующую политику планирования
-date/lane, при этом public move не может изменить аудиторию.
+содержат identity водителя и остаются общей работой `WAREHOUSE_DRIVERS`: назначение конкретного
+водителя относится к клиентским ходкам shipment/return, но не к складским transfer. Каждая новая
+запланированная shipment, return или transfer сохраняет
+одно durable задание водителя `LOGISTICS_DOCUMENT` с неизменяемым снимком клиента и упорядоченными,
+неизменяемыми участниками-бытовками. Сохранённый `tripNumber` стабилен в рамках заказа аренды.
+Исторические задания по строкам документа до старта отменяются перед созданием одной группы;
+начатый исторический участник блокирует перегруппировку, новые задания по строкам не создаются.
+
+Public board и detail задания показывают всю ходку: операцию, клиента, адрес и координаты, основной
+и дополнительные контакты клиента/заказа, комментарий, желаемые даты, фактически назначенную дату,
+бытовки и желаемую/фактическую мебель каждой бытовки со статусами movement task и readiness.
+Точный назначенный водитель может читать detail своего задания; неназначенное задание доступно
+только менеджерам. Board move действует на сгруппированное задание, но не на отдельного участника.
+Во время version-fenced вызова task-board намеренно удерживаются блокировки локального задания и
+документа, чтобы локально начатая ходка не пересеклась с устаревшим remote-состоянием `WAITING`;
+граница зависимости ограничена настроенными connect/read timeout (`2s`/`5s` по умолчанию).
+После принятого task-board перемещения до старта logistics обновляет дату owning document в recovery
+boundary, сохраняет его дату и пожелания клиента; shipment, return и transfer используют
+одинаковое групповое поведение.
 
 `GET` и `PUT /api/logistics/v1/warehouses/{warehouseId}/shipment-task-settings` владеют
-warehouse-scoped максимумом бытовок в одном новом shipment-задании. Лениво создаваемое значение по
+warehouse-scoped максимумом бытовок в одной новой сгруппированной ходке. Лениво создаваемое значение по
 умолчанию — одна бытовка; GET требует read/VIEW scope, PUT — write/MANAGE scope и
-`expectedVersion`. Generic и saved-order команды shipment отклоняют уникальный выбранный набор выше
-текущего лимита до создания document или driver task; logistics никогда не делит такой запрос
-автоматически.
+`expectedVersion`. Планирование shipment, return и transfer отклоняет уникальный выбранный набор
+выше текущего лимита до создания driver task; logistics не вводит второй лимит и не делит такой
+запрос автоматически.
 
 `POST /api/logistics/v1/rental-inquiries/{inquiryId}/cabin-searches` является write-authorized
 командой и требует `Idempotency-Key`. Короткая PREPARE transaction блокирует inquiry, повторно
@@ -76,21 +84,58 @@ asset-owned selection.
 
 `POST /api/logistics/v1/clients` создаёт rental client логистики типа `INDIVIDUAL` или
 `LEGAL_ENTITY`. Name/FIO и основной телефон обязательны; для юридических лиц обязательно также
-контактное лицо. Email, комментарий и источник необязательны, а identity и
+контактное лицо. Любое количество проверенных дополнительных контактов имя/телефон может оставаться
+client-owned; order-owned дополнительные контакты хранятся отдельно. Email, комментарий и источник
+необязательны, а identity и
 display-name snapshot ответственного менеджера берутся только из authenticated write actor.
 Исторические клиенты сохраняют правдивый UUID subject создателя как manager identity и могут не
 иметь display-name snapshot. Поиск/detail клиента и paged route `/clients/{clientId}/orders`
 используют обычные visible-order rules и не раскрывают недоступные identities.
 
 Draft заказа аренды можно создать с заранее выбранным клиентом и редактировать с idempotency и
-expected version. В заказе хранятся delivery address, пара координат, контактный телефон,
-необязательный комментарий и до 31 уникальной конкретной acceptable date. Address, coordinates,
-phone и непустой список дат обязательны до save; дата новой shipment должна входить в этот список,
-если он настроен. Request может передавать человекочитаемый телефон с международным `+` или
-российским префиксом `8`; domain проверяет цифры и сохраняет/возвращает только canonical E.164.
-Detail заказа содержит принадлежащие logistics timeline facts shipment/return и
-cabin lines. Maintenance estimates и repair history остаются dossier/maintenance reads и здесь не
-копируются и не сохраняются.
+expected version. Команды create и обычного update принимают только клиента, основной телефон и
+комментарий; delivery address, пару координат и order-owned дополнительные контакты клиент указывает
+в normal presentation confirmation. Желаемые окна остаются order-owned read projection: перенесённые
+legacy строки правдиво читаются, а актуальное normal confirmation заменяет их ровно одним выбранным
+клиентом календарным днём (`startDate=endDate`). Draft можно сохранить без delivery facts, но создание
+отгрузки требует адрес, основной телефон и одну желаемую дату. Фактическое расписание документа —
+его `scheduledDate`; публичные команды и проекции не содержат времени суток. Человекочитаемый телефон
+нормализуется в canonical E.164.
+
+`CreateRentalInquiryRequest` может указывать существующий draft или сохранённый, но ещё редактируемый
+заказ. Assistant inquiry сохраняет conversation ID; manual inquiry использует ту же сущность без
+скрытого чата, а `GET /api/logistics/v1/rental-inquiries?rentalOrderId=...` повторно находит оба типа
+с авторизацией заказа и склада. Повторные normal presentation добавляют бытовки в тот же заказ и
+соблюдают его зафиксированный склад. Presentation reads объединяют live общий asset-остаток,
+атомарно снятое содержимое выбранных held cabins и неназначенный физический излишек уже внутри этого
+заказа; строки с нулевой общей доступностью сохраняют максимум на бытовку. Confirmation передаёт
+мебель по бытовкам и атомарно конвертирует holds вместе с авторитетным полным составом мебели заказа.
+Поэтому каждое публичное `NORMAL` presentation требует одну дату клиента, обязательный delivery
+address, необязательную полную пару latitude/longitude, nullable дополнительные контакты с
+нормализацией в пустой список и положительный начальный `rentalMonths`; значения не предзаполняются
+из связанного заказа. Durable booking receipt хранит эти нормализованные факты, а local transition
+после conversion сохраняет единственную дату заказа и создаёт срок только для каждой newly converted
+бытовки. В retry проверяются все delivery facts и длительность, поэтому несовпадающий replay
+конфликтует и не может переписать срок уже выбранной бытовки. `REPLACEMENT` presentation показывает
+текущие facts заказа только для чтения и отклоняет все normal-only поля. Assignment отгрузки рассчитывает дату
+возврата каждой бытовки от фактической даты отгрузки и выбранного клиентом срока; единственная
+публичная мутация срока — существующая команда продления выбранных уже отгруженных бытовок.
+`OrderPermissions.canExtendRentalTerms` — server-derived affordance этой команды, включая
+`FULFILLED` заказ, где обычное редактирование недоступно.
+В публичной границе заказа нет прямых команд выбора склада или добавления бытовки: бытовки
+добавляются, а первый склад фиксируется только через существующий inquiry/presentation flow.
+`GET /api/logistics/v1/orders/{orderId}/available-units` остаётся поиском для замены; удаление,
+замена бытовки и редактирование желаемой мебели сохраняют отдельные команды.
+
+Replacement повторно использует те же presentation/booking или прямую команду заказа. Warehouse
+manager может заменить только запрошенные бытовки до старта с точным количеством client selection;
+direct replace также сохраняет непустую причину. Упорядоченный batch атомарно меняет asset
+reservations, затем обновляет тот же заказ, document members и требования мебели. Checkpoints
+существующих movement tasks отменяют незавершённое наполнение старой бытовки до swap, повторяют
+точные old-to-new furniture holds при необходимости физического переноса и оставляют readiness false
+до завершения обычного movement task. Обычное редактирование прекращается после окончательной даты
+ходки или furniture task; replacement остаётся доступен для конкретной бытовки до старта её
+ходки.
 
 Интерактивные panel и Android-клиенты обращаются к этому namespace только через публичный маршрут
 `/api/logistics/**` в `api-gateway-service`. Им нельзя напрямую вызывать host этого модуля или
@@ -126,11 +171,14 @@ port. Его неизменённый constructor собирает шесть ow
 | `RentalInquiryCabinCatalogService` | Ограниченный facts-only cabin lookup с authorization inquiry, warehouse и owner |
 | `LogisticsDocumentService` | Стабильный facade return/shipment/transfer и rental-order hooks над семью точными owners |
 | Coordinators документов return, shipment и transfer | Независимые document state machines с исходным порядком transaction и recovery |
-| `DocumentDriverTaskPlanner` | Одно idempotent document-owned задание с упорядоченными участниками-бытовками на каждую новую запланированную shipment; legacy line tasks и задачи return/transfer сохраняют per-line planning и pre-start guards replan/cancel |
-| `ShipmentTaskSettingsService` | Warehouse-scoped version-fenced лимит бытовок в новом shipment-задании; атомарно материализует default one и отклоняет over-limit создание до persistence document |
+| `DocumentDriverTaskPlanner` | Одно idempotent document-owned задание с упорядоченными участниками-бытовками на каждую новую запланированную shipment, return или transfer; ожидающие legacy line tasks сходятся в группу, а начатые блокируют replanning |
+| `DriverTripProjectionService` | Structured task/board facts ходки с одним asset read на отдельный заказ и явным unavailable readiness при dependency failure |
+| `ShipmentTaskSettingsService` | Warehouse-scoped version-fenced лимит, повторно используемый каждой сгруппированной ходкой; атомарно материализует default one и отклоняет over-limit planning |
 | Coordinators rental-order shipment/completion и reconciliation | Document hooks для rental shipment, terminal return и команды reconciliation request |
 | Политики document admission, idempotency, attempts, reads и binding | Узкие leaves warehouse, replay, external-attempt, projection и active-order |
 | `RentalOrderService` | Стабильный order facade над reads, creation, lifecycle, reservations, terms и shipment hand-off |
+| `RentalOrderUnitReplacementService` | Direct и presentation replacement через ordered batch checkpoints, pre-start отмену driver task и сходимость order/document members |
+| `ShipmentFurnitureTaskService` | Полный состав мебели всех active units заказа, readiness существующих movement tasks и replacement recovery checkpoints |
 | Rental-order command store, editability и problem/outcome leaves | Row/receipt replay, saved-draft synchronization и canonical local problem mapping; `LogisticsTransactionLock` владеет узким transaction advisory-lock access |
 
 Owner clients зависят только от общего transport и настроенного private base
@@ -196,8 +244,10 @@ continuation marks также сохраняют null evidence. Если candida
 
 Пользовательский JWT не пересекает `LogisticsDependencyGateway`. Gateway получает
 client-credential tokens для asset, warehouse, task-board, maintenance и media. Remote effects
-становятся durable attempts и relay запускает их после local commit; нельзя выполнять cross-service
-calls внутри owning database transaction.
+становятся durable attempts и relay запускает их после local commit. Единственное намеренное
+исключение remote-under-lock — public move целой ходки: task/document pre-start locks удерживаются на
+время bounded version-fenced вызова task-board, чтобы закрыть гонку local-start/remote-`WAITING`, а
+существующий status poll сводит remote success с последующим local rollback.
 
 ## Хранение, события и восстановление
 
@@ -207,8 +257,9 @@ Flyway migrations в `src/main/resources/db/migration/` владеют logistics
 
 Migration
 [`V42__clients_order_delivery_and_acceptable_dates.sql`](src/main/resources/db/migration/V42__clients_order_delivery_and_acceptable_dates.sql)
-добавляет client fields contact/manager/comment/source, order delivery facts и ordered unique
-collection приемлемых дат, а также durable exact-command receipts для cabin selection inquiry. Она
+добавляет client fields contact/manager/comment/source, исходные order delivery facts, предшествующую
+коллекцию дат, которую V47 затем losslessly мигрирует в desired windows, а также durable
+exact-command receipts для cabin selection inquiry. Она
 backfill только правдивый UUID ответственного менеджера из
 `created_by_subject_id` и не выдумывает historical display name. Legacy строки без phone/contact
 остаются читаемыми, новые writes ограничены constraints, а V39-V41 неизменяемы.
@@ -238,6 +289,31 @@ Migration
 добавляет warehouse-local настройки shipment task, source `LOGISTICS_DOCUMENT` driver task и
 упорядоченные cover checkpoints участников shipment. Это только expand: ни одна историческая
 `LOGISTICS_DOCUMENT_LINE` задача не перегруппировывается и не переписывается.
+
+Migration
+[`V47__order_contacts_windows_and_inquiry_target.sql`](src/main/resources/db/migration/V47__order_contacts_windows_and_inquiry_target.sql)
+добавляет упорядоченные коллекции дополнительных контактов, без потерь переименовывает legacy
+acceptable dates во включительные desired windows (`startDate=endDate`, null legacy times) и сохраняет
+исторические физические колонки scheduled time. Она добавляет стабильные номера сгруппированных ходок с order-wide
+backfill истории, nullable conversation для manual inquiry вместе с target order и creation key,
+metadata replacement presentation и повторно использует существующий shipment-furniture link как
+durable ordered replacement checkpoint. Outbox остаётся только для conversation и становится
+unique per inquiry, поэтому повторные добавления в один заказ не конфликтуют.
+
+Migration
+[`V48__presentation_booking_client_rental_terms.sql`](src/main/resources/db/migration/V48__presentation_booking_client_rental_terms.sql)
+добавляет в существующие строки `presentation_booking` nullable положительное поле receipt
+`rental_months`, выбранное клиентом как начальный срок. Historical и replacement receipts остаются
+null; normal confirmation сохраняет положительное значение до local order reconciliation, который
+создаёт сроки только для newly converted бытовок.
+
+Migration
+[`V49__presentation_booking_delivery_confirmation_snapshot.sql`](src/main/resources/db/migration/V49__presentation_booking_delivery_confirmation_snapshot.sql)
+additive-схемой сохраняет в существующем idempotency receipt `presentation_booking` нормализованные
+delivery address normal-confirmation, необязательную пару координат и JSON дополнительных контактов.
+Она не создаёт второй источник истины заказа, не переписывает historical строки и не удаляет
+исторические колонки desired window и scheduled time: legacy значения остаются физически только для
+persistence и сравнения старых receipt, но никогда не входят в публичные команды или проекции.
 
 Logistics вместе фиксирует facts, projection checkpoints и transactional outbox. Kafka delivery —
 at-least-once: aggregate IDs являются record keys, event IDs — dedupe identities, а consumers хранят

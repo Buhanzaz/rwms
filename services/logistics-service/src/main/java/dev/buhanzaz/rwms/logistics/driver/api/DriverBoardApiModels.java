@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.driver.api;
 
+import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.DriverTripDetailsResponse;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskAudienceMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
@@ -9,9 +10,7 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
-/**
- * Defines transport models for the authenticated driver board HTTP boundary.
- */
+/** Defines transport models for the authenticated driver board HTTP boundary. */
 public final class DriverBoardApiModels {
   private DriverBoardApiModels() {}
 
@@ -54,8 +53,8 @@ public final class DriverBoardApiModels {
       String repairStageState,
       int priority) {}
 
-  public record DriverBoardDateColumnResponse(
-      LocalDate date, List<DriverBoardCardResponse> tasks) {
+  /** One calendar column containing whole-task board cards in authoritative queue order. */
+  public record DriverBoardDateColumnResponse(LocalDate date, List<DriverBoardCardResponse> tasks) {
     public DriverBoardDateColumnResponse {
       tasks = List.copyOf(tasks);
     }
@@ -80,7 +79,8 @@ public final class DriverBoardApiModels {
       String lane,
       int priority,
       boolean pinned,
-      int position) {}
+      int position,
+      DriverTripDetailsResponse tripDetails) {}
 
   /** Planned WorkerApp audience; only ASSIGNED_DRIVER carries a driver identity. */
   public record DriverTaskAudienceResponse(
@@ -113,6 +113,5 @@ public final class DriverBoardApiModels {
       @NotNull @Min(0) Integer targetIndex) {}
 
   public record ReturnCapitalRepairRequest(
-      @NotNull UUID warehouseId,
-      @NotNull @Min(0) Long expectedTaskVersion) {}
+      @NotNull UUID warehouseId, @NotNull @Min(0) Long expectedTaskVersion) {}
 }

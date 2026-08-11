@@ -27,6 +27,7 @@ type AssetEquipmentDto = {
   category: EquipmentCategory
   active: boolean
   comment: string | null
+  maximumPerCabin: number | null
   createdAt: string
   updatedAt: string
 }
@@ -113,6 +114,15 @@ function nonNegativeInteger(value: unknown) {
   return value
 }
 
+function nullablePositiveInteger(value: unknown) {
+  if (value === null || value === undefined) return null
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    throw new Error("Сервис имущества вернул некорректное числовое значение.")
+  }
+
+  return value
+}
+
 function boolean(value: unknown) {
   if (typeof value !== "boolean") {
     throw new Error("Сервис имущества вернул некорректный ответ.")
@@ -148,6 +158,7 @@ function parseEquipment(value: unknown): AssetEquipmentDto {
     category: enumValue(source.category, EQUIPMENT_CATEGORIES),
     active: boolean(source.active),
     comment: nullableString(source.comment),
+    maximumPerCabin: nullablePositiveInteger(source.maximumPerCabin),
     createdAt: dateTime(source.createdAt),
     updatedAt: dateTime(source.updatedAt),
   }
@@ -218,6 +229,7 @@ function parseEquipmentItem(value: unknown): EquipmentItemDto {
     category: equipment.category,
     active: equipment.active,
     comment: equipment.comment,
+    maximumPerCabin: equipment.maximumPerCabin,
     totalQuantity: totals.totalQuantity,
     stockQuantity: totals.stockQuantity,
     cabinStockQuantity: totals.nonRentedCabinQuantity,

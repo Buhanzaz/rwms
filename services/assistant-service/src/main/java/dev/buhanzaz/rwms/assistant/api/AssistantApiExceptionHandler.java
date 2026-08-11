@@ -17,12 +17,16 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 public class AssistantApiExceptionHandler {
   @ExceptionHandler(AssistantNotFoundException.class)
   ProblemDetail notFound(AssistantNotFoundException failure) {
-    return problem(HttpStatus.NOT_FOUND, "ASSISTANT_CONVERSATION_NOT_FOUND", "Conversation was not found");
+    return problem(
+        HttpStatus.NOT_FOUND, "ASSISTANT_CONVERSATION_NOT_FOUND", "Conversation was not found");
   }
 
   @ExceptionHandler(AssistantConflictException.class)
   ProblemDetail conflict(AssistantConflictException failure) {
-    return problem(HttpStatus.CONFLICT, "ASSISTANT_CONVERSATION_CONFLICT", "Conversation is immutable");
+    return problem(
+        HttpStatus.CONFLICT,
+        "ASSISTANT_CONVERSATION_CONFLICT",
+        "Conversation state conflicts with the request");
   }
 
   @ExceptionHandler(AssistantInquiryArchivedException.class)
@@ -43,7 +47,8 @@ public class AssistantApiExceptionHandler {
 
   @ExceptionHandler({IllegalArgumentException.class, MethodArgumentNotValidException.class})
   ProblemDetail invalidRequest(RuntimeException failure) {
-    return problem(HttpStatus.BAD_REQUEST, "ASSISTANT_REQUEST_INVALID", "The assistant request is invalid");
+    return problem(
+        HttpStatus.BAD_REQUEST, "ASSISTANT_REQUEST_INVALID", "The assistant request is invalid");
   }
 
   @ExceptionHandler(AccessDeniedException.class)

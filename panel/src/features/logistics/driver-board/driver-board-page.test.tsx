@@ -192,6 +192,7 @@ function card(
     priority: 3,
     pinned: false,
     position: 0,
+    tripDetails: null,
     ...params,
   }
 }

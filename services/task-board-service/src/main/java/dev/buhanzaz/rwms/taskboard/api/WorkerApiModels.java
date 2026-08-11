@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.taskboard.api;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import dev.buhanzaz.rwms.taskboard.api.ApiModels.DriverTaskAudienceDto;
+import dev.buhanzaz.rwms.taskboard.api.ApiModels.TaskSourceReferenceDto;
 import dev.buhanzaz.rwms.taskboard.api.ApiModels.TaskTimerSnapshot;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -252,6 +253,7 @@ public final class WorkerApiModels {
    * @param entryId stable route-entry identity
    * @param version current entry version for worker commands
    * @param taskId parent task identity
+   * @param source immutable source-domain reference, if any
    * @param routeIndex immutable route-step index
    * @param title task title
    * @param description worker-visible task description
@@ -282,6 +284,7 @@ public final class WorkerApiModels {
       UUID entryId,
       long version,
       UUID taskId,
+      @JsonInclude(JsonInclude.Include.ALWAYS) TaskSourceReferenceDto source,
       int routeIndex,
       String title,
       String description,

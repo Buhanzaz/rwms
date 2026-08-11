@@ -200,6 +200,13 @@ data class WorkerTaskObjectDto(
     val label: String,
 )
 
+/** Immutable owning-aggregate reference supplied by task-board. */
+@Serializable
+data class TaskSourceReferenceDto(
+    val type: String,
+    val sourceId: String,
+)
+
 @Serializable
 /**
  * Public-worker-gateway response/read payload for WorkerMaterialDto. It is a transport boundary model, not persisted domain state.
@@ -312,6 +319,9 @@ data class WorkerTaskDetailDto(
     val entryId: String,
     val version: Long,
     val taskId: String,
+    // Default is only for task detail JSON cached before task-board exposed
+    // the required nullable source reference.
+    val source: TaskSourceReferenceDto? = null,
     val routeIndex: Int,
     val title: String,
     val description: String?,
@@ -339,6 +349,79 @@ data class WorkerTaskDetailDto(
     val resultPhotoMinCount: Int,
     val completionAllowed: Boolean,
     val timerSnapshot: WorkerTaskTimerSnapshotDto? = null,
+)
+
+/** Additional client or order contact visible to the assigned driver. */
+@Serializable
+data class DriverTripAdditionalContactDto(
+    val name: String,
+    val phone: String,
+)
+
+/** Advisory client-requested delivery date or date range; it contains no time of day. */
+@Serializable
+data class DriverTripDesiredDeliveryWindowDto(
+    val startDate: String,
+    val endDate: String,
+)
+
+/** Furniture requested for one cabin in the order. */
+@Serializable
+data class DriverTripDesiredEquipmentDto(
+    val equipmentId: String,
+    val equipmentName: String,
+    val quantity: Long,
+)
+
+/** Current physical furniture observed in one cabin. */
+@Serializable
+data class DriverTripActualEquipmentDto(
+    val equipmentId: String,
+    val equipmentName: String?,
+    val quantity: Long,
+    val locationKind: String,
+)
+
+/** One cabin member of a grouped logistics trip and its live filling readiness. */
+@Serializable
+data class DriverTripCabinDto(
+    val cabinId: String,
+    val unitNumber: String,
+    val desiredContents: List<DriverTripDesiredEquipmentDto>,
+    val actualContents: List<DriverTripActualEquipmentDto>,
+    val movementTaskCreated: Boolean,
+    val movementTaskCompleted: Boolean,
+    val contentReady: Boolean,
+)
+
+/**
+ * Logistics-owned structured facts needed by the assigned driver to execute one trip.
+ *
+ * The public worker payload deliberately exposes client preferences and the assigned trip
+ * as dates only; it does not expose time-of-day fields.
+ */
+@Serializable
+data class DriverTripDetailsDto(
+    val taskNumber: String,
+    val tripNumber: Int,
+    val operationType: String,
+    val clientName: String,
+    val address: String?,
+    val latitude: Double?,
+    val longitude: Double?,
+    val primaryContactName: String?,
+    val primaryContactPhone: String?,
+    val additionalContacts: List<DriverTripAdditionalContactDto>,
+    val comment: String?,
+    val desiredDeliveryWindows: List<DriverTripDesiredDeliveryWindowDto>,
+    val scheduledDate: String,
+    val cabins: List<DriverTripCabinDto>,
+)
+
+/** Minimal read boundary for the public logistics driver-task response. */
+@Serializable
+data class DriverTaskTripDetailsResponseDto(
+    val tripDetails: DriverTripDetailsDto?,
 )
 
 @Serializable(with = WorkerActionRequestDtoSerializer::class)

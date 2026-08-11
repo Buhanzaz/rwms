@@ -89,7 +89,7 @@ public class MaintenanceApiExceptionHandler {
       MaintenanceDependencyException exception, HttpServletRequest request) {
     return problem(
         exception.status(),
-        "MAINTENANCE_DEPENDENCY_UNAVAILABLE",
+        exception.code(),
         exception.getMessage(),
         request);
   }

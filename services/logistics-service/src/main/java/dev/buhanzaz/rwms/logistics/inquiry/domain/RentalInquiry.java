@@ -12,6 +12,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import jakarta.persistence.Version;
 import java.time.OffsetDateTime;
 import java.util.Objects;
@@ -21,11 +22,14 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.proxy.HibernateProxy;
 
-/**
- * JPA persistence model for Rental Inquiry in the logistics-owned database.
- */
+/** JPA persistence model for Rental Inquiry in the logistics-owned database. */
 @Entity
-@Table(name = "rental_inquiry")
+@Table(
+    name = "rental_inquiry",
+    uniqueConstraints =
+        @UniqueConstraint(
+            name = "uk_rental_inquiry_creation_key",
+            columnNames = {"manager_id", "creation_idempotency_key"}))
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class RentalInquiry {
@@ -38,8 +42,11 @@ public class RentalInquiry {
   @Column(name = "version", nullable = false)
   private long version;
 
-  @Column(name = "conversation_id", nullable = false)
+  @Column(name = "conversation_id")
   private UUID conversationId;
+
+  @Column(name = "creation_idempotency_key", nullable = false)
+  private UUID creationIdempotencyKey;
 
   @ManyToOne(fetch = FetchType.LAZY, optional = false)
   @JoinColumn(name = "client_id", nullable = false)
@@ -56,6 +63,10 @@ public class RentalInquiry {
 
   @Column(name = "warehouse_id")
   private UUID warehouseId;
+
+  /** Existing draft order to which this inquiry must append confirmed cabins. */
+  @Column(name = "rental_order_id")
+  private UUID rentalOrderId;
 
   @Enumerated(EnumType.STRING)
   @Column(name = "state", nullable = false, length = 16)
@@ -75,17 +86,24 @@ public class RentalInquiry {
 
   public static RentalInquiry create(
       UUID conversationId,
+      UUID creationIdempotencyKey,
       OrderClient client,
       UUID managerId,
       String managerDisplayName,
       String managerRole,
+      UUID rentalOrderId,
+      UUID warehouseId,
       OffsetDateTime now) {
     RentalInquiry inquiry = new RentalInquiry();
-    inquiry.conversationId = Objects.requireNonNull(conversationId, "conversationId");
+    inquiry.conversationId = conversationId;
+    inquiry.creationIdempotencyKey =
+        Objects.requireNonNull(creationIdempotencyKey, "creationIdempotencyKey");
     inquiry.client = Objects.requireNonNull(client, "client");
     inquiry.managerId = Objects.requireNonNull(managerId, "managerId");
     inquiry.managerDisplayName = requireText(managerDisplayName, 255, "managerDisplayName");
     inquiry.managerRole = requireRole(managerRole);
+    inquiry.rentalOrderId = rentalOrderId;
+    inquiry.warehouseId = warehouseId;
     inquiry.state = RentalInquiryState.ACTIVE;
     inquiry.createdAt = Objects.requireNonNull(now, "now");
     inquiry.updatedAt = now;
@@ -135,11 +153,7 @@ public class RentalInquiry {
 
   private static String requireRole(String value) {
     if (!java.util.Set.of(
-            "SYSTEM_ADMIN",
-            "WMS_ADMIN",
-            "WAREHOUSE_MANAGER",
-            "RENTAL_MANAGER",
-            "VIEWER")
+            "SYSTEM_ADMIN", "WMS_ADMIN", "WAREHOUSE_MANAGER", "RENTAL_MANAGER", "VIEWER")
         .contains(value)) {
       throw new IllegalArgumentException("managerRole is invalid");
     }
@@ -158,9 +172,7 @@ public class RentalInquiry {
         this instanceof HibernateProxy proxy
             ? proxy.getHibernateLazyInitializer().getPersistentClass()
             : getClass();
-    return thisClass == otherClass
-        && id != null
-        && Objects.equals(id, ((RentalInquiry) other).id);
+    return thisClass == otherClass && id != null && Objects.equals(id, ((RentalInquiry) other).id);
   }
 
   @Override

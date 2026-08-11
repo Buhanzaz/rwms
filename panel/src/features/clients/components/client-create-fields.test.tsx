@@ -16,6 +16,7 @@ const INITIAL_VALUE: ClientCreateFieldsValue = {
   email: "",
   comment: "",
   source: "",
+  additionalContacts: [],
 }
 
 function FieldsHarness() {

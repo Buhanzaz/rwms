@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.logistics.equipment.service;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskOwnerType;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.service.ShipmentFurnitureTaskService;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import java.util.UUID;
@@ -20,6 +21,7 @@ public class EquipmentMovementTaskProcessor {
 
   private final EquipmentMovementWorkflowStore store;
   private final LogisticsDependencyGateway dependencies;
+  private final ShipmentFurnitureTaskService shipmentFurnitureTasks;
 
   public int processUntilIdle(UUID taskId) {
     if (taskId == null) throw new IllegalArgumentException("taskId is required");
@@ -36,21 +38,61 @@ public class EquipmentMovementTaskProcessor {
   private void execute(EquipmentMovementWorkflowStore.Work work) {
     try {
       if (work instanceof EquipmentMovementWorkflowStore.ReserveWork reserve) {
+        LogisticsDependencyGateway.EquipmentMovementPurpose purpose =
+            reservationPurpose(reserve.ownerType());
+        ShipmentFurnitureTaskService.OrderMovementReservationContext context =
+            purpose == LogisticsDependencyGateway.EquipmentMovementPurpose.ALLOCATABLE_REBALANCE
+                ? shipmentFurnitureTasks.movementReservationContext(
+                    reserve.taskId(), reserve.sourceRentalItemId())
+                : null;
         store.confirmReservation(
             reserve.taskId(),
             reserve.lineId(),
-            dependencies.acquireEquipmentMovementReservation(
-                reserve.lineId(),
-                reserve.assetMovementOwnerId(),
-                reserve.lineId(),
-                reserve.equipmentId(),
-                reserve.sourceWarehouseId(),
-                reserve.sourceRentalItemId(),
-                reserve.sourceLocationKind(),
-                reserve.expectedSourceBalanceVersion(),
-                reserve.quantity(),
-                reserve.reservedUntil(),
-                reservationPurpose(reserve.ownerType())));
+            context == null
+                ? dependencies.acquireEquipmentMovementReservation(
+                    reserve.lineId(),
+                    reserve.assetMovementOwnerId(),
+                    reserve.lineId(),
+                    reserve.equipmentId(),
+                    reserve.sourceWarehouseId(),
+                    reserve.sourceRentalItemId(),
+                    reserve.sourceLocationKind(),
+                    reserve.expectedSourceBalanceVersion(),
+                    reserve.quantity(),
+                    reserve.reservedUntil(),
+                    purpose)
+                : context.replacementSourceReservationId() == null
+                    ? dependencies.acquireEquipmentMovementReservation(
+                        reserve.lineId(),
+                        reserve.assetMovementOwnerId(),
+                        reserve.lineId(),
+                        reserve.equipmentId(),
+                        reserve.sourceWarehouseId(),
+                        reserve.sourceRentalItemId(),
+                        reserve.sourceLocationKind(),
+                        reserve.expectedSourceBalanceVersion(),
+                        reserve.quantity(),
+                        reserve.reservedUntil(),
+                        purpose,
+                        context.orderId(),
+                        context.targetRentalItemId(),
+                        context.units())
+                    : dependencies.acquireEquipmentMovementReservation(
+                        reserve.lineId(),
+                        reserve.assetMovementOwnerId(),
+                        reserve.lineId(),
+                        reserve.equipmentId(),
+                        reserve.sourceWarehouseId(),
+                        reserve.sourceRentalItemId(),
+                        reserve.sourceLocationKind(),
+                        reserve.expectedSourceBalanceVersion(),
+                        reserve.quantity(),
+                        reserve.reservedUntil(),
+                        purpose,
+                        context.orderId(),
+                        context.targetRentalItemId(),
+                        context.units(),
+                        context.replacementSourceReservationId()));
         return;
       }
       if (work instanceof EquipmentMovementWorkflowStore.RegisterWork register) {
@@ -101,7 +143,10 @@ public class EquipmentMovementTaskProcessor {
       store.recordFailure(taskId(work), exception);
     } catch (RuntimeException exception) {
       UUID taskId = taskId(work);
-      log.warn("Equipment movement dependency task {} produced an unexpected local error", taskId, exception);
+      log.warn(
+          "Equipment movement dependency task {} produced an unexpected local error",
+          taskId,
+          exception);
       store.recordFailure(
           taskId,
           new LogisticsDependencyException(
@@ -128,7 +173,8 @@ public class EquipmentMovementTaskProcessor {
       throw new IllegalArgumentException("Equipment movement task owner type is required");
     }
     return switch (ownerType) {
-      case USER_REQUEST -> LogisticsDependencyGateway.EquipmentMovementPurpose.ALLOCATABLE_REBALANCE;
+      case USER_REQUEST ->
+          LogisticsDependencyGateway.EquipmentMovementPurpose.ALLOCATABLE_REBALANCE;
       case MAINTENANCE_DISPOSITION ->
           LogisticsDependencyGateway.EquipmentMovementPurpose.MAINTENANCE_DISPOSITION;
     };

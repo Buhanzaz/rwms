@@ -2840,11 +2840,12 @@ components:
       additionalProperties: false
     WorkerTaskDetail:
       type: object
-      required: [entryId, version, taskId, routeIndex, title, description, object, taskText, scheduledDate, deadlineAt, priority, queuePosition, status, availabilityMode, plannedDurationMinutes, activeStartedAt, activeWorkSeconds, timerSnapshot, audienceSelectors, assignments, works, materials, comments, sourceMedia, evidence, relatedSteps, resultPhotoMinCount, completionAllowed]
+      required: [entryId, version, taskId, source, routeIndex, title, description, object, taskText, scheduledDate, deadlineAt, priority, queuePosition, status, availabilityMode, plannedDurationMinutes, activeStartedAt, activeWorkSeconds, timerSnapshot, audienceSelectors, assignments, works, materials, comments, sourceMedia, evidence, relatedSteps, resultPhotoMinCount, completionAllowed]
       properties:
         entryId: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         taskId: { type: string, format: uuid }
+        source: { oneOf: [{ $ref: '#/components/schemas/TaskSourceReference' }, { type: 'null' }] }
         routeIndex: { type: integer, minimum: 0 }
         title: { type: string, minLength: 1 }
         description: { oneOf: [{ type: string }, { type: 'null' }] }

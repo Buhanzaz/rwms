@@ -39,7 +39,6 @@ const DOCUMENT_KEYS = [
   "clientId",
   "equipmentMovementTaskId",
   "scheduledDate",
-  "scheduledAt",
   "rentalOrderId",
   "lines",
   "createdAt",
@@ -270,10 +269,6 @@ export function parseTransferDocument(value: unknown): TransferDocument {
     equipmentMovementTaskId: nullableUuid(source.equipmentMovementTaskId),
     scheduledDate: (() => {
       return calendarDate(source.scheduledDate)
-    })(),
-    scheduledAt: (() => {
-      if (source.scheduledAt !== null) invalidResponse()
-      return null
     })(),
     rentalOrderId: (() => {
       if (nullableUuid(source.rentalOrderId) !== null) invalidResponse()

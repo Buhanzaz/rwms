@@ -15,6 +15,20 @@ public interface LogisticsClient {
       AssistantApiModels.NewClientRequest newClient,
       String bearerToken);
 
+  /**
+   * Creates or replays an order-linked inquiry; logistics validates current editability, client
+   * identity and warehouse ownership.
+   */
+  InquiryBootstrap createRentalInquiry(
+      UUID conversationId,
+      UUID clientId,
+      AssistantApiModels.NewClientRequest newClient,
+      UUID rentalOrderId,
+      String bearerToken);
+
+  /** Reads current inquiry links and its logistics-owned fixed warehouse before a mutation. */
+  RentalInquiryContext readRentalInquiryContext(UUID rentalInquiryId, String bearerToken);
+
   JsonNode listAvailableCabinFacets(UUID rentalInquiryId, String bearerToken);
 
   /**
@@ -22,10 +36,7 @@ public interface LogisticsClient {
    * adapter must not replace that key when handling an uncertain response.
    */
   JsonNode searchAvailableCabins(
-      UUID rentalInquiryId,
-      UUID idempotencyKey,
-      CabinSearch search,
-      String bearerToken);
+      UUID rentalInquiryId, UUID idempotencyKey, CabinSearch search, String bearerToken);
 
   /** Reads the logistics-owned live inquiry selection without renewing any hold. */
   CabinSelection readCabinSelection(UUID rentalInquiryId, String bearerToken);
@@ -40,19 +51,13 @@ public interface LogisticsClient {
 
   /** Reads one bounded informational cabin fact page without acquiring a hold. */
   JsonNode lookupCabinCatalog(
-      UUID rentalInquiryId,
-      UUID warehouseId,
-      String query,
-      int page,
-      int size,
-      String bearerToken);
+      UUID rentalInquiryId, UUID warehouseId, String query, int page, int size, String bearerToken);
 
   /**
    * Reads the current client presentation for the inquiry. A missing presentation is a normal
    * state, not an upstream error.
    */
-  Optional<ClientPresentation> findClientPresentation(
-      UUID rentalInquiryId, String bearerToken);
+  Optional<ClientPresentation> findClientPresentation(UUID rentalInquiryId, String bearerToken);
 
   /** Identities and display metadata returned by idempotent inquiry creation. */
   record InquiryBootstrap(
@@ -61,6 +66,16 @@ public interface LogisticsClient {
       String inquiryStatus,
       String clientType,
       String clientDisplayName) {}
+
+  /** Current logistics-owned inquiry routing context; assistant stores none of this state. */
+  record RentalInquiryContext(
+      UUID inquiryId, UUID clientId, UUID rentalOrderId, UUID warehouseId, String state) {
+    public RentalInquiryContext {
+      if (inquiryId == null || clientId == null || state == null || state.isBlank()) {
+        throw new IllegalArgumentException("Rental inquiry context is incomplete");
+      }
+    }
+  }
 
   /** Existing published client presentation used to disable unsafe selection merging. */
   record ClientPresentation(UUID inquiryId, String state) {
@@ -78,8 +93,7 @@ public interface LogisticsClient {
   }
 
   /** Exact warehouse search and its explicit hold mutation mode. */
-  record CabinSearch(
-      List<CabinSearchGroup> groups, UUID warehouseId, SearchResultMode resultMode) {
+  record CabinSearch(List<CabinSearchGroup> groups, UUID warehouseId, SearchResultMode resultMode) {
     public CabinSearch(List<CabinSearchGroup> groups, UUID warehouseId) {
       this(groups, warehouseId, SearchResultMode.REPLACE);
     }

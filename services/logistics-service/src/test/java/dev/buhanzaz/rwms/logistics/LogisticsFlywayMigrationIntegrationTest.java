@@ -31,7 +31,8 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 class LogisticsFlywayMigrationIntegrationTest {
   private static final String MIGRATIONS = "classpath:db/migration";
 
-  @Container static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
+  @Container
+  static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
   private JdbcTemplate jdbc;
 
@@ -85,6 +86,7 @@ class LogisticsFlywayMigrationIntegrationTest {
             "logistics_warehouse_admission_intent",
             "logistics_warehouse_readiness_fence",
             "order_client",
+            "order_client_additional_contact",
             "outbox_event",
             "projection_checkpoint",
             "presentation_booking",
@@ -93,9 +95,10 @@ class LogisticsFlywayMigrationIntegrationTest {
             "rental_inquiry_search_attempt",
             "rental_inquiry_selection_receipt",
             "rental_order",
-            "rental_order_acceptable_delivery_date",
+            "rental_order_additional_contact",
             "rental_order_audit_event",
             "rental_order_command_receipt",
+            "rental_order_desired_delivery_window",
             "rental_order_unit_term",
             "rental_settings",
             "shipment_task_settings",
@@ -234,7 +237,8 @@ class LogisticsFlywayMigrationIntegrationTest {
                 transferId))
         .isEqualTo(transferTaskTime);
 
-    assertThat(configuration(MIGRATIONS).target("17").load().migrate().migrationsExecuted).isPositive();
+    assertThat(configuration(MIGRATIONS).target("17").load().migrate().migrationsExecuted)
+        .isPositive();
     assertThat(
             jdbc.queryForObject(
                 "select scheduled_date::text from logistics_document where id=?",
@@ -261,8 +265,7 @@ class LogisticsFlywayMigrationIntegrationTest {
         where id='00000000-0000-0000-0000-000000000001'
         """);
 
-    assertThat(configuration(MIGRATIONS).target("20").load().migrate().migrationsExecuted)
-        .isOne();
+    assertThat(configuration(MIGRATIONS).target("20").load().migrate().migrationsExecuted).isOne();
 
     Map<String, Object> settings =
         jdbc.queryForMap(
@@ -292,8 +295,7 @@ class LogisticsFlywayMigrationIntegrationTest {
     assertThat(toRegclass("uk_logistics_document_shipment_order")).isNotNull();
     assertThat(toRegclass("uk_logistics_document_return_order")).isNotNull();
 
-    assertThat(configuration(MIGRATIONS).target("28").load().migrate().migrationsExecuted)
-        .isOne();
+    assertThat(configuration(MIGRATIONS).target("28").load().migrate().migrationsExecuted).isOne();
 
     assertThat(tableNames()).contains("rental_order_unit_term");
     assertThat(
@@ -325,8 +327,7 @@ class LogisticsFlywayMigrationIntegrationTest {
                 Long.class))
         .isEqualTo(4);
 
-    assertThat(configuration(MIGRATIONS).target("29").load().migrate().migrationsExecuted)
-        .isOne();
+    assertThat(configuration(MIGRATIONS).target("29").load().migrate().migrationsExecuted).isOne();
     assertThat(toRegclass("uk_logistics_document_return_shipment")).isNull();
     assertThat(toRegclass("idx_logistics_document_return_shipment")).isNotNull();
   }
@@ -380,7 +381,8 @@ class LogisticsFlywayMigrationIntegrationTest {
         UUID.randomUUID(),
         UUID.randomUUID(),
         "b".repeat(64));
-    String oldPanelSnapshot = """
+    String oldPanelSnapshot =
+        """
         {
           "number": "БЫТ-001",
           "passport": {
@@ -447,8 +449,7 @@ class LogisticsFlywayMigrationIntegrationTest {
                     or (cabin_snapshot_json->'passport')::text ilike
                       '%previewPhotoUrls%')
                 """,
-                Integer.class,
-                presentationId))
+                Integer.class, presentationId))
         .isZero();
     assertThat(
             jdbc.queryForObject(
@@ -478,8 +479,7 @@ class LogisticsFlywayMigrationIntegrationTest {
     UUID presentationId = UUID.randomUUID();
     UUID selectedCabinId = UUID.randomUUID();
     UUID historicalBookingId = UUID.randomUUID();
-    OffsetDateTime historicalCompletedAt =
-        OffsetDateTime.parse("2026-07-27T10:15:00Z");
+    OffsetDateTime historicalCompletedAt = OffsetDateTime.parse("2026-07-27T10:15:00Z");
     jdbc.update(
         """
         insert into order_client(
@@ -861,10 +861,7 @@ class LogisticsFlywayMigrationIntegrationTest {
         .allSatisfy((ignored, value) -> assertThat(value).isNull());
 
     assertThatThrownBy(
-            () ->
-                jdbc.update(
-                    "update driver_logistics_task set priority=0 where id=?",
-                    id))
+            () -> jdbc.update("update driver_logistics_task set priority=0 where id=?", id))
         .hasMessageContaining("ck_driver_logistics_task_priority");
     assertJpaValidationStarts();
   }
@@ -885,7 +882,8 @@ class LogisticsFlywayMigrationIntegrationTest {
     insertCurrentDriverTask(secondId, warehouseId, UUID.randomUUID());
     assertThat(
             jdbc.queryForObject(
-                "select count(*) from driver_logistics_task where warehouse_id=? and state='CURRENT'",
+                "select count(*) from driver_logistics_task where warehouse_id=? and"
+                    + " state='CURRENT'",
                 Long.class,
                 warehouseId))
         .isEqualTo(2);
@@ -1079,7 +1077,8 @@ class LogisticsFlywayMigrationIntegrationTest {
     assertThatThrownBy(
             () ->
                 jdbc.update(
-                    "update driver_logistics_task set fixed_date_lower_bound=null where id=?", taskId))
+                    "update driver_logistics_task set fixed_date_lower_bound=null where id=?",
+                    taskId))
         .hasMessageContaining("ck_driver_logistics_task_fixed_lower_bound");
     assertJpaValidationStarts();
   }
@@ -1095,13 +1094,7 @@ class LogisticsFlywayMigrationIntegrationTest {
     UUID queueDefinitionId = UUID.randomUUID();
     OffsetDateTime now = OffsetDateTime.parse("2026-08-03T08:00:00Z");
     insertDriverMovement(
-        UUID.randomUUID(),
-        warehouseId,
-        cabinId,
-        repairId,
-        queueDefinitionId,
-        "CANCELLED",
-        now);
+        UUID.randomUUID(), warehouseId, cabinId, repairId, queueDefinitionId, "CANCELLED", now);
 
     Flyway upgraded = configuration(MIGRATIONS).target("33").load();
     assertThat(upgraded.migrate().migrationsExecuted).isOne();
@@ -1272,8 +1265,8 @@ class LogisticsFlywayMigrationIntegrationTest {
   }
 
   @Test
-  void v1DatabaseUpgradesInPlaceToLatestPreservesRowsAndPassesJpaValidation(
-      @TempDir Path directory) throws IOException {
+  void v1DatabaseUpgradesInPlaceToLatestPreservesRowsAndPassesJpaValidation(@TempDir Path directory)
+      throws IOException {
     copyMigration(directory, "V1__logistics_schema.sql");
     String location = "filesystem:" + directory.toAbsolutePath().toString().replace('\\', '/');
     assertThat(flyway(location).migrate().migrationsExecuted).isOne();
@@ -1390,18 +1383,14 @@ class LogisticsFlywayMigrationIntegrationTest {
     Flyway beforeV34 = configuration(MIGRATIONS).target("33").load();
     assertThat(beforeV34.migrate().migrationsExecuted).isEqualTo(33);
 
-    assertThat(configuration(MIGRATIONS).target("34").load().migrate().migrationsExecuted)
-        .isOne();
+    assertThat(configuration(MIGRATIONS).target("34").load().migrate().migrationsExecuted).isOne();
 
     assertThat(
             jdbc.queryForObject(
-                "select manual_booking_hold_minutes from rental_settings",
-                Integer.class))
+                "select manual_booking_hold_minutes from rental_settings", Integer.class))
         .isEqualTo(60);
     assertThatThrownBy(
-            () ->
-                jdbc.update(
-                    "update rental_settings set manual_booking_hold_minutes=4"))
+            () -> jdbc.update("update rental_settings set manual_booking_hold_minutes=4"))
         .hasMessageContaining("ck_rental_settings_manual_booking_hold_minutes");
     assertJpaValidationStarts();
   }
@@ -1433,8 +1422,7 @@ class LogisticsFlywayMigrationIntegrationTest {
         UUID.randomUUID(),
         "a".repeat(64));
 
-    assertThat(configuration(MIGRATIONS).target("35").load().migrate().migrationsExecuted)
-        .isOne();
+    assertThat(configuration(MIGRATIONS).target("35").load().migrate().migrationsExecuted).isOne();
     assertThat(
             jdbc.queryForObject(
                 "select task_kind from driver_logistics_task where id=?", String.class, taskId))
@@ -1457,8 +1445,7 @@ class LogisticsFlywayMigrationIntegrationTest {
         .contains("REQUEST_RETURN_ESTIMATE")
         .doesNotContain("START_RETURN_ESTIMATES");
 
-    assertThat(configuration(MIGRATIONS).target("38").load().migrate().migrationsExecuted)
-        .isOne();
+    assertThat(configuration(MIGRATIONS).target("38").load().migrate().migrationsExecuted).isOne();
 
     assertThat(logisticsConstraintDefinition("ck_logistics_idempotency_operation"))
         .contains("REQUEST_RETURN_ESTIMATE", "START_RETURN_ESTIMATES");
@@ -1714,9 +1701,7 @@ class LogisticsFlywayMigrationIntegrationTest {
     UUID firstAttempt = UUID.randomUUID();
     insertPreparedSearchAttempt(firstAttempt, pending[1], UUID.randomUUID());
     assertThatThrownBy(
-            () ->
-                insertPreparedSearchAttempt(
-                    UUID.randomUUID(), pending[1], UUID.randomUUID()))
+            () -> insertPreparedSearchAttempt(UUID.randomUUID(), pending[1], UUID.randomUUID()))
         .hasMessageContaining("uk_rental_inquiry_search_attempt_one_prepared");
     jdbc.update(
         """
@@ -1940,7 +1925,8 @@ class LogisticsFlywayMigrationIntegrationTest {
         .hasMessageContaining("same normalized phone");
     assertThat(
             jdbc.queryForObject(
-                "select count(*) from order_client where client_type='SOLE_PROPRIETOR'", Long.class))
+                "select count(*) from order_client where client_type='SOLE_PROPRIETOR'",
+                Long.class))
         .isOne();
   }
 
@@ -2071,7 +2057,8 @@ class LogisticsFlywayMigrationIntegrationTest {
     insertV46GroupedShipmentTask(groupedTaskId, warehouseId);
     assertThat(
             jdbc.queryForMap(
-                "select source_type,task_kind,client_snapshot,unit_number from driver_logistics_task where id=?",
+                "select source_type,task_kind,client_snapshot,unit_number from"
+                    + " driver_logistics_task where id=?",
                 groupedTaskId))
         .containsEntry("source_type", "LOGISTICS_DOCUMENT")
         .containsEntry("task_kind", "SHIPMENT")
@@ -2080,7 +2067,8 @@ class LogisticsFlywayMigrationIntegrationTest {
     assertThatThrownBy(
             () ->
                 jdbc.update(
-                    "update driver_logistics_task set client_snapshot=null where id=?", groupedTaskId))
+                    "update driver_logistics_task set client_snapshot=null where id=?",
+                    groupedTaskId))
         .hasMessageContaining("ck_driver_logistics_task_document_group");
     jdbc.update(
         """
@@ -2093,9 +2081,264 @@ class LogisticsFlywayMigrationIntegrationTest {
     assertThatThrownBy(
             () ->
                 jdbc.update(
-                    "update shipment_task_settings set max_cabins_per_shipment_task=0 where warehouse_id=?",
+                    "update shipment_task_settings set max_cabins_per_shipment_task=0 where"
+                        + " warehouse_id=?",
                     warehouseId))
         .hasMessageContaining("ck_shipment_task_settings_max_cabins");
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v47MigratesDesiredWindowsAndBackfillsStableOrderTripNumbers() {
+    Flyway beforeV47 = configuration(MIGRATIONS).target("46").load();
+    assertThat(beforeV47.migrate().migrationsExecuted).isEqualTo(46);
+    UUID warehouseId = UUID.randomUUID();
+    UUID managerId = UUID.randomUUID();
+    UUID clientId = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into order_client(
+          id,version,client_type,display_name,normalized_name,phone,normalized_phone,
+          contact_person,responsible_manager_id,responsible_manager_display_name,
+          created_by_subject_id,creation_idempotency_key,creation_request_sha256,
+          created_at,updated_at)
+        values (?,0,'LEGAL_ENTITY','ООО V47','ооо v47','+79990000047','+79990000047',
+          'Контакт V47',?,'Менеджер V47',?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        clientId,
+        managerId,
+        managerId,
+        UUID.randomUUID(),
+        "a".repeat(64));
+    jdbc.update(
+        """
+        insert into rental_order(
+          id,version,order_number,status,client_id,manager_id,manager_display_name,
+          created_by_subject_id,created_by_display_name,created_by_role,warehouse_id,
+          creation_idempotency_key,creation_request_sha256,created_at,updated_at)
+        values (?,0,'ORD-470001','DRAFT',?,?,'Менеджер V47',?,'Менеджер V47',
+          'RENTAL_MANAGER',?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        orderId,
+        clientId,
+        managerId,
+        managerId,
+        warehouseId,
+        UUID.randomUUID(),
+        "b".repeat(64));
+    LocalDate legacyDate = LocalDate.of(2026, 8, 11);
+    jdbc.update(
+        """
+        insert into rental_order_acceptable_delivery_date(order_id,position,delivery_date)
+        values (?,0,?)
+        """,
+        orderId,
+        legacyDate);
+    UUID firstDocumentId = UUID.randomUUID();
+    UUID secondDocumentId = UUID.randomUUID();
+    UUID standaloneDocumentId = UUID.randomUUID();
+    insertV46OrderTripDocument(
+        firstDocumentId, warehouseId, orderId, OffsetDateTime.parse("2026-08-10T10:00:00Z"));
+    insertV46OrderTripDocument(
+        secondDocumentId, warehouseId, orderId, OffsetDateTime.parse("2026-08-10T11:00:00Z"));
+    insertV46OrderTripDocument(
+        standaloneDocumentId, warehouseId, null, OffsetDateTime.parse("2026-08-10T12:00:00Z"));
+    UUID firstTaskId = UUID.randomUUID();
+    UUID secondTaskId = UUID.randomUUID();
+    UUID standaloneTaskId = UUID.randomUUID();
+    insertV46GroupedShipmentTask(firstTaskId, warehouseId, firstDocumentId);
+    insertV46GroupedShipmentTask(secondTaskId, warehouseId, secondDocumentId);
+    insertV46GroupedShipmentTask(standaloneTaskId, warehouseId, standaloneDocumentId);
+
+    Flyway upgraded = configuration(MIGRATIONS).target("47").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(toRegclass("order_client_additional_contact")).isNotNull();
+    assertThat(toRegclass("rental_order_additional_contact")).isNotNull();
+    assertThat(toRegclass("rental_order_desired_delivery_window")).isNotNull();
+    assertThat(toRegclass("rental_order_acceptable_delivery_date")).isNull();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from information_schema.columns
+                where table_schema='public'
+                  and table_name='shipment_furniture_movement_task'
+                  and column_name='replacement_source_reservation_id'
+                """,
+                Integer.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select start_date from rental_order_desired_delivery_window
+                where order_id=? and position=0
+                """,
+                LocalDate.class,
+                orderId))
+        .isEqualTo(legacyDate);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select end_date from rental_order_desired_delivery_window
+                where order_id=? and position=0
+                """,
+                LocalDate.class,
+                orderId))
+        .isEqualTo(legacyDate);
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select time_from,time_to from rental_order_desired_delivery_window
+                where order_id=? and position=0
+                """,
+                orderId))
+        .containsEntry("time_from", null)
+        .containsEntry("time_to", null);
+    assertThat(
+            jdbc.queryForObject(
+                "select trip_number from driver_logistics_task where id=?",
+                Integer.class,
+                firstTaskId))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "select trip_number from driver_logistics_task where id=?",
+                Integer.class,
+                secondTaskId))
+        .isEqualTo(2);
+    assertThat(
+            jdbc.queryForObject(
+                "select trip_number from driver_logistics_task where id=?",
+                Integer.class,
+                standaloneTaskId))
+        .isEqualTo(1);
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v48AddsNullablePositiveClientSelectedRentalMonthsToExistingBookings() {
+    Flyway beforeV48 = configuration(MIGRATIONS).target("47").load();
+    assertThat(beforeV48.migrate().migrationsExecuted).isEqualTo(47);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from information_schema.columns
+                where table_schema='public'
+                  and table_name='presentation_booking'
+                  and column_name='rental_months'
+                """,
+                Integer.class))
+        .isZero();
+
+    Flyway upgraded = configuration(MIGRATIONS).target("48").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select data_type,is_nullable
+                from information_schema.columns
+                where table_schema='public'
+                  and table_name='presentation_booking'
+                  and column_name='rental_months'
+                """))
+        .containsEntry("data_type", "bigint")
+        .containsEntry("is_nullable", "YES");
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select pg_get_constraintdef(c.oid)
+                from pg_constraint c
+                join pg_class relation on relation.oid=c.conrelid
+                join pg_namespace namespace on namespace.oid=relation.relnamespace
+                where namespace.nspname='public'
+                  and relation.relname='presentation_booking'
+                  and c.conname='ck_presentation_booking_rental_months'
+                """,
+                String.class))
+        .contains("rental_months")
+        .contains(">= 1");
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v49AddsOnlyReplaySnapshotFieldsAndRetainsHistoricalDesiredTimeColumns() {
+    Flyway beforeV49 = configuration(MIGRATIONS).target("48").load();
+    assertThat(beforeV49.migrate().migrationsExecuted).isEqualTo(48);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from information_schema.columns
+                where table_schema='public'
+                  and table_name='presentation_booking'
+                  and column_name in ('delivery_address','latitude','longitude','additional_contacts_json')
+                """,
+                Integer.class))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from information_schema.columns
+                where table_schema='public'
+                  and table_name='rental_order_desired_delivery_window'
+                  and column_name in ('time_from','time_to')
+                """,
+                Integer.class))
+        .isEqualTo(2);
+
+    Flyway upgraded = configuration(MIGRATIONS).target("49").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForList(
+                """
+                select column_name || ':' || data_type || ':' || is_nullable
+                from information_schema.columns
+                where table_schema='public'
+                  and table_name='presentation_booking'
+                  and column_name in ('delivery_address','latitude','longitude','additional_contacts_json')
+                order by column_name
+                """,
+                String.class))
+        .containsExactly(
+            "additional_contacts_json:jsonb:YES",
+            "delivery_address:character varying:YES",
+            "latitude:numeric:YES",
+            "longitude:numeric:YES");
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from information_schema.columns
+                where table_schema='public'
+                  and table_name='rental_order_desired_delivery_window'
+                  and column_name in ('time_from','time_to')
+                """,
+                Integer.class))
+        .isEqualTo(2);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from pg_constraint c
+                join pg_class relation on relation.oid=c.conrelid
+                join pg_namespace namespace on namespace.oid=relation.relnamespace
+                where namespace.nspname='public'
+                  and relation.relname='presentation_booking'
+                  and c.conname in (
+                    'ck_presentation_booking_delivery_address',
+                    'ck_presentation_booking_delivery_coordinates',
+                    'ck_presentation_booking_additional_contacts_json')
+                """,
+                Integer.class))
+        .isEqualTo(3);
     assertJpaValidationStarts();
   }
 
@@ -2145,7 +2388,8 @@ class LogisticsFlywayMigrationIntegrationTest {
 
   private List<String> tableNames() {
     return jdbc.queryForList(
-        "select table_name from information_schema.tables where table_schema='public' order by table_name",
+        "select table_name from information_schema.tables where table_schema='public' order by"
+            + " table_name",
         String.class);
   }
 
@@ -2284,9 +2528,7 @@ class LogisticsFlywayMigrationIntegrationTest {
             + "\"}",
         status,
         status);
-    return new UUID[] {
-      eventId, inquiryId, conversationId, bookingId, orderId, managerSubjectId
-    };
+    return new UUID[] {eventId, inquiryId, conversationId, bookingId, orderId, managerSubjectId};
   }
 
   private Map<String, Object> bookedEnvelope(UUID eventId) {
@@ -2426,6 +2668,10 @@ class LogisticsFlywayMigrationIntegrationTest {
 
   /** Inserts a V46 document-owned group to prove the expanded source constraint is usable. */
   private void insertV46GroupedShipmentTask(UUID taskId, UUID warehouseId) {
+    insertV46GroupedShipmentTask(taskId, warehouseId, UUID.randomUUID());
+  }
+
+  private void insertV46GroupedShipmentTask(UUID taskId, UUID warehouseId, UUID documentId) {
     jdbc.update(
         """
         insert into driver_logistics_task(
@@ -2443,13 +2689,34 @@ class LogisticsFlywayMigrationIntegrationTest {
         taskId,
         warehouseId,
         UUID.randomUUID(),
-        UUID.randomUUID(),
+        documentId,
         UUID.randomUUID(),
         UUID.randomUUID(),
         UUID.randomUUID(),
         UUID.randomUUID(),
         UUID.randomUUID(),
         "a".repeat(64));
+  }
+
+  private void insertV46OrderTripDocument(
+      UUID documentId, UUID warehouseId, UUID rentalOrderId, OffsetDateTime createdAt) {
+    jdbc.update(
+        """
+        insert into logistics_document(
+          id,version,document_type,state,warehouse_id,party_snapshot,driver_snapshot,
+          driver_worker_id,scheduled_date,requested_by_subject_id,correlation_id,
+          rental_order_id,created_at,updated_at)
+        values (?,0,'SHIPMENT','DRAFT',?,'ООО V47','Водитель V47',?,date '2026-08-11',
+          ?,?,?,?,?)
+        """,
+        documentId,
+        warehouseId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        rentalOrderId,
+        createdAt,
+        createdAt);
   }
 
   private Map<String, Object> driverAudienceRow(UUID taskId) {
@@ -2463,7 +2730,8 @@ class LogisticsFlywayMigrationIntegrationTest {
 
   private java.net.URL requireResource(String path) {
     java.net.URL resource = getClass().getClassLoader().getResource(path);
-    if (resource == null) throw new IllegalStateException("Missing logistics migration resource: " + path);
+    if (resource == null)
+      throw new IllegalStateException("Missing logistics migration resource: " + path);
     return resource;
   }
 

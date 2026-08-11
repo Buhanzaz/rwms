@@ -4411,6 +4411,12 @@ class MaintenanceCorePostgresIntegrationTest {
           return new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
               tableEquipmentId, "Table");
         });
+    when(dependencies.furnitureEquipmentSnapshots(List.of(chairNodeId, tableNodeId)))
+        .thenReturn(List.of(
+            new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
+                chairNodeId, chairEquipmentId, "Chair", 0, null),
+            new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
+                tableNodeId, tableEquipmentId, "Table", 0, null)));
 
     ChangeCatalogRequest exactRequest =
         new ChangeCatalogRequest(0L, nodes, List.of());
@@ -4437,6 +4443,7 @@ class MaintenanceCorePostgresIntegrationTest {
         .containsExactlyInAnyOrder(chairEquipmentId, tableEquipmentId);
     verify(dependencies, times(1)).ensureFurnitureEquipment(chairNodeId, "Chair");
     verify(dependencies, times(2)).ensureFurnitureEquipment(tableNodeId, "Table");
+    verify(dependencies).furnitureEquipmentSnapshots(List.of(chairNodeId, tableNodeId));
 
     // A late replay after generic request replay retention uses the durable confirmed mapping.
     var lateReplay = service.changeCatalog(
@@ -4811,6 +4818,25 @@ class MaintenanceCorePostgresIntegrationTest {
                     "",
                     null)),
             List.of()));
+    when(dependencies.getPropertyAssetSnapshot(
+            MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
+            rentalItemId,
+            warehouseId))
+        .thenReturn(new MaintenanceDependencyGateway.PropertyAssetSnapshot(
+            MaintenanceDependencyGateway.PropertyAssetKind.CABIN,
+            rentalItemId,
+            "C-1",
+            warehouseId,
+            7,
+            "AFTER_RENT",
+            null,
+            null,
+            List.of(new MaintenanceDependencyGateway.PropertyAssetContentSnapshot(
+                equipmentId, "Chair", null, 3, 1)),
+            false,
+            false,
+            false,
+            true));
     var completed = service.completeEstimate(
         UUID.randomUUID(),
         UUID.randomUUID(),

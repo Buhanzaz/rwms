@@ -826,32 +826,6 @@ function AssistantSidebarMenu({
   )
 }
 
-function BookingSidebarMenu({
-  currentPath,
-  onNavigate,
-}: {
-  currentPath: string
-  onNavigate: () => void
-}) {
-  return (
-    <SidebarMenuItem>
-      <SidebarMenuButton
-        asChild
-        isActive={isActiveUrl(currentPath, "/booking")}
-        tooltip="Бронирование"
-        className="h-10 py-1"
-      >
-        <Link to="/booking" onClick={onNavigate}>
-          <span className="flex size-8 shrink-0 items-center justify-center group-data-[collapsible=icon]:size-9">
-            <HugeiconsIcon icon={ClipboardPenLineIcon} strokeWidth={2} />
-          </span>
-          <span>Бронирование</span>
-        </Link>
-      </SidebarMenuButton>
-    </SidebarMenuItem>
-  )
-}
-
 function ClientsSidebarMenu({
   currentPath,
   onNavigate,
@@ -1019,10 +993,6 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
           <SidebarGroupContent>
             <SidebarMenu>
               <AssistantSidebarMenu
-                currentPath={location.pathname}
-                onNavigate={handleNavigationClick}
-              />
-              <BookingSidebarMenu
                 currentPath={location.pathname}
                 onNavigate={handleNavigationClick}
               />

@@ -29,8 +29,8 @@ Russian version: [README.ru.md](README.ru.md).
 ### Transport contract gate
 
 [`WorkerGatewayApiContractBoundaryTest.kt`](core-network/src/test/java/dev/buhanzaz/rwms/worker/core/network/WorkerGatewayApiContractBoundaryTest.kt)
-pins all 11 declared `WorkerGatewayApi` methods to their canonical public
-OpenAPI source: nine fixed gateway routes and exactly two allowlisted dynamic
+pins all 12 declared `WorkerGatewayApi` methods to their canonical public
+OpenAPI source: ten fixed gateway routes and exactly two allowlisted dynamic
 media routes. It rejects internal/private namespaces and service origins,
 eagerly resolves every Retrofit/kotlinx.serialization request and response
 converter, and checks every active worker/task-board and media JSON root
@@ -68,6 +68,16 @@ time; its expanded state adds status, optional budget timer and photo count.
 and durable upload flow. The Downloads screen remains the recovery surface for
 failed or pending uploads and explicit retry. The task screen records a work
 result and JPEG evidence but never decides a task transition locally.
+
+For a task-board detail whose immutable source is `LOGISTICS_DRIVER_TASK`, the
+detail screen follows that source ID through the public logistics driver-task
+GET and renders the live grouped-trip facts: operation, client, address and
+coordinates, primary and additional contacts, comments, client-requested
+dates, separately assigned date, and one filling/readiness card per
+cabin. These logistics facts are not copied into Room. A failed logistics read
+leaves the ordinary task detail and actions usable and exposes an explicit
+retry; switching tasks or opening a non-logistics source clears the ephemeral
+trip state.
 
 Server-provided KPI ranges determine colors; no local green/yellow/red policy
 is invented. Worker-facing work data does not expose price/cost fields.

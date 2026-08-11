@@ -142,10 +142,9 @@ export function PropertyDispositionCreateDialog({
     assetKind === "CABIN"
       ? cabinsQuery.isSuccess && cabins.length === 0
       : equipmentQuery.isSuccess && equipment.length === 0
-  const cabinContents = useMemo(() => {
-    if (!selectedCabin) return []
-    return cabinDispositionContents(selectedCabin.id, equipmentQuery.data ?? [])
-  }, [equipmentQuery.data, selectedCabin])
+  const cabinContents = selectedCabin
+    ? cabinDispositionContents(selectedCabin.id, equipmentQuery.data ?? [])
+    : []
   const quantityValid = Boolean(
     selectedStock &&
     Number.isSafeInteger(quantity) &&

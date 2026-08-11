@@ -21,7 +21,8 @@ final class LogisticsAssetOperationsDependencyClient {
   private final LogisticsOAuthHttpTransport transport;
   private final String assetBase;
 
-  LogisticsAssetOperationsDependencyClient(LogisticsOAuthHttpTransport transport, String assetBase) {
+  LogisticsAssetOperationsDependencyClient(
+      LogisticsOAuthHttpTransport transport, String assetBase) {
     this.transport = transport;
     this.assetBase = assetBase;
   }
@@ -39,11 +40,7 @@ final class LogisticsAssetOperationsDependencyClient {
   }
 
   OperationLease acquireReturnLease(
-      UUID idempotencyKey,
-      UUID assetId,
-      long expectedAssetVersion,
-      UUID documentId,
-      UUID lineId) {
+      UUID idempotencyKey, UUID assetId, long expectedAssetVersion, UUID documentId, UUID lineId) {
     return acquireReturnLease(
         idempotencyKey, assetId, expectedAssetVersion, documentId, lineId, null);
   }
@@ -73,13 +70,7 @@ final class LogisticsAssetOperationsDependencyClient {
       UUID documentId,
       UUID lineId) {
     return acquireOperationLease(
-        idempotencyKey,
-        ownerType,
-        assetId,
-        expectedAssetVersion,
-        documentId,
-        lineId,
-        null);
+        idempotencyKey, ownerType, assetId, expectedAssetVersion, documentId, lineId, null);
   }
 
   OperationLease acquireOperationLease(
@@ -96,12 +87,7 @@ final class LogisticsAssetOperationsDependencyClient {
             assetBase + "/operation-leases",
             idempotencyKey,
             new AcquireLeaseRequest(
-                assetId,
-                ownerType.name(),
-                documentId,
-                lineId,
-                expectedAssetVersion,
-                rentalOrderId),
+                assetId, ownerType.name(), documentId, lineId, expectedAssetVersion, rentalOrderId),
             OperationLeaseResponse.class,
             ASSET_CLIENT,
             ASSET_SCOPE,
@@ -318,7 +304,8 @@ final class LogisticsAssetOperationsDependencyClient {
             ASSET_SCOPE,
             "Dependency returned an empty response",
             DEFAULT);
-    if (response == null) throw malformed("Asset-service returned an empty released operation lease");
+    if (response == null)
+      throw malformed("Asset-service returned an empty released operation lease");
     return new OperationLease(
         response.leaseId(),
         response.version(),
@@ -391,6 +378,72 @@ final class LogisticsAssetOperationsDependencyClient {
       long quantity,
       OffsetDateTime reservedUntil,
       EquipmentMovementPurpose purpose) {
+    return acquireEquipmentMovementReservation(
+        idempotencyKey,
+        movementId,
+        lineId,
+        equipmentId,
+        sourceWarehouseId,
+        sourceRentalItemId,
+        sourceLocationKind,
+        expectedSourceBalanceVersion,
+        quantity,
+        reservedUntil,
+        purpose,
+        null,
+        null,
+        null);
+  }
+
+  EquipmentMovementReservation acquireEquipmentMovementReservation(
+      UUID idempotencyKey,
+      UUID movementId,
+      UUID lineId,
+      UUID equipmentId,
+      UUID sourceWarehouseId,
+      UUID sourceRentalItemId,
+      String sourceLocationKind,
+      long expectedSourceBalanceVersion,
+      long quantity,
+      OffsetDateTime reservedUntil,
+      EquipmentMovementPurpose purpose,
+      UUID orderId,
+      UUID targetRentalItemId,
+      List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> units) {
+    return acquireEquipmentMovementReservation(
+        idempotencyKey,
+        movementId,
+        lineId,
+        equipmentId,
+        sourceWarehouseId,
+        sourceRentalItemId,
+        sourceLocationKind,
+        expectedSourceBalanceVersion,
+        quantity,
+        reservedUntil,
+        purpose,
+        orderId,
+        targetRentalItemId,
+        units,
+        null);
+  }
+
+  EquipmentMovementReservation acquireEquipmentMovementReservation(
+      UUID idempotencyKey,
+      UUID movementId,
+      UUID lineId,
+      UUID equipmentId,
+      UUID sourceWarehouseId,
+      UUID sourceRentalItemId,
+      String sourceLocationKind,
+      long expectedSourceBalanceVersion,
+      long quantity,
+      OffsetDateTime reservedUntil,
+      EquipmentMovementPurpose purpose,
+      UUID orderId,
+      UUID targetRentalItemId,
+      List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> units,
+      UUID replacementSourceReservationId) {
     if (purpose == null) {
       throw malformed("Equipment movement reservation purpose is required");
     }
@@ -408,7 +461,11 @@ final class LogisticsAssetOperationsDependencyClient {
                 expectedSourceBalanceVersion,
                 quantity,
                 reservedUntil,
-                purpose),
+                purpose,
+                orderId,
+                targetRentalItemId,
+                units,
+                replacementSourceReservationId),
             EquipmentMovementReservationResponse.class,
             ASSET_CLIENT,
             ASSET_SCOPE,
@@ -693,15 +750,11 @@ final class LogisticsAssetOperationsDependencyClient {
       List<ReturnEquipmentReceiptLineResponse> lines) {}
 
   /**
-   * Versioned lease command used to release or otherwise conclude a fenced operation without
-   * losing its owner-document identity.
+   * Versioned lease command used to release or otherwise conclude a fenced operation without losing
+   * its owner-document identity.
    */
   private record LeaseCommandRequest(
-      long expectedVersion,
-      long fencingToken,
-      String ownerType,
-      UUID documentId,
-      UUID lineId) {}
+      long expectedVersion, long fencingToken, String ownerType, UUID documentId, UUID lineId) {}
 
   /**
    * Shipment equipment-hold command that reserves stock against its expected balance version and
@@ -741,7 +794,11 @@ final class LogisticsAssetOperationsDependencyClient {
       long expectedSourceBalanceVersion,
       long quantity,
       OffsetDateTime reservedUntil,
-      EquipmentMovementPurpose purpose) {}
+      EquipmentMovementPurpose purpose,
+      UUID orderId,
+      UUID targetRentalItemId,
+      List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> units,
+      UUID replacementSourceReservationId) {}
 
   /**
    * Compensating release command fenced by reservation version and correlated to the original

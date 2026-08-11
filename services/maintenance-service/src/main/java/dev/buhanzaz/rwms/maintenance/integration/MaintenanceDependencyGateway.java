@@ -55,8 +55,24 @@ public interface MaintenanceDependencyGateway {
   List<MaintenanceFurnitureCustodyClaim> unresolvedFurnitureCustody(
       String ownerType, UUID ownerId);
 
+  /**
+   * Ensures the durable maintenance-node binding and applies a maximum mutation only when the
+   * caller supplies the asset equipment version used as its CAS fence.
+   */
   FurnitureEquipmentSnapshot ensureFurnitureEquipment(
-      UUID catalogNodeId, String equipmentName);
+      UUID catalogNodeId,
+      String equipmentName,
+      Long expectedEquipmentVersion,
+      Integer maximumPerCabin);
+
+  /** Legacy ensure semantics: preserve every existing asset-owned maximum. */
+  default FurnitureEquipmentSnapshot ensureFurnitureEquipment(
+      UUID catalogNodeId, String equipmentName) {
+    return ensureFurnitureEquipment(catalogNodeId, equipmentName, null, null);
+  }
+
+  /** Returns live asset-owned furniture settings for the bounded durable node identities. */
+  List<FurnitureEquipmentSnapshot> furnitureEquipmentSnapshots(List<UUID> catalogNodeIds);
 
   List<CabinCharacteristicSnapshot> cabinCharacteristics();
 
@@ -596,12 +612,27 @@ public interface MaintenanceDependencyGateway {
     }
   }
 
-  record FurnitureEquipmentSnapshot(UUID equipmentId, String equipmentName) {
+  /**
+   * Live asset-owned furniture binding returned to maintenance; the version fences editor writes
+   * and {@code maximumPerCabin} is never duplicated into the maintenance catalog tree.
+   */
+  record FurnitureEquipmentSnapshot(
+      UUID catalogNodeId,
+      UUID equipmentId,
+      String equipmentName,
+      long equipmentVersion,
+      Integer maximumPerCabin) {
+    public FurnitureEquipmentSnapshot(UUID equipmentId, String equipmentName) {
+      this(null, equipmentId, equipmentName, 0, null);
+    }
+
     public FurnitureEquipmentSnapshot {
       if (equipmentId == null
           || equipmentName == null
           || equipmentName.isBlank()
-          || equipmentName.length() > 255) {
+          || equipmentName.length() > 255
+          || equipmentVersion < 0
+          || (maximumPerCabin != null && maximumPerCabin < 1)) {
         throw new IllegalArgumentException("Furniture equipment snapshot is invalid");
       }
     }

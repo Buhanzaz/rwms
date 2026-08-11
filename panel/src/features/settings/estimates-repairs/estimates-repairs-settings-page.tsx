@@ -872,6 +872,11 @@ function NodeEditorDialogContent({
       !characteristics.some(
         (characteristic) => characteristic.id === draft.characteristicId
       ))
+  const maximumPerCabin = draft.furnitureEquipment?.maximumPerCabin ?? null
+  const maximumPerCabinSaveBlocked =
+    furnitureMaterial &&
+    maximumPerCabin !== null &&
+    (!Number.isInteger(maximumPerCabin) || maximumPerCabin < 1)
   const draftForSave =
     categoryRouting && selectedRoutingQueue !== null
       ? {
@@ -923,7 +928,8 @@ function NodeEditorDialogContent({
               !mutation.isPending &&
               !commentTooLong &&
               !routingSaveBlocked &&
-              !characteristicSaveBlocked
+              !characteristicSaveBlocked &&
+              !maximumPerCabinSaveBlocked
             ) {
               mutation.mutate(draftForSave)
             }
@@ -993,10 +999,20 @@ function NodeEditorDialogContent({
                   id={`${fieldIdPrefix}-name`}
                   value={draft.name}
                   onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      name: event.target.value,
-                    }))
+                    setDraft((current) => {
+                      const name = event.target.value
+                      return {
+                        ...current,
+                        name,
+                        furnitureEquipment:
+                          current.furnitureEquipment?.equipmentId === null
+                            ? {
+                                ...current.furnitureEquipment,
+                                equipmentName: name,
+                              }
+                            : current.furnitureEquipment,
+                      }
+                    })
                   }
                 />
               </Field>
@@ -1257,6 +1273,58 @@ function NodeEditorDialogContent({
                   К одной характеристике можно привязать несколько материалов.
                 </FieldDescription>
               </FieldGroup>
+            ) : null}
+
+            {furnitureMaterial ? (
+              <Field data-invalid={maximumPerCabinSaveBlocked || undefined}>
+                <FieldLabel htmlFor={`${fieldIdPrefix}-maximum-per-cabin`}>
+                  Максимальное количество в одной бытовке
+                </FieldLabel>
+                <Input
+                  id={`${fieldIdPrefix}-maximum-per-cabin`}
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  step={1}
+                  value={maximumPerCabin ?? ""}
+                  disabled={mutation.isPending}
+                  aria-invalid={maximumPerCabinSaveBlocked || undefined}
+                  onChange={(event) => {
+                    const nextMaximum = toNumberOrNull(event.target.value)
+                    setDraft((current) => {
+                      if (
+                        current.furnitureEquipment === null &&
+                        nextMaximum === null
+                      ) {
+                        return current
+                      }
+                      return {
+                        ...current,
+                        furnitureEquipment: {
+                          equipmentId:
+                            current.furnitureEquipment?.equipmentId ?? null,
+                          equipmentName:
+                            current.furnitureEquipment?.equipmentName ??
+                            current.name,
+                          equipmentVersion:
+                            current.furnitureEquipment?.equipmentVersion ??
+                            null,
+                          maximumPerCabin: nextMaximum,
+                        },
+                      }
+                    })
+                  }}
+                />
+                <FieldDescription>
+                  Оставьте поле пустым, если ограничение для этой позиции не
+                  требуется.
+                </FieldDescription>
+                {maximumPerCabinSaveBlocked ? (
+                  <FieldError>
+                    Укажите целое положительное количество.
+                  </FieldError>
+                ) : null}
+              </Field>
             ) : null}
 
             <div className="grid gap-3 md:grid-cols-2">

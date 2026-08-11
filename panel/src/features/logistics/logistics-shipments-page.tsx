@@ -47,7 +47,6 @@ import {
   FieldDescription,
   FieldError,
   FieldGroup,
-  FieldLabel,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
@@ -64,6 +63,8 @@ import {
   type LogisticsDocumentFiltersState,
 } from "@/features/logistics/logistics-document-filters"
 import { LogisticsDriverPicker } from "@/features/logistics/logistics-driver-picker"
+import { DesiredTripScheduleFields } from "@/features/logistics/desired-trip-schedule-fields"
+import { DRIVER_BOARD_QUERY_KEY } from "@/features/logistics/driver-board/driver-board-api"
 import {
   logisticsAssetLabel,
   logisticsOrderLabel,
@@ -89,6 +90,7 @@ import {
   type ShipmentDocumentState,
 } from "@/features/logistics/shipments/model"
 import type { RepairTaskWorkerSnapshotDto } from "@/features/repair-tasks/model/repair-task"
+import type { DesiredDeliveryWindow } from "@/features/orders/domain/orders"
 import { useResponsiveFiltersOpen } from "@/hooks/use-responsive-filters-open"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { ApiError } from "@/lib/api-client"
@@ -127,6 +129,10 @@ function formatDate(value: string) {
   return new Intl.DateTimeFormat("ru-RU", {
     dateStyle: "medium",
   }).format(new Date(`${value}T00:00:00`))
+}
+
+function formatSchedule(date: string | null) {
+  return date ? formatDate(date) : "Не назначена"
 }
 
 function matchesDateRange(
@@ -181,6 +187,15 @@ function needsFurnitureReadiness(shipment: ShipmentDocument) {
     isOrderShipment(shipment) &&
     (shipment.state === "DRAFT" || shipment.state === "AWAITING_CONFIRMATION")
   )
+}
+
+function desiredWindowsForShipment(
+  referenceLabels: LogisticsReferenceLabels,
+  shipment: ShipmentDocument
+) {
+  if (!shipment.rentalOrderId) return []
+  const order = referenceLabels.orders.get(shipment.rentalOrderId)
+  return order?.status === "available" ? order.order.desiredDeliveryWindows : []
 }
 
 function furnitureTaskHref(readiness: ShipmentFurnitureReadiness | undefined) {
@@ -429,6 +444,7 @@ export function LogisticsShipmentsPage() {
       setScheduleTarget(null)
       setCommandError(null)
       void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
+      void queryClient.invalidateQueries({ queryKey: DRIVER_BOARD_QUERY_KEY })
     },
     onError: (cause, variables) => {
       if (cause instanceof ApiError && cause.status === 409) {
@@ -468,44 +484,6 @@ export function LogisticsShipmentsPage() {
         void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
       }
       setCommandError(errorMessage(cause, "Не удалось отметить отгрузку"))
-    },
-  })
-
-  const rescheduleAndConfirmMutation = useMutation({
-    mutationFn: async (shipment: ShipmentDocument) => {
-      if (!shipment.driverSnapshot) {
-        throw new Error("Для отгрузки не указан водитель")
-      }
-      const scheduledDate = new Date().toISOString().slice(0, 10)
-      const planSignature = `schedule:${shipment.id}:${shipment.version}:${shipment.driverWorkerId ?? "unassigned"}:${shipment.driverSnapshot}:${scheduledDate}`
-      const planned = await replaceShipmentPlan({
-        accessToken: accessToken!,
-        documentId: shipment.id,
-        expectedVersion: shipment.version,
-        driverSnapshot: shipment.driverSnapshot,
-        driverWorkerId: shipment.driverWorkerId,
-        scheduledDate,
-        idempotencyKey: keyFor(planSignature),
-      })
-      const confirmSignature = `confirm:${planned.id}:${planned.version}`
-      return confirmShipmentPreparation({
-        accessToken: accessToken!,
-        documentId: planned.id,
-        expectedVersion: planned.version,
-        idempotencyKey: keyFor(confirmSignature),
-      })
-    },
-    onSuccess: (result) => {
-      applyServerProjection(result)
-      setShipmentDateDecisionTarget(null)
-      setCommandError(null)
-      setCommandNotice("Дата изменена на сегодня, отгрузка отмечена.")
-      void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
-    },
-    onError: (cause) => {
-      setCommandError(
-        errorMessage(cause, "Не удалось изменить дату и отметить отгрузку")
-      )
     },
   })
 
@@ -597,10 +575,8 @@ export function LogisticsShipmentsPage() {
 
   function actions(shipment: ShipmentDocument) {
     const confirming =
-      (confirmMutation.isPending &&
-        confirmMutation.variables?.shipment.id === shipment.id) ||
-      (rescheduleAndConfirmMutation.isPending &&
-        rescheduleAndConfirmMutation.variables?.id === shipment.id)
+      confirmMutation.isPending &&
+      confirmMutation.variables?.shipment.id === shipment.id
     const cancelling =
       cancelMutation.isPending && cancelMutation.variables?.id === shipment.id
     const scheduling =
@@ -872,10 +848,7 @@ export function LogisticsShipmentsPage() {
                 label: "Дата отгрузки",
                 className: "w-48",
                 getSortValue: (shipment) => shipment.scheduledDate ?? "",
-                render: (shipment) =>
-                  shipment.scheduledDate
-                    ? formatDate(shipment.scheduledDate)
-                    : "Не назначена",
+                render: (shipment) => formatSchedule(shipment.scheduledDate),
               },
               {
                 id: "party",
@@ -927,9 +900,7 @@ export function LogisticsShipmentsPage() {
               <CardHeader>
                 <CardTitle>{shipment.partySnapshot}</CardTitle>
                 <CardDescription>
-                  {shipment.scheduledDate
-                    ? formatDate(shipment.scheduledDate)
-                    : "Дата отгрузки не назначена"}
+                  {formatSchedule(shipment.scheduledDate)}
                   {` · ${shipment.driverSnapshot ?? "водитель не назначен"}`}
                 </CardDescription>
                 <CardAction>
@@ -973,6 +944,10 @@ export function LogisticsShipmentsPage() {
         <ShipmentScheduleDialog
           accessToken={accessToken}
           document={scheduleTarget.document}
+          desiredDeliveryWindows={desiredWindowsForShipment(
+            referenceLabels,
+            scheduleTarget.document
+          )}
           futureDateWarning={scheduleTarget.futureDateWarning}
           pending={scheduleMutation.isPending}
           onOpenChange={(open) => !open && setScheduleTarget(null)}
@@ -987,9 +962,7 @@ export function LogisticsShipmentsPage() {
       {shipmentDateDecisionTarget ? (
         <ShipmentDateDecisionDialog
           shipment={shipmentDateDecisionTarget}
-          pending={
-            confirmMutation.isPending || rescheduleAndConfirmMutation.isPending
-          }
+          pending={confirmMutation.isPending}
           onOpenChange={(open) => !open && setShipmentDateDecisionTarget(null)}
           onKeepDate={() => {
             const target = shipmentDateDecisionTarget
@@ -999,9 +972,11 @@ export function LogisticsShipmentsPage() {
               keepScheduledDate: true,
             })
           }}
-          onUseToday={() =>
-            rescheduleAndConfirmMutation.mutate(shipmentDateDecisionTarget)
-          }
+          onReschedule={() => {
+            const target = shipmentDateDecisionTarget
+            setShipmentDateDecisionTarget(null)
+            setScheduleTarget({ document: target, futureDateWarning: true })
+          }}
         />
       ) : null}
 
@@ -1041,13 +1016,13 @@ function ShipmentDateDecisionDialog({
   pending,
   onOpenChange,
   onKeepDate,
-  onUseToday,
+  onReschedule,
 }: {
   shipment: ShipmentDocument
   pending: boolean
   onOpenChange: (open: boolean) => void
   onKeepDate: () => void
-  onUseToday: () => void
+  onReschedule: () => void
 }) {
   return (
     <Dialog open onOpenChange={onOpenChange}>
@@ -1056,8 +1031,8 @@ function ShipmentDateDecisionDialog({
           <DialogTitle>Дата отгрузки отличается</DialogTitle>
           <DialogDescription>
             Назначенная дата: {formatDate(shipment.scheduledDate!)}. Сегодня{" "}
-            {formatDate(new Date().toISOString().slice(0, 10))}. Выберите, как
-            сохранить дату задания.
+            {formatDate(new Date().toISOString().slice(0, 10))}. Изменение
+            графика и подтверждение отгрузки выполняются отдельными командами.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter className="flex-col sm:flex-row sm:justify-end">
@@ -1069,8 +1044,8 @@ function ShipmentDateDecisionDialog({
           >
             Оставить назначенную
           </Button>
-          <Button type="button" disabled={pending} onClick={onUseToday}>
-            Изменить на сегодня
+          <Button type="button" disabled={pending} onClick={onReschedule}>
+            Изменить дату отдельно
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1081,6 +1056,7 @@ function ShipmentDateDecisionDialog({
 function ShipmentScheduleDialog({
   accessToken,
   document,
+  desiredDeliveryWindows,
   futureDateWarning,
   pending,
   onOpenChange,
@@ -1088,6 +1064,7 @@ function ShipmentScheduleDialog({
 }: {
   accessToken: string
   document: ShipmentDocument
+  desiredDeliveryWindows: readonly DesiredDeliveryWindow[]
   futureDateWarning: boolean
   pending: boolean
   onOpenChange: (open: boolean) => void
@@ -1134,7 +1111,7 @@ function ShipmentScheduleDialog({
             <DialogDescription>
               {futureDateWarning
                 ? "Дата отгрузки ещё не наступила. Измените её на текущую или прошедшую, затем повторите отметку «Отгружена»."
-                : "Назначьте водителя и дату. После назначения сервис создаст задания на подготовку бытовок."}
+                : "Назначьте водителя и фактическую дату ходки. Пожелания клиента остаются отдельным ориентиром."}
             </DialogDescription>
           </DialogHeader>
           <FieldGroup>
@@ -1154,19 +1131,17 @@ function ShipmentScheduleDialog({
               warehouseId={document.warehouseId}
               onChange={setDriver}
             />
-            <Field data-invalid={Boolean(error) || undefined}>
-              <FieldLabel htmlFor="shipment-scheduled-date">
-                Дата отгрузки
-              </FieldLabel>
-              <Input
-                id="shipment-scheduled-date"
-                type="date"
-                value={scheduledDate}
-                aria-invalid={Boolean(error) || undefined}
-                onChange={(event) => setScheduledDate(event.target.value)}
-              />
-              {error ? <FieldError>{error}</FieldError> : null}
-            </Field>
+            <DesiredTripScheduleFields
+              dateLabel="Фактическая дата отгрузки"
+              scheduledDate={scheduledDate}
+              desiredDeliveryWindows={desiredDeliveryWindows}
+              disabled={pending}
+              error={error}
+              onDateChange={(value) => {
+                setScheduledDate(value)
+                setError(null)
+              }}
+            />
           </FieldGroup>
           <DialogFooter>
             <Button

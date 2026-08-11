@@ -55,6 +55,7 @@ class WorkerTaskDetailCompatibilityTest {
         )
 
         assertThat(detail.works).isEmpty()
+        assertThat(detail.source).isNull()
         assertThat(detail.evidence.single().contentType).isNull()
         assertThat(detail.evidence.single().readPath).isNull()
         assertThat(detail.evidence.single().thumbnailPath).isNull()

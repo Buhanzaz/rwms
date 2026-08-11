@@ -4,6 +4,7 @@ import dev.buhanzaz.rwms.asset.domain.EquipmentCatalogItem;
 import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
 import jakarta.persistence.LockModeType;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
@@ -22,6 +23,11 @@ public interface EquipmentCatalogItemRepository extends JpaRepository<EquipmentC
 
   List<EquipmentCatalogItem> findAllByCategoryAndActiveTrueOrderByNameAscIdAsc(
       EquipmentCategory category);
+
+  /** Locks one item before applying a version-fenced maintenance editor mutation. */
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query("select item from EquipmentCatalogItem item where item.id = :id")
+  Optional<EquipmentCatalogItem> findByIdForUpdate(@Param("id") UUID id);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query(

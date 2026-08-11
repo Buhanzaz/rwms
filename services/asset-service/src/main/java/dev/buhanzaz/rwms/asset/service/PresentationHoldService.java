@@ -5,7 +5,9 @@ import static dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.*;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CabinCatalogValueResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemPage;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
+import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderEquipmentReservationView;
 import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderUnitReservationView;
+import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.ReplaceOrderEquipmentReservationsRequest;
 import dev.buhanzaz.rwms.asset.domain.OrderUnitReservation;
 import dev.buhanzaz.rwms.asset.domain.OrderUnitReservationState;
 import dev.buhanzaz.rwms.asset.domain.PresentationUnitHold;
@@ -37,6 +39,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
@@ -71,6 +74,7 @@ public class PresentationHoldService {
   private final OrderAssetService orders;
   private final AssetIdempotencyStore idempotency;
   private final RentalAvailabilityInvalidationPublisher availabilityInvalidations;
+  private final JdbcTemplate jdbc;
   private final ObjectMapper json;
 
   @Transactional
@@ -170,8 +174,9 @@ public class PresentationHoldService {
   }
 
   /**
-   * Applies one subject-scoped search exactly once: its request hash, frozen status-200 response
-   * and resulting holds commit in the same asset transaction.
+   * Applies one subject-scoped search exactly once: its request hash, status-200 response and holds
+   * commit in the same transaction. Selected cabin identities are locked against movement, then
+   * their contents are resnapshotted so the returned facts match the newly active hold fence.
    */
   @Transactional
   public AssetService.CreateResult<CabinSearchResponse> search(
@@ -220,6 +225,7 @@ public class PresentationHoldService {
         cabinComposition.compositionsFor(available);
     Set<UUID> allocated = new HashSet<>();
     Set<UUID> changedAvailability = new LinkedHashSet<>();
+    Map<UUID, RentalItem> selectedItems = new LinkedHashMap<>();
     List<CabinSearchGroupResult> results = new ArrayList<>();
     for (CabinSearchGroup group : request.groups()) {
       List<AvailableCabin> cabins =
@@ -266,6 +272,7 @@ public class PresentationHoldService {
       Map<UUID, RentalItem> items =
           lockedItems.stream()
               .collect(Collectors.toMap(RentalItem::getId, Function.identity()));
+      selectedItems.putAll(items);
       for (UUID rentalItemId : selectedIds) {
         requireRentable(items.get(rentalItemId), request.warehouseId());
         try {
@@ -274,6 +281,7 @@ public class PresentationHoldService {
           throw conflict(
               "UNIT_NOT_AVAILABLE", "Бытовка выполняет другую складскую операцию");
         }
+        assertNoActiveMovementFence(rentalItemId);
         if (orderReservations
             .findByRentalItemIdAndState(rentalItemId, OrderUnitReservationState.ACTIVE)
             .isPresent()) {
@@ -318,8 +326,19 @@ public class PresentationHoldService {
     }
     availabilityInvalidations.publishAfterCommit(
         request.warehouseId(), changedAvailability);
-    CabinSearchResponse response = new CabinSearchResponse(
-        request.warehouseId(), request.expiresAt(), List.copyOf(results));
+    List<CabinSearchGroupResult> stableResults =
+        results.stream()
+            .map(
+                result ->
+                    new CabinSearchGroupResult(
+                        result.group(),
+                        result.cabins().stream()
+                            .map(cabin -> snapshot(selectedItems.get(cabin.id())))
+                            .toList()))
+            .toList();
+    CabinSearchResponse response =
+        new CabinSearchResponse(
+            request.warehouseId(), request.expiresAt(), stableResults);
     idempotency.store(
         subjectId,
         "logistics.cabin-search",
@@ -419,11 +438,13 @@ public class PresentationHoldService {
     return new CabinSnapshotsResponse(request.warehouseId(), response);
   }
 
+  /** Returns live held cabins and their contents in the durable hold order without mutating expiry. */
   @Transactional
   public ReplacePresentationHoldsResponse holds(UUID presentationId) {
     return holds(presentationId, null, null);
   }
 
+  /** Applies optional actor ownership checks while returning the same live snapshot contract. */
   @Transactional
   public ReplacePresentationHoldsResponse holds(
       UUID presentationId, UUID actorSubjectId, String actorRole) {
@@ -447,9 +468,25 @@ public class PresentationHoldService {
             .max(Comparator.naturalOrder())
             .orElse(null);
     return new ReplacePresentationHoldsResponse(
-        presentationId, expiry, active.stream().map(PresentationHoldService::view).toList());
+        presentationId,
+        expiry,
+        active.stream().map(PresentationHoldService::view).toList(),
+        active.stream()
+            .map(PresentationUnitHold::getRentalItemId)
+            .map(rentalItems::findById)
+            .map(
+                item ->
+                    snapshot(
+                        item.orElseThrow(
+                            () -> new AssetNotFoundException("Rental item was not found"))))
+            .toList());
   }
 
+  /**
+   * Idempotently replaces a presentation hold set. Scope and rental-item locks serialize competing
+   * hold/movement commands, and cabin snapshots are captured after all requested holds succeed in
+   * request order; any failure rolls back both holds and response persistence.
+   */
   @Transactional
   public AssetService.CreateResult<ReplacePresentationHoldsResponse> replace(
       UUID idempotencyKey, UUID presentationId, ReplacePresentationHoldsRequest request) {
@@ -536,6 +573,7 @@ public class PresentationHoldService {
       } catch (AssetConflictException exception) {
         throw conflict("UNIT_NOT_AVAILABLE", "Бытовка выполняет другую складскую операцию");
       }
+      assertNoActiveMovementFence(rentalItemId);
       if (orderReservations
           .findByRentalItemIdAndState(rentalItemId, OrderUnitReservationState.ACTIVE)
           .isPresent()) {
@@ -594,11 +632,19 @@ public class PresentationHoldService {
     List<PresentationUnitHold> active =
         holds.findAllByPresentationIdAndStateOrderByCreatedAtAscIdAsc(
             presentationId, PresentationUnitHoldState.ACTIVE);
+    Set<UUID> activeIds =
+        active.stream()
+            .map(PresentationUnitHold::getRentalItemId)
+            .collect(Collectors.toSet());
+    if (!activeIds.equals(requested)) {
+      throw new IllegalStateException("Stored presentation hold set does not match the request");
+    }
     ReplacePresentationHoldsResponse response =
         new ReplacePresentationHoldsResponse(
             presentationId,
             request.expiresAt(),
-            active.stream().map(PresentationHoldService::view).toList());
+            active.stream().map(PresentationHoldService::view).toList(),
+            requestedIds.stream().map(items::get).map(this::snapshot).toList());
     idempotency.store(
         request.actorSubjectId(),
         "presentation-holds.replace",
@@ -611,6 +657,7 @@ public class PresentationHoldService {
     return new AssetService.CreateResult<>(response, false);
   }
 
+  /** Idempotently releases a presentation scope and returns an intentionally empty cabin snapshot. */
   @Transactional
   public AssetService.CreateResult<ReplacePresentationHoldsResponse> release(
       UUID idempotencyKey, UUID presentationId, ActorInput request) {
@@ -634,7 +681,7 @@ public class PresentationHoldService {
         });
     holds.saveAllAndFlush(active);
     ReplacePresentationHoldsResponse response =
-        new ReplacePresentationHoldsResponse(presentationId, null, List.of());
+        new ReplacePresentationHoldsResponse(presentationId, null, List.of(), List.of());
     idempotency.store(
         request.actorSubjectId(),
         "presentation-holds.release",
@@ -655,6 +702,11 @@ public class PresentationHoldService {
     return new AssetService.CreateResult<>(response, false);
   }
 
+  /**
+   * Converts selected holds and optional authoritative furniture requirements atomically. The
+   * shared order-composition lock materializes units before availability/max validation; failures
+   * leave every presentation hold active and idempotent replay returns the stored full receipt.
+   */
   @Transactional
   public AssetService.CreateResult<ConvertPresentationHoldsResponse> convert(
       UUID idempotencyKey, UUID presentationId, ConvertPresentationHoldsRequest request) {
@@ -664,9 +716,20 @@ public class PresentationHoldService {
         idempotency.replay(
             request.actorSubjectId(), "presentation-holds.convert", idempotencyKey, fingerprint);
     if (replay.isPresent()) {
+      ConvertPresentationHoldsResponse stored =
+          read(replay.get(), ConvertPresentationHoldsResponse.class);
       return new AssetService.CreateResult<>(
-          read(replay.get(), ConvertPresentationHoldsResponse.class), true);
+          stored.equipmentReservations() == null
+              ? new ConvertPresentationHoldsResponse(
+                  stored.presentationId(),
+                  stored.orderId(),
+                  stored.reservations(),
+                  stored.releasedRentalItemIds(),
+                  List.of())
+              : stored,
+          true);
     }
+    orderReservations.acquireTransactionLock("order-composition:" + request.orderId());
     OffsetDateTime timestamp = now();
     List<UUID> selectedIds = uniqueIds(request.selectedRentalItemIds(), 100);
     Set<UUID> selected = Set.copyOf(selectedIds);
@@ -730,9 +793,20 @@ public class PresentationHoldService {
         hold.release(timestamp);
       }
     }
+    List<OrderEquipmentReservationView> equipmentReservations;
     try {
       holds.saveAllAndFlush(current);
       orderReservations.saveAllAndFlush(created);
+      equipmentReservations =
+          request.units() == null
+              ? List.of()
+              : orders.replaceEquipmentReservationsInCurrentTransaction(
+                  request.orderId(),
+                  new ReplaceOrderEquipmentReservationsRequest(
+                      request.warehouseId(),
+                      request.actorSubjectId(),
+                      request.actorRole(),
+                      request.units()));
       selectedIds.forEach(assets::bookOrderRentalItem);
     } catch (DataIntegrityViolationException exception) {
       throw conflict("UNIT_ORDER_RESERVED", "Бытовка уже занята заказом");
@@ -750,7 +824,8 @@ public class PresentationHoldService {
             current.stream()
                 .map(PresentationUnitHold::getRentalItemId)
                 .filter(id -> !selected.contains(id))
-                .toList());
+                .toList(),
+            equipmentReservations);
     idempotency.store(
         request.actorSubjectId(),
         "presentation-holds.convert",
@@ -804,6 +879,40 @@ public class PresentationHoldService {
         .toList();
   }
 
+  /**
+   * Prevents publication from freezing a cabin whose physical contents are already fenced by an
+   * existing equipment movement. The caller owns the canonical rental-item lock, so a concurrent
+   * acquire either commits before this check or observes the newly-created presentation hold.
+   */
+  private void assertNoActiveMovementFence(UUID rentalItemId) {
+    Boolean fenced =
+        jdbc.queryForObject(
+            """
+            select exists(
+              select 1
+              from equipment_allocation_hold movement_hold
+              left join equipment_balance source
+                on source.id=movement_hold.source_balance_id
+              where movement_hold.owner_type in (
+                  'LOGISTICS_EQUIPMENT_MOVEMENT',
+                  'MAINTENANCE_DISPOSITION_MOVEMENT')
+                and movement_hold.state='ACTIVE'
+                and movement_hold.expires_at>clock_timestamp()
+                and (
+                  source.rental_item_id=?
+                  or movement_hold.target_rental_item_id=?)
+            )
+            """,
+            Boolean.class,
+            rentalItemId,
+            rentalItemId);
+    if (Boolean.TRUE.equals(fenced)) {
+      throw conflict(
+          "UNIT_EQUIPMENT_MOVEMENT_FENCED",
+          "Наполнение бытовки уже зарезервировано заданием перемещения");
+    }
+  }
+
   private AvailableCabin snapshot(RentalItem item) {
     RentalItemResponse source = assets.rentalItem(item.getId());
     return new AvailableCabin(
@@ -822,6 +931,7 @@ public class PresentationHoldService {
         source.linoleum(),
         source.passport(),
         source.tags(),
+        source.contents(),
         source.updatedAt());
   }
 

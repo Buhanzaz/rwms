@@ -237,7 +237,6 @@ function transferDocument(
     clientId: null,
     equipmentMovementTaskId: EQUIPMENT_TASK_ID,
     scheduledDate: "2026-07-19",
-    scheduledAt: null,
     rentalOrderId: null,
     lines: [
       {
@@ -278,6 +277,49 @@ function renderPage(initialEntry = "/logistics/transfers") {
       </QueryClientProvider>
     </MemoryRouter>
   )
+}
+
+const SOURCE_ROUTE = "Москва · Москва → Петербург · Санкт-Петербург"
+const DESTINATION_ROUTE = "Петербург · Санкт-Петербург → Москва · Москва"
+
+async function renderTransferFilters() {
+  const draft = transferDocument(DOCUMENT_ID, "DRAFT", 4)
+  const transit = {
+    ...transferDocument(TRANSIT_DOCUMENT_ID, "IN_TRANSIT", 9, "DEPARTED"),
+    warehouseId: DESTINATION_WAREHOUSE_ID,
+    destinationWarehouseId: SOURCE_WAREHOUSE_ID,
+    scheduledDate: "2026-07-22",
+  }
+  transferApi.listWarehouseTransfers.mockResolvedValue([draft, transit])
+  renderPage()
+
+  await screen.findAllByText("Черновик")
+  return screen.getByRole("table")
+}
+
+function filterButton(label: string) {
+  const button = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      '[data-slot="popover-trigger"]'
+    ),
+  ].find((candidate) => candidate.textContent?.startsWith(label))
+
+  if (!button) {
+    throw new Error(`Не найдена кнопка фильтра «${label}»`)
+  }
+
+  return button
+}
+
+async function expectOnlyRoute(
+  table: HTMLElement,
+  route: string,
+  hiddenRoute: string
+) {
+  await waitFor(() => {
+    expect(within(table).getByText(route)).toBeTruthy()
+    expect(within(table).queryByText(hiddenRoute)).toBeNull()
+  })
 }
 
 beforeEach(() => {
@@ -330,22 +372,8 @@ afterEach(() => {
 })
 
 describe("WarehouseTransfersPage", () => {
-  it("filters transfers by a readable route, status, and planned date", async () => {
-    const user = userEvent.setup()
-    const sourceRoute = "Москва · Москва → Петербург · Санкт-Петербург"
-    const destinationRoute = "Петербург · Санкт-Петербург → Москва · Москва"
-    const draft = transferDocument(DOCUMENT_ID, "DRAFT", 4)
-    const transit = {
-      ...transferDocument(TRANSIT_DOCUMENT_ID, "IN_TRANSIT", 9, "DEPARTED"),
-      warehouseId: DESTINATION_WAREHOUSE_ID,
-      destinationWarehouseId: SOURCE_WAREHOUSE_ID,
-      scheduledDate: "2026-07-22",
-    }
-    transferApi.listWarehouseTransfers.mockResolvedValue([draft, transit])
-    renderPage()
-
-    await screen.findAllByText("Черновик")
-    const table = screen.getByRole("table")
+  it("exposes transfer-specific route, status, and planned-date filters", async () => {
+    const table = await renderTransferFilters()
     expect(
       screen.getByRole("textbox", { name: "Поиск по маршруту" })
     ).toBeTruthy()
@@ -355,33 +383,6 @@ describe("WarehouseTransfersPage", () => {
     expect(screen.queryByRole("button", { name: "Обновить" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Показать все" })).toBeNull()
 
-    const filterButton = (label: string) => {
-      const button = [
-        ...document.querySelectorAll<HTMLButtonElement>(
-          '[data-slot="popover-trigger"]'
-        ),
-      ].find((candidate) => candidate.textContent?.startsWith(label))
-
-      if (!button) {
-        throw new Error(`Не найдена кнопка фильтра «${label}»`)
-      }
-
-      return button
-    }
-    const expectOnlyRoute = async (route: string, hiddenRoute: string) => {
-      await waitFor(() => {
-        expect(within(table).getByText(route)).toBeTruthy()
-        expect(within(table).queryByText(hiddenRoute)).toBeNull()
-      })
-    }
-    const resetFilters = async () => {
-      await user.click(screen.getByRole("button", { name: "Сбросить фильтры" }))
-      await waitFor(() => {
-        expect(within(table).getByText(sourceRoute)).toBeTruthy()
-        expect(within(table).getByText(destinationRoute)).toBeTruthy()
-      })
-    }
-
     expect(filterButton("Статус")).toBeTruthy()
     expect(filterButton("Маршрут")).toBeTruthy()
     expect(
@@ -389,33 +390,64 @@ describe("WarehouseTransfersPage", () => {
         '[data-slot="popover-trigger"]'
       )
     ).toHaveLength(2)
-    expect(within(table).getByText(sourceRoute)).toBeTruthy()
-    expect(within(table).getByText(destinationRoute)).toBeTruthy()
+    expect(within(table).getByText(SOURCE_ROUTE)).toBeTruthy()
+    expect(within(table).getByText(DESTINATION_ROUTE)).toBeTruthy()
+  })
+
+  it("filters transfers by a readable route", async () => {
+    const user = userEvent.setup()
+    const table = await renderTransferFilters()
 
     const search = screen.getByRole("textbox", { name: "Поиск по маршруту" })
     await user.type(search, "Петербург → Москва")
-    await expectOnlyRoute(destinationRoute, sourceRoute)
+    await expectOnlyRoute(table, DESTINATION_ROUTE, SOURCE_ROUTE)
     await user.clear(search)
-    await waitFor(() =>
-      expect(within(table).getByText(sourceRoute)).toBeTruthy()
-    )
+    await waitFor(() => {
+      expect(within(table).getByText(SOURCE_ROUTE)).toBeTruthy()
+      expect(within(table).getByText(DESTINATION_ROUTE)).toBeTruthy()
+    })
+  })
+
+  it("filters transfers by the selected route", async () => {
+    const user = userEvent.setup()
+    const table = await renderTransferFilters()
 
     await user.click(filterButton("Маршрут"))
-    await user.click(screen.getByRole("checkbox", { name: destinationRoute }))
+    await user.click(screen.getByRole("checkbox", { name: DESTINATION_ROUTE }))
     await user.click(screen.getByRole("button", { name: "Применить" }))
-    await expectOnlyRoute(destinationRoute, sourceRoute)
-    await resetFilters()
+    await expectOnlyRoute(table, DESTINATION_ROUTE, SOURCE_ROUTE)
+  })
+
+  it("filters transfers by status", async () => {
+    const user = userEvent.setup()
+    const table = await renderTransferFilters()
 
     await user.click(filterButton("Статус"))
     await user.click(screen.getByRole("checkbox", { name: "В пути" }))
     await user.click(screen.getByRole("button", { name: "Применить" }))
-    await expectOnlyRoute(destinationRoute, sourceRoute)
-    await resetFilters()
+    await expectOnlyRoute(table, DESTINATION_ROUTE, SOURCE_ROUTE)
+  })
+
+  it("filters transfers by planned date", async () => {
+    const table = await renderTransferFilters()
 
     fireEvent.change(screen.getByLabelText("Перемещение с"), {
       target: { value: "2026-07-22" },
     })
-    await expectOnlyRoute(destinationRoute, sourceRoute)
+    await expectOnlyRoute(table, DESTINATION_ROUTE, SOURCE_ROUTE)
+  })
+
+  it("requests furniture readiness only for pending departure documents", async () => {
+    await renderTransferFilters()
+
+    await waitFor(() =>
+      expect(
+        transferApi.getWarehouseTransferFurnitureReadiness
+      ).toHaveBeenCalledWith("transfer-token", DOCUMENT_ID)
+    )
+    expect(
+      transferApi.getWarehouseTransferFurnitureReadiness
+    ).not.toHaveBeenCalledWith("transfer-token", TRANSIT_DOCUMENT_ID)
   })
 
   it("keeps the transfer search compact and lets the user hide filters", async () => {
@@ -560,6 +592,9 @@ describe("WarehouseTransfersPage", () => {
     fireEvent.change(within(dialog).getByLabelText("Дата задания"), {
       target: { value: scheduledDate },
     })
+    expect(
+      within(dialog).queryByLabelText("Фактическое время задания")
+    ).toBeNull()
     await user.click(within(dialog).getByLabelText("Номер бытовки"))
     await user.click(await screen.findByText(TRANSFER_CABIN.number))
     await user.click(

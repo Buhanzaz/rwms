@@ -29,15 +29,11 @@ public final class LogisticsApiModels {
       UUID driverWorkerId,
       @NotNull @Size(min = 1, max = 100) List<@Valid ReturnLineRequest> lines) {
     public CreateReturnRequest(
-        UUID warehouseId,
-        UUID clientId,
-        String driverSnapshot,
-        List<ReturnLineRequest> lines) {
+        UUID warehouseId, UUID clientId, String driverSnapshot, List<ReturnLineRequest> lines) {
       this(warehouseId, clientId, driverSnapshot, null, lines);
     }
 
-    public CreateReturnRequest(
-        UUID warehouseId, UUID clientId, List<ReturnLineRequest> lines) {
+    public CreateReturnRequest(UUID warehouseId, UUID clientId, List<ReturnLineRequest> lines) {
       this(warehouseId, clientId, null, null, lines);
     }
 
@@ -71,14 +67,7 @@ public final class LogisticsApiModels {
         String partySnapshot,
         String driverSnapshot,
         List<ShipmentLineRequest> lines) {
-      this(
-          warehouseId,
-          clientId,
-          rentalOrderId,
-          partySnapshot,
-          driverSnapshot,
-          null,
-          lines);
+      this(warehouseId, clientId, rentalOrderId, partySnapshot, driverSnapshot, null, lines);
     }
 
     public CreateShipmentRequest(
@@ -94,6 +83,7 @@ public final class LogisticsApiModels {
       @NotBlank @Size(max = 512) String driverSnapshot,
       UUID driverWorkerId,
       @NotNull LocalDate scheduledDate) {
+
     public ShipmentPlanRequest(String driverSnapshot, LocalDate scheduledDate) {
       this(driverSnapshot, null, scheduledDate);
     }
@@ -103,9 +93,7 @@ public final class LogisticsApiModels {
       UUID rentalItemId, String unitNumber, UUID taskId, int lineCount) {}
 
   public record ShipmentFurnitureTaskResult(
-      UUID shipmentId,
-      long shipmentVersion,
-      List<ShipmentFurnitureTaskView> tasks) {}
+      UUID shipmentId, long shipmentVersion, List<ShipmentFurnitureTaskView> tasks) {}
 
   public enum ShipmentFurnitureReadinessState {
     NOT_REQUIRED,
@@ -122,7 +110,10 @@ public final class LogisticsApiModels {
       UUID externalTaskId,
       UUID taskBoardTaskId,
       EquipmentMovementTaskState taskState,
-      int lineCount) {}
+      int lineCount,
+      boolean movementTaskCreated,
+      boolean movementTaskCompleted,
+      boolean contentReady) {}
 
   public record ShipmentFurnitureReadinessView(
       UUID shipmentId,
@@ -134,6 +125,7 @@ public final class LogisticsApiModels {
       @NotBlank @Size(max = 512) String driverSnapshot,
       UUID driverWorkerId,
       @NotNull LocalDate scheduledDate) {
+
     public ReturnPickupRequest(String driverSnapshot, LocalDate scheduledDate) {
       this(driverSnapshot, null, scheduledDate);
     }
@@ -158,9 +150,7 @@ public final class LogisticsApiModels {
   public record CreateCabinFurnitureTaskRequest(
       @NotNull UUID warehouseId,
       @NotNull LocalDate scheduledDate,
-      @NotNull
-          @Size(max = 100)
-          List<@NotNull @Valid CabinFurnitureRequirement> contents) {
+      @NotNull @Size(max = 100) List<@NotNull @Valid CabinFurnitureRequirement> contents) {
     public CreateCabinFurnitureTaskRequest {
       contents = contents == null ? List.of() : contents;
     }
@@ -174,8 +164,7 @@ public final class LogisticsApiModels {
       @NotNull UUID destinationWarehouseId,
       @NotNull LocalDate scheduledDate,
       @NotNull @Size(min = 1, max = 100) List<@Valid TransferLineRequest> lines,
-      @NotNull
-          @Size(max = 100)
+      @NotNull @Size(max = 100)
           List<@NotNull @Valid TransferFurnitureReplacementRequest> furnitureReplacements) {
     public CreateTransferRequest {
       furnitureReplacements = furnitureReplacements == null ? List.of() : furnitureReplacements;
@@ -209,9 +198,7 @@ public final class LogisticsApiModels {
   /** The selected complete furniture composition for one cabin in this transfer. */
   public record TransferFurnitureReplacementRequest(
       @NotNull UUID assetId,
-      @NotNull
-          @Size(max = 100)
-          List<@NotNull @Valid CabinFurnitureRequirement> contents) {
+      @NotNull @Size(max = 100) List<@NotNull @Valid CabinFurnitureRequirement> contents) {
     public TransferFurnitureReplacementRequest {
       contents = contents == null ? List.of() : contents;
     }
@@ -237,8 +224,7 @@ public final class LogisticsApiModels {
       @NotNull UUID lineId,
       @NotNull @Size(min = 1, max = 20) List<@Valid MediaReferenceInput> references,
       @NotNull @AssertTrue Boolean equipmentConfirmed,
-      @NotNull @Size(max = 100) List<@Valid ReturnAdditionalEquipmentRequest>
-          additionalEquipment) {
+      @NotNull @Size(max = 100) List<@Valid ReturnAdditionalEquipmentRequest> additionalEquipment) {
     public ReturnMediaLineRequest {
       additionalEquipment = additionalEquipment == null ? List.of() : additionalEquipment;
     }
@@ -269,7 +255,6 @@ public final class LogisticsApiModels {
       UUID clientId,
       UUID equipmentMovementTaskId,
       LocalDate scheduledDate,
-      OffsetDateTime scheduledAt,
       UUID rentalOrderId,
       UUID rentalShipmentId,
       OffsetDateTime createdAt,
@@ -298,7 +283,6 @@ public final class LogisticsApiModels {
       UUID clientId,
       UUID equipmentMovementTaskId,
       LocalDate scheduledDate,
-      OffsetDateTime scheduledAt,
       UUID rentalOrderId,
       UUID rentalShipmentId,
       List<LogisticsLineView> lines,

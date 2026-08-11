@@ -91,6 +91,14 @@ public class MaintenanceAssetController {
     return response.body(result.response());
   }
 
+  @PostMapping("/equipment-catalog/snapshots")
+  public List<MaintenanceFurnitureEquipmentResponse> furnitureEquipmentSnapshots(
+      @AuthenticationPrincipal Jwt jwt,
+      @Valid @RequestBody MaintenanceFurnitureEquipmentSnapshotRequest request) {
+    access.requireMaintenanceAssetAccess(jwt);
+    return service.maintenanceFurnitureEquipmentSnapshots(request);
+  }
+
   @PutMapping("/operation-leases/{id}/renew")
   public ResponseEntity<OperationLeaseResponse> renewLease(
       @AuthenticationPrincipal Jwt jwt,

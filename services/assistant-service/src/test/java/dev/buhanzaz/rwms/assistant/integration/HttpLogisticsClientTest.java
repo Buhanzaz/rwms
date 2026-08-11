@@ -46,7 +46,8 @@ class HttpLogisticsClientTest {
               201,
               """
               {"id":"%s","state":"ACTIVE","client":{"id":"%s","type":"INDIVIDUAL","displayName":"Ada Client"}}
-              """.formatted(inquiryId, clientId));
+              """
+                  .formatted(inquiryId, clientId));
         });
 
     LogisticsClient.InquiryBootstrap result =
@@ -55,13 +56,7 @@ class HttpLogisticsClientTest {
                 conversationId,
                 null,
                 new AssistantApiModels.NewClientRequest(
-                    "INDIVIDUAL",
-                    "Ada Client",
-                    "+7 900 000 00 00",
-                    null,
-                    null,
-                    null,
-                    null),
+                    "INDIVIDUAL", "Ada Client", "+7 900 000 00 00", null, null, null, null),
                 "current-user-bearer");
 
     assertThat(result)
@@ -121,6 +116,45 @@ class HttpLogisticsClientTest {
   }
 
   @Test
+  void forwardsRentalOrderLinkAndReadsCurrentFixedWarehouseContext() throws Exception {
+    UUID conversationId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID clientId = UUID.randomUUID();
+    UUID rentalOrderId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    List<RecordedRequest> received = new CopyOnWriteArrayList<>();
+    start(
+        exchange -> {
+          RecordedRequest request = record(exchange);
+          received.add(request);
+          reply(
+              exchange,
+              request.method().equals("POST") ? 201 : 200,
+              """
+              {"id":"%s","state":"ACTIVE","rentalOrderId":"%s",
+               "warehouseId":"%s","client":{"id":"%s","type":"INDIVIDUAL",
+               "displayName":"Client"}}
+              """
+                  .formatted(inquiryId, rentalOrderId, warehouseId, clientId));
+        });
+    HttpLogisticsClient client = client();
+
+    client.createRentalInquiry(
+        conversationId, clientId, null, rentalOrderId, "current-user-bearer");
+    LogisticsClient.RentalInquiryContext context =
+        client.readRentalInquiryContext(inquiryId, "current-user-bearer");
+
+    assertThat(received.getFirst().body().path("rentalOrderId").asText())
+        .isEqualTo(rentalOrderId.toString());
+    assertThat(received.get(1).method()).isEqualTo("GET");
+    assertThat(received.get(1).path()).isEqualTo("/api/logistics/v1/rental-inquiries/" + inquiryId);
+    assertThat(context)
+        .isEqualTo(
+            new LogisticsClient.RentalInquiryContext(
+                inquiryId, clientId, rentalOrderId, warehouseId, "ACTIVE"));
+  }
+
+  @Test
   void forwardsOnlyBoundedFacetAndCabinSearchCalls() throws Exception {
     UUID inquiryId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
@@ -136,14 +170,16 @@ class HttpLogisticsClientTest {
                 200,
                 """
                 {"warehouses":[{"warehouseId":"%s","name":"Moscow","city":"Moscow","cabinTypes":["6m"],"finishes":["basic"],"dimensions":["6x2.4"],"categories":["Новая","ИТР"]}]}
-                """.formatted(warehouseId));
+                """
+                    .formatted(warehouseId));
           } else {
             reply(
                 exchange,
                 200,
                 """
                 {"warehouseId":"%s","groups":[]}
-                """.formatted(warehouseId));
+                """
+                    .formatted(warehouseId));
           }
         });
 
@@ -156,13 +192,7 @@ class HttpLogisticsClientTest {
                 new LogisticsClient.CabinSearch(
                     List.of(
                         new LogisticsClient.CabinSearchGroup(
-                            "6m",
-                            "basic",
-                            exactDimensions,
-                            "Новая",
-                            "с тамбуром",
-                            false,
-                            2)),
+                            "6m", "basic", exactDimensions, "Новая", "с тамбуром", false, 2)),
                     warehouseId),
                 "current-user-bearer");
 
@@ -179,7 +209,8 @@ class HttpLogisticsClientTest {
     assertThat(received.get(1).path())
         .isEqualTo("/api/logistics/v1/rental-inquiries/" + inquiryId + "/cabin-searches");
     assertThat(received.get(1).header("Idempotency-Key")).isEqualTo(searchKey.toString());
-    assertThat(received.get(1).body().path("warehouseId").asText()).isEqualTo(warehouseId.toString());
+    assertThat(received.get(1).body().path("warehouseId").asText())
+        .isEqualTo(warehouseId.toString());
     assertThat(received.get(1).body().path("resultMode").asText()).isEqualTo("REPLACE");
     assertThat(received.get(1).body().path("groups").get(0).path("quantity").asInt()).isEqualTo(2);
     assertThat(received.get(1).body().path("groups").get(0).path("category").asText())
@@ -233,12 +264,7 @@ class HttpLogisticsClientTest {
                  "warehouseId":"%s","number":"CAB-1","status":"FREE",
                  "updatedAt":"2030-08-09T11:00:00Z"}]}
                 """
-                    .formatted(
-                        inquiryId,
-                        warehouseId,
-                        rentalItemId,
-                        rentalItemId,
-                        warehouseId));
+                    .formatted(inquiryId, warehouseId, rentalItemId, rentalItemId, warehouseId));
           }
         });
     HttpLogisticsClient client = client();
@@ -247,11 +273,7 @@ class HttpLogisticsClientTest {
         client.readCabinSelection(inquiryId, "current-user-bearer");
     LogisticsClient.CabinSelection replaced =
         client.replaceCabinSelection(
-            inquiryId,
-            idempotencyKey,
-            warehouseId,
-            List.of(rentalItemId),
-            "current-user-bearer");
+            inquiryId, idempotencyKey, warehouseId, List.of(rentalItemId), "current-user-bearer");
     JsonNode catalog =
         client.lookupCabinCatalog(
             inquiryId, warehouseId, "CAB 1/Линолеум", 0, 20, "current-user-bearer");
@@ -292,15 +314,9 @@ class HttpLogisticsClientTest {
                  "warehouseId":"%s","number":"CAB-1","status":"RENTED",
                  "updatedAt":"2030-08-09T11:00:00Z"}]}
                 """
-                    .formatted(
-                        inquiryId,
-                        warehouseId,
-                        rentalItemId,
-                        rentalItemId,
-                        warehouseId)));
+                    .formatted(inquiryId, warehouseId, rentalItemId, rentalItemId, warehouseId)));
 
-    assertThatThrownBy(
-            () -> client().readCabinSelection(inquiryId, "current-user-bearer"))
+    assertThatThrownBy(() -> client().readCabinSelection(inquiryId, "current-user-bearer"))
         .isInstanceOf(AssistantUpstreamException.class)
         .hasMessage("Logistics returned an invalid cabin selection");
   }
@@ -330,9 +346,7 @@ class HttpLogisticsClientTest {
               assertThat(request.method()).isEqualTo("GET");
               assertThat(request.path())
                   .isEqualTo(
-                      "/api/logistics/v1/rental-inquiries/"
-                          + inquiryId
-                          + "/client-presentation");
+                      "/api/logistics/v1/rental-inquiries/" + inquiryId + "/client-presentation");
               assertThat(request.header("Authorization")).isEqualTo("Bearer current-user-bearer");
             });
 
@@ -372,8 +386,7 @@ class HttpLogisticsClientTest {
   }
 
   @Test
-  void retriesOneLostResponseWithTheExactCallerKeyAndARecreatedClientReusesIt()
-      throws Exception {
+  void retriesOneLostResponseWithTheExactCallerKeyAndARecreatedClientReusesIt() throws Exception {
     UUID inquiryId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
     UUID callerKey = UUID.randomUUID();
@@ -390,9 +403,7 @@ class HttpLogisticsClientTest {
         });
     LogisticsClient.CabinSearch request =
         new LogisticsClient.CabinSearch(
-            List.of(
-                new LogisticsClient.CabinSearchGroup(
-                    "БК-1", null, null, null, null, null, 1)),
+            List.of(new LogisticsClient.CabinSearchGroup("БК-1", null, null, null, null, null, 1)),
             warehouseId);
 
     client().searchAvailableCabins(inquiryId, callerKey, request, "current-user-bearer");
@@ -402,8 +413,7 @@ class HttpLogisticsClientTest {
     assertThat(received)
         .allSatisfy(
             recorded ->
-                assertThat(recorded.header("Idempotency-Key"))
-                    .isEqualTo(callerKey.toString()));
+                assertThat(recorded.header("Idempotency-Key")).isEqualTo(callerKey.toString()));
     assertThat(received)
         .extracting(RecordedRequest::body)
         .allSatisfy(body -> assertThat(body).isEqualTo(received.getFirst().body()));
@@ -420,8 +430,10 @@ class HttpLogisticsClientTest {
 
   private void start(ExchangeHandler handler) throws IOException {
     server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-    server.createContext("/api/logistics/v1/rental-inquiries", exchange -> handler.handle(exchange));
-    server.createContext("/api/logistics/v1/rental-inquiries/", exchange -> handler.handle(exchange));
+    server.createContext(
+        "/api/logistics/v1/rental-inquiries", exchange -> handler.handle(exchange));
+    server.createContext(
+        "/api/logistics/v1/rental-inquiries/", exchange -> handler.handle(exchange));
     server.start();
   }
 

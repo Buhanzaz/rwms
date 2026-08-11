@@ -304,21 +304,65 @@ state and calls other owners through versioned, idempotent boundaries.
 
 Rental counterparties are logistics domain records, not OAuth clients. Every
 new client has a normalized required phone and an authenticated responsible
-manager; an IP or legal entity also requires a contact person. Reads are
+manager; a legal entity also requires a contact person. Reads are
 manager/warehouse scoped, and an inaccessible duplicate is reported as a
-generic conflict without disclosing its identity. Rental orders carry the
-delivery address, optional coordinate pair, contact phone, comment and a
-unique bounded set of acceptable delivery dates. Saving requires all delivery
-facts except the comment, and a planned shipment date must belong to the
-accepted set.
+generic conflict without disclosing its identity. Client-owned and order-owned
+additional name/phone contacts remain separate from the primary contact and
+are combined only in a deterministic driver/task snapshot. Rental-order create
+and ordinary manager edit commands carry only the client, primary phone and
+comment. A normal public presentation confirmation owns the delivery address,
+optional complete coordinate pair, order-owned additional contacts, exactly one
+same-day client delivery preference and positive rental duration; nullable
+contacts normalize to an empty list. Desired-delivery windows remain order-owned
+read state: legacy physical time columns can retain old values but no public
+command or projection exposes them. A draft can save without client delivery
+facts, but rental shipment creation requires the confirmed address, primary
+phone and desired day. Wishes remain advisory: actual document `scheduledDate`
+is separate and may fall outside it.
 
 The assistant-facing cabin boundary remains logistics-owned. Facets expose
 current characteristics and exact type-to-dimension relations; catalog lookup
-is read-only. A search group cannot acquire holds until it has an exact type
-and finish. Selection replacement stores a durable exact-byte command receipt
-before calling asset-service. Removing items sends the complete retained set,
-which releases removed holds immediately and gives retained holds a new
-settings-derived expiry; an empty set releases the whole selection.
+is read-only. Clarifications advance in one sequential conversation. An
+inquiry may retain its assistant conversation or be manual with no hidden chat;
+either can target the same `DRAFT` or normally editable `SAVED` order and is
+rediscoverable by order. The order warehouse is fixed by its first selected
+cabin and then constrains search, presentation and confirmation. Selection
+replacement stores a durable exact-byte command receipt before calling
+asset-service. Removing items sends the complete retained set, which releases
+removed holds immediately and gives retained holds a new settings-derived
+expiry; an empty set releases the whole selection.
+
+Furniture requirements are logistics-owned per order cabin, while equipment
+catalogue, physical contents, shared availability, per-cabin maximums and
+reservation effects remain asset-owned. A normal presentation exposes every
+active equipment row even at zero global availability, the atomically held
+cabin contents and only true unassigned same-order physical surplus. One asset
+transaction converts the selected holds and replaces the authoritative
+all-order per-cabin composition; concurrent channels therefore consume one
+shared pool. A rejected booking can republish the same inquiry as a new
+revision; pending and completed bookings remain fenced. The same durable
+`PresentationBooking` receipt stores normalized `NORMAL` delivery facts and a
+positive client-selected initial rental duration only. Its order transition
+creates terms only for newly converted cabins, includes the date, duration,
+address, coordinates and contacts in replay checksums, and never rewrites a
+pre-existing cabin term on replay. A `REPLACEMENT` confirmation rejects all of
+those normal-only values and preserves current order wishes/terms. Shipment term
+assignment derives `returnDate` from actual shipment date plus that duration;
+the retained extension command is available only for selected shipped cabins.
+Order read permissions expose the server-derived extension affordance separately
+from ordinary editability so `FULFILLED` orders can still show the supported
+extension action.
+
+Cabin replacement is not an ordinary edit. An authorized warehouse manager
+may replace an exact pre-start unit directly with a nonblank reason, or publish
+an exact-cardinality replacement presentation. A single ordered asset batch
+swaps all reservations, and one local transaction transfers existing furniture
+requirements and every affected document/task member in the same order. The
+existing shipment-furniture checkpoint and equipment-movement task provide
+crash recovery: unfinished old-cabin filling is cancelled before swap,
+executing work blocks it, and completed physical contents create an exact
+old-to-new move without releasing the order furniture reservation. Readiness
+stays false until required movement work is done.
 
 A first warehouse-bound create always requires warehouse-service admission and
 fails before owner/outbox persistence when dependencies are disabled,
@@ -347,9 +391,11 @@ Evidence: [`services/logistics-service/`](../../services/logistics-service/),
 [`LogisticsExternalAttemptClaimService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/service/LogisticsExternalAttemptClaimService.java),
 [`V40__bounded_logistics_external_attempt_claims.sql`](../../services/logistics-service/src/main/resources/db/migration/V40__bounded_logistics_external_attempt_claims.sql),
 [`OrderClientService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/OrderClientService.java),
+[`PresentationBookingService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/PresentationBookingService.java),
 [`RentalInquiryCabinSelectionStore.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/RentalInquiryCabinSelectionStore.java),
+[`RentalOrderUnitReplacementService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderUnitReplacementService.java),
 and
-[`V42__clients_order_delivery_and_acceptable_dates.sql`](../../services/logistics-service/src/main/resources/db/migration/V42__clients_order_delivery_and_acceptable_dates.sql).
+[`V47__order_contacts_windows_and_inquiry_target.sql`](../../services/logistics-service/src/main/resources/db/migration/V47__order_contacts_windows_and_inquiry_target.sql).
 
 ### Repair Places And Driver Queue
 
@@ -371,21 +417,25 @@ manually move an ordinary scheduled task into Current; only
 removal movement is inserted before ordinary Current work but after all leading
 pinned cards.
 
-Each newly created shipment persists one logistics-owned driver intent for the
-whole document, with immutable document-line/cabin members and the client
-snapshot. A warehouse-local logistics setting caps the selected cabin count at
-1–100 (the compatibility default is one); a request above the current cap is
-rejected before the document or intent is created. The internal task-board
-priority is fixed and is not a logistics-board decision. Completion evidence is
-applied idempotently to every grouped cabin. Existing line-derived shipment
-intents are retained as legacy records; return and transfer continue to persist
-one intent per document line. Shipment and return use an assigned or unassigned
-audience according to the opaque worker ID stored on the document. Transfer is
-always warehouse-shared and stores no responsible-driver identity or display
-snapshot. The panel presents shipment/return in dated columns with collapsible
-driver sections, and keeps shared warehouse movements on a separate board.
-Shipment/return drag-and-drop is version-fenced and can only reorder inside the
-same driver/date/lane queue; it cannot reassign the audience.
+Each newly scheduled shipment, return or transfer persists one logistics-owned
+driver intent for the whole document, with a stable order trip number,
+immutable document-line/cabin members and a client snapshot. One
+warehouse-local setting caps every grouped trip at 1–100 cabins (the
+compatibility default is one); a request above it is rejected before the intent
+is created. No new line-derived task is created. Waiting historical line tasks
+are cancelled before regrouping; any started member prevents conversion and
+remains truthful history. The internal task-board priority is fixed, and
+completion evidence is applied idempotently to every grouped cabin. Shipment
+and return use assigned or unassigned audiences; transfer is warehouse-shared
+and identity-free.
+
+The board and driver detail expose structured trip facts including contacts,
+desired and actual dates, cabin contents and movement/readiness state.
+Drag-and-drop moves only the whole grouped task. Logistics locks and verifies
+the document is pre-start before the bounded version-fenced task-board call,
+then synchronizes the document date and rental terms while retaining the desired
+delivery date; a later status poll converges a lost local
+confirmation. Audience and member order never change through board movement.
 
 Evidence:
 [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml),
@@ -395,6 +445,7 @@ Evidence:
 [`DriverQueueScheduler.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverQueueScheduler.java),
 [`DriverTaskRelay.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverTaskRelay.java),
 [`DriverBoardService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverBoardService.java),
+[`DriverTripProjectionService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverTripProjectionService.java),
 [`DocumentDriverTaskPlanner.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DocumentDriverTaskPlanner.java),
 [`ShipmentTaskSettingsService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/settings/service/ShipmentTaskSettingsService.java),
 and
@@ -446,15 +497,33 @@ owner for source aggregates. `assistant-service` owns conversation state and
 tool-call history, while rental availability and inquiry decisions remain in
 `logistics-service`.
 
-Assistant clarification branches are durable and independent. A question is
-superseded only by a newer question for the same branch, so ОСБ and ЛДСП
-questions may be answered in either order and survive reload. The server, not
-the LLM or browser, validates exact facet relationships before searching: a
-single compatible dimension may be selected automatically, while multiple
-dimensions produce buttons. Approximate six-metre input resolves only through
-the current 6x2.4 relation; module and security-post choices are never guessed.
-Read-only reference lookup by number or text reports current types, finishes,
-dimensions, characteristics and linoleum without creating or renewing holds.
+Assistant clarifications form one durable ordered queue per conversation. Only
+the head is `PENDING` and visible; later `QUEUED` questions cannot be answered
+or rendered until each preceding answer activates the next. An intermediate
+answer parks continuation, while the final answer resumes the assistant turn.
+The historical `branchKey` remains immutable metadata and does not grant an
+independently advancing branch. The server, not the LLM or browser, validates
+exact facet relationships before searching: a single compatible dimension may
+be selected automatically, while multiple dimensions produce buttons.
+Approximate six-metre input resolves only through the current 6x2.4 relation;
+module and security-post choices are never guessed. Read-only reference lookup
+by number or text reports current types, finishes, dimensions,
+characteristics and linoleum without creating or renewing holds.
+
+An order-linked assistant conversation does not depend on timely delivery of
+the booking event to become reusable. Order-filtered list/create rechecks the
+exact logistics inquiry/client/order links outside its local transaction;
+terminal exact links are archived under the order fence and a fresh linked
+conversation can open immediately. The later booking fact is fenced by both
+the old conversation and inquiry IDs, so it cannot archive that fresh winner.
+
+Evidence:
+[`AssistantClarificationService.java`](../../services/assistant-service/src/main/java/dev/buhanzaz/rwms/assistant/service/AssistantClarificationService.java),
+[`AssistantTurnService.java`](../../services/assistant-service/src/main/java/dev/buhanzaz/rwms/assistant/service/AssistantTurnService.java),
+[`AssistantConversationService.java`](../../services/assistant-service/src/main/java/dev/buhanzaz/rwms/assistant/service/AssistantConversationService.java),
+[`AssistantConversationCreationStore.java`](../../services/assistant-service/src/main/java/dev/buhanzaz/rwms/assistant/service/AssistantConversationCreationStore.java),
+and
+[`V6__order_linked_sequential_conversations.sql`](../../services/assistant-service/src/main/resources/db/migration/V6__order_linked_sequential_conversations.sql).
 
 Dossier `PARTIAL` means that the requested cabin's active generation has
 hidden or unresolved proven coverage. Globally unlinked facts, raw validation

@@ -1,6 +1,8 @@
 package dev.buhanzaz.rwms.asset.api;
 
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.EquipmentContentResponse;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
+import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderUnitEquipmentRequirements;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Max;
@@ -45,7 +47,10 @@ public final class PresentationHoldApiModels {
           String actorRole,
       UUID sourceHoldScopeId) {}
 
-  /** Converts selected presentation holds into one logistics order reservation. */
+  /**
+   * Converts selected presentation holds into one logistics order reservation. Non-null units are
+   * the authoritative all-order furniture composition and commit in the same transaction.
+   */
   public record ConvertPresentationHoldsRequest(
       @NotNull UUID orderId,
       @NotNull UUID warehouseId,
@@ -58,7 +63,28 @@ public final class PresentationHoldApiModels {
           @Pattern(
               regexp =
                   "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|VIEWER)$")
-          String actorRole) {}
+          String actorRole,
+      @Size(max = 100)
+          List<@NotNull @Valid OrderUnitEquipmentRequirements> units) {
+    public ConvertPresentationHoldsRequest(
+        UUID orderId,
+        UUID warehouseId,
+        List<UUID> selectedRentalItemIds,
+        UUID clientId,
+        String tenantSnapshot,
+        UUID actorSubjectId,
+        String actorRole) {
+      this(
+          orderId,
+          warehouseId,
+          selectedRentalItemIds,
+          clientId,
+          tenantSnapshot,
+          actorSubjectId,
+          actorRole,
+          null);
+    }
+  }
 
   /** Current or historical asset-owned presentation hold projection. */
   public record PresentationHoldView(
@@ -73,16 +99,31 @@ public final class PresentationHoldApiModels {
       OffsetDateTime createdAt,
       OffsetDateTime endedAt) {}
 
-  /** Authoritative presentation hold set after a replacement or release. */
+  /**
+   * Authoritative presentation hold set and its atomically captured cabin snapshots. Replacement
+   * responses preserve the request rental-item order; release responses contain no cabins.
+   */
   public record ReplacePresentationHoldsResponse(
-      UUID presentationId, OffsetDateTime expiresAt, List<PresentationHoldView> holds) {}
+      UUID presentationId,
+      OffsetDateTime expiresAt,
+      List<PresentationHoldView> holds,
+      List<AvailableCabin> cabins) {}
 
   /** Conversion result with created reservations and released unselected items. */
   public record ConvertPresentationHoldsResponse(
       UUID presentationId,
       UUID orderId,
       List<OrderAssetApiModels.OrderUnitReservationView> reservations,
-      List<UUID> releasedRentalItemIds) {}
+      List<UUID> releasedRentalItemIds,
+      List<OrderAssetApiModels.OrderEquipmentReservationView> equipmentReservations) {
+    public ConvertPresentationHoldsResponse(
+        UUID presentationId,
+        UUID orderId,
+        List<OrderAssetApiModels.OrderUnitReservationView> reservations,
+        List<UUID> releasedRentalItemIds) {
+      this(presentationId, orderId, reservations, releasedRentalItemIds, List.of());
+    }
+  }
 
   /** One exact cabin filter and requested quantity within a grouped hold search. */
   public record CabinSearchGroup(
@@ -132,7 +173,10 @@ public final class PresentationHoldApiModels {
       List<String> characteristics,
       List<CabinTypeDimensions> typeDimensions) {}
 
-  /** Cabin snapshot returned by availability search, reference lookup and internal reads. */
+  /**
+   * Cabin snapshot returned by availability search, reference lookup and internal reads. Once an
+   * active presentation hold is created, its contents remain fenced until release or conversion.
+   */
   public record AvailableCabin(
       UUID id,
       long version,
@@ -147,6 +191,7 @@ public final class PresentationHoldApiModels {
       Boolean linoleum,
       Map<String, Object> passport,
       List<String> tags,
+      List<EquipmentContentResponse> contents,
       OffsetDateTime updatedAt) {}
 
   /** One exact requested group paired with the cabins held for it. */

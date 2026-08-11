@@ -39,6 +39,10 @@ bodies are converter-checked and intentionally are not JSON fixtures. The
 dynamic upload and variant-read tests also prove that their callers reject a
 foreign origin before Retrofit is invoked.
 
+Logistics document projections expose only the scheduled calendar date
+(`scheduledDate`); the manager client does not consume a legacy scheduling-time
+field.
+
 ## Screens and ownership of local state
 
 The navigation graph covers the manager home/menu, background uploads,

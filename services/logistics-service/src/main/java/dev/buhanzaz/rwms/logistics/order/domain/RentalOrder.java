@@ -1,7 +1,7 @@
 package dev.buhanzaz.rwms.logistics.order.domain;
 
-import jakarta.persistence.Column;
 import jakarta.persistence.CollectionTable;
+import jakarta.persistence.Column;
 import jakarta.persistence.ElementCollection;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -17,18 +17,17 @@ import jakarta.persistence.Table;
 import jakarta.persistence.Version;
 import java.math.BigDecimal;
 import java.sql.Types;
-import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.BatchSize;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.proxy.HibernateProxy;
 
@@ -96,11 +95,19 @@ public class RentalOrder {
 
   @ElementCollection(fetch = FetchType.LAZY)
   @CollectionTable(
-      name = "rental_order_acceptable_delivery_date",
+      name = "rental_order_desired_delivery_window",
       joinColumns = @JoinColumn(name = "order_id", nullable = false))
   @OrderColumn(name = "position")
-  @Column(name = "delivery_date", nullable = false)
-  private List<LocalDate> acceptableDeliveryDates = new ArrayList<>();
+  @BatchSize(size = 100)
+  private List<DesiredDeliveryWindow> desiredDeliveryWindows = new ArrayList<>();
+
+  @ElementCollection(fetch = FetchType.LAZY)
+  @CollectionTable(
+      name = "rental_order_additional_contact",
+      joinColumns = @JoinColumn(name = "order_id", nullable = false))
+  @OrderColumn(name = "position")
+  @BatchSize(size = 100)
+  private List<AdditionalContact> additionalContacts = new ArrayList<>();
 
   @Column(name = "creation_idempotency_key", nullable = false)
   private UUID creationIdempotencyKey;
@@ -115,7 +122,7 @@ public class RentalOrder {
   @Column(name = "updated_at", nullable = false)
   private OffsetDateTime updatedAt;
 
-  /** Creates a delivery-aware draft; all delivery fields remain optional until the save command. */
+  /** Creates a draft with manager-owned primary contact facts but no client-confirmed delivery facts. */
   public static RentalOrder create(
       String orderNumber,
       OrderClient client,
@@ -124,12 +131,8 @@ public class RentalOrder {
       UUID createdBySubjectId,
       String createdByDisplayName,
       String createdByRole,
-      String deliveryAddress,
-      BigDecimal latitude,
-      BigDecimal longitude,
       String contactPhone,
       String comment,
-      List<LocalDate> acceptableDeliveryDates,
       UUID idempotencyKey,
       String requestSha256) {
     RentalOrder order = new RentalOrder();
@@ -143,13 +146,7 @@ public class RentalOrder {
     order.createdByRole = requireText(createdByRole, 32, "createdByRole");
     order.createdAt = now();
     order.updatedAt = order.createdAt;
-    order.replaceDeliveryDetails(
-        deliveryAddress,
-        latitude,
-        longitude,
-        contactPhone,
-        comment,
-        acceptableDeliveryDates);
+    order.replaceManagerOrderDetails(contactPhone, comment);
     order.creationIdempotencyKey = Objects.requireNonNull(idempotencyKey, "idempotencyKey");
     order.creationRequestSha256 = requireHash(requestSha256);
     return order;
@@ -171,46 +168,77 @@ public class RentalOrder {
   }
 
   /**
-   * Replaces the complete delivery draft, including its concrete acceptable dates.
+   * Replaces manager-entered primary contact and comment facts without changing delivery details
+   * collected from the client presentation.
    *
-   * <p>Every field may remain absent while the order is a draft. Address, coordinates, contact
-   * phone and at least one acceptable date become mandatory before the order is saved.</p>
+   * <p>Every field may remain absent while the order is a draft. The main contact becomes mandatory
+   * before the order is saved.
    */
-  public boolean replaceDeliveryDetails(
+  public boolean replaceManagerOrderDetails(String nextContactPhone, String nextComment) {
+    requireEditable();
+    String normalizedPhone = PhoneNumberNormalizer.normalizeOptional(nextContactPhone);
+    String normalizedComment = optionalText(nextComment, 2_000, "comment");
+    if (Objects.equals(contactPhone, normalizedPhone) && Objects.equals(comment, normalizedComment)) {
+      return false;
+    }
+    contactPhone = normalizedPhone;
+    comment = normalizedComment;
+    touch();
+    return true;
+  }
+
+  /**
+   * Replaces the client-confirmed delivery location and order-owned additional contacts after a
+   * normal presentation confirmation. The primary contact and manager comment remain untouched.
+   */
+  public boolean replaceClientDeliveryDetails(
       String nextDeliveryAddress,
       BigDecimal nextLatitude,
       BigDecimal nextLongitude,
-      String nextContactPhone,
-      String nextComment,
-      List<LocalDate> nextAcceptableDeliveryDates) {
+      List<AdditionalContact> nextAdditionalContacts) {
     requireEditable();
-    String normalizedAddress = optionalText(nextDeliveryAddress, 1_000, "deliveryAddress");
+    String normalizedAddress = requireText(nextDeliveryAddress, 1_000, "deliveryAddress");
     Coordinates coordinates = coordinates(nextLatitude, nextLongitude);
-    String normalizedPhone = PhoneNumberNormalizer.normalizeOptional(nextContactPhone);
-    String normalizedComment = optionalText(nextComment, 2_000, "comment");
-    List<LocalDate> normalizedDates = acceptableDates(nextAcceptableDeliveryDates);
+    List<AdditionalContact> normalizedContacts = additionalContacts(nextAdditionalContacts);
     if (Objects.equals(deliveryAddress, normalizedAddress)
-        && Objects.equals(latitude, coordinates.latitude())
-        && Objects.equals(longitude, coordinates.longitude())
-        && Objects.equals(contactPhone, normalizedPhone)
-        && Objects.equals(comment, normalizedComment)
-        && acceptableDeliveryDates.equals(normalizedDates)) {
+        && equalDecimal(latitude, coordinates.latitude())
+        && equalDecimal(longitude, coordinates.longitude())
+        && additionalContacts.equals(normalizedContacts)) {
       return false;
     }
     deliveryAddress = normalizedAddress;
     latitude = coordinates.latitude();
     longitude = coordinates.longitude();
-    contactPhone = normalizedPhone;
-    comment = normalizedComment;
-    acceptableDeliveryDates.clear();
-    acceptableDeliveryDates.addAll(normalizedDates);
+    additionalContacts.clear();
+    additionalContacts.addAll(normalizedContacts);
     touch();
     return true;
   }
 
-  /** Returns the ordered delivery-date value set without exposing the mutable JPA collection. */
-  public List<LocalDate> getAcceptableDeliveryDates() {
-    return List.copyOf(acceptableDeliveryDates);
+  /**
+   * Replaces the single client-selected receiving window after a normal presentation confirmation.
+   * Existing client-confirmed delivery details, primary phone and comment remain unchanged.
+   */
+  public boolean replaceClientDesiredDeliveryWindow(DesiredDeliveryWindow nextWindow) {
+    requireEditable();
+    DesiredDeliveryWindow requiredWindow = Objects.requireNonNull(nextWindow, "desiredDeliveryWindow");
+    if (desiredDeliveryWindows.size() == 1 && desiredDeliveryWindows.getFirst().equals(requiredWindow)) {
+      return false;
+    }
+    desiredDeliveryWindows.clear();
+    desiredDeliveryWindows.add(requiredWindow);
+    touch();
+    return true;
+  }
+
+  /** Returns the ordered order-owned contacts without exposing the mutable JPA collection. */
+  public List<AdditionalContact> getAdditionalContacts() {
+    return List.copyOf(additionalContacts);
+  }
+
+  /** Returns client-requested windows without exposing the mutable JPA collection. */
+  public List<DesiredDeliveryWindow> getDesiredDeliveryWindows() {
+    return List.copyOf(desiredDeliveryWindows);
   }
 
   public void touch() {
@@ -274,10 +302,18 @@ public class RentalOrder {
     }
   }
 
+  /** Enforces that the normal client confirmation supplied a receiving preference before shipment. */
+  public void requireDesiredDeliveryWindows() {
+    if (desiredDeliveryWindows.isEmpty()) {
+      throw new IllegalStateException(
+          "Desired delivery windows are required before shipment scheduling");
+    }
+  }
+
   /**
-   * A saved booking remains editable only while its linked rental shipment is
-   * still an untouched draft. The shipment-specific guard lives in the service
-   * layer, where the document and furniture-task locks are available.
+   * A saved booking remains editable only while its linked rental shipment is still an untouched
+   * draft. The shipment-specific guard lives in the service layer, where the document and
+   * furniture-task locks are available.
    */
   public void requireEditable() {
     if (status != RentalOrderStatus.DRAFT && status != RentalOrderStatus.SAVED) {
@@ -287,14 +323,6 @@ public class RentalOrder {
 
   public boolean matchesCreationRequest(String requestSha256) {
     return creationRequestSha256.equals(requestSha256);
-  }
-
-  /** Rejects a shipment date outside the client's configured receiving dates. */
-  public void requireAcceptableDeliveryDate(LocalDate scheduledDate) {
-    LocalDate requiredDate = Objects.requireNonNull(scheduledDate, "scheduledDate");
-    if (!acceptableDeliveryDates.isEmpty() && !acceptableDeliveryDates.contains(requiredDate)) {
-      throw new IllegalStateException("Shipment date is not acceptable for the client");
-    }
   }
 
   private static String requireText(String value, int maximum, String field) {
@@ -321,15 +349,11 @@ public class RentalOrder {
     return value;
   }
 
-  /** Verifies the delivery facts required before a draft can enter fulfillment. */
+  /** Verifies the client-confirmed address and manager primary phone required before fulfillment. */
   public void requireFulfillmentDetails() {
-    if (deliveryAddress == null
-        || latitude == null
-        || longitude == null
-        || contactPhone == null
-        || acceptableDeliveryDates.isEmpty()) {
+    if (deliveryAddress == null || contactPhone == null) {
       throw new IllegalStateException(
-          "Order delivery address, coordinates, contact phone and acceptable dates are required");
+          "Order delivery address and contact phone are required");
     }
   }
 
@@ -347,16 +371,16 @@ public class RentalOrder {
     return new Coordinates(latitude, longitude);
   }
 
-  private static List<LocalDate> acceptableDates(List<LocalDate> values) {
+  private static List<AdditionalContact> additionalContacts(List<AdditionalContact> values) {
     if (values == null || values.isEmpty()) return List.of();
-    if (values.size() > 31 || values.stream().anyMatch(Objects::isNull)) {
-      throw new IllegalArgumentException("acceptableDeliveryDates are invalid");
+    if (values.stream().anyMatch(Objects::isNull)) {
+      throw new IllegalArgumentException("additionalContacts are invalid");
     }
-    LinkedHashSet<LocalDate> unique = new LinkedHashSet<>(values);
-    if (unique.size() != values.size()) {
-      throw new IllegalArgumentException("acceptableDeliveryDates must be unique");
-    }
-    return unique.stream().sorted().toList();
+    return List.copyOf(values);
+  }
+
+  private static boolean equalDecimal(BigDecimal left, BigDecimal right) {
+    return left == null ? right == null : right != null && left.compareTo(right) == 0;
   }
 
   private static OffsetDateTime now() {
@@ -380,9 +404,7 @@ public class RentalOrder {
         this instanceof HibernateProxy proxy
             ? proxy.getHibernateLazyInitializer().getPersistentClass()
             : getClass();
-    return thisClass == otherClass
-        && id != null
-        && Objects.equals(id, ((RentalOrder) other).id);
+    return thisClass == otherClass && id != null && Objects.equals(id, ((RentalOrder) other).id);
   }
 
   @Override

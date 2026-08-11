@@ -20,16 +20,9 @@ import {
   CarouselPrevious,
 } from "@/components/ui/carousel"
 import { Checkbox } from "@/components/ui/checkbox"
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type {
   AvailableCabin,
-  CabinFilterSuggestions,
   CabinSearchResult,
 } from "@/features/assistant/api/assistant-api"
 import { cabinSearchGroupKey } from "@/features/assistant/api/assistant-api"
@@ -50,8 +43,6 @@ export function AssistantSearchResults({
   selectionPending = false,
   collapsed = false,
   onCollapsedChange,
-  filterSuggestions,
-  onSuggestion,
   footer,
 }: {
   accessToken: string
@@ -61,8 +52,6 @@ export function AssistantSearchResults({
   selectionPending?: boolean
   collapsed?: boolean
   onCollapsedChange?: (collapsed: boolean) => void
-  filterSuggestions?: CabinFilterSuggestions
-  onSuggestion?: (message: string) => void
   footer?: ReactNode
 }) {
   const groups = useMemo(
@@ -76,7 +65,6 @@ export function AssistantSearchResults({
   const [activeGroupKey, setActiveGroupKey] = useState(
     () => groups[0]?.key ?? null
   )
-  const [exactSearchOpen, setExactSearchOpen] = useState(false)
   const cabinIds = useMemo(
     () =>
       [
@@ -255,123 +243,8 @@ export function AssistantSearchResults({
             {footer}
           </div>
         ) : null}
-        {!collapsed && filterSuggestions && onSuggestion ? (
-          <Collapsible
-            open={exactSearchOpen}
-            onOpenChange={setExactSearchOpen}
-            className="mt-4"
-          >
-            <CollapsibleTrigger asChild>
-              <Button type="button" size="sm" variant="outline">
-                <HugeiconsIcon
-                  icon={exactSearchOpen ? ArrowUp01Icon : ArrowDown01Icon}
-                  aria-hidden="true"
-                />
-                Продолжить точный поиск
-              </Button>
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <AssistantFilterSuggestions
-                suggestions={filterSuggestions}
-                onSuggestion={onSuggestion}
-              />
-            </CollapsibleContent>
-          </Collapsible>
-        ) : null}
       </div>
     </section>
-  )
-}
-
-function SuggestionGroup({
-  label,
-  values,
-  prompt,
-  onSuggestion,
-}: {
-  label: string
-  values: string[]
-  prompt: (value: string) => string
-  onSuggestion: (message: string) => void
-}) {
-  if (values.length === 0) return null
-  return (
-    <div className="flex flex-col gap-1.5">
-      <p className="text-xs font-medium text-muted-foreground">{label}</p>
-      <ToggleGroup
-        type="single"
-        value=""
-        size="sm"
-        variant="outline"
-        className="max-w-full flex-wrap justify-start"
-        aria-label={label}
-        onValueChange={(value) => {
-          if (value) onSuggestion(prompt(value))
-        }}
-      >
-        {values.map((value) => (
-          <ToggleGroupItem key={value} value={value}>
-            {value}
-          </ToggleGroupItem>
-        ))}
-      </ToggleGroup>
-    </div>
-  )
-}
-
-function AssistantFilterSuggestions({
-  suggestions,
-  onSuggestion,
-}: {
-  suggestions: CabinFilterSuggestions
-  onSuggestion: (message: string) => void
-}) {
-  return (
-    <div className="mt-3 rounded-xl border border-dashed p-3">
-      <p className="mb-3 text-sm font-medium">Точные фильтры</p>
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        <SuggestionGroup
-          label="Тип"
-          values={suggestions.cabinTypes}
-          prompt={(value) => `Уточни выборку: тип бытовки «${value}».`}
-          onSuggestion={onSuggestion}
-        />
-        <SuggestionGroup
-          label="Отделка"
-          values={suggestions.finishes}
-          prompt={(value) => `Уточни выборку: отделка «${value}».`}
-          onSuggestion={onSuggestion}
-        />
-        <SuggestionGroup
-          label="Размер"
-          values={suggestions.dimensions}
-          prompt={(value) => `Уточни выборку: точный размер «${value}».`}
-          onSuggestion={onSuggestion}
-        />
-        <SuggestionGroup
-          label="Категория"
-          values={suggestions.categories}
-          prompt={(value) => `Уточни выборку: категория «${value}».`}
-          onSuggestion={onSuggestion}
-        />
-        <SuggestionGroup
-          label="Характеристика"
-          values={suggestions.characteristics}
-          prompt={(value) => `Уточни выборку: характеристика «${value}».`}
-          onSuggestion={onSuggestion}
-        />
-        <SuggestionGroup
-          label="Линолеум"
-          values={["Есть", "Нет"]}
-          prompt={(value) =>
-            value === "Есть"
-              ? "Уточни выборку: только бытовки с линолеумом."
-              : "Уточни выборку: только бытовки без линолеума."
-          }
-          onSuggestion={onSuggestion}
-        />
-      </div>
-    </div>
   )
 }
 

@@ -18,6 +18,7 @@ import jakarta.persistence.Version;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.Objects;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.Getter;
@@ -27,7 +28,8 @@ import org.hibernate.type.SqlTypes;
 import tools.jackson.databind.JsonNode;
 
 /**
- * JPA persistence model for one logistics document line; document commands own its workflow transitions.
+ * JPA persistence model for one logistics document line; document commands own its workflow
+ * transitions.
  */
 @Entity
 @Table(name = "logistics_document_line")
@@ -87,18 +89,17 @@ public class LogisticsDocumentLine {
   private JsonNode sourceAllocationSnapshot;
 
   /**
-   * Furniture found in addition to the canonical cabin contents at return
-   * acceptance.  The logistics completion workflow turns this immutable fact
-   * into an asset-service stock receipt.
+   * Furniture found in addition to the canonical cabin contents at return acceptance. The logistics
+   * completion workflow turns this immutable fact into an asset-service stock receipt.
    */
   @JdbcTypeCode(SqlTypes.JSON)
   @Column(name = "return_additional_contents_snapshot", columnDefinition = "jsonb")
   private JsonNode returnAdditionalContentsSnapshot;
 
   /**
-   * Canonical source status captured from maintenance-service before departure.
-   * It is deliberately persisted because an in-transit asset no longer exposes
-   * whether arrival must restore FREE or REPAIR.
+   * Canonical source status captured from maintenance-service before departure. It is deliberately
+   * persisted because an in-transit asset no longer exposes whether arrival must restore FREE or
+   * REPAIR.
    */
   @Column(name = "transfer_asset_status", length = 16)
   private String transferAssetStatus;
@@ -206,12 +207,29 @@ public class LogisticsDocumentLine {
     return true;
   }
 
+  /** Replaces an unstarted rental-order line after an asset-side atomic cabin swap. */
+  public void replaceRentalItem(
+      UUID expectedOldRentalItemId, UUID replacementRentalItemId, long replacementAssetVersion) {
+    if (rentalOrderId == null
+        || state != LogisticsLineState.PENDING
+        || !assetId.equals(expectedOldRentalItemId)) {
+      throw new IllegalStateException("Only an unstarted matching order line can be replaced");
+    }
+    if (replacementAssetVersion < 0) {
+      throw new IllegalArgumentException("replacementAssetVersion must not be negative");
+    }
+    assetId = Objects.requireNonNull(replacementRentalItemId, "replacementRentalItemId");
+    assetVersion = replacementAssetVersion;
+  }
+
   public void captureExpectedContents(JsonNode snapshot) {
-    expectedContentsSnapshot = captureImmutable(expectedContentsSnapshot, snapshot, "expectedContentsSnapshot");
+    expectedContentsSnapshot =
+        captureImmutable(expectedContentsSnapshot, snapshot, "expectedContentsSnapshot");
   }
 
   public void captureFactualContents(JsonNode snapshot) {
-    factualContentsSnapshot = captureImmutable(factualContentsSnapshot, snapshot, "factualContentsSnapshot");
+    factualContentsSnapshot =
+        captureImmutable(factualContentsSnapshot, snapshot, "factualContentsSnapshot");
   }
 
   public void captureSourceAllocations(JsonNode snapshot) {
@@ -251,7 +269,8 @@ public class LogisticsDocumentLine {
   public void configureRepairContinuation(Integer priority) {
     if (activeRepairId == null) {
       if (priority != null) {
-        throw new IllegalArgumentException("A transfer without an active repair has no continuation");
+        throw new IllegalArgumentException(
+            "A transfer without an active repair has no continuation");
       }
       repairContinuationPriority = null;
       return;
@@ -259,8 +278,7 @@ public class LogisticsDocumentLine {
     if (priority == null || priority < 1 || priority > 5) {
       throw new IllegalArgumentException("Repair priority must be between 1 and 5");
     }
-    if (repairContinuationPriority != null
-        && !repairContinuationPriority.equals(priority)) {
+    if (repairContinuationPriority != null && !repairContinuationPriority.equals(priority)) {
       throw new IllegalStateException("Repair continuation settings are immutable");
     }
     repairContinuationPriority = priority;
@@ -294,7 +312,8 @@ public class LogisticsDocumentLine {
   }
 
   private void transition(LogisticsLineState expected, LogisticsLineState next) {
-    if (state != expected) throw new IllegalStateException("Line lifecycle transition is not allowed");
+    if (state != expected)
+      throw new IllegalStateException("Line lifecycle transition is not allowed");
     state = next;
   }
 

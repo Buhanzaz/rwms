@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   createManualMovement,
+  getDriverTask,
   moveDriverBoardTask,
   pinDriverBoardTask,
   promoteCapitalRepair,
@@ -27,6 +28,30 @@ afterEach(() => {
 })
 
 describe("driver board API", () => {
+  it("loads the authoritative grouped trip detail from the driver-task endpoint", async () => {
+    const detail = {
+      id: EXTERNAL_TASK_ID,
+      scheduledDate: "2026-08-02",
+      tripDetails: { taskNumber: "123", tripNumber: 2, cabins: [] },
+    }
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(detail))
+
+    await expect(
+      getDriverTask("driver-token", EXTERNAL_TASK_ID)
+    ).resolves.toEqual(detail)
+
+    const [input, init] = fetchMock.mock.calls[0]!
+    expect(String(input)).toBe(
+      `${getGatewayRuntimeConfig().logisticsApiBaseUrl}/v1/driver-tasks/${EXTERNAL_TASK_ID}`
+    )
+    expect(init?.method).toBeUndefined()
+    expect(new Headers(init?.headers).get("Authorization")).toBe(
+      "Bearer driver-token"
+    )
+  })
+
   it("moves a card through the public gateway with both task-board versions", async () => {
     const moved = {
       externalTaskId: EXTERNAL_TASK_ID,

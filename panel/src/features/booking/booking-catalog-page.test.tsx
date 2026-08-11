@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   list: vi.fn(),
   check: vi.fn(),
   hold: vi.fn(),
+  getOrder: vi.fn(),
 }))
 
 vi.mock("@/features/auth/use-auth", () => ({
@@ -52,6 +53,13 @@ vi.mock("@/features/booking/api/manual-booking-drafts-api", async () => {
   return { ...actual, putManualBookingDraftHold: api.hold }
 })
 
+vi.mock("@/features/orders/api/orders-api", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/features/orders/api/orders-api")
+  >("@/features/orders/api/orders-api")
+  return { ...actual, getOrder: api.getOrder }
+})
+
 vi.mock("@/features/booking/booking-cabin-browser", () => ({
   BookingCabinBrowser: ({
     items,
@@ -78,7 +86,11 @@ vi.mock("@/features/booking/booking-cabin-browser", () => ({
 
 import { BookingCatalogPage } from "@/features/booking/booking-catalog-page"
 import { BookingSelectionProvider } from "@/features/booking/booking-selection-provider"
+import type { OrderDetail } from "@/features/orders/domain/orders"
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
+
+const CLIENT_ID = "66666666-6666-4666-8666-666666666666"
+const ORDER_ID = "77777777-7777-4777-8777-777777777777"
 
 const item: RentalItemDto = {
   id: "22222222-2222-4222-8222-222222222222",
@@ -105,7 +117,54 @@ const item: RentalItemDto = {
   tags: [],
 }
 
+const order: OrderDetail = {
+  id: ORDER_ID,
+  version: 1,
+  number: "З-001",
+  status: "DRAFT",
+  client: {
+    id: CLIENT_ID,
+    version: 1,
+    type: "LEGAL_ENTITY",
+    displayName: "ООО Север",
+    phone: "+79990000000",
+    contactPerson: "Иван Иванов",
+    additionalContacts: [],
+    email: null,
+    responsibleManagerId: "manager-1",
+    responsibleManagerDisplayName: "Менеджер",
+    comment: null,
+    source: null,
+    createdAt: "2026-08-10T10:00:00Z",
+    updatedAt: "2026-08-10T10:00:00Z",
+  },
+  managerId: "manager-1",
+  managerDisplayName: "Менеджер",
+  createdBy: "manager-1",
+  createdByDisplayName: "Менеджер",
+  warehouseId: item.warehouseId,
+  deliveryAddress: null,
+  latitude: null,
+  longitude: null,
+  contactPhone: null,
+  comment: null,
+  additionalContacts: [],
+  desiredDeliveryWindows: [],
+  unitCount: 0,
+  units: [],
+  movements: [],
+  permissions: {
+    canEdit: true,
+    canReplaceUnits: false,
+    canExtendRentalTerms: false,
+    canViewOtherManagers: false,
+  },
+  createdAt: "2026-08-10T10:00:00Z",
+  updatedAt: "2026-08-10T10:00:00Z",
+}
+
 function configureAvailableItem() {
+  api.getOrder.mockResolvedValue(order)
   api.list.mockResolvedValue({
     content: [item],
     page: 0,
@@ -126,7 +185,7 @@ function configureAvailableItem() {
   api.hold.mockImplementation(async (params) => ({
     draftId: params.draftId,
     warehouseId: params.warehouseId,
-    expiresAt: "2099-08-04T12:00:00Z",
+    expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
     rentalItemIds: [...params.rentalItemIds],
   }))
 }
@@ -136,7 +195,9 @@ function renderPage() {
     defaultOptions: { queries: { retry: false } },
   })
   return render(
-    <MemoryRouter initialEntries={["/booking"]}>
+    <MemoryRouter
+      initialEntries={[`/booking?clientId=${CLIENT_ID}&orderId=${ORDER_ID}`]}
+    >
       <QueryClientProvider client={queryClient}>
         <BookingSelectionProvider>
           <Routes>
@@ -166,7 +227,11 @@ describe("BookingCatalogPage", () => {
 
     await waitFor(() => expect(api.list).toHaveBeenCalledTimes(1))
     expect(api.list).toHaveBeenCalledWith(
-      expect.objectContaining({ size: 50, search: "" })
+      expect.objectContaining({
+        warehouseId: order.warehouseId,
+        size: 50,
+        search: "",
+      })
     )
 
     vi.useFakeTimers()

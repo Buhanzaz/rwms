@@ -33,13 +33,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  Field,
-  FieldDescription,
-  FieldError,
-  FieldGroup,
-  FieldLabel,
-} from "@/components/ui/field"
+import { FieldError, FieldGroup } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
@@ -50,6 +44,8 @@ import {
   type LogisticsDocumentFiltersState,
 } from "@/features/logistics/logistics-document-filters"
 import { LogisticsDriverPicker } from "@/features/logistics/logistics-driver-picker"
+import { DesiredTripScheduleFields } from "@/features/logistics/desired-trip-schedule-fields"
+import { DRIVER_BOARD_QUERY_KEY } from "@/features/logistics/driver-board/driver-board-api"
 import { createOrderShipment } from "@/features/logistics/order-tasks-api"
 import {
   RETURNS_QUERY_KEY,
@@ -75,7 +71,11 @@ import {
   useLogisticsReferenceLabels,
   type LogisticsReferenceLabels,
 } from "@/features/logistics/use-logistics-reference-labels"
-import type { OrderDetail, OrderSummary } from "@/features/orders/domain/orders"
+import type {
+  DesiredDeliveryWindow,
+  OrderDetail,
+  OrderSummary,
+} from "@/features/orders/domain/orders"
 import {
   getOrder,
   listOrders,
@@ -415,11 +415,8 @@ export function LogisticsOrderTasksPage() {
     })),
   })
   const shipmentTaskSettingsQuery = useQuery({
-    queryKey: shipmentTaskSettingsKeys.warehouse(
-      selectedWarehouseId ?? "none"
-    ),
-    queryFn: () =>
-      getShipmentTaskSettings(accessToken!, selectedWarehouseId!),
+    queryKey: shipmentTaskSettingsKeys.warehouse(selectedWarehouseId ?? "none"),
+    queryFn: () => getShipmentTaskSettings(accessToken!, selectedWarehouseId!),
     enabled: Boolean(accessToken && selectedWarehouseId),
   })
   const shipmentTaskCap =
@@ -623,8 +620,10 @@ export function LogisticsOrderTasksPage() {
   function shipmentTaskLimitError(task: RentalOrderTask, count: number) {
     if (task.kind !== "SHIPMENT" || !task.virtual) return null
     if (shipmentTaskCap === null) {
-      return shipmentTaskSettingsMessage ??
+      return (
+        shipmentTaskSettingsMessage ??
         "Лимит бытовок в одном задании отгрузки недоступен."
+      )
     }
     if (count > shipmentTaskCap) {
       return `В одном задании отгрузки можно выбрать не больше ${shipmentTaskCap} бытовок.`
@@ -702,18 +701,16 @@ export function LogisticsOrderTasksPage() {
         idempotencyKey: keyFor(signature),
       })
     },
-    onSuccess: (shipment, variables) => {
+    onSuccess: () => {
       setScheduleTarget(null)
       setCommandError(null)
-      setCommandNotice("Отгрузка создана. Проверяем наполнение бытовок…")
+      setCommandNotice(
+        "Сгруппированная ходка создана. Наполнение и подготовка запускаются отдельными действиями по актуальному статусу сервера."
+      )
       clearSelection()
       void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
-      furnitureTasksMutation.mutate({
-        shipment,
-        driverSnapshot: variables.driverSnapshot,
-        driverWorkerId: variables.driverWorkerId,
-        scheduledDate: variables.scheduledDate,
-      })
+      void queryClient.invalidateQueries({ queryKey: ORDERS_QUERY_KEY })
+      void queryClient.invalidateQueries({ queryKey: DRIVER_BOARD_QUERY_KEY })
     },
     onError: (cause) => {
       setCommandError(errorMessage(cause, "Не удалось создать отгрузку"))
@@ -751,6 +748,7 @@ export function LogisticsOrderTasksPage() {
           : "Отгрузка запланирована."
       )
       void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
+      void queryClient.invalidateQueries({ queryKey: DRIVER_BOARD_QUERY_KEY })
       void queryClient.invalidateQueries({
         queryKey: ORDER_TASK_FURNITURE_READINESS_QUERY_KEY,
       })
@@ -769,14 +767,7 @@ export function LogisticsOrderTasksPage() {
   })
 
   const furnitureTasksMutation = useMutation({
-    mutationFn: ({
-      shipment,
-    }: {
-      shipment: ShipmentDocument
-      driverSnapshot?: string
-      driverWorkerId?: string
-      scheduledDate?: string
-    }) => {
+    mutationFn: ({ shipment }: { shipment: ShipmentDocument }) => {
       const signature = `order-furniture:${shipment.id}:${shipment.version}`
       return createShipmentFurnitureTasks({
         accessToken: accessToken!,
@@ -785,41 +776,20 @@ export function LogisticsOrderTasksPage() {
         idempotencyKey: keyFor(signature),
       })
     },
-    onSuccess: (result, variables) => {
+    onSuccess: (result) => {
       const createdTaskCount = result.tasks.filter(
         (task) => task.taskId !== null
       ).length
-      const driverSnapshot =
-        variables.driverSnapshot ?? variables.shipment.driverSnapshot
-      const driverWorkerId =
-        variables.driverWorkerId ?? variables.shipment.driverWorkerId
-      const scheduledDate =
-        variables.scheduledDate ?? variables.shipment.scheduledDate
       setCommandError(null)
       setCommandNotice(
         createdTaskCount > 0
           ? `Создано заданий на мебель: ${createdTaskCount}. После их выполнения нажмите «Готово к отгрузке».`
-          : "Мебель уже соответствует заказу. Запускаем подготовку отгрузки…"
+          : "Мебель уже соответствует заказу. Подготовку отгрузки можно запустить отдельной кнопкой."
       )
       void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
       void queryClient.invalidateQueries({
         queryKey: ORDER_TASK_FURNITURE_READINESS_QUERY_KEY,
       })
-
-      // If the cabin has no furniture delta, the worker gate is already clear and
-      // preparation can start immediately. Otherwise leave the document in DRAFT
-      // until the worker task reaches COMPLETED; the row action then calls planMutation.
-      if (createdTaskCount === 0 && driverSnapshot && scheduledDate) {
-        planMutation.mutate({
-          shipment: {
-            ...variables.shipment,
-            version: result.shipmentVersion,
-          },
-          driverSnapshot,
-          driverWorkerId,
-          scheduledDate,
-        })
-      }
     },
     onError: (cause) => {
       setCommandError(
@@ -885,6 +855,7 @@ export function LogisticsOrderTasksPage() {
       setCommandNotice("Задание отмечено как отгруженное.")
       void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
       void queryClient.invalidateQueries({ queryKey: RETURNS_QUERY_KEY })
+      void queryClient.invalidateQueries({ queryKey: DRIVER_BOARD_QUERY_KEY })
     },
     onError: (cause, { task, keepScheduledDate = false }) => {
       if (cause instanceof ApiError && cause.status === 409) {
@@ -894,51 +865,6 @@ export function LogisticsOrderTasksPage() {
       }
       setCommandError(
         errorMessage(cause, "Не удалось завершить подготовку отгрузки")
-      )
-    },
-  })
-
-  const rescheduleAndConfirmMutation = useMutation({
-    mutationFn: async (task: RentalOrderTask) => {
-      if (task.kind !== "SHIPMENT") {
-        throw new Error("Это не задание отгрузки")
-      }
-      const shipment = task.document as ShipmentDocument
-      if (!shipment.driverSnapshot) {
-        throw new Error("Для отгрузки не указан водитель")
-      }
-      const scheduledDate = today()
-      const planSignature = `order-plan:${shipment.id}:${shipment.version}:${shipment.driverWorkerId ?? "unassigned"}:${shipment.driverSnapshot}:${scheduledDate}`
-      const planned = await replaceShipmentPlan({
-        accessToken: accessToken!,
-        documentId: shipment.id,
-        expectedVersion: shipment.version,
-        driverSnapshot: shipment.driverSnapshot,
-        driverWorkerId: shipment.driverWorkerId,
-        scheduledDate,
-        idempotencyKey: keyFor(planSignature),
-      })
-      const confirmSignature = `order-confirm:${planned.id}:${planned.version}`
-      return confirmShipmentPreparation({
-        accessToken: accessToken!,
-        documentId: planned.id,
-        expectedVersion: planned.version,
-        idempotencyKey: keyFor(confirmSignature),
-      })
-    },
-    onSuccess: () => {
-      setShipmentDateDecisionTarget(null)
-      setCommandError(null)
-      setCommandNotice(
-        "Дата отгрузки изменена на сегодня, бытовка отмечена как отгруженная."
-      )
-      void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
-      void queryClient.invalidateQueries({ queryKey: RETURNS_QUERY_KEY })
-      void queryClient.invalidateQueries({ queryKey: ORDERS_QUERY_KEY })
-    },
-    onError: (cause) => {
-      setCommandError(
-        errorMessage(cause, "Не удалось изменить дату и завершить отгрузку")
       )
     },
   })
@@ -1067,7 +993,6 @@ export function LogisticsOrderTasksPage() {
     furnitureTasksMutation.isPending ||
     returnMutation.isPending ||
     confirmMutation.isPending ||
-    rescheduleAndConfirmMutation.isPending ||
     clearContentsMutation.isPending
 
   const canSubmitSelectedTask =
@@ -1434,6 +1359,15 @@ export function LogisticsOrderTasksPage() {
         <TaskScheduleDialog
           accessToken={accessToken}
           task={scheduleTarget}
+          desiredDeliveryWindows={
+            (
+              scheduleTarget.order ??
+              orderFromLabels(
+                referenceLabels,
+                scheduleTarget.document.rentalOrderId
+              )
+            )?.desiredDeliveryWindows ?? []
+          }
           selectedLineCount={
             selectedTaskId === scheduleTarget.id ? selectedLineIds.length : 0
           }
@@ -1446,18 +1380,13 @@ export function LogisticsOrderTasksPage() {
       {shipmentDateDecisionTarget ? (
         <ShipmentDateDecisionDialog
           task={shipmentDateDecisionTarget}
-          pending={
-            confirmMutation.isPending || rescheduleAndConfirmMutation.isPending
-          }
+          pending={confirmMutation.isPending}
           onOpenChange={(open) => !open && setShipmentDateDecisionTarget(null)}
           onKeepDate={() => {
             const target = shipmentDateDecisionTarget
             setShipmentDateDecisionTarget(null)
             confirmMutation.mutate({ task: target, keepScheduledDate: true })
           }}
-          onUseToday={() =>
-            rescheduleAndConfirmMutation.mutate(shipmentDateDecisionTarget)
-          }
         />
       ) : null}
     </div>
@@ -1602,8 +1531,7 @@ function SelectedCabinsActions({
           pending ||
           !hasAccessToken ||
           (task.kind === "SHIPMENT" &&
-            (shipmentTaskCap === null ||
-              selectedLineCount > shipmentTaskCap))
+            (shipmentTaskCap === null || selectedLineCount > shipmentTaskCap))
         }
         onClick={onSchedule}
       >
@@ -1844,13 +1772,11 @@ function ShipmentDateDecisionDialog({
   pending,
   onOpenChange,
   onKeepDate,
-  onUseToday,
 }: {
   task: RentalOrderTask
   pending: boolean
   onOpenChange: (open: boolean) => void
   onKeepDate: () => void
-  onUseToday: () => void
 }) {
   const shipment =
     task.kind === "SHIPMENT" ? (task.document as ShipmentDocument) : null
@@ -1862,8 +1788,9 @@ function ShipmentDateDecisionDialog({
           <DialogTitle>Дата отгрузки отличается</DialogTitle>
           <DialogDescription>
             Назначенная дата: {formatDetailDate(shipment.scheduledDate)}.
-            Сегодня {formatDetailDate(today())}. Выберите, как сохранить дату
-            задания.
+            Сегодня {formatDetailDate(today())}. Подтверждение и изменение
+            расписания выполняются отдельными командами. Для изменения даты
+            используйте действие отгрузки, затем подтвердите её отдельно.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter className="flex-col sm:flex-row sm:justify-end">
@@ -1874,9 +1801,6 @@ function ShipmentDateDecisionDialog({
             onClick={onKeepDate}
           >
             Оставить назначенную
-          </Button>
-          <Button type="button" disabled={pending} onClick={onUseToday}>
-            Изменить на сегодня
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1926,6 +1850,7 @@ function CompositionBlock({
 function TaskScheduleDialog({
   accessToken,
   task,
+  desiredDeliveryWindows,
   selectedLineCount,
   shipmentTaskCap,
   pending,
@@ -1934,6 +1859,7 @@ function TaskScheduleDialog({
 }: {
   accessToken: string
   task: RentalOrderTask
+  desiredDeliveryWindows: readonly DesiredDeliveryWindow[]
   selectedLineCount: number
   shipmentTaskCap: number | null
   pending: boolean
@@ -1992,20 +1918,17 @@ function TaskScheduleDialog({
               warehouseId={task.document.warehouseId}
               onChange={setDriver}
             />
-            <Field data-invalid={Boolean(error) || undefined}>
-              <FieldLabel htmlFor="order-task-date">Дата</FieldLabel>
-              <Input
-                id="order-task-date"
-                type="date"
-                value={scheduledDate}
-                aria-invalid={Boolean(error) || undefined}
-                onChange={(event) => setScheduledDate(event.target.value)}
-              />
-              {error ? <FieldError>{error}</FieldError> : null}
-              <FieldDescription>
-                Дата хранится как календарная дата без времени.
-              </FieldDescription>
-            </Field>
+            <DesiredTripScheduleFields
+              dateLabel="Фактическая дата ходки"
+              scheduledDate={scheduledDate}
+              desiredDeliveryWindows={desiredDeliveryWindows}
+              disabled={pending}
+              error={error}
+              onDateChange={(value) => {
+                setScheduledDate(value)
+                setError(null)
+              }}
+            />
           </FieldGroup>
           <DialogFooter>
             <Button

@@ -1,18 +1,29 @@
 import { useMemo, useRef, useState } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import {
+  Add01Icon,
+  Calendar03Icon,
   CheckmarkCircle02Icon,
-  Clock01Icon,
   Image01Icon,
   Loading03Icon,
+  MinusSignIcon,
 } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
+import { ru } from "date-fns/locale"
 import { useParams } from "react-router-dom"
 
 import { PhotoCarousel } from "@/components/media/photo-carousel"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
+import { Calendar } from "@/components/ui/calendar"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -21,6 +32,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
@@ -35,24 +56,55 @@ import {
   getPublicPresentationBooking,
   type PresentationBooking,
   type PresentationCabin,
+  type PresentationEquipmentAvailability,
 } from "@/features/assistant/api/rental-presentations-api"
+import {
+  desiredQuantity,
+  equipmentCapacityForCabin,
+  presentationDraftIssues,
+  selectedCabins,
+  type FurnitureDraft,
+} from "@/features/assistant/pages/public-client-presentation-draft"
+import { AdditionalContactsFields } from "@/features/clients/components/additional-contacts-fields"
+import {
+  parseAdditionalContacts,
+  type AdditionalContact,
+} from "@/features/clients/domain/clients"
 import { OrderCommandIdentityRegistry } from "@/features/orders/api/order-command-identity"
+import type { DesiredDeliveryWindow } from "@/features/orders/domain/orders"
 import { ApiError } from "@/lib/api-client"
 import { cn } from "@/lib/utils"
 
 export function PublicClientPresentationPage() {
   const { token = "" } = useParams()
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [furnitureDraft, setFurnitureDraft] = useState<FurnitureDraft>({})
+  const [furnitureCabinId, setFurnitureCabinId] = useState<string | null>(null)
+  const [normalStep, setNormalStep] = useState<"selection" | "details">(
+    "selection"
+  )
+  const [desiredDate, setDesiredDate] = useState<Date>()
+  const [rentalMonths, setRentalMonths] = useState(1)
+  const [deliveryAddress, setDeliveryAddress] = useState("")
+  const [coordinates, setCoordinates] = useState("")
+  const [additionalContacts, setAdditionalContacts] = useState<
+    AdditionalContact[]
+  >([])
+  const [selectionMessage, setSelectionMessage] = useState<string | null>(null)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [booking, setBooking] = useState<PresentationBooking | null>(null)
+  const bookingCommand = useRef(new OrderCommandIdentityRegistry())
   const presentationQuery = useQuery({
     queryKey: ["public-client-presentation", token],
     queryFn: () => getPublicPresentation(token),
     retry: (count, error) =>
       !(error instanceof ApiError && [404, 410].includes(error.status)) &&
       count < 2,
+    refetchInterval: (query) =>
+      query.state.data?.viewOnly === true ? false : 15_000,
+    refetchOnWindowFocus: "always",
+    refetchOnReconnect: "always",
   })
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [confirmOpen, setConfirmOpen] = useState(false)
-  const [booking, setBooking] = useState<PresentationBooking | null>(null)
-  const bookingCommand = useRef(new OrderCommandIdentityRegistry())
   const bookingQuery = useQuery({
     queryKey: ["public-presentation-booking", token, booking?.bookingId],
     queryFn: () =>
@@ -65,16 +117,91 @@ export function PublicClientPresentationPage() {
       query.state.data?.state === "PENDING" ? 1_500 : false,
   })
   const effectiveBooking = bookingQuery.data ?? booking
+  const presentation = presentationQuery.data
+  const draftIssues = presentation
+    ? presentationDraftIssues({
+        presentation,
+        selectedIds,
+        draft: furnitureDraft,
+      })
+    : []
+  const desiredWindowInput = useMemo<DesiredDeliveryWindow | null>(() => {
+    if (!desiredDate) return null
+    const date = calendarDateValue(desiredDate)
+    return {
+      startDate: date,
+      endDate: date,
+    }
+  }, [desiredDate])
+  const normalizedDeliveryAddress = deliveryAddress.trim()
+  const parsedCoordinates = parseCoordinates(coordinates)
+  const parsedAdditionalContacts = parseAdditionalContacts(additionalContacts)
+  const requiredSelectionCount =
+    presentation?.mode === "REPLACEMENT"
+      ? presentation.requiredSelectionCount
+      : null
+  const selectionCountValid =
+    requiredSelectionCount === null
+      ? selectedIds.length > 0
+      : selectedIds.length === requiredSelectionCount
+  const normalPresentation = presentation?.mode === "NORMAL"
+
   const confirmMutation = useMutation({
     mutationFn: async () => {
-      const selectedRentalItemIds = [...selectedIds].sort()
+      if (!presentation) throw new Error("Представление ещё не загружено.")
+      if (presentation.mode === "NORMAL") {
+        if (
+          !desiredWindowInput ||
+          rentalMonths < 1 ||
+          !normalizedDeliveryAddress ||
+          parsedCoordinates.error ||
+          !parsedAdditionalContacts.contacts
+        ) {
+          throw new Error(
+            "Укажите дату, срок аренды, адрес и корректные дополнительные контакты."
+          )
+        }
+      }
+      const selections = selectedIds.map((rentalItemId) => ({
+        rentalItemId,
+        equipment:
+          presentation.mode === "REPLACEMENT"
+            ? []
+            : presentation.equipmentAvailability.flatMap((item) => {
+                const quantity = desiredQuantity(
+                  furnitureDraft,
+                  rentalItemId,
+                  item.equipmentId
+                )
+                return quantity > 0
+                  ? [{ equipmentId: item.equipmentId, quantity }]
+                  : []
+              }),
+      }))
+      const bookingPreferences =
+        presentation.mode === "NORMAL"
+          ? {
+              desiredDeliveryWindows: [desiredWindowInput!],
+              rentalMonths,
+              deliveryAddress: normalizedDeliveryAddress,
+              ...(parsedCoordinates.latitude === null
+                ? {}
+                : {
+                    latitude: parsedCoordinates.latitude,
+                    longitude: parsedCoordinates.longitude,
+                  }),
+              additionalContacts: parsedAdditionalContacts.contacts!,
+            }
+          : {}
       const fingerprint = JSON.stringify({
         token,
-        selectedRentalItemIds,
+        selections,
+        ...bookingPreferences,
       })
       const value = await confirmPublicPresentation({
         token,
-        selectedRentalItemIds,
+        selections,
+        ...bookingPreferences,
         idempotencyKey: bookingCommand.current.keyFor(fingerprint),
       })
       return { fingerprint, value }
@@ -83,6 +210,12 @@ export function PublicClientPresentationPage() {
       bookingCommand.current.confirm(fingerprint)
       setBooking(value)
       setConfirmOpen(false)
+      if (value.state === "REJECTED") void presentationQuery.refetch()
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        void presentationQuery.refetch()
+      }
     },
   })
 
@@ -103,11 +236,58 @@ export function PublicClientPresentationPage() {
       />
     )
   }
+  if (!presentation) {
+    return <PublicState text="Представление не содержит данных." />
+  }
 
-  const presentation = presentationQuery.data
   const viewOnly = presentation.viewOnly === true
   const completed = effectiveBooking?.state === "COMPLETED"
   const rejected = effectiveBooking?.state === "REJECTED"
+  const furnitureCabin = presentation.groups
+    .flatMap((group) => group.cabins)
+    .find((cabin) => cabin.id === furnitureCabinId)
+  const selectedCabinList = selectedCabins(presentation, selectedIds)
+  const normalDetailsStep = normalPresentation && normalStep === "details"
+  const canAdvanceToDetails =
+    !viewOnly &&
+    !effectiveBooking &&
+    selectionCountValid &&
+    draftIssues.length === 0
+  const canConfirm =
+    !viewOnly &&
+    !effectiveBooking &&
+    selectionCountValid &&
+    (!normalPresentation ||
+      (normalDetailsStep &&
+        desiredWindowInput !== null &&
+        rentalMonths > 0 &&
+        normalizedDeliveryAddress.length > 0 &&
+        parsedCoordinates.error === null &&
+        parsedAdditionalContacts.contacts !== null)) &&
+    draftIssues.length === 0
+
+  function toggleCabin(cabinId: string) {
+    setSelectionMessage(null)
+    if (selectedIds.includes(cabinId)) {
+      setSelectedIds(selectedIds.filter((id) => id !== cabinId))
+      setFurnitureDraft((current) => {
+        const next = { ...current }
+        delete next[cabinId]
+        return next
+      })
+      return
+    }
+    if (
+      requiredSelectionCount !== null &&
+      selectedIds.length >= requiredSelectionCount
+    ) {
+      setSelectionMessage(
+        `Для замены можно выбрать ровно ${requiredSelectionCount} бытовок.`
+      )
+      return
+    }
+    setSelectedIds([...selectedIds, cabinId])
+  }
 
   return (
     <main className="h-svh overflow-y-auto bg-muted/30 text-foreground">
@@ -116,92 +296,350 @@ export function PublicClientPresentationPage() {
           <div>
             <p className="text-base font-bold tracking-tight">RWMS</p>
             <p className="text-xs text-muted-foreground">
-              Подборка бытовок для аренды
+              {presentation.mode === "REPLACEMENT"
+                ? "Выбор замены бытовок"
+                : "Подборка бытовок для аренды"}
             </p>
           </div>
-          <Select
-            onValueChange={(value) =>
-              document
-                .getElementById(`offer-group-${value}`)
-                ?.scrollIntoView({ behavior: "smooth", block: "start" })
-            }
-          >
-            <SelectTrigger
-              aria-label="Перейти к группе бытовок"
-              className="w-48 sm:w-64"
+          {presentation.mode === "REPLACEMENT" || normalStep === "selection" ? (
+            <Select
+              onValueChange={(value) =>
+                document
+                  .getElementById(`offer-group-${value}`)
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
+              }
             >
-              <SelectValue placeholder="Перейти к группе" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {presentation.groups.map((group) => (
-                  <SelectItem key={group.key} value={group.key}>
-                    {group.label}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+              <SelectTrigger
+                aria-label="Перейти к группе бытовок"
+                className="w-48 sm:w-64"
+              >
+                <SelectValue placeholder="Перейти к группе" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {presentation.groups.map((group) => (
+                    <SelectItem key={group.key} value={group.key}>
+                      {group.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          ) : null}
         </div>
       </header>
 
       <div className="mx-auto max-w-6xl px-4 pt-8 pb-[calc(10rem+env(safe-area-inset-bottom))] sm:px-6">
-        <div className="mb-8 rounded-2xl border bg-background p-5 shadow-sm">
+        <div className="mb-8 flex flex-col gap-4 rounded-2xl border bg-background p-5 shadow-sm">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <h1 className="text-2xl font-semibold tracking-tight">
-                Доступные бытовки
+                {presentation.mode === "REPLACEMENT"
+                  ? "Выберите бытовки на замену"
+                  : "Доступные бытовки"}
               </h1>
               <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-                Посмотрите фотографии и характеристики, затем отметьте
-                подходящие варианты. Выбор создаст черновик бронирования у
-                вашего менеджера.
+                {presentation.mode === "REPLACEMENT"
+                  ? `Нужно выбрать ровно ${requiredSelectionCount ?? 0}. Порядок выбора соответствует порядку заменяемых бытовок.`
+                  : "Выберите бытовки и при необходимости добавьте мебель отдельно в каждую из них."}
               </p>
             </div>
             <Badge variant={viewOnly ? "outline" : "secondary"}>
-              <HugeiconsIcon icon={Clock01Icon} />
+              <HugeiconsIcon icon={Calendar03Icon} />
               {viewOnly
                 ? "Только просмотр"
                 : `Удержание до ${formatPublicDate(presentation.expiresAt)}`}
             </Badge>
           </div>
+
+          {normalPresentation ? (
+            <ol
+              aria-label="Шаги оформления аренды"
+              className="flex flex-wrap gap-2"
+            >
+              <li>
+                <Badge
+                  variant={normalStep === "selection" ? "secondary" : "outline"}
+                >
+                  1. Бытовки и наполнение
+                </Badge>
+              </li>
+              <li>
+                <Badge
+                  variant={normalStep === "details" ? "secondary" : "outline"}
+                >
+                  2. Дата, срок и доставка
+                </Badge>
+              </li>
+            </ol>
+          ) : null}
+
+          {presentation.mode === "REPLACEMENT" ? (
+            <Alert>
+              <AlertTitle>Мебель останется в заказе</AlertTitle>
+              <AlertDescription>
+                Количества мебели сохраняются. Если мебель уже физически
+                находится в старой бытовке, склад получит задание переместить её
+                в выбранную замену.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
+          {presentation.mode === "REPLACEMENT" &&
+          presentation.desiredDeliveryWindows.length > 0 ? (
+            <Alert>
+              <AlertTitle>Условия текущего заказа</AlertTitle>
+              <AlertDescription>
+                <ul className="mt-2 flex list-disc flex-col gap-1 pl-5">
+                  {presentation.desiredDeliveryWindows.map((window, index) => (
+                    <li key={`${window.startDate}:${window.endDate}:${index}`}>
+                      {formatDesiredWindow(window)}
+                    </li>
+                  ))}
+                </ul>
+                Дата и срок аренды при замене не меняются.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
+          {selectionMessage ? (
+            <Alert variant="destructive">
+              <AlertTitle>Ограничение выбора</AlertTitle>
+              <AlertDescription>{selectionMessage}</AlertDescription>
+            </Alert>
+          ) : null}
+          {draftIssues.length > 0 ? (
+            <Alert variant="destructive">
+              <AlertTitle>Доступность мебели изменилась</AlertTitle>
+              <AlertDescription>
+                <ul className="flex list-disc flex-col gap-1 pl-5">
+                  {draftIssues.map((issue) => (
+                    <li key={issue}>{issue}</li>
+                  ))}
+                </ul>
+                Скорректируйте количество. Подтверждение временно недоступно.
+              </AlertDescription>
+            </Alert>
+          ) : null}
         </div>
 
-        <div className="space-y-12">
-          {presentation.groups.map((group) => (
-            <section
-              id={`offer-group-${group.key}`}
-              key={group.key}
-              className="scroll-mt-24"
-            >
-              <div className="mb-4 flex items-end justify-between gap-4">
-                <div>
-                  <h2 className="text-xl font-semibold">{group.label}</h2>
-                  <p className="text-sm text-muted-foreground">
-                    {group.cabins.length}{" "}
-                    {formatCabinCount(group.cabins.length)}
-                  </p>
-                </div>
-              </div>
-              <div className="space-y-5">
-                {group.cabins.map((cabin) => (
-                  <PublicCabinCard
-                    key={cabin.id}
-                    cabin={cabin}
-                    selected={selectedIds.has(cabin.id)}
+        {normalDetailsStep ? (
+          <section
+            aria-label="Дата, срок и доставка"
+            className="flex flex-col gap-6"
+          >
+            <Card>
+              <CardHeader>
+                <CardTitle>Выбранные бытовки и наполнение</CardTitle>
+                <CardDescription>
+                  Проверьте выбранные бытовки. Чтобы изменить выбор или мебель,
+                  вернитесь на предыдущий шаг.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ul className="flex flex-col gap-3">
+                  {selectedCabinList.map((cabin) => {
+                    const furniture =
+                      presentation.equipmentAvailability.flatMap(
+                        (equipment) => {
+                          const quantity = desiredQuantity(
+                            furnitureDraft,
+                            cabin.id,
+                            equipment.equipmentId
+                          )
+                          return quantity > 0
+                            ? [`${equipment.equipmentName} — ${quantity}`]
+                            : []
+                        }
+                      )
+                    return (
+                      <li
+                        key={cabin.id}
+                        className="flex flex-col gap-1 rounded-lg border p-3"
+                      >
+                        <span className="font-medium">
+                          Бытовка {cabin.number}
+                        </span>
+                        <span className="text-sm text-muted-foreground">
+                          {furniture.length > 0
+                            ? `Добавлено: ${furniture.join(", ")}`
+                            : "Дополнительное наполнение не выбрано."}
+                        </span>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </CardContent>
+            </Card>
+
+            <FieldSet className="gap-5">
+              <FieldLegend>Дата, срок и данные доставки</FieldLegend>
+              <FieldDescription>
+                Дата — пожелание для согласования с логистом. Срок начнёт
+                считаться от фактической даты отгрузки.
+              </FieldDescription>
+              <FieldGroup className="gap-5">
+                <Field data-invalid={!desiredDate || undefined}>
+                  <FieldLabel>Желаемая дата получения</FieldLabel>
+                  <div className="w-fit max-w-full overflow-x-auto rounded-lg border">
+                    <Calendar
+                      mode="single"
+                      locale={ru}
+                      selected={desiredDate}
+                      disabled={viewOnly || Boolean(effectiveBooking)}
+                      aria-label="Календарь выбора желаемой даты получения"
+                      onSelect={setDesiredDate}
+                    />
+                  </div>
+                  <FieldDescription>
+                    {desiredDate
+                      ? `Выбрано: ${formatCalendarDate(calendarDateValue(desiredDate))}.`
+                      : "Выберите один день в календаре."}
+                  </FieldDescription>
+                </Field>
+
+                <Field>
+                  <FieldLabel id="public-presentation-rental-months-label">
+                    Срок аренды
+                  </FieldLabel>
+                  <div
+                    role="group"
+                    aria-labelledby="public-presentation-rental-months-label"
+                    className="flex w-fit items-center gap-2"
+                  >
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="outline"
+                      disabled={
+                        viewOnly ||
+                        Boolean(effectiveBooking) ||
+                        rentalMonths <= 1
+                      }
+                      aria-label="Уменьшить срок аренды"
+                      onClick={() => setRentalMonths(rentalMonths - 1)}
+                    >
+                      <HugeiconsIcon icon={MinusSignIcon} />
+                    </Button>
+                    <output
+                      aria-live="polite"
+                      className="min-w-20 text-center text-sm font-medium tabular-nums"
+                    >
+                      {formatRentalMonths(rentalMonths)}
+                    </output>
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="outline"
+                      disabled={viewOnly || Boolean(effectiveBooking)}
+                      aria-label="Увеличить срок аренды"
+                      onClick={() => setRentalMonths(rentalMonths + 1)}
+                    >
+                      <HugeiconsIcon icon={Add01Icon} />
+                    </Button>
+                  </div>
+                  <FieldDescription>
+                    После назначения отгрузки система автоматически рассчитает
+                    дату возврата для выбранных бытовок.
+                  </FieldDescription>
+                </Field>
+
+                <Field data-invalid={!normalizedDeliveryAddress || undefined}>
+                  <FieldLabel htmlFor="public-presentation-delivery-address">
+                    Адрес доставки
+                  </FieldLabel>
+                  <Input
+                    id="public-presentation-delivery-address"
+                    value={deliveryAddress}
+                    required
                     disabled={viewOnly || Boolean(effectiveBooking)}
-                    onSelectedChange={(selected) => {
-                      const next = new Set(selectedIds)
-                      if (selected) next.add(cabin.id)
-                      else next.delete(cabin.id)
-                      setSelectedIds(next)
-                    }}
+                    maxLength={1_000}
+                    aria-invalid={!normalizedDeliveryAddress}
+                    autoComplete="street-address"
+                    placeholder="Город, улица, дом, ориентир"
+                    onChange={(event) => setDeliveryAddress(event.target.value)}
                   />
-                ))}
-              </div>
-            </section>
-          ))}
-        </div>
+                  {!normalizedDeliveryAddress ? (
+                    <FieldError>Укажите адрес доставки.</FieldError>
+                  ) : null}
+                </Field>
+
+                <Field
+                  data-invalid={Boolean(parsedCoordinates.error) || undefined}
+                >
+                  <FieldLabel htmlFor="public-presentation-coordinates">
+                    Координаты
+                  </FieldLabel>
+                  <Input
+                    id="public-presentation-coordinates"
+                    value={coordinates}
+                    disabled={viewOnly || Boolean(effectiveBooking)}
+                    maxLength={64}
+                    aria-invalid={Boolean(parsedCoordinates.error)}
+                    autoComplete="off"
+                    placeholder="55.75, 37.61"
+                    onChange={(event) => setCoordinates(event.target.value)}
+                  />
+                  {parsedCoordinates.error ? (
+                    <FieldError>{parsedCoordinates.error}</FieldError>
+                  ) : (
+                    <FieldDescription>
+                      Необязательно. Укажите широту и долготу через запятую.
+                    </FieldDescription>
+                  )}
+                </Field>
+
+                <AdditionalContactsFields
+                  idPrefix="public-presentation"
+                  value={additionalContacts}
+                  errors={
+                    parsedAdditionalContacts.contacts === null
+                      ? parsedAdditionalContacts.errors
+                      : []
+                  }
+                  disabled={viewOnly || Boolean(effectiveBooking)}
+                  ownerLabel="заказа"
+                  onChange={setAdditionalContacts}
+                />
+              </FieldGroup>
+            </FieldSet>
+          </section>
+        ) : (
+          <div className="flex flex-col gap-12">
+            {presentation.groups.map((group) => (
+              <section
+                id={`offer-group-${group.key}`}
+                key={group.key}
+                className="scroll-mt-24"
+              >
+                <div className="mb-4 flex items-end justify-between gap-4">
+                  <div>
+                    <h2 className="text-xl font-semibold">{group.label}</h2>
+                    <p className="text-sm text-muted-foreground">
+                      {group.cabins.length}{" "}
+                      {formatCabinCount(group.cabins.length)}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-5">
+                  {group.cabins.map((cabin) => (
+                    <PublicCabinCard
+                      key={cabin.id}
+                      cabin={cabin}
+                      selected={selectedIds.includes(cabin.id)}
+                      furniture={furnitureDraft[cabin.id] ?? {}}
+                      equipmentAvailability={presentation.equipmentAvailability}
+                      disabled={viewOnly || Boolean(effectiveBooking)}
+                      furnitureDisabled={presentation.mode === "REPLACEMENT"}
+                      onToggle={() => toggleCabin(cabin.id)}
+                      onAddFurniture={() => setFurnitureCabinId(cabin.id)}
+                    />
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="sticky bottom-0 z-40 border-t bg-background/95 px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur">
@@ -214,7 +652,8 @@ export function PublicClientPresentationPage() {
               </span>
             ) : rejected ? (
               <span className="text-destructive">
-                Выбранные бытовки уже недоступны. Обратитесь к менеджеру.
+                Выбор больше нельзя подтвердить. Попросите менеджера отправить
+                обновлённую ссылку.
               </span>
             ) : effectiveBooking?.state === "PENDING" ? (
               <span className="inline-flex items-center gap-2">
@@ -226,39 +665,204 @@ export function PublicClientPresentationPage() {
                 Срок удержания истёк — представление доступно только для
                 просмотра.
               </span>
+            ) : requiredSelectionCount === null ? (
+              <>
+                Выбрано: <strong>{selectedIds.length}</strong>
+              </>
             ) : (
               <>
-                Выбрано: <strong>{selectedIds.size}</strong>
+                Выбрано: <strong>{selectedIds.length}</strong> из{" "}
+                <strong>{requiredSelectionCount}</strong>
               </>
             )}
           </div>
           {!viewOnly && !effectiveBooking ? (
-            <Button
-              type="button"
-              disabled={selectedIds.size === 0}
-              onClick={() => setConfirmOpen(true)}
-            >
-              Создать бронирование
-            </Button>
+            normalPresentation ? (
+              normalDetailsStep ? (
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setNormalStep("selection")}
+                  >
+                    Назад к выбору
+                  </Button>
+                  <Button
+                    type="button"
+                    disabled={!canConfirm}
+                    onClick={() => setConfirmOpen(true)}
+                  >
+                    Подтвердить выбор
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  disabled={!canAdvanceToDetails}
+                  onClick={() => setNormalStep("details")}
+                >
+                  Далее: дата, срок и доставка
+                </Button>
+              )
+            ) : (
+              <Button
+                type="button"
+                disabled={!canConfirm}
+                onClick={() => setConfirmOpen(true)}
+              >
+                Подтвердить выбор
+              </Button>
+            )
           ) : null}
         </div>
       </div>
+
+      <Dialog
+        open={Boolean(furnitureCabin)}
+        onOpenChange={(open) => {
+          if (!open) setFurnitureCabinId(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Добавить мебель в бытовку {furnitureCabin?.number ?? ""}
+            </DialogTitle>
+            <DialogDescription>
+              Свободное количество общее для всех выбранных бытовок и всех
+              каналов бронирования. Лимит применяется отдельно к каждой позиции.
+            </DialogDescription>
+          </DialogHeader>
+          {furnitureCabin ? (
+            <FieldGroup>
+              {presentation.equipmentAvailability.length === 0 ? (
+                <FieldDescription>
+                  Свободная мебель сейчас отсутствует.
+                </FieldDescription>
+              ) : (
+                presentation.equipmentAvailability.map((equipment) => {
+                  const capacity = equipmentCapacityForCabin({
+                    presentation,
+                    selectedIds,
+                    draft: furnitureDraft,
+                    cabinId: furnitureCabin.id,
+                    equipmentId: equipment.equipmentId,
+                  })
+                  const quantity = desiredQuantity(
+                    furnitureDraft,
+                    furnitureCabin.id,
+                    equipment.equipmentId
+                  )
+                  return (
+                    <Field key={equipment.equipmentId} className="gap-1">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <p
+                          className="min-w-0 flex-1 truncate text-sm font-medium"
+                          title={equipment.equipmentName}
+                        >
+                          {equipment.equipmentName}
+                        </p>
+                        <Button
+                          type="button"
+                          size="icon-sm"
+                          variant="outline"
+                          disabled={quantity === 0}
+                          aria-label={`Уменьшить количество: ${equipment.equipmentName}`}
+                          onClick={() =>
+                            setFurnitureDraft((current) => {
+                              const currentQuantity = desiredQuantity(
+                                current,
+                                furnitureCabin.id,
+                                equipment.equipmentId
+                              )
+                              return {
+                                ...current,
+                                [furnitureCabin.id]: {
+                                  ...current[furnitureCabin.id],
+                                  [equipment.equipmentId]: Math.max(
+                                    0,
+                                    currentQuantity - 1
+                                  ),
+                                },
+                              }
+                            })
+                          }
+                        >
+                          <HugeiconsIcon icon={MinusSignIcon} />
+                        </Button>
+                        <output
+                          aria-label={`Количество: ${equipment.equipmentName}`}
+                          className="w-6 text-center text-sm font-medium tabular-nums"
+                        >
+                          {quantity}
+                        </output>
+                        <Button
+                          type="button"
+                          size="icon-sm"
+                          variant="outline"
+                          disabled={quantity >= capacity}
+                          aria-label={`Увеличить количество: ${equipment.equipmentName}`}
+                          onClick={() =>
+                            setFurnitureDraft((current) => {
+                              const currentQuantity = desiredQuantity(
+                                current,
+                                furnitureCabin.id,
+                                equipment.equipmentId
+                              )
+                              return {
+                                ...current,
+                                [furnitureCabin.id]: {
+                                  ...current[furnitureCabin.id],
+                                  [equipment.equipmentId]: Math.min(
+                                    capacity,
+                                    currentQuantity + 1
+                                  ),
+                                },
+                              }
+                            })
+                          }
+                        >
+                          <HugeiconsIcon icon={Add01Icon} />
+                        </Button>
+                      </div>
+                      <FieldDescription className="text-xs">
+                        Свободно сейчас: {equipment.availableQuantity} · в этой
+                        бытовке: {capacity} · лимит:{" "}
+                        {equipment.maximumPerCabin ?? "нет"}
+                      </FieldDescription>
+                    </Field>
+                  )
+                })
+              )}
+            </FieldGroup>
+          ) : null}
+          <DialogFooter>
+            <Button type="button" onClick={() => setFurnitureCabinId(null)}>
+              Готово
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Подтвердить выбор?</DialogTitle>
             <DialogDescription>
-              В черновик бронирования попадут выбранные бытовки (
-              {selectedIds.size}). Остальные временные удержания будут сняты.
+              {presentation.mode === "REPLACEMENT"
+                ? `Выбранные ${selectedIds.length} бытовки заменят недоступные в текущем заказе в указанном порядке.`
+                : `В текущий заказ попадут выбранные бытовки (${selectedIds.length}) и мебель по каждой из них.`}
             </DialogDescription>
           </DialogHeader>
           {confirmMutation.isError ? (
-            <p className="text-sm text-destructive">
-              {confirmMutation.error instanceof Error
-                ? confirmMutation.error.message
-                : "Не удалось создать бронирование."}
-            </p>
+            <Alert variant="destructive">
+              <AlertTitle>Подтверждение не выполнено</AlertTitle>
+              <AlertDescription>
+                {confirmMutation.error instanceof Error
+                  ? confirmMutation.error.message
+                  : "Не удалось подтвердить выбор."}
+              </AlertDescription>
+            </Alert>
           ) : null}
           <DialogFooter>
             <Button
@@ -270,7 +874,7 @@ export function PublicClientPresentationPage() {
             </Button>
             <Button
               type="button"
-              disabled={confirmMutation.isPending}
+              disabled={confirmMutation.isPending || !canConfirm}
               onClick={() => confirmMutation.mutate()}
             >
               {confirmMutation.isPending ? (
@@ -288,13 +892,21 @@ export function PublicClientPresentationPage() {
 function PublicCabinCard({
   cabin,
   selected,
+  furniture,
+  equipmentAvailability,
   disabled,
-  onSelectedChange,
+  furnitureDisabled,
+  onToggle,
+  onAddFurniture,
 }: {
   cabin: PresentationCabin
   selected: boolean
+  furniture: Record<string, number>
+  equipmentAvailability: PresentationEquipmentAvailability[]
   disabled: boolean
-  onSelectedChange: (selected: boolean) => void
+  furnitureDisabled: boolean
+  onToggle: () => void
+  onAddFurniture: () => void
 }) {
   const passport = useMemo(
     () =>
@@ -321,6 +933,10 @@ function PublicCabinCard({
       large: { url: photo.contentUrl },
     },
   }))
+  const selectedFurniture = equipmentAvailability.flatMap((equipment) => {
+    const quantity = furniture[equipment.equipmentId] ?? 0
+    return quantity > 0 ? [`${equipment.equipmentName} — ${quantity}`] : []
+  })
 
   return (
     <article
@@ -352,21 +968,27 @@ function PublicCabinCard({
               Бытовка {cabin.number}
             </h3>
           </div>
-          <label
-            className={cn(
-              "flex cursor-pointer items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium",
-              selected && "border-primary bg-primary/5 text-primary",
-              disabled && "cursor-default opacity-60"
-            )}
-          >
-            <Checkbox
-              checked={selected}
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant={selected ? "secondary" : "default"}
               disabled={disabled}
-              aria-label={`Выбрать бытовку ${cabin.number}`}
-              onCheckedChange={(value) => onSelectedChange(value === true)}
-            />
-            {selected ? "Выбрана" : "Выбрать"}
-          </label>
+              aria-pressed={selected}
+              onClick={onToggle}
+            >
+              {selected ? "Убрать выбор" : "Выбрать"}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={disabled || !selected || furnitureDisabled}
+              onClick={onAddFurniture}
+            >
+              Добавить мебель
+            </Button>
+          </div>
         </div>
         <dl className="mt-6 grid grid-cols-2 gap-x-5 gap-y-4 text-sm">
           <Characteristic label="Габариты" value={cabin.dimensions} />
@@ -390,6 +1012,34 @@ function PublicCabinCard({
             <p className="mt-2 text-sm whitespace-pre-wrap">
               {cabin.characteristics}
             </p>
+          </div>
+        ) : null}
+        {selectedFurniture.length > 0 ? (
+          <div className="mt-5 flex flex-col gap-2">
+            <p className="text-xs font-medium text-muted-foreground">
+              Добавленная мебель
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {selectedFurniture.map((label) => (
+                <Badge key={label} variant="secondary">
+                  {label}
+                </Badge>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {cabin.currentContents.length > 0 ? (
+          <div className="mt-5 flex flex-col gap-2">
+            <p className="text-xs font-medium text-muted-foreground">
+              Уже находится в бытовке
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {cabin.currentContents.map((item) => (
+                <Badge key={item.equipmentId} variant="outline">
+                  {item.equipmentName ?? "Мебель"} — {item.quantity}
+                </Badge>
+              ))}
+            </div>
           </div>
         ) : null}
         {cabin.tags.length > 0 ? (
@@ -433,7 +1083,7 @@ function PublicState({
     <main className="flex min-h-svh flex-col items-center justify-center gap-4 bg-muted/30 p-6 text-center">
       <div className="flex size-12 items-center justify-center rounded-2xl bg-background shadow-sm">
         <HugeiconsIcon
-          icon={loading ? Loading03Icon : Clock01Icon}
+          icon={loading ? Loading03Icon : Calendar03Icon}
           className={cn("size-6", loading && "animate-spin")}
         />
       </div>
@@ -442,14 +1092,78 @@ function PublicState({
   )
 }
 
+function calendarDateValue(value: Date) {
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, "0")
+  const day = String(value.getDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
+}
+
+function formatCalendarDate(value: string) {
+  const [year, month, day] = value.split("-").map(Number)
+  const date = new Date(year, month - 1, day)
+  return Number.isNaN(date.getTime())
+    ? value
+    : new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium" }).format(date)
+}
+
+function parseCoordinates(value: string) {
+  const normalized = value.trim()
+  if (!normalized) {
+    return { latitude: null, longitude: null, error: null }
+  }
+  const pair =
+    /^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*,\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))$/.exec(
+      normalized
+    )
+  if (!pair) {
+    return {
+      latitude: null,
+      longitude: null,
+      error: "Укажите широту и долготу в формате «55.75, 37.61».",
+    }
+  }
+  const latitude = Number(pair[1])
+  const longitude = Number(pair[2])
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
+    return {
+      latitude: null,
+      longitude: null,
+      error: "Широта должна быть числом от −90 до 90.",
+    }
+  }
+  if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+    return {
+      latitude: null,
+      longitude: null,
+      error: "Долгота должна быть числом от −180 до 180.",
+    }
+  }
+  return { latitude, longitude, error: null }
+}
+
+function formatRentalMonths(value: number) {
+  const lastTwo = value % 100
+  const last = value % 10
+  if (lastTwo >= 11 && lastTwo <= 14) return `${value} месяцев`
+  if (last === 1) return `${value} месяц`
+  if ([2, 3, 4].includes(last)) return `${value} месяца`
+  return `${value} месяцев`
+}
+
 function formatPublicDate(value: string) {
   const date = new Date(value)
   return Number.isNaN(date.getTime())
     ? value
-    : new Intl.DateTimeFormat("ru-RU", {
-        dateStyle: "medium",
-        timeStyle: "short",
-      }).format(date)
+    : new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium" }).format(date)
+}
+
+function formatDesiredWindow(window: DesiredDeliveryWindow) {
+  const dates =
+    window.startDate === window.endDate
+      ? window.startDate
+      : `${window.startDate} — ${window.endDate}`
+  return dates
 }
 
 function formatCabinCount(count: number) {

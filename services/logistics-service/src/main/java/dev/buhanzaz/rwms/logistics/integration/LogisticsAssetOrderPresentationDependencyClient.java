@@ -61,7 +61,9 @@ final class LogisticsAssetOrderPresentationDependencyClient {
             .map(
                 candidate ->
                     new OrderUnitCandidate(
-                        candidate.reservationId(), candidate.added(), orderRentalItem(candidate.unit())))
+                        candidate.reservationId(),
+                        candidate.added(),
+                        orderRentalItem(candidate.unit())))
             .toList(),
         response.page(),
         response.size(),
@@ -113,11 +115,7 @@ final class LogisticsAssetOrderPresentationDependencyClient {
   }
 
   OrderUnitReservation releaseOrderUnit(
-      UUID idempotencyKey,
-      UUID orderId,
-      UUID unitId,
-      UUID actorSubjectId,
-      String actorRole) {
+      UUID idempotencyKey, UUID orderId, UUID unitId, UUID actorSubjectId, String actorRole) {
     return orderReservation(
         transport.post(
             assetBase + "/orders/" + orderId + "/units/" + unitId + "/release",
@@ -147,13 +145,33 @@ final class LogisticsAssetOrderPresentationDependencyClient {
         .toList();
   }
 
+  List<EquipmentWarehouseAvailability> readLogisticsEquipmentAvailability(UUID warehouseId) {
+    String uri =
+        UriComponentsBuilder.fromUriString(assetBase + "/equipment-availability")
+            .queryParam("warehouseId", warehouseId)
+            .build()
+            .encode()
+            .toUriString();
+    return transport
+        .getList(
+            uri,
+            new ParameterizedTypeReference<List<EquipmentWarehouseResponse>>() {},
+            ASSET_CLIENT,
+            ASSET_SCOPE,
+            "Asset-service returned an empty equipment availability response",
+            ORDER)
+        .stream()
+        .map(LogisticsAssetOrderPresentationDependencyClient::equipmentAvailability)
+        .toList();
+  }
+
   List<OrderEquipmentReservation> replaceOrderEquipmentReservations(
       UUID idempotencyKey,
       UUID orderId,
       UUID warehouseId,
       UUID actorSubjectId,
       String actorRole,
-      List<OrderEquipmentRequirement> requirements) {
+      List<OrderUnitEquipmentRequirements> units) {
     List<OrderEquipmentReservationResponse> response =
         transport.putList(
             assetBase + "/orders/" + orderId + "/equipment-reservations",
@@ -162,14 +180,7 @@ final class LogisticsAssetOrderPresentationDependencyClient {
                 warehouseId,
                 actorSubjectId,
                 actorRole,
-                requirements == null
-                    ? null
-                    : requirements.stream()
-                        .map(
-                            requirement ->
-                                new OrderEquipmentRequirementRequest(
-                                    requirement.equipmentId(), requirement.quantity()))
-                        .toList()),
+                units == null ? null : orderUnitEquipmentRequirementRequests(units)),
             new ParameterizedTypeReference<List<OrderEquipmentReservationResponse>>() {},
             ASSET_CLIENT,
             ASSET_SCOPE,
@@ -182,16 +193,18 @@ final class LogisticsAssetOrderPresentationDependencyClient {
       UUID orderId,
       UUID warehouseId,
       UUID unitId,
+      UUID replacementForRentalItemId,
       List<OrderEquipmentRequirement> unitRequirements,
-      List<OrderEquipmentRequirement> orderRequirements) {
+      List<OrderUnitEquipmentRequirements> units) {
     OrderFurnitureMovementPlanResponse response =
         transport.postWithoutIdempotency(
             assetBase + "/orders/" + orderId + "/equipment-movement-plan",
             new OrderFurnitureMovementPlanRequest(
                 warehouseId,
                 unitId,
+                replacementForRentalItemId,
                 orderEquipmentRequirementRequests(unitRequirements),
-                orderEquipmentRequirementRequests(orderRequirements)),
+                orderUnitEquipmentRequirementRequests(units)),
             OrderFurnitureMovementPlanResponse.class,
             ASSET_CLIENT,
             ASSET_SCOPE,
@@ -200,10 +213,71 @@ final class LogisticsAssetOrderPresentationDependencyClient {
     return orderFurnitureMovementPlan(response);
   }
 
-  CabinFurnitureMovementPlan planCabinFurnitureMovements(
+  OrderUnitsReplacementReceipt replaceOrderUnits(
+      UUID idempotencyKey,
+      UUID orderId,
       UUID warehouseId,
-      UUID rentalItemId,
-      List<CabinFurnitureRequirement> requirements) {
+      UUID presentationId,
+      UUID actorSubjectId,
+      String actorRole,
+      List<OrderUnitEquipmentRequirements> units,
+      List<OrderUnitReplacement> replacements) {
+    OrderUnitsReplacementReceiptResponse response =
+        transport.post(
+            assetBase + "/orders/" + orderId + "/units/replace",
+            idempotencyKey,
+            new ReplaceOrderUnitsRequest(
+                warehouseId,
+                presentationId,
+                actorSubjectId,
+                actorRole,
+                orderUnitEquipmentRequirementRequests(units),
+                replacements.stream()
+                    .map(LogisticsAssetOrderPresentationDependencyClient::replacementRequest)
+                    .toList()),
+            OrderUnitsReplacementReceiptResponse.class,
+            ASSET_CLIENT,
+            ASSET_SCOPE,
+            "Asset-service returned an empty order-units replacement receipt",
+            ORDER);
+    if (response.replacements() == null) {
+      throw malformed("Asset-service returned an invalid order-units replacement receipt");
+    }
+    return new OrderUnitsReplacementReceipt(
+        response.replacements().stream()
+            .map(LogisticsAssetOrderPresentationDependencyClient::orderUnitReplacementReceipt)
+            .toList(),
+        response.replayed());
+  }
+
+  private static OrderUnitReplacementRequest replacementRequest(OrderUnitReplacement value) {
+    if (value == null || value.rentalItemId() == null || value.replacementRentalItemId() == null) {
+      throw malformed("Order-unit replacement is invalid");
+    }
+    OrderUnitReplacementMovement movement = value.movement();
+    return new OrderUnitReplacementRequest(
+        value.rentalItemId(),
+        value.replacementRentalItemId(),
+        movement == null
+            ? null
+            : new OrderUnitReplacementMovementBundleRequest(
+                movement.movementId(),
+                movement.reservedUntil(),
+                movement.lines().stream()
+                    .map(
+                        line ->
+                            new OrderUnitReplacementMovementLineRequest(
+                                line.lineId(),
+                                line.equipmentId(),
+                                line.sourceBalanceId(),
+                                line.expectedSourceBalanceVersion(),
+                                line.targetRentalItemId(),
+                                line.quantity()))
+                    .toList()));
+  }
+
+  CabinFurnitureMovementPlan planCabinFurnitureMovements(
+      UUID warehouseId, UUID rentalItemId, List<CabinFurnitureRequirement> requirements) {
     CabinFurnitureMovementPlanResponse response =
         transport.postWithoutIdempotency(
             assetBase + "/rental-items/" + rentalItemId + "/furniture-movement-plan",
@@ -295,8 +369,7 @@ final class LogisticsAssetOrderPresentationDependencyClient {
         response.totalPages());
   }
 
-  CabinSearchResult searchAvailableCabins(
-      UUID downstreamIdempotencyKey, String exactRequestBody) {
+  CabinSearchResult searchAvailableCabins(UUID downstreamIdempotencyKey, String exactRequestBody) {
     CabinSearchResponse response =
         transport.postExactJson(
             assetBase + "/cabin-searches",
@@ -311,9 +384,7 @@ final class LogisticsAssetOrderPresentationDependencyClient {
         || response.expiresAt() == null
         || response.groups() == null
         || response.groups().stream()
-            .anyMatch(
-                group ->
-                    group == null || group.group() == null || group.cabins() == null)) {
+            .anyMatch(group -> group == null || group.group() == null || group.cabins() == null)) {
       throw malformed("Asset-service returned an invalid cabin search result");
     }
     return new CabinSearchResult(
@@ -370,8 +441,7 @@ final class LogisticsAssetOrderPresentationDependencyClient {
         response.items().stream()
             .map(
                 item ->
-                    new CabinAvailabilityItem(
-                        item.rentalItemId(), item.available(), item.reason()))
+                    new CabinAvailabilityItem(item.rentalItemId(), item.available(), item.reason()))
             .toList());
   }
 
@@ -419,7 +489,7 @@ final class LogisticsAssetOrderPresentationDependencyClient {
             ASSET_SCOPE,
             "Dependency returned an empty response",
             DEFAULT);
-    return presentationHolds(response);
+    return presentationHolds(response, true);
   }
 
   PresentationHolds replacePresentationHoldsExact(
@@ -434,7 +504,7 @@ final class LogisticsAssetOrderPresentationDependencyClient {
             ASSET_SCOPE,
             "Dependency returned an empty response",
             DEFAULT);
-    return presentationHolds(response);
+    return presentationHolds(response, true);
   }
 
   PresentationHolds readPresentationHolds(UUID presentationId) {
@@ -455,14 +525,11 @@ final class LogisticsAssetOrderPresentationDependencyClient {
             ASSET_SCOPE,
             "Dependency returned an empty response",
             DEFAULT);
-    return presentationHolds(response);
+    return presentationHolds(response, false);
   }
 
   PresentationHolds releasePresentationHolds(
-      UUID idempotencyKey,
-      UUID presentationId,
-      UUID actorSubjectId,
-      String actorRole) {
+      UUID idempotencyKey, UUID presentationId, UUID actorSubjectId, String actorRole) {
     PresentationHoldsResponse response =
         transport.post(
             assetBase + "/presentations/" + presentationId + "/holds/release",
@@ -473,7 +540,7 @@ final class LogisticsAssetOrderPresentationDependencyClient {
             ASSET_SCOPE,
             "Dependency returned an empty response",
             DEFAULT);
-    return presentationHolds(response);
+    return presentationHolds(response, false);
   }
 
   PresentationHolds releasePresentationHoldsExact(
@@ -488,7 +555,7 @@ final class LogisticsAssetOrderPresentationDependencyClient {
             ASSET_SCOPE,
             "Dependency returned an empty response",
             DEFAULT);
-    return presentationHolds(response);
+    return presentationHolds(response, false);
   }
 
   ConvertedPresentationHolds convertPresentationHolds(
@@ -500,7 +567,8 @@ final class LogisticsAssetOrderPresentationDependencyClient {
       UUID clientId,
       String tenantSnapshot,
       UUID actorSubjectId,
-      String actorRole) {
+      String actorRole,
+      List<OrderUnitEquipmentRequirements> units) {
     ConvertedPresentationHoldsResponse response =
         transport.post(
             assetBase + "/presentations/" + presentationId + "/holds/convert",
@@ -512,7 +580,8 @@ final class LogisticsAssetOrderPresentationDependencyClient {
                 clientId,
                 tenantSnapshot,
                 actorSubjectId,
-                actorRole),
+                actorRole,
+                units == null ? null : orderUnitEquipmentRequirementRequests(units)),
             ConvertedPresentationHoldsResponse.class,
             ASSET_CLIENT,
             ASSET_SCOPE,
@@ -524,7 +593,8 @@ final class LogisticsAssetOrderPresentationDependencyClient {
         response.reservations().stream()
             .map(LogisticsAssetOrderPresentationDependencyClient::orderReservation)
             .toList(),
-        List.copyOf(response.releasedRentalItemIds()));
+        List.copyOf(response.releasedRentalItemIds()),
+        orderEquipmentReservations(response.equipmentReservations()));
   }
 
   private static OrderUnitReservation orderReservation(OrderUnitReservationResponse response) {
@@ -593,6 +663,44 @@ final class LogisticsAssetOrderPresentationDependencyClient {
         .toList();
   }
 
+  private static List<OrderUnitEquipmentRequirementsRequest> orderUnitEquipmentRequirementRequests(
+      List<OrderUnitEquipmentRequirements> units) {
+    if (units == null) {
+      throw malformed("Order unit equipment requirements are required");
+    }
+    return units.stream()
+        .map(
+            unit -> {
+              if (unit == null || unit.rentalItemId() == null) {
+                throw malformed("Order unit equipment requirements are invalid");
+              }
+              return new OrderUnitEquipmentRequirementsRequest(
+                  unit.rentalItemId(), orderEquipmentRequirementRequests(unit.requirements()));
+            })
+        .toList();
+  }
+
+  private static EquipmentWarehouseAvailability equipmentAvailability(
+      EquipmentWarehouseResponse response) {
+    if (response == null
+        || response.equipment() == null
+        || response.totals() == null
+        || response.equipment().id() == null
+        || response.equipment().name() == null
+        || response.equipment().name().isBlank()
+        || response.totals().availableQuantity() < 0
+        || response.equipment().maximumPerCabin() != null
+            && response.equipment().maximumPerCabin() < 1) {
+      throw malformed("Asset-service returned invalid equipment availability");
+    }
+    return new EquipmentWarehouseAvailability(
+        response.equipment().id(),
+        response.equipment().name(),
+        response.equipment().active(),
+        response.totals().availableQuantity(),
+        response.equipment().maximumPerCabin());
+  }
+
   private static List<OrderEquipmentReservation> orderEquipmentReservations(
       List<OrderEquipmentReservationResponse> response) {
     if (response == null) {
@@ -615,7 +723,8 @@ final class LogisticsAssetOrderPresentationDependencyClient {
               value.equipmentId(),
               value.equipmentName(),
               value.quantity(),
-              value.availableQuantity()));
+              value.availableQuantity(),
+              value.maximumPerCabin()));
     }
     return List.copyOf(values);
   }
@@ -659,6 +768,60 @@ final class LogisticsAssetOrderPresentationDependencyClient {
     }
     return new OrderFurnitureMovementPlan(
         response.orderId(), response.rentalItemId(), response.unitNumber(), List.copyOf(lines));
+  }
+
+  private static OrderUnitReplacementReceipt orderUnitReplacementReceipt(
+      OrderUnitReplacementReceiptResponse response) {
+    if (response == null
+        || response.releasedReservation() == null
+        || response.replacementReservation() == null
+        || response.movementReservations() == null) {
+      throw malformed("Asset-service returned an invalid order-unit replacement receipt");
+    }
+    return new OrderUnitReplacementReceipt(
+        orderReservation(response.releasedReservation()),
+        orderReservation(response.replacementReservation()),
+        response.movementReservations().stream()
+            .map(LogisticsAssetOrderPresentationDependencyClient::movementReservation)
+            .toList(),
+        response.contentReady());
+  }
+
+  private static EquipmentMovementReservation movementReservation(
+      EquipmentMovementReservationResponse response) {
+    if (response == null
+        || response.reservationId() == null
+        || response.version() < 0
+        || !"LOGISTICS_EQUIPMENT_MOVEMENT".equals(response.ownerType())
+        || response.movementId() == null
+        || response.lineId() == null
+        || response.equipmentId() == null
+        || response.equipmentName() == null
+        || response.equipmentName().isBlank()
+        || response.sourceBalanceId() == null
+        || response.sourceWarehouseId() == null
+        || response.sourceLocationKind() == null
+        || response.quantity() < 1
+        || response.state() == null
+        || response.reservedUntil() == null) {
+      throw malformed("Asset-service returned an invalid equipment movement reservation");
+    }
+    return new EquipmentMovementReservation(
+        response.reservationId(),
+        response.version(),
+        response.ownerType(),
+        response.movementId(),
+        response.lineId(),
+        response.equipmentId(),
+        response.equipmentName(),
+        response.sourceBalanceId(),
+        response.sourceWarehouseId(),
+        response.sourceRentalItemId(),
+        response.sourceLocationKind(),
+        response.quantity(),
+        response.state(),
+        response.reservedUntil(),
+        response.executedAt());
   }
 
   private static List<CabinFurnitureRequirementRequest> cabinFurnitureRequirementRequests(
@@ -741,6 +904,7 @@ final class LogisticsAssetOrderPresentationDependencyClient {
         || response.passport() == null
         || response.tags() == null
         || response.tags().stream().anyMatch(java.util.Objects::isNull)
+        || response.contents() == null
         || response.updatedAt() == null) {
       throw malformed("Asset-service returned an invalid available cabin");
     }
@@ -758,6 +922,15 @@ final class LogisticsAssetOrderPresentationDependencyClient {
         response.linoleum(),
         Collections.unmodifiableMap(new LinkedHashMap<>(response.passport())),
         List.copyOf(response.tags()),
+        response.contents().stream()
+            .map(
+                content ->
+                    new OrderEquipmentContent(
+                        content.equipmentId(),
+                        content.equipmentName(),
+                        content.quantity(),
+                        content.locationKind()))
+            .toList(),
         response.updatedAt());
   }
 
@@ -765,11 +938,15 @@ final class LogisticsAssetOrderPresentationDependencyClient {
     return "FREE".equals(status);
   }
 
-  private static PresentationHolds presentationHolds(PresentationHoldsResponse response) {
+  private static PresentationHolds presentationHolds(
+      PresentationHoldsResponse response, boolean requireCabins) {
     if (response == null
         || response.presentationId() == null
         || response.holds() == null
-        || response.holds().stream().anyMatch(java.util.Objects::isNull)) {
+        || response.holds().stream().anyMatch(java.util.Objects::isNull)
+        || (requireCabins
+            && (response.cabins() == null
+                || response.cabins().stream().anyMatch(java.util.Objects::isNull)))) {
       throw malformed("Asset-service returned invalid presentation holds");
     }
     return new PresentationHolds(
@@ -789,7 +966,12 @@ final class LogisticsAssetOrderPresentationDependencyClient {
                         hold.orderId(),
                         hold.createdAt(),
                         hold.endedAt()))
-            .toList());
+            .toList(),
+        response.cabins() == null
+            ? List.of()
+            : response.cabins().stream()
+                .map(LogisticsAssetOrderPresentationDependencyClient::availableCabin)
+                .toList());
   }
 
   /**
@@ -811,6 +993,10 @@ final class LogisticsAssetOrderPresentationDependencyClient {
   /** Requested quantity of one equipment kind in an order or furniture-movement plan. */
   private record OrderEquipmentRequirementRequest(UUID equipmentId, long quantity) {}
 
+  /** Complete desired equipment composition for one order cabin. */
+  private record OrderUnitEquipmentRequirementsRequest(
+      UUID rentalItemId, List<OrderEquipmentRequirementRequest> requirements) {}
+
   /**
    * Replacement command declaring the complete desired equipment reservation set for an order in
    * one warehouse.
@@ -819,11 +1005,15 @@ final class LogisticsAssetOrderPresentationDependencyClient {
       UUID warehouseId,
       UUID actorSubjectId,
       String actorRole,
-      List<OrderEquipmentRequirementRequest> requirements) {}
+      List<OrderUnitEquipmentRequirementsRequest> units) {}
 
   /** Asset-service resolution of an equipment requirement against current available quantity. */
   private record OrderEquipmentReservationResponse(
-      UUID equipmentId, String equipmentName, long quantity, long availableQuantity) {}
+      UUID equipmentId,
+      String equipmentName,
+      long quantity,
+      long availableQuantity,
+      Integer maximumPerCabin) {}
 
   /**
    * Planning request that compares a selected cabin's current equipment with both cabin and
@@ -832,8 +1022,78 @@ final class LogisticsAssetOrderPresentationDependencyClient {
   private record OrderFurnitureMovementPlanRequest(
       UUID warehouseId,
       UUID rentalItemId,
+      UUID replacementForRentalItemId,
       List<OrderEquipmentRequirementRequest> requirements,
-      List<OrderEquipmentRequirementRequest> orderRequirements) {}
+      List<OrderUnitEquipmentRequirementsRequest> units) {}
+
+  /** One exact line of an existing furniture movement task supplied to replacement. */
+  private record OrderUnitReplacementMovementLineRequest(
+      UUID lineId,
+      UUID equipmentId,
+      UUID sourceBalanceId,
+      long expectedSourceBalanceVersion,
+      UUID targetRentalItemId,
+      long quantity) {}
+
+  /** Existing movement identity and its exact source-fenced lines. */
+  private record OrderUnitReplacementMovementBundleRequest(
+      UUID movementId,
+      OffsetDateTime reservedUntil,
+      List<OrderUnitReplacementMovementLineRequest> lines) {}
+
+  /** One ordered replacement pair in the atomic asset batch. */
+  private record OrderUnitReplacementRequest(
+      UUID rentalItemId,
+      UUID replacementRentalItemId,
+      OrderUnitReplacementMovementBundleRequest movement) {}
+
+  /** Atomic asset replacement command carrying all pairs and post-swap composition. */
+  private record ReplaceOrderUnitsRequest(
+      UUID warehouseId,
+      UUID presentationId,
+      UUID actorSubjectId,
+      String actorRole,
+      List<OrderUnitEquipmentRequirementsRequest> units,
+      List<OrderUnitReplacementRequest> replacements) {}
+
+  /** Asset reservation pre-created for one existing logistics movement-task line. */
+  private record EquipmentMovementReservationResponse(
+      UUID reservationId,
+      long version,
+      String ownerType,
+      UUID movementId,
+      UUID lineId,
+      UUID equipmentId,
+      String equipmentName,
+      UUID sourceBalanceId,
+      UUID sourceWarehouseId,
+      UUID sourceRentalItemId,
+      String sourceLocationKind,
+      long quantity,
+      String state,
+      OffsetDateTime reservedUntil,
+      OffsetDateTime executedAt) {}
+
+  /** Atomic order-unit replacement receipt returned by asset-service. */
+  private record OrderUnitReplacementReceiptResponse(
+      OrderUnitReservationResponse releasedReservation,
+      OrderUnitReservationResponse replacementReservation,
+      List<EquipmentMovementReservationResponse> movementReservations,
+      boolean contentReady) {}
+
+  /** Complete atomic multi-cabin replacement receipt. */
+  private record OrderUnitsReplacementReceiptResponse(
+      List<OrderUnitReplacementReceiptResponse> replacements, boolean replayed) {}
+
+  /** Minimal equipment catalogue shape needed for live presentation availability. */
+  private record EquipmentResponse(UUID id, String name, boolean active, Integer maximumPerCabin) {}
+
+  /** Minimal warehouse totals shape needed for live presentation availability. */
+  private record EquipmentTotalsResponse(long availableQuantity) {}
+
+  /** Asset-owned warehouse equipment availability row. */
+  private record EquipmentWarehouseResponse(
+      EquipmentResponse equipment, EquipmentTotalsResponse totals) {}
 
   /**
    * One remotely planned stock movement, including the optimistic source-balance version and exact
@@ -885,9 +1145,7 @@ final class LogisticsAssetOrderPresentationDependencyClient {
 
   /** Complete asset-service furniture movement plan for one cabin. */
   private record CabinFurnitureMovementPlanResponse(
-      UUID rentalItemId,
-      String unitNumber,
-      List<CabinFurnitureMovementPlanLineResponse> lines) {}
+      UUID rentalItemId, String unitNumber, List<CabinFurnitureMovementPlanLineResponse> lines) {}
 
   /** Equipment content embedded in an order-facing cabin snapshot. */
   private record OrderEquipmentContentResponse(
@@ -955,8 +1213,7 @@ final class LogisticsAssetOrderPresentationDependencyClient {
       List<CabinTypeDimensionRelationResponse> typeDimensions) {}
 
   /** Exact asset catalog relation between one cabin type and its available dimensions. */
-  private record CabinTypeDimensionRelationResponse(
-      String cabinType, List<String> dimensions) {}
+  private record CabinTypeDimensionRelationResponse(String cabinType, List<String> dimensions) {}
 
   /**
    * Asset-service availability snapshot for a cabin returned to presentation and order search
@@ -976,6 +1233,7 @@ final class LogisticsAssetOrderPresentationDependencyClient {
       Boolean linoleum,
       Map<String, Object> passport,
       List<String> tags,
+      List<OrderEquipmentContentResponse> contents,
       OffsetDateTime updatedAt) {}
 
   /** Cabins matched by asset-service to one requested presentation search group. */
@@ -1039,7 +1297,10 @@ final class LogisticsAssetOrderPresentationDependencyClient {
 
   /** Complete current hold set and expiry for one client presentation. */
   private record PresentationHoldsResponse(
-      UUID presentationId, OffsetDateTime expiresAt, List<PresentationHoldResponse> holds) {}
+      UUID presentationId,
+      OffsetDateTime expiresAt,
+      List<PresentationHoldResponse> holds,
+      List<AvailableCabinResponse> cabins) {}
 
   /**
    * Conversion command selecting presentation-held cabins for an order while carrying client,
@@ -1052,7 +1313,8 @@ final class LogisticsAssetOrderPresentationDependencyClient {
       UUID clientId,
       String tenantSnapshot,
       UUID actorSubjectId,
-      String actorRole) {}
+      String actorRole,
+      List<OrderUnitEquipmentRequirementsRequest> units) {}
 
   /**
    * Conversion outcome containing created order reservations and cabins released from the
@@ -1062,5 +1324,6 @@ final class LogisticsAssetOrderPresentationDependencyClient {
       UUID presentationId,
       UUID orderId,
       List<OrderUnitReservationResponse> reservations,
-      List<UUID> releasedRentalItemIds) {}
+      List<UUID> releasedRentalItemIds,
+      List<OrderEquipmentReservationResponse> equipmentReservations) {}
 }

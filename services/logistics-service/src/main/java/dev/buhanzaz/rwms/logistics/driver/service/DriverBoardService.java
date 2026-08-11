@@ -5,8 +5,8 @@ import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardCa
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardDateColumnResponse;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardLane;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardRepairPlaceCardResponse;
-import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverTaskAudienceResponse;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardResponse;
+import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverTaskAudienceResponse;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.MoveDriverBoardTaskRequest;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.ReturnCapitalRepairRequest;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.ScheduleCapitalRepairRequest;
@@ -34,7 +34,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Builds the authenticated driver board from logistics-owned task state and assignment scope.
+ * Builds the authenticated driver board from logistics-owned task state and assignment scope, and
+ * moves only whole grouped document trips. A locked local pre-start check runs before task-board;
+ * after remote success the workflow store synchronizes the owning document date recoverably.
  */
 @Service
 @RequiredArgsConstructor
@@ -49,6 +51,7 @@ public class DriverBoardService {
   private final DriverTaskProcessor processor;
   private final DriverQueueScheduler scheduler;
   private final DriverTaskService driverTaskService;
+  private final DriverTripProjectionService tripProjection;
   private final LogisticsTransactionLock transactionLock;
 
   public DriverBoardResponse board(UUID warehouseId) {
@@ -57,8 +60,9 @@ public class DriverBoardService {
     LogisticsDependencyGateway.RepairPlaceProjection places =
         dependencies.readRepairPlaces(warehouseId);
     Map<UUID, DriverLogisticsTask> localTasks = localTasks(warehouseId);
-    List<DriverBoardRepairPlaceCardResponse> repairPlaces =
-        repairPlaces(warehouseId, places);
+    Map<UUID, dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.DriverTripDetailsResponse>
+        tripDetails = tripProjection.boardDetails(localTasks.values());
+    List<DriverBoardRepairPlaceCardResponse> repairPlaces = repairPlaces(warehouseId, places);
     List<CapitalRepairCardResponse> capitalRepairs =
         capitalRepairs(warehouseId, localTasks.values());
 
@@ -76,7 +80,11 @@ public class DriverBoardService {
         places.overCapacity(),
         repairPlaces,
         board.current().stream()
-            .map(value -> card(value, localTasks.get(value.externalTaskId())))
+            .map(
+                value -> {
+                  DriverLogisticsTask task = localTasks.get(value.externalTaskId());
+                  return card(value, task, task == null ? null : tripDetails.get(task.getId()));
+                })
             .toList(),
         board.dates().stream()
             .map(
@@ -84,37 +92,54 @@ public class DriverBoardService {
                     new DriverBoardDateColumnResponse(
                         column.date(),
                         column.tasks().stream()
-                            .map(value -> card(value, localTasks.get(value.externalTaskId())))
+                            .map(
+                                value -> {
+                                  DriverLogisticsTask task = localTasks.get(value.externalTaskId());
+                                  return card(
+                                      value,
+                                      task,
+                                      task == null ? null : tripDetails.get(task.getId()));
+                                })
                             .toList()))
             .toList(),
         capitalRepairs);
   }
 
+  /**
+   * Moves a whole board task. The locked local pre-start check precedes every task-board read or
+   * command, then retains the local task/document locks across task-board's version-fenced command.
+   * This is an intentional bounded remote-under-lock exception: releasing the document lock before
+   * the remote command would let a locally started trip move while its task-board entry still
+   * reports {@code WAITING}. The dependency client applies the configured connect/read deadlines
+   * (2s/5s by default); a remote success followed by local rollback is converged by the existing
+   * task status poll through {@link DriverTaskWorkflowStore#confirmStatus(UUID,
+   * LogisticsDependencyGateway.DriverBoardTask)}.
+   */
   @Transactional
-  public DriverBoardCardResponse move(
-      UUID externalTaskId, MoveDriverBoardTaskRequest request) {
+  public DriverBoardCardResponse move(UUID externalTaskId, MoveDriverBoardTaskRequest request) {
     transactionLock.acquire("driver-queue:" + request.warehouseId());
     DriverLogisticsTask local =
-        tasks.findForUpdateByExternalTaskId(externalTaskId)
+        tasks
+            .findForUpdateByExternalTaskId(externalTaskId)
             .orElseThrow(
                 () ->
                     new LogisticsConflictException(
                         "Для задания отсутствует единый логистический workflow"));
     if (!request.warehouseId().equals(local.getWarehouseId())) {
-      throw new LogisticsConflictException(
-          "Задание не принадлежит выбранному складу");
+      throw new LogisticsConflictException("Задание не принадлежит выбранному складу");
+    }
+    if (local.getSourceType() == DriverTaskSourceType.LOGISTICS_DOCUMENT) {
+      workflowStore.requireGroupedDocumentMovePreStart(local.getId());
     }
     LogisticsDependencyGateway.DriverBoardTask current =
         dependencies.readDriverTask(externalTaskId);
     if (!request.warehouseId().equals(current.warehouseId())) {
-      throw new LogisticsConflictException(
-          "Задание не принадлежит выбранному складу");
+      throw new LogisticsConflictException("Задание не принадлежит выбранному складу");
     }
     requirePublicMoveScope(local, current, request);
     LocalDate today = warehouseToday(request.warehouseId());
     if (request.targetDate().isBefore(today)) {
-      throw new IllegalArgumentException(
-          "Дата логистического задания не может быть в прошлом");
+      throw new IllegalArgumentException("Дата логистического задания не может быть в прошлом");
     }
     if (request.targetLane() == DriverBoardLane.CURRENT) {
       if (!"CURRENT".equals(current.lane())
@@ -161,9 +186,9 @@ public class DriverBoardService {
   }
 
   /**
-   * Creates the capital-to-production movement directly in the selected calendar lane. The
-   * browser sends one idempotent command; registration and queue insertion stay in the
-   * logistics-owned workflow.
+   * Creates the capital-to-production movement directly in the selected calendar lane. The browser
+   * sends one idempotent command; registration and queue insertion stay in the logistics-owned
+   * workflow.
    */
   @Transactional
   public CapitalRepairScheduleResult scheduleCapitalRepair(
@@ -238,18 +263,17 @@ public class DriverBoardService {
   }
 
   @Transactional
-  public void returnToCapitalRepairs(
-      UUID externalTaskId, ReturnCapitalRepairRequest request) {
+  public void returnToCapitalRepairs(UUID externalTaskId, ReturnCapitalRepairRequest request) {
     transactionLock.acquire("driver-queue:" + request.warehouseId());
     DriverLogisticsTask local =
-        tasks.findForUpdateByExternalTaskId(externalTaskId)
+        tasks
+            .findForUpdateByExternalTaskId(externalTaskId)
             .orElseThrow(
                 () ->
                     new LogisticsConflictException(
                         "Для задания отсутствует единый логистический workflow"));
     if (!request.warehouseId().equals(local.getWarehouseId())) {
-      throw new LogisticsConflictException(
-          "Задание не принадлежит выбранному складу");
+      throw new LogisticsConflictException("Задание не принадлежит выбранному складу");
     }
     if (local.getSourceType() != DriverTaskSourceType.CAPITAL_REPAIR
         || local.getKind() != DriverTaskKind.CAPITAL_TO_PRODUCTION) {
@@ -280,8 +304,7 @@ public class DriverBoardService {
       MoveDriverBoardTaskRequest request) {
     if (current.taskVersion() != request.expectedTaskVersion()
         || current.entryVersion() != request.expectedEntryVersion()) {
-      throw new LogisticsConflictException(
-          "Очередь перемещений уже изменилась");
+      throw new LogisticsConflictException("Очередь перемещений уже изменилась");
     }
     LogisticsDependencyGateway.DriverBoardTask promoted = current;
     if (!"CURRENT".equals(current.lane())) {
@@ -298,8 +321,7 @@ public class DriverBoardService {
             request.targetIndex(),
             null);
     workflowStore.confirmStatus(local.getId(), moved);
-    DriverLogisticsTask refreshed =
-        tasks.findById(local.getId()).orElseThrow();
+    DriverLogisticsTask refreshed = tasks.findById(local.getId()).orElseThrow();
     return card(moved, refreshed);
   }
 
@@ -310,8 +332,7 @@ public class DriverBoardService {
           .atZone(ZoneId.of(dependencies.warehouseTimeZoneAt(warehouseId, at).timeZone()))
           .toLocalDate();
     } catch (RuntimeException exception) {
-      throw new LogisticsConflictException(
-          "Для склада не настроен корректный часовой пояс");
+      throw new LogisticsConflictException("Для склада не настроен корректный часовой пояс");
     }
   }
 
@@ -409,9 +430,16 @@ public class DriverBoardService {
     return List.copyOf(result);
   }
 
+  private DriverBoardCardResponse card(
+      LogisticsDependencyGateway.DriverBoardTask board, DriverLogisticsTask local) {
+    return card(board, local, local == null ? null : tripProjection.details(local.getId()));
+  }
+
   private static DriverBoardCardResponse card(
       LogisticsDependencyGateway.DriverBoardTask board,
-      DriverLogisticsTask local) {
+      DriverLogisticsTask local,
+      dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.DriverTripDetailsResponse
+          tripDetails) {
     return new DriverBoardCardResponse(
         local == null ? null : local.getId(),
         board.externalTaskId(),
@@ -434,36 +462,35 @@ public class DriverBoardService {
         board.lane(),
         board.priority(),
         board.pinned(),
-        board.queuePosition());
+        board.queuePosition(),
+        tripDetails);
   }
 
   /**
-   * Restricts document delivery work to ordering inside its current driver/date/lane section.
-   * Movement work retains the existing broader date/lane scheduling policy, but the public
-   * command never changes either kind's server-owned audience.
+   * Keeps a document trip's server-owned driver audience immutable while the ordinary board move
+   * command reorders the whole task, including all grouped cabin members, across supported dates
+   * and lanes.
    */
   private static void requirePublicMoveScope(
       DriverLogisticsTask task,
       LogisticsDependencyGateway.DriverBoardTask current,
       MoveDriverBoardTaskRequest request) {
     if (task.getKind() != DriverTaskKind.SHIPMENT
-        && task.getKind() != DriverTaskKind.RETURN) {
+        && task.getKind() != DriverTaskKind.RETURN
+        && task.getKind() != DriverTaskKind.TRANSFER) {
       return;
     }
-    if (!request.targetLane().name().equals(current.lane())
-        || !request.targetDate().equals(current.scheduledDate())) {
-      throw new LogisticsConflictException(
-          "Отгрузку или возврат можно переставлять только внутри своей очереди водителя и даты");
+    if (task.getSourceType() != DriverTaskSourceType.LOGISTICS_DOCUMENT) {
+      throw new LogisticsConflictException("Перемещать можно только целую сгруппированную ходку");
     }
     if (current.driverAudience() == null
         || current.driverAudience().mode() != task.getDriverAudienceMode()
         || !java.util.Objects.equals(
             current.driverAudience().workerId(), task.getPlannedDriverWorkerId())) {
-      throw new LogisticsConflictException(
-          "Аудитория задания водителя изменилась; обновите доску");
+      throw new LogisticsConflictException("Аудитория задания водителя изменилась; обновите доску");
     }
   }
 
-  public record CapitalRepairScheduleResult(
-      DriverBoardCardResponse card, boolean replayed) {}
+  /** Scheduled capital-repair board card plus create-command replay truth. */
+  public record CapitalRepairScheduleResult(DriverBoardCardResponse card, boolean replayed) {}
 }

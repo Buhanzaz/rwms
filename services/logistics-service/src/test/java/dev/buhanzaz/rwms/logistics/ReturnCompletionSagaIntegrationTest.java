@@ -18,18 +18,19 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnMediaLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnPickupRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.StartReturnEstimatesRequest;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
-import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
+import dev.buhanzaz.rwms.logistics.order.domain.DesiredDeliveryWindow;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
 import dev.buhanzaz.rwms.logistics.order.repository.OrderClientRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
-import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
+import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsExternalAttemptClaimService;
 import dev.buhanzaz.rwms.logistics.service.ReturnCompletionProcessor;
 import dev.buhanzaz.rwms.logistics.service.ReturnRegistrationProcessor;
@@ -74,8 +75,7 @@ class ReturnCompletionSagaIntegrationTest {
   private static final UUID DRIVER_QUEUE_CATEGORY =
       UUID.fromString("00000000-0000-0000-0000-000000000706");
 
-  @Container
-  @ServiceConnection
+  @Container @ServiceConnection
   static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
   @Autowired LogisticsDocumentService documents;
@@ -176,12 +176,7 @@ class ReturnCompletionSagaIntegrationTest {
                 WAREHOUSE,
                 List.of(
                     new LogisticsDependencyGateway.ReturnEquipmentReceiptLine(
-                        UUID.randomUUID(),
-                        additionalEquipmentId,
-                        3L,
-                        UUID.randomUUID(),
-                        0L,
-                        3L))));
+                        UUID.randomUUID(), additionalEquipmentId, 3L, UUID.randomUUID(), 0L, 3L))));
 
     LogisticsDocumentService.CreateResult started =
         documents.acceptUndamagedReturn(
@@ -210,7 +205,8 @@ class ReturnCompletionSagaIntegrationTest {
         .isEqualTo(LogisticsDocumentState.ACCEPTED);
     assertThat(
             jdbc.queryForObject(
-                "select count(*) from logistics_media_reference where readiness='READY'", Long.class))
+                "select count(*) from logistics_media_reference where readiness='READY'",
+                Long.class))
         .isOne();
     assertThat(
             jdbc.queryForObject(
@@ -273,8 +269,9 @@ class ReturnCompletionSagaIntegrationTest {
     UUID estimateId = UUID.randomUUID();
     StartReturnEstimatesRequest request =
         new StartReturnEstimatesRequest(
-            List.of(new ReturnEstimateLineRequest(
-                registered.lineId(), List.of(new MediaReferenceInput(mediaId, 4)))));
+            List.of(
+                new ReturnEstimateLineRequest(
+                    registered.lineId(), List.of(new MediaReferenceInput(mediaId, 4)))));
     when(dependencies.validateMediaReferences(
             eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_RETURN),
             eq(registered.documentId()),
@@ -339,7 +336,8 @@ class ReturnCompletionSagaIntegrationTest {
 
     assertThat(
             jdbc.queryForList(
-                "select operation_type || ':' || result from logistics_external_attempt order by operation_type",
+                "select operation_type || ':' || result from logistics_external_attempt order by"
+                    + " operation_type",
                 String.class))
         .contains(
             "RETURN_MEDIA_VALIDATE:CONFIRMED",
@@ -350,7 +348,8 @@ class ReturnCompletionSagaIntegrationTest {
         .isEqualTo(LogisticsDocumentState.ESTIMATE_REQUESTED);
     assertThat(
             jdbc.queryForObject(
-                "select count(*) from domain_event where event_type='logistics.return.estimate-requested.v1'",
+                "select count(*) from domain_event where"
+                    + " event_type='logistics.return.estimate-requested.v1'",
                 Long.class))
         .isOne();
     assertThat(
@@ -359,7 +358,8 @@ class ReturnCompletionSagaIntegrationTest {
         .isOne();
     assertThat(
             jdbc.queryForObject(
-                "select count(*) from logistics_media_reference where readiness='READY'", Long.class))
+                "select count(*) from logistics_media_reference where readiness='READY'",
+                Long.class))
         .isOne();
     assertThat(
             jdbc.queryForObject(
@@ -433,10 +433,7 @@ class ReturnCompletionSagaIntegrationTest {
                     registered.documentId(),
                     registered.version(),
                     new StartReturnEstimatesRequest(
-                        List.of(
-                            new ReturnEstimateLineRequest(
-                                registered.lineId(),
-                                List.of())))))
+                        List.of(new ReturnEstimateLineRequest(registered.lineId(), List.of())))))
         .isInstanceOf(LogisticsConflictException.class)
         .hasMessage("Return estimate lines are invalid");
   }
@@ -458,6 +455,7 @@ class ReturnCompletionSagaIntegrationTest {
                 "Dispatcher",
                 null,
                 null,
+                List.of(),
                 SUBJECT,
                 UUID.randomUUID(),
                 "0".repeat(64)));
@@ -470,14 +468,17 @@ class ReturnCompletionSagaIntegrationTest {
             SUBJECT,
             "Dispatcher",
             "RENTAL_MANAGER",
-            "Moscow, test address",
-            new BigDecimal("55.750000"),
-            new BigDecimal("37.620000"),
             "+79990000001",
             null,
-            List.of(LocalDate.now()),
             UUID.randomUUID(),
             "1".repeat(64));
+    order.replaceClientDeliveryDetails(
+        "Moscow, test address",
+        new BigDecimal("55.750000"),
+        new BigDecimal("37.620000"),
+        List.of());
+    order.replaceClientDesiredDeliveryWindow(
+        DesiredDeliveryWindow.create(LocalDate.now(), LocalDate.now()));
     order.selectWarehouse(WAREHOUSE);
     order.saveForFulfillment();
     order.fulfill();
@@ -517,7 +518,8 @@ class ReturnCompletionSagaIntegrationTest {
         .isEqualTo("CLOSED");
     assertThat(
             jdbc.queryForObject(
-                "select count(*) from rental_order_audit_event where order_id=? and event_type='ORDER_CLOSED'",
+                "select count(*) from rental_order_audit_event where order_id=? and"
+                    + " event_type='ORDER_CLOSED'",
                 Long.class,
                 order.getId()))
         .isOne();
@@ -535,7 +537,8 @@ class ReturnCompletionSagaIntegrationTest {
     UUID lineId = created.response().lines().getFirst().id();
     UUID leaseId = UUID.randomUUID();
     when(dependencies.readWarehouseIdentity(WAREHOUSE))
-        .thenReturn(new LogisticsDependencyGateway.WarehouseIdentity(WAREHOUSE, 1, true, "Europe/Moscow"));
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseIdentity(WAREHOUSE, 1, true, "Europe/Moscow"));
     when(dependencies.readRentalItemSnapshot(ASSET)).thenReturn(snapshot(7, "RENTED"));
     when(dependencies.acquireReturnLease(any(), eq(ASSET), eq(7L), eq(documentId), eq(lineId)))
         .thenReturn(activeLease(leaseId));
@@ -549,8 +552,7 @@ class ReturnCompletionSagaIntegrationTest {
         CORRELATION,
         documentId,
         0,
-        new ReturnPickupRequest(
-            "Driver snapshot", LocalDate.parse("2026-07-01")));
+        new ReturnPickupRequest("Driver snapshot", LocalDate.parse("2026-07-01")));
     LogisticsExternalAttemptTestClaims.drainReturnRegistration(claims, registration);
     long version = documents.get(documentId, LogisticsDocumentType.RETURN).version();
     assertThat(documents.get(documentId, LogisticsDocumentType.RETURN).state())
@@ -564,7 +566,8 @@ class ReturnCompletionSagaIntegrationTest {
     return new RegisteredReturn(documentId, lineId, leaseId, version);
   }
 
-  private static LogisticsDependencyGateway.RentalItemSnapshot snapshot(long version, String status) {
+  private static LogisticsDependencyGateway.RentalItemSnapshot snapshot(
+      long version, String status) {
     return new LogisticsDependencyGateway.RentalItemSnapshot(
         ASSET,
         version,
@@ -576,22 +579,12 @@ class ReturnCompletionSagaIntegrationTest {
 
   private static LogisticsDependencyGateway.OperationLease activeLease(UUID leaseId) {
     return new LogisticsDependencyGateway.OperationLease(
-        leaseId,
-        3,
-        ASSET,
-        11,
-        "ACTIVE",
-        OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(5));
+        leaseId, 3, ASSET, 11, "ACTIVE", OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(5));
   }
 
   private static LogisticsDependencyGateway.OperationLease releasedLease(UUID leaseId) {
     return new LogisticsDependencyGateway.OperationLease(
-        leaseId,
-        4,
-        ASSET,
-        11,
-        "RELEASED",
-        OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(5));
+        leaseId, 4, ASSET, 11, "RELEASED", OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(5));
   }
 
   private record RegisteredReturn(UUID documentId, UUID lineId, UUID leaseId, long version) {}

@@ -26,10 +26,10 @@ import org.hibernate.proxy.HibernateProxy;
 /**
  * Rental duration and delivery dates for one cabin in an order.
  *
- * <p>The term is owned by the order rather than a logistics document: a single order can split
- * its cabins into several shipments, while each cabin belongs to exactly one active shipment at a
- * time. The linked shipment identifier is a local immutable reference used to prevent a cabin
- * from silently appearing in two shipment documents.</p>
+ * <p>The term is owned by the order rather than a logistics document: a single order can split its
+ * cabins into several shipments, while each cabin belongs to exactly one active shipment at a time.
+ * The linked shipment identifier is a local immutable reference used to prevent a cabin from
+ * silently appearing in two shipment documents.
  */
 @Entity
 @Table(
@@ -152,6 +152,15 @@ public class RentalOrderUnitTerm {
     returnDate = null;
     touch();
     return true;
+  }
+
+  /** Transfers the unchanged commercial term to a same-order replacement cabin. */
+  public void transferToRentalItem(UUID replacementRentalItemId) {
+    UUID replacement = Objects.requireNonNull(replacementRentalItemId, "replacementRentalItemId");
+    if (!replacement.equals(rentalItemId)) {
+      rentalItemId = replacement;
+      touch();
+    }
   }
 
   /** Extends an already shipped cabin without changing its original shipment date. */

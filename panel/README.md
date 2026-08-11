@@ -44,19 +44,34 @@ contexts and screens are usable.
   repair history using the immutable warehouse snapshot returned by
   `dossier-service`; the exact boundary is the [dossier OpenAPI](../contracts/openapi/dossier-service.yaml)
   and the strict [panel activity model](src/features/rental-items/dossier/model/dossier-service.ts).
+- The cabin `История` tab renders those canonical activities as a compact,
+  chronological, expandable timeline. Related estimate, repair, inventory, and
+  media facts are grouped only by their canonical source or folder IDs; past
+  operations use green markers and the latest loaded operation uses blue.
+  Expanding a group shows the exact server-supplied time, actor, media states,
+  event breakdown, and available route to its owning workflow without inferring
+  missing domain data; permission-controlled technical mode retains raw source
+  metadata. See the [activity register](src/features/rental-items/dossier/dossier-activity-register.tsx).
+- When queuing a repair returns the exact Problem Details code
+  `BOOKED_UNIT_REPLACEMENT_REQUIRED`, the repair editor keeps the persisted draft
+  task ID and version, closes the completion dialog, and shows
+  `Бытовка забронирована` with a `К заказам` action to the existing `/orders`
+  flow. Generic queue failures keep their normal error and do not show this
+  replacement hint. See the [repair task editor](src/features/repair-tasks/repair-task-editor-workspace.tsx).
 - The panel may combine independent public reads for a screen, but it must not
   orchestrate cross-service business workflows in the browser.
 
 ## Rental assistant, clients, and orders
 
-- Assistant clarification cards are durable server data. Independent branches
-  such as OSB and LDSP remain separately answerable in either order, while the
-  panel renders only friendly question kinds and exact server-provided options.
-  Search cards require both cabin type and finish, and exact follow-up filters
-  come from the search result rather than browser guesses. Within one mounted
-  result surface, the active logical group remains selected through selection
-  and stream updates; compact rounded group pills replace underline tabs, and
-  exact filters stay collapsed until the manager opens them. See the
+- Assistant clarifications are one durable server-ordered sequence. The panel
+  renders only the lowest-sequence `PENDING` question with its exact
+  server-provided options, hides queued/history entries, and disables free text
+  until that answer succeeds. A stale or out-of-order `409` refetches the
+  authoritative question. There are no independently actionable branches and
+  no lower `Продолжить точный поиск` panel; ordinary messages, cabin results,
+  and client-presentation actions remain in the conversation. Search cards
+  require both cabin type and finish, and the active logical result group stays
+  selected through selection and stream updates. See the
   [assistant OpenAPI](../contracts/openapi/assistant-service.yaml), the strict
   [assistant adapter](src/features/assistant/api/assistant-api.ts), and the
   [conversation page](src/features/assistant/pages/assistant-page.tsx).
@@ -66,13 +81,21 @@ contexts and screens are usable.
   expiry. Streamed LLM removal is reconciled immediately and followed by the
   terminal conversation refetch. The browser never treats a local checkbox set
   as authoritative state.
-- Rental navigation exposes the client grid at `/clients` and client details at
-  `/clients/:clientId`. Clients are created from chat, booking, or the new-order
-  flow; the client grid has no standalone creation action. The client grid is
-  server-paginated; a client detail reads that client's orders and links to
-  chat, warehouse selection, or manual order creation with only `clientId` as
-  prefill. A truthful null phone on a historical client is displayed as not
-  specified and is never backfilled in the browser. See the
+- An order-linked assistant route validates the exact `clientId` and `orderId`,
+  lists or creates the conversation through the contract's `rentalOrderId`, and
+  sends the already-known client and order rather than opening a second client
+  chooser. Logistics fixes the order warehouse; the browser neither selects a
+  different warehouse nor auto-archives and recreates conversations as a saga.
+- Rental navigation exposes the server-paginated client grid at `/clients` and
+  client details at `/clients/:clientId`. The prominent top-right
+  `Создать клиента` action opens the existing client form in a modal and creates
+  through the logistics API. It supports zero or more named additional contacts
+  without a separate page. Primary and additional client contacts remain separate and
+  are shown by name and phone in list and detail views; order-owned contacts are
+  stored and rendered separately. Client detail reads that client's orders and
+  links to chat, warehouse selection, or manual order creation with only
+  `clientId` as prefill. A truthful null phone on a historical client is
+  displayed as not specified and is never backfilled in the browser. See the
   [logistics OpenAPI](../contracts/openapi/logistics-service.yaml) and the
   [client feature](src/features/clients/).
 - Booking requests 50 cabins per server page and defers text before it becomes
@@ -82,24 +105,76 @@ contexts and screens are usable.
   schedules one deadline refresh instead of re-rendering the whole booking
   screen each second. See the [booking catalogue](src/features/booking/booking-catalog-page.tsx)
   and [expiry hook](src/features/booking/use-booking-hold-expiry.ts).
-- Order creation and address-edit screens persist the delivery address,
-  latitude, longitude, editable contact phone, comment, and concrete
-  acceptable delivery dates.
-  A DRAFT detail makes its save prerequisites visible: a nonblank address,
-  finite coordinate pair, nonblank contact phone, one or more acceptable dates,
-  selected warehouse, one or more cabins, and a persisted, unchanged rental
-  term for every selected cabin. Its address dialog changes only delivery data
-  and keeps the selected client. Saving moves the order to the saved state so it
-  can be handled in Tasks; it does not create a shipment or trip. Lists and
-  details render those server projections. Order detail shows logistics-owned
-  planned/actual delivery and return movements, then performs independent public
-  dossier reads for selected cabins. Estimate or repair absence is shown as
-  proven only after a complete dossier projection has been paged to exhaustion;
-  partial, failed, or still-paged reads remain explicitly inconclusive. See the
+- Ordinary booking is supported only as `/booking?clientId&orderId`. It validates
+  that exact order and client, fixes the order warehouse (or the first selected
+  warehouse while the draft order has none), and lists or creates a direct
+  logistics inquiry with `conversationId: null`. It never creates a hidden
+  assistant conversation and never reuses an active AI-linked inquiry. A route
+  without an order shows an explicit unsupported state.
+- Every NORMAL public cabin card has the exact actions `Выбрать` and
+  `Добавить мебель`. Furniture is drafted independently for each selected
+  cabin. Its effective capacity uses the refreshed shared availability, that
+  cabin's existing draft, and physical contents in selected held cabins without
+  double counting, then applies nullable `maximumPerCabin`. The presentation
+  polls and refetches on focus/reconnect; a smaller refreshed pool keeps the
+  explainable draft, marks it invalid, and disables confirmation while the
+  atomic server confirmation remains authoritative. A public presentation
+  collects client-selected desired dates; the manager order detail shows the
+  returned values read-only and never overwrites them.
+- A REPLACEMENT presentation requires the server's exact selection count and
+  preserves client click order. It has no furniture editor: desired quantities
+  remain reserved and transfer to the corresponding replacement in the current
+  order. If the old cabin already contains furniture after a completed movement,
+  the server creates its physical movement to the replacement. A permanent
+  public booking rejection is terminal for that revision and asks the client to
+  request an updated link rather than retrying locally.
+- Order creation and edit screens persist the selected client, editable order
+  contact phone, and comment only. The public presentation's second step
+  collects the delivery address, optional coordinate pair, zero or more
+  order-owned additional contacts, the desired date, and the initial rental
+  duration. The returned `desiredDeliveryWindows` are read-only on order detail
+  as a client selection and remain distinct from the logistics-owned scheduled
+  date. A DRAFT detail requires a nonblank contact phone, selected
+  warehouse, and one or more cabins; it never offers a manager command for the
+  initial per-cabin term. After a cabin is
+  actually shipped/rented, its card shows duration, shipment date, and
+  calculated return date. `Продлить аренду` selects one or more such cabins,
+  shows desired and factual furniture only as information, and sends the shared
+  month count through the existing versioned, idempotent
+  `POST /orders/{id}/rental-terms/extend` command. The manager contact dialog
+  keeps the selected client. Saving moves the order to the saved state so it can be
+  handled in Tasks; it does not create a shipment or trip.
+- An order that the server marks editable exposes `Добавить бытовки` in both DRAFT
+  and SAVED states, including after the first cabin was added. Its chooser has
+  exactly two linked paths: AI chat and ordinary booking, each carrying the
+  current `clientId` and `orderId`; neither path is gated by manager-entered
+  desired dates because the client supplies the date and rental duration in
+  the presentation. The obsolete inline cabin layout is absent. Server
+  projections show the reservation state of each cabin
+  and each desired furniture row. The furniture editor caps a row by both the
+  shared available quantity and `maximumPerCabin`, without silently truncating
+  that order's already saved quantity; a concurrent conflict refreshes the
+  authoritative order and catalogue. Order detail also shows logistics-owned
+  planned/actual delivery and return movements, then performs independent
+  public dossier reads for selected cabins. Estimate or repair absence is shown
+  as proven only after a complete dossier projection has been paged to
+  exhaustion; partial, failed, or still-paged reads remain explicitly
+  inconclusive. See the
   [order adapter](src/features/orders/api/orders-api.ts), [draft
   detail](src/features/orders/pages/order-detail-page.tsx), [delivery
   dialog](src/features/orders/components/order-delivery-dialog.tsx), and
   [dossier evidence](src/features/orders/components/order-unit-dossier-evidence.tsx).
+- The server's independent `permissions.canReplaceUnits` projection exposes
+  `Заменить бытовки` even when ordinary order editing is closed. A manager
+  first selects existing order cabins and then uses exactly one of two modes:
+  the existing booking route receives ordered repeated `replacementUnitId`
+  parameters for client selection, while direct replacement accepts exactly one
+  old cabin, a required reason, and a free same-warehouse candidate from the
+  order boundary. The versioned idempotent replace response updates the current
+  order with its transferred furniture projection; a conflict refreshes order
+  and candidates without clearing the replacement draft. See the [replacement
+  dialog](src/features/orders/components/order-unit-replacement-dialog.tsx) and
+  [order adapter](src/features/orders/api/orders-api.ts).
 
 ## Logistics driver board
 

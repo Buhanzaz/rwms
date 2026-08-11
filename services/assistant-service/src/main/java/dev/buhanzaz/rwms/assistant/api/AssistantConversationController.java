@@ -19,11 +19,15 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-/** Public gateway-facing HTTP and SSE adapter for owner-scoped assistant conversations; it contains no rental workflow logic. */
+/**
+ * Public gateway-facing HTTP and SSE adapter for owner-scoped assistant conversations; it contains
+ * no rental workflow logic.
+ */
 @RestController
 @RequestMapping("/api/assistant/v1/conversations")
 public class AssistantConversationController {
@@ -44,8 +48,12 @@ public class AssistantConversationController {
   }
 
   @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-  public List<AssistantApiModels.ConversationResponse> list(@AuthenticationPrincipal Jwt jwt) {
-    return conversations.list(authorizer.requireRentalUser(jwt));
+  public List<AssistantApiModels.ConversationResponse> list(
+      @AuthenticationPrincipal Jwt jwt, @RequestParam(required = false) UUID rentalOrderId) {
+    UUID owner = authorizer.requireRentalUser(jwt);
+    return rentalOrderId == null
+        ? conversations.list(owner)
+        : conversations.list(owner, rentalOrderId, jwt.getTokenValue());
   }
 
   @PostMapping(

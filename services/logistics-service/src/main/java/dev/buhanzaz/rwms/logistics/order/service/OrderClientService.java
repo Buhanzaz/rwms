@@ -1,10 +1,12 @@
 package dev.buhanzaz.rwms.logistics.order.service;
 
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AdditionalContactInput;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.ClientPageResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.ClientResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateClientRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.NewClientInput;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderPageResponse;
+import dev.buhanzaz.rwms.logistics.order.domain.AdditionalContact;
 import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
 import dev.buhanzaz.rwms.logistics.order.domain.PhoneNumberNormalizer;
@@ -32,9 +34,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-/**
- * Owns rental-order client data and its validation within the logistics database.
- */
+/** Owns rental-order client data and its validation within the logistics database. */
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
@@ -62,9 +62,7 @@ public class OrderClientService {
             predicates.add(
                 builder.or(
                     builder.like(
-                        root.get("normalizedName"),
-                        "%" + escapeLike(normalizedSearch) + "%",
-                        '\\'),
+                        root.get("normalizedName"), "%" + escapeLike(normalizedSearch) + "%", '\\'),
                     builder.like(
                         root.get("normalizedPhone"),
                         "%" + escapeLike(normalizedSearch) + "%",
@@ -129,8 +127,7 @@ public class OrderClientService {
   }
 
   @Transactional
-  public CreateResult create(
-      OrderActor actor, UUID idempotencyKey, CreateClientRequest request) {
+  public CreateResult create(OrderActor actor, UUID idempotencyKey, CreateClientRequest request) {
     CreatedClient result =
         create(
             actor,
@@ -142,7 +139,8 @@ public class OrderClientService {
             request.contactPerson(),
             request.email(),
             request.comment(),
-            request.source());
+            request.source(),
+            request.additionalContacts());
     return new CreateResult(mapper.toClientResponse(result.client()), result.replayed());
   }
 
@@ -159,7 +157,8 @@ public class OrderClientService {
         request.contactPerson(),
         request.email(),
         request.comment(),
-        request.source());
+        request.source(),
+        request.additionalContacts());
   }
 
   /** Resolves an existing client under the same no-disclosure policy as the client detail API. */
@@ -177,7 +176,8 @@ public class OrderClientService {
       String requestedContactPerson,
       String requestedEmail,
       String requestedComment,
-      String requestedSource) {
+      String requestedSource,
+      List<AdditionalContactInput> requestedAdditionalContacts) {
     if (actor == null || idempotencyKey == null || type == null) {
       throw new IllegalArgumentException("Client actor, type and Idempotency-Key are required");
     }
@@ -191,6 +191,7 @@ public class OrderClientService {
     String normalizedEmail = normalizeEmail(requestedEmail);
     String comment = normalizeOptionalText(requestedComment, 2_000, "comment");
     String source = normalizeOptionalText(requestedSource, 255, "source");
+    List<AdditionalContact> additionalContacts = additionalContacts(requestedAdditionalContacts);
     String checksum =
         OrderCommandChecksum.sha256(
             scope,
@@ -201,10 +202,10 @@ public class OrderClientService {
                 contactPerson == null ? "" : contactPerson,
                 normalizedEmail == null ? "" : normalizedEmail,
                 comment == null ? "" : comment,
-                source == null ? "" : source));
+                source == null ? "" : source,
+                contactsChecksum(additionalContacts)));
     UUID scopedKey = OrderCommandChecksum.scopedKey(idempotencyKey, scope);
-    transactionLock.acquire(
-        "order-client:idempotency:" + actor.subjectId() + ":" + scopedKey);
+    transactionLock.acquire("order-client:idempotency:" + actor.subjectId() + ":" + scopedKey);
     OrderClient replay =
         clients
             .findByCreatedBySubjectIdAndCreationIdempotencyKey(actor.subjectId(), scopedKey)
@@ -212,8 +213,7 @@ public class OrderClientService {
     if (replay != null) {
       if (!replay.matchesCreationRequest(checksum)) {
         throw conflict(
-            "IDEMPOTENCY_KEY_REUSED",
-            "Idempotency-Key уже использован для другой команды");
+            "IDEMPOTENCY_KEY_REUSED", "Idempotency-Key уже использован для другой команды");
       }
       return new CreatedClient(replay, true);
     }
@@ -223,9 +223,7 @@ public class OrderClientService {
         clients.findByClientTypeAndNormalizedPhone(type, normalizedPhone).orElse(null);
     if (duplicate != null) {
       if (!isVisible(actor, duplicate)) {
-        throw conflict(
-            "CLIENT_ALREADY_EXISTS",
-            "Клиент с указанными реквизитами уже существует");
+        throw conflict("CLIENT_ALREADY_EXISTS", "Клиент с указанными реквизитами уже существует");
       }
       return new CreatedClient(duplicate, true);
     }
@@ -244,10 +242,24 @@ public class OrderClientService {
                 actor.displayName(),
                 comment,
                 source,
+                additionalContacts,
                 actor.subjectId(),
                 scopedKey,
                 checksum));
     return new CreatedClient(client, false);
+  }
+
+  private static List<AdditionalContact> additionalContacts(List<AdditionalContactInput> inputs) {
+    if (inputs == null || inputs.isEmpty()) return List.of();
+    return inputs.stream()
+        .map(input -> AdditionalContact.create(input.name(), input.phone()))
+        .toList();
+  }
+
+  private static String contactsChecksum(List<AdditionalContact> contacts) {
+    return contacts.stream()
+        .map(contact -> contact.getName() + "\u001f" + contact.getPhone())
+        .collect(java.util.stream.Collectors.joining("\u001e"));
   }
 
   public static String normalizeName(String value) {
@@ -265,9 +277,7 @@ public class OrderClientService {
     if (value == null || value.isBlank()) return null;
     String normalized =
         Normalizer.normalize(value, Normalizer.Form.NFKC).trim().toLowerCase(Locale.ROOT);
-    if (normalized.length() > 320
-        || normalized.indexOf('@') < 1
-        || normalized.endsWith("@")) {
+    if (normalized.length() > 320 || normalized.indexOf('@') < 1 || normalized.endsWith("@")) {
       throw new IllegalArgumentException("email is invalid");
     }
     return normalized;
@@ -331,9 +341,7 @@ public class OrderClientService {
   private static String normalizeOptionalText(String value, int maximum, String field) {
     if (value == null) return null;
     String normalized =
-        Normalizer.normalize(value, Normalizer.Form.NFKC)
-            .replaceAll("[\\p{Z}\\s]+", " ")
-            .trim();
+        Normalizer.normalize(value, Normalizer.Form.NFKC).replaceAll("[\\p{Z}\\s]+", " ").trim();
     if (normalized.isEmpty() || normalized.length() > maximum) {
       throw new IllegalArgumentException(field + " is invalid");
     }

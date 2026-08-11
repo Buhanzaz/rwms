@@ -9,19 +9,17 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
-import java.time.OffsetDateTime;
 import java.sql.Types;
+import java.time.OffsetDateTime;
 import java.util.Objects;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
-import org.hibernate.proxy.HibernateProxy;
 import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.proxy.HibernateProxy;
 
-/**
- * JPA persistence model for Client Presentation in the logistics-owned database.
- */
+/** JPA persistence model for Client Presentation in the logistics-owned database. */
 @Entity
 @Table(name = "client_presentation")
 @Getter
@@ -44,6 +42,14 @@ public class ClientPresentation {
 
   @Column(name = "warehouse_id", nullable = false)
   private UUID warehouseId;
+
+  @Enumerated(EnumType.STRING)
+  @Column(name = "mode", nullable = false, length = 16)
+  private ClientPresentationMode mode;
+
+  @JdbcTypeCode(org.hibernate.type.SqlTypes.JSON)
+  @Column(name = "replacement_unit_ids_json", nullable = false, columnDefinition = "jsonb")
+  private String replacementUnitIdsJson;
 
   @Enumerated(EnumType.STRING)
   @Column(name = "state", nullable = false, length = 24)
@@ -77,6 +83,8 @@ public class ClientPresentation {
   public static ClientPresentation create(
       UUID inquiryId,
       UUID warehouseId,
+      ClientPresentationMode mode,
+      String replacementUnitIdsJson,
       OffsetDateTime expiresAt,
       OffsetDateTime viewUntil,
       UUID idempotencyKey,
@@ -86,13 +94,22 @@ public class ClientPresentation {
     presentation.inquiryId = Objects.requireNonNull(inquiryId, "inquiryId");
     presentation.revision = 1;
     presentation.activate(
-        warehouseId, expiresAt, viewUntil, idempotencyKey, requestSha256, now);
+        warehouseId,
+        mode,
+        replacementUnitIdsJson,
+        expiresAt,
+        viewUntil,
+        idempotencyKey,
+        requestSha256,
+        now);
     presentation.createdAt = now;
     return presentation;
   }
 
   public void replace(
       UUID nextWarehouseId,
+      ClientPresentationMode nextMode,
+      String nextReplacementUnitIdsJson,
       OffsetDateTime nextExpiresAt,
       OffsetDateTime nextViewUntil,
       UUID idempotencyKey,
@@ -105,6 +122,8 @@ public class ClientPresentation {
     revision = Math.addExact(revision, 1);
     activate(
         nextWarehouseId,
+        nextMode,
+        nextReplacementUnitIdsJson,
         nextExpiresAt,
         nextViewUntil,
         idempotencyKey,
@@ -165,6 +184,8 @@ public class ClientPresentation {
 
   private void activate(
       UUID nextWarehouseId,
+      ClientPresentationMode nextMode,
+      String nextReplacementUnitIdsJson,
       OffsetDateTime nextExpiresAt,
       OffsetDateTime nextViewUntil,
       UUID idempotencyKey,
@@ -175,11 +196,12 @@ public class ClientPresentation {
       throw new IllegalArgumentException("Presentation lifetime is invalid");
     }
     warehouseId = Objects.requireNonNull(nextWarehouseId, "warehouseId");
+    mode = Objects.requireNonNull(nextMode, "mode");
+    replacementUnitIdsJson = requireReplacementJson(nextReplacementUnitIdsJson);
     state = ClientPresentationState.ACTIVE;
     expiresAt = nextExpiresAt;
     viewUntil = nextViewUntil;
-    lastPublishIdempotencyKey =
-        Objects.requireNonNull(idempotencyKey, "idempotencyKey");
+    lastPublishIdempotencyKey = Objects.requireNonNull(idempotencyKey, "idempotencyKey");
     lastPublishRequestSha256 = requireHash(requestSha256);
     updatedAt = now;
   }
@@ -189,6 +211,14 @@ public class ClientPresentation {
       throw new IllegalArgumentException("requestSha256 is invalid");
     }
     return value;
+  }
+
+  private static String requireReplacementJson(String value) {
+    String normalized = value == null ? "" : value.trim();
+    if (!normalized.startsWith("[") || !normalized.endsWith("]") || normalized.length() > 4_000) {
+      throw new IllegalArgumentException("replacementUnitIdsJson is invalid");
+    }
+    return normalized;
   }
 
   @Override

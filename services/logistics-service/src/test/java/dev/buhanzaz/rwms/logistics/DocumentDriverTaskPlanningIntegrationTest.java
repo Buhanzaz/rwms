@@ -47,18 +47,13 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 @Testcontainers
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class DocumentDriverTaskPlanningIntegrationTest {
-  private static final UUID WAREHOUSE =
-      UUID.fromString("00000000-0000-0000-0000-000000000a01");
-  private static final UUID DESTINATION =
-      UUID.fromString("00000000-0000-0000-0000-000000000a02");
-  private static final UUID SUBJECT =
-      UUID.fromString("00000000-0000-0000-0000-000000000a03");
-  private static final UUID DRIVER =
-      UUID.fromString("00000000-0000-0000-0000-000000000a04");
+  private static final UUID WAREHOUSE = UUID.fromString("00000000-0000-0000-0000-000000000a01");
+  private static final UUID DESTINATION = UUID.fromString("00000000-0000-0000-0000-000000000a02");
+  private static final UUID SUBJECT = UUID.fromString("00000000-0000-0000-0000-000000000a03");
+  private static final UUID DRIVER = UUID.fromString("00000000-0000-0000-0000-000000000a04");
   private static final UUID SHIPMENT_ASSET =
       UUID.fromString("00000000-0000-0000-0000-000000000a05");
-  private static final UUID RETURN_ASSET =
-      UUID.fromString("00000000-0000-0000-0000-000000000a06");
+  private static final UUID RETURN_ASSET = UUID.fromString("00000000-0000-0000-0000-000000000a06");
   private static final UUID TRANSFER_ASSET =
       UUID.fromString("00000000-0000-0000-0000-000000000a07");
   private static final UUID QUEUE_DEFINITION =
@@ -66,8 +61,7 @@ class DocumentDriverTaskPlanningIntegrationTest {
   private static final UUID SECOND_SHIPMENT_ASSET =
       UUID.fromString("00000000-0000-0000-0000-000000000a09");
 
-  @Container
-  @ServiceConnection
+  @Container @ServiceConnection
   static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
   @Autowired LogisticsDocumentService documents;
@@ -210,16 +204,16 @@ class DocumentDriverTaskPlanningIntegrationTest {
         .containsEntry("driver_audience_mode", "UNASSIGNED")
         .containsEntry("planned_driver_worker_id", null)
         .containsEntry("planned_driver_name_snapshot", null)
-        .containsEntry("unit_number", "БТ-202");
+        .containsEntry("unit_number", "1 бытовка")
+        .containsEntry("source_type", "LOGISTICS_DOCUMENT");
     assertThat(row(rows, "TRANSFER"))
         .containsEntry("driver_audience_mode", "WAREHOUSE_DRIVERS")
         .containsEntry("planned_driver_worker_id", null)
         .containsEntry("planned_driver_name_snapshot", null)
-        .containsEntry("unit_number", "БТ-203");
-    assertThat(
-            jdbc.queryForObject(
-                "select count(*) from driver_logistics_task_member", Long.class))
-        .isEqualTo(2L);
+        .containsEntry("unit_number", "1 бытовка")
+        .containsEntry("source_type", "LOGISTICS_DOCUMENT");
+    assertThat(jdbc.queryForObject("select count(*) from driver_logistics_task_member", Long.class))
+        .isEqualTo(4L);
   }
 
   @Test
@@ -257,8 +251,7 @@ class DocumentDriverTaskPlanningIntegrationTest {
         .isZero();
   }
 
-  private static Map<String, Object> row(
-      List<Map<String, Object>> rows, String taskKind) {
+  private static Map<String, Object> row(List<Map<String, Object>> rows, String taskKind) {
     return rows.stream()
         .filter(row -> taskKind.equals(row.get("task_kind")))
         .findFirst()

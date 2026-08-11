@@ -24,23 +24,31 @@ must handle a canonical conflict rather than send a changed retry.
 
 Shipment and return commands carry an optional opaque task-board `driverWorkerId` together with
 the historical display snapshot; logistics never derives identity from the name. Transfer commands
-carry no driver identity. Once scheduled, each newly created shipment stores one durable
-document-owned driver task with an immutable client snapshot and ordered cabin members. Its neutral
-technical priority remains task-board implementation detail; the title, count summary and task text
-carry the shipment intent, client and full cabin-number list. Completion evidence applies its cover
-checkpoint idempotently to every member and the group completes only after all covers succeed.
-Historical document-line shipment tasks are not regrouped. Returns retain one task per line and are
-assigned when an ID is present and otherwise stay unassigned; transfers and other movement work use
-identity-free `WAREHOUSE_DRIVERS`. The public board exposes the audience used for date/driver
-grouping. Public moves can only reorder shipment and return work inside its current driver, date and
-lane. Movement work retains its existing date/lane planning policy, while no public move can change
-audience.
+carry no driver identity and remain shared `WAREHOUSE_DRIVERS` work, so concrete-driver assignment
+applies to customer shipment/return trips but not warehouse transfers. Every newly scheduled
+shipment, return or transfer stores one durable
+`LOGISTICS_DOCUMENT` driver task with an immutable client snapshot and ordered, immutable cabin
+members. Its persisted `tripNumber` is stable within the rental order. Pre-start historical
+document-line tasks are cancelled before one grouped task is created; a started historical member
+prevents regrouping, and no new document-line task is created.
+
+The public board and task detail expose the whole trip: operation, client, address and coordinates,
+primary plus client/order additional contacts, comment, advisory delivery dates, actual assigned
+date, cabins and per-cabin desired/actual furniture with movement-task and readiness facts. An
+exact assigned driver may read that task detail; an unassigned task remains manager-only. A board
+move acts on the grouped task, never one member. It intentionally retains the locked local task and
+document rows across task-board's version-fenced call so a locally started trip cannot race a stale
+remote `WAITING` entry; the dependency boundary is limited by the configured connect/read timeouts
+(`2s`/`5s` by default). After task-board accepts a pre-start date move,
+logistics updates the owning document date in the recovery boundary, preserves its client delivery
+date, and uses the same grouped behavior for shipment, return and transfer.
 
 `GET` and `PUT /api/logistics/v1/warehouses/{warehouseId}/shipment-task-settings` own the
-warehouse-scoped maximum cabin count for one newly created shipment task. The lazily materialized
+warehouse-scoped maximum cabin count for one newly created grouped trip. The lazily materialized
 default is one cabin; GET requires read/VIEW scope and PUT requires write/MANAGE scope with an
-`expectedVersion`. Both generic and saved-order shipment commands reject a unique selected set above
-the current cap before creating a document or driver task; logistics never auto-splits that request.
+`expectedVersion`. Shipment, return and transfer planning reject a unique selected set above the
+current cap before creating a driver task; logistics never introduces a second cap or auto-splits
+that request.
 
 `POST /api/logistics/v1/rental-inquiries/{inquiryId}/cabin-searches` is a write-authorized command
 and requires `Idempotency-Key`. A short PREPARE transaction locks the inquiry, rechecks current
@@ -73,21 +81,55 @@ is effect/replay evidence rather than a duplicate of the authoritative asset-own
 
 `POST /api/logistics/v1/clients` creates a logistics rental client of type `INDIVIDUAL` or
 `LEGAL_ENTITY`. Name/FIO and main phone are required; legal entities also require a contact person.
-Email, comment and source are optional, while the
+Any number of validated name/phone additional contacts can remain client-owned; order-owned
+additional contacts are stored separately. Email, comment and source are optional, while the
 responsible-manager identity and display-name snapshot come only from the authenticated write
 actor. Historical clients keep the truthful creator-subject UUID as manager identity and may have
 no display-name snapshot. Client search/detail and the paged `/clients/{clientId}/orders` route use
 the ordinary visible-order rules and do not disclose inaccessible identities.
 
 Rental-order drafts may be created for a preselected client and edited with idempotency and an
-expected version. Delivery address, coordinate pair, contact phone, optional comment and up to 31
-unique concrete acceptable dates are stored on the order. Address, coordinates, phone and a
-non-empty date list are required before save; a new shipment date must belong to that list when it
-is configured. A request may use `+` international or Russian `8` trunk human phone formatting;
-the domain validates its digits and persists/exposes only canonical E.164. Order detail includes
-logistics-owned shipment/return timeline facts and cabin
-lines. Maintenance estimates and repair history remain dossier/maintenance reads and are neither
-copied nor persisted here.
+expected version. Create and ordinary update commands accept only the client, primary phone and
+comment; delivery address, coordinate pair and order-owned additional contacts are deliberately
+collected by the client in a normal presentation confirmation. Desired-delivery windows remain an
+order-owned read projection: migrated legacy rows remain truthfully readable, while a current normal
+confirmation replaces them with exactly one client-selected calendar day (`startDate=endDate`). A
+draft may be saved without delivery facts, but shipment creation requires an address, primary phone
+and one desired delivery day. The actual document schedule is its `scheduledDate`; public commands
+and projections carry no clock-time value. Human phone formatting is normalized to canonical E.164.
+
+`CreateRentalInquiryRequest` can target an existing draft or saved-but-editable order. Assistant
+inquiries retain their conversation ID; manual inquiries use the same entity without a hidden chat,
+and `GET /api/logistics/v1/rental-inquiries?rentalOrderId=...` rediscovers both under order and
+warehouse authorization. Repeated normal presentations append cabins to the same order and enforce
+its fixed warehouse. Presentation reads combine live shared asset availability, the selected held
+cabins' atomically captured contents and unassigned physical surplus already inside that order; zero
+shared availability rows remain visible with their per-cabin maximum. Confirmation carries furniture
+per cabin and atomically converts holds plus the authoritative all-order furniture composition.
+Every `NORMAL` public presentation therefore requires one client delivery day, a required delivery
+address, an optional complete latitude/longitude pair, nullable additional contacts normalized to an
+empty list, and a positive initial `rentalMonths`; none is prefilled from the linked order. The
+durable booking receipt includes those normalized facts, and the local post-conversion transition
+stores the one order delivery day and creates a term only for every newly converted cabin. Retry
+checks include every delivery fact and duration, so a mismatched replay conflicts and can never
+rewrite an existing cabin term. A `REPLACEMENT` presentation exposes current order facts read-only
+and rejects every normal-only field. Shipment assignment derives each cabin return date from its actual shipment
+date plus its client-selected term; the only public term mutation is the existing extension command
+for selected already shipped cabins. `OrderPermissions.canExtendRentalTerms` is the server-derived
+affordance for that command, including `FULFILLED` orders where ordinary editing is unavailable.
+The public order boundary has no direct warehouse-selection or cabin-add command: adding cabins and
+fixing the first warehouse occur only through the existing inquiry/presentation flow.
+`GET /api/logistics/v1/orders/{orderId}/available-units` remains replacement discovery; cabin
+removal, replacement and desired-furniture editing keep their dedicated commands.
+
+Replacement reuses the same presentation/booking or direct order command. A warehouse manager can
+replace only the requested pre-start cabins, with exact client-selection cardinality; direct replace
+also records a nonblank reason. The ordered batch atomically swaps asset reservations and then updates
+the same order, document members and furniture requirements. Existing movement-task checkpoints
+cancel unfinished old-cabin filling before swap, replay exact old-to-new furniture holds when physical
+contents must move, and keep readiness false until that ordinary movement task completes. Normal edits
+stop once a final trip date or furniture task exists; replacement remains available per cabin
+until that cabin's trip starts.
 
 Interactive panel and Android clients reach this namespace only through the public
 `api-gateway-service` `/api/logistics/**` route. They must not call this module host or an
@@ -123,11 +165,14 @@ facade delegates every interface operation:
 | `RentalInquiryCabinCatalogService` | Bounded facts-only cabin lookup with inquiry, warehouse and owner authorization |
 | `LogisticsDocumentService` | Stable return/shipment/transfer and rental-order hook facade over seven exact owners |
 | Return, shipment and transfer document coordinators | Independent document state machines with their existing transaction and recovery order |
-| `DocumentDriverTaskPlanner` | One idempotent document-owned task with ordered cabin members for each new scheduled shipment; legacy line tasks plus return/transfer tasks retain per-line planning and pre-start replan/cancel guards |
-| `ShipmentTaskSettingsService` | Warehouse-scoped, version-fenced cap for cabins in a new shipment task; materializes default one atomically and rejects over-limit creates before document persistence |
+| `DocumentDriverTaskPlanner` | One idempotent document-owned task with ordered cabin members for each new scheduled shipment, return or transfer; waiting legacy line tasks converge to the group and started ones fence replanning |
+| `DriverTripProjectionService` | Structured task/board trip facts with one asset read per distinct order and explicit unavailable readiness on dependency failure |
+| `ShipmentTaskSettingsService` | Warehouse-scoped, version-fenced cap reused by every grouped trip; materializes default one atomically and rejects over-limit planning |
 | Rental-order shipment/completion and reconciliation coordinators | Document hooks for rental shipment, terminal return and reconciliation request commands |
 | Document admission, idempotency, attempts, reads and binding policies | Narrow warehouse, replay, external-attempt, projection and active-order leaves |
 | `RentalOrderService` | Stable order facade over reads, creation, lifecycle, reservations, terms and shipment hand-off |
+| `RentalOrderUnitReplacementService` | Direct and presentation replacement over ordered batch checkpoints, pre-start driver-task cancellation and same-order document/member convergence |
+| `ShipmentFurnitureTaskService` | All-active-order furniture composition, existing movement-task readiness and replacement recovery checkpoints |
 | Rental-order command store, editability and problem/outcome leaves | Row/receipt replay, saved-draft synchronization and canonical local problem mapping; `LogisticsTransactionLock` owns the narrow transaction advisory-lock access |
 
 Owner clients depend only on the shared transport and their configured private
@@ -193,7 +238,10 @@ admission/timezone call and creates no short admission intent.
 
 No user JWT crosses `LogisticsDependencyGateway`. The gateway obtains client-credential tokens for
 asset, warehouse, task-board, maintenance and media. Remote effects become durable attempts and are
-relayed after local commit; do not make cross-service calls inside an owning database transaction.
+relayed after local commit. The sole deliberate remote-under-lock exception is a public whole-trip
+board move: it retains the task/document pre-start locks across task-board's bounded version-fenced
+call to close the local-start/remote-`WAITING` race, and the existing status poll converges a remote
+success followed by local rollback.
 
 ## Persistence, events and recovery
 
@@ -203,8 +251,9 @@ are forbidden.
 
 Migration
 [`V42__clients_order_delivery_and_acceptable_dates.sql`](src/main/resources/db/migration/V42__clients_order_delivery_and_acceptable_dates.sql)
-adds contact/manager/comment/source client fields, order delivery facts, the ordered unique
-acceptable-date collection and durable exact-command receipts for inquiry cabin selection. It
+adds contact/manager/comment/source client fields, initial order delivery facts, the predecessor
+date collection later migrated losslessly to desired windows by V47, and durable exact-command
+receipts for inquiry cabin selection. It
 backfills only the truthful responsible manager UUID from
 `created_by_subject_id`; it does not invent a historical display name. Legacy phone/contact rows
 remain readable while new writes are constrained, and V39-V41 remain immutable.
@@ -233,6 +282,32 @@ Migration
 adds warehouse-local shipment-task settings, the `LOGISTICS_DOCUMENT` driver-task source and ordered
 shipment-member cover checkpoints. It expands only: no historical
 `LOGISTICS_DOCUMENT_LINE` task is regrouped or rewritten.
+
+Migration
+[`V47__order_contacts_windows_and_inquiry_target.sql`](src/main/resources/db/migration/V47__order_contacts_windows_and_inquiry_target.sql)
+adds ordered additional-contact collections, losslessly renames legacy acceptable dates to inclusive
+desired windows (`startDate=endDate`, null legacy times), and retains the historical physical
+scheduled-time columns. It adds
+stable grouped-trip numbers with an order-wide historical backfill, nullable manual-inquiry
+conversation linkage plus an order target and creation key, replacement presentation metadata, and
+reuses the existing shipment-furniture link as the durable ordered replacement checkpoint. The
+outbox stays conversation-only and becomes unique per inquiry so repeated additions to one order do
+not collide.
+
+Migration
+[`V48__presentation_booking_client_rental_terms.sql`](src/main/resources/db/migration/V48__presentation_booking_client_rental_terms.sql)
+adds the nullable, positive client-selected initial `rental_months` receipt field to existing
+`presentation_booking` rows. Historical and replacement receipts remain null; normal confirmation
+persists a positive value before its local order reconciliation creates terms for newly converted
+cabins.
+
+Migration
+[`V49__presentation_booking_delivery_confirmation_snapshot.sql`](src/main/resources/db/migration/V49__presentation_booking_delivery_confirmation_snapshot.sql)
+additively stores the normalized normal-confirmation delivery address, optional coordinate pair and
+additional-contact JSON in the existing `presentation_booking` idempotency receipt. It does not
+create a second order source of truth, rewrite historical rows or remove historical desired-window
+and scheduled-time columns; those legacy values remain physically readable only for persistence and
+old receipt comparison, never for public commands or projections.
 
 Logistics commits facts, projection checkpoints and a transactional outbox together. Kafka delivery
 is at-least-once: aggregate IDs are record keys, event IDs are dedupe identities, and consumers retain

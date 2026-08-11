@@ -11,7 +11,8 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Component;
 
 /**
- * Authorization boundary for logistics document APIs, enforcing authenticated role and warehouse scope.
+ * Authorization boundary for logistics document APIs, enforcing authenticated role and warehouse
+ * scope.
  */
 @Component
 public class LogisticsAuthorizer {
@@ -87,6 +88,26 @@ public class LogisticsAuthorizer {
       return UUID.fromString(jwt.getSubject());
     } catch (IllegalArgumentException exception) {
       throw new AccessDeniedException("USER subject must be a UUID");
+    }
+  }
+
+  /**
+   * Returns whether a USER carrying the WorkerApp task scope is the exact driver frozen on an
+   * assigned logistics task. It grants no warehouse-wide visibility.
+   */
+  public boolean isExactAssignedDriver(Jwt jwt, String audienceMode, UUID plannedDriverWorkerId) {
+    if (developmentBypass) return true;
+    if (jwt == null
+        || !"USER".equals(jwt.getClaimAsString("principal_type"))
+        || !"ASSIGNED_DRIVER".equals(audienceMode)
+        || plannedDriverWorkerId == null
+        || !scopes(jwt).contains("worker.tasks")) {
+      return false;
+    }
+    try {
+      return plannedDriverWorkerId.equals(UUID.fromString(jwt.getSubject()));
+    } catch (IllegalArgumentException exception) {
+      return false;
     }
   }
 

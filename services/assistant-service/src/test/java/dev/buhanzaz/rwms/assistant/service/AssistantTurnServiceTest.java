@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -33,6 +34,7 @@ class AssistantTurnServiceTest {
     UUID owner = UUID.randomUUID();
     UUID conversationId = UUID.randomUUID();
     UUID inquiryId = UUID.randomUUID();
+    UUID rentalOrderId = UUID.randomUUID();
     UUID currentUserMessageId = UUID.randomUUID();
     AssistantConversationService conversations = mock(AssistantConversationService.class);
     TextThenSearchProvider provider = new TextThenSearchProvider("Проверенный текущий результат.");
@@ -40,7 +42,14 @@ class AssistantTurnServiceTest {
     when(conversations.beginTurn(owner, conversationId, "покажи все"))
         .thenReturn(
             new AssistantConversationService.TurnStart(
-                conversationId, inquiryId, currentUserMessageId, "покажи все"));
+                conversationId,
+                inquiryId,
+                rentalOrderId,
+                currentUserMessageId,
+                "покажи все",
+                null,
+                null,
+                null));
     when(conversations.promptMessages(owner, conversationId))
         .thenReturn(
             List.of(
@@ -83,7 +92,8 @@ class AssistantTurnServiceTest {
             });
     AssistantMessage completed = mock(AssistantMessage.class);
     when(completed.getId()).thenReturn(UUID.randomUUID());
-    when(conversations.completeAssistantTurn(owner, conversationId, "Проверенный текущий результат."))
+    when(conversations.completeAssistantTurn(
+            owner, conversationId, "Проверенный текущий результат."))
         .thenReturn(completed);
 
     new AssistantTurnService(
@@ -98,6 +108,8 @@ class AssistantTurnServiceTest {
 
     assertThat(provider.requests).hasSize(3);
     assertReplayedHistory(provider.requests.getFirst());
+    assertThat(provider.requests.getFirst().messages().getFirst().content())
+        .contains("amends one existing rental order", "never propose another warehouse");
     assertThat(provider.requests.getFirst().toolRequired()).isTrue();
     assertThat(provider.requests.getFirst().tools())
         .extracting(ChatCompletionClient.ToolDefinition::name)
@@ -124,8 +136,9 @@ class AssistantTurnServiceTest {
     assertThat(prompt)
         .contains("exact current cabinType and finish")
         .contains("покажи 2 ЛДСП")
-        .contains("two independent questions")
-        .contains("either may be answered first")
+        .contains("deterministic order")
+        .contains("next one is shown only after that answer")
+        .contains("Never create or continue two independent clarification branches")
         .contains("If it has several, ask with exact size buttons")
         .contains("6x2.4-equivalent")
         .contains("narrow the type buttons to compatible relations")
@@ -160,8 +173,7 @@ class AssistantTurnServiceTest {
             "Какой тип бытовки нужен для ЛДСП?",
             "ANSWERED",
             List.of(
-                new AssistantApiModels.ClarificationOptionResponse(
-                    optionId, "Модуль", "Модуль"),
+                new AssistantApiModels.ClarificationOptionResponse(optionId, "Модуль", "Модуль"),
                 new AssistantApiModels.ClarificationOptionResponse(
                     UUID.randomUUID(), "Пост охраны", "Пост охраны")),
             optionId,
@@ -197,15 +209,15 @@ class AssistantTurnServiceTest {
             });
     AssistantMessage completed = mock(AssistantMessage.class);
     when(completed.getId()).thenReturn(UUID.randomUUID());
-    when(
-            conversations.completeAssistantTurn(
-                owner, conversationId, "Этот диалог уже завершён: подборка больше не активна."))
+    when(conversations.completeAssistantTurn(
+            owner, conversationId, "Этот диалог уже завершён: подборка больше не активна."))
         .thenReturn(completed);
     CapturingEmitter emitter = new CapturingEmitter();
+    ArchivedInquiryProvider provider = new ArchivedInquiryProvider();
 
     new AssistantTurnService(
             conversations,
-            new ArchivedInquiryProvider(),
+            provider,
             new AssistantToolDefinitions(),
             tools,
             mapper,
@@ -217,6 +229,61 @@ class AssistantTurnServiceTest {
         .extracting(AssistantApiModels.TurnEvent::event)
         .startsWith("turn.started", "clarification.answered");
     assertThat(emitter.events.get(1).clarification()).isEqualTo(answeredQuestion);
+    assertThat(provider.requests).hasSize(1);
+  }
+
+  @Test
+  void intermediateAnswerActivatesOnlyTheNextQuestionWithoutCallingTheProvider() {
+    UUID owner = UUID.randomUUID();
+    UUID conversationId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID userMessageId = UUID.randomUUID();
+    UUID toolCallId = UUID.randomUUID();
+    AssistantApiModels.ClarificationQuestionResponse answered =
+        question(1, "ANSWERED", UUID.randomUUID());
+    AssistantApiModels.ClarificationQuestionResponse next = question(2, "PENDING", null);
+    AssistantApiModels.TurnRequest request =
+        new AssistantApiModels.TurnRequest(
+            null,
+            new AssistantApiModels.ClarificationAnswerRequest(
+                answered.id(), answered.answeredOptionId()));
+    AssistantConversationService conversations = mock(AssistantConversationService.class);
+    when(conversations.beginTurn(owner, conversationId, request))
+        .thenReturn(
+            new AssistantConversationService.TurnStart(
+                conversationId,
+                inquiryId,
+                UUID.randomUUID(),
+                userMessageId,
+                "Ответ на уточнение",
+                answered,
+                next,
+                toolCallId));
+    CapturingEmitter emitter = new CapturingEmitter();
+    ChatCompletionClient provider =
+        (ignoredRequest, ignoredListener) -> {
+          throw new AssertionError("Provider must stay parked until the final answer");
+        };
+
+    new AssistantTurnService(
+            conversations,
+            provider,
+            new AssistantToolDefinitions(),
+            mock(AssistantToolExecutor.class),
+            mapper,
+            properties(),
+            Runnable::run)
+        .stream(owner, conversationId, request, "current-user-bearer", emitter);
+
+    assertThat(emitter.events)
+        .extracting(AssistantApiModels.TurnEvent::event)
+        .containsExactly(
+            "turn.started", "clarification.answered", "clarification.requested", "turn.completed");
+    assertThat(emitter.events.get(2).clarification()).isEqualTo(next);
+    assertThat(emitter.events.get(2).toolCallId()).isEqualTo(toolCallId);
+    assertThat(emitter.events.getLast().messageId()).isNull();
+    verify(conversations, never()).hasActiveSearchResult(any(), any(), any());
+    verify(conversations, never()).completeAssistantTurn(any(), any(), any());
   }
 
   @Test
@@ -254,8 +321,7 @@ class AssistantTurnServiceTest {
     when(conversations.promptMessages(owner, conversationId))
         .thenReturn(
             List.of(
-                new AssistantConversationService.PromptMessage(
-                    "user", "Покажи БК-1", List.of())));
+                new AssistantConversationService.PromptMessage("user", "Покажи БК-1", List.of())));
     when(tools.execute(
             eq(owner),
             eq(conversationId),
@@ -271,16 +337,11 @@ class AssistantTurnServiceTest {
                   call,
                   mapper.readTree(
                       """
-                      {"tool":"request_cabin_clarifications","data":{"questions":[]}}
+                      {"tool":"request_cabin_clarifications","data":{"questions":[{}]}}
                       """),
                   UUID.randomUUID());
             });
-    AssistantMessage completed = mock(AssistantMessage.class);
-    when(completed.getId()).thenReturn(UUID.randomUUID());
-    when(
-            conversations.completeAssistantTurn(
-                owner, conversationId, "Добавить к текущей подборке или заменить её?"))
-        .thenReturn(completed);
+    CapturingEmitter emitter = new CapturingEmitter();
 
     new AssistantTurnService(
             conversations,
@@ -290,9 +351,9 @@ class AssistantTurnServiceTest {
             mapper,
             properties(),
             Runnable::run)
-        .stream(owner, conversationId, "Покажи ещё БК-2", "current-user-bearer", new SseEmitter());
+        .stream(owner, conversationId, "Покажи ещё БК-2", "current-user-bearer", emitter);
 
-    assertThat(provider.requests).hasSize(2);
+    assertThat(provider.requests).hasSize(1);
     assertThat(provider.requests.getFirst().toolRequired()).isTrue();
     assertThat(provider.requests.getFirst().tools())
         .extracting(ChatCompletionClient.ToolDefinition::name)
@@ -304,9 +365,9 @@ class AssistantTurnServiceTest {
             AssistantToolDefinitions.REMOVE_SELECTED_CABINS);
     assertThat(provider.requests.getFirst().messages().getFirst().content())
         .contains("DYNAMIC SELECTION CONTEXT: There is an active");
-    assertThat(provider.requests.get(1).toolRequired()).isFalse();
-    verify(conversations)
-        .completeAssistantTurn(owner, conversationId, "Добавить к текущей подборке или заменить её?");
+    assertThat(emitter.events.getLast().event()).isEqualTo("turn.completed");
+    assertThat(emitter.events.getLast().messageId()).isNull();
+    verify(conversations, never()).completeAssistantTurn(any(), any(), any());
   }
 
   @Test
@@ -344,9 +405,7 @@ class AssistantTurnServiceTest {
             });
     AssistantMessage completed = mock(AssistantMessage.class);
     when(completed.getId()).thenReturn(UUID.randomUUID());
-    when(
-            conversations.completeAssistantTurn(
-                owner, conversationId, "Подбор обновлён."))
+    when(conversations.completeAssistantTurn(owner, conversationId, "Подбор обновлён."))
         .thenReturn(completed);
 
     new AssistantTurnService(
@@ -357,7 +416,12 @@ class AssistantTurnServiceTest {
             mapper,
             properties(),
             Runnable::run)
-        .stream(owner, conversationId, "Покажи свободные бытовки", "current-user-bearer", new SseEmitter());
+        .stream(
+            owner,
+            conversationId,
+            "Покажи свободные бытовки",
+            "current-user-bearer",
+            new SseEmitter());
 
     assertThat(provider.requests).hasSize(3);
     assertThat(provider.requests.getFirst().toolRequired()).isTrue();
@@ -376,8 +440,7 @@ class AssistantTurnServiceTest {
             AssistantToolDefinitions.REQUEST_CABIN_CLARIFICATIONS,
             AssistantToolDefinitions.LOOKUP_CABIN_CATALOG);
     assertThat(provider.requests.get(2).toolRequired()).isFalse();
-    verify(conversations)
-        .completeAssistantTurn(owner, conversationId, "Подбор обновлён.");
+    verify(conversations).completeAssistantTurn(owner, conversationId, "Подбор обновлён.");
   }
 
   @Test
@@ -434,7 +497,12 @@ class AssistantTurnServiceTest {
             mapper,
             properties(),
             Runnable::run)
-        .stream(owner, conversationId, "Покажи свободные БК-1", "current-user-bearer", new SseEmitter());
+        .stream(
+            owner,
+            conversationId,
+            "Покажи свободные БК-1",
+            "current-user-bearer",
+            new SseEmitter());
 
     assertThat(provider.requests).hasSize(3);
     assertThat(provider.requests.getFirst().toolRequired()).isTrue();
@@ -519,8 +587,7 @@ class AssistantTurnServiceTest {
 
     assertThat(provider.requests).hasSize(2);
     assertThat(provider.requests.get(1).toolRequired()).isFalse();
-    verify(conversations)
-        .completeAssistantTurn(owner, conversationId, "Подбор обновлён.");
+    verify(conversations).completeAssistantTurn(owner, conversationId, "Подбор обновлён.");
   }
 
   @Test
@@ -557,9 +624,8 @@ class AssistantTurnServiceTest {
             });
     AssistantMessage completed = mock(AssistantMessage.class);
     when(completed.getId()).thenReturn(UUID.randomUUID());
-    when(
-            conversations.completeAssistantTurn(
-                owner, conversationId, "Этот диалог уже завершён: подборка больше не активна."))
+    when(conversations.completeAssistantTurn(
+            owner, conversationId, "Этот диалог уже завершён: подборка больше не активна."))
         .thenReturn(completed);
 
     new AssistantTurnService(
@@ -570,7 +636,12 @@ class AssistantTurnServiceTest {
             mapper,
             properties(),
             Runnable::run)
-        .stream(owner, conversationId, "Покажи свободные бытовки", "current-user-bearer", new SseEmitter());
+        .stream(
+            owner,
+            conversationId,
+            "Покажи свободные бытовки",
+            "current-user-bearer",
+            new SseEmitter());
 
     assertThat(provider.requests).hasSize(1);
     InOrder ordered = inOrder(conversations);
@@ -590,7 +661,8 @@ class AssistantTurnServiceTest {
   private void assertReplayedHistory(ChatCompletionRequest request) {
     assertThat(request.messages())
         .extracting(ChatCompletionClient.ChatMessage::role)
-        .containsExactly("system", "user", "assistant", "tool", "assistant", "tool", "assistant", "user");
+        .containsExactly(
+            "system", "user", "assistant", "tool", "assistant", "tool", "assistant", "user");
     assertThat(request.messages().get(1).content())
         .isEqualTo("Покажи 10 свободных БК-1 с ДВП в Санкт-Петербурге");
     assertToolCall(
@@ -634,6 +706,27 @@ class AssistantTurnServiceTest {
         Duration.ofSeconds(1),
         Duration.ofSeconds(5),
         false);
+  }
+
+  private static AssistantApiModels.ClarificationQuestionResponse question(
+      int sequenceNumber, String status, UUID answeredOptionId) {
+    UUID firstOptionId = answeredOptionId == null ? UUID.randomUUID() : answeredOptionId;
+    return new AssistantApiModels.ClarificationQuestionResponse(
+        UUID.randomUUID(),
+        "ordered:" + sequenceNumber,
+        sequenceNumber,
+        "CABIN_TYPE",
+        "Уточнение " + sequenceNumber,
+        status,
+        List.of(
+            new AssistantApiModels.ClarificationOptionResponse(firstOptionId, "Модуль", "Модуль"),
+            new AssistantApiModels.ClarificationOptionResponse(
+                UUID.randomUUID(), "Пост охраны", "Пост охраны")),
+        answeredOptionId,
+        OffsetDateTime.parse("2026-08-09T12:00:00Z").plusMinutes(sequenceNumber),
+        answeredOptionId == null
+            ? null
+            : OffsetDateTime.parse("2026-08-09T12:10:00Z").plusMinutes(sequenceNumber));
   }
 
   private static void toolCall(
@@ -710,11 +803,7 @@ class AssistantTurnServiceTest {
       switch (requests.size()) {
         case 1 -> {
           listener.onContent("Непроверенный текст вместе с фасетами.");
-          toolCall(
-              listener,
-              "facets",
-              AssistantToolDefinitions.LIST_AVAILABLE_CABIN_FACETS,
-              "{}");
+          toolCall(listener, "facets", AssistantToolDefinitions.LIST_AVAILABLE_CABIN_FACETS, "{}");
         }
         case 2 -> {
           listener.onContent("Непроверенный текст до поиска.");
@@ -740,7 +829,8 @@ class AssistantTurnServiceTest {
     @Override
     public void stream(ChatCompletionRequest request, ChatCompletionListener listener) {
       requests.add(request);
-      if (requests.size() != 1) throw new AssertionError("Archived inquiry must finish immediately");
+      if (requests.size() != 1)
+        throw new AssertionError("Archived inquiry must finish immediately");
       toolCall(
           listener,
           "archived-search",
@@ -772,7 +862,6 @@ class AssistantTurnServiceTest {
         default -> throw new AssertionError("Unexpected provider round");
       }
     }
-
   }
 
   /** Captures structured event payloads without starting an HTTP response. */
@@ -782,7 +871,10 @@ class AssistantTurnServiceTest {
     @Override
     public void send(SseEventBuilder builder) {
       builder.build().stream()
-          .map(org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter.DataWithMediaType::getData)
+          .map(
+              org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter
+                      .DataWithMediaType
+                  ::getData)
           .filter(AssistantApiModels.TurnEvent.class::isInstance)
           .map(AssistantApiModels.TurnEvent.class::cast)
           .forEach(events::add);

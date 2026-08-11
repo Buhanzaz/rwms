@@ -8,6 +8,7 @@ import {
   createAssistantConversation,
   getAssistantConversation,
   isCabinSearchResultActive,
+  listAssistantConversations,
   mergeCabinSearchNotices,
   mergeCabinSearchResults,
   streamAssistantTurn,
@@ -30,6 +31,7 @@ const FILTER_SUGGESTIONS = {
 }
 const WAREHOUSE_ID = "55555555-5555-4555-8555-555555555555"
 const CABIN_ID = "99999999-9999-4999-8999-999999999999"
+const ORDER_ID = "77777777-7777-4777-8777-777777777777"
 const validCabin = {
   id: CABIN_ID,
   version: 1,
@@ -61,6 +63,7 @@ describe("assistant API", () => {
             version: 0,
             clientId: CLIENT_ID,
             rentalInquiryId: "33333333-3333-4333-8333-333333333333",
+            rentalOrderId: null,
             clientType: "LEGAL_ENTITY",
             clientDisplayName: "ООО Тест",
             archived: false,
@@ -95,6 +98,7 @@ describe("assistant API", () => {
           displayName: "ООО Тест",
           phone: "+79990000000",
           contactPerson: "Иван Иванов",
+          additionalContacts: [],
           email: null,
           responsibleManagerId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
           responsibleManagerDisplayName: "Менеджер",
@@ -115,6 +119,85 @@ describe("assistant API", () => {
       conversationId: CONVERSATION_ID,
       clientId: CLIENT_ID,
     })
+  })
+
+  it("lists and creates a fresh assistant conversation for the current order", async () => {
+    const conversation = {
+      id: CONVERSATION_ID,
+      version: 0,
+      clientId: CLIENT_ID,
+      rentalInquiryId: "33333333-3333-4333-8333-333333333333",
+      rentalOrderId: ORDER_ID,
+      clientType: "LEGAL_ENTITY",
+      clientDisplayName: "ООО Тест",
+      archived: false,
+      archivedAt: null,
+      createdAt: "2026-07-27T08:00:00Z",
+      updatedAt: "2026-07-27T08:00:00Z",
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            conversation,
+            inquiry: {
+              id: conversation.rentalInquiryId,
+              status: "ACTIVE",
+            },
+            client: {
+              id: CLIENT_ID,
+              clientType: "LEGAL_ENTITY",
+              displayName: "ООО Тест",
+            },
+          }),
+          { status: 201, headers: { "Content-Type": "application/json" } }
+        )
+      )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await listAssistantConversations("access-token", ORDER_ID)
+    const created = await createAssistantConversation({
+      accessToken: "access-token",
+      conversationId: CONVERSATION_ID,
+      rentalOrderId: ORDER_ID,
+      choice: {
+        kind: "existing",
+        client: {
+          id: CLIENT_ID,
+          version: 1,
+          type: "LEGAL_ENTITY",
+          displayName: "ООО Тест",
+          phone: "+79990000000",
+          contactPerson: "Иван Иванов",
+          additionalContacts: [],
+          email: null,
+          responsibleManagerId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          responsibleManagerDisplayName: "Менеджер",
+          comment: null,
+          source: null,
+          createdAt: "2026-07-27T08:00:00Z",
+          updatedAt: "2026-07-27T08:00:00Z",
+        },
+      },
+    })
+
+    const [listUrl] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new URL(listUrl).searchParams.get("rentalOrderId")).toBe(ORDER_ID)
+
+    const [, createInit] = fetchMock.mock.calls[1] as [string, RequestInit]
+    expect(JSON.parse(String(createInit.body))).toEqual({
+      conversationId: CONVERSATION_ID,
+      clientId: CLIENT_ID,
+      rentalOrderId: ORDER_ID,
+    })
+    expect(created.conversation.rentalOrderId).toBe(ORDER_ID)
   })
 
   it("parses incremental SSE events and exposes bounded search data", async () => {
@@ -224,6 +307,7 @@ describe("assistant API", () => {
     const clarification = {
       id: "66666666-6666-4666-8666-666666666666",
       branchKey: "finish:osb",
+      sequenceNumber: 1,
       kind: "DIMENSIONS" as const,
       prompt: "Какой размер ОСБ нужен?",
       status: "ANSWERED" as const,
@@ -421,6 +505,7 @@ describe("assistant API", () => {
               version: 1,
               clientId: CLIENT_ID,
               rentalInquiryId: currentSelection.inquiryId,
+              rentalOrderId: null,
               clientType: "LEGAL_ENTITY",
               clientDisplayName: "ООО Тест",
               archived: false,
@@ -454,6 +539,7 @@ describe("assistant API", () => {
               version: 1,
               clientId: CLIENT_ID,
               rentalInquiryId: "33333333-3333-4333-8333-333333333333",
+              rentalOrderId: null,
               clientType: "LEGAL_ENTITY",
               clientDisplayName: "ООО Тест",
               archived: false,

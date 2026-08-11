@@ -12,8 +12,12 @@ import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.FINISHING_DVP;
 import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.TYPE_BK_1;
 import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.plasticWindow;
 
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireLogisticsEquipmentMovementReservationRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateRentalItemRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsEquipmentMovementPurpose;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.TransferEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateStatusRequest;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.CabinSearchGroup;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.CabinSearchRequest;
@@ -22,9 +26,11 @@ import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.CabinAvailabilityRe
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.ConvertPresentationHoldsRequest;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.PresentationHoldView;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.ReplacePresentationHoldsRequest;
+import dev.buhanzaz.rwms.asset.domain.BalanceLocationKind;
+import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
 import dev.buhanzaz.rwms.asset.domain.OperationLease;
-import dev.buhanzaz.rwms.asset.domain.OrderUnitReservationState;
 import dev.buhanzaz.rwms.asset.domain.OrderUnitReservation;
+import dev.buhanzaz.rwms.asset.domain.OrderUnitReservationState;
 import dev.buhanzaz.rwms.asset.domain.PresentationUnitHoldState;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import dev.buhanzaz.rwms.asset.repository.OperationLeaseRepository;
@@ -799,8 +805,151 @@ class PresentationHoldServiceIntegrationTest {
         .isEqualTo(PresentationUnitHoldState.RELEASED);
   }
 
+  @Test
+  void heldCabinSnapshotsAreOrderedAndFenceContentsAgainstEveryMovementOrdering() {
+    UUID actorSubjectId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID equipmentId =
+        assets
+            .createEquipment(
+                actorSubjectId,
+                UUID.randomUUID(),
+                new CreateEquipmentRequest(
+                    "Presentation bed " + UUID.randomUUID(),
+                    EquipmentCategory.FURNITURE,
+                    null,
+                    4))
+            .response()
+            .id();
+    RentalItemResponse first = freeRental(actorSubjectId, warehouseId, "SNAPSHOT-FIRST");
+    RentalItemResponse second = freeRental(actorSubjectId, warehouseId, "SNAPSHOT-SECOND");
+    UUID firstBalanceId =
+        seedBalance(
+            equipmentId,
+            warehouseId,
+            first.id(),
+            BalanceLocationKind.CABIN_NON_RENTED,
+            4);
+    seedBalance(equipmentId, warehouseId, null, BalanceLocationKind.STOCK, 0);
+
+    UUID presentationId = UUID.randomUUID();
+    var held =
+        presentationHolds.replace(
+            UUID.randomUUID(),
+            presentationId,
+            replaceRequest(
+                warehouseId,
+                List.of(second.id(), first.id()),
+                OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(10),
+                actorSubjectId));
+    assertThat(held.response().cabins())
+        .extracting(cabin -> cabin.id())
+        .containsExactly(second.id(), first.id());
+    assertThat(held.response().cabins().get(1).contents())
+        .singleElement()
+        .satisfies(
+            content -> {
+              assertThat(content.equipmentId()).isEqualTo(equipmentId);
+              assertThat(content.quantity()).isEqualTo(4);
+            });
+    assertThat(assets.equipmentTotals(equipmentId, warehouseId).availableQuantity()).isZero();
+    assertThatThrownBy(
+            () ->
+                assets.transfer(
+                    actorSubjectId,
+                    UUID.randomUUID(),
+                    new TransferEquipmentRequest(
+                        equipmentId,
+                        warehouseId,
+                        first.id(),
+                        BalanceLocationKind.CABIN_NON_RENTED,
+                        0L,
+                        warehouseId,
+                        null,
+                        BalanceLocationKind.STOCK,
+                        0L,
+                        1L)))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("Presentation-held rental item contents");
+    assertThat(
+            jdbc.queryForObject(
+                "select quantity from equipment_balance where id=?", Long.class, firstBalanceId))
+        .isEqualTo(4L);
+
+    RentalItemResponse movementSource =
+        freeRental(actorSubjectId, warehouseId, "MOVEMENT-FIRST");
+    UUID movementBalanceId =
+        seedBalance(
+            equipmentId,
+            warehouseId,
+            movementSource.id(),
+            BalanceLocationKind.CABIN_NON_RENTED,
+            1);
+    assets.acquireLogisticsEquipmentMovementReservation(
+        actorSubjectId,
+        UUID.randomUUID(),
+        new AcquireLogisticsEquipmentMovementReservationRequest(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            LogisticsEquipmentMovementPurpose.ALLOCATABLE_REBALANCE,
+            equipmentId,
+            warehouseId,
+            movementSource.id(),
+            BalanceLocationKind.CABIN_NON_RENTED,
+            0L,
+            1L,
+            OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(10)));
+    RentalItemResponse rollbackCandidate =
+        freeRental(actorSubjectId, warehouseId, "ROLLBACK-CANDIDATE");
+    UUID failedPresentationId = UUID.randomUUID();
+    assertThatThrownBy(
+            () ->
+                presentationHolds.replace(
+                    UUID.randomUUID(),
+                    failedPresentationId,
+                    replaceRequest(
+                        warehouseId,
+                        List.of(rollbackCandidate.id(), movementSource.id()),
+                        OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(10),
+                        actorSubjectId)))
+        .isInstanceOf(OrderUnitReservationConflictException.class)
+        .satisfies(
+            error ->
+                assertThat(((OrderUnitReservationConflictException) error).code())
+                    .isEqualTo("UNIT_EQUIPMENT_MOVEMENT_FENCED"));
+    assertThat(presentationHolds.holds(failedPresentationId).holds()).isEmpty();
+    assertThat(presentationHolds.holds(failedPresentationId).cabins()).isEmpty();
+    assertThat(
+            jdbc.queryForObject(
+                "select quantity from equipment_balance where id=?", Long.class, movementBalanceId))
+        .isEqualTo(1L);
+  }
+
   private RentalItemResponse freeRental(UUID actorSubjectId, UUID warehouseId, String suffix) {
     return freeRental(actorSubjectId, warehouseId, suffix, null, null, false);
+  }
+
+  private UUID seedBalance(
+      UUID equipmentId,
+      UUID warehouseId,
+      UUID rentalItemId,
+      BalanceLocationKind locationKind,
+      long quantity) {
+    UUID balanceId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into equipment_balance(
+          id,version,equipment_id,warehouse_id,rental_item_id,location_kind,quantity,
+          created_at,updated_at)
+        values (?,0,?,?,?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        balanceId,
+        equipmentId,
+        warehouseId,
+        rentalItemId,
+        locationKind.name(),
+        quantity);
+    return balanceId;
   }
 
   private CabinSearchResponse search(CabinSearchRequest request) {

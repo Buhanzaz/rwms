@@ -73,5 +73,16 @@ public interface OrderUnitReservationRepository
       @Param("orderId") UUID orderId,
       @Param("state") OrderUnitReservationState state);
 
+  /**
+   * Serializes every command that changes or validates the cabin/equipment composition of one
+   * logistics order. The shared textual namespace is intentionally used by both order reservation
+   * and presentation-hold conversion transactions.
+   */
+  @Query(
+      value =
+          "select 1 from pg_advisory_xact_lock(hashtextextended(cast(:lockKey as text), 0))",
+      nativeQuery = true)
+  Integer acquireTransactionLock(@Param("lockKey") String lockKey);
+
   boolean existsByOrderIdAndState(UUID orderId, OrderUnitReservationState state);
 }

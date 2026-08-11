@@ -80,7 +80,8 @@ final class AssetEquipmentCatalogService {
       return new AssetService.CreateResult<>(json.read(replay.get(), EquipmentResponse.class), true);
     }
     EquipmentCatalogItem candidate =
-        EquipmentCatalogItem.create(request.name(), request.category(), request.comment());
+        EquipmentCatalogItem.create(
+            request.name(), request.category(), request.comment(), request.maximumPerCabin());
     if (equipment.existsByNormalizedName(candidate.getNormalizedName())) {
       throw new AssetConflictException("Equipment with this name already exists");
     }
@@ -103,8 +104,10 @@ final class AssetEquipmentCatalogService {
   }
 
   /**
-   * Binds a maintenance catalog node to a furniture item permanently; the binding is the source
-   * of truth for late retries after generic idempotency retention expires.
+   * Binds a maintenance catalog node to a furniture item permanently. Versionless legacy ensures
+   * preserve the current maximum; a version-fenced editor intent may change or clear it. The node
+   * advisory lock and duplicate-reference retry apply the same CAS semantics after races and after
+   * generic idempotency retention expires.
    */
   AssetService.CreateResult<MaintenanceFurnitureEquipmentResponse> ensureMaintenanceFurniture(
       UUID subjectId, UUID key, EnsureMaintenanceFurnitureEquipmentRequest request) {
@@ -119,9 +122,16 @@ final class AssetEquipmentCatalogService {
     MaintenanceFurnitureEquipmentResponse existing =
         maintenanceFurnitureReference(request.externalReferenceId()).orElse(null);
     if (existing != null) {
+      EquipmentCatalogItem existingItem = require(existing.equipmentId());
+      updateMaintenanceFurniture(existingItem, request);
+      existing = maintenanceFurnitureResponse(request.externalReferenceId(), existingItem);
       idempotency.store(
           subjectId, "maintenance.equipment-catalog.ensure", key, hash, 200, existing);
       return new AssetService.CreateResult<>(existing, true);
+    }
+    if (request.expectedEquipmentVersion() != null) {
+      throw new AssetConflictException(
+          "Maintenance equipment reference does not exist at the expected version");
     }
 
     String normalizedName = EquipmentCatalogItem.normalizeName(request.equipmentName());
@@ -134,7 +144,10 @@ final class AssetEquipmentCatalogService {
       catalogItem =
           equipment.saveAndFlush(
               EquipmentCatalogItem.create(
-                  request.equipmentName(), EquipmentCategory.FURNITURE, null));
+                  request.equipmentName(),
+                  EquipmentCategory.FURNITURE,
+                  null,
+                  request.maximumPerCabin()));
       events.initialize(
           AssetAggregateType.EQUIPMENT_CATALOG,
           catalogItem.getId(),
@@ -146,6 +159,12 @@ final class AssetEquipmentCatalogService {
       throw new AssetConflictException(
           "Maintenance furniture reference conflicts with a non-furniture catalog item");
     }
+    catalogItem =
+        equipment
+            .findByIdForUpdate(catalogItem.getId())
+            .orElseThrow(() -> new AssetNotFoundException("Equipment catalog item was not found"));
+    applyNewReferenceMaximum(catalogItem, request.maximumPerCabin());
+    updateMaintenanceFurniture(catalogItem, request);
     try {
       jdbc.update(
           """
@@ -161,11 +180,13 @@ final class AssetEquipmentCatalogService {
       if (raced == null) {
         throw new AssetConflictException("Maintenance equipment reference changed concurrently");
       }
-      return new AssetService.CreateResult<>(raced, true);
+      EquipmentCatalogItem racedItem = require(raced.equipmentId());
+      updateMaintenanceFurniture(racedItem, request);
+      return new AssetService.CreateResult<>(
+          maintenanceFurnitureResponse(request.externalReferenceId(), racedItem), true);
     }
     MaintenanceFurnitureEquipmentResponse response =
-        new MaintenanceFurnitureEquipmentResponse(
-            request.externalReferenceId(), catalogItem.getId(), catalogItem.getName());
+        maintenanceFurnitureResponse(request.externalReferenceId(), catalogItem);
     idempotency.store(
         subjectId, "maintenance.equipment-catalog.ensure", key, hash, 201, response);
     return new AssetService.CreateResult<>(response, false);
@@ -185,7 +206,12 @@ final class AssetEquipmentCatalogService {
       throw new AssetConflictException(
           "Equipment with non-terminal quantity, reservations or holds cannot be deactivated");
     }
-    if (!item.change(request.name(), request.category(), request.active(), request.comment())) {
+    if (!item.change(
+        request.name(),
+        request.category(),
+        request.active(),
+        request.comment(),
+        request.maximumPerCabin())) {
       return response(item);
     }
     EquipmentCatalogItem saved;
@@ -209,7 +235,8 @@ final class AssetEquipmentCatalogService {
     return jdbc
         .query(
             """
-            select reference.external_reference_id,item.id,item.name,item.category
+            select reference.external_reference_id,item.id,item.name,item.category,
+                   item.version,item.maximum_per_cabin
             from equipment_external_reference reference
             join equipment_catalog_item item on item.id=reference.equipment_id
             where reference.source_system='MAINTENANCE_CATALOG_NODE'
@@ -223,11 +250,99 @@ final class AssetEquipmentCatalogService {
               return new MaintenanceFurnitureEquipmentResponse(
                   rs.getObject("external_reference_id", UUID.class),
                   rs.getObject("id", UUID.class),
-                  rs.getString("name"));
+                  rs.getString("name"),
+                  rs.getLong("version"),
+                  rs.getObject("maximum_per_cabin", Integer.class));
             },
             externalReferenceId)
         .stream()
         .findFirst();
+  }
+
+  /** Returns a bounded live read of asset-owned settings for durable maintenance node identities. */
+  List<MaintenanceFurnitureEquipmentResponse> maintenanceFurnitureReferences(
+      List<UUID> externalReferenceIds) {
+    if (externalReferenceIds == null
+        || externalReferenceIds.size() > 10000
+        || externalReferenceIds.stream().anyMatch(java.util.Objects::isNull)
+        || externalReferenceIds.stream().distinct().count() != externalReferenceIds.size()) {
+      throw new IllegalArgumentException("Maintenance equipment references are invalid");
+    }
+    return externalReferenceIds.stream()
+        .sorted()
+        .map(this::maintenanceFurnitureReference)
+        .flatMap(Optional::stream)
+        .toList();
+  }
+
+  /**
+   * Applies a maintenance editor mutation only with the exact asset version. A versionless ensure
+   * deliberately preserves both the current name and maximum for legacy/retry callers.
+   */
+  private void updateMaintenanceFurniture(
+      EquipmentCatalogItem item, EnsureMaintenanceFurnitureEquipmentRequest request) {
+    if (request.expectedEquipmentVersion() == null) {
+      return;
+    }
+    AssetLeaseService.assertVersion(item.getVersion(), request.expectedEquipmentVersion());
+    if (!item.change(
+        request.equipmentName(),
+        EquipmentCategory.FURNITURE,
+        item.isActive(),
+        item.getComment(),
+        request.maximumPerCabin())) {
+      return;
+    }
+    long previousVersion = item.getVersion();
+    EquipmentCatalogItem saved = equipment.saveAndFlush(item);
+    events.append(
+        AssetAggregateType.EQUIPMENT_CATALOG,
+        saved.getId(),
+        previousVersion,
+        AssetEventType.EQUIPMENT_CATALOG_CHANGED,
+        fact(saved),
+        snapshot(saved));
+  }
+
+  /**
+   * Initializes a previously unlinked existing furniture item only when no configured maximum can
+   * be overwritten; later changes must use the version-fenced editor path.
+   */
+  private void applyNewReferenceMaximum(
+      EquipmentCatalogItem item, Integer requestedMaximumPerCabin) {
+    if (requestedMaximumPerCabin == null
+        || java.util.Objects.equals(item.getMaximumPerCabin(), requestedMaximumPerCabin)) {
+      return;
+    }
+    if (item.getMaximumPerCabin() != null) {
+      throw new AssetConflictException(
+          "Existing furniture has another maximum per cabin; reload and edit it with its version");
+    }
+    long previousVersion = item.getVersion();
+    item.change(
+        item.getName(),
+        item.getCategory(),
+        item.isActive(),
+        item.getComment(),
+        requestedMaximumPerCabin);
+    EquipmentCatalogItem saved = equipment.saveAndFlush(item);
+    events.append(
+        AssetAggregateType.EQUIPMENT_CATALOG,
+        saved.getId(),
+        previousVersion,
+        AssetEventType.EQUIPMENT_CATALOG_CHANGED,
+        fact(saved),
+        snapshot(saved));
+  }
+
+  private static MaintenanceFurnitureEquipmentResponse maintenanceFurnitureResponse(
+      UUID externalReferenceId, EquipmentCatalogItem item) {
+    return new MaintenanceFurnitureEquipmentResponse(
+        externalReferenceId,
+        item.getId(),
+        item.getName(),
+        item.getVersion(),
+        item.getMaximumPerCabin());
   }
 
   private boolean hasEquipmentUsage(UUID equipmentId) {
@@ -302,6 +417,7 @@ final class AssetEquipmentCatalogService {
     value.put("name", item.getName());
     value.put("category", item.getCategory().name());
     value.put("active", item.isActive());
+    value.put("maximumPerCabin", item.getMaximumPerCabin());
     value.put("comment", item.getComment());
     return value;
   }

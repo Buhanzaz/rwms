@@ -29,13 +29,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  cabinFurnitureRows,
+  cabinHasFurniture,
+  type CabinFurnitureRequirementInput,
+} from "@/features/rental-items/cabin-furniture"
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 import type { EquipmentItemDto } from "@/types/equipment"
 
-export type CabinFurnitureRequirementInput = {
-  equipmentId: string
-  quantity: number
-}
+export type { CabinFurnitureRequirementInput } from "@/features/rental-items/cabin-furniture"
 
 type FurnitureDraft = CabinFurnitureRequirementInput & {
   key: string
@@ -68,35 +70,6 @@ function initialDrafts(contents: CabinFurnitureRequirementInput[]) {
 
 function furnitureItems(items: EquipmentItemDto[]) {
   return items.filter((item) => item.active && item.category === "FURNITURE")
-}
-
-export function furnitureEquipmentIds(items: EquipmentItemDto[] | undefined) {
-  if (!items) return undefined
-  return new Set(
-    items.filter((item) => item.category === "FURNITURE").map((item) => item.id)
-  )
-}
-
-function cabinFurnitureRows(
-  cabin: Pick<RentalItemDto, "contentsItems">,
-  furnitureIds?: ReadonlySet<string>
-) {
-  return cabin.contentsItems.filter(
-    (item) =>
-      item.quantity > 0 &&
-      (!furnitureIds ||
-        (item.equipmentId !== undefined && furnitureIds.has(item.equipmentId)))
-  )
-}
-
-export function cabinHasFurniture(
-  cabin: Pick<RentalItemDto, "contents" | "contentsItems">,
-  furnitureIds?: ReadonlySet<string>
-) {
-  return (
-    cabinFurnitureRows(cabin, furnitureIds).length > 0 ||
-    (!furnitureIds && Boolean(cabin.contents?.trim()))
-  )
 }
 
 export function CabinFurnitureContents({

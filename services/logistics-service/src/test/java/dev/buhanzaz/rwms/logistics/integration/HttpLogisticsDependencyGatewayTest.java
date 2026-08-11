@@ -45,32 +45,34 @@ class HttpLogisticsDependencyGatewayTest {
     RestClient.Builder builder = RestClient.builder();
     server = MockRestServiceServer.bindTo(builder).build();
     authorizedClients = mock(OAuth2AuthorizedClientManager.class);
-    when(authorizedClients.authorize(any())).thenAnswer(invocation -> {
-      OAuth2AuthorizeRequest request = invocation.getArgument(0);
-      String scope =
-          switch (request.getClientRegistrationId()) {
-            case "logistics-asset" -> "asset.logistics";
-            case "logistics-warehouse" -> "warehouse.logistics";
-            case "logistics-warehouse-timezone" -> "warehouse.timezone.read";
-            case "logistics-warehouse-operation" -> "warehouse.operation.mark";
-            case "logistics-warehouse-lifecycle-read" -> "warehouse.lifecycle.read";
-            case "logistics-warehouse-lifecycle-confirm" -> "warehouse.lifecycle.confirm";
-            case "logistics-maintenance" -> "maintenance.logistics";
-            case "logistics-media" -> "media.logistics";
-            case "logistics-task-board" -> "task-board.logistics";
-            default -> throw new IllegalArgumentException("unexpected registration");
-          };
-      OAuth2AuthorizedClient authorized = mock(OAuth2AuthorizedClient.class);
-      when(authorized.getAccessToken())
-          .thenReturn(
-              new OAuth2AccessToken(
-                  OAuth2AccessToken.TokenType.BEARER,
-                  "test-" + scope,
-                  Instant.now(),
-                  Instant.now().plusSeconds(300),
-                  Set.of(scope)));
-      return authorized;
-    });
+    when(authorizedClients.authorize(any()))
+        .thenAnswer(
+            invocation -> {
+              OAuth2AuthorizeRequest request = invocation.getArgument(0);
+              String scope =
+                  switch (request.getClientRegistrationId()) {
+                    case "logistics-asset" -> "asset.logistics";
+                    case "logistics-warehouse" -> "warehouse.logistics";
+                    case "logistics-warehouse-timezone" -> "warehouse.timezone.read";
+                    case "logistics-warehouse-operation" -> "warehouse.operation.mark";
+                    case "logistics-warehouse-lifecycle-read" -> "warehouse.lifecycle.read";
+                    case "logistics-warehouse-lifecycle-confirm" -> "warehouse.lifecycle.confirm";
+                    case "logistics-maintenance" -> "maintenance.logistics";
+                    case "logistics-media" -> "media.logistics";
+                    case "logistics-task-board" -> "task-board.logistics";
+                    default -> throw new IllegalArgumentException("unexpected registration");
+                  };
+              OAuth2AuthorizedClient authorized = mock(OAuth2AuthorizedClient.class);
+              when(authorized.getAccessToken())
+                  .thenReturn(
+                      new OAuth2AccessToken(
+                          OAuth2AccessToken.TokenType.BEARER,
+                          "test-" + scope,
+                          Instant.now(),
+                          Instant.now().plusSeconds(300),
+                          Set.of(scope)));
+              return authorized;
+            });
     gateway =
         new HttpLogisticsDependencyGateway(
             builder.build(),
@@ -223,16 +225,13 @@ class HttpLogisticsDependencyGatewayTest {
                     .formatted(warehouseId),
                 MediaType.APPLICATION_JSON));
 
-    LogisticsDependencyGateway.WarehouseIdentity identity = gateway.readWarehouseIdentity(warehouseId);
+    LogisticsDependencyGateway.WarehouseIdentity identity =
+        gateway.readWarehouseIdentity(warehouseId);
 
-    assertThat(identity).isEqualTo(
-        new LogisticsDependencyGateway.WarehouseIdentity(
-            warehouseId,
-            4,
-            true,
-            "СПБ",
-            "Санкт-Петербург",
-            "Europe/Moscow"));
+    assertThat(identity)
+        .isEqualTo(
+            new LogisticsDependencyGateway.WarehouseIdentity(
+                warehouseId, 4, true, "СПБ", "Санкт-Петербург", "Europe/Moscow"));
     server.verify();
   }
 
@@ -308,35 +307,17 @@ class HttpLogisticsDependencyGatewayTest {
 
     assertThat(
             gateway.prepareTransferDeparture(
-                key,
-                transferId,
-                lineId,
-                rentalItemId,
-                sourceWarehouseId,
-                targetWarehouseId))
-        .isEqualTo(
-            new LogisticsDependencyGateway.TransferRepairDeparture(
-                repairId, 8L, "REPAIR"));
+                key, transferId, lineId, rentalItemId, sourceWarehouseId, targetWarehouseId))
+        .isEqualTo(new LogisticsDependencyGateway.TransferRepairDeparture(repairId, 8L, "REPAIR"));
     assertThat(
             gateway.preflightTransferArrival(
-                transferId,
-                lineId,
-                rentalItemId,
-                sourceWarehouseId,
-                targetWarehouseId))
+                transferId, lineId, rentalItemId, sourceWarehouseId, targetWarehouseId))
         .isEqualTo(
             new LogisticsDependencyGateway.TransferRepairArrivalPreflight(
                 repairId, true, List.of()));
     assertThat(
             gateway.completeTransferArrival(
-                key,
-                transferId,
-                lineId,
-                rentalItemId,
-                9,
-                sourceWarehouseId,
-                targetWarehouseId,
-                2))
+                key, transferId, lineId, rentalItemId, 9, sourceWarehouseId, targetWarehouseId, 2))
         .isEqualTo(
             new LogisticsDependencyGateway.TransferRepairArrivalCompletion(
                 repairId, 9L, targetWarehouseId));
@@ -431,8 +412,7 @@ class HttpLogisticsDependencyGatewayTest {
     assertThat(facets.characteristics()).containsExactly("Утеплённая", "Электрика");
     assertThat(facets.typeDimensions())
         .containsExactly(
-            new LogisticsDependencyGateway.CabinTypeDimensionRelation(
-                "БК-1", List.of("6x2.4")));
+            new LogisticsDependencyGateway.CabinTypeDimensionRelation("БК-1", List.of("6x2.4")));
     server.verify();
   }
 
@@ -468,6 +448,7 @@ class HttpLogisticsDependencyGatewayTest {
                     "linoleum":true,
                     "passport":{},
                     "tags":[],
+                    "contents":[],
                     "updatedAt":"2026-07-27T05:41:54Z"
                   }],
                   "page":0,
@@ -482,7 +463,8 @@ class HttpLogisticsDependencyGatewayTest {
     LogisticsDependencyGateway.CabinCatalogPage page =
         gateway.readCabinCatalog(warehouseId, "CAB-001", 0, 20);
 
-    assertThat(page.content()).singleElement()
+    assertThat(page.content())
+        .singleElement()
         .satisfies(
             cabin -> {
               assertThat(cabin.id()).isEqualTo(cabinId);
@@ -551,6 +533,7 @@ class HttpLogisticsDependencyGatewayTest {
                       "linoleum":true,
                       "passport":{"wall":"ДВП","legacy":null},
                       "tags":[],
+                      "contents":[],
                       "updatedAt":"2026-07-27T05:41:54Z"
                     }]
                   }]
@@ -661,6 +644,7 @@ class HttpLogisticsDependencyGatewayTest {
                         "linoleum":true,
                         "passport":{},
                         "tags":[],
+                        "contents":[],
                         "updatedAt":"2026-07-27T05:41:54Z"
                       }]
                     },
@@ -688,6 +672,7 @@ class HttpLogisticsDependencyGatewayTest {
                         "linoleum":false,
                         "passport":{},
                         "tags":[],
+                        "contents":[],
                         "updatedAt":"2026-07-27T05:41:54Z"
                       }]
                     }
@@ -827,9 +812,18 @@ class HttpLogisticsDependencyGatewayTest {
         .andRespond(
             withSuccess(
                 """
-                {"presentationId":"%s","expiresAt":"2026-08-09T12:30:00Z","holds":[]}
+                {
+                  "presentationId":"%s",
+                  "expiresAt":"2026-08-09T12:30:00Z",
+                  "holds":[],
+                  "cabins":[{
+                    "id":"%s","version":0,"warehouseId":"%s","status":"FREE",
+                    "number":"СПБ-001","passport":{},"tags":[],"contents":[],
+                    "updatedAt":"2026-08-09T12:00:00Z"
+                  }]
+                }
                 """
-                    .formatted(inquiryId),
+                    .formatted(inquiryId, cabinId, warehouseId),
                 MediaType.APPLICATION_JSON));
     server
         .expect(requestTo(holdsUri + "/release"))
@@ -880,9 +874,18 @@ class HttpLogisticsDependencyGatewayTest {
         .andRespond(
             withSuccess(
                 """
-                {"presentationId":"%s","expiresAt":"%s","holds":[]}
+                {
+                  "presentationId":"%s",
+                  "expiresAt":"%s",
+                  "holds":[],
+                  "cabins":[{
+                    "id":"%s","version":0,"warehouseId":"%s","status":"FREE",
+                    "number":"СПБ-001","passport":{},"tags":[],"contents":[],
+                    "updatedAt":"2026-07-27T06:30:00Z"
+                  }]
+                }
                 """
-                    .formatted(inquiryId, expiresAt),
+                    .formatted(inquiryId, expiresAt, cabinId, warehouseId),
                 MediaType.APPLICATION_JSON));
 
     LogisticsDependencyGateway.PresentationHolds result =
@@ -1055,13 +1058,10 @@ class HttpLogisticsDependencyGatewayTest {
         .isInstanceOf(LogisticsDependencyException.class)
         .satisfies(
             exception -> {
-              LogisticsDependencyException dependency =
-                  (LogisticsDependencyException) exception;
+              LogisticsDependencyException dependency = (LogisticsDependencyException) exception;
               assertThat(dependency.kind())
-                  .isEqualTo(
-                      LogisticsDependencyException.FailureKind.PERMANENT_REJECTION);
-              assertThat(dependency.dependencyCode())
-                  .isEqualTo("UNIT_ALREADY_RESERVED");
+                  .isEqualTo(LogisticsDependencyException.FailureKind.PERMANENT_REJECTION);
+              assertThat(dependency.dependencyCode()).isEqualTo("UNIT_ALREADY_RESERVED");
             });
     server.verify();
   }
@@ -1110,23 +1110,17 @@ class HttpLogisticsDependencyGatewayTest {
     UUID downstreamKey = UUID.randomUUID();
     String exactBody = "{\"probe\":\"" + downstreamKey + "\"}";
     server
-        .expect(
-            requestTo("http://asset.test/api/internal/asset/v1/logistics/cabin-searches"))
+        .expect(requestTo("http://asset.test/api/internal/asset/v1/logistics/cabin-searches"))
         .andExpect(method(HttpMethod.POST))
         .andExpect(header("Idempotency-Key", downstreamKey.toString()))
         .andExpect(content().string(exactBody))
-        .andRespond(
-            withStatus(status)
-                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
-                .body(body));
+        .andRespond(withStatus(status).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(body));
 
-    assertThatThrownBy(
-            () -> gateway.searchAvailableCabins(downstreamKey, exactBody))
+    assertThatThrownBy(() -> gateway.searchAvailableCabins(downstreamKey, exactBody))
         .isInstanceOf(LogisticsDependencyException.class)
         .satisfies(
             exception -> {
-              LogisticsDependencyException dependency =
-                  (LogisticsDependencyException) exception;
+              LogisticsDependencyException dependency = (LogisticsDependencyException) exception;
               assertThat(dependency.kind()).isEqualTo(expectedKind);
               assertThat(dependency.dependencyCode()).isEqualTo(expectedCode);
             });
@@ -1228,6 +1222,77 @@ class HttpLogisticsDependencyGatewayTest {
   void serializesMaintenanceDispositionPurposeForEquipmentMovementReservations() {
     assertEquipmentMovementReservationPurpose(
         LogisticsDependencyGateway.EquipmentMovementPurpose.MAINTENANCE_DISPOSITION);
+  }
+
+  @Test
+  void serializesExactReplacementReservationReplayContext() {
+    UUID movementId = UUID.randomUUID();
+    UUID lineId = UUID.randomUUID();
+    UUID equipmentId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID sourceUnitId = UUID.randomUUID();
+    UUID targetUnitId = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
+    UUID sourceReservationId = UUID.randomUUID();
+    UUID reservationId = UUID.randomUUID();
+    UUID sourceBalanceId = UUID.randomUUID();
+    OffsetDateTime deadline = OffsetDateTime.parse("2026-08-11T15:00:00Z");
+    List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> units =
+        List.of(
+            new LogisticsDependencyGateway.OrderUnitEquipmentRequirements(
+                targetUnitId,
+                List.of(new LogisticsDependencyGateway.OrderEquipmentRequirement(equipmentId, 4))));
+    server
+        .expect(
+            requestTo(
+                "http://asset.test/api/internal/asset/v1/logistics/equipment-movement-reservations"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(jsonPath("$.orderId").value(orderId.toString()))
+        .andExpect(jsonPath("$.targetRentalItemId").value(targetUnitId.toString()))
+        .andExpect(
+            jsonPath("$.replacementSourceReservationId").value(sourceReservationId.toString()))
+        .andExpect(jsonPath("$.units[0].rentalItemId").value(targetUnitId.toString()))
+        .andExpect(jsonPath("$.units[0].requirements[0].quantity").value(4))
+        .andRespond(
+            withSuccess(
+                """
+                {"reservationId":"%s","version":0,"ownerType":"LOGISTICS_EQUIPMENT_MOVEMENT",
+                 "movementId":"%s","lineId":"%s","equipmentId":"%s",
+                 "equipmentName":"Кровать","sourceBalanceId":"%s","sourceWarehouseId":"%s",
+                 "sourceRentalItemId":"%s","sourceLocationKind":"CABIN_NON_RENTED",
+                 "quantity":4,"state":"ACTIVE","reservedUntil":"%s","executedAt":null}
+                """
+                    .formatted(
+                        reservationId,
+                        movementId,
+                        lineId,
+                        equipmentId,
+                        sourceBalanceId,
+                        warehouseId,
+                        sourceUnitId,
+                        deadline),
+                MediaType.APPLICATION_JSON));
+
+    LogisticsDependencyGateway.EquipmentMovementReservation reservation =
+        gateway.acquireEquipmentMovementReservation(
+            lineId,
+            movementId,
+            lineId,
+            equipmentId,
+            warehouseId,
+            sourceUnitId,
+            "CABIN_NON_RENTED",
+            8,
+            4,
+            deadline,
+            LogisticsDependencyGateway.EquipmentMovementPurpose.ALLOCATABLE_REBALANCE,
+            orderId,
+            targetUnitId,
+            units,
+            sourceReservationId);
+
+    assertThat(reservation.reservationId()).isEqualTo(reservationId);
+    server.verify();
   }
 
   @Test
@@ -1461,12 +1526,7 @@ class HttpLogisticsDependencyGatewayTest {
             movementId,
             java.util.List.of(
                 new LogisticsDependencyGateway.EquipmentMovementExecutionRequestLine(
-                    reservationId,
-                    0,
-                    lineId,
-                    warehouseId,
-                    cabinId,
-                    "CABIN_NON_RENTED")));
+                    reservationId, 0, lineId, warehouseId, cabinId, "CABIN_NON_RENTED")));
     assertThat(execution.lines())
         .singleElement()
         .satisfies(line -> assertThat(line.reservationVersion()).isOne());
@@ -1526,8 +1586,7 @@ class HttpLogisticsDependencyGatewayTest {
                 MediaType.APPLICATION_JSON));
 
     LogisticsDependencyGateway.DriverBoardTask moved =
-        gateway.moveDriverTask(
-            externalTaskId, 3, 5, "SCHEDULED", targetDate, 2);
+        gateway.moveDriverTask(externalTaskId, 3, 5, "SCHEDULED", targetDate, 2);
 
     assertThat(moved.scheduledDate()).isEqualTo(targetDate);
     assertThat(moved.queuePosition()).isEqualTo(2);
@@ -1836,12 +1895,10 @@ class HttpLogisticsDependencyGatewayTest {
 
     assertThat(
             gateway.warehouseAdmission(
-                warehouseId,
-                LogisticsDependencyGateway.WarehouseOperationDirection.OUTGOING))
+                warehouseId, LogisticsDependencyGateway.WarehouseOperationDirection.OUTGOING))
         .extracting(LogisticsDependencyGateway.WarehouseOperationAdmission::warehouseVersion)
         .isEqualTo(7L);
-    assertThat(gateway.warehouseTimeZoneAt(warehouseId, at).timeZone())
-        .isEqualTo("Europe/Samara");
+    assertThat(gateway.warehouseTimeZoneAt(warehouseId, at).timeZone()).isEqualTo("Europe/Samara");
     gateway.markWarehouseOperation(warehouseId, operationId, at);
     assertThat(gateway.warehouseLifecycleReadinessWork(null, 100).items())
         .singleElement()
@@ -1873,8 +1930,7 @@ class HttpLogisticsDependencyGatewayTest {
     assertThatThrownBy(
             () ->
                 gateway.warehouseAdmission(
-                    warehouseId,
-                    LogisticsDependencyGateway.WarehouseOperationDirection.INCOMING))
+                    warehouseId, LogisticsDependencyGateway.WarehouseOperationDirection.INCOMING))
         .isInstanceOf(LogisticsDependencyException.class)
         .satisfies(
             failure ->

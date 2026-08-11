@@ -4,6 +4,7 @@ import static dev.buhanzaz.rwms.maintenance.integration.MaintenanceDependencyGat
 
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpHeaders;
@@ -190,7 +191,11 @@ final class MaintenanceAssetHttpClient {
     }
   }
 
-  FurnitureEquipmentSnapshot ensureFurnitureEquipment(UUID catalogNodeId, String equipmentName) {
+  FurnitureEquipmentSnapshot ensureFurnitureEquipment(
+      UUID catalogNodeId,
+      String equipmentName,
+      Long expectedEquipmentVersion,
+      Integer maximumPerCabin) {
     if (catalogNodeId == null) {
       throw new IllegalArgumentException(
           "Catalog node identity is required for furniture equipment");
@@ -199,22 +204,96 @@ final class MaintenanceAssetHttpClient {
     try {
       MaintenanceFurnitureEquipmentResponse response = transport.client().post()
           .uri(assetBase + "/equipment-catalog")
-          .header("Idempotency-Key", catalogNodeId.toString())
+          .header(
+              "Idempotency-Key",
+              furnitureEquipmentIdempotencyKey(
+                      catalogNodeId, canonicalName, expectedEquipmentVersion, maximumPerCabin)
+                  .toString())
           .header(HttpHeaders.AUTHORIZATION, transport.bearer(ASSET_CLIENT, ASSET_SCOPE))
-          .body(new EnsureFurnitureEquipmentRequest(catalogNodeId, canonicalName))
+          .body(
+              new EnsureFurnitureEquipmentRequest(
+                  catalogNodeId,
+                  canonicalName,
+                  expectedEquipmentVersion,
+                  maximumPerCabin))
           .retrieve()
           .body(MaintenanceFurnitureEquipmentResponse.class);
       if (response == null
           || !catalogNodeId.equals(response.externalReferenceId())
           || response.equipmentId() == null
-          || !canonicalName.equals(response.equipmentName())) {
+          || !canonicalName.equals(response.equipmentName())
+          || response.equipmentVersion() < 0
+          || (expectedEquipmentVersion != null
+              && !java.util.Objects.equals(maximumPerCabin, response.maximumPerCabin()))) {
         throw MaintenanceHttpTransport.malformed(
             "Asset-service returned mismatched furniture equipment truth");
       }
-      return new FurnitureEquipmentSnapshot(response.equipmentId(), response.equipmentName());
+      return new FurnitureEquipmentSnapshot(
+          response.externalReferenceId(),
+          response.equipmentId(),
+          response.equipmentName(),
+          response.equipmentVersion(),
+          response.maximumPerCabin());
     } catch (RuntimeException exception) {
       throw transport.furnitureDependencyFailure(exception);
     }
+  }
+
+  List<FurnitureEquipmentSnapshot> furnitureEquipmentSnapshots(List<UUID> catalogNodeIds) {
+    if (catalogNodeIds == null
+        || catalogNodeIds.size() > 10000
+        || catalogNodeIds.stream().anyMatch(java.util.Objects::isNull)
+        || catalogNodeIds.stream().distinct().count() != catalogNodeIds.size()) {
+      throw new IllegalArgumentException("Furniture equipment snapshot identities are invalid");
+    }
+    try {
+      MaintenanceFurnitureEquipmentResponse[] response =
+          transport.client().post()
+              .uri(assetBase + "/equipment-catalog/snapshots")
+              .header(HttpHeaders.AUTHORIZATION, transport.bearer(ASSET_CLIENT, ASSET_SCOPE))
+              .body(new FurnitureEquipmentSnapshotsRequest(catalogNodeIds))
+              .retrieve()
+              .body(MaintenanceFurnitureEquipmentResponse[].class);
+      if (response == null) {
+        throw MaintenanceHttpTransport.malformed(
+            "Asset-service returned no furniture equipment snapshots");
+      }
+      List<FurnitureEquipmentSnapshot> snapshots =
+          java.util.Arrays.stream(response)
+              .map(
+                  value ->
+                      new FurnitureEquipmentSnapshot(
+                          value.externalReferenceId(),
+                          value.equipmentId(),
+                          value.equipmentName(),
+                          value.equipmentVersion(),
+                          value.maximumPerCabin()))
+              .toList();
+      if (snapshots.stream().map(FurnitureEquipmentSnapshot::catalogNodeId).distinct().count()
+          != snapshots.size()) {
+        throw MaintenanceHttpTransport.malformed(
+            "Asset-service returned duplicate furniture equipment snapshots");
+      }
+      return snapshots;
+    } catch (RuntimeException exception) {
+      throw transport.furnitureDependencyFailure(exception);
+    }
+  }
+
+  private static UUID furnitureEquipmentIdempotencyKey(
+      UUID catalogNodeId,
+      String equipmentName,
+      Long expectedEquipmentVersion,
+      Integer maximumPerCabin) {
+    String fingerprint =
+        catalogNodeId
+            + ":"
+            + equipmentName
+            + ":"
+            + (expectedEquipmentVersion == null ? "create" : expectedEquipmentVersion)
+            + ":"
+            + (maximumPerCabin == null ? "null" : maximumPerCabin);
+    return UUID.nameUUIDFromBytes(fingerprint.getBytes(StandardCharsets.UTF_8));
   }
 
   List<CabinCharacteristicSnapshot> cabinCharacteristics() {
@@ -569,11 +648,22 @@ final class MaintenanceAssetHttpClient {
       UUID rentalItemId, String ownerType, UUID ownerId, long expectedRentalItemVersion) {}
 
   /** Identifies the catalog-derived furniture equipment that asset-service must materialize. */
-  private record EnsureFurnitureEquipmentRequest(UUID externalReferenceId, String equipmentName) {}
+  private record EnsureFurnitureEquipmentRequest(
+      UUID externalReferenceId,
+      String equipmentName,
+      Long expectedEquipmentVersion,
+      Integer maximumPerCabin) {}
+
+  /** Bounded asset-owned equipment settings read for catalog enrichment. */
+  private record FurnitureEquipmentSnapshotsRequest(List<UUID> externalReferenceIds) {}
 
   /** Returns the asset-owned equipment identity resolved for a maintenance catalog position. */
   private record MaintenanceFurnitureEquipmentResponse(
-      UUID externalReferenceId, UUID equipmentId, String equipmentName) {}
+      UUID externalReferenceId,
+      UUID equipmentId,
+      String equipmentName,
+      long equipmentVersion,
+      Integer maximumPerCabin) {}
 
   /**
    * Supplies the version, fencing token and owner proof required to renew or release an existing

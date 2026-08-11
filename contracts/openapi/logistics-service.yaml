@@ -671,6 +671,10 @@ paths:
       - $ref: "#/components/parameters/DriverTaskId"
     get:
       operationId: getDriverTask
+      description: >-
+        Returns the logistics-owned task to a warehouse-authorized manager, or to the exact
+        assigned driver subject for an ASSIGNED_DRIVER task. Unassigned and warehouse-wide tasks
+        remain manager-only until a concrete driver is assigned.
       responses:
         "200": { $ref: "#/components/responses/DriverTask" }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -945,7 +949,9 @@ paths:
     put:
       operationId: updateOrder
       description: >-
-        Replaces the selected client and complete delivery draft under expectedVersion.
+        Replaces the selected client and manager-entered primary contact/comment under expectedVersion.
+        Client-confirmed address, optional coordinates, additional contacts and desired date are
+        supplied only by a NORMAL public presentation confirmation.
         A SAVED order is editable only while its linked shipment remains an untouched draft.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -982,35 +988,11 @@ paths:
     post:
       operationId: saveOrder
       description: >-
-        Locks a non-empty DRAFT order whose complete rental-duration vector, delivery address,
-        coordinate pair, contact phone and non-empty acceptable-date list are configured. Saving
-        does not implicitly choose a shipment batch; create one explicitly with selected unitIds.
-      responses:
-        "200": { $ref: "#/components/responses/OrderDetail" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
-        "503": { $ref: "#/components/responses/DependencyUnavailable" }
-  /api/logistics/v1/orders/{orderId}/rental-terms:
-    parameters:
-      - $ref: "#/components/parameters/OrderId"
-    put:
-      operationId: setOrderRentalTerms
-      description: >-
-        Replaces the complete rental-duration vector for the order cabins. It is accepted for a
-        DRAFT order and for a SAVED order while every existing rental shipment is still an
-        untouched draft. A term already assigned to a shipment is immutable here: cancel that
-        draft shipment before changing it, or use the extension command after SHIPPED.
-        shipmentDate and returnDate remain null until a cabin is assigned to a shipment.
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/SetOrderRentalTermsRequest" }
+        Locks a non-empty DRAFT order whose complete rental-duration vector, client-confirmed
+        delivery address, contact phone and non-empty date-only desired delivery window list are
+        configured. Coordinates remain optional as one pair.
+        Saving does not implicitly choose a shipment batch; create one explicitly with selected
+        unitIds.
       responses:
         "200": { $ref: "#/components/responses/OrderDetail" }
         "400": { $ref: "#/components/responses/BadRequest" }
@@ -1048,9 +1030,9 @@ paths:
     post:
       operationId: createOrderRentalShipment
       description: >-
-        Creates one DRAFT shipment for exactly the selected unitIds. The driver and calendar date
-        are saved immediately, and the date must be one of the configured acceptable delivery
-        dates when that list is non-empty. Preparation starts only when the shipment plan command is called.
+        Creates one DRAFT shipment for exactly the selected unitIds. The actual driver and calendar
+        date are saved immediately. Client desired delivery
+        windows remain advisory and never block another actual date. Preparation starts only when the shipment plan command is called.
         A cabin cannot be selected by another non-cancelled shipment. When this shipment reaches
         SHIPPED, logistics creates one cabin-level return document per shipped line, each linked by
         rentalShipmentId, so return dates and drivers can be changed independently.
@@ -1200,26 +1182,6 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
-  /api/logistics/v1/orders/{orderId}/warehouse:
-    parameters:
-      - $ref: "#/components/parameters/OrderId"
-    put:
-      operationId: selectOrderWarehouse
-      description: Warehouse changes are rejected after the first active unit reservation.
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/SelectOrderWarehouseRequest" }
-      responses:
-        "200": { $ref: "#/components/responses/OrderDetail" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
   /api/logistics/v1/orders/{orderId}/available-units:
     parameters:
       - $ref: "#/components/parameters/OrderId"
@@ -1249,28 +1211,6 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
-  /api/logistics/v1/orders/{orderId}/units:
-    parameters:
-      - $ref: "#/components/parameters/OrderId"
-    post:
-      operationId: addOrderUnit
-      description: Atomically reserves one unit in asset-service for this editable order.
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/AddOrderUnitRequest" }
-      responses:
-        "200": { $ref: "#/components/responses/OrderDetail" }
-        "201": { $ref: "#/components/responses/OrderDetail" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
-        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/orders/{orderId}/units/{unitId}:
     parameters:
       - $ref: "#/components/parameters/OrderId"
@@ -1280,6 +1220,31 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ExpectedVersion"
         - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200": { $ref: "#/components/responses/OrderDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/orders/{orderId}/units/{unitId}/replace:
+    parameters:
+      - $ref: "#/components/parameters/OrderId"
+      - $ref: "#/components/parameters/UnitId"
+    post:
+      operationId: replaceOrderUnit
+      description: >-
+        Warehouse-manager replacement of one unavailable booked cabin inside the same order.
+        Furniture requirements transfer unchanged; any required physical furniture move reuses
+        the existing equipment-movement task flow.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReplaceOrderUnitRequest" }
       responses:
         "200": { $ref: "#/components/responses/OrderDetail" }
         "400": { $ref: "#/components/responses/BadRequest" }
@@ -1379,11 +1344,35 @@ paths:
         "409": { $ref: "#/components/responses/Conflict" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/rental-inquiries:
+    get:
+      operationId: listRentalInquiriesForOrder
+      description: >-
+        Lists manual and assistant inquiries linked to one visible rental order,
+        newest first. Detached inquiries are never included; expired or completed
+        presentations remain discoverable for truthful read-only reopening.
+      parameters:
+        - name: rentalOrderId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Order-linked inquiries, newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/RentalInquiry" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
     post:
       operationId: createRentalInquiry
       description: >-
-        Creates or replays the manager-owned rental inquiry that binds one
-        immutable existing or newly resolved client to one assistant conversation.
+        Creates or replays a manager-owned rental inquiry that binds one
+        immutable existing or newly resolved client to an optional assistant
+        conversation and an optional existing order.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -1753,7 +1742,7 @@ paths:
             schema: { $ref: "#/components/schemas/ConfirmClientPresentationRequest" }
       responses:
         "201":
-          description: Draft order was created.
+          description: Booking completed and selected cabins were added to its target order.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PresentationBooking" }
@@ -1790,7 +1779,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/PresentationBooking" }
         "201":
-          description: Draft order was created.
+          description: Booking completed and selected cabins were added to its target order.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PresentationBooking" }
@@ -1971,7 +1960,6 @@ components:
           clientId,
           equipmentMovementTaskId,
           scheduledDate,
-          scheduledAt,
           rentalOrderId,
           rentalShipmentId,
           lines,
@@ -2045,12 +2033,6 @@ components:
             type: [string, "null"],
             format: date,
             description: Assigned shipment, return pickup, or transfer task date; absent while waiting for scheduling.,
-          }
-        scheduledAt:
-          {
-            type: [string, "null"],
-            format: date-time,
-            description: Deprecated compatibility field. It is always null; logistics schedules by calendar date only.,
           }
         rentalOrderId:
           {
@@ -2378,6 +2360,73 @@ components:
       type: string
       enum:
         [REGISTERING, SCHEDULED, CURRENT, FINALIZING, COMPLETED, CANCELLED, RECONCILIATION_REQUIRED]
+    DriverTripDesiredEquipment:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, equipmentName, quantity]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        equipmentName: { type: string, minLength: 1, maxLength: 512 }
+        quantity: { type: integer, format: int64, minimum: 1 }
+    DriverTripActualEquipment:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, equipmentName, quantity, locationKind]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        equipmentName: { type: [string, "null"], maxLength: 512 }
+        quantity: { type: integer, format: int64, minimum: 0 }
+        locationKind: { type: string }
+    DriverTripCabin:
+      type: object
+      additionalProperties: false
+      required:
+        [cabinId, unitNumber, desiredContents, actualContents, movementTaskCreated, movementTaskCompleted, contentReady]
+      properties:
+        cabinId: { type: string, format: uuid }
+        unitNumber: { type: string, minLength: 1, maxLength: 64 }
+        desiredContents:
+          type: array
+          items: { $ref: "#/components/schemas/DriverTripDesiredEquipment" }
+        actualContents:
+          type: [array, "null"]
+          description: Null only in the bounded local board-card projection; the detail endpoint returns live contents.
+          items: { $ref: "#/components/schemas/DriverTripActualEquipment" }
+        movementTaskCreated: { type: boolean }
+        movementTaskCompleted: { type: boolean }
+        contentReady:
+          type: [boolean, "null"]
+          description: Null only when the local board snapshot cannot prove readiness without a live asset read.
+    DriverTripDetails:
+      type: object
+      additionalProperties: false
+      required:
+        [taskNumber, tripNumber, operationType, clientName, address, latitude, longitude, primaryContactName, primaryContactPhone, additionalContacts, comment, desiredDeliveryWindows, scheduledDate, cabins]
+      properties:
+        taskNumber: { type: string, minLength: 1, maxLength: 64 }
+        tripNumber: { type: integer, minimum: 1 }
+        operationType: { type: string }
+        clientName: { type: string, minLength: 1, maxLength: 512 }
+        address: { type: [string, "null"], maxLength: 1000 }
+        latitude: { type: [number, "null"], format: double, minimum: -90, maximum: 90 }
+        longitude: { type: [number, "null"], format: double, minimum: -180, maximum: 180 }
+        primaryContactName: { type: [string, "null"], maxLength: 512 }
+        primaryContactPhone:
+          type: [string, "null"]
+          maxLength: 16
+          pattern: '^\+[1-9][0-9]{6,14}$'
+        additionalContacts:
+          type: array
+          items: { $ref: "#/components/schemas/AdditionalContact" }
+        comment: { type: [string, "null"], maxLength: 2000 }
+        desiredDeliveryWindows:
+          type: array
+          items: { $ref: "#/components/schemas/DesiredDeliveryWindow" }
+        scheduledDate: { type: string, format: date }
+        cabins:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/DriverTripCabin" }
     MaintenanceDriverTaskCompensationOutcome:
       type: string
       enum:
@@ -2496,6 +2545,7 @@ components:
           createdAt,
           updatedAt,
           completedAt,
+          tripDetails,
         ]
       properties:
         id: { type: string, format: uuid }
@@ -2532,6 +2582,10 @@ components:
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
         completedAt: { type: [string, "null"], format: date-time }
+        tripDetails:
+          oneOf:
+            - { $ref: "#/components/schemas/DriverTripDetails" }
+            - { type: "null" }
     DriverBoardCard:
       type: object
       additionalProperties: false
@@ -2556,6 +2610,7 @@ components:
           priority,
           pinned,
           position,
+          tripDetails,
         ]
       properties:
         driverTaskId: { type: [string, "null"], format: uuid }
@@ -2583,6 +2638,10 @@ components:
         priority: { type: integer, minimum: 1, maximum: 5 }
         pinned: { type: boolean }
         position: { type: integer, minimum: 0 }
+        tripDetails:
+          oneOf:
+            - { $ref: "#/components/schemas/DriverTripDetails" }
+            - { type: "null" }
     DriverBoardDateColumn:
       type: object
       additionalProperties: false
@@ -3056,6 +3115,45 @@ components:
     ClientType:
       type: string
       enum: [INDIVIDUAL, LEGAL_ENTITY]
+    AdditionalContactInput:
+      type: object
+      additionalProperties: false
+      required: [name, phone]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 255 }
+        phone:
+          type: string
+          minLength: 7
+          maxLength: 32
+          pattern: '^(?:\+|8)[0-9() .-]{6,31}$'
+    AdditionalContact:
+      type: object
+      additionalProperties: false
+      required: [name, phone]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 255 }
+        phone:
+          type: string
+          maxLength: 16
+          pattern: '^\+[1-9][0-9]{6,14}$'
+    DesiredDeliveryWindowInput:
+      type: object
+      additionalProperties: false
+      required: [startDate, endDate]
+      properties:
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+      description: >-
+        Inclusive client-requested receiving date range. For a public NORMAL presentation,
+        startDate equals endDate.
+    DesiredDeliveryWindow:
+      type: object
+      additionalProperties: false
+      required: [startDate, endDate]
+      properties:
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+      description: Date-only advisory client preference; it never blocks another logistics-assigned date.
     NewClientInput:
       type: object
       additionalProperties: false
@@ -3073,6 +3171,9 @@ components:
         email: { type: [string, "null"], format: email, maxLength: 320 }
         comment: { type: [string, "null"], minLength: 1, maxLength: 2000 }
         source: { type: [string, "null"], minLength: 1, maxLength: 255 }
+        additionalContacts:
+          type: [array, "null"]
+          items: { $ref: "#/components/schemas/AdditionalContactInput" }
       allOf:
         - if:
             properties:
@@ -3099,6 +3200,9 @@ components:
         email: { type: [string, "null"], format: email, maxLength: 320 }
         comment: { type: [string, "null"], minLength: 1, maxLength: 2000 }
         source: { type: [string, "null"], minLength: 1, maxLength: 255 }
+        additionalContacts:
+          type: [array, "null"]
+          items: { $ref: "#/components/schemas/AdditionalContactInput" }
       allOf:
         - if:
             properties:
@@ -3114,11 +3218,6 @@ components:
       properties:
         clientId: { type: string, format: uuid }
         newClient: { $ref: "#/components/schemas/NewClientInput" }
-        deliveryAddress: { type: [string, "null"], minLength: 1, maxLength: 1000 }
-        latitude:
-          { type: [number, "null"], format: double, minimum: -90, maximum: 90 }
-        longitude:
-          { type: [number, "null"], format: double, minimum: -180, maximum: 180 }
         contactPhone:
           type: [string, "null"]
           minLength: 7
@@ -3126,20 +3225,6 @@ components:
           pattern: '^(?:\+|8)[0-9() .-]{6,31}$'
           description: Human-formatted international or Russian trunk phone; normalized to canonical E.164 before storage.
         comment: { type: [string, "null"], minLength: 1, maxLength: 2000 }
-        acceptableDeliveryDates:
-          type: [array, "null"]
-          maxItems: 31
-          uniqueItems: true
-          items: { type: string, format: date }
-      allOf:
-        - if:
-            required: [latitude]
-          then:
-            required: [longitude]
-        - if:
-            required: [longitude]
-          then:
-            required: [latitude]
       oneOf:
         - required: [clientId]
           not: { required: [newClient] }
@@ -3152,11 +3237,6 @@ components:
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         clientId: { type: string, format: uuid }
-        deliveryAddress: { type: [string, "null"], minLength: 1, maxLength: 1000 }
-        latitude:
-          { type: [number, "null"], format: double, minimum: -90, maximum: 90 }
-        longitude:
-          { type: [number, "null"], format: double, minimum: -180, maximum: 180 }
         contactPhone:
           type: [string, "null"]
           minLength: 7
@@ -3164,34 +3244,14 @@ components:
           pattern: '^(?:\+|8)[0-9() .-]{6,31}$'
           description: Human-formatted international or Russian trunk phone; normalized to canonical E.164 before storage.
         comment: { type: [string, "null"], minLength: 1, maxLength: 2000 }
-        acceptableDeliveryDates:
-          type: [array, "null"]
-          maxItems: 31
-          uniqueItems: true
-          items: { type: string, format: date }
-      allOf:
-        - if:
-            required: [latitude]
-          then:
-            required: [longitude]
-        - if:
-            required: [longitude]
-          then:
-            required: [latitude]
-    SelectOrderWarehouseRequest:
+    ReplaceOrderUnitRequest:
       type: object
       additionalProperties: false
-      required: [expectedVersion, warehouseId]
+      required: [expectedVersion, replacementRentalItemId, reason]
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
-        warehouseId: { type: string, format: uuid }
-    AddOrderUnitRequest:
-      type: object
-      additionalProperties: false
-      required: [expectedVersion, unitId]
-      properties:
-        expectedVersion: { type: integer, format: int64, minimum: 0 }
-        unitId: { type: string, format: uuid }
+        replacementRentalItemId: { type: string, format: uuid }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
     OrderDesiredEquipmentInput:
       type: object
       additionalProperties: false
@@ -3209,25 +3269,6 @@ components:
           type: array
           maxItems: 100
           items: { $ref: "#/components/schemas/OrderDesiredEquipmentInput" }
-    OrderRentalTermInput:
-      type: object
-      additionalProperties: false
-      required: [unitId, rentalMonths]
-      properties:
-        unitId: { type: string, format: uuid }
-        rentalMonths: { type: integer, format: int64, minimum: 1 }
-    SetOrderRentalTermsRequest:
-      type: object
-      additionalProperties: false
-      required: [expectedVersion, terms]
-      properties:
-        expectedVersion: { type: integer, format: int64, minimum: 0 }
-        terms:
-          type: array
-          minItems: 1
-          maxItems: 100
-          uniqueItems: true
-          items: { $ref: "#/components/schemas/OrderRentalTermInput" }
     OrderRentalTermExtensionInput:
       type: object
       additionalProperties: false
@@ -3278,6 +3319,7 @@ components:
           responsibleManagerDisplayName,
           comment,
           source,
+          additionalContacts,
           createdAt,
           updatedAt,
         ]
@@ -3302,6 +3344,9 @@ components:
           maxLength: 255
         comment: { type: [string, "null"], maxLength: 2000 }
         source: { type: [string, "null"], maxLength: 255 }
+        additionalContacts:
+          type: array
+          items: { $ref: "#/components/schemas/AdditionalContact" }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
     ClientPage:
@@ -3336,7 +3381,8 @@ components:
           longitude,
           contactPhone,
           comment,
-          acceptableDeliveryDates,
+          additionalContacts,
+          desiredDeliveryWindows,
           unitCount,
           createdAt,
           updatedAt,
@@ -3364,11 +3410,13 @@ components:
           pattern: '^\+[1-9][0-9]{6,14}$'
           description: Canonical E.164 contact phone stored by logistics.
         comment: { type: [string, "null"], maxLength: 2000 }
-        acceptableDeliveryDates:
+        additionalContacts:
           type: array
-          maxItems: 31
-          uniqueItems: true
-          items: { type: string, format: date }
+          items: { $ref: "#/components/schemas/AdditionalContact" }
+        desiredDeliveryWindows:
+          type: array
+          description: Date-only client receiving preferences, separate from the logistics-assigned date.
+          items: { $ref: "#/components/schemas/DesiredDeliveryWindow" }
         unitCount: { type: integer, format: int64, minimum: 0 }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
@@ -3397,11 +3445,15 @@ components:
     OrderDesiredEquipment:
       type: object
       additionalProperties: false
-      required: [equipmentId, equipmentName, quantity]
+      required: [equipmentId, equipmentName, quantity, reservationState]
       properties:
         equipmentId: { type: string, format: uuid }
         equipmentName: { type: string, minLength: 1, maxLength: 512 }
         quantity: { type: integer, format: int64, minimum: 1 }
+        reservationState:
+          type: string
+          const: ACTIVE
+          description: Derived from the active order-wide asset reservation; no duplicate local status is stored.
     OrderRentalTerm:
       type: object
       additionalProperties: false
@@ -3452,10 +3504,13 @@ components:
     OrderUnit:
       type: object
       additionalProperties: false
-      required: [reservationId, added, unit, desiredContents, rentalTerm]
+      required: [reservationId, added, reservationState, unit, desiredContents, rentalTerm]
       properties:
         reservationId: { type: [string, "null"], format: uuid }
         added: { type: boolean }
+        reservationState:
+          type: [string, "null"]
+          description: ACTIVE for a cabin currently reserved by this order; null for an unselected candidate.
         unit: { $ref: "#/components/schemas/OrderRentalItem" }
         desiredContents:
           type: array
@@ -3478,9 +3533,20 @@ components:
     OrderPermissions:
       type: object
       additionalProperties: false
-      required: [canEdit, canViewOtherManagers]
+      required: [canEdit, canReplaceUnits, canExtendRentalTerms, canViewOtherManagers]
       properties:
         canEdit: { type: boolean }
+        canReplaceUnits:
+          type: boolean
+          description: >-
+            True only for an authorized warehouse manager while this DRAFT or SAVED order has a
+            fixed warehouse and every shipment remains before physical departure. It is independent
+            from ordinary booking editability and the command still applies a per-unit start fence.
+        canExtendRentalTerms:
+          type: boolean
+          description: >-
+            True when the current actor may submit the existing extension command for this SAVED or
+            FULFILLED order. The command still requires each selected cabin to have shipped.
         canViewOtherManagers: { type: boolean }
     OrderDetail:
       type: object
@@ -3502,7 +3568,8 @@ components:
           longitude,
           contactPhone,
           comment,
-          acceptableDeliveryDates,
+          additionalContacts,
+          desiredDeliveryWindows,
           unitCount,
           createdAt,
           updatedAt,
@@ -3533,11 +3600,12 @@ components:
           pattern: '^\+[1-9][0-9]{6,14}$'
           description: Canonical E.164 contact phone stored by logistics.
         comment: { type: [string, "null"], maxLength: 2000 }
-        acceptableDeliveryDates:
+        additionalContacts:
           type: array
-          maxItems: 31
-          uniqueItems: true
-          items: { type: string, format: date }
+          items: { $ref: "#/components/schemas/AdditionalContact" }
+        desiredDeliveryWindows:
+          type: array
+          items: { $ref: "#/components/schemas/DesiredDeliveryWindow" }
         unitCount: { type: integer, format: int64, minimum: 0 }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
@@ -3620,16 +3688,30 @@ components:
     CreateRentalInquiryRequest:
       type: object
       additionalProperties: false
-      required: [conversationId]
       properties:
-        conversationId: { type: string, format: uuid }
+        conversationId:
+          type: [string, "null"]
+          format: uuid
+          description: Assistant conversation identity; omitted for ordinary manual booking.
         clientId: { type: string, format: uuid }
         newClient: { $ref: "#/components/schemas/NewClientInput" }
+        rentalOrderId:
+          type: [string, "null"]
+          format: uuid
+          description: >-
+            Existing same-client DRAFT or SAVED order. NORMAL additions require
+            current order editability; REPLACEMENT uses its dedicated pre-start
+            trip fence even after an actual date was assigned.
       oneOf:
         - required: [clientId]
           not: { required: [newClient] }
         - required: [newClient]
           not: { required: [clientId] }
+      anyOf:
+        - required: [conversationId]
+          properties:
+            conversationId: { type: string, format: uuid }
+        - required: [clientId, rentalOrderId]
     RentalInquiry:
       type: object
       additionalProperties: false
@@ -3642,6 +3724,7 @@ components:
           managerId,
           managerDisplayName,
           managerRole,
+          rentalOrderId,
           warehouseId,
           state,
           bookedOrderId,
@@ -3651,11 +3734,12 @@ components:
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
-        conversationId: { type: string, format: uuid }
+        conversationId: { type: [string, "null"], format: uuid }
         client: { $ref: "#/components/schemas/OrderClient" }
         managerId: { type: string, format: uuid }
         managerDisplayName: { type: string }
         managerRole: { type: string }
+        rentalOrderId: { type: [string, "null"], format: uuid }
         warehouseId: { type: [string, "null"], format: uuid }
         state: { type: string, enum: [ACTIVE, BOOKED, ARCHIVED] }
         bookedOrderId: { type: [string, "null"], format: uuid }
@@ -3763,6 +3847,7 @@ components:
           linoleum,
           passport,
           tags,
+          contents,
           updatedAt,
         ]
       properties:
@@ -3781,6 +3866,10 @@ components:
         tags:
           type: array
           items: { type: string }
+        contents:
+          type: array
+          description: Current physical furniture inside this held cabin; global availability remains separate.
+          items: { $ref: "#/components/schemas/OrderEquipmentContent" }
         updatedAt: { type: string, format: date-time }
     CabinSearchGroupResult:
       type: object
@@ -3912,6 +4001,16 @@ components:
           description: >-
             Optional manager-owned manual draft whose selected live holds are
             atomically transferred to this client presentation.
+        mode:
+          type: [string, "null"]
+          enum: [NORMAL, REPLACEMENT, null]
+          description: Omitted NORMAL flow or same-order client replacement.
+        replacementUnitIds:
+          type: [array, "null"]
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+          description: Ordered old order-cabin IDs; required only in REPLACEMENT mode.
         groups:
           type: array
           minItems: 1
@@ -3953,6 +4052,7 @@ components:
           linoleum,
           passport,
           tags,
+          currentContents,
           photos,
         ]
       properties:
@@ -3968,6 +4068,10 @@ components:
         tags:
           type: array
           items: { type: string }
+        currentContents:
+          type: array
+          description: Physical furniture currently inside this held cabin.
+          items: { $ref: "#/components/schemas/OrderEquipmentContent" }
         photos:
           type: array
           items: { $ref: "#/components/schemas/PresentationPhoto" }
@@ -3981,6 +4085,15 @@ components:
         cabins:
           type: array
           items: { $ref: "#/components/schemas/PresentationCabin" }
+    PresentationEquipmentAvailability:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, equipmentName, availableQuantity, maximumPerCabin]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        equipmentName: { type: string, minLength: 1, maxLength: 512 }
+        availableQuantity: { type: integer, format: int64, minimum: 0 }
+        maximumPerCabin: { type: [integer, "null"], minimum: 1 }
     ClientPresentation:
       type: object
       additionalProperties: false
@@ -3997,6 +4110,12 @@ components:
           canConfirm,
           publicPath,
           bookedOrderId,
+          mode,
+          replacementUnitIds,
+          requiredSelectionCount,
+          requiresDesiredDeliveryWindows,
+          desiredDeliveryWindows,
+          equipmentAvailability,
           groups,
         ]
       properties:
@@ -4011,6 +4130,24 @@ components:
         canConfirm: { type: boolean }
         publicPath: { type: string }
         bookedOrderId: { type: [string, "null"], format: uuid }
+        mode: { type: string, enum: [NORMAL, REPLACEMENT] }
+        replacementUnitIds:
+          type: array
+          items: { type: string, format: uuid }
+        requiredSelectionCount:
+          type: [integer, "null"]
+          minimum: 1
+          description: Exact selection cardinality for REPLACEMENT; null for NORMAL.
+        requiresDesiredDeliveryWindows:
+          type: boolean
+          description: True for NORMAL presentations, which collect one desired client receiving date before confirmation; false for REPLACEMENT.
+        desiredDeliveryWindows:
+          type: array
+          description: Empty for NORMAL because the client supplies its date at confirmation; REPLACEMENT exposes existing date-only order preferences read-only.
+          items: { $ref: "#/components/schemas/DesiredDeliveryWindow" }
+        equipmentAvailability:
+          type: array
+          items: { $ref: "#/components/schemas/PresentationEquipmentAvailability" }
         groups:
           type: array
           items: { $ref: "#/components/schemas/PresentationGroup" }
@@ -4091,14 +4228,69 @@ components:
     ConfirmClientPresentationRequest:
       type: object
       additionalProperties: false
-      required: [selectedRentalItemIds]
+      required: [selections]
       properties:
-        selectedRentalItemIds:
+        selections:
           type: array
           minItems: 1
           maxItems: 100
-          uniqueItems: true
-          items: { type: string, format: uuid }
+          items: { $ref: "#/components/schemas/PresentationCabinSelectionInput" }
+        desiredDeliveryWindows:
+          type: [array, "null"]
+          description: Required only for NORMAL. It contains exactly one date-only calendar day; it must be absent for REPLACEMENT.
+          items: { $ref: "#/components/schemas/DesiredDeliveryWindowInput" }
+        rentalMonths:
+          type: [integer, "null"]
+          format: int64
+          minimum: 1
+          description: Required only for NORMAL and applied to every cabin selected in this presentation; it must be absent for REPLACEMENT.
+        deliveryAddress:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 1000
+          description: Required only for NORMAL and written to the target order after hold conversion; it must be absent for REPLACEMENT.
+        latitude:
+          type: [number, "null"]
+          format: double
+          minimum: -90
+          maximum: 90
+          description: Optional only with longitude for NORMAL; it must be absent for REPLACEMENT.
+        longitude:
+          type: [number, "null"]
+          format: double
+          minimum: -180
+          maximum: 180
+          description: Optional only with latitude for NORMAL; it must be absent for REPLACEMENT.
+        additionalContacts:
+          type: [array, "null"]
+          description: Optional order-owned contacts for NORMAL, normalized to an empty list when absent; it must be absent for REPLACEMENT.
+          items: { $ref: "#/components/schemas/AdditionalContactInput" }
+      allOf:
+        - if:
+            required: [latitude]
+          then:
+            required: [longitude]
+        - if:
+            required: [longitude]
+          then:
+            required: [latitude]
+    PresentationEquipmentSelectionInput:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, quantity]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        quantity: { type: integer, format: int64, minimum: 1 }
+    PresentationCabinSelectionInput:
+      type: object
+      additionalProperties: false
+      required: [rentalItemId, equipment]
+      properties:
+        rentalItemId: { type: string, format: uuid }
+        equipment:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/PresentationEquipmentSelectionInput" }
     PublicClientPresentation:
       type: object
       additionalProperties: false
@@ -4110,6 +4302,11 @@ components:
           expiresAt,
           viewUntil,
           viewOnly,
+          mode,
+          requiredSelectionCount,
+          requiresDesiredDeliveryWindows,
+          desiredDeliveryWindows,
+          equipmentAvailability,
           groups,
           bookedOrderId,
         ]
@@ -4120,6 +4317,20 @@ components:
         expiresAt: { type: string, format: date-time }
         viewUntil: { type: string, format: date-time }
         viewOnly: { type: boolean }
+        mode: { type: string, enum: [NORMAL, REPLACEMENT] }
+        requiredSelectionCount:
+          type: [integer, "null"]
+          minimum: 1
+        requiresDesiredDeliveryWindows:
+          type: boolean
+          description: True for NORMAL presentations, which collect one desired client receiving date; false for REPLACEMENT.
+        desiredDeliveryWindows:
+          type: array
+          description: Empty for NORMAL; existing date-only order preferences are read-only for REPLACEMENT.
+          items: { $ref: "#/components/schemas/DesiredDeliveryWindow" }
+        equipmentAvailability:
+          type: array
+          items: { $ref: "#/components/schemas/PresentationEquipmentAvailability" }
         groups:
           type: array
           items: { $ref: "#/components/schemas/PresentationGroup" }

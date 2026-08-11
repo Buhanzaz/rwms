@@ -70,8 +70,19 @@ const order = {
   status: "DRAFT" as const,
   client: {
     id: "44444444-4444-4444-8444-444444444444",
+    version: 1,
     type: "LEGAL_ENTITY" as const,
     displayName: "ООО Тест",
+    phone: "+79990000001",
+    contactPerson: "Иван Клиент",
+    email: null,
+    responsibleManagerId: "55555555-5555-4555-8555-555555555555",
+    responsibleManagerDisplayName: "Менеджер из заказа",
+    comment: null,
+    source: null,
+    additionalContacts: [{ name: "Бухгалтер", phone: "+79990000002" }],
+    createdAt: "2026-07-18T08:00:00Z",
+    updatedAt: "2026-07-18T09:00:00Z",
   },
   managerId: "55555555-5555-4555-8555-555555555555",
   managerDisplayName: "Менеджер из заказа",
@@ -83,7 +94,13 @@ const order = {
   longitude: 37.62,
   contactPhone: "+79990000000",
   comment: null,
-  acceptableDeliveryDates: ["2026-08-15"],
+  additionalContacts: [{ name: "Прораб", phone: "+79990000003" }],
+  desiredDeliveryWindows: [
+    {
+      startDate: "2026-08-15",
+      endDate: "2026-08-15",
+    },
+  ],
   unitCount: 2,
   createdAt: "2026-07-19T08:00:00Z",
   updatedAt: "2026-07-19T09:00:00Z",
@@ -213,11 +230,14 @@ describe("OrdersListPage", () => {
     expect(await screen.findAllByText("Мск")).toHaveLength(2)
   })
 
-  it("shows the order delivery address and contact phone in grid and mobile projections", async () => {
+  it("shows only manager-owned and client-owned contacts in grid and mobile projections", async () => {
     renderPage()
 
-    expect(await screen.findAllByText("Москва, Складская, 1")).toHaveLength(2)
+    await screen.findAllByText("ORD-000001")
     expect(screen.getAllByText("+79990000000")).toHaveLength(2)
+    expect(screen.getAllByText(/Бухгалтер: \+79990000002/)).toHaveLength(2)
+    expect(screen.queryByText("Москва, Складская, 1")).toBeNull()
+    expect(screen.queryByText(/Прораб: \+79990000003/)).toBeNull()
   })
 
   it.each([

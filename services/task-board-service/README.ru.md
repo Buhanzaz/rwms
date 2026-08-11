@@ -131,6 +131,11 @@ Private paths — service-to-service boundaries, а не client shortcuts. Их 
 периодически делает authoritative REST refresh. Payload не является полной task
 projection.
 
+`WorkerTaskDetail.source` присутствует всегда и равен null для обычной работы. Для source-owned
+работы он содержит только существующие immutable type и ID источника. Worker client может
+использовать ID `LOGISTICS_DRIVER_TASK`, чтобы загрузить принадлежащие logistics детали ходки;
+task-board не копирует этот payload или его business state.
+
 Worker action проверяет identity работника, current assignment, entry version,
 action/status transition и offline lease, где он нужен. Evidence сначала
 резервируется со stable client reference, затем загружается в media-service.

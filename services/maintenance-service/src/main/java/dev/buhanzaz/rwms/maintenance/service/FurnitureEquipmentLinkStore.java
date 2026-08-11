@@ -26,7 +26,11 @@ public class FurnitureEquipmentLinkStore {
     this.jdbc = jdbc;
   }
 
-  /** Commits every missing local intent as one unit before any caller may contact asset-service. */
+  /**
+   * Commits every missing local intent as one unit before any caller may contact asset-service.
+   * Per-node advisory locks also serialize version-fenced maximum changes with legacy preserve
+   * retries.
+   */
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public List<LinkSnapshot> prepareAll(
       UUID warehouseId,
@@ -40,11 +44,24 @@ public class FurnitureEquipmentLinkStore {
         || requirements.stream().anyMatch(java.util.Objects::isNull)) {
       throw new IllegalArgumentException("Furniture equipment link intent is invalid");
     }
-    Map<UUID, String> requested = new LinkedHashMap<>();
+    Map<UUID, LinkRequirement> requested = new LinkedHashMap<>();
     for (LinkRequirement requirement : requirements) {
       String name = normalizeName(requirement.requestedName());
-      String previous = requested.putIfAbsent(requirement.nodeId(), name);
-      if (requirement.nodeId() == null || (previous != null && !previous.equals(name))) {
+      if (requirement.expectedEquipmentVersion() != null
+          && requirement.expectedEquipmentVersion() < 0) {
+        throw new IllegalArgumentException("Furniture equipment version is invalid");
+      }
+      if (requirement.maximumPerCabin() != null && requirement.maximumPerCabin() < 1) {
+        throw new IllegalArgumentException("Furniture equipment maximum is invalid");
+      }
+      LinkRequirement canonical =
+          new LinkRequirement(
+              requirement.nodeId(),
+              name,
+              requirement.expectedEquipmentVersion(),
+              requirement.maximumPerCabin());
+      LinkRequirement previous = requested.putIfAbsent(requirement.nodeId(), canonical);
+      if (requirement.nodeId() == null || (previous != null && !previous.equals(canonical))) {
         throw new IllegalArgumentException("Furniture equipment node requirements conflict");
       }
     }
@@ -59,26 +76,31 @@ public class FurnitureEquipmentLinkStore {
     List<LinkSnapshot> result = new ArrayList<>(orderedIds.size());
     for (UUID nodeId : orderedIds) {
       LinkSnapshot existing = findForUpdate(nodeId).orElse(null);
-      String requestedName = requested.get(nodeId);
+      LinkRequirement requirement = requested.get(nodeId);
+      String requestedName = requirement.requestedName();
       if (existing == null) {
         jdbc.update(
             """
             insert into furniture_equipment_link_intent(
               node_id,warehouse_id,source_catalog_version_id,source_catalog_expected_version,
-              requested_name,state,attempt_count,next_attempt_at,review_version,created_at,updated_at)
-            values (?,?,?,?,?,'PENDING',0,?,0,?,?)
+              requested_name,requested_equipment_version,requested_maximum_per_cabin,
+              state,attempt_count,next_attempt_at,review_version,created_at,updated_at)
+            values (?,?,?,?,?,?,?,'PENDING',0,?,0,?,?)
             """,
             nodeId,
             warehouseId,
             catalogVersionId,
             catalogExpectedVersion,
             requestedName,
+            requirement.expectedEquipmentVersion(),
+            requirement.maximumPerCabin(),
             now,
             now,
             now);
         existing = findForUpdate(nodeId).orElseThrow();
       } else {
         requireStableRequest(existing, requestedName);
+        existing = synchronizeDesired(existing, requirement, now);
       }
       result.add(existing);
     }
@@ -153,32 +175,50 @@ public class FurnitureEquipmentLinkStore {
         candidate.nodeId(),
         candidate.warehouseId(),
         candidate.requestedName(),
+        candidate.requestedEquipmentVersion(),
+        candidate.requestedMaximumPerCabin(),
         candidate.attemptCount(),
         claimToken,
         claimUntil));
   }
 
+  /** Confirms the exact claimed CAS intent with the asset version and maximum it observed. */
   @Transactional(propagation = Propagation.REQUIRES_NEW)
-  public void confirmed(WorkItem work, UUID equipmentId, String equipmentName) {
+  public void confirmed(
+      WorkItem work,
+      UUID equipmentId,
+      String equipmentName,
+      long equipmentVersion,
+      Integer maximumPerCabin) {
     requireClaim(work);
     String normalizedEquipmentName = normalizeName(equipmentName);
-    if (equipmentId == null || !work.requestedName().equals(normalizedEquipmentName)) {
+    if (equipmentId == null
+        || equipmentVersion < 0
+        || (maximumPerCabin != null && maximumPerCabin < 1)
+        || !work.requestedName().equals(normalizedEquipmentName)
+        || (work.expectedEquipmentVersion() != null
+            && !java.util.Objects.equals(work.maximumPerCabin(), maximumPerCabin))) {
       throw new IllegalArgumentException("Confirmed furniture equipment mapping is invalid");
     }
     OffsetDateTime confirmedAt = now();
     int changed = jdbc.update(
         """
         update furniture_equipment_link_intent
-           set state='CONFIRMED',equipment_id=?,equipment_name=?,
+           set state='CONFIRMED',equipment_id=?,equipment_name=?,equipment_version=?,maximum_per_cabin=?,
                observed_equipment_id=?,observed_equipment_name=?,
+               observed_equipment_version=?,observed_maximum_per_cabin=?,
                attempt_count=attempt_count+1,claim_token=null,claim_until=null,
                last_error_code=null,last_error_detail=null,confirmed_at=?,updated_at=?
          where node_id=? and state='IN_FLIGHT' and claim_token=? and attempt_count=?
         """,
         equipmentId,
         normalizedEquipmentName,
+        equipmentVersion,
+        maximumPerCabin,
         equipmentId,
         normalizedEquipmentName,
+        equipmentVersion,
+        maximumPerCabin,
         confirmedAt,
         confirmedAt,
         work.nodeId(),
@@ -434,11 +474,17 @@ public class FurnitureEquipmentLinkStore {
         rs.getObject("source_catalog_version_id", UUID.class),
         rs.getLong("source_catalog_expected_version"),
         rs.getString("requested_name"),
+        rs.getObject("requested_equipment_version", Long.class),
+        rs.getObject("requested_maximum_per_cabin", Integer.class),
         rs.getString("state"),
         rs.getObject("equipment_id", UUID.class),
         rs.getString("equipment_name"),
+        rs.getObject("equipment_version", Long.class),
+        rs.getObject("maximum_per_cabin", Integer.class),
         rs.getObject("observed_equipment_id", UUID.class),
         rs.getString("observed_equipment_name"),
+        rs.getObject("observed_equipment_version", Long.class),
+        rs.getObject("observed_maximum_per_cabin", Integer.class),
         rs.getInt("attempt_count"),
         rs.getObject("next_attempt_at", OffsetDateTime.class),
         rs.getObject("claim_token", UUID.class),
@@ -469,6 +515,50 @@ public class FurnitureEquipmentLinkStore {
     }
   }
 
+  /**
+   * Applies a version-fenced editor intent to the durable link row. Versionless legacy ensures
+   * preserve the confirmed asset value; concurrent non-identical editor intents conflict.
+   */
+  private LinkSnapshot synchronizeDesired(
+      LinkSnapshot existing, LinkRequirement requirement, OffsetDateTime timestamp) {
+    if (requirement.expectedEquipmentVersion() == null) {
+      return existing;
+    }
+    if ("CONFIRMED".equals(existing.state())) {
+      if (java.util.Objects.equals(
+          existing.maximumPerCabin(), requirement.maximumPerCabin())) {
+        return existing;
+      }
+      int changed =
+          jdbc.update(
+              """
+              update furniture_equipment_link_intent
+                 set requested_equipment_version=?,requested_maximum_per_cabin=?,
+                     state='PENDING',equipment_id=null,equipment_name=null,
+                     equipment_version=null,maximum_per_cabin=null,confirmed_at=null,
+                     attempt_count=0,next_attempt_at=?,last_error_code=null,last_error_detail=null,
+                     updated_at=?
+               where node_id=? and state='CONFIRMED'
+              """,
+              requirement.expectedEquipmentVersion(),
+              requirement.maximumPerCabin(),
+              timestamp,
+              timestamp,
+              existing.nodeId());
+      if (changed != 1) throw claimChanged();
+      return findForUpdate(existing.nodeId()).orElseThrow();
+    }
+    if (!java.util.Objects.equals(
+            existing.requestedEquipmentVersion(), requirement.expectedEquipmentVersion())
+        || !java.util.Objects.equals(
+            existing.requestedMaximumPerCabin(), requirement.maximumPerCabin())) {
+      throw new MaintenanceConflictException(
+          "FURNITURE_EQUIPMENT_LINK_CONFLICT",
+          "Furniture equipment settings are already being synchronized from another version");
+    }
+    return existing;
+  }
+
   private static void requireClaimRequest(UUID nodeId, Duration lease) {
     if (nodeId == null
         || lease == null
@@ -485,6 +575,8 @@ public class FurnitureEquipmentLinkStore {
         || work.warehouseId() == null
         || work.requestedName() == null
         || work.requestedName().isBlank()
+        || (work.expectedEquipmentVersion() != null && work.expectedEquipmentVersion() < 0)
+        || (work.maximumPerCabin() != null && work.maximumPerCabin() < 1)
         || work.attemptCount() < 0
         || work.claimToken() == null
         || work.claimUntil() == null) {
@@ -524,29 +616,49 @@ public class FurnitureEquipmentLinkStore {
   private static final java.util.Set<String> STATES = java.util.Set.of(
       "PENDING", "IN_FLIGHT", "RETRY_PENDING", "CONFIRMED", "REVIEW_REQUIRED", "ABANDONED");
 
+  /** Manual recovery choices for a link intent that exhausted automatic reconciliation. */
   public enum ReviewAction { RETRY, ABANDON }
 
-  public record LinkRequirement(UUID nodeId, String requestedName) {}
+  /** Desired asset binding and optional version-fenced maximum mutation for one furniture node. */
+  public record LinkRequirement(
+      UUID nodeId,
+      String requestedName,
+      Long expectedEquipmentVersion,
+      Integer maximumPerCabin) {
+    public LinkRequirement(UUID nodeId, String requestedName) {
+      this(nodeId, requestedName, null, null);
+    }
+  }
 
+  /** Claimed durable synchronization intent processed outside the catalog write transaction. */
   public record WorkItem(
       UUID nodeId,
       UUID warehouseId,
       String requestedName,
+      Long expectedEquipmentVersion,
+      Integer maximumPerCabin,
       int attemptCount,
       UUID claimToken,
       OffsetDateTime claimUntil) {}
 
+  /** Durable link intent, observed asset truth, CAS intent, and bounded recovery state. */
   public record LinkSnapshot(
       UUID nodeId,
       UUID warehouseId,
       UUID sourceCatalogVersionId,
       long sourceCatalogExpectedVersion,
       String requestedName,
+      Long requestedEquipmentVersion,
+      Integer requestedMaximumPerCabin,
       String state,
       UUID equipmentId,
       String equipmentName,
+      Long equipmentVersion,
+      Integer maximumPerCabin,
       UUID observedEquipmentId,
       String observedEquipmentName,
+      Long observedEquipmentVersion,
+      Integer observedMaximumPerCabin,
       int attemptCount,
       OffsetDateTime nextAttemptAt,
       UUID claimToken,
@@ -563,13 +675,16 @@ public class FurnitureEquipmentLinkStore {
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt) {}
 
+  /** Stable page of reviewed furniture link intents. */
   public record LinkPage(List<LinkSnapshot> items, int page, int size, long total) {
     public LinkPage {
       items = List.copyOf(items);
     }
   }
 
+  /** Idempotent manual-review result. */
   public record ReviewResult(LinkSnapshot snapshot, boolean replayed) {}
 
+  /** Normalized manual-review audit payload persisted with a reviewed intent. */
   private record ReviewAudit(String action, UUID reviewSubjectId, String reason) {}
 }

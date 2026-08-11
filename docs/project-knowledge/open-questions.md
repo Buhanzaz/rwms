@@ -4,6 +4,39 @@ Use this file only for unresolved contradictions or product decisions that
 block a safe implementation. This is not a backlog and does not authorize
 work.
 
+## Cabin Dossier Detail And Historical Snapshot Boundary
+
+- Status: `Open`
+- Affected owner and consumers: logistics-service, maintenance-service,
+  inventory-service and task-board-service as fact owners; dossier-service and
+  the panel cabin history as read-only consumers.
+- Requested behavior: the cabin history should group booking, logistics,
+  estimate, repair/acceptance and inventory operations and expand each group
+  into the responsible people, destination, reason, materials, duration and
+  owning workflow link.
+- Conflicting contract or invariant: current logistics document facts publish
+  only document state, warehouses and line count, while the booking fact
+  publishes only conversation and order IDs. Maintenance repair facts publish
+  stage identities and states but not material/work names, crew or actual
+  duration. The dossier contract explicitly forbids inferring a cabin subject,
+  free-form summary or href and exposes no detail snapshot. Hydrating current
+  owner reads in the browser would not prove the historical state; publishing
+  client or worker display data would additionally require an approved
+  sanitized-data boundary.
+- Evidence:
+  [`dossier consumers`](../../contracts/events/dossier-consumers.yaml),
+  [`logistics facts`](../../contracts/events/logistics/logistics-events-v1.schema.json),
+  [`booking fact`](../../contracts/events/logistics/rental-inquiry-events-v1.schema.json),
+  [`maintenance facts`](../../contracts/events/maintenance/maintenance-events-v1.schema.json),
+  and [`dossier OpenAPI`](../../contracts/openapi/dossier-service.yaml).
+- Smallest decision needed: choose immutable, sanitized per-cabin snapshots in
+  new producer/dossier contract versions or explicitly accept expansion from
+  current owner reads; approve the exact client/worker field allow-list and
+  decide whether pre-existing logistics history must be backfilled.
+- Resolution and date: none. The panel may render and group only canonical
+  fields already supplied by dossier-service; it must not fabricate the absent
+  booking or work-detail evidence.
+
 ## Resolved: Logistics Admission Evidence For Dependency-Free Replay
 
 - Status: `Resolved`

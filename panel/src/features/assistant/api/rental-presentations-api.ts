@@ -1,5 +1,7 @@
 import { ApiError, bearerRequest } from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
+import type { AdditionalContact } from "@/features/clients/domain/clients"
+import type { DesiredDeliveryWindow } from "@/features/orders/domain/orders"
 
 export type PresentationPhoto = {
   mediaId: string
@@ -21,8 +23,25 @@ export type PresentationCabin = {
   linoleum: boolean | null
   passport: Record<string, unknown>
   tags: string[]
+  currentContents: PresentationEquipmentContent[]
   photos: PresentationPhoto[]
 }
+
+export type PresentationEquipmentContent = {
+  equipmentId: string
+  equipmentName: string | null
+  quantity: number
+  locationKind: string
+}
+
+export type PresentationEquipmentAvailability = {
+  equipmentId: string
+  equipmentName: string
+  availableQuantity: number
+  maximumPerCabin: number | null
+}
+
+export type PresentationMode = "NORMAL" | "REPLACEMENT"
 
 export type PresentationGroup = {
   key: string
@@ -32,25 +51,51 @@ export type PresentationGroup = {
 
 export type ClientPresentation = {
   id: string
-  version?: number
+  version: number
   revision: number
-  inquiryId?: string
-  warehouseId?: string
-  state: string
+  inquiryId: string
+  warehouseId: string
+  state: "ACTIVE" | "BOOKING_PENDING" | "BOOKED" | "REVOKED"
   expiresAt: string
   viewUntil: string
-  canConfirm?: boolean
-  viewOnly?: boolean
-  publicPath?: string
+  canConfirm: boolean
+  publicPath: string
   bookedOrderId: string | null
+  mode: PresentationMode
+  replacementUnitIds: string[]
+  requiredSelectionCount: number | null
+  requiresDesiredDeliveryWindows: boolean
+  desiredDeliveryWindows: DesiredDeliveryWindow[]
+  equipmentAvailability: PresentationEquipmentAvailability[]
   groups: PresentationGroup[]
+}
+
+export type PublicClientPresentation = {
+  id: string
+  revision: number
+  state: "ACTIVE" | "BOOKING_PENDING" | "BOOKED" | "REVOKED"
+  expiresAt: string
+  viewUntil: string
+  viewOnly: boolean
+  mode: PresentationMode
+  requiredSelectionCount: number | null
+  requiresDesiredDeliveryWindows: boolean
+  desiredDeliveryWindows: DesiredDeliveryWindow[]
+  equipmentAvailability: PresentationEquipmentAvailability[]
+  groups: PresentationGroup[]
+  bookedOrderId: string | null
+}
+
+export type PresentationCabinSelection = {
+  rentalItemId: string
+  equipment: Array<{ equipmentId: string; quantity: number }>
 }
 
 export type PresentationBooking = {
   bookingId: string
   state: "PENDING" | "COMPLETED" | "REJECTED"
   orderId: string | null
-  statusPath: string | null
+  statusPath: string
   errorCode: string | null
 }
 
@@ -110,6 +155,8 @@ export function publishClientPresentation(params: {
   warehouseId: string
   idempotencyKey: string
   manualBookingDraftId?: string
+  mode?: PresentationMode
+  replacementUnitIds?: string[]
   groups: Array<{
     key: string
     label: string
@@ -127,6 +174,8 @@ export function publishClientPresentation(params: {
       body: JSON.stringify({
         warehouseId: params.warehouseId,
         manualBookingDraftId: params.manualBookingDraftId,
+        mode: params.mode,
+        replacementUnitIds: params.replacementUnitIds,
         groups: params.groups,
       }),
     }
@@ -259,12 +308,18 @@ async function publicBookingJson(
 }
 
 export function getPublicPresentation(token: string) {
-  return publicJson<ClientPresentation>(publicPresentationEndpoint(token))
+  return publicJson<PublicClientPresentation>(publicPresentationEndpoint(token))
 }
 
 export function confirmPublicPresentation(params: {
   token: string
-  selectedRentalItemIds: string[]
+  selections: PresentationCabinSelection[]
+  desiredDeliveryWindows?: DesiredDeliveryWindow[]
+  rentalMonths?: number
+  deliveryAddress?: string
+  latitude?: number
+  longitude?: number
+  additionalContacts?: AdditionalContact[]
   idempotencyKey: string
 }) {
   return publicBookingJson(
@@ -273,7 +328,13 @@ export function confirmPublicPresentation(params: {
       method: "POST",
       headers: { "Idempotency-Key": params.idempotencyKey },
       body: JSON.stringify({
-        selectedRentalItemIds: params.selectedRentalItemIds,
+        selections: params.selections,
+        desiredDeliveryWindows: params.desiredDeliveryWindows,
+        rentalMonths: params.rentalMonths,
+        deliveryAddress: params.deliveryAddress,
+        latitude: params.latitude,
+        longitude: params.longitude,
+        additionalContacts: params.additionalContacts,
       }),
     }
   )

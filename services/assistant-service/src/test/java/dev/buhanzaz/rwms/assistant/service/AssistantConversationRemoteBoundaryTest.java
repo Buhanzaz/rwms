@@ -1,6 +1,8 @@
 package dev.buhanzaz.rwms.assistant.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -30,8 +32,7 @@ class AssistantConversationRemoteBoundaryTest {
     LogisticsClient.InquiryBootstrap bootstrap =
         new LogisticsClient.InquiryBootstrap(
             fixture.inquiryId, clientId, "ACTIVE", "INDIVIDUAL", "Иван Иванов");
-    when(fixture.logistics.createRentalInquiry(
-            fixture.conversationId, clientId, null, "bearer"))
+    when(fixture.logistics.createRentalInquiry(fixture.conversationId, clientId, null, "bearer"))
         .thenAnswer(
             ignored -> {
               assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
@@ -49,8 +50,333 @@ class AssistantConversationRemoteBoundaryTest {
             "bearer");
 
     assertThat(result.conversation().id()).isEqualTo(fixture.conversationId);
-    verify(fixture.logistics)
-        .createRentalInquiry(fixture.conversationId, clientId, null, "bearer");
+    verify(fixture.logistics).createRentalInquiry(fixture.conversationId, clientId, null, "bearer");
+  }
+
+  @Test
+  void bookedOrderConversationIsArchivedBeforeARepeatCreateUsesAFreshInquiry() {
+    Fixture fixture = new Fixture();
+    UUID orderId = UUID.randomUUID();
+    UUID oldConversationId = UUID.randomUUID();
+    UUID oldInquiryId = UUID.randomUUID();
+    UUID newConversationId = UUID.randomUUID();
+    UUID newInquiryId = UUID.randomUUID();
+    UUID clientId = fixture.conversation.getClientId();
+    AssistantConversation oldConversation =
+        AssistantConversation.create(
+            oldConversationId,
+            fixture.ownerId,
+            clientId,
+            oldInquiryId,
+            orderId,
+            "INDIVIDUAL",
+            "Иван Иванов");
+    AssistantConversation freshConversation =
+        AssistantConversation.create(
+            newConversationId,
+            fixture.ownerId,
+            clientId,
+            newInquiryId,
+            orderId,
+            "INDIVIDUAL",
+            "Иван Иванов");
+    LogisticsClient.InquiryBootstrap freshBootstrap =
+        new LogisticsClient.InquiryBootstrap(
+            newInquiryId, clientId, "ACTIVE", "INDIVIDUAL", "Иван Иванов");
+    when(fixture.creationStore.activeForOrder(orderId, fixture.ownerId))
+        .thenReturn(oldConversation);
+    when(fixture.logistics.readRentalInquiryContext(oldInquiryId, "bearer"))
+        .thenAnswer(
+            ignored -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+              return new LogisticsClient.RentalInquiryContext(
+                  oldInquiryId, clientId, orderId, fixture.warehouseId, "BOOKED");
+            });
+    when(fixture.creationStore.archiveTerminalForOrder(
+            fixture.ownerId, orderId, clientId, oldConversationId, oldInquiryId))
+        .thenReturn(null);
+    when(fixture.logistics.createRentalInquiry(
+            newConversationId, clientId, null, orderId, "bearer"))
+        .thenAnswer(
+            ignored -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+              return freshBootstrap;
+            });
+    when(fixture.creationStore.createOrValidate(
+            newConversationId,
+            fixture.ownerId,
+            freshBootstrap,
+            clientId,
+            null,
+            orderId))
+        .thenReturn(freshConversation);
+    fixture.stubResponse(freshConversation);
+
+    AssistantApiModels.CreateConversationResponse result =
+        fixture.service.create(
+            fixture.ownerId,
+            new AssistantApiModels.CreateConversationRequest(
+                newConversationId, clientId, null, orderId),
+            "bearer");
+
+    assertThat(result.conversation().id()).isEqualTo(newConversationId);
+    assertThat(result.inquiry().id()).isEqualTo(newInquiryId);
+    verify(fixture.creationStore)
+        .archiveTerminalForOrder(
+            fixture.ownerId, orderId, clientId, oldConversationId, oldInquiryId);
+  }
+
+  @Test
+  void newerActiveOrderConversationReturnedByTheFenceIsRecheckedBeforeReuse() {
+    Fixture fixture = new Fixture();
+    UUID orderId = UUID.randomUUID();
+    UUID oldConversationId = UUID.randomUUID();
+    UUID oldInquiryId = UUID.randomUUID();
+    UUID newerConversationId = UUID.randomUUID();
+    UUID newerInquiryId = UUID.randomUUID();
+    UUID clientId = fixture.conversation.getClientId();
+    AssistantConversation oldConversation =
+        AssistantConversation.create(
+            oldConversationId,
+            fixture.ownerId,
+            clientId,
+            oldInquiryId,
+            orderId,
+            "INDIVIDUAL",
+            "Иван Иванов");
+    AssistantConversation newerConversation =
+        AssistantConversation.create(
+            newerConversationId,
+            fixture.ownerId,
+            clientId,
+            newerInquiryId,
+            orderId,
+            "INDIVIDUAL",
+            "Иван Иванов");
+    when(fixture.creationStore.activeForOrder(orderId, fixture.ownerId))
+        .thenReturn(oldConversation);
+    when(fixture.logistics.readRentalInquiryContext(oldInquiryId, "bearer"))
+        .thenReturn(
+            new LogisticsClient.RentalInquiryContext(
+                oldInquiryId, clientId, orderId, fixture.warehouseId, "BOOKED"));
+    when(fixture.creationStore.archiveTerminalForOrder(
+            fixture.ownerId, orderId, clientId, oldConversationId, oldInquiryId))
+        .thenReturn(newerConversation);
+    when(fixture.logistics.readRentalInquiryContext(newerInquiryId, "bearer"))
+        .thenAnswer(
+            ignored -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+              return new LogisticsClient.RentalInquiryContext(
+                  newerInquiryId, clientId, orderId, fixture.warehouseId, "ACTIVE");
+            });
+    fixture.stubResponse(newerConversation);
+
+    AssistantApiModels.CreateConversationResponse result =
+        fixture.service.create(
+            fixture.ownerId,
+            new AssistantApiModels.CreateConversationRequest(
+                UUID.randomUUID(), clientId, null, orderId),
+            "bearer");
+
+    assertThat(result.conversation().id()).isEqualTo(newerConversationId);
+    verify(fixture.logistics).readRentalInquiryContext(newerInquiryId, "bearer");
+  }
+
+  @Test
+  void newerTerminalOrderConversationReturnedByTheFenceIsArchivedInsteadOfListed() {
+    Fixture fixture = new Fixture();
+    UUID orderId = UUID.randomUUID();
+    UUID oldConversationId = UUID.randomUUID();
+    UUID oldInquiryId = UUID.randomUUID();
+    UUID newerConversationId = UUID.randomUUID();
+    UUID newerInquiryId = UUID.randomUUID();
+    UUID clientId = fixture.conversation.getClientId();
+    AssistantConversation oldConversation =
+        AssistantConversation.create(
+            oldConversationId,
+            fixture.ownerId,
+            clientId,
+            oldInquiryId,
+            orderId,
+            "INDIVIDUAL",
+            "Иван Иванов");
+    AssistantConversation newerConversation =
+        AssistantConversation.create(
+            newerConversationId,
+            fixture.ownerId,
+            clientId,
+            newerInquiryId,
+            orderId,
+            "INDIVIDUAL",
+            "Иван Иванов");
+    when(fixture.conversations
+            .findByOwnerSubjectIdAndRentalOrderIdAndArchivedFalseOrderByUpdatedAtDesc(
+                fixture.ownerId, orderId))
+        .thenReturn(List.of(oldConversation));
+    when(fixture.logistics.readRentalInquiryContext(oldInquiryId, "bearer"))
+        .thenReturn(
+            new LogisticsClient.RentalInquiryContext(
+                oldInquiryId, clientId, orderId, fixture.warehouseId, "BOOKED"));
+    when(fixture.creationStore.archiveTerminalForOrder(
+            fixture.ownerId, orderId, clientId, oldConversationId, oldInquiryId))
+        .thenReturn(newerConversation);
+    when(fixture.logistics.readRentalInquiryContext(newerInquiryId, "bearer"))
+        .thenReturn(
+            new LogisticsClient.RentalInquiryContext(
+                newerInquiryId, clientId, orderId, fixture.warehouseId, "ARCHIVED"));
+    when(fixture.creationStore.archiveTerminalForOrder(
+            fixture.ownerId, orderId, clientId, newerConversationId, newerInquiryId))
+        .thenReturn(null);
+
+    assertThat(fixture.service.list(fixture.ownerId, orderId, "bearer")).isEmpty();
+
+    verify(fixture.creationStore)
+        .archiveTerminalForOrder(
+            fixture.ownerId, orderId, clientId, newerConversationId, newerInquiryId);
+  }
+
+  @Test
+  void reconciliationCycleFailsClosedWithoutReturningATerminalConversation() {
+    Fixture fixture = new Fixture();
+    UUID orderId = UUID.randomUUID();
+    UUID conversationId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID clientId = fixture.conversation.getClientId();
+    AssistantConversation candidate =
+        AssistantConversation.create(
+            conversationId,
+            fixture.ownerId,
+            clientId,
+            inquiryId,
+            orderId,
+            "INDIVIDUAL",
+            "Иван Иванов");
+    when(fixture.conversations
+            .findByOwnerSubjectIdAndRentalOrderIdAndArchivedFalseOrderByUpdatedAtDesc(
+                fixture.ownerId, orderId))
+        .thenReturn(List.of(candidate));
+    when(fixture.logistics.readRentalInquiryContext(inquiryId, "bearer"))
+        .thenReturn(
+            new LogisticsClient.RentalInquiryContext(
+                inquiryId, clientId, orderId, fixture.warehouseId, "BOOKED"));
+    when(fixture.creationStore.archiveTerminalForOrder(
+            fixture.ownerId, orderId, clientId, conversationId, inquiryId))
+        .thenReturn(candidate);
+
+    assertThatThrownBy(() -> fixture.service.list(fixture.ownerId, orderId, "bearer"))
+        .isInstanceOf(AssistantUpstreamException.class);
+  }
+
+  @Test
+  void mismatchedOrderInquiryContextFailsClosedWithoutArchivingOrCreating() {
+    Fixture fixture = new Fixture();
+    UUID orderId = UUID.randomUUID();
+    UUID conversationId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID clientId = fixture.conversation.getClientId();
+    AssistantConversation candidate =
+        AssistantConversation.create(
+            conversationId,
+            fixture.ownerId,
+            clientId,
+            inquiryId,
+            orderId,
+            "INDIVIDUAL",
+            "Иван Иванов");
+    when(fixture.creationStore.activeForOrder(orderId, fixture.ownerId)).thenReturn(candidate);
+    when(fixture.logistics.readRentalInquiryContext(inquiryId, "bearer"))
+        .thenReturn(
+            new LogisticsClient.RentalInquiryContext(
+                inquiryId, UUID.randomUUID(), orderId, fixture.warehouseId, "BOOKED"));
+
+    assertThatThrownBy(
+            () ->
+                fixture.service.create(
+                    fixture.ownerId,
+                    new AssistantApiModels.CreateConversationRequest(
+                        UUID.randomUUID(), clientId, null, orderId),
+                    "bearer"))
+        .isInstanceOf(AssistantUpstreamException.class);
+
+    verify(fixture.creationStore, never())
+        .archiveTerminalForOrder(any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void orderInquiryDependencyFailureFailsClosedWithoutArchiving() {
+    Fixture fixture = new Fixture();
+    UUID orderId = UUID.randomUUID();
+    UUID conversationId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID clientId = fixture.conversation.getClientId();
+    AssistantConversation candidate =
+        AssistantConversation.create(
+            conversationId,
+            fixture.ownerId,
+            clientId,
+            inquiryId,
+            orderId,
+            "INDIVIDUAL",
+            "Иван Иванов");
+    when(fixture.creationStore.activeForOrder(orderId, fixture.ownerId)).thenReturn(candidate);
+    when(fixture.logistics.readRentalInquiryContext(inquiryId, "bearer"))
+        .thenThrow(new AssistantUpstreamException("logistics is unavailable"));
+
+    assertThatThrownBy(
+            () ->
+                fixture.service.create(
+                    fixture.ownerId,
+                    new AssistantApiModels.CreateConversationRequest(
+                        UUID.randomUUID(), clientId, null, orderId),
+                    "bearer"))
+        .isInstanceOf(AssistantUpstreamException.class);
+
+    verify(fixture.creationStore, never())
+        .archiveTerminalForOrder(any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void unsupportedOrderInquiryStateFailsClosedWithoutArchiving() {
+    Fixture fixture = new Fixture();
+    UUID orderId = UUID.randomUUID();
+    UUID conversationId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID clientId = fixture.conversation.getClientId();
+    AssistantConversation candidate =
+        AssistantConversation.create(
+            conversationId,
+            fixture.ownerId,
+            clientId,
+            inquiryId,
+            orderId,
+            "INDIVIDUAL",
+            "Иван Иванов");
+    when(fixture.conversations
+            .findByOwnerSubjectIdAndRentalOrderIdAndArchivedFalseOrderByUpdatedAtDesc(
+                fixture.ownerId, orderId))
+        .thenReturn(List.of(candidate));
+    when(fixture.logistics.readRentalInquiryContext(inquiryId, "bearer"))
+        .thenReturn(
+            new LogisticsClient.RentalInquiryContext(
+                inquiryId, clientId, orderId, fixture.warehouseId, "UNKNOWN"));
+
+    assertThatThrownBy(() -> fixture.service.list(fixture.ownerId, orderId, "bearer"))
+        .isInstanceOf(AssistantUpstreamException.class);
+    verify(fixture.creationStore, never())
+        .archiveTerminalForOrder(any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void unfilteredHistoryListDoesNotReadLogisticsPerConversation() {
+    Fixture fixture = new Fixture();
+    when(fixture.conversations.findByOwnerSubjectIdOrderByUpdatedAtDesc(fixture.ownerId))
+        .thenReturn(List.of(fixture.conversation));
+
+    assertThat(fixture.service.list(fixture.ownerId))
+        .extracting(AssistantApiModels.ConversationResponse::id)
+        .containsExactly(fixture.conversationId);
+
+    verify(fixture.logistics, never()).readRentalInquiryContext(any(), any());
   }
 
   @Test
@@ -155,44 +481,30 @@ class AssistantConversationRemoteBoundaryTest {
         mock(AssistantConversationRepository.class);
     private final AssistantClarificationService clarifications =
         mock(AssistantClarificationService.class);
+    private final AssistantResponseMapper responseMapper = mock(AssistantResponseMapper.class);
     private final AssistantConversation conversation;
     private final AssistantConversationService service;
 
     private Fixture() {
       conversation =
           AssistantConversation.create(
-              conversationId,
-              ownerId,
-              UUID.randomUUID(),
-              inquiryId,
-              "INDIVIDUAL",
-              "Иван Иванов");
+              conversationId, ownerId, UUID.randomUUID(), inquiryId, "INDIVIDUAL", "Иван Иванов");
       AssistantMessageRepository messages = mock(AssistantMessageRepository.class);
       AssistantToolCallRepository toolCalls = mock(AssistantToolCallRepository.class);
-      AssistantResponseMapper responseMapper = mock(AssistantResponseMapper.class);
       when(conversations.findByIdAndOwnerSubjectId(conversationId, ownerId))
           .thenReturn(Optional.of(conversation));
       when(conversations.findById(conversationId)).thenReturn(Optional.of(conversation));
       when(conversations.save(conversation)).thenReturn(conversation);
+      when(logistics.readRentalInquiryContext(inquiryId, "bearer"))
+          .thenReturn(
+              new LogisticsClient.RentalInquiryContext(
+                  inquiryId, conversation.getClientId(), null, warehouseId, "ACTIVE"));
       when(messages.findByConversationIdOrderByCreatedAtAscIdAsc(conversationId))
           .thenReturn(List.of());
       when(toolCalls.findByConversationIdOrderByCreatedAtAscIdAsc(conversationId))
           .thenReturn(List.of());
       when(clarifications.current(conversationId)).thenReturn(List.of());
-      when(responseMapper.toConversationResponse(conversation))
-          .thenAnswer(
-              ignored ->
-                  new AssistantApiModels.ConversationResponse(
-                      conversationId,
-                      0,
-                      conversation.getClientId(),
-                      inquiryId,
-                      "INDIVIDUAL",
-                      "Иван Иванов",
-                      conversation.isArchived(),
-                      null,
-                      null,
-                      null));
+      stubResponse(conversation);
       service =
           new AssistantConversationService(
               conversations,
@@ -203,6 +515,24 @@ class AssistantConversationRemoteBoundaryTest {
               responseMapper,
               clarifications,
               new AssistantSelectionService(logistics, new ObjectMapper()));
+    }
+
+    private void stubResponse(AssistantConversation value) {
+      when(responseMapper.toConversationResponse(value))
+          .thenAnswer(
+              ignored ->
+                  new AssistantApiModels.ConversationResponse(
+                      value.getId(),
+                      value.getVersion(),
+                      value.getClientId(),
+                      value.getRentalInquiryId(),
+                      value.getRentalOrderId(),
+                      value.getClientType(),
+                      value.getClientDisplayName(),
+                      value.isArchived(),
+                      value.getArchivedAt(),
+                      value.getCreatedAt(),
+                      value.getUpdatedAt()));
     }
 
     private LogisticsClient.CabinSelection selection(List<UUID> ids) {

@@ -10,13 +10,13 @@ import dev.buhanzaz.rwms.logistics.driver.mapper.DriverTaskResponseMapper;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsNotFoundException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseOperationMarkStore;
-import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.List;
@@ -26,7 +26,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Owns driver-task commands and persists their local workflow before processor-driven external effects.
+ * Owns driver-task commands and persists their local workflow before processor-driven external
+ * effects.
  */
 @Service
 @RequiredArgsConstructor
@@ -40,13 +41,15 @@ public class DriverTaskService {
 
   private final DriverLogisticsTaskRepository tasks;
   private final DriverTaskResponseMapper mapper;
+  private final DriverTripProjectionService tripProjection;
   private final LogisticsDependencyGateway dependencies;
   private final LogisticsWarehouseLifecycle warehouseLifecycle;
   private final LogisticsWarehouseOperationMarkStore warehouseOperationMarks;
   private final LogisticsTransactionLock transactionLock;
 
   public DriverTaskResponse get(UUID taskId) {
-    return mapper.toResponse(required(taskId));
+    DriverLogisticsTask task = required(taskId);
+    return mapper.toResponse(task, tripProjection.details(taskId));
   }
 
   public List<DriverTaskResponse> list(UUID warehouseId) {
@@ -61,9 +64,7 @@ public class DriverTaskService {
 
   @Transactional
   public CreateResult create(
-      UUID actorSubjectId,
-      UUID idempotencyKey,
-      CreateDriverTaskRequest request) {
+      UUID actorSubjectId, UUID idempotencyKey, CreateDriverTaskRequest request) {
     if (actorSubjectId == null || idempotencyKey == null || request == null) {
       throw new IllegalArgumentException(
           "Driver task actor, request and Idempotency-Key are required");
@@ -90,9 +91,7 @@ public class DriverTaskService {
   }
 
   @Transactional
-  public CreateResult createFromMaintenance(
-      UUID idempotencyKey,
-      CreateDriverTaskRequest request) {
+  public CreateResult createFromMaintenance(UUID idempotencyKey, CreateDriverTaskRequest request) {
     if (idempotencyKey == null || request == null) {
       throw new IllegalArgumentException(
           "Maintenance driver task request and Idempotency-Key are required");
@@ -122,9 +121,7 @@ public class DriverTaskService {
 
   @Transactional
   public CreateResult createFromMaintenance(
-      UUID idempotencyKey,
-      CreateDriverTaskRequest request,
-      AdmissionTicket admission) {
+      UUID idempotencyKey, CreateDriverTaskRequest request, AdmissionTicket admission) {
     if (idempotencyKey == null || request == null) {
       throw new IllegalArgumentException(
           "Maintenance driver task request and Idempotency-Key are required");
@@ -159,8 +156,7 @@ public class DriverTaskService {
     }
     UUID idempotencyKey =
         UUID.nameUUIDFromBytes(
-            ("driver-removal:" + warehouseId + ":" + repairId)
-                .getBytes(StandardCharsets.UTF_8));
+            ("driver-removal:" + warehouseId + ":" + repairId).getBytes(StandardCharsets.UTF_8));
     transactionLock.acquire(
         "driver-task:create:"
             + DriverTaskSourceType.REPAIR_PLACE
@@ -174,9 +170,7 @@ public class DriverTaskService {
       existing =
           tasks
               .findActiveBySourceTypeAndSourceIdAndKind(
-                  DriverTaskSourceType.REPAIR_PLACE,
-                  repairId,
-                  DriverTaskKind.REMOVE_FROM_REPAIR)
+                  DriverTaskSourceType.REPAIR_PLACE, repairId, DriverTaskKind.REMOVE_FROM_REPAIR)
               .orElse(null);
     }
     if (existing != null) {
@@ -187,9 +181,7 @@ public class DriverTaskService {
         warehouseLifecycle.ownedContinuation(
             repairId,
             idempotencyKey,
-            List.of(
-                new AdmissionRequirement(
-                    warehouseId, WarehouseOperationDirection.OUTGOING)));
+            List.of(new AdmissionRequirement(warehouseId, WarehouseOperationDirection.OUTGOING)));
     return createInternal(
         SYSTEM_ACTOR,
         idempotencyKey,
@@ -223,17 +215,9 @@ public class DriverTaskService {
 
   @Transactional
   public CreateResult createCapitalMovement(
-      UUID actorSubjectId,
-      UUID idempotencyKey,
-      UUID warehouseId,
-      UUID repairId) {
+      UUID actorSubjectId, UUID idempotencyKey, UUID warehouseId, UUID repairId) {
     return createCapitalMovement(
-        actorSubjectId,
-        idempotencyKey,
-        warehouseId,
-        repairId,
-        DriverTaskPlanningMode.AUTO,
-        null);
+        actorSubjectId, idempotencyKey, warehouseId, repairId, DriverTaskPlanningMode.AUTO, null);
   }
 
   @Transactional
@@ -244,7 +228,10 @@ public class DriverTaskService {
       UUID repairId,
       DriverTaskPlanningMode planningMode,
       LocalDate scheduledDate) {
-    if (actorSubjectId == null || idempotencyKey == null || warehouseId == null || repairId == null) {
+    if (actorSubjectId == null
+        || idempotencyKey == null
+        || warehouseId == null
+        || repairId == null) {
       throw new IllegalArgumentException("Capital movement identity is required");
     }
     return createCapitalMovement(
@@ -258,9 +245,7 @@ public class DriverTaskService {
             actorSubjectId,
             CREATE_OPERATION,
             idempotencyKey,
-            List.of(
-                new AdmissionRequirement(
-                    warehouseId, WarehouseOperationDirection.OUTGOING))));
+            List.of(new AdmissionRequirement(warehouseId, WarehouseOperationDirection.OUTGOING))));
   }
 
   @Transactional
@@ -280,7 +265,9 @@ public class DriverTaskService {
           "Capital movement scheduled date is required for FIXED_DATE planning");
     }
     DriverLogisticsTask replay =
-        tasks.findByCreatedBySubjectIdAndIdempotencyKey(actorSubjectId, idempotencyKey).orElse(null);
+        tasks
+            .findByCreatedBySubjectIdAndIdempotencyKey(actorSubjectId, idempotencyKey)
+            .orElse(null);
     if (replay != null) {
       if (!warehouseId.equals(replay.getWarehouseId())
           || replay.getSourceType() != DriverTaskSourceType.CAPITAL_REPAIR
@@ -294,11 +281,9 @@ public class DriverTaskService {
       }
       return new CreateResult(mapper.toResponse(replay), true, true);
     }
-    LogisticsDependencyGateway.CapitalRepair repair =
-        dependencies.readCapitalRepair(repairId);
+    LogisticsDependencyGateway.CapitalRepair repair = dependencies.readCapitalRepair(repairId);
     if (!warehouseId.equals(repair.warehouseId())) {
-      throw new LogisticsConflictException(
-          "Капитальный ремонт не принадлежит выбранному складу");
+      throw new LogisticsConflictException("Капитальный ремонт не принадлежит выбранному складу");
     }
     return createInternal(
         actorSubjectId,
@@ -344,11 +329,13 @@ public class DriverTaskService {
             + ":"
             + request.kind());
     DriverLogisticsTask replay =
-        tasks.findByCreatedBySubjectIdAndIdempotencyKey(actorSubjectId, idempotencyKey)
+        tasks
+            .findByCreatedBySubjectIdAndIdempotencyKey(actorSubjectId, idempotencyKey)
             .orElse(null);
     if (replay == null) {
       replay =
-          tasks.findActiveBySourceTypeAndSourceIdAndKind(
+          tasks
+              .findActiveBySourceTypeAndSourceIdAndKind(
                   request.sourceType(), request.sourceId(), request.kind())
               .orElse(null);
     }
@@ -373,12 +360,9 @@ public class DriverTaskService {
 
     LocalDate today = admission.localDate(request.warehouseId());
     LocalDate scheduledDate =
-        request.planningMode() == DriverTaskPlanningMode.AUTO
-            ? today
-            : request.scheduledDate();
+        request.planningMode() == DriverTaskPlanningMode.AUTO ? today : request.scheduledDate();
     if (scheduledDate.isBefore(today)) {
-      throw new IllegalArgumentException(
-          "Дата логистического задания не может быть в прошлом");
+      throw new IllegalArgumentException("Дата логистического задания не может быть в прошлом");
     }
 
     LogisticsDependencyGateway.WarehouseDriverQueue queue =
@@ -422,17 +406,14 @@ public class DriverTaskService {
     return new CreateResult(mapper.toResponse(task), false, request.activateNow());
   }
 
-  public static List<AdmissionRequirement> admissionRequirements(
-      CreateDriverTaskRequest request) {
+  public static List<AdmissionRequirement> admissionRequirements(CreateDriverTaskRequest request) {
     if (request == null || request.warehouseId() == null || request.kind() == null) {
       throw new IllegalArgumentException("Driver task warehouse and kind are required");
     }
     WarehouseOperationDirection direction =
         switch (request.kind()) {
-          case REMOVE_FROM_REPAIR, CAPITAL_TO_PRODUCTION ->
-              WarehouseOperationDirection.OUTGOING;
-          case DELIVER_TO_REPAIR, GENERAL_MOVEMENT, RETURN ->
-              WarehouseOperationDirection.INCOMING;
+          case REMOVE_FROM_REPAIR, CAPITAL_TO_PRODUCTION -> WarehouseOperationDirection.OUTGOING;
+          case DELIVER_TO_REPAIR, GENERAL_MOVEMENT, RETURN -> WarehouseOperationDirection.INCOMING;
           case SHIPMENT, TRANSFER -> WarehouseOperationDirection.OUTGOING;
         };
     return List.of(new AdmissionRequirement(request.warehouseId(), direction));
@@ -450,8 +431,7 @@ public class DriverTaskService {
     }
     boolean manualMovement = request.sourceType() == DriverTaskSourceType.MANUAL;
     if (manualMovement != (request.kind() == DriverTaskKind.GENERAL_MOVEMENT)) {
-      throw new IllegalArgumentException(
-          "MANUAL source is allowed only for GENERAL_MOVEMENT");
+      throw new IllegalArgumentException("MANUAL source is allowed only for GENERAL_MOVEMENT");
     }
     if (manualMovement && (request.comment() == null || request.comment().isBlank())) {
       throw new IllegalArgumentException("Manual movement comment is required");
@@ -468,22 +448,19 @@ public class DriverTaskService {
     }
     if (request.kind() == DriverTaskKind.DELIVER_TO_REPAIR
         && request.sourceType() == DriverTaskSourceType.CAPITAL_REPAIR) {
-      throw new IllegalArgumentException(
-          "Капитальный ремонт не занимает обычное ремонтное место");
+      throw new IllegalArgumentException("Капитальный ремонт не занимает обычное ремонтное место");
     }
   }
 
   /** Validates planning shape without applying a time-relative fresh-create decision. */
   private static void validatePlanning(CreateDriverTaskRequest request) {
     if (request.planningMode() == null) {
-      throw new IllegalArgumentException(
-          "scheduledDate must be set only for FIXED_DATE planning");
+      throw new IllegalArgumentException("scheduledDate must be set only for FIXED_DATE planning");
     }
     boolean fixedDate = request.planningMode() == DriverTaskPlanningMode.FIXED_DATE;
     if ((fixedDate && request.scheduledDate() == null)
         || (!fixedDate && request.scheduledDate() != null)) {
-      throw new IllegalArgumentException(
-          "scheduledDate must be set only for FIXED_DATE planning");
+      throw new IllegalArgumentException("scheduledDate must be set only for FIXED_DATE planning");
     }
   }
 
@@ -517,6 +494,6 @@ public class DriverTaskService {
     return value.trim();
   }
 
-  public record CreateResult(
-      DriverTaskResponse response, boolean replayed, boolean activateNow) {}
+  /** Durable driver-task create result and whether its immediate activation remains required. */
+  public record CreateResult(DriverTaskResponse response, boolean replayed, boolean activateNow) {}
 }

@@ -29,8 +29,7 @@ class DriverLogisticsTaskTest {
     UUID reservedAllocationId = UUID.randomUUID();
     UUID occupiedAllocationId = UUID.randomUUID();
 
-    task.registerBoardTask(
-        taskBoardTaskId, 0, entryId, "WAITING", "SCHEDULED", null);
+    task.registerBoardTask(taskBoardTaskId, 0, entryId, "WAITING", "SCHEDULED", null);
     task.reserveRepairPlace(reservedAllocationId, 0);
     task.moveToCurrent(1, entryId, "WAITING");
     task.observeBoardTask(
@@ -74,12 +73,7 @@ class DriverLogisticsTaskTest {
             DriverTaskKind.CAPITAL_TO_PRODUCTION);
     UUID entryId = UUID.randomUUID();
     task.registerBoardTask(
-        UUID.randomUUID(),
-        0,
-        entryId,
-        "DONE",
-        "CURRENT",
-        OffsetDateTime.now(ZoneOffset.UTC));
+        UUID.randomUUID(), 0, entryId, "DONE", "CURRENT", OffsetDateTime.now(ZoneOffset.UTC));
     task.captureEvidence(UUID.randomUUID(), UUID.randomUUID(), 1, entryId);
     task.markCoverApplied();
     task.complete();
@@ -101,19 +95,11 @@ class DriverLogisticsTaskTest {
             DriverTaskKind.DELIVER_TO_REPAIR);
     UUID taskBoardTaskId = UUID.randomUUID();
     UUID entryId = UUID.randomUUID();
-    task.registerBoardTask(
-        taskBoardTaskId, 0, entryId, "WAITING", "SCHEDULED", null);
+    task.registerBoardTask(taskBoardTaskId, 0, entryId, "WAITING", "SCHEDULED", null);
     LocalDate movedDate = LocalDate.now(ZoneOffset.UTC).plusDays(3);
 
     task.observeBoardTask(
-        taskBoardTaskId,
-        1,
-        entryId,
-        "WAITING",
-        movedDate,
-        "SCHEDULED",
-        "ACTIVE",
-        null);
+        taskBoardTaskId, 1, entryId, "WAITING", movedDate, "SCHEDULED", "ACTIVE", null);
 
     assertThat(task.getScheduledDate()).isEqualTo(movedDate);
     assertThat(task.getState()).isEqualTo(DriverTaskState.SCHEDULED);
@@ -170,8 +156,7 @@ class DriverLogisticsTaskTest {
             DriverTaskSourceType.REPAIR,
             UUID.randomUUID(),
             DriverTaskKind.DELIVER_TO_REPAIR);
-    task.registerBoardTask(
-        UUID.randomUUID(), 0, UUID.randomUUID(), "WAITING", "SCHEDULED", null);
+    task.registerBoardTask(UUID.randomUUID(), 0, UUID.randomUUID(), "WAITING", "SCHEDULED", null);
 
     assertThatThrownBy(task::cancelBeforeExternalRegistration)
         .isInstanceOf(IllegalStateException.class)
@@ -188,8 +173,7 @@ class DriverLogisticsTaskTest {
             DriverTaskSourceType.REPAIR,
             UUID.randomUUID(),
             DriverTaskKind.DELIVER_TO_REPAIR);
-    task.registerBoardTask(
-        UUID.randomUUID(), 0, UUID.randomUUID(), "WAITING", "SCHEDULED", null);
+    task.registerBoardTask(UUID.randomUUID(), 0, UUID.randomUUID(), "WAITING", "SCHEDULED", null);
     task.reserveRepairPlace(UUID.randomUUID(), 4);
     task.requireReconciliation("MAINTENANCE_COMPENSATION_RELEASE_UNKNOWN");
 
@@ -232,14 +216,7 @@ class DriverLogisticsTaskTest {
     task.retryAfterSeconds(32, "DEPENDENCY_TRANSIENT", 5);
     OffsetDateTime beforeStatusConfirmation = OffsetDateTime.now(ZoneOffset.UTC);
     task.observeBoardTask(
-        taskBoardTaskId,
-        2,
-        entryId,
-        "WAITING",
-        scheduledDate,
-        "CURRENT",
-        "ACTIVE",
-        null);
+        taskBoardTaskId, 2, entryId, "WAITING", scheduledDate, "CURRENT", "ACTIVE", null);
     OffsetDateTime afterStatusConfirmation = OffsetDateTime.now(ZoneOffset.UTC);
 
     assertThat(task.getState()).isEqualTo(DriverTaskState.CURRENT);
@@ -252,14 +229,7 @@ class DriverLogisticsTaskTest {
     task.retryAfterSeconds(32, "DEPENDENCY_TRANSIENT", 5);
     OffsetDateTime completionAt = OffsetDateTime.now(ZoneOffset.UTC);
     task.observeBoardTask(
-        taskBoardTaskId,
-        3,
-        entryId,
-        "DONE",
-        scheduledDate,
-        "CURRENT",
-        "DONE",
-        completionAt);
+        taskBoardTaskId, 3, entryId, "DONE", scheduledDate, "CURRENT", "DONE", completionAt);
 
     assertThat(task.getState()).isEqualTo(DriverTaskState.FINALIZING);
     assertThat(task.getRetryCount()).isZero();
@@ -285,14 +255,7 @@ class DriverLogisticsTaskTest {
     task.markFixedDate(selectedDate);
 
     task.observeBoardTask(
-        boardTaskId,
-        1,
-        entryId,
-        "WAITING",
-        capacityDate,
-        "SCHEDULED",
-        "ACTIVE",
-        null);
+        boardTaskId, 1, entryId, "WAITING", capacityDate, "SCHEDULED", "ACTIVE", null);
 
     assertThat(task.getPlanningMode()).isEqualTo(DriverTaskPlanningMode.FIXED_DATE);
     assertThat(task.getFixedDateLowerBound()).isEqualTo(selectedDate);
@@ -311,9 +274,7 @@ class DriverLogisticsTaskTest {
             DriverTaskKind.DELIVER_TO_REPAIR);
     task.markManualPromotionHold(1);
     ReflectionTestUtils.setField(
-        task,
-        "manualPromotionHoldUntil",
-        OffsetDateTime.now(ZoneOffset.UTC).minusSeconds(1));
+        task, "manualPromotionHoldUntil", OffsetDateTime.now(ZoneOffset.UTC).minusSeconds(1));
 
     assertThat(task.hasManualPromotionHold()).isTrue();
     assertThat(task.isManualPromotionHeldAt(OffsetDateTime.now(ZoneOffset.UTC))).isFalse();
@@ -358,7 +319,7 @@ class DriverLogisticsTaskTest {
                     DriverTaskPlanningMode.AUTO,
                     LocalDate.now(ZoneOffset.UTC),
                     3,
-                    "x".repeat(1_001),
+                    "x".repeat(2_001),
                     "БЫТ-777",
                     UUID.randomUUID(),
                     UUID.randomUUID(),
@@ -417,10 +378,8 @@ class DriverLogisticsTaskTest {
             UUID.randomUUID(),
             DriverTaskKind.TRANSFER);
 
-    assertThat(shipment.getDriverAudienceMode())
-        .isEqualTo(DriverTaskAudienceMode.UNASSIGNED);
-    assertThat(returnTask.getDriverAudienceMode())
-        .isEqualTo(DriverTaskAudienceMode.UNASSIGNED);
+    assertThat(shipment.getDriverAudienceMode()).isEqualTo(DriverTaskAudienceMode.UNASSIGNED);
+    assertThat(returnTask.getDriverAudienceMode()).isEqualTo(DriverTaskAudienceMode.UNASSIGNED);
     assertThat(transfer.getDriverAudienceMode())
         .isEqualTo(DriverTaskAudienceMode.WAREHOUSE_DRIVERS);
     assertThat(shipment.getPlannedDriverWorkerId()).isNull();

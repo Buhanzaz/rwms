@@ -3,6 +3,7 @@ import {
   type ClientPage,
   type ClientType,
   type CreateClientInput,
+  type AdditionalContact,
   type RentalClient,
 } from "@/features/clients/domain/clients"
 import { bearerRequest } from "@/lib/api-client"
@@ -68,6 +69,14 @@ function clientType(value: unknown): ClientType {
   return parsed as ClientType
 }
 
+function parseAdditionalContact(value: unknown): AdditionalContact {
+  const source = record(value)
+  return {
+    name: text(source.name),
+    phone: text(source.phone),
+  }
+}
+
 export function parseRentalClient(value: unknown): RentalClient {
   const source = record(value)
   return {
@@ -85,6 +94,9 @@ export function parseRentalClient(value: unknown): RentalClient {
         : nullableText(source.responsibleManagerDisplayName),
     comment: nullableText(source.comment),
     source: nullableText(source.source),
+    additionalContacts: list(source.additionalContacts).map(
+      parseAdditionalContact
+    ),
     createdAt: timestamp(source.createdAt),
     updatedAt: timestamp(source.updatedAt),
   }
@@ -149,4 +161,15 @@ export async function createClient(params: {
       body: JSON.stringify(params.input),
     })
   )
+}
+
+/** Creates a browser-side UUID used only to make a client create retry safe. */
+export function createClientIdempotencyKey() {
+  if (
+    typeof crypto === "undefined" ||
+    typeof crypto.randomUUID !== "function"
+  ) {
+    throw new Error("Браузер не поддерживает ключи идемпотентности.")
+  }
+  return crypto.randomUUID()
 }

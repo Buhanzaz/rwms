@@ -463,6 +463,10 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(child(schemas, "WorkerContext").get("required"))
         .asList()
         .contains("kpiPalette");
+    Map<String, Object> workerTaskDetail = child(schemas, "WorkerTaskDetail");
+    assertThat(workerTaskDetail.get("required")).asList().contains("source");
+    assertThat(child(child(workerTaskDetail, "properties"), "source").get("oneOf").toString())
+        .contains("#/components/schemas/TaskSourceReference", "type=null");
     assertThat(
             child(
                     child(child(schemas, "WorkerInvalidationEvent"), "properties"),

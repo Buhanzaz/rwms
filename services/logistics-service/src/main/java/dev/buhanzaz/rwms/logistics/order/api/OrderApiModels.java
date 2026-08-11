@@ -20,10 +20,30 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Defines transport models for rental-order HTTP operations; these values are not persistence entities.
+ * Defines transport models for rental-order HTTP operations; these values are not persistence
+ * entities.
  */
 public final class OrderApiModels {
   private OrderApiModels() {}
+
+  /** Name and phone accepted for one non-primary client or order contact. */
+  public record AdditionalContactInput(
+      @NotBlank @Size(max = 255) String name, @NotBlank @Size(max = 32) String phone) {}
+
+  /** Canonical additional-contact projection returned by logistics. */
+  public record AdditionalContactResponse(String name, String phone) {}
+
+  /** Inclusive client-requested receiving date range, independent from the logistics-assigned date. */
+  public record DesiredDeliveryWindowInput(
+      @NotNull LocalDate startDate, @NotNull LocalDate endDate) {
+    @AssertTrue(message = "endDate must not precede startDate")
+    public boolean hasOrderedDates() {
+      return startDate == null || endDate == null || !endDate.isBefore(startDate);
+    }
+  }
+
+  /** Advisory client receiving date range returned independently from the logistics-assigned date. */
+  public record DesiredDeliveryWindowResponse(LocalDate startDate, LocalDate endDate) {}
 
   /** Inline client facts accepted only when an order creates a client in the same transaction. */
   public record NewClientInput(
@@ -33,7 +53,19 @@ public final class OrderApiModels {
       @Size(min = 1, max = 255) String contactPerson,
       @Email @Size(max = 320) String email,
       @Size(min = 1, max = 2_000) String comment,
-      @Size(min = 1, max = 255) String source) {
+      @Size(min = 1, max = 255) String source,
+      List<@NotNull @Valid AdditionalContactInput> additionalContacts) {
+    public NewClientInput(
+        ClientType clientType,
+        String displayName,
+        String phone,
+        String contactPerson,
+        String email,
+        String comment,
+        String source) {
+      this(clientType, displayName, phone, contactPerson, email, comment, source, List.of());
+    }
+
     @AssertTrue(message = "contactPerson is required for this client type")
     public boolean hasRequiredContactPerson() {
       return clientType == null
@@ -50,7 +82,19 @@ public final class OrderApiModels {
       @Size(min = 1, max = 255) String contactPerson,
       @Email @Size(max = 320) String email,
       @Size(min = 1, max = 2_000) String comment,
-      @Size(min = 1, max = 255) String source) {
+      @Size(min = 1, max = 255) String source,
+      List<@NotNull @Valid AdditionalContactInput> additionalContacts) {
+    public CreateClientRequest(
+        ClientType clientType,
+        String displayName,
+        String phone,
+        String contactPerson,
+        String email,
+        String comment,
+        String source) {
+      this(clientType, displayName, phone, contactPerson, email, comment, source, List.of());
+    }
+
     @AssertTrue(message = "contactPerson is required for this client type")
     public boolean hasRequiredContactPerson() {
       return clientType == null
@@ -60,85 +104,39 @@ public final class OrderApiModels {
   }
 
   /**
-   * Creates an editable draft for exactly one existing or inline-created client; delivery facts may
-   * be completed before save.
+   * Creates an editable draft for exactly one existing or inline-created client; the client later
+   * supplies its desired receiving window in the ordinary presentation confirmation.
    */
   public record CreateOrderRequest(
       UUID clientId,
       @Valid NewClientInput newClient,
-      @Size(min = 1, max = 1_000) String deliveryAddress,
-      @DecimalMin("-90") @DecimalMax("90") @Digits(integer = 2, fraction = 6)
-          BigDecimal latitude,
-      @DecimalMin("-180") @DecimalMax("180") @Digits(integer = 3, fraction = 6)
-          BigDecimal longitude,
       @Size(min = 1, max = 32) String contactPhone,
-      @Size(min = 1, max = 2_000) String comment,
-      @Size(max = 31) List<@NotNull LocalDate> acceptableDeliveryDates) {
+      @Size(min = 1, max = 2_000) String comment) {
     @AssertTrue(message = "Exactly one of clientId or newClient is required")
     public boolean hasExactlyOneClient() {
       return (clientId == null) != (newClient == null);
     }
-
-    @AssertTrue(message = "latitude and longitude must be provided together")
-    public boolean hasCoordinatePair() {
-      return (latitude == null) == (longitude == null);
-    }
-
-    @AssertTrue(message = "acceptableDeliveryDates must be unique")
-    public boolean hasUniqueAcceptableDeliveryDates() {
-      return acceptableDeliveryDates == null
-          || acceptableDeliveryDates.size()
-              == new java.util.LinkedHashSet<>(acceptableDeliveryDates).size();
-    }
   }
 
-  /** Replaces the editable draft's selected client and complete delivery fact set under a fence. */
+  /** Replaces the editable draft's selected client and manager-entered primary contact/comment. */
   public record UpdateOrderRequest(
       @NotNull @Min(0) Long expectedVersion,
       @NotNull UUID clientId,
-      @Size(min = 1, max = 1_000) String deliveryAddress,
-      @DecimalMin("-90") @DecimalMax("90") @Digits(integer = 2, fraction = 6)
-          BigDecimal latitude,
-      @DecimalMin("-180") @DecimalMax("180") @Digits(integer = 3, fraction = 6)
-          BigDecimal longitude,
       @Size(min = 1, max = 32) String contactPhone,
-      @Size(min = 1, max = 2_000) String comment,
-      @Size(max = 31) List<@NotNull LocalDate> acceptableDeliveryDates) {
-    @AssertTrue(message = "latitude and longitude must be provided together")
-    public boolean hasCoordinatePair() {
-      return (latitude == null) == (longitude == null);
-    }
+      @Size(min = 1, max = 2_000) String comment) {}
 
-    @AssertTrue(message = "acceptableDeliveryDates must be unique")
-    public boolean hasUniqueAcceptableDeliveryDates() {
-      return acceptableDeliveryDates == null
-          || acceptableDeliveryDates.size()
-              == new java.util.LinkedHashSet<>(acceptableDeliveryDates).size();
-    }
-  }
-
-  public record SelectWarehouseRequest(
-      @NotNull @Min(0) Long expectedVersion, @NotNull UUID warehouseId) {}
-
-  public record AddOrderUnitRequest(
-      @NotNull @Min(0) Long expectedVersion, @NotNull UUID unitId) {}
+  /** Warehouse-manager command replacing one cabin in the same order with a recorded reason. */
+  public record ReplaceOrderUnitRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      @NotNull UUID replacementRentalItemId,
+      @NotBlank @Size(max = 2000) String reason) {}
 
   public record OrderDesiredEquipmentInput(
       @NotNull UUID equipmentId, @NotNull @Min(1) Long quantity) {}
 
   public record SetOrderUnitDesiredEquipmentRequest(
       @NotNull @Min(0) Long expectedVersion,
-      @NotNull
-          @Size(max = 100)
-          List<@NotNull @Valid OrderDesiredEquipmentInput> requirements) {}
-
-  public record OrderRentalTermInput(
-      @NotNull UUID unitId, @NotNull @Min(1) Long rentalMonths) {}
-
-  /** Replaces the complete duration vector for the currently selected order cabins. */
-  public record SetOrderRentalTermsRequest(
-      @NotNull @Min(0) Long expectedVersion,
-      @NotNull @Size(min = 1, max = 100) List<@NotNull @Valid OrderRentalTermInput> terms) {}
+      @NotNull @Size(max = 100) List<@NotNull @Valid OrderDesiredEquipmentInput> requirements) {}
 
   public record OrderRentalTermExtensionInput(
       @NotNull UUID unitId, @NotNull @Min(1) Long additionalMonths) {}
@@ -146,8 +144,7 @@ public final class OrderApiModels {
   /** Extends one or more already shipped cabins without changing their shipment dates. */
   public record ExtendOrderRentalTermsRequest(
       @NotNull @Min(0) Long expectedVersion,
-      @NotNull
-          @Size(min = 1, max = 100)
+      @NotNull @Size(min = 1, max = 100)
           List<@NotNull @Valid OrderRentalTermExtensionInput> terms) {}
 
   /** Creates one independently scheduled shipment containing exactly the selected cabins. */
@@ -158,17 +155,14 @@ public final class OrderApiModels {
       @NotNull LocalDate scheduledDate,
       @NotNull @Size(min = 1, max = 100) List<@NotNull UUID> unitIds) {
     public CreateOrderRentalShipmentRequest(
-        Long expectedVersion,
-        String driverSnapshot,
-        LocalDate scheduledDate,
-        List<UUID> unitIds) {
+        Long expectedVersion, String driverSnapshot, LocalDate scheduledDate, List<UUID> unitIds) {
       this(expectedVersion, driverSnapshot, null, scheduledDate, unitIds);
     }
   }
 
   /**
-   * Logistics-owned rental-client projection. A historical responsible-manager display snapshot
-   * may be null, while its truthful subject identifier is always present.
+   * Logistics-owned rental-client projection. A historical responsible-manager display snapshot may
+   * be null, while its truthful subject identifier is always present.
    */
   public record ClientResponse(
       UUID id,
@@ -182,17 +176,19 @@ public final class OrderApiModels {
       String responsibleManagerDisplayName,
       String comment,
       String source,
+      List<AdditionalContactResponse> additionalContacts,
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt) {}
 
   public record ClientPageResponse(
-      List<ClientResponse> content,
-      long page,
-      long size,
-      long totalElements,
-      long totalPages) {}
+      List<ClientResponse> content, long page, long size, long totalElements, long totalPages) {}
 
-  public record OrderPermissions(boolean canEdit, boolean canViewOtherManagers) {}
+  /** Server-derived order command affordances; clients must not reconstruct role rules. */
+  public record OrderPermissions(
+      boolean canEdit,
+      boolean canReplaceUnits,
+      boolean canExtendRentalTerms,
+      boolean canViewOtherManagers) {}
 
   /** Server-list projection including the delivery metadata needed to identify and filter work. */
   public record OrderSummaryResponse(
@@ -211,7 +207,8 @@ public final class OrderApiModels {
       BigDecimal longitude,
       String contactPhone,
       String comment,
-      List<LocalDate> acceptableDeliveryDates,
+      List<AdditionalContactResponse> additionalContacts,
+      List<DesiredDeliveryWindowResponse> desiredDeliveryWindows,
       long unitCount,
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt) {}
@@ -224,13 +221,10 @@ public final class OrderApiModels {
       long totalPages) {}
 
   public record OrderEquipmentContentResponse(
-      UUID equipmentId,
-      String equipmentName,
-      long quantity,
-      String locationKind) {}
+      UUID equipmentId, String equipmentName, long quantity, String locationKind) {}
 
   public record OrderDesiredEquipmentResponse(
-      UUID equipmentId, String equipmentName, long quantity) {}
+      UUID equipmentId, String equipmentName, long quantity, String reservationState) {}
 
   public record OrderRentalTermResponse(
       long rentalMonths, LocalDate shipmentDate, LocalDate returnDate) {}
@@ -255,16 +249,13 @@ public final class OrderApiModels {
   public record OrderUnitResponse(
       UUID reservationId,
       boolean added,
+      String reservationState,
       OrderRentalItemResponse unit,
       List<OrderDesiredEquipmentResponse> desiredContents,
       OrderRentalTermResponse rentalTerm) {}
 
   public record OrderUnitPageResponse(
-      List<OrderUnitResponse> content,
-      long page,
-      long size,
-      long totalElements,
-      long totalPages) {}
+      List<OrderUnitResponse> content, long page, long size, long totalElements, long totalPages) {}
 
   /** One cabin line in a logistics-owned shipment or return document. */
   public record OrderMovementCabinResponse(UUID rentalItemId, String lineState) {}
@@ -306,7 +297,8 @@ public final class OrderApiModels {
       BigDecimal longitude,
       String contactPhone,
       String comment,
-      List<LocalDate> acceptableDeliveryDates,
+      List<AdditionalContactResponse> additionalContacts,
+      List<DesiredDeliveryWindowResponse> desiredDeliveryWindows,
       long unitCount,
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt,

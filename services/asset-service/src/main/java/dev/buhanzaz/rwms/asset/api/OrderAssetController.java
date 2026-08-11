@@ -107,6 +107,19 @@ public class OrderAssetController {
     return response.body(result.response());
   }
 
+  @PostMapping("/{orderId}/units/replace")
+  public ResponseEntity<OrderUnitsReplacementReceipt> replaceUnits(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID orderId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody ReplaceOrderUnitsRequest request) {
+    access.requireLogisticsAssetAccess(jwt);
+    var result = service.replaceUnits(idempotencyKey, orderId, request);
+    ResponseEntity.BodyBuilder response = ResponseEntity.ok();
+    if (result.replayed()) response.header("Idempotency-Replayed", "true");
+    return response.body(result.response());
+  }
+
   @PostMapping("/{orderId}/units/release-all")
   public ResponseEntity<List<OrderUnitReservationView>> releaseAll(
       @AuthenticationPrincipal Jwt jwt,

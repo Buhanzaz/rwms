@@ -18,8 +18,8 @@ import org.hibernate.type.SqlTypes;
 import tools.jackson.databind.JsonNode;
 
 /**
- * Persists one independently answerable cabin clarification with immutable exact options.
- * Availability remains logistics-owned; this record stores only assistant interaction state.
+ * Persists one ordered cabin clarification with immutable exact options. Availability remains
+ * logistics-owned; this record stores only assistant interaction state.
  */
 @Entity
 @Table(name = "assistant_clarification_question")
@@ -43,6 +43,9 @@ public class AssistantClarificationQuestion {
 
   @Column(name = "branch_key", nullable = false, length = 255)
   private String branchKey;
+
+  @Column(name = "sequence_number", nullable = false)
+  private int sequenceNumber;
 
   @Enumerated(EnumType.STRING)
   @Column(name = "kind", nullable = false, length = 32)
@@ -76,24 +79,30 @@ public class AssistantClarificationQuestion {
 
   protected AssistantClarificationQuestion() {}
 
-  /** Creates a pending question whose options were already validated against current metadata. */
+  /** Creates one queued question whose options were already validated against current metadata. */
   public static AssistantClarificationQuestion create(
       UUID id,
       UUID conversationId,
       UUID turnMessageId,
       UUID toolCallId,
       String branchKey,
+      int sequenceNumber,
       AssistantClarificationKind kind,
       String prompt,
       UUID warehouseId,
       String cabinType,
-      JsonNode optionsPayload) {
+      JsonNode optionsPayload,
+      AssistantClarificationStatus initialStatus) {
     AssistantClarificationQuestion value = new AssistantClarificationQuestion();
     value.id = require(id, "questionId");
     value.conversationId = require(conversationId, "conversationId");
     value.turnMessageId = require(turnMessageId, "turnMessageId");
     value.toolCallId = require(toolCallId, "toolCallId");
     value.branchKey = requiredText(branchKey, "branchKey", 255);
+    if (sequenceNumber < 1) {
+      throw new IllegalArgumentException("sequenceNumber must be positive");
+    }
+    value.sequenceNumber = sequenceNumber;
     value.kind = Objects.requireNonNull(kind, "kind");
     value.prompt = requiredText(prompt, "prompt", 2000);
     value.warehouseId = require(warehouseId, "warehouseId");
@@ -102,7 +111,11 @@ public class AssistantClarificationQuestion {
       throw new IllegalArgumentException("At least two clarification options are required");
     }
     value.optionsPayload = optionsPayload.deepCopy();
-    value.status = AssistantClarificationStatus.PENDING;
+    if (initialStatus != AssistantClarificationStatus.PENDING
+        && initialStatus != AssistantClarificationStatus.QUEUED) {
+      throw new IllegalArgumentException("A new clarification must be queued or pending");
+    }
+    value.status = initialStatus;
     return value;
   }
 
@@ -119,10 +132,6 @@ public class AssistantClarificationQuestion {
     if (!optionExists) {
       throw new IllegalArgumentException("Clarification option is not part of the question");
     }
-    if (status == AssistantClarificationStatus.ANSWERED) {
-      if (requiredOptionId.equals(answeredOptionId)) return false;
-      throw new IllegalStateException("Clarification question was already answered");
-    }
     if (status != AssistantClarificationStatus.PENDING) {
       throw new IllegalStateException("Clarification question is no longer active");
     }
@@ -132,11 +141,12 @@ public class AssistantClarificationQuestion {
     return true;
   }
 
-  /** Makes an older branch question non-answerable when a newer exact question replaces it. */
-  public boolean supersede() {
-    if (status != AssistantClarificationStatus.PENDING) return false;
-    status = AssistantClarificationStatus.SUPERSEDED;
-    return true;
+  /** Activates this question after the preceding queue entry has been answered. */
+  public void activate() {
+    if (status != AssistantClarificationStatus.QUEUED) {
+      throw new IllegalStateException("Only a queued clarification can be activated");
+    }
+    status = AssistantClarificationStatus.PENDING;
   }
 
   @PrePersist
@@ -166,6 +176,10 @@ public class AssistantClarificationQuestion {
 
   public String getBranchKey() {
     return branchKey;
+  }
+
+  public int getSequenceNumber() {
+    return sequenceNumber;
   }
 
   public AssistantClarificationKind getKind() {

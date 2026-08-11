@@ -98,6 +98,10 @@ import type {
   DriverTaskKind,
   RepairPlaceCard,
 } from "@/features/logistics/driver-board/driver-board-model"
+import {
+  DriverTripDetailsDialog,
+  DriverTripDetailsView,
+} from "@/features/logistics/driver-board/driver-trip-details"
 import { listAssetRentalItems } from "@/features/rental-items/api/asset-rental-items-api"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { ApiError } from "@/lib/api-client"
@@ -362,6 +366,7 @@ function pendingCapitalCard(schedule: CapitalRepairSchedule): DriverBoardCard {
     priority: schedule.repair.priority,
     pinned: false,
     position: schedule.targetIndex,
+    tripDetails: null,
   }
 }
 
@@ -440,16 +445,24 @@ function DriverTaskDetailsCard({
   pinDisabled?: boolean
 }) {
   const [expanded, setExpanded] = useState(true)
+  const trip = card.tripDetails
+  const cabinLabel = trip
+    ? `${trip.cabins.length} бытовок`
+    : card.unitNumber || "без номера"
 
   return (
     <Collapsible open={expanded} onOpenChange={setExpanded} asChild>
       <Card size="sm" className={className}>
         <CardHeader>
           <CardTitle className="line-clamp-2 pr-10">
-            {taskTitle(card)}
+            {trip
+              ? `Задание №${trip.taskNumber} · Ходка №${trip.tripNumber}`
+              : taskTitle(card)}
           </CardTitle>
           <CardDescription>
-            Бытовка {card.unitNumber || "без номера"}
+            {trip
+              ? `${trip.clientName} · ${cabinLabel}`
+              : `Бытовка ${cabinLabel}`}
           </CardDescription>
           <CardAction className="flex items-center gap-1">
             <CollapsibleTrigger asChild>
@@ -504,7 +517,14 @@ function DriverTaskDetailsCard({
             <p className="text-xs text-muted-foreground">
               {taskKindLabel(card.kind)}
             </p>
-            {card.taskText?.trim() &&
+            {trip ? (
+              <>
+                <DriverTripDetailsView details={trip} live={false} />
+                <DriverTripDetailsDialog card={card} />
+              </>
+            ) : null}
+            {!trip &&
+            card.taskText?.trim() &&
             card.taskText.trim() !== card.title.trim() ? (
               <p className="text-sm whitespace-pre-wrap">
                 {card.taskText.trim()}
@@ -523,6 +543,11 @@ function DriverTaskDetailsCard({
               </Badge>
               {card.pinned ? (
                 <Badge variant="secondary">Закреплено</Badge>
+              ) : null}
+              {trip ? (
+                <Badge variant="outline">
+                  Водитель: {card.driverAudience.workerName ?? "не назначен"}
+                </Badge>
               ) : null}
             </div>
           </CardContent>
@@ -609,7 +634,11 @@ function CurrentTaskCard({
       data-testid={`current-task-${card.externalTaskId}`}
       {...attributes}
       {...listeners}
-      aria-label={`Переместить задание бытовки ${card.unitNumber || "без номера"}`}
+      aria-label={
+        card.tripDetails
+          ? `Переместить ходку №${card.tripDetails.tripNumber}`
+          : `Переместить задание бытовки ${card.unitNumber || "без номера"}`
+      }
     >
       <DriverTaskDetailsCard
         card={card}
@@ -678,7 +707,11 @@ function ScheduledTaskCard({
       data-testid={`scheduled-task-${card.externalTaskId}`}
       {...attributes}
       {...listeners}
-      aria-label={`Переместить задание бытовки ${card.unitNumber || "без номера"}`}
+      aria-label={
+        card.tripDetails
+          ? `Переместить ходку №${card.tripDetails.tripNumber}`
+          : `Переместить задание бытовки ${card.unitNumber || "без номера"}`
+      }
     >
       <DriverTaskDetailsCard
         card={card}

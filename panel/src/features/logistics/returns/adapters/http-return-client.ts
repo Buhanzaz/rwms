@@ -21,7 +21,6 @@ type JsonObject = Record<string, unknown>
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const LOCAL_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
-
 function invalidResponse(): never {
   throw new Error("Сервис логистики вернул некорректный ответ.")
 }

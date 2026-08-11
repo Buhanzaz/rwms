@@ -14,14 +14,15 @@ import jakarta.persistence.UniqueConstraint;
 import jakarta.persistence.Version;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
-import java.util.Objects;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.regex.Pattern;
 import org.hibernate.proxy.HibernateProxy;
 
 /**
- * JPA entity that persists equipment catalog item in the asset-owned database.
+ * JPA entity that persists asset-owned equipment catalog truth, including the optional positive
+ * quantity limit enforced for each order cabin.
  */
 @Entity
 @Table(
@@ -58,6 +59,9 @@ public class EquipmentCatalogItem {
   @Column(name = "comment", length = 2000)
   private String comment;
 
+  @Column(name = "maximum_per_cabin")
+  private Integer maximumPerCabin;
+
   @Column(name = "created_at", nullable = false)
   private OffsetDateTime createdAt;
 
@@ -66,29 +70,51 @@ public class EquipmentCatalogItem {
 
   protected EquipmentCatalogItem() {}
 
+  /** Creates an item after validating the optional positive per-cabin maximum. */
   public static EquipmentCatalogItem create(
-      String name, EquipmentCategory category, String comment) {
+      String name, EquipmentCategory category, String comment, Integer maximumPerCabin) {
     EquipmentCatalogItem item = new EquipmentCatalogItem();
-    item.assign(name, category, true, comment);
+    item.assign(name, category, true, comment, maximumPerCabin);
     return item;
   }
 
-  public boolean change(String name, EquipmentCategory category, boolean active, String comment) {
+  public static EquipmentCatalogItem create(
+      String name, EquipmentCategory category, String comment) {
+    return create(name, category, comment, null);
+  }
+
+  /** Applies one catalog mutation; a null maximum intentionally restores legacy unlimited use. */
+  public boolean change(
+      String name,
+      EquipmentCategory category,
+      boolean active,
+      String comment,
+      Integer maximumPerCabin) {
     CanonicalName canonicalName = canonicalName(name);
     String nextComment = optional(comment, 2000);
+    Integer nextMaximumPerCabin = optionalPositive(maximumPerCabin);
     if (category == null) throw new IllegalArgumentException("category is required");
     if (Objects.equals(this.name, canonicalName.displayName())
         && Objects.equals(this.normalizedName, canonicalName.normalizedName())
-        && this.category == category && this.active == active && Objects.equals(this.comment, nextComment)) return false;
+        && this.category == category
+        && this.active == active
+        && Objects.equals(this.comment, nextComment)
+        && Objects.equals(this.maximumPerCabin, nextMaximumPerCabin)) return false;
     this.name = canonicalName.displayName();
     this.normalizedName = canonicalName.normalizedName();
     this.category = category;
     this.active = active;
     this.comment = nextComment;
+    this.maximumPerCabin = nextMaximumPerCabin;
     return true;
   }
 
-  private void assign(String name, EquipmentCategory category, boolean active, String comment) {
+  private void assign(
+      String name,
+      EquipmentCategory category,
+      boolean active,
+      String comment,
+      Integer maximumPerCabin) {
     CanonicalName canonicalName = canonicalName(name);
     this.name = canonicalName.displayName();
     this.normalizedName = canonicalName.normalizedName();
@@ -96,6 +122,7 @@ public class EquipmentCatalogItem {
     this.category = category;
     this.active = active;
     this.comment = optional(comment, 2000);
+    this.maximumPerCabin = optionalPositive(maximumPerCabin);
   }
 
   @PrePersist
@@ -144,6 +171,13 @@ public class EquipmentCatalogItem {
     return normalized;
   }
 
+  private static Integer optionalPositive(Integer value) {
+    if (value != null && value < 1) {
+      throw new IllegalArgumentException("maximumPerCabin must be positive");
+    }
+    return value;
+  }
+
   public UUID getId() { return id; }
   public long getVersion() { return version; }
   public String getName() { return name; }
@@ -151,6 +185,7 @@ public class EquipmentCatalogItem {
   public EquipmentCategory getCategory() { return category; }
   public boolean isActive() { return active; }
   public String getComment() { return comment; }
+  public Integer getMaximumPerCabin() { return maximumPerCabin; }
   public OffsetDateTime getCreatedAt() { return createdAt; }
   public OffsetDateTime getUpdatedAt() { return updatedAt; }
 

@@ -11,12 +11,12 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsLineState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsMediaPurpose;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsMediaReference;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsTargetService;
+import dev.buhanzaz.rwms.logistics.driver.service.DocumentDriverTaskPlanner;
 import dev.buhanzaz.rwms.logistics.equipment.api.EquipmentMovementTaskApiModels.CancelEquipmentMovementTaskRequest;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
 import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskService;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventStore;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventType;
-import dev.buhanzaz.rwms.logistics.driver.service.DocumentDriverTaskPlanner;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
@@ -123,11 +123,7 @@ class LogisticsTransferDocumentCoordinator {
           proofCreatedAt);
     }
     transferFurnitureTasks.createForTransfer(
-        subjectId,
-        document,
-        request.scheduledDate(),
-        request.furnitureReplacements(),
-        admission);
+        subjectId, document, request.scheduledDate(), request.furnitureReplacements(), admission);
     eventStore.initialize(document, lines.size(), correlationId, subjectId);
     warehouseAdmission.enqueue(document, document.getWarehouseId(), admission);
     warehouseAdmission.enqueue(document, document.getDestinationWarehouseId(), admission);
@@ -158,7 +154,8 @@ class LogisticsTransferDocumentCoordinator {
         idempotency.replay(subjectId, idempotencyKey, DEPART_TRANSFER_LINE, checksum);
     if (replay != null) return result(replay, true);
 
-    LogisticsDocument document = readProjection.document(documentId, LogisticsDocumentType.TRANSFER);
+    LogisticsDocument document =
+        readProjection.document(documentId, LogisticsDocumentType.TRANSFER);
     requireExpectedVersion(
         document, expectedDocumentVersion, "Transfer document version changed concurrently");
     if (document.getState() != LogisticsDocumentState.DRAFT
@@ -261,7 +258,8 @@ class LogisticsTransferDocumentCoordinator {
         idempotency.replay(subjectId, idempotencyKey, ARRIVE_TRANSFER_LINE, checksum);
     if (replay != null) return result(replay, true);
 
-    LogisticsDocument document = readProjection.document(documentId, LogisticsDocumentType.TRANSFER);
+    LogisticsDocument document =
+        readProjection.document(documentId, LogisticsDocumentType.TRANSFER);
     requireExpectedVersion(
         document, expectedDocumentVersion, "Transfer document version changed concurrently");
     if (document.getState() != LogisticsDocumentState.IN_TRANSIT
@@ -333,9 +331,11 @@ class LogisticsTransferDocumentCoordinator {
         || lineId == null
         || expectedDocumentVersion < 0
         || expectedLineVersion < 0) {
-      throw new IllegalArgumentException("Transfer preflight identifiers and versions are required");
+      throw new IllegalArgumentException(
+          "Transfer preflight identifiers and versions are required");
     }
-    LogisticsDocument document = readProjection.document(documentId, LogisticsDocumentType.TRANSFER);
+    LogisticsDocument document =
+        readProjection.document(documentId, LogisticsDocumentType.TRANSFER);
     requireExpectedVersion(
         document, expectedDocumentVersion, "Transfer document version changed concurrently");
     if (document.getState() != LogisticsDocumentState.IN_TRANSIT
@@ -367,12 +367,15 @@ class LogisticsTransferDocumentCoordinator {
     requireTransferCancellationCommand(documentId, correlationId, expectedDocumentVersion);
     String checksum =
         LogisticsCommandChecksum.sha256(
-            CANCEL_TRANSFER, List.of(documentId.toString(), Long.toString(expectedDocumentVersion)));
+            CANCEL_TRANSFER,
+            List.of(documentId.toString(), Long.toString(expectedDocumentVersion)));
     idempotency.acquireLock(subjectId, CANCEL_TRANSFER, idempotencyKey);
-    LogisticsDocument replay = idempotency.replay(subjectId, idempotencyKey, CANCEL_TRANSFER, checksum);
+    LogisticsDocument replay =
+        idempotency.replay(subjectId, idempotencyKey, CANCEL_TRANSFER, checksum);
     if (replay != null) return result(replay, true);
 
-    LogisticsDocument document = readProjection.document(documentId, LogisticsDocumentType.TRANSFER);
+    LogisticsDocument document =
+        readProjection.document(documentId, LogisticsDocumentType.TRANSFER);
     requireExpectedVersion(
         document, expectedDocumentVersion, "Transfer document version changed concurrently");
     if (document.getState() != LogisticsDocumentState.DRAFT) {
@@ -502,8 +505,7 @@ class LogisticsTransferDocumentCoordinator {
       return;
     }
     if (request.priority() == null || request.priority() < 1 || request.priority() > 5) {
-      throw new LogisticsConflictException(
-          "The accepting employee must select a repair priority");
+      throw new LogisticsConflictException("The accepting employee must select a repair priority");
     }
   }
 
@@ -529,7 +531,8 @@ class LogisticsTransferDocumentCoordinator {
   private static void requireTransferCancellationCommand(
       UUID documentId, UUID correlationId, long expectedDocumentVersion) {
     if (documentId == null || correlationId == null || expectedDocumentVersion < 0) {
-      throw new IllegalArgumentException("Transfer cancellation identifiers and version are required");
+      throw new IllegalArgumentException(
+          "Transfer cancellation identifiers and version are required");
     }
   }
 
@@ -542,7 +545,8 @@ class LogisticsTransferDocumentCoordinator {
 
   private static UUID transferDestination(LogisticsDocument document) {
     UUID destinationWarehouseId = document.getDestinationWarehouseId();
-    if (destinationWarehouseId == null || destinationWarehouseId.equals(document.getWarehouseId())) {
+    if (destinationWarehouseId == null
+        || destinationWarehouseId.equals(document.getWarehouseId())) {
       throw new IllegalStateException("Transfer destination warehouse is invalid");
     }
     return destinationWarehouseId;
@@ -571,10 +575,7 @@ class LogisticsTransferDocumentCoordinator {
   }
 
   private static String transferWarehouseDigest(
-      String operation,
-      LogisticsDocument document,
-      LogisticsDocumentLine line,
-      UUID warehouseId) {
+      String operation, LogisticsDocument document, LogisticsDocumentLine line, UUID warehouseId) {
     return LogisticsCommandChecksum.sha256(
         operation,
         List.of(document.getId().toString(), line.getId().toString(), warehouseId.toString()));

@@ -10,6 +10,7 @@ import { useWarehouse } from "@/hooks/use-warehouse"
 
 type BookingSelectionState = {
   draftId: string
+  selectionWarehouseId: string | null
   checkedItems: RentalItemDto[]
   stagedItems: RentalItemDto[]
   activeHold: ManualBookingDraftHold | null
@@ -18,6 +19,7 @@ type BookingSelectionState = {
 function createInitialState(): BookingSelectionState {
   return {
     draftId: crypto.randomUUID(),
+    selectionWarehouseId: null,
     checkedItems: [],
     stagedItems: [],
     activeHold: null,
@@ -65,28 +67,33 @@ function BookingSelectionScope({
     [state.stagedItems]
   )
 
-  const toggleChecked = useCallback(
-    (item: RentalItemDto) => {
-      if (warehouseId !== item.warehouseId) return
-      setState((current) => {
-        if (current.stagedItems.some((candidate) => candidate.id === item.id)) {
-          return current
-        }
-        const checked = current.checkedItems.some(
-          (candidate) => candidate.id === item.id
-        )
-        return {
-          ...current,
-          checkedItems: checked
-            ? current.checkedItems.filter(
-                (candidate) => candidate.id !== item.id
-              )
-            : [...current.checkedItems, item],
-        }
-      })
-    },
-    [warehouseId]
-  )
+  const toggleChecked = useCallback((item: RentalItemDto) => {
+    setState((current) => {
+      if (
+        current.selectionWarehouseId !== null &&
+        current.selectionWarehouseId !== item.warehouseId
+      ) {
+        return current
+      }
+      if (current.stagedItems.some((candidate) => candidate.id === item.id)) {
+        return current
+      }
+      const checked = current.checkedItems.some(
+        (candidate) => candidate.id === item.id
+      )
+      const checkedItems = checked
+        ? current.checkedItems.filter((candidate) => candidate.id !== item.id)
+        : [...current.checkedItems, item]
+      return {
+        ...current,
+        selectionWarehouseId:
+          checkedItems.length === 0 && current.stagedItems.length === 0
+            ? null
+            : (current.selectionWarehouseId ?? item.warehouseId),
+        checkedItems,
+      }
+    })
+  }, [])
 
   const addCheckedToStaged = useCallback(() => {
     setState((current) => {
@@ -104,32 +111,47 @@ function BookingSelectionScope({
   }, [])
 
   const removeStaged = useCallback((rentalItemId: string) => {
-    setState((current) => ({
-      ...current,
-      stagedItems: current.stagedItems.filter(
+    setState((current) => {
+      const stagedItems = current.stagedItems.filter(
         (item) => item.id !== rentalItemId
-      ),
-    }))
+      )
+      return {
+        ...current,
+        selectionWarehouseId:
+          current.checkedItems.length === 0 && stagedItems.length === 0
+            ? null
+            : current.selectionWarehouseId,
+        stagedItems,
+      }
+    })
   }, [])
 
   const removeMany = useCallback((rentalItemIds: readonly string[]) => {
     const ids = new Set(rentalItemIds)
     if (ids.size === 0) return
-    setState((current) => ({
-      ...current,
-      checkedItems: current.checkedItems.filter((item) => !ids.has(item.id)),
-      stagedItems: current.stagedItems.filter((item) => !ids.has(item.id)),
-      activeHold: current.activeHold
-        ? (() => {
-            const retainedIds = current.activeHold.rentalItemIds.filter(
-              (id) => !ids.has(id)
-            )
-            return retainedIds.length > 0
-              ? { ...current.activeHold, rentalItemIds: retainedIds }
-              : null
-          })()
-        : null,
-    }))
+    setState((current) => {
+      const checkedItems = current.checkedItems.filter(
+        (item) => !ids.has(item.id)
+      )
+      const stagedItems = current.stagedItems.filter(
+        (item) => !ids.has(item.id)
+      )
+      const retainedHoldIds =
+        current.activeHold?.rentalItemIds.filter((id) => !ids.has(id)) ?? []
+      return {
+        ...current,
+        selectionWarehouseId:
+          checkedItems.length === 0 && stagedItems.length === 0
+            ? null
+            : current.selectionWarehouseId,
+        checkedItems,
+        stagedItems,
+        activeHold:
+          current.activeHold && retainedHoldIds.length > 0
+            ? { ...current.activeHold, rentalItemIds: retainedHoldIds }
+            : null,
+      }
+    })
   }, [])
 
   const syncSnapshot = useCallback((item: RentalItemDto) => {
@@ -157,7 +179,7 @@ function BookingSelectionScope({
   const clear = useCallback(() => setState(createInitialState()), [])
   const value = useMemo<BookingSelectionContextValue>(
     () => ({
-      warehouseId,
+      warehouseId: state.selectionWarehouseId ?? warehouseId,
       draftId: state.draftId,
       checkedItems: state.checkedItems,
       checkedIds,

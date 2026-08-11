@@ -19,14 +19,14 @@ import {
   RentalItemCreationPhotoUploader,
   type StagedRentalItemPhoto,
 } from "@/features/rental-items/rental-item-creation-photo-uploader"
+import { RentalItemCompositionFields } from "@/features/rental-items/rental-item-composition-fields"
 import {
   compositionCategoryOptions,
   emptyRentalItemComposition,
   isRentalItemCompositionComplete,
-  RentalItemCompositionFields,
   type RentalItemCompositionCategoryMode,
   type RentalItemCompositionFormValue,
-} from "@/features/rental-items/rental-item-composition-fields"
+} from "@/features/rental-items/rental-item-composition"
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 import { Button } from "@/components/ui/button"
 import {

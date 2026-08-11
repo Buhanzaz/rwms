@@ -30,6 +30,9 @@ logging:
 spring:
   application:
     name: logistics-service
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
   datasource:
     url: ${LOGISTICS_DB_URL}
     username: ${LOGISTICS_DB_USERNAME}

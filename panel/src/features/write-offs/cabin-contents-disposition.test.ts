@@ -25,6 +25,7 @@ function equipment(
     name,
     active: true,
     comment: null,
+    maximumPerCabin: null,
     totalQuantity: quantity,
     stockQuantity: 0,
     cabinStockQuantity: quantity,

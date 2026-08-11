@@ -114,6 +114,7 @@ function equipment(): EquipmentItemDto {
     name: "Стол",
     active: true,
     comment: null,
+    maximumPerCabin: null,
     totalQuantity: 12,
     stockQuantity: 10,
     cabinStockQuantity: 2,

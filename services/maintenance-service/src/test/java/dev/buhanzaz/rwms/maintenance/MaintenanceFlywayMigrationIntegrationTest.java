@@ -42,7 +42,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsTheAuthoritativeMaintenanceSchema() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(41);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(42);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains(
@@ -244,7 +244,13 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "node_id", "warehouse_id", "source_catalog_version_id",
         "source_catalog_expected_version", "requested_name", "state", "equipment_id",
         "equipment_name", "observed_equipment_id", "observed_equipment_name",
+        "requested_equipment_version", "requested_maximum_per_cabin", "equipment_version",
+        "maximum_per_cabin", "observed_equipment_version", "observed_maximum_per_cabin",
         "attempt_count", "claim_token", "claim_until", "review_version");
+    assertThat(
+            constraintDefinition(
+                "furniture_equipment_link_intent", "ck_furniture_link_maximum_per_cabin"))
+        .contains("requested_maximum_per_cabin", "maximum_per_cabin > 0");
     assertThat(triggerDefinition("furniture_equipment_link_review_audit_immutable"))
         .contains("reject_furniture_link_review_audit_mutation");
     assertThat(columns("warehouse_readiness_fence")).containsExactlyInAnyOrder(
@@ -355,7 +361,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
     throughV34.validate();
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(7);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(8);
     upgraded.validate();
     assertThat(constraintDefinition("event_stream_head", "ck_maintenance_stream_type"))
         .contains("PROPERTY_DISPOSITION");
@@ -582,7 +588,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         catalogId.toString(),
         "0".repeat(64));
 
-    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(17);
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(18);
 
     assertThat(jdbc.queryForObject(
         "select count(*) from catalog_node where catalog_version_id=? and node_type='WORK'",
@@ -963,7 +969,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "0".repeat(64));
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(18);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(19);
     upgraded.validate();
 
     assertThat(
@@ -1126,7 +1132,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
     insertLegacyEstimateStage(estimateId, UUID.randomUUID(), 2, "MOVE_FROM_REPAIR");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(15);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(16);
     upgraded.validate();
 
     assertThat(jdbc.queryForMap(
@@ -1308,7 +1314,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         repairStageId);
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(14);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(15);
     upgraded.validate();
 
     assertThat(
@@ -1421,7 +1427,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "0".repeat(64));
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(13);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(14);
     upgraded.validate();
 
     assertThat(jdbc.queryForMap(
@@ -1521,7 +1527,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
     insertV20CatalogStreamArtifacts(otherCatalogId, otherNodeId, "ACTIVE");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(21);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(22);
     upgraded.validate();
 
     assertThat(jdbc.queryForObject(

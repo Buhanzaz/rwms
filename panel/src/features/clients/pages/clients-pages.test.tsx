@@ -1,10 +1,22 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import type { ReactNode } from "react"
+import userEvent from "@testing-library/user-event"
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const clientsApi = vi.hoisted(() => ({
+  createClient: vi.fn(),
+  createClientIdempotencyKey: vi.fn(
+    () => "55555555-5555-4555-8555-555555555555"
+  ),
   getClient: vi.fn(),
   listClients: vi.fn(),
 }))
@@ -51,6 +63,7 @@ const client = {
   responsibleManagerDisplayName: null,
   comment: "Постоянный клиент",
   source: "Рекомендация",
+  additionalContacts: [{ name: "Анна Петрова", phone: "+79990000001" }],
   createdAt: "2026-08-09T08:00:00Z",
   updatedAt: "2026-08-09T09:00:00Z",
 }
@@ -70,7 +83,13 @@ const order = {
   longitude: 37.62,
   contactPhone: "+79990000000",
   comment: null,
-  acceptableDeliveryDates: ["2026-08-15"],
+  additionalContacts: [{ name: "Прораб", phone: "+79990000002" }],
+  desiredDeliveryWindows: [
+    {
+      startDate: "2026-08-15",
+      endDate: "2026-08-15",
+    },
+  ],
   unitCount: 2,
   createdAt: "2026-08-09T08:30:00Z",
   updatedAt: "2026-08-09T09:30:00Z",
@@ -102,6 +121,10 @@ function renderRoute(initialEntry: string, route: string, element: ReactNode) {
 }
 
 beforeEach(() => {
+  clientsApi.createClient.mockResolvedValue({
+    ...client,
+    phone: "+79990000000",
+  })
   clientsApi.getClient.mockResolvedValue(client)
   clientsApi.listClients.mockResolvedValue({
     content: [client],
@@ -125,6 +148,59 @@ afterEach(() => {
 })
 
 describe("client pages", () => {
+  it("creates a client in the top-right modal with named additional contacts", async () => {
+    const user = userEvent.setup()
+    renderRoute("/clients", "/clients", <ClientsListPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Создать клиента" })
+    )
+    const dialog = screen.getByRole("dialog", { name: "Создать клиента" })
+    await user.type(
+      within(dialog).getByLabelText("Наименование или ФИО"),
+      "ООО Новый"
+    )
+    await user.type(
+      within(dialog).getByLabelText("Основной телефон"),
+      "+7 999 000-00-00"
+    )
+    await user.type(
+      within(dialog).getByLabelText("Основное контактное лицо"),
+      "Иван Иванов"
+    )
+    await user.click(
+      within(dialog).getByRole("button", { name: "Добавить контакт" })
+    )
+    await user.type(within(dialog).getByLabelText("Имя"), "Прораб")
+    await user.type(
+      within(dialog).getByLabelText("Телефон"),
+      "+7 999 000-00-01"
+    )
+    await user.click(
+      within(dialog).getByRole("button", { name: "Создать клиента" })
+    )
+
+    await waitFor(() =>
+      expect(clientsApi.createClient).toHaveBeenCalledWith({
+        accessToken: "token",
+        idempotencyKey: "55555555-5555-4555-8555-555555555555",
+        input: {
+          clientType: "LEGAL_ENTITY",
+          displayName: "ООО Новый",
+          phone: "+7 999 000-00-00",
+          contactPerson: "Иван Иванов",
+          email: null,
+          comment: null,
+          source: null,
+          additionalContacts: [{ name: "Прораб", phone: "+7 999 000-00-01" }],
+        },
+      })
+    )
+    expect(
+      (await screen.findByLabelText("Текущий маршрут")).textContent
+    ).toContain(`/clients/${CLIENT_ID}`)
+  })
+
   it("opens a paginated grid row by double-click and exposes keyboard navigation", async () => {
     renderRoute("/clients", "/clients", <ClientsListPage />)
 
@@ -136,6 +212,7 @@ describe("client pages", () => {
       screen.getByRole("link", { name: "ООО Петров" }).getAttribute("href")
     ).toBe(`/clients/${CLIENT_ID}`)
     expect(screen.getAllByText("Не указан").length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Анна Петрова: \+79990000001/)).toHaveLength(2)
     fireEvent.doubleClick(row)
 
     expect(
@@ -143,7 +220,7 @@ describe("client pages", () => {
     ).toContain(`/clients/${CLIENT_ID}`)
   })
 
-  it("shows client orders and prefilled chat, warehouse and manual-order actions", async () => {
+  it("shows client orders and only the order-first creation action", async () => {
     renderRoute(
       `/clients/${CLIENT_ID}`,
       "/clients/:clientId",
@@ -157,16 +234,18 @@ describe("client pages", () => {
     expect(screen.getByText("Не указан")).toBeTruthy()
     expect(screen.getByText(client.responsibleManagerId)).toBeTruthy()
     expect(screen.getByText("Москва, Складская, 1")).toBeTruthy()
+    expect(screen.getByText("Основной телефон")).toBeTruthy()
+    expect(screen.getByText("Контактное лицо")).toBeTruthy()
+    expect(screen.getByText("Пётр Петров")).toBeTruthy()
+    expect(screen.getByText("Дополнительные контакты клиента")).toBeTruthy()
+    expect(screen.getByText("Анна Петрова")).toBeTruthy()
+    expect(screen.getByText("+79990000001")).toBeTruthy()
     expect(
-      screen
-        .getByRole("link", { name: /Новый заказ через чат/ })
-        .getAttribute("href")
-    ).toBe(`/assistant?clientId=${CLIENT_ID}`)
+      screen.queryByRole("link", { name: /Новый заказ через чат/ })
+    ).toBeNull()
     expect(
-      screen
-        .getByRole("link", { name: /Подобрать по складу/ })
-        .getAttribute("href")
-    ).toBe(`/booking?clientId=${CLIENT_ID}`)
+      screen.queryByRole("link", { name: /Подобрать по складу/ })
+    ).toBeNull()
     expect(
       screen.getByRole("link", { name: /Создать заказ/ }).getAttribute("href")
     ).toBe(`/orders/new?clientId=${CLIENT_ID}`)

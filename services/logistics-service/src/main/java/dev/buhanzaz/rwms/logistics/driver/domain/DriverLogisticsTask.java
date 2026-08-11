@@ -1,7 +1,7 @@
 package dev.buhanzaz.rwms.logistics.driver.domain;
 
-import jakarta.persistence.Column;
 import jakarta.persistence.CascadeType;
+import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -31,7 +31,7 @@ import org.hibernate.proxy.HibernateProxy;
 /**
  * Logistics-owned intent and effect checkpoint for one physical movement.
  *
- * <p>Shipment tasks may retain several immutable cabin members while task order, worker
+ * <p>Document tasks may retain several immutable cabin members while task order, worker
  * assignments, and execution status stay authoritative in task-board.
  */
 @Entity
@@ -97,9 +97,18 @@ public class DriverLogisticsTask {
   @Column(name = "movement_comment", length = 2000)
   private String comment;
 
-  /** Immutable client display snapshot retained only for a grouped shipment task. */
+  /** Immutable client display snapshot retained when a grouped document has one. */
   @Column(name = "client_snapshot", length = 512)
   private String clientSnapshot;
+
+  /** Stable ordinal of this trip inside its source rental order. */
+  @Column(name = "trip_number")
+  private Integer tripNumber;
+
+  /** Historical physical column retained for old rows; new date-only trips never read or write it. */
+  @Getter(AccessLevel.NONE)
+  @Column(name = "scheduled_time")
+  private java.time.LocalTime legacyScheduledTime;
 
   @Column(name = "unit_number", nullable = false, length = 64)
   private String unitNumber;
@@ -202,8 +211,8 @@ public class DriverLogisticsTask {
   private OffsetDateTime completedAt;
 
   /**
-   * Cabin members are present only for the new document-owned grouped shipment form; legacy
-   * document-line tasks intentionally retain no member rows.
+   * Cabin members are present only for the document-owned grouped trip form; legacy document-line
+   * tasks intentionally retain no member rows.
    */
   @OneToMany(mappedBy = "task", cascade = CascadeType.ALL, orphanRemoval = true)
   @OrderBy("position ASC")
@@ -250,9 +259,7 @@ public class DriverLogisticsTask {
         requestSha256);
   }
 
-  /**
-   * Creates one durable driver intent with its planned WorkerApp audience frozen before relay.
-   */
+  /** Creates one durable driver intent with its planned WorkerApp audience frozen before relay. */
   public static DriverLogisticsTask create(
       UUID warehouseId,
       UUID cabinId,
@@ -291,13 +298,14 @@ public class DriverLogisticsTask {
     if ((kind.consumesRepairPlace() || kind.releasesRepairPlace()) && repairId == null) {
       throw new IllegalArgumentException("Repair movement requires repairId");
     }
-    if ((sourceType == DriverTaskSourceType.MANUAL)
-        != (kind == DriverTaskKind.GENERAL_MOVEMENT)) {
+    if ((sourceType == DriverTaskSourceType.MANUAL) != (kind == DriverTaskKind.GENERAL_MOVEMENT)) {
       throw new IllegalArgumentException("Manual source requires a general movement task");
     }
     if (sourceType == DriverTaskSourceType.LOGISTICS_DOCUMENT
-        && kind != DriverTaskKind.SHIPMENT) {
-      throw new IllegalArgumentException("Document group source requires a shipment task");
+        && kind != DriverTaskKind.SHIPMENT
+        && kind != DriverTaskKind.RETURN
+        && kind != DriverTaskKind.TRANSFER) {
+      throw new IllegalArgumentException("Document group source requires a document movement task");
     }
     DriverLogisticsTask task = new DriverLogisticsTask();
     task.warehouseId = warehouseId;
@@ -317,8 +325,7 @@ public class DriverLogisticsTask {
     }
     task.unitNumber = requiredText(unitNumber, 64, "unitNumber");
     task.driverQueueDefinitionId = driverQueueDefinitionId;
-    task.applyAudience(
-        driverAudienceMode, plannedDriverWorkerId, plannedDriverNameSnapshot);
+    task.applyAudience(driverAudienceMode, plannedDriverWorkerId, plannedDriverNameSnapshot);
     task.externalTaskId = UUID.randomUUID();
     task.state = DriverTaskState.REGISTERING;
     task.repairPlaceEffectApplied = !kind.consumesRepairPlace() && !kind.releasesRepairPlace();
@@ -332,8 +339,8 @@ public class DriverLogisticsTask {
   }
 
   /**
-   * Creates the document-owned task that represents every cabin in one newly created shipment.
-   * The first member remains in {@code cabinId} for compatibility with existing generic task
+   * Creates the document-owned task that represents every cabin in one newly created shipment. The
+   * first member remains in {@code cabinId} for compatibility with existing generic task
    * infrastructure; all task-specific cabin truth lives in {@link #members}.
    */
   public static DriverLogisticsTask createGroupedShipment(
@@ -352,6 +359,90 @@ public class DriverLogisticsTask {
       UUID createdBySubjectId,
       UUID idempotencyKey,
       String requestSha256) {
+    return createGroupedShipment(
+        warehouseId,
+        primaryCabinId,
+        documentId,
+        scheduledDate,
+        1,
+        technicalPriority,
+        taskText,
+        clientSnapshot,
+        unitSummary,
+        driverQueueDefinitionId,
+        driverAudienceMode,
+        plannedDriverWorkerId,
+        plannedDriverNameSnapshot,
+        createdBySubjectId,
+        idempotencyKey,
+        requestSha256);
+  }
+
+  /** Creates a grouped shipment with its stable order trip number. */
+  public static DriverLogisticsTask createGroupedShipment(
+      UUID warehouseId,
+      UUID primaryCabinId,
+      UUID documentId,
+      LocalDate scheduledDate,
+      int tripNumber,
+      int technicalPriority,
+      String taskText,
+      String clientSnapshot,
+      String unitSummary,
+      UUID driverQueueDefinitionId,
+      DriverTaskAudienceMode driverAudienceMode,
+      UUID plannedDriverWorkerId,
+      String plannedDriverNameSnapshot,
+      UUID createdBySubjectId,
+      UUID idempotencyKey,
+      String requestSha256) {
+    return createGroupedDocument(
+        warehouseId,
+        primaryCabinId,
+        documentId,
+        DriverTaskKind.SHIPMENT,
+        scheduledDate,
+        tripNumber,
+        technicalPriority,
+        taskText,
+        clientSnapshot,
+        unitSummary,
+        driverQueueDefinitionId,
+        driverAudienceMode,
+        plannedDriverWorkerId,
+        plannedDriverNameSnapshot,
+        createdBySubjectId,
+        idempotencyKey,
+        requestSha256);
+  }
+
+  /** Creates one grouped document trip with a stable order ordinal. */
+  public static DriverLogisticsTask createGroupedDocument(
+      UUID warehouseId,
+      UUID primaryCabinId,
+      UUID documentId,
+      DriverTaskKind kind,
+      LocalDate scheduledDate,
+      int tripNumber,
+      int technicalPriority,
+      String taskText,
+      String clientSnapshot,
+      String unitSummary,
+      UUID driverQueueDefinitionId,
+      DriverTaskAudienceMode driverAudienceMode,
+      UUID plannedDriverWorkerId,
+      String plannedDriverNameSnapshot,
+      UUID createdBySubjectId,
+      UUID idempotencyKey,
+      String requestSha256) {
+    if (tripNumber < 1) {
+      throw new IllegalArgumentException("tripNumber must be positive");
+    }
+    if (kind != DriverTaskKind.SHIPMENT
+        && kind != DriverTaskKind.RETURN
+        && kind != DriverTaskKind.TRANSFER) {
+      throw new IllegalArgumentException("Grouped document kind is invalid");
+    }
     DriverLogisticsTask task =
         create(
             warehouseId,
@@ -359,7 +450,7 @@ public class DriverLogisticsTask {
             null,
             DriverTaskSourceType.LOGISTICS_DOCUMENT,
             documentId,
-            DriverTaskKind.SHIPMENT,
+            kind,
             DriverTaskPlanningMode.FIXED_DATE,
             scheduledDate,
             technicalPriority,
@@ -372,15 +463,16 @@ public class DriverLogisticsTask {
             createdBySubjectId,
             idempotencyKey,
             requestSha256);
-    task.clientSnapshot = requiredText(clientSnapshot, 512, "clientSnapshot");
+    task.clientSnapshot = optionalText(clientSnapshot, 512);
+    task.tripNumber = tripNumber;
     return task;
   }
 
   /** Adds one immutable document-line/cabin snapshot before the grouped task crosses the relay. */
-  public void addGroupedShipmentMember(
+  public void addGroupedDocumentMember(
       UUID documentLineId, UUID memberCabinId, String memberUnitNumber, int position) {
-    if (!isGroupedShipment() || state != DriverTaskState.REGISTERING) {
-      throw new IllegalStateException("Shipment members can be added only to a new grouped task");
+    if (!isGroupedDocument() || state != DriverTaskState.REGISTERING) {
+      throw new IllegalStateException("Document members can be added only to a new grouped task");
     }
     DriverLogisticsTaskMember member =
         DriverLogisticsTaskMember.create(
@@ -390,15 +482,55 @@ public class DriverLogisticsTask {
             existing ->
                 existing.getDocumentLineId().equals(documentLineId)
                     || existing.getCabinId().equals(memberCabinId))) {
-      throw new IllegalArgumentException("Grouped shipment members must be distinct");
+      throw new IllegalArgumentException("Grouped document members must be distinct");
     }
     members.add(member);
   }
 
-  /** Returns whether this is the V46 document-owned shipment grouping form. */
-  public boolean isGroupedShipment() {
+  /**
+   * Replaces one member snapshot only after the caller has proven task-board still reports a
+   * waiting, unstarted entry.
+   */
+  public void replaceGroupedDocumentMember(
+      UUID documentLineId,
+      UUID expectedOldCabinId,
+      UUID replacementCabinId,
+      String replacementUnitNumber) {
+    if (!isGroupedDocument()
+        || (state != DriverTaskState.REGISTERING
+            && state != DriverTaskState.SCHEDULED
+            && state != DriverTaskState.CURRENT)) {
+      throw new IllegalStateException("Only an unstarted grouped trip can replace a cabin");
+    }
+    DriverLogisticsTaskMember member =
+        members.stream()
+            .filter(value -> value.getDocumentLineId().equals(documentLineId))
+            .findFirst()
+            .orElseThrow(() -> new IllegalStateException("Grouped trip member is missing"));
+    member.replaceCabin(expectedOldCabinId, replacementCabinId, replacementUnitNumber);
+    if (cabinId.equals(expectedOldCabinId)) {
+      cabinId = replacementCabinId;
+    }
+    touch();
+  }
+
+  /** Source-compatible grouped-shipment member command. */
+  public void addGroupedShipmentMember(
+      UUID documentLineId, UUID memberCabinId, String memberUnitNumber, int position) {
+    addGroupedDocumentMember(documentLineId, memberCabinId, memberUnitNumber, position);
+  }
+
+  /** Returns whether this is a document-owned trip with immutable cabin members. */
+  public boolean isGroupedDocument() {
     return sourceType == DriverTaskSourceType.LOGISTICS_DOCUMENT
-        && kind == DriverTaskKind.SHIPMENT;
+        && (kind == DriverTaskKind.SHIPMENT
+            || kind == DriverTaskKind.RETURN
+            || kind == DriverTaskKind.TRANSFER);
+  }
+
+  /** Returns whether this grouped document is specifically a shipment. */
+  public boolean isGroupedShipment() {
+    return isGroupedDocument() && kind == DriverTaskKind.SHIPMENT;
   }
 
   /**
@@ -406,7 +538,7 @@ public class DriverLogisticsTask {
    * completed only after every immutable member accepted the same evidence item.
    */
   public void markGroupedShipmentMemberCoverApplied(UUID cabinId, UUID mediaId, UUID entryId) {
-    if (!isGroupedShipment()
+    if (!isGroupedDocument()
         || state != DriverTaskState.FINALIZING
         || completionMediaId == null
         || completionEntryId == null
@@ -433,8 +565,8 @@ public class DriverLogisticsTask {
 
   /** Returns the next cabin whose completion cover effect has not yet been confirmed. */
   public DriverLogisticsTaskMember nextUncoveredGroupedShipmentMember() {
-    if (!isGroupedShipment()) {
-      throw new IllegalStateException("Only grouped shipment tasks have member cover checkpoints");
+    if (!isGroupedDocument()) {
+      throw new IllegalStateException("Only grouped document tasks have member cover checkpoints");
     }
     if (members.isEmpty()) {
       throw new IllegalStateException("Grouped shipment task has no cabin members");
@@ -513,8 +645,7 @@ public class DriverLogisticsTask {
             || (state == DriverTaskState.CURRENT
                 && (sourceType == DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE
                     || sourceType == DriverTaskSourceType.LOGISTICS_DOCUMENT));
-    if (!cancellableState
-        || taskBoardTaskId == null) {
+    if (!cancellableState || taskBoardTaskId == null) {
       throw new IllegalStateException(
           "Only a registered pre-start driver task can be cancelled after guard confirmation");
     }
@@ -674,8 +805,7 @@ public class DriverLogisticsTask {
     resumeImmediatelyAfterConfirmation();
   }
 
-  public void captureEvidence(
-      UUID evidenceId, UUID mediaId, long mediaGeneration, UUID entryId) {
+  public void captureEvidence(UUID evidenceId, UUID mediaId, long mediaGeneration, UUID entryId) {
     if (state != DriverTaskState.FINALIZING
         || evidenceId == null
         || mediaId == null
@@ -699,7 +829,7 @@ public class DriverLogisticsTask {
   }
 
   public void markCoverApplied() {
-    if (isGroupedShipment()) {
+    if (isGroupedDocument()) {
       throw new IllegalStateException(
           "Grouped shipment covers must be confirmed for every cabin member");
     }
@@ -735,7 +865,7 @@ public class DriverLogisticsTask {
     if (state != DriverTaskState.FINALIZING
         || !coverApplied
         || !repairPlaceEffectApplied
-        || (isGroupedShipment()
+        || (isGroupedDocument()
             && (members.isEmpty()
                 || members.stream().anyMatch(member -> !member.isCoverApplied())))) {
       throw new IllegalStateException("Driver task completion effects are incomplete");
@@ -758,9 +888,7 @@ public class DriverLogisticsTask {
     }
     int normalizedRetryCount = Math.min(Math.max(retryCount, 0), retryCountCeiling);
     retryCount =
-        normalizedRetryCount < retryCountCeiling
-            ? normalizedRetryCount + 1
-            : retryCountCeiling;
+        normalizedRetryCount < retryCountCeiling ? normalizedRetryCount + 1 : retryCountCeiling;
     failureCode = optionalText(code, 96);
     nextAttemptAt = now().plusSeconds(Math.max(1, seconds));
     touch();
@@ -774,8 +902,7 @@ public class DriverLogisticsTask {
     touch();
   }
 
-  private void observeLaneAndStatus(
-      String lane, String entryStatus, OffsetDateTime doneAt) {
+  private void observeLaneAndStatus(String lane, String entryStatus, OffsetDateTime doneAt) {
     if ("DONE".equals(entryStatus)) {
       if (doneAt == null) {
         throw new IllegalArgumentException("Completed driver task has no completion time");
@@ -864,7 +991,7 @@ public class DriverLogisticsTask {
   }
 
   private void markAllGroupedShipmentCoversApplied() {
-    if (!isGroupedShipment()
+    if (!isGroupedDocument()
         || members.isEmpty()
         || members.stream().anyMatch(member -> !member.isCoverApplied())) {
       throw new IllegalStateException("Grouped shipment covers are incomplete");
@@ -889,8 +1016,7 @@ public class DriverLogisticsTask {
     }
     if (requiredMode == DriverTaskAudienceMode.WAREHOUSE_DRIVERS
         && (workerId != null || normalizedName != null)) {
-      throw new IllegalArgumentException(
-          "Shared driver work cannot retain a worker identity");
+      throw new IllegalArgumentException("Shared driver work cannot retain a worker identity");
     }
     driverAudienceMode = requiredMode;
     plannedDriverWorkerId = workerId;

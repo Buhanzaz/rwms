@@ -56,6 +56,7 @@ class AssetOpenApiParityTest {
         "/api/internal/asset/v1/maintenance/operation-leases/{id}/release",
         "/api/internal/asset/v1/maintenance/cabin-characteristics",
         "/api/internal/asset/v1/maintenance/equipment-catalog",
+        "/api/internal/asset/v1/maintenance/equipment-catalog/snapshots",
         "/api/internal/asset/v1/maintenance/furniture-custody",
         "/api/internal/asset/v1/maintenance/furniture-custody/{claimId}/return-to-stock",
         "/api/internal/asset/v1/maintenance/rental-items/{id}/snapshot",
@@ -65,6 +66,7 @@ class AssetOpenApiParityTest {
         "/api/internal/asset/v1/maintenance/rental-items/{rentalItemId}/characteristics/{characteristicId}",
         "/api/internal/asset/v1/maintenance/rental-items/{id}/fenced-status",
         "/api/internal/asset/v1/logistics/rental-items/{id}/snapshot",
+        "/api/internal/asset/v1/logistics/equipment-availability",
         "/api/internal/asset/v1/logistics/operation-leases",
         "/api/internal/asset/v1/logistics/return-equipment-receipts",
         "/api/internal/asset/v1/logistics/operation-leases/{id}/renew",
@@ -81,6 +83,7 @@ class AssetOpenApiParityTest {
         "/api/internal/asset/v1/logistics/orders/{orderId}/units",
         "/api/internal/asset/v1/logistics/orders/{orderId}/units/release-all",
         "/api/internal/asset/v1/logistics/orders/{orderId}/units/{rentalItemId}/release",
+        "/api/internal/asset/v1/logistics/orders/{orderId}/units/replace",
         "/api/internal/asset/v1/logistics/orders/{orderId}/equipment-reservations",
         "/api/internal/asset/v1/logistics/orders/{orderId}/equipment-movement-plan",
         "/api/internal/asset/v1/logistics/rental-items/{rentalItemId}/furniture-movement-plan",
@@ -237,13 +240,20 @@ class AssetOpenApiParityTest {
     assertThat(list(child(schemas, "CabinCatalogPage").get("required")))
         .containsExactly("warehouseId", "content", "page", "size", "totalElements", "totalPages");
     assertThat(list(child(schemas, "AvailableCabin").get("required")))
-        .contains("status");
+        .contains("status", "contents");
+    assertThat(list(child(schemas, "ReplacePresentationHoldsResponse").get("required")))
+        .containsExactly("presentationId", "holds", "cabins");
     assertThat(list(child(schemas, "OrderEquipmentRequirement").get("required")))
         .containsExactly("equipmentId", "quantity");
     assertThat(list(child(schemas, "ReplaceOrderEquipmentReservationsRequest").get("required")))
-        .containsExactly("warehouseId", "actorSubjectId", "actorRole", "requirements");
+        .containsExactly("warehouseId", "actorSubjectId", "actorRole", "units");
     assertThat(list(child(schemas, "OrderFurnitureMovementPlanRequest").get("required")))
-        .containsExactly("warehouseId", "rentalItemId", "requirements", "orderRequirements");
+        .containsExactly(
+            "warehouseId",
+            "rentalItemId",
+            "replacementForRentalItemId",
+            "requirements",
+            "units");
     assertThat(list(child(schemas, "OrderFurnitureMovementPlan").get("required")))
         .containsExactly("orderId", "rentalItemId", "unitNumber", "lines");
     assertThat(list(child(schemas, "CabinFurnitureMovementPlanRequest").get("required")))
@@ -346,14 +356,28 @@ class AssetOpenApiParityTest {
     assertThat(list(ensureFurnitureRequest.get("required")))
         .containsExactly("externalReferenceId", "equipmentName");
     assertThat(child(ensureFurnitureRequest, "properties").keySet())
-        .containsExactly("externalReferenceId", "equipmentName");
+        .containsExactly(
+            "externalReferenceId",
+            "equipmentName",
+            "expectedEquipmentVersion",
+            "maximumPerCabin");
     Map<String, Object> maintenanceFurnitureEquipment =
         child(schemas, "MaintenanceFurnitureEquipment");
     assertThat(maintenanceFurnitureEquipment.get("additionalProperties")).isEqualTo(false);
     assertThat(list(maintenanceFurnitureEquipment.get("required")))
-        .containsExactly("externalReferenceId", "equipmentId", "equipmentName");
+        .containsExactly(
+            "externalReferenceId",
+            "equipmentId",
+            "equipmentName",
+            "equipmentVersion",
+            "maximumPerCabin");
     assertThat(child(maintenanceFurnitureEquipment, "properties").keySet())
-        .containsExactly("externalReferenceId", "equipmentId", "equipmentName");
+        .containsExactly(
+            "externalReferenceId",
+            "equipmentId",
+            "equipmentName",
+            "equipmentVersion",
+            "maximumPerCabin");
     Map<String, Object> pendingReturn = child(schemas, "MaintenanceFurniturePendingReturn");
     assertThat(list(pendingReturn.get("required")))
         .containsExactly("equipmentId", "expectedSourceBalanceVersion", "quantity");
@@ -396,6 +420,15 @@ class AssetOpenApiParityTest {
             "expectedSourceBalanceVersion",
             "quantity",
             "reservedUntil");
+    assertThat(child(
+            child(schemas, "AcquireLogisticsEquipmentMovementReservationRequest"),
+            "properties")
+        .keySet())
+        .contains(
+            "orderId",
+            "targetRentalItemId",
+            "units",
+            "replacementSourceReservationId");
     assertThat(child(schemas, "ExecuteLogisticsEquipmentMovementReservationsRequest").toString())
         .doesNotContain("expectedTargetBalanceVersion");
     assertThat(list(child(

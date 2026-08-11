@@ -27,7 +27,6 @@ class LogisticsDocumentTest {
     assertThat(document.getDocumentType()).isEqualTo(LogisticsDocumentType.RETURN);
     assertThat(document.getState()).isEqualTo(LogisticsDocumentState.ACCEPTED);
     assertThat(document.getScheduledDate()).isEqualTo(LocalDate.parse("2026-07-01"));
-    assertThat(document.getScheduledAt()).isNull();
   }
 
   @Test

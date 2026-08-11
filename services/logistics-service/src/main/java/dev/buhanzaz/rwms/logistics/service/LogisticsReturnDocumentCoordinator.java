@@ -14,9 +14,9 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsMediaPurpose;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsMediaReference;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsReturnShortageSnapshot;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsTargetService;
+import dev.buhanzaz.rwms.logistics.driver.service.DocumentDriverTaskPlanner;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventStore;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventType;
-import dev.buhanzaz.rwms.logistics.driver.service.DocumentDriverTaskPlanner;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
@@ -95,26 +95,34 @@ class LogisticsReturnDocumentCoordinator {
     String checksum =
         LogisticsCommandChecksum.sha256(CREATE_RETURN, returnFingerprintValues(request));
     idempotency.acquireLock(subjectId, CREATE_RETURN, idempotencyKey);
-    LogisticsDocument replay = idempotency.replay(subjectId, idempotencyKey, CREATE_RETURN, checksum);
+    LogisticsDocument replay =
+        idempotency.replay(subjectId, idempotencyKey, CREATE_RETURN, checksum);
     if (replay != null) return result(replay, true);
 
     warehouseAdmission.requireAdmission(
         admission,
         List.of(
-            new AdmissionRequirement(
-                request.warehouseId(), WarehouseOperationDirection.INCOMING)));
+            new AdmissionRequirement(request.warehouseId(), WarehouseOperationDirection.INCOMING)));
 
     RentalOrder returnOrder = rentalOrderBinding.validateReturnBinding(request);
-    LogisticsDocument document =
-        documentRepository.saveAndFlush(
-            LogisticsDocument.createReturn(
+    LogisticsDocument returnDocument =
+        returnOrder == null
+            ? LogisticsDocument.createReturn(
                 request.warehouseId(),
                 request.clientId(),
-                returnOrder == null ? null : returnOrder.getClient().getDisplayName(),
+                null,
                 request.driverSnapshot(),
                 request.driverWorkerId(),
                 subjectId,
-                correlationId));
+                correlationId)
+            : LogisticsDocument.createRentalOrderReturn(
+                request.warehouseId(),
+                request.clientId(),
+                returnOrder.getId(),
+                returnOrder.getClient().getDisplayName(),
+                subjectId,
+                correlationId);
+    LogisticsDocument document = documentRepository.saveAndFlush(returnDocument);
     List<LogisticsDocumentLine> lines =
         lineRepository.saveAllAndFlush(returnLines(document, request.lines()));
     OffsetDateTime proofCreatedAt = now();
@@ -158,7 +166,8 @@ class LogisticsReturnDocumentCoordinator {
     fingerprintValues.add(request.scheduledDate().toString());
     String checksum = LogisticsCommandChecksum.sha256(REGISTER_RETURN, fingerprintValues);
     idempotency.acquireLock(subjectId, REGISTER_RETURN, idempotencyKey);
-    LogisticsDocument replay = idempotency.replay(subjectId, idempotencyKey, REGISTER_RETURN, checksum);
+    LogisticsDocument replay =
+        idempotency.replay(subjectId, idempotencyKey, REGISTER_RETURN, checksum);
     if (replay != null) return result(replay, true);
 
     LogisticsDocument document = readProjection.document(documentId, LogisticsDocumentType.RETURN);
@@ -168,7 +177,9 @@ class LogisticsReturnDocumentCoordinator {
     List<LogisticsDocumentLine> lines = readProjection.linesRequired(documentId);
 
     document.scheduleReturn(
-        request.driverSnapshot(), request.driverWorkerId(), request.scheduledDate());
+        request.driverSnapshot(),
+        request.driverWorkerId(),
+        request.scheduledDate());
     document.beginReturnRegistration();
     documentRepository.saveAndFlush(document);
     driverTaskPlanner.plan(document, lines);
@@ -202,16 +213,19 @@ class LogisticsReturnDocumentCoordinator {
     requireReturnCommand(documentId, correlationId, expectedDocumentVersion, request);
     String checksum =
         LogisticsCommandChecksum.sha256(
-            ACCEPT_RETURN, acceptanceFingerprintValues(documentId, expectedDocumentVersion, request));
+            ACCEPT_RETURN,
+            acceptanceFingerprintValues(documentId, expectedDocumentVersion, request));
     idempotency.acquireLock(subjectId, ACCEPT_RETURN, idempotencyKey);
-    LogisticsDocument replay = idempotency.replay(subjectId, idempotencyKey, ACCEPT_RETURN, checksum);
+    LogisticsDocument replay =
+        idempotency.replay(subjectId, idempotencyKey, ACCEPT_RETURN, checksum);
     if (replay != null) return result(replay, true);
 
     LogisticsDocument document = readProjection.document(documentId, LogisticsDocumentType.RETURN);
     requireExpectedVersion(
         document, expectedDocumentVersion, "Return document version changed concurrently");
     if (document.getState() != LogisticsDocumentState.INSPECTION_REQUIRED) {
-      throw new LogisticsConflictException("Return cannot be accepted in its current lifecycle state");
+      throw new LogisticsConflictException(
+          "Return cannot be accepted in its current lifecycle state");
     }
     List<LogisticsDocumentLine> lines = readProjection.linesRequired(documentId);
     Map<UUID, LogisticsDocumentLine> byId = linesById(lines);
@@ -268,7 +282,8 @@ class LogisticsReturnDocumentCoordinator {
     requireReturnCommand(documentId, correlationId, expectedDocumentVersion, request);
     String checksum =
         LogisticsCommandChecksum.sha256(
-            START_RETURN_ESTIMATES, estimateFingerprintValues(documentId, expectedDocumentVersion, request));
+            START_RETURN_ESTIMATES,
+            estimateFingerprintValues(documentId, expectedDocumentVersion, request));
     idempotency.acquireLock(subjectId, START_RETURN_ESTIMATES, idempotencyKey);
     LogisticsDocument replay =
         idempotency.replay(subjectId, idempotencyKey, START_RETURN_ESTIMATES, checksum);
@@ -348,7 +363,8 @@ class LogisticsReturnDocumentCoordinator {
     LogisticsGuard guard =
         guardRepository
             .findByLine_Id(line.getId())
-            .orElseThrow(() -> new LogisticsConflictException("Return line has no active asset lease"));
+            .orElseThrow(
+                () -> new LogisticsConflictException("Return line has no active asset lease"));
     if (guard.getGuardState() != LogisticsGuardState.ACTIVE
         || guard.getLeaseId() == null
         || guard.getLeaseVersion() == null
@@ -377,7 +393,8 @@ class LogisticsReturnDocumentCoordinator {
   private static Map<UUID, LogisticsDocumentLine> linesById(List<LogisticsDocumentLine> lines) {
     return lines.stream()
         .collect(
-            java.util.stream.Collectors.toUnmodifiableMap(LogisticsDocumentLine::getId, line -> line));
+            java.util.stream.Collectors.toUnmodifiableMap(
+                LogisticsDocumentLine::getId, line -> line));
   }
 
   private static void validateAcceptanceLines(
@@ -425,7 +442,8 @@ class LogisticsReturnDocumentCoordinator {
       }
     }
     if (!lineIds.equals(requiredLineIds)) {
-      throw new LogisticsConflictException("Return acceptance must contain exactly the return lines");
+      throw new LogisticsConflictException(
+          "Return acceptance must contain exactly the return lines");
     }
   }
 

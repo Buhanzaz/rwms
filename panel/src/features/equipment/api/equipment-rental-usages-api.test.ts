@@ -64,6 +64,7 @@ function equipment(): EquipmentItemDto {
     name: "Конвектор",
     active: true,
     comment: null,
+    maximumPerCabin: null,
     totalQuantity: 12,
     stockQuantity: 3,
     cabinStockQuantity: 5,

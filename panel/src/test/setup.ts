@@ -18,9 +18,9 @@ Object.defineProperty(window, "localStorage", {
 })
 
 class TestResizeObserver implements ResizeObserver {
-  observe(_target: Element, _options?: ResizeObserverOptions) {}
+  observe() {}
 
-  unobserve(_target: Element) {}
+  unobserve() {}
 
   disconnect() {}
 }

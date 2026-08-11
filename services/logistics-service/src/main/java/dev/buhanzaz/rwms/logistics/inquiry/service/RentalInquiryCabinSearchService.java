@@ -35,16 +35,12 @@ public class RentalInquiryCabinSearchService {
    */
   @Transactional(propagation = Propagation.NEVER)
   public CabinSearchOutcome search(
-      OrderActor actor,
-      UUID inquiryId,
-      UUID publicIdempotencyKey,
-      CabinSearchRequest request) {
-    SearchPreparation preparation =
-        store.prepare(actor, inquiryId, publicIdempotencyKey, request);
+      OrderActor actor, UUID inquiryId, UUID publicIdempotencyKey, CabinSearchRequest request) {
+    SearchPreparation preparation = store.prepare(actor, inquiryId, publicIdempotencyKey, request);
     return switch (preparation.disposition()) {
       case REPLAYED -> new CabinSearchOutcome(preparation.response(), true);
-      case TERMINAL -> throw terminalProblem(
-          preparation.terminalState(), preparation.rejectionCode());
+      case TERMINAL ->
+          throw terminalProblem(preparation.terminalState(), preparation.rejectionCode());
       case PREPARED -> executePrepared(actor, preparation.prepared());
     };
   }
@@ -60,8 +56,7 @@ public class RentalInquiryCabinSearchService {
       throw unavailable();
     }
     if (!warehouse.active()) {
-      return finalized(
-          store.reject(actor, prepared, "WAREHOUSE_UNAVAILABLE"));
+      return finalized(store.reject(actor, prepared, "WAREHOUSE_UNAVAILABLE"));
     }
 
     LogisticsDependencyGateway.CabinSearchResult result;
@@ -71,8 +66,7 @@ public class RentalInquiryCabinSearchService {
               prepared.downstreamIdempotencyKey(), prepared.exactRequestBody());
       validateResult(prepared, result);
     } catch (LogisticsDependencyException exception) {
-      if (exception.kind()
-          == LogisticsDependencyException.FailureKind.PERMANENT_REJECTION) {
+      if (exception.kind() == LogisticsDependencyException.FailureKind.PERMANENT_REJECTION) {
         String safeCode =
             exception.dependencyCode() == null
                 ? "CABIN_SEARCH_REJECTED"
@@ -114,9 +108,7 @@ public class RentalInquiryCabinSearchService {
           || group.cabins() == null
           || group.cabins().stream()
               .anyMatch(
-                  cabin ->
-                      cabin == null
-                          || !prepared.warehouseId().equals(cabin.warehouseId()))) {
+                  cabin -> cabin == null || !prepared.warehouseId().equals(cabin.warehouseId()))) {
         throw malformedResult();
       }
     }
@@ -129,8 +121,7 @@ public class RentalInquiryCabinSearchService {
     throw terminalProblem(finalization.terminalState(), finalization.rejectionCode());
   }
 
-  private static CabinSearchGroup apiGroup(
-      LogisticsDependencyGateway.CabinSearchGroup source) {
+  private static CabinSearchGroup apiGroup(LogisticsDependencyGateway.CabinSearchGroup source) {
     return new CabinSearchGroup(
         source.cabinType(),
         source.finish(),
@@ -141,8 +132,7 @@ public class RentalInquiryCabinSearchService {
         source.quantity());
   }
 
-  private static AvailableCabinResponse cabin(
-      LogisticsDependencyGateway.AvailableCabin source) {
+  private static AvailableCabinResponse cabin(LogisticsDependencyGateway.AvailableCabin source) {
     return new AvailableCabinResponse(
         source.id(),
         source.version(),
@@ -157,6 +147,16 @@ public class RentalInquiryCabinSearchService {
         source.linoleum(),
         source.passport(),
         source.tags(),
+        source.contents().stream()
+            .map(
+                content ->
+                    new dev.buhanzaz.rwms.logistics.order.api.OrderApiModels
+                        .OrderEquipmentContentResponse(
+                        content.equipmentId(),
+                        content.equipmentName(),
+                        content.quantity(),
+                        content.locationKind()))
+            .toList(),
         source.updatedAt());
   }
 

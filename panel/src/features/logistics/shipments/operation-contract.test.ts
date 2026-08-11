@@ -46,7 +46,6 @@ describe("shipment UI contract mapping", () => {
         clientId: null,
         equipmentMovementTaskId: null,
         scheduledDate: null,
-        scheduledAt: null,
         rentalOrderId: null,
         lines: [
           {

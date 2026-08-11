@@ -25,11 +25,11 @@ import lombok.NoArgsConstructor;
 import org.hibernate.proxy.HibernateProxy;
 
 /**
- * Immutable cabin membership snapshot for one grouped shipment driver task, including the
- * per-cabin completion-cover checkpoint.
+ * Immutable cabin membership snapshot for one grouped document driver task, including the per-cabin
+ * completion-cover checkpoint.
  *
- * <p>Asset ownership remains external. This row only retains the cabin and document-line
- * identities needed to make one completion evidence item safely cover every cabin in the group.</p>
+ * <p>Asset ownership remains external. This row only retains the cabin and document-line identities
+ * needed to make one completion evidence item safely cover every cabin in the group.
  */
 @Entity
 @Table(
@@ -96,7 +96,7 @@ public class DriverLogisticsTaskMember {
       String unitNumber,
       int position) {
     if (task == null || documentLineId == null || cabinId == null || position < 1) {
-      throw new IllegalArgumentException("Grouped shipment member identity is invalid");
+      throw new IllegalArgumentException("Grouped document member identity is invalid");
     }
     DriverLogisticsTaskMember member = new DriverLogisticsTaskMember();
     member.task = task;
@@ -121,6 +121,16 @@ public class DriverLogisticsTaskMember {
     coverApplied = true;
     coverMediaId = mediaId;
     coverEntryId = entryId;
+  }
+
+  /** Refreshes an unstarted grouped-trip member after a same-document cabin replacement. */
+  public void replaceCabin(
+      UUID expectedOldCabinId, UUID replacementCabinId, String replacementUnitNumber) {
+    if (coverApplied || !cabinId.equals(expectedOldCabinId)) {
+      throw new IllegalStateException("Only an unstarted matching trip member can be replaced");
+    }
+    cabinId = Objects.requireNonNull(replacementCabinId, "replacementCabinId");
+    unitNumber = requiredUnitNumber(replacementUnitNumber);
   }
 
   @PrePersist

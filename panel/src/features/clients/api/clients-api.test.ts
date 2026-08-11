@@ -21,6 +21,7 @@ const clientResponse = {
   responsibleManagerDisplayName: null,
   comment: "Постоянный клиент",
   source: "Рекомендация",
+  additionalContacts: [{ name: "Анна Петрова", phone: "+79990000001" }],
   createdAt: "2026-08-09T08:00:00Z",
   updatedAt: "2026-08-09T09:00:00Z",
 }
@@ -92,6 +93,7 @@ describe("clients API", () => {
       email: null,
       comment: null,
       source: "Рекомендация",
+      additionalContacts: [{ name: "Анна Петрова", phone: "+7 999 000-00-01" }],
     }
 
     await createClient({

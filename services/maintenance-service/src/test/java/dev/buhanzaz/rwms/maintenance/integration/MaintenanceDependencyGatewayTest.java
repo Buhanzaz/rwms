@@ -477,21 +477,92 @@ class MaintenanceDependencyGatewayTest {
   }
 
   @Test
+  void bookedCabinReplacementConflictIsTheOnlyAssetProblemCodePropagated() {
+    UUID rentalItemId = UUID.randomUUID();
+    UUID ownerId = UUID.randomUUID();
+    authorize("asset-token", "asset.maintenance");
+    server
+        .expect(
+            requestTo(
+                "http://asset.test/api/internal/asset/v1/maintenance/operation-leases"))
+        .andRespond(
+            withStatus(HttpStatus.CONFLICT)
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(
+                    """
+                    {"status":409,"code":"BOOKED_UNIT_REPLACEMENT_REQUIRED","detail":"reserved"}
+                    """));
+
+    assertThatThrownBy(
+            () ->
+                gateway.acquireLease(
+                    UUID.randomUUID(),
+                    rentalItemId,
+                    3,
+                    "MAINTENANCE_REPAIR",
+                    ownerId.toString()))
+        .isInstanceOfSatisfying(
+            MaintenanceDependencyException.class,
+            exception -> {
+              assertThat(exception.status()).isEqualTo(HttpStatus.CONFLICT);
+              assertThat(exception.code()).isEqualTo("BOOKED_UNIT_REPLACEMENT_REQUIRED");
+              assertThat(exception.getMessage()).contains("замену");
+            });
+    server.verify();
+  }
+
+  @Test
+  void unknownAssetConflictKeepsTheGenericMaintenanceDependencyCode() {
+    UUID rentalItemId = UUID.randomUUID();
+    UUID ownerId = UUID.randomUUID();
+    authorize("asset-token", "asset.maintenance");
+    server
+        .expect(
+            requestTo(
+                "http://asset.test/api/internal/asset/v1/maintenance/operation-leases"))
+        .andRespond(
+            withStatus(HttpStatus.CONFLICT)
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body("{\"status\":409,\"code\":\"FOREIGN_PRIVATE_CONFLICT\"}"));
+
+    assertThatThrownBy(
+            () ->
+                gateway.acquireLease(
+                    UUID.randomUUID(),
+                    rentalItemId,
+                    3,
+                    "MAINTENANCE_REPAIR",
+                    ownerId.toString()))
+        .isInstanceOfSatisfying(
+            MaintenanceDependencyException.class,
+            exception -> {
+              assertThat(exception.status()).isEqualTo(HttpStatus.CONFLICT);
+              assertThat(exception.code())
+                  .isEqualTo(MaintenanceDependencyException.DEFAULT_CODE);
+            });
+    server.verify();
+  }
+
+  @Test
   void furnitureEquipmentUsesExactAssetScopePayloadAndNodeIdempotencyHeader() {
     UUID equipmentId = UUID.randomUUID();
     UUID catalogNodeId = UUID.randomUUID();
+    UUID idempotencyKey =
+        UUID.nameUUIDFromBytes(
+            (catalogNodeId + ":Chair:create:null")
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
     authorize("asset-token", "asset.maintenance");
     server.expect(requestTo(
         "http://asset.test/api/internal/asset/v1/maintenance/equipment-catalog"))
         .andExpect(method(HttpMethod.POST))
         .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer asset-token"))
-        .andExpect(header("Idempotency-Key", catalogNodeId.toString()))
+        .andExpect(header("Idempotency-Key", idempotencyKey.toString()))
         .andExpect(content().string(equalTo(
-            "{\"externalReferenceId\":\"%s\",\"equipmentName\":\"Chair\"}"
+            "{\"externalReferenceId\":\"%s\",\"equipmentName\":\"Chair\",\"expectedEquipmentVersion\":null,\"maximumPerCabin\":null}"
                 .formatted(catalogNodeId))))
         .andRespond(withSuccess(
             """
-            {"externalReferenceId":"%s","equipmentId":"%s","equipmentName":"Chair"}
+            {"externalReferenceId":"%s","equipmentId":"%s","equipmentName":"Chair","equipmentVersion":0,"maximumPerCabin":null}
             """.formatted(catalogNodeId, equipmentId),
             MediaType.APPLICATION_JSON));
 
@@ -499,7 +570,7 @@ class MaintenanceDependencyGatewayTest {
 
     assertThat(response).isEqualTo(
         new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
-            equipmentId, "Chair"));
+            catalogNodeId, equipmentId, "Chair", 0, null));
     server.verify();
   }
 

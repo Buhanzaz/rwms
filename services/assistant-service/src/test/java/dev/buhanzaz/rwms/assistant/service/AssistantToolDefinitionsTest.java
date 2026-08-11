@@ -30,13 +30,11 @@ class AssistantToolDefinitionsTest {
     var search = definitions.get(1).parameters();
     var required = new ArrayList<String>();
     search.path("required").forEach(value -> required.add(value.asText()));
-    assertThat(required)
-        .containsExactlyInAnyOrder("warehouseId", "groups");
+    assertThat(required).containsExactlyInAnyOrder("warehouseId", "groups");
     assertThat(search.path("additionalProperties").booleanValue()).isFalse();
     var group = search.path("properties").path("groups").path("items");
     assertThat(group.has("required")).isFalse();
-    assertThat(group.path("properties").path("category").path("type").asText())
-        .isEqualTo("string");
+    assertThat(group.path("properties").path("category").path("type").asText()).isEqualTo("string");
     assertThat(group.path("properties").path("categories").path("type").asText())
         .isEqualTo("array");
     assertThat(group.path("properties").path("categories").path("maxItems").intValue())
@@ -53,10 +51,7 @@ class AssistantToolDefinitionsTest {
     assertThat(group.path("properties").path("linoleum").path("type").asText())
         .isEqualTo("boolean");
     assertThat(definitions.getFirst().description())
-        .contains(
-            "ambiguous",
-            "ТВП to ДВП",
-            "Facets do not prove that a combination is available");
+        .contains("ambiguous", "ТВП to ДВП", "Facets do not prove that a combination is available");
     assertThat(definitions.get(1).description())
         .contains(
             "exact user quantity",
@@ -75,7 +70,11 @@ class AssistantToolDefinitionsTest {
             "only compatible types",
             "six-metre");
     assertThat(definitions.get(2).description())
-        .contains("independent button questions", "ОСБ and ЛДСП", "SEARCH_MERGE");
+        .contains(
+            "deterministic array order",
+            "queues the rest",
+            "not an independent branch",
+            "SEARCH_MERGE");
     assertThat(definitions.get(3).description())
         .contains("without creating or renewing holds", "number or text", "linoleum");
     assertThat(definitions.getLast().description())

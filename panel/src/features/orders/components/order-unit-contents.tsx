@@ -20,6 +20,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { FieldError } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
 import {
   Table,
   TableBody,
@@ -43,12 +44,15 @@ import { ApiError } from "@/lib/api-client"
 
 const EQUIPMENT_QUERY_KEY = ["orders", "equipment-catalog"] as const
 
+/** Quantity editor row fenced by shared availability and the per-cabin cap. */
 type DesiredEquipmentRow = {
   equipmentId: string
   name: string
   savedDesiredQuantity: number
   desiredQuantity: number
   availableForOrder: number
+  maximumPerCabin: number | null
+  maximumQuantity: number
 }
 
 function locationLabel(value: string) {
@@ -184,6 +188,24 @@ function OrderUnitEquipmentDialogContent({
     const equipmentById = new Map(
       (equipmentQuery.data ?? []).map((item) => [item.id, item])
     )
+    const physicalQuantityByEquipmentId = new Map<string, number>()
+    const orderDesiredQuantityByEquipmentId = new Map<string, number>()
+    order.units.forEach((orderUnit) => {
+      orderUnit.unit.contents.forEach((content) => {
+        physicalQuantityByEquipmentId.set(
+          content.equipmentId,
+          (physicalQuantityByEquipmentId.get(content.equipmentId) ?? 0) +
+            content.quantity
+        )
+      })
+      orderUnit.desiredContents.forEach((content) => {
+        orderDesiredQuantityByEquipmentId.set(
+          content.equipmentId,
+          (orderDesiredQuantityByEquipmentId.get(content.equipmentId) ?? 0) +
+            content.quantity
+        )
+      })
+    })
     const savedDesiredByEquipmentId = new Map(
       candidate.desiredContents.map((content) => [content.equipmentId, content])
     )
@@ -200,9 +222,24 @@ function OrderUnitEquipmentDialogContent({
         if (!item?.active && !savedDesired) return []
 
         const savedDesiredQuantity = savedDesired?.quantity ?? 0
+        const ownPhysicalSurplus = Math.max(
+          (physicalQuantityByEquipmentId.get(equipmentId) ?? 0) -
+            (orderDesiredQuantityByEquipmentId.get(equipmentId) ?? 0),
+          0
+        )
         const availableForOrder = Math.max(
           savedDesiredQuantity,
-          (item?.availableQuantity ?? 0) + savedDesiredQuantity
+          (item?.availableQuantity ?? 0) +
+            savedDesiredQuantity +
+            ownPhysicalSurplus
+        )
+        const maximumPerCabin = item?.maximumPerCabin ?? null
+        const maximumQuantity = Math.max(
+          savedDesiredQuantity,
+          Math.min(
+            availableForOrder,
+            maximumPerCabin ?? Number.POSITIVE_INFINITY
+          )
         )
         return [
           {
@@ -212,9 +249,11 @@ function OrderUnitEquipmentDialogContent({
             desiredQuantity: clamp(
               desiredQuantityByEquipmentId[equipmentId] ?? savedDesiredQuantity,
               0,
-              availableForOrder
+              maximumQuantity
             ),
             availableForOrder,
+            maximumPerCabin,
+            maximumQuantity,
           } satisfies DesiredEquipmentRow,
         ]
       })
@@ -223,6 +262,7 @@ function OrderUnitEquipmentDialogContent({
     candidate.desiredContents,
     desiredQuantityByEquipmentId,
     equipmentQuery.data,
+    order.units,
   ])
 
   const requirements = useMemo(
@@ -313,7 +353,7 @@ function OrderUnitEquipmentDialogContent({
     },
   })
 
-  function changeDesiredQuantity(equipmentId: string, delta: number) {
+  function setDesiredQuantity(equipmentId: string, nextQuantity: number) {
     const row = desiredRows.find(
       (candidateRow) => candidateRow.equipmentId === equipmentId
     )
@@ -321,12 +361,16 @@ function OrderUnitEquipmentDialogContent({
     setErrorText(null)
     setDesiredQuantityByEquipmentId((current) => ({
       ...current,
-      [equipmentId]: clamp(
-        row.desiredQuantity + delta,
-        0,
-        row.availableForOrder
-      ),
+      [equipmentId]: clamp(nextQuantity, 0, row.maximumQuantity),
     }))
+  }
+
+  function changeDesiredQuantity(equipmentId: string, delta: number) {
+    const row = desiredRows.find(
+      (candidateRow) => candidateRow.equipmentId === equipmentId
+    )
+    if (!row) return
+    setDesiredQuantity(equipmentId, row.desiredQuantity + delta)
   }
 
   const mutationPending = saveDesiredMutation.isPending
@@ -377,8 +421,21 @@ function OrderUnitEquipmentDialogContent({
                 <div className="min-w-0">
                   <div className="truncate font-medium">{row.name}</div>
                   <div className="text-xs text-muted-foreground">
-                    Доступно: {row.availableForOrder} шт.
+                    Доступно этому заказу: {row.availableForOrder} шт.
                   </div>
+                  <div className="text-xs text-muted-foreground">
+                    Максимум в одной бытовке:{" "}
+                    {row.maximumPerCabin === null
+                      ? "не ограничен"
+                      : `${row.maximumPerCabin} шт.`}
+                  </div>
+                  {row.savedDesiredQuantity >
+                  (row.maximumPerCabin ?? Number.POSITIVE_INFINITY) ? (
+                    <div className="text-xs text-muted-foreground">
+                      Ранее сохранено {row.savedDesiredQuantity} шт.; увеличить
+                      это количество нельзя.
+                    </div>
+                  ) : null}
                 </div>
                 <div className="flex items-center gap-2 justify-self-start sm:justify-self-auto">
                   <Button
@@ -391,16 +448,30 @@ function OrderUnitEquipmentDialogContent({
                   >
                     <HugeiconsIcon icon={MinusSignIcon} />
                   </Button>
-                  <span className="min-w-8 text-center font-semibold tabular-nums">
-                    {row.desiredQuantity}
-                  </span>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={row.maximumQuantity}
+                    step={1}
+                    inputMode="numeric"
+                    className="h-8 w-20 text-center font-semibold tabular-nums"
+                    aria-label={`Количество ${row.name}`}
+                    value={row.desiredQuantity}
+                    disabled={mutationPending}
+                    onChange={(event) => {
+                      const next = Number(event.target.value)
+                      if (Number.isSafeInteger(next)) {
+                        setDesiredQuantity(row.equipmentId, next)
+                      }
+                    }}
+                  />
                   <Button
                     type="button"
                     size="icon-sm"
                     variant="ghost"
                     disabled={
                       mutationPending ||
-                      row.desiredQuantity >= row.availableForOrder
+                      row.desiredQuantity >= row.maximumQuantity
                     }
                     aria-label={`Увеличить ${row.name}`}
                     onClick={() => changeDesiredQuantity(row.equipmentId, 1)}

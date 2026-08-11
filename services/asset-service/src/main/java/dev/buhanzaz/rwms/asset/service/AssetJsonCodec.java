@@ -74,4 +74,13 @@ final class AssetJsonCodec {
       throw new IllegalStateException("Stored idempotent response is corrupt", exception);
     }
   }
+
+  /** Decodes durable typed movement context while preserving its generic unit-requirement shape. */
+  <T> T read(String value, TypeReference<T> type) {
+    try {
+      return mapper.readValue(value, type);
+    } catch (JacksonException exception) {
+      throw new IllegalStateException("Stored asset JSON is corrupt", exception);
+    }
+  }
 }

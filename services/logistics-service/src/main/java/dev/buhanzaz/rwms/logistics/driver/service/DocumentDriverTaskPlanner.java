@@ -6,32 +6,33 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskAudienceMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
-import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskPlanningMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
+import dev.buhanzaz.rwms.logistics.driver.settings.service.ShipmentTaskSettingsService;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.DriverTaskAudience;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.DriverTaskPreStartCancellationOutcome;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Owns creation, pre-start replanning, and cancellation of document-derived driver tasks. New
- * shipment documents receive one task with durable cabin members; return and transfer documents,
- * plus legacy shipment documents, retain their existing one-task-per-line representation.
- * Document lifecycle remains in the document coordinators. A local intent is persisted before the
- * relay registers it; changes to an already registered task use task-board's version-fenced
- * pre-start commands and reconcile a lost response by reading the same external task again.
+ * Owns creation, pre-start replanning, and cancellation of document-derived driver trips. Every new
+ * shipment, return, or transfer receives one grouped task with durable ordered cabin members.
+ * Waiting legacy line tasks are cancelled before grouping; any started legacy task fences the
+ * conversion, and no parallel line-task creation path remains. Document lifecycle stays in the
+ * document coordinators. A local intent precedes relay registration; registered changes use
+ * task-board's version-fenced pre-start commands and reconcile lost responses from the same task.
  */
 @Service
 @RequiredArgsConstructor
@@ -40,32 +41,32 @@ public class DocumentDriverTaskPlanner {
   private static final int DEFAULT_PRIORITY = 3;
 
   private final DriverLogisticsTaskRepository tasks;
+  private final LogisticsDocumentRepository documents;
   private final LogisticsDependencyGateway dependencies;
   private final DriverTaskWorkflowStore workflowStore;
+  private final ShipmentTaskSettingsService shipmentTaskSettings;
 
   /** Creates or idempotently replans every driver task required by a scheduled document. */
+  @Transactional
   public void plan(LogisticsDocument document, List<LogisticsDocumentLine> lines) {
     requirePlan(document, lines);
     DriverTaskKind kind = kind(document.getDocumentType());
     DriverTaskAudience audience = audience(document);
     LogisticsDependencyGateway.WarehouseDriverQueue queue =
         dependencies.readWarehouseDriverQueue(document.getWarehouseId());
-    if (document.getDocumentType() == LogisticsDocumentType.SHIPMENT
-        && !legacyLineTasksExist(lines)) {
-      planGroupedShipment(document, lines, audience, queue);
-      return;
-    }
-    for (LogisticsDocumentLine line : lines) {
-      planLine(document, line, kind, audience, queue);
-    }
+    shipmentTaskSettings.requireWithinLimit(
+        document.getWarehouseId(), lines.size(), document.getRequestedBySubjectId());
+    cancelLegacyLineTasksBeforeGrouping(document, lines);
+    planGroupedDocument(document, lines, kind, audience, queue);
   }
 
   /**
-   * Cancels a grouped shipment task or the prior document-line tasks only while task-board still
+   * Cancels a grouped document task or prior document-line tasks only while task-board still
    * confirms that execution has not begun. A partially observed remote cancellation is safe to
    * retry because each local intent is retained and task-board exposes an explicit
    * already-cancelled outcome.
    */
+  @Transactional
   public void cancelBeforeStart(LogisticsDocument document, List<LogisticsDocumentLine> lines) {
     if (document == null || lines == null || lines.isEmpty()) {
       throw new IllegalArgumentException("Document and lines are required for driver cancellation");
@@ -83,130 +84,152 @@ public class DocumentDriverTaskPlanner {
     }
   }
 
-  private boolean legacyLineTasksExist(List<LogisticsDocumentLine> lines) {
-    return tasks.existsBySourceTypeAndSourceIdIn(
-        DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE,
-        lines.stream().map(LogisticsDocumentLine::getId).toList());
-  }
-
-  private void planGroupedShipment(
+  private void planGroupedDocument(
       LogisticsDocument document,
       List<LogisticsDocumentLine> lines,
-      DriverTaskAudience audience,
-      LogisticsDependencyGateway.WarehouseDriverQueue queue) {
-    DriverLogisticsTask existing =
-        tasks
-            .findActiveForUpdateBySourceTypeAndSourceIdAndKind(
-                DriverTaskSourceType.LOGISTICS_DOCUMENT, document.getId(), DriverTaskKind.SHIPMENT)
-            .orElse(null);
-    List<ShipmentMember> members = shipmentMembers(document, lines);
-    if (existing == null) {
-      DriverLogisticsTask created =
-          DriverLogisticsTask.createGroupedShipment(
-              document.getWarehouseId(),
-              members.getFirst().cabinId(),
-              document.getId(),
-              document.getScheduledDate(),
-              DEFAULT_PRIORITY,
-              groupedTaskText(document, members),
-              requiredClientSnapshot(document),
-              groupedUnitSummary(members.size()),
-              queue.queueDefinitionId(),
-              audience.mode(),
-              audience.workerId(),
-              audience.workerName(),
-              document.getRequestedBySubjectId(),
-              idempotencyKey(document.getId(), DriverTaskKind.SHIPMENT),
-              groupedChecksum(document, members, audience, queue));
-      for (ShipmentMember member : members) {
-        created.addGroupedShipmentMember(
-            member.lineId(), member.cabinId(), member.unitNumber(), member.position());
-      }
-      tasks.saveAndFlush(created);
-      return;
-    }
-    requireSameGroupedShipmentIntent(document, members, queue, existing);
-    String checksum = groupedChecksum(document, members, audience, queue);
-    if (existing.matchesRequest(checksum)) return;
-    replanRegisteredTask(document, existing, audience, checksum);
-  }
-
-  private void planLine(
-      LogisticsDocument document,
-      LogisticsDocumentLine line,
       DriverTaskKind kind,
       DriverTaskAudience audience,
       LogisticsDependencyGateway.WarehouseDriverQueue queue) {
     DriverLogisticsTask existing =
         tasks
             .findActiveForUpdateBySourceTypeAndSourceIdAndKind(
-                DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE, line.getId(), kind)
+                DriverTaskSourceType.LOGISTICS_DOCUMENT, document.getId(), kind)
             .orElse(null);
-    LogisticsDependencyGateway.RentalItemSnapshot cabin =
-        dependencies.readRentalItemSnapshot(line.getAssetId());
-    requireCabin(document, line, cabin);
-    String checksum = checksum(document, line, kind, audience, queue, cabin.number());
+    List<DocumentMember> members = documentMembers(document, lines);
+    String checksum = groupedChecksum(document, kind, members, audience, queue);
     if (existing == null) {
-      tasks.saveAndFlush(
-          DriverLogisticsTask.create(
+      DriverLogisticsTask created =
+          DriverLogisticsTask.createGroupedDocument(
               document.getWarehouseId(),
-              line.getAssetId(),
-              null,
-              DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE,
-              line.getId(),
+              members.getFirst().cabinId(),
+              document.getId(),
               kind,
-              DriverTaskPlanningMode.FIXED_DATE,
               document.getScheduledDate(),
+              tripNumber(document),
               DEFAULT_PRIORITY,
-              description(document),
-              cabin.number(),
+              groupedTaskText(document, members),
+              clientSnapshot(document),
+              groupedUnitSummary(members.size()),
               queue.queueDefinitionId(),
               audience.mode(),
               audience.workerId(),
               audience.workerName(),
               document.getRequestedBySubjectId(),
-              idempotencyKey(line.getId(), kind),
-              checksum));
+              idempotencyKey(document.getId(), kind, checksum),
+              checksum);
+      for (DocumentMember member : members) {
+        created.addGroupedDocumentMember(
+            member.lineId(), member.cabinId(), member.unitNumber(), member.position());
+      }
+      tasks.saveAndFlush(created);
       return;
     }
-    requireSameIntent(document, line, kind, queue, existing);
+    requireSameGroupedDocumentIntent(document, kind, members, queue, existing);
     if (existing.matchesRequest(checksum)) return;
     replanRegisteredTask(document, existing, audience, checksum);
   }
 
-  private List<ShipmentMember> shipmentMembers(
+  /**
+   * Converges pre-existing line tasks to the single grouped-trip representation. Every remote
+   * member is checked before the first cancellation command, so an already-started legacy task
+   * prevents regrouping without mutating its siblings. New line tasks are never created.
+   */
+  private void cancelLegacyLineTasksBeforeGrouping(
       LogisticsDocument document, List<LogisticsDocumentLine> lines) {
-    List<ShipmentMember> members = new ArrayList<>(lines.size());
+    List<DriverLogisticsTask> legacyTasks =
+        tasks
+            .findAllForUpdateBySourceTypeAndSourceIdIn(
+                DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE,
+                lines.stream().map(LogisticsDocumentLine::getId).toList())
+            .stream()
+            .filter(task -> task.getState() != DriverTaskState.CANCELLED)
+            .toList();
+    if (legacyTasks.isEmpty()) return;
+
+    List<LegacyLineCancellation> cancellations = new ArrayList<>(legacyTasks.size());
+    for (DriverLogisticsTask task : legacyTasks) {
+      if (!document.getWarehouseId().equals(task.getWarehouseId())) {
+        throw new LogisticsConflictException("Старое задание водителя принадлежит другому складу");
+      }
+      if (task.getState() == DriverTaskState.REGISTERING && task.getTaskBoardTaskId() == null) {
+        cancellations.add(new LegacyLineCancellation(task, null));
+        continue;
+      }
+      if (task.getState() == DriverTaskState.COMPLETED
+          || task.getState() == DriverTaskState.FINALIZING) {
+        throw legacyStarted();
+      }
+      LogisticsDependencyGateway.DriverBoardTask current =
+          dependencies.readDriverTask(task.getExternalTaskId());
+      if (!"CANCELLED".equals(current.status())
+          && (!("ACTIVE".equals(current.status())
+              && "WAITING".equals(current.entryStatus())
+              && ("SCHEDULED".equals(current.lane()) || "CURRENT".equals(current.lane()))))) {
+        throw legacyStarted();
+      }
+      cancellations.add(new LegacyLineCancellation(task, current));
+    }
+
+    for (LegacyLineCancellation cancellation : cancellations) {
+      DriverLogisticsTask task = cancellation.task();
+      LogisticsDependencyGateway.DriverBoardTask current = cancellation.current();
+      if (current == null) {
+        task.cancelBeforeExternalRegistration();
+      } else if ("CANCELLED".equals(current.status())) {
+        task.cancelAfterPreStartCancellation();
+      } else {
+        LogisticsDependencyGateway.DriverTaskPreStartCancellation outcome =
+            dependencies.cancelDriverTaskIfPreStart(
+                task.getExternalTaskId(),
+                current.taskVersion(),
+                "Бытовки объединены в одну водительскую ходку");
+        if (outcome.outcome() != DriverTaskPreStartCancellationOutcome.CANCELLED
+            && outcome.outcome() != DriverTaskPreStartCancellationOutcome.ALREADY_CANCELLED) {
+          throw legacyStarted();
+        }
+        task.cancelAfterPreStartCancellation();
+      }
+      tasks.saveAndFlush(task);
+    }
+  }
+
+  private List<DocumentMember> documentMembers(
+      LogisticsDocument document, List<LogisticsDocumentLine> lines) {
+    List<DocumentMember> members = new ArrayList<>(lines.size());
     for (LogisticsDocumentLine line :
-        lines.stream().sorted(Comparator.comparingInt(LogisticsDocumentLine::getLineNumber)).toList()) {
+        lines.stream()
+            .sorted(Comparator.comparingInt(LogisticsDocumentLine::getLineNumber))
+            .toList()) {
       LogisticsDependencyGateway.RentalItemSnapshot cabin =
           dependencies.readRentalItemSnapshot(line.getAssetId());
       requireCabin(document, line, cabin);
       members.add(
-          new ShipmentMember(
+          new DocumentMember(
               line.getId(), line.getAssetId(), cabin.number(), line.getLineNumber()));
     }
     if (members.isEmpty()) {
-      throw new IllegalArgumentException("Grouped shipment requires at least one cabin member");
+      throw new IllegalArgumentException("Grouped document requires at least one cabin member");
     }
     return List.copyOf(members);
   }
 
-  private static String requiredClientSnapshot(LogisticsDocument document) {
+  private static String clientSnapshot(LogisticsDocument document) {
     String snapshot = document.getPartySnapshot();
-    if (snapshot == null || snapshot.isBlank() || snapshot.trim().length() > 512) {
-      throw new LogisticsConflictException("Отгрузка не содержит снимок клиента");
+    if (snapshot == null || snapshot.isBlank()) return null;
+    if (snapshot.trim().length() > 512) {
+      throw new LogisticsConflictException("Снимок клиента ходки слишком длинный");
     }
     return snapshot.trim();
   }
 
-  private static String groupedTaskText(
-      LogisticsDocument document, List<ShipmentMember> members) {
+  private static String groupedTaskText(LogisticsDocument document, List<DocumentMember> members) {
+    String client = clientSnapshot(document);
     String taskText =
-        "Клиент: "
-            + requiredClientSnapshot(document)
+        (client == null ? description(document) : "Клиент: " + client)
             + ". Бытовки: "
-            + members.stream().map(ShipmentMember::unitNumber).collect(java.util.stream.Collectors.joining(", "));
+            + members.stream()
+                .map(DocumentMember::unitNumber)
+                .collect(java.util.stream.Collectors.joining(", "));
     if (taskText.length() > 2_000) {
       throw new LogisticsConflictException(
           "Список номеров бытовок слишком длинный для задания отгрузки");
@@ -214,10 +237,10 @@ public class DocumentDriverTaskPlanner {
     return taskText;
   }
 
-  /** Formats an unambiguous cabin-count summary for a grouped shipment board card. */
+  /** Formats an unambiguous cabin-count summary for a grouped document board card. */
   static String groupedUnitSummary(int count) {
     if (count < 1) {
-      throw new IllegalArgumentException("Grouped shipment must contain at least one cabin");
+      throw new IllegalArgumentException("Grouped document must contain at least one cabin");
     }
     int remainder100 = count % 100;
     int remainder10 = count % 10;
@@ -232,32 +255,30 @@ public class DocumentDriverTaskPlanner {
     return count + " " + noun;
   }
 
-  private static void requireSameGroupedShipmentIntent(
+  private static void requireSameGroupedDocumentIntent(
       LogisticsDocument document,
-      List<ShipmentMember> members,
+      DriverTaskKind kind,
+      List<DocumentMember> members,
       LogisticsDependencyGateway.WarehouseDriverQueue queue,
       DriverLogisticsTask task) {
     if (!document.getWarehouseId().equals(task.getWarehouseId())
         || !members.getFirst().cabinId().equals(task.getCabinId())
         || !document.getId().equals(task.getSourceId())
         || task.getSourceType() != DriverTaskSourceType.LOGISTICS_DOCUMENT
-        || task.getKind() != DriverTaskKind.SHIPMENT
+        || task.getKind() != kind
         || !queue.queueDefinitionId().equals(task.getDriverQueueDefinitionId())
-        || task.getClientSnapshot() == null
-        || task.getClientSnapshot().isBlank()
+        || !Objects.equals(clientSnapshot(document), task.getClientSnapshot())
         || task.getMembers().size() != members.size()) {
-      throw new LogisticsConflictException(
-          "Отгрузка уже связана с другим заданием водителя");
+      throw new LogisticsConflictException("Отгрузка уже связана с другим заданием водителя");
     }
     for (int index = 0; index < members.size(); index++) {
-      ShipmentMember expected = members.get(index);
+      DocumentMember expected = members.get(index);
       var actual = task.getMembers().get(index);
       if (!expected.lineId().equals(actual.getDocumentLineId())
           || !expected.cabinId().equals(actual.getCabinId())
           || !expected.unitNumber().equals(actual.getUnitNumber())
           || expected.position() != actual.getPosition()) {
-        throw new LogisticsConflictException(
-            "Состав бытовок в задании отгрузки нельзя изменить");
+        throw new LogisticsConflictException("Состав бытовок в задании отгрузки нельзя изменить");
       }
     }
   }
@@ -312,6 +333,16 @@ public class DocumentDriverTaskPlanner {
         .findFirst()
         .map(column -> column.tasks().size())
         .orElse(0);
+  }
+
+  private int tripNumber(LogisticsDocument document) {
+    if (document.getRentalOrderId() == null) return 1;
+    List<LogisticsDocument> orderTrips =
+        documents.findAllByRentalOrderIdForUpdate(document.getRentalOrderId());
+    for (int index = 0; index < orderTrips.size(); index++) {
+      if (document.getId().equals(orderTrips.get(index).getId())) return index + 1;
+    }
+    throw new LogisticsConflictException("Ходка не входит в текущий заказ");
   }
 
   private void cancelTask(LogisticsDocument document, DriverLogisticsTask task) {
@@ -378,8 +409,7 @@ public class DocumentDriverTaskPlanner {
     };
   }
 
-  private static void requirePlan(
-      LogisticsDocument document, List<LogisticsDocumentLine> lines) {
+  private static void requirePlan(LogisticsDocument document, List<LogisticsDocumentLine> lines) {
     if (document == null
         || document.getId() == null
         || document.getWarehouseId() == null
@@ -406,61 +436,22 @@ public class DocumentDriverTaskPlanner {
     }
   }
 
-  private static void requireSameIntent(
-      LogisticsDocument document,
-      LogisticsDocumentLine line,
-      DriverTaskKind kind,
-      LogisticsDependencyGateway.WarehouseDriverQueue queue,
-      DriverLogisticsTask task) {
-    if (!document.getWarehouseId().equals(task.getWarehouseId())
-        || !line.getAssetId().equals(task.getCabinId())
-        || !line.getId().equals(task.getSourceId())
-        || task.getSourceType() != DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE
-        || task.getKind() != kind
-        || !queue.queueDefinitionId().equals(task.getDriverQueueDefinitionId())) {
-      throw new LogisticsConflictException(
-          "Строка документа уже связана с другим заданием водителя");
-    }
-  }
-
-  private static String checksum(
-      LogisticsDocument document,
-      LogisticsDocumentLine line,
-      DriverTaskKind kind,
-      DriverTaskAudience audience,
-      LogisticsDependencyGateway.WarehouseDriverQueue queue,
-      String unitNumber) {
-    return DriverTaskChecksum.sha256(
-        PLAN_OPERATION,
-        Arrays.asList(
-            document.getId().toString(),
-            line.getId().toString(),
-            document.getWarehouseId().toString(),
-            line.getAssetId().toString(),
-            kind.name(),
-            document.getScheduledDate().toString(),
-            audience.mode().name(),
-            audience.workerId() == null ? null : audience.workerId().toString(),
-            audience.workerName(),
-            queue.queueDefinitionId().toString(),
-            unitNumber));
-  }
-
   private static String groupedChecksum(
       LogisticsDocument document,
-      List<ShipmentMember> members,
+      DriverTaskKind kind,
+      List<DocumentMember> members,
       DriverTaskAudience audience,
       LogisticsDependencyGateway.WarehouseDriverQueue queue) {
     List<String> values = new ArrayList<>();
     values.add(document.getId().toString());
     values.add(document.getWarehouseId().toString());
-    values.add(DriverTaskKind.SHIPMENT.name());
+    values.add(kind.name());
     values.add(document.getScheduledDate().toString());
     values.add(audience.mode().name());
     values.add(audience.workerId() == null ? null : audience.workerId().toString());
     values.add(audience.workerName());
     values.add(queue.queueDefinitionId().toString());
-    for (ShipmentMember member : members) {
+    for (DocumentMember member : members) {
       values.add(member.lineId().toString());
       values.add(member.cabinId().toString());
       values.add(member.unitNumber());
@@ -469,13 +460,22 @@ public class DocumentDriverTaskPlanner {
     return DriverTaskChecksum.sha256(PLAN_OPERATION, values);
   }
 
-  /** Derives one stable local task identity from either a document or a document line source. */
-  private static UUID idempotencyKey(UUID sourceId, DriverTaskKind kind) {
+  private static LogisticsConflictException legacyStarted() {
+    return new LogisticsConflictException(
+        "Старые задания бытовок уже начаты; объединить их в одну ходку нельзя");
+  }
+
+  /** Derives one stable local task identity from a grouped logistics document. */
+  private static UUID idempotencyKey(UUID sourceId, DriverTaskKind kind, String requestSha256) {
     return UUID.nameUUIDFromBytes(
-        ("document-driver-task:" + sourceId + ":" + kind)
+        ("document-driver-task-v2:" + sourceId + ":" + kind + ":" + requestSha256)
             .getBytes(StandardCharsets.UTF_8));
   }
 
   /** Immutable input assembled from one document line and the asset-owned cabin number snapshot. */
-  private record ShipmentMember(UUID lineId, UUID cabinId, String unitNumber, int position) {}
+  private record DocumentMember(UUID lineId, UUID cabinId, String unitNumber, int position) {}
+
+  /** Prevalidated legacy task and its stable task-board version used for cancellation. */
+  private record LegacyLineCancellation(
+      DriverLogisticsTask task, LogisticsDependencyGateway.DriverBoardTask current) {}
 }

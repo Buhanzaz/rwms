@@ -3,11 +3,12 @@ package dev.buhanzaz.rwms.maintenance;
 import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.*;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.maintenance.integration.MaintenanceDependencyGateway;
@@ -75,8 +76,13 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
         .thenAnswer(invocation -> {
           assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
           return new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
-              equipmentId, "Chair");
+              chairId, equipmentId, "Chair", 0, null);
         });
+    when(dependencies.furnitureEquipmentSnapshots(List.of(chairId)))
+        .thenReturn(
+            List.of(
+                new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
+                    chairId, equipmentId, "Chair", 0, null)));
 
     var changed = service.replaceCatalogNodes(
         catalogId,
@@ -91,7 +97,7 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
         .filteredOn(node -> node.id().equals(chairId))
         .singleElement()
         .extracting(CatalogNodeResponse::furnitureEquipment)
-        .isEqualTo(new FurnitureEquipmentReference(equipmentId, "Chair"));
+        .isEqualTo(new FurnitureEquipmentReference(equipmentId, "Chair", 0L, null));
 
     clearInvocations(dependencies);
     var unchanged = service.replaceCatalogNodes(
@@ -107,7 +113,9 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
                     new FurnitureEquipmentReference(equipmentId, "Chair")))));
 
     assertThat(unchanged.version()).isOne();
-    verifyNoInteractions(dependencies);
+    verify(dependencies, never()).ensureFurnitureEquipment(any(), any());
+    verify(dependencies, never()).ensureFurnitureEquipment(any(), any(), any(), any());
+    verify(dependencies, never()).furnitureEquipmentSnapshots(any());
     assertThat(jdbc.queryForObject("""
         select count(*) from domain_event
         where aggregate_type='CATALOG_VERSION' and aggregate_id=?
@@ -118,7 +126,7 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
         .satisfies(node -> {
           assertThat(node.id()).isEqualTo(chairId);
           assertThat(node.furnitureEquipment()).isEqualTo(
-              new FurnitureEquipmentReference(equipmentId, "Chair"));
+              new FurnitureEquipmentReference(equipmentId, "Chair", 0L, null));
         });
   }
 
@@ -137,7 +145,8 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
         .isInstanceOf(dev.buhanzaz.rwms.maintenance.service.MaintenanceValidationException.class)
         .hasMessageContaining("parent node is missing");
 
-    verifyNoInteractions(dependencies);
+    verify(dependencies, never()).ensureFurnitureEquipment(any(), any());
+    verify(dependencies, never()).ensureFurnitureEquipment(any(), any(), any(), any());
     assertThat(service.catalogVersion(catalogId).version()).isZero();
     assertThat(service.catalogNodes(catalogId)).isEmpty();
   }
@@ -154,7 +163,12 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
     when(dependencies.ensureFurnitureEquipment(chairId, "Chair"))
         .thenReturn(
             new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
-                equipmentId, "Chair"));
+                chairId, equipmentId, "Chair", 0, null));
+    when(dependencies.furnitureEquipmentSnapshots(List.of(chairId)))
+        .thenReturn(
+            List.of(
+                new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
+                    chairId, equipmentId, "Chair", 0, null)));
 
     service.changeCatalog(
         catalogId,
@@ -175,7 +189,7 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
         .filteredOn(node -> node.id().equals(chairId))
         .singleElement()
         .extracting(CatalogNodeResponse::furnitureEquipment)
-        .isEqualTo(existing);
+        .isEqualTo(new FurnitureEquipmentReference(equipmentId, "Chair", 0L, null));
     assertThat(service.catalogNodes(catalogId))
         .filteredOn(node -> node.id().equals(ordinaryMaterialId))
         .singleElement()

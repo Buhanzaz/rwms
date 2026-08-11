@@ -28,14 +28,12 @@ public interface ShipmentTaskSettingsRepository
    */
   @Modifying
   @Query(
-      value =
-          """
-          insert into shipment_task_settings(
-            warehouse_id, version, max_cabins_per_shipment_task, updated_by_subject_id, updated_at)
+      """
+          insert into ShipmentTaskSettings(
+            warehouseId, version, maxCabinsPerShipmentTask, updatedBySubjectId, updatedAt)
           values (:warehouseId, 0, 1, :updatedBySubjectId, :updatedAt)
-          on conflict (warehouse_id) do nothing
-          """,
-      nativeQuery = true)
+          on conflict (warehouseId) do nothing
+          """)
   int insertDefaultIfAbsent(
       @Param("warehouseId") UUID warehouseId,
       @Param("updatedBySubjectId") UUID updatedBySubjectId,

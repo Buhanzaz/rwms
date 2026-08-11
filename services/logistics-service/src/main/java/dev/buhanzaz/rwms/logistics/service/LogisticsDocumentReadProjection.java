@@ -40,10 +40,10 @@ class LogisticsDocumentReadProjection {
         summary.clientId(),
         summary.equipmentMovementTaskId(),
         summary.scheduledDate(),
-        summary.scheduledAt(),
         summary.rentalOrderId(),
         summary.rentalShipmentId(),
-        responseMapper.toLineViews(lineRepository.findAllByDocument_IdOrderByLineNumber(summary.id())),
+        responseMapper.toLineViews(
+            lineRepository.findAllByDocument_IdOrderByLineNumber(summary.id())),
         summary.createdAt(),
         summary.updatedAt());
   }

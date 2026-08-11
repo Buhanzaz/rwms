@@ -34,8 +34,7 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
   }
 
   @Override
-  public WarehouseTimeZone warehouseTimeZoneAt(
-      UUID warehouseId, java.time.OffsetDateTime at) {
+  public WarehouseTimeZone warehouseTimeZoneAt(UUID warehouseId, java.time.OffsetDateTime at) {
     throw unavailable();
   }
 
@@ -57,11 +56,7 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
 
   @Override
   public OperationLease acquireReturnLease(
-      UUID idempotencyKey,
-      UUID assetId,
-      long expectedAssetVersion,
-      UUID documentId,
-      UUID lineId) {
+      UUID idempotencyKey, UUID assetId, long expectedAssetVersion, UUID documentId, UUID lineId) {
     throw unavailable();
   }
 
@@ -269,11 +264,7 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
 
   @Override
   public OrderUnitReservation releaseOrderUnit(
-      UUID idempotencyKey,
-      UUID orderId,
-      UUID unitId,
-      UUID actorSubjectId,
-      String actorRole) {
+      UUID idempotencyKey, UUID orderId, UUID unitId, UUID actorSubjectId, String actorRole) {
     throw unavailable();
   }
 
@@ -284,13 +275,19 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
   }
 
   @Override
+  public java.util.List<EquipmentWarehouseAvailability> readLogisticsEquipmentAvailability(
+      UUID warehouseId) {
+    throw unavailable();
+  }
+
+  @Override
   public java.util.List<OrderEquipmentReservation> replaceOrderEquipmentReservations(
       UUID idempotencyKey,
       UUID orderId,
       UUID warehouseId,
       UUID actorSubjectId,
       String actorRole,
-      java.util.List<OrderEquipmentRequirement> requirements) {
+      java.util.List<OrderUnitEquipmentRequirements> units) {
     throw unavailable();
   }
 
@@ -299,16 +296,28 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
       UUID orderId,
       UUID warehouseId,
       UUID unitId,
+      UUID replacementForRentalItemId,
       java.util.List<OrderEquipmentRequirement> unitRequirements,
-      java.util.List<OrderEquipmentRequirement> orderRequirements) {
+      java.util.List<OrderUnitEquipmentRequirements> units) {
+    throw unavailable();
+  }
+
+  @Override
+  public OrderUnitsReplacementReceipt replaceOrderUnits(
+      UUID idempotencyKey,
+      UUID orderId,
+      UUID warehouseId,
+      UUID presentationId,
+      UUID actorSubjectId,
+      String actorRole,
+      java.util.List<OrderUnitEquipmentRequirements> units,
+      java.util.List<OrderUnitReplacement> replacements) {
     throw unavailable();
   }
 
   @Override
   public CabinFurnitureMovementPlan planCabinFurnitureMovements(
-      UUID warehouseId,
-      UUID rentalItemId,
-      java.util.List<CabinFurnitureRequirement> requirements) {
+      UUID warehouseId, UUID rentalItemId, java.util.List<CabinFurnitureRequirement> requirements) {
     throw unavailable();
   }
 

@@ -32,20 +32,13 @@ import { ApiError } from "@/lib/api-client"
 
 function deliveryDraft(order: OrderDetail): OrderDeliveryDraft {
   return {
-    deliveryAddress: order.deliveryAddress ?? "",
-    latitude: order.latitude === null ? "" : String(order.latitude),
-    longitude: order.longitude === null ? "" : String(order.longitude),
     contactPhone: order.contactPhone ?? order.client.phone ?? "",
     comment: order.comment ?? "",
-    acceptableDeliveryDates:
-      (order.acceptableDeliveryDates ?? []).length > 0
-        ? order.acceptableDeliveryDates
-        : [""],
   }
 }
 
 /**
- * Edits an order's delivery data without changing its already selected client.
+ * Edits manager-owned order contact data without changing the selected client.
  */
 export function OrderDeliveryDialog({
   open,
@@ -60,8 +53,10 @@ export function OrderDeliveryDialog({
   onUpdated: (order: OrderDetail) => void
   onConflict: () => void
 }) {
-  const deliveryComplete = isOrderDeliveryComplete(order)
-  const title = deliveryComplete ? "Изменить адрес" : "Добавить адрес"
+  const contactComplete = isOrderDeliveryComplete(order)
+  const title = contactComplete
+    ? "Изменить данные заказа"
+    : "Добавить данные заказа"
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -69,8 +64,8 @@ export function OrderDeliveryDialog({
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
-            Укажите адрес, координаты, контактный телефон и дату приёмки. Эти
-            данные необходимы, чтобы сохранить черновик заказа.
+            Контактный телефон и комментарий сохраняются в заказе. Адрес,
+            координаты и дополнительные контакты клиент укажет в представлении.
           </DialogDescription>
         </DialogHeader>
         {open ? (
@@ -131,7 +126,7 @@ function OrderDeliveryDialogContent({
     onSuccess: (projection, { fingerprint }) => {
       commandIdentity.current.confirm(fingerprint)
       onUpdated(projection)
-      toast.success("Данные доставки сохранены.")
+      toast.success("Данные заказа сохранены.")
       onClose()
     },
     onError: (error) => {
@@ -146,7 +141,7 @@ function OrderDeliveryDialogContent({
       setErrorText(
         error instanceof Error
           ? error.message
-          : "Не удалось сохранить данные доставки."
+          : "Не удалось сохранить данные заказа."
       )
     },
   })
@@ -156,16 +151,16 @@ function OrderDeliveryDialogContent({
     const parsedDelivery = parseOrderDeliveryDraft(delivery)
     setDeliveryErrors(parsedDelivery.errors)
     if (!parsedDelivery.input) {
-      setErrorText("Проверьте обязательные поля доставки и приёмки.")
+      setErrorText("Проверьте контактный телефон заказа.")
       return
     }
     if (deliveryUnchanged) {
-      setErrorText("Измените данные доставки перед сохранением.")
+      setErrorText("Измените данные заказа перед сохранением.")
       return
     }
 
     const fingerprint = JSON.stringify({
-      operation: "update-order-delivery",
+      operation: "update-order-details",
       orderId: order.id,
       expectedVersion: order.version,
       clientId: order.client.id,
@@ -211,7 +206,9 @@ function OrderDeliveryDialogContent({
                 className="animate-spin"
               />
             ) : null}
-            {updateMutation.isPending ? "Сохранение…" : "Сохранить адрес"}
+            {updateMutation.isPending
+              ? "Сохранение…"
+              : "Сохранить данные заказа"}
           </Button>
         </DialogFooter>
       </FieldGroup>

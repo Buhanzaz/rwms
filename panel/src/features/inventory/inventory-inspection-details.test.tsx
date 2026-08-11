@@ -52,6 +52,7 @@ const furniture: EquipmentItemDto = {
   name: "Стол",
   active: true,
   comment: null,
+  maximumPerCabin: null,
   totalQuantity: 0,
   stockQuantity: 0,
   cabinStockQuantity: 0,
@@ -139,9 +140,7 @@ describe("inventory inspection details", () => {
 
     await user.click(screen.getByRole("button", { name: "БК-1" }))
     await user.click(await screen.findByRole("button", { name: "БК-2" }))
-    await user.click(
-      screen.getByRole("button", { name: "Выберите габариты" })
-    )
+    await user.click(screen.getByRole("button", { name: "Выберите габариты" }))
     await user.click(await screen.findByRole("button", { name: "3×7" }))
 
     expect(onPassportObservationChange).toHaveBeenLastCalledWith({

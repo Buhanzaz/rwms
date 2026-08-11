@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { Link, useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ArrowLeft01Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons"
 
 import { PageToolbar, PageToolbarActions } from "@/components/page-toolbar"
+import {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
@@ -76,6 +82,8 @@ type RepairTaskEditorWorkspaceProps = {
   onClose: () => void
   onSaved: (task: RepairTaskDto) => void
 }
+
+const BOOKED_UNIT_REPLACEMENT_REQUIRED = "BOOKED_UNIT_REPLACEMENT_REQUIRED"
 
 function ReworkCandidates({
   candidates,
@@ -240,6 +248,7 @@ function RepairTaskEditorContent({
   const [showBeforePhotos, setShowBeforePhotos] = useState(false)
   const [writeOffOpen, setWriteOffOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [queueFailureCode, setQueueFailureCode] = useState<string | null>(null)
   const [writeOffError, setWriteOffError] = useState<string | null>(null)
   const reworkCandidatesQuery = useQuery({
     queryKey: [
@@ -410,7 +419,10 @@ function RepairTaskEditorContent({
 
       return saveRepairTaskDraft({ draft, warehouseId })
     },
-    onMutate: () => setError(null),
+    onMutate: () => {
+      setError(null)
+      setQueueFailureCode(null)
+    },
     onSuccess: handleSuccess,
     onError: (unknownError) => {
       if (unknownError instanceof ApiError && unknownError.status === 409) {
@@ -435,6 +447,10 @@ function RepairTaskEditorContent({
 
       return queueRepairTask({ draft, warehouseId, ...completion })
     },
+    onMutate: () => {
+      setError(null)
+      setQueueFailureCode(null)
+    },
     onSuccess: handleSuccess,
     onError: (unknownError) => {
       if (unknownError instanceof RepairTaskQueueDraftPersistedError) {
@@ -446,6 +462,12 @@ function RepairTaskEditorContent({
         void queryClient.invalidateQueries({
           queryKey: REPAIR_TASKS_QUERY_KEY,
         })
+        setQueueFailureCode(unknownError.code)
+        if (unknownError.code === BOOKED_UNIT_REPLACEMENT_REQUIRED) {
+          setCompletionOpen(false)
+        }
+      } else {
+        setQueueFailureCode(null)
       }
       setError(
         unknownError instanceof Error
@@ -718,6 +740,7 @@ function RepairTaskEditorContent({
               disabled={mutationPending}
               onClick={() => {
                 if (validateDraft(true)) {
+                  setQueueFailureCode(null)
                   setCompletionOpen(true)
                 }
               }}
@@ -794,7 +817,24 @@ function RepairTaskEditorContent({
               : "Выберите бытовку и составьте план ремонта."
         }
         message={
-          error ? (
+          queueFailureCode === BOOKED_UNIT_REPLACEMENT_REQUIRED ? (
+            <Alert
+              variant="destructive"
+              className="has-data-[slot=alert-action]:pr-28"
+            >
+              <AlertTitle>Бытовка забронирована</AlertTitle>
+              <AlertDescription>
+                Её необходимо заменить перед ремонтом. Запустите замену в
+                существующем заказе, затем повторите постановку ремонта в
+                очередь.
+              </AlertDescription>
+              <AlertAction>
+                <Button asChild size="sm" variant="outline">
+                  <Link to="/orders">К заказам</Link>
+                </Button>
+              </AlertAction>
+            </Alert>
+          ) : error ? (
             <p role="alert" className="text-xs text-destructive">
               {error}
             </p>
@@ -862,6 +902,7 @@ function RepairTaskEditorContent({
         onOpenChange={(open) => {
           setCompletionOpen(open)
           setError(null)
+          setQueueFailureCode(null)
         }}
         onComplete={(completion) => {
           if (!readOnly) {

@@ -246,10 +246,22 @@ function savedOrder() {
     createdBy: "99999999-9999-4999-8999-999999999999",
     createdByDisplayName: "Менеджер",
     warehouseId: WAREHOUSE_ID,
+    deliveryAddress: "Санкт-Петербург, Невский проспект, 1",
+    latitude: 59.9343,
+    longitude: 30.3351,
+    contactPhone: "+79990000001",
+    comment: "Позвонить за час",
+    additionalContacts: [],
+    desiredDeliveryWindows: [
+      {
+        startDate: currentUtcDate(),
+        endDate: currentUtcDate(),
+      },
+    ],
     unitCount: 1,
     createdAt: "2026-07-30T08:00:00Z",
     updatedAt: "2026-07-30T08:00:00Z",
-    permissions: { canEdit: true, canViewOtherManagers: true },
+    permissions: { canEdit: true, canReplaceUnits: false, canViewOtherManagers: true },
     units: [
       {
         reservationId: "88888888-8888-4888-8888-888888888888",
@@ -434,6 +446,12 @@ beforeEach(() => {
             id: ORDER_ID,
             version: 7,
             number: "ORD-000001",
+            desiredDeliveryWindows: [
+              {
+                startDate: currentUtcDate(),
+                endDate: currentUtcDate(),
+              },
+            ],
             units: [
               {
                 reservationId: "88888888-8888-4888-8888-888888888888",
@@ -491,7 +509,7 @@ describe("LogisticsOrderTasksPage", () => {
     ).toBe(true)
   })
 
-  it("creates a selected shipment, schedules preparation and sends furniture tasks", async () => {
+  it("creates one selected-cabin trip without automatically chaining furniture or planning commands", async () => {
     const user = userEvent.setup()
     useSavedOrderTask()
     renderPage()
@@ -512,6 +530,20 @@ describe("LogisticsOrderTasksPage", () => {
       within(dialog).getByRole("combobox", { name: "Водитель" }),
       "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
     )
+    expect(
+      within(dialog).queryByLabelText("Фактическое время ходки")
+    ).toBeNull()
+    expect(within(dialog).getByLabelText("Желаемые даты клиента")).toBeTruthy()
+    expect(
+      within(dialog).getByLabelText(
+        "Фактическая дата ходки: календарь фактической ходки"
+      )
+    ).toBeTruthy()
+    expect(
+      within(dialog)
+        .getByLabelText("Фактическая дата ходки: календарь фактической ходки")
+        .querySelectorAll('[data-desired-window="true"]').length
+    ).toBeGreaterThan(0)
     await user.click(
       within(dialog).getByRole("button", { name: "Создать отгрузку" })
     )
@@ -526,18 +558,8 @@ describe("LogisticsOrderTasksPage", () => {
         })
       )
     )
-    await waitFor(() =>
-      expect(shipmentApi.createShipmentFurnitureTasks).toHaveBeenCalled()
-    )
-    await waitFor(() =>
-      expect(shipmentApi.replaceShipmentPlan).toHaveBeenCalledWith(
-        expect.objectContaining({
-          documentId: SHIPMENT_ID,
-          driverSnapshot: "Иванов Иван",
-          driverWorkerId: DRIVER_WORKER_ID,
-        })
-      )
-    )
+    expect(shipmentApi.createShipmentFurnitureTasks).not.toHaveBeenCalled()
+    expect(shipmentApi.replaceShipmentPlan).not.toHaveBeenCalled()
   })
 
   it("shows a saved order as an actionable task before its first shipment", async () => {
@@ -722,9 +744,14 @@ describe("LogisticsOrderTasksPage", () => {
     expect(screen.queryByText("Лимит одного задания: 3.")).toBeNull()
   })
 
-  it("waits for a furniture worker task before starting shipment preparation", async () => {
+  it("creates furniture work only from the explicit action and never auto-plans the shipment", async () => {
     const user = userEvent.setup()
-    useSavedOrderTask()
+    shipmentApi.getShipmentFurnitureReadiness.mockResolvedValue({
+      shipmentId: SHIPMENT_ID,
+      shipmentVersion: 4,
+      state: "REQUIRES_TASK_CREATION",
+      tasks: [],
+    })
     shipmentApi.createShipmentFurnitureTasks.mockResolvedValue({
       shipmentId: SHIPMENT_ID,
       shipmentVersion: 5,
@@ -737,42 +764,14 @@ describe("LogisticsOrderTasksPage", () => {
         },
       ],
     })
-    shipmentApi.getShipmentFurnitureReadiness.mockResolvedValue({
-      shipmentId: SHIPMENT_ID,
-      shipmentVersion: 5,
-      state: "AWAITING_TASK_COMPLETION",
-      tasks: [
-        {
-          rentalItemId: ASSET_ID,
-          unitNumber: "БЫТ-001",
-          taskId: "77777777-7777-4777-8777-777777777777",
-          externalTaskId: "88888888-8888-4888-8888-888888888888",
-          taskBoardTaskId: null,
-          taskState: "AWAITING_WORKER",
-          lineCount: 1,
-        },
-      ],
-    })
     renderPage()
 
     await user.click(
-      (await screen.findAllByRole("button", { name: "Показать бытовки" }))[0]
-    )
-    await user.click(
-      screen.getAllByRole("checkbox", { name: "Выбрать бытовку БЫТ-001" })[0]
-    )
-    await user.click(
-      screen.getAllByRole("button", { name: "Создать отгрузку" }).at(-1)!
-    )
-    const dialog = await screen.findByRole("dialog", {
-      name: "Создать отгрузку",
-    })
-    await user.selectOptions(
-      within(dialog).getByRole("combobox", { name: "Водитель" }),
-      "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-    )
-    await user.click(
-      within(dialog).getByRole("button", { name: "Создать отгрузку" })
+      (
+        await screen.findAllByRole("button", {
+          name: "Создать задачу на мебель",
+        })
+      )[0]
     )
 
     await waitFor(() =>
@@ -781,7 +780,7 @@ describe("LogisticsOrderTasksPage", () => {
     expect(shipmentApi.replaceShipmentPlan).not.toHaveBeenCalled()
   })
 
-  it("shows return details and schedules one cabin for a custom date", async () => {
+  it("shows return details and schedules one cabin from the highlighted client window", async () => {
     const user = userEvent.setup()
     const outbound = {
       ...shipment(),
@@ -812,8 +811,17 @@ describe("LogisticsOrderTasksPage", () => {
       within(dialog).getByRole("combobox", { name: "Водитель" }),
       "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
     )
-    await user.clear(within(dialog).getByLabelText("Дата"))
-    await user.type(within(dialog).getByLabelText("Дата"), "2026-08-15")
+    const calendar = within(dialog).getByLabelText(
+      "Фактическая дата ходки: календарь фактической ходки"
+    )
+    const desiredDay = calendar.querySelector<HTMLButtonElement>(
+      '[data-desired-window="true"]'
+    )
+    expect(desiredDay).toBeTruthy()
+    await user.click(desiredDay!)
+    expect(
+      within(dialog).queryByLabelText("Фактическое время ходки")
+    ).toBeNull()
     await user.click(
       within(dialog).getByRole("button", { name: "Создать возврат" })
     )
@@ -822,7 +830,7 @@ describe("LogisticsOrderTasksPage", () => {
       expect(returnApi.registerReturn).toHaveBeenCalledWith(
         expect.objectContaining({
           documentId: RETURN_ID,
-          scheduledDate: "2026-08-15",
+          scheduledDate: currentUtcDate(),
           driverSnapshot: "Иванов Иван",
           driverWorkerId: DRIVER_WORKER_ID,
         })
@@ -872,7 +880,7 @@ describe("LogisticsOrderTasksPage", () => {
     expect(shipmentApi.replaceShipmentPlan).not.toHaveBeenCalled()
   })
 
-  it("changes a non-today shipment date to today before confirming", async () => {
+  it("does not chain a schedule change with shipment confirmation", async () => {
     const user = userEvent.setup()
     const awaiting = {
       ...shipment(),
@@ -898,28 +906,12 @@ describe("LogisticsOrderTasksPage", () => {
     const dialog = await screen.findByRole("dialog", {
       name: "Дата отгрузки отличается",
     })
-    await user.click(
-      within(dialog).getByRole("button", { name: "Изменить на сегодня" })
-    )
-
-    await waitFor(() =>
-      expect(shipmentApi.replaceShipmentPlan).toHaveBeenCalledWith(
-        expect.objectContaining({
-          documentId: SHIPMENT_ID,
-          expectedVersion: awaiting.version,
-          driverSnapshot: awaiting.driverSnapshot,
-          scheduledDate: currentUtcDate(),
-        })
-      )
-    )
-    await waitFor(() =>
-      expect(shipmentApi.confirmShipmentPreparation).toHaveBeenCalledWith(
-        expect.objectContaining({
-          documentId: SHIPMENT_ID,
-          expectedVersion: 6,
-        })
-      )
-    )
+    expect(
+      within(dialog).queryByRole("button", { name: "Изменить на сегодня" })
+    ).toBeNull()
+    expect(within(dialog).getByText(/отдельными командами/i)).toBeTruthy()
+    expect(shipmentApi.replaceShipmentPlan).not.toHaveBeenCalled()
+    expect(shipmentApi.confirmShipmentPreparation).not.toHaveBeenCalled()
   })
 
   it("confirms a shipment scheduled for today without the date decision dialog", async () => {

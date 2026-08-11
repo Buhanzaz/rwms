@@ -49,6 +49,29 @@ task-board, media, logistics и warehouse-service. Нельзя выполнят
 write-транзакция удерживает maintenance locks. Application flow фиксирует local preparation до
 remote preflight/effects, затем продолжает local fenced state через durable recovery records.
 
+## Настройки мебели и конфликты забронированной бытовки
+
+Существующий maintenance editor мебели показывает asset-owned nullable максимум на бытовку ниже
+сопоставления с характеристикой бытовки. Maintenance хранит только durable intent связи catalog
+node, ожидаемую asset version и последнее подтверждённое наблюдение; второй каталог оборудования
+или остаток здесь не создаётся. Save завершает local preparation, синхронно выполняет существующую
+private asset-команду ensure/update вне local write transaction и подтверждает возвращённые version
+и maximum до успешного завершения mutation каталога. Catalog reads обогащают подтверждённые связи
+актуальными asset-owned значениями. Миграция `V42__furniture_equipment_maximum_sync.sql` расширяет
+существующий link intent; источником истины остаётся asset-service.
+
+Когда asset-service отклоняет maintenance lease или fenced status command из-за активной order
+reservation бытовки, `MaintenanceHttpTransport` пропускает только точный upstream `409` code
+`BOOKED_UNIT_REPLACEMENT_REQUIRED`. Публичный maintenance Problem Details сохраняет этот code и
+понятное сообщение о замене. Все прочие dependency codes, включая неизвестные upstream `409`,
+остаются `MAINTENANCE_DEPENDENCY_UNAVAILABLE`; maintenance не создаёт и не принимает решение о
+workflow замены бытовки.
+
+После атомарной замены бытовки asset-service также отклоняет maintenance lease acquisition, пока
+существующее перемещение мебели замены имеет live source hold. Maintenance не копирует эту
+готовность и не создаёт другой тип задания; после выполнения существующего movement (либо когда
+его hold больше не live) тот же maintenance acquisition можно повторить.
+
 ## Внутренняя структура приложения
 
 `MaintenanceApplicationService` — стабильный compatibility facade над шестью collaborators. Он

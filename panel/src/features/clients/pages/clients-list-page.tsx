@@ -1,10 +1,14 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { RefreshIcon } from "@hugeicons/core-free-icons"
+import { Add01Icon, RefreshIcon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Link, useNavigate } from "react-router-dom"
 
-import { PageToolbar, PageToolbarContent } from "@/components/page-toolbar"
+import {
+  PageToolbar,
+  PageToolbarActions,
+  PageToolbarContent,
+} from "@/components/page-toolbar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -42,6 +46,7 @@ import {
   type ClientType,
   type RentalClient,
 } from "@/features/clients/domain/clients"
+import { ClientCreateDialog } from "@/features/clients/components/client-create-dialog"
 import { useOrdersModule } from "@/features/orders/orders-module-context"
 
 const PAGE_SIZE = 50
@@ -63,7 +68,10 @@ function ClientMobileCard({ client }: { client: RentalClient }) {
       <Card size="sm">
         <CardHeader>
           <CardTitle>{client.displayName}</CardTitle>
-          <CardDescription>{client.phone ?? "Не указан"}</CardDescription>
+          <CardDescription>
+            {client.contactPerson ?? client.displayName}:{" "}
+            {client.phone ?? "телефон не указан"}
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2">
           <Badge variant="outline">{CLIENT_TYPE_LABELS[client.type]}</Badge>
@@ -71,6 +79,14 @@ function ClientMobileCard({ client }: { client: RentalClient }) {
             {client.responsibleManagerDisplayName ??
               client.responsibleManagerId}
           </Badge>
+          {client.additionalContacts.map((contact, index) => (
+            <Badge
+              key={`${contact.name}:${contact.phone}:${index}`}
+              variant="outline"
+            >
+              {contact.name}: {contact.phone}
+            </Badge>
+          ))}
         </CardContent>
       </Card>
     </Link>
@@ -83,6 +99,7 @@ export function ClientsListPage() {
   const [search, setSearch] = useState("")
   const [type, setType] = useState<ClientType | null>(null)
   const [page, setPage] = useState(0)
+  const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const clientsQuery = useQuery({
     queryKey: [
       ...CLIENTS_QUERY_KEY,
@@ -142,6 +159,12 @@ export function ClientsListPage() {
             </SelectContent>
           </Select>
         </PageToolbarContent>
+        <PageToolbarActions>
+          <Button type="button" onClick={() => setCreateDialogOpen(true)}>
+            <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+            Создать клиента
+          </Button>
+        </PageToolbarActions>
       </PageToolbar>
 
       {clientsQuery.isLoading ? (
@@ -180,8 +203,7 @@ export function ClientsListPage() {
           <CardHeader>
             <CardTitle>Клиенты не найдены</CardTitle>
             <CardDescription>
-              Измените запрос или создайте клиента в чате, бронировании или
-              новом заказе.
+              Измените запрос или создайте клиента кнопкой вверху справа.
             </CardDescription>
           </CardHeader>
         </Card>
@@ -199,6 +221,7 @@ export function ClientsListPage() {
                     <TableHead>Тип</TableHead>
                     <TableHead>Телефон</TableHead>
                     <TableHead>Контактное лицо</TableHead>
+                    <TableHead>Доп. контакты</TableHead>
                     <TableHead>Менеджер</TableHead>
                     <TableHead>Изменён</TableHead>
                   </TableRow>
@@ -229,6 +252,15 @@ export function ClientsListPage() {
                       <TableCell>{CLIENT_TYPE_LABELS[client.type]}</TableCell>
                       <TableCell>{client.phone ?? "Не указан"}</TableCell>
                       <TableCell>{client.contactPerson ?? "—"}</TableCell>
+                      <TableCell>
+                        {client.additionalContacts.length === 0
+                          ? "—"
+                          : client.additionalContacts
+                              .map(
+                                (contact) => `${contact.name}: ${contact.phone}`
+                              )
+                              .join("; ")}
+                      </TableCell>
                       <TableCell>
                         {client.responsibleManagerDisplayName ??
                           client.responsibleManagerId}
@@ -277,6 +309,10 @@ export function ClientsListPage() {
           </div>
         </>
       )}
+      <ClientCreateDialog
+        open={createDialogOpen}
+        onOpenChange={setCreateDialogOpen}
+      />
     </div>
   )
 }

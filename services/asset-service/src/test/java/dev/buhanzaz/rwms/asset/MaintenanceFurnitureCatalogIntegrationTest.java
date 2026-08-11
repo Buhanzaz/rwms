@@ -8,8 +8,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import dev.buhanzaz.rwms.asset.domain.AssetEventType;
 import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -75,7 +79,12 @@ class MaintenanceFurnitureCatalogIntegrationTest {
     JsonNode repeated = create(idempotencyKey, equipmentName, status().isCreated());
 
     assertThat(Set.copyOf(created.propertyNames()))
-        .containsExactlyInAnyOrder("externalReferenceId", "equipmentId", "equipmentName");
+        .containsExactlyInAnyOrder(
+            "externalReferenceId",
+            "equipmentId",
+            "equipmentName",
+            "equipmentVersion",
+            "maximumPerCabin");
     assertThat(created.get("externalReferenceId").asText()).isEqualTo(idempotencyKey.toString());
     assertThat(created.get("equipmentName").asText()).isEqualTo(equipmentName);
     assertThat(repeated).isEqualTo(created);
@@ -83,6 +92,115 @@ class MaintenanceFurnitureCatalogIntegrationTest {
     assertThat(eventCount(equipmentId)).isOne();
     assertThat(eventCount(equipmentId, AssetEventType.EQUIPMENT_CATALOG_CREATED)).isOne();
     assertThat(outboxCount(equipmentId)).isOne();
+  }
+
+  @Test
+  void legacyEnsurePreservesMaximumAndVersionedMutationCanClearIt() throws Exception {
+    UUID externalReferenceId = UUID.randomUUID();
+    String name = "Кровать с лимитом " + UUID.randomUUID();
+    JsonNode created =
+        create(
+            UUID.randomUUID(),
+            externalReferenceId,
+            name,
+            null,
+            4,
+            true,
+            status().isCreated());
+    assertThat(created.get("equipmentVersion").asLong()).isZero();
+    assertThat(created.get("maximumPerCabin").asInt()).isEqualTo(4);
+
+    JsonNode legacy =
+        create(
+            UUID.randomUUID(),
+            externalReferenceId,
+            "Старое повторное имя",
+            null,
+            null,
+            false,
+            status().isCreated());
+    assertThat(legacy.get("equipmentName").asText()).isEqualTo(name);
+    assertThat(legacy.get("equipmentVersion").asLong()).isZero();
+    assertThat(legacy.get("maximumPerCabin").asInt()).isEqualTo(4);
+
+    JsonNode cleared =
+        create(
+            UUID.randomUUID(),
+            externalReferenceId,
+            name,
+            0L,
+            null,
+            true,
+            status().isCreated());
+    assertThat(cleared.get("equipmentVersion").asLong()).isEqualTo(1);
+    assertThat(cleared.get("maximumPerCabin").isNull()).isTrue();
+
+    create(
+        UUID.randomUUID(),
+        externalReferenceId,
+        name,
+        0L,
+        2,
+        true,
+        status().isConflict());
+    assertThat(
+            jdbc.queryForObject(
+                "select maximum_per_cabin from equipment_catalog_item where id=?",
+                Integer.class,
+                UUID.fromString(created.get("equipmentId").asText())))
+        .isNull();
+  }
+
+  @Test
+  void concurrentDuplicateReferenceEnsureReturnsOneAppliedMaximum() throws Exception {
+    UUID externalReferenceId = UUID.randomUUID();
+    String name = "Гонка автосвязи " + UUID.randomUUID();
+    CountDownLatch ready = new CountDownLatch(2);
+    CountDownLatch start = new CountDownLatch(1);
+    var executor = Executors.newFixedThreadPool(2);
+    JsonNode first;
+    JsonNode second;
+    try {
+      var firstAttempt =
+          executor.submit(
+              () -> {
+                ready.countDown();
+                start.await();
+                return create(
+                    UUID.randomUUID(),
+                    externalReferenceId,
+                    name,
+                    null,
+                    3,
+                    true,
+                    status().isCreated());
+              });
+      var secondAttempt =
+          executor.submit(
+              () -> {
+                ready.countDown();
+                start.await();
+                return create(
+                    UUID.randomUUID(),
+                    externalReferenceId,
+                    name,
+                    null,
+                    3,
+                    true,
+                    status().isCreated());
+              });
+      assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+      start.countDown();
+      first = firstAttempt.get(30, TimeUnit.SECONDS);
+      second = secondAttempt.get(30, TimeUnit.SECONDS);
+    } finally {
+      executor.shutdownNow();
+    }
+
+    assertThat(first.get("equipmentId")).isEqualTo(second.get("equipmentId"));
+    assertThat(first.get("maximumPerCabin").asInt()).isEqualTo(3);
+    assertThat(second.get("maximumPerCabin").asInt()).isEqualTo(3);
+    assertThat(catalogCount(UUID.fromString(first.get("equipmentId").asText()))).isOne();
   }
 
   @Test
@@ -158,23 +276,62 @@ class MaintenanceFurnitureCatalogIntegrationTest {
       String equipmentName,
       org.springframework.test.web.servlet.ResultMatcher expectedStatus)
       throws Exception {
+    return create(
+        idempotencyKey,
+        idempotencyKey,
+        equipmentName,
+        null,
+        null,
+        false,
+        expectedStatus);
+  }
+
+  private JsonNode create(
+      UUID idempotencyKey,
+      UUID externalReferenceId,
+      String equipmentName,
+      Long expectedEquipmentVersion,
+      Integer maximumPerCabin,
+      boolean includeVersionedFields,
+      org.springframework.test.web.servlet.ResultMatcher expectedStatus)
+      throws Exception {
     MvcResult result = mvc.perform(
             post("/api/internal/asset/v1/maintenance/equipment-catalog")
                 .header("Idempotency-Key", idempotencyKey)
                 .with(serviceJwt(
                     "maintenance-service", "maintenance-service", "asset.maintenance"))
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(requestBody(idempotencyKey, equipmentName)))
+                .content(
+                    requestBody(
+                        externalReferenceId,
+                        equipmentName,
+                        expectedEquipmentVersion,
+                        maximumPerCabin,
+                        includeVersionedFields)))
         .andExpect(expectedStatus)
         .andReturn();
     return objectMapper.readTree(result.getResponse().getContentAsString());
   }
 
   private String requestBody(UUID externalReferenceId, String equipmentName) throws Exception {
-    return objectMapper.writeValueAsString(
-        Map.of(
-            "externalReferenceId", externalReferenceId,
-            "equipmentName", equipmentName));
+    return requestBody(externalReferenceId, equipmentName, null, null, false);
+  }
+
+  private String requestBody(
+      UUID externalReferenceId,
+      String equipmentName,
+      Long expectedEquipmentVersion,
+      Integer maximumPerCabin,
+      boolean includeVersionedFields)
+      throws Exception {
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("externalReferenceId", externalReferenceId);
+    body.put("equipmentName", equipmentName);
+    if (includeVersionedFields) {
+      body.put("expectedEquipmentVersion", expectedEquipmentVersion);
+      body.put("maximumPerCabin", maximumPerCabin);
+    }
+    return objectMapper.writeValueAsString(body);
   }
 
   private int catalogCount(UUID equipmentId) {

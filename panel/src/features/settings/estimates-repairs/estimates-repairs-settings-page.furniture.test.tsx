@@ -135,6 +135,8 @@ const furnitureSection: RepairEstimateCatalogSectionDto = {
 const furnitureEquipment = {
   equipmentId: "00000000-0000-4000-8000-000000000005",
   equipmentName: "Стул",
+  equipmentVersion: 3,
+  maximumPerCabin: 4,
 }
 
 const existingFurniture: RepairEstimateCatalogNodeDto = {
@@ -205,6 +207,8 @@ beforeEach(() => {
     furnitureEquipment: {
       equipmentId: "00000000-0000-4000-8000-000000000005",
       equipmentName: "Стол",
+      equipmentVersion: 0,
+      maximumPerCabin: null,
     },
   })
 })
@@ -215,7 +219,7 @@ afterEach(() => {
 })
 
 describe("automatic furniture equipment link", () => {
-  it("saves new furniture without loading or selecting asset equipment", async () => {
+  it("saves a per-cabin maximum without loading or selecting asset equipment", async () => {
     const user = userEvent.setup()
     const { invalidateQueries } = renderPage()
     const dialog = await openFurnitureEditor(user)
@@ -231,6 +235,12 @@ describe("automatic furniture equipment link", () => {
     ).toBeNull()
 
     await user.type(screen.getByRole("textbox", { name: "Название" }), "Стол")
+    await user.type(
+      screen.getByRole("spinbutton", {
+        name: "Максимальное количество в одной бытовке",
+      }),
+      "4"
+    )
     await user.click(screen.getByRole("button", { name: "Сохранить" }))
 
     await waitFor(() => {
@@ -242,7 +252,12 @@ describe("automatic furniture equipment link", () => {
         }),
         expect.objectContaining({
           name: "Стол",
-          furnitureEquipment: null,
+          furnitureEquipment: {
+            equipmentId: null,
+            equipmentName: "Стол",
+            equipmentVersion: null,
+            maximumPerCabin: 4,
+          },
         })
       )
     })
@@ -280,6 +295,13 @@ describe("automatic furniture equipment link", () => {
     })
     expect(dialog.textContent).toContain("Связано автоматически")
     expect(dialog.textContent).toContain("Стул")
+    expect(
+      (
+        screen.getByRole("spinbutton", {
+          name: "Максимальное количество в одной бытовке",
+        }) as HTMLInputElement
+      ).value
+    ).toBe("4")
     expect(screen.queryByText("Фотографии")).toBeNull()
     expect(
       screen.queryByRole("combobox", {
@@ -290,6 +312,11 @@ describe("automatic furniture equipment link", () => {
     const name = screen.getByRole("textbox", { name: "Название" })
     await user.clear(name)
     await user.type(name, "Стул складной")
+    const maximum = screen.getByRole("spinbutton", {
+      name: "Максимальное количество в одной бытовке",
+    })
+    await user.clear(maximum)
+    await user.type(maximum, "2")
     await user.click(screen.getByRole("button", { name: "Сохранить" }))
 
     await waitFor(() => {
@@ -298,7 +325,10 @@ describe("automatic furniture equipment link", () => {
         expect.objectContaining({
           id: FURNITURE_ID,
           name: "Стул складной",
-          furnitureEquipment,
+          furnitureEquipment: {
+            ...furnitureEquipment,
+            maximumPerCabin: 2,
+          },
         })
       )
     })

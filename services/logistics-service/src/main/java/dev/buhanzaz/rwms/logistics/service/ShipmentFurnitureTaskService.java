@@ -1,8 +1,8 @@
 package dev.buhanzaz.rwms.logistics.service;
 
-import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentFurnitureTaskResult;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentFurnitureReadinessState;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentFurnitureReadinessView;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentFurnitureTaskResult;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentFurnitureTaskStatusView;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentFurnitureTaskView;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
@@ -42,11 +42,13 @@ import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Converts saved order intent into worker tasks only when a shipment operator
- * explicitly asks to reconcile a cabin. The asset service computes the delta.
+ * Converts the authoritative furniture composition of every active cabin in a saved order into
+ * existing movement tasks for a shipment. It also persists and recovers ordered cabin-replacement
+ * checkpoints, while asset-service remains the owner of physical contents, reservations and plans.
  */
 @Service
 @RequiredArgsConstructor
@@ -62,6 +64,372 @@ public class ShipmentFurnitureTaskService {
   private final EquipmentMovementTaskService movementTasks;
   private final LogisticsWarehouseLifecycle warehouseLifecycle;
   private final ShipmentFurnitureTaskResponseMapper mapper;
+
+  /**
+   * Persists the existing movement-task/link checkpoint before an atomic cabin replacement. A
+   * replay with the same order-scoped key returns the same checkpoint and never replans lines.
+   */
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
+  public ShipmentFurnitureMovementTask checkpointReplacement(
+      ReplacementCheckpointCommand command,
+      LogisticsDependencyGateway.OrderFurnitureMovementPlan plan) {
+    return checkpointReplacements(List.of(new ReplacementPreparation(command, plan))).getFirst();
+  }
+
+  /**
+   * Atomically persists every pair checkpoint and existing movement task before one asset batch
+   * call. A crash can therefore expose either the whole recoverable batch or no batch at all.
+   */
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
+  public List<ShipmentFurnitureMovementTask> checkpointReplacements(
+      List<ReplacementPreparation> preparations) {
+    if (preparations == null || preparations.isEmpty()) {
+      throw new IllegalArgumentException("Replacement preparations are required");
+    }
+    ReplacementCheckpointCommand first = preparations.getFirst().command();
+    if (first == null) {
+      throw new IllegalArgumentException("Replacement command is required");
+    }
+    RentalOrder order =
+        orders
+            .findForUpdate(first.orderId())
+            .orElseThrow(() -> new LogisticsConflictException("Заказ замены не найден"));
+    List<ShipmentFurnitureMovementTask> replay =
+        taskLinks.findAllByOrder_IdAndReplacementBatchIdempotencyKeyOrderByReplacementPairIndexAsc(
+            first.orderId(), first.batchIdempotencyKey());
+    if (!replay.isEmpty()) {
+      if (replay.size() != preparations.size()) {
+        throw new LogisticsConflictException("Состав пакетной замены уже зафиксирован иначе");
+      }
+      for (int index = 0; index < preparations.size(); index++) {
+        ReplacementCheckpointCommand expected = preparations.get(index).command();
+        ShipmentFurnitureMovementTask existing = replay.get(index);
+        if (existing.getReplacementPairIndex() != index
+            || !existing.getReplacementIdempotencyKey().equals(expected.idempotencyKey())
+            || !existing.matchesReplacementRequest(expected.requestSha256())
+            || !existing.getOldRentalItemId().equals(expected.oldRentalItemId())
+            || !existing.getRentalItemId().equals(expected.replacementRentalItemId())) {
+          throw new LogisticsConflictException(
+              "Idempotency-Key уже использован для другой замены бытовки");
+        }
+      }
+      return replay;
+    }
+    Set<UUID> oldIds = new HashSet<>();
+    Set<UUID> newIds = new HashSet<>();
+    List<ShipmentFurnitureMovementTask> created = new ArrayList<>();
+    for (int index = 0; index < preparations.size(); index++) {
+      ReplacementPreparation preparation = preparations.get(index);
+      ReplacementCheckpointCommand command = preparation.command();
+      LogisticsDependencyGateway.OrderFurnitureMovementPlan plan = preparation.plan();
+      if (command == null
+          || plan == null
+          || command.pairIndex() != index
+          || !first.orderId().equals(command.orderId())
+          || !first.batchIdempotencyKey().equals(command.batchIdempotencyKey())
+          || !java.util.Objects.equals(first.presentationId(), command.presentationId())
+          || !first.actorSubjectId().equals(command.actorSubjectId())
+          || !first.actorRole().equals(command.actorRole())
+          || !java.util.Objects.equals(first.reason(), command.reason())
+          || !oldIds.add(command.oldRentalItemId())
+          || !newIds.add(command.replacementRentalItemId())
+          || !order.getWarehouseId().equals(command.warehouseId())
+          || order.getVersion() != command.expectedOrderVersion()
+          || !command.orderId().equals(plan.orderId())
+          || !command.replacementRentalItemId().equals(plan.unitId())) {
+        throw new LogisticsConflictException("План перемещения мебели не соответствует замене");
+      }
+      LogisticsDocument document = replacementDocument(order.getId(), command.oldRentalItemId());
+      UUID taskId = null;
+      if (!plan.lines().isEmpty()) {
+        UUID taskKey =
+            UUID.nameUUIDFromBytes(
+                ("order-unit-replacement-movement:"
+                        + command.orderId()
+                        + ":"
+                        + command.idempotencyKey())
+                    .getBytes(StandardCharsets.UTF_8));
+        AdmissionTicket admission =
+            warehouseLifecycle.ownedContinuation(
+                document == null ? order.getId() : document.getId(),
+                taskKey,
+                List.of(
+                    new AdmissionRequirement(
+                        command.warehouseId(), WarehouseOperationDirection.OUTGOING)));
+        EquipmentMovementTaskService.CreateResult movement =
+            movementTasks.create(
+                command.actorSubjectId(),
+                taskKey,
+                new CreateEquipmentMovementTaskRequest(
+                    command.warehouseId(),
+                    plan.unitNumber(),
+                    DEFAULT_PLANNED_DURATION_MINUTES,
+                    OffsetDateTime.now(ZoneOffset.UTC).plusDays(30),
+                    plan.lines().stream().map(ShipmentFurnitureTaskService::toTaskLine).toList()),
+                admission);
+        taskId = movement.response().id();
+        movementTasks.freezeReplacementSources(taskId, plan.lines());
+        movementTasks.deferReplacementPreparation(taskId);
+      }
+      created.add(
+          ShipmentFurnitureMovementTask.createReplacement(
+              order,
+              document,
+              command.oldRentalItemId(),
+              command.replacementRentalItemId(),
+              plan.unitNumber(),
+              taskId,
+              plan.lines().size(),
+              command.reason(),
+              command.actorSubjectId(),
+              command.actorRole(),
+              command.idempotencyKey(),
+              command.batchIdempotencyKey(),
+              command.pairIndex(),
+              command.requestSha256(),
+              command.presentationId(),
+              OffsetDateTime.now(ZoneOffset.UTC)));
+    }
+    if (!java.util.Collections.disjoint(oldIds, newIds)) {
+      throw new LogisticsConflictException("План перемещения мебели не соответствует замене");
+    }
+    return List.copyOf(taskLinks.saveAllAndFlush(created));
+  }
+
+  /** Loads a scalar durable replacement checkpoint for scheduled recovery. */
+  public ReplacementCheckpoint replacementCheckpoint(UUID checkpointId) {
+    ShipmentFurnitureMovementTask link =
+        taskLinks.findById(checkpointId).orElseThrow(LogisticsNotFoundException::new);
+    if (!link.isReplacement()) throw new LogisticsNotFoundException();
+    return checkpoint(link);
+  }
+
+  /** Loads the complete durable batch in its original pair order. */
+  public List<ReplacementCheckpoint> replacementBatch(UUID orderId, UUID batchIdempotencyKey) {
+    List<ReplacementCheckpoint> checkpoints =
+        taskLinks
+            .findAllByOrder_IdAndReplacementBatchIdempotencyKeyOrderByReplacementPairIndexAsc(
+                orderId, batchIdempotencyKey)
+            .stream()
+            .map(ShipmentFurnitureTaskService::checkpoint)
+            .toList();
+    if (checkpoints.isEmpty()) throw new LogisticsNotFoundException();
+    return checkpoints;
+  }
+
+  private static ReplacementCheckpoint checkpoint(ShipmentFurnitureMovementTask link) {
+    return new ReplacementCheckpoint(
+        link.getId(),
+        link.getOrder().getId(),
+        link.getOrder().getWarehouseId(),
+        link.getDocument() == null ? null : link.getDocument().getId(),
+        link.getOldRentalItemId(),
+        link.getRentalItemId(),
+        link.getReplacementReason(),
+        link.getReplacementActorSubjectId(),
+        link.getReplacementActorRole(),
+        link.getReplacementIdempotencyKey(),
+        link.getReplacementBatchIdempotencyKey(),
+        link.getReplacementPairIndex(),
+        link.getReplacementRequestSha256(),
+        link.getReplacementPresentationId(),
+        link.getEquipmentMovementTaskId(),
+        link.getReplacementSourceReservationId(),
+        link.getReplacementCompletedAt(),
+        link.getReplacementRejectedAt());
+  }
+
+  public List<UUID> pendingReplacementCheckpointIds() {
+    return taskLinks.findPendingReplacementIds();
+  }
+
+  public boolean isPendingReplacementMovement(UUID taskId) {
+    return taskLinks
+        .findByEquipmentMovementTaskId(taskId)
+        .filter(ShipmentFurnitureMovementTask::isReplacementPending)
+        .isPresent();
+  }
+
+  /**
+   * Returns the ordinary furniture task that could still mutate an old cabin before replacement.
+   */
+  public ExistingShipmentFurnitureMovement existingOrdinaryMovement(
+      UUID documentId, UUID rentalItemId) {
+    if (documentId == null || rentalItemId == null) return null;
+    ShipmentFurnitureMovementTask link =
+        taskLinks.findByDocument_IdAndRentalItemId(documentId, rentalItemId).orElse(null);
+    if (link == null || link.isReplacement() || link.getEquipmentMovementTaskId() == null) {
+      return null;
+    }
+    EquipmentMovementTask task = movementTasks.required(link.getEquipmentMovementTaskId());
+    return new ExistingShipmentFurnitureMovement(
+        link.getId(), task.getId(), task.getVersion(), task.getState());
+  }
+
+  /** Removes only a terminal, released ordinary task link before a fresh replacement plan. */
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
+  public void removeReleasedOrdinaryMovement(
+      UUID documentId, UUID rentalItemId, UUID equipmentMovementTaskId) {
+    ShipmentFurnitureMovementTask link =
+        taskLinks.findByDocumentAndRentalItemForUpdate(documentId, rentalItemId).orElse(null);
+    if (link == null) return;
+    if (link.isReplacement()
+        || !equipmentMovementTaskId.equals(link.getEquipmentMovementTaskId())) {
+      throw new LogisticsConflictException("Задание мебели бытовки было изменено параллельно");
+    }
+    EquipmentMovementTask task = movementTasks.required(equipmentMovementTaskId);
+    if (!Set.of(
+            EquipmentMovementTaskState.CANCELLED,
+            EquipmentMovementTaskState.EXPIRED,
+            EquipmentMovementTaskState.CONFLICT)
+        .contains(task.getState())) {
+      throw new LogisticsConflictException("Резервы старого задания мебели ещё не освобождены");
+    }
+    taskLinks.delete(link);
+    taskLinks.flush();
+  }
+
+  /**
+   * Resolves the authoritative same-order furniture composition only when an ordinary shipment
+   * movement line takes surplus from another active cabin of that order. Stock and unrelated cabin
+   * sources intentionally retain the legacy context-free reservation call.
+   */
+  public OrderMovementReservationContext movementReservationContext(
+      UUID equipmentMovementTaskId, UUID sourceRentalItemId) {
+    if (equipmentMovementTaskId == null || sourceRentalItemId == null) return null;
+    ShipmentFurnitureMovementTask link =
+        taskLinks.findByEquipmentMovementTaskId(equipmentMovementTaskId).orElse(null);
+    if (link == null) return null;
+    boolean replacement = link.isReplacement();
+    if (replacement
+        && (link.getReplacementCompletedAt() == null
+            || link.getReplacementRejectedAt() != null
+            || link.getReplacementSourceReservationId() == null
+            || !sourceRentalItemId.equals(link.getOldRentalItemId()))) {
+      throw new LogisticsConflictException(
+          "Replacement movement reservation is not ready for replay");
+    }
+    if (!replacement && link.getDocument() == null) return null;
+    UUID orderId = replacement ? link.getOrder().getId() : link.getDocument().getRentalOrderId();
+    UUID targetRentalItemId = link.getRentalItemId();
+    if (orderId == null || sourceRentalItemId.equals(targetRentalItemId)) return null;
+    RentalOrder order =
+        orders
+            .findWithClientById(orderId)
+            .orElseThrow(
+                () -> new LogisticsConflictException("Заказ перемещения мебели не найден"));
+    List<LogisticsDependencyGateway.OrderUnitReservation> active =
+        dependencies.readOrderUnits(orderId);
+    if (active == null
+        || active.stream()
+            .anyMatch(
+                unit ->
+                    unit == null
+                        || !orderId.equals(unit.orderId())
+                        || !order.getWarehouseId().equals(unit.warehouseId()))) {
+      throw new LogisticsConflictException("Склад вернул некорректный состав заказа");
+    }
+    Set<UUID> activeIds =
+        active.stream()
+            .map(LogisticsDependencyGateway.OrderUnitReservation::unitId)
+            .collect(java.util.stream.Collectors.toUnmodifiableSet());
+    if (!activeIds.contains(targetRentalItemId)
+        || (!replacement && !activeIds.contains(sourceRentalItemId))) {
+      return null;
+    }
+    Map<UUID, List<LogisticsDependencyGateway.OrderEquipmentRequirement>> byUnit =
+        requirementsByUnit(
+            requirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(
+                orderId));
+    List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> composition =
+        activeIds.stream()
+            .sorted()
+            .map(
+                unitId ->
+                    new LogisticsDependencyGateway.OrderUnitEquipmentRequirements(
+                        unitId, byUnit.getOrDefault(unitId, List.of())))
+            .toList();
+    return new OrderMovementReservationContext(
+        orderId,
+        targetRentalItemId,
+        composition,
+        replacement ? link.getReplacementSourceReservationId() : null);
+  }
+
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
+  public void rejectReplacement(UUID checkpointId, String code) {
+    ShipmentFurnitureMovementTask link =
+        taskLinks.findForUpdate(checkpointId).orElseThrow(LogisticsNotFoundException::new);
+    if (!link.isReplacementPending()) return;
+    if (link.getEquipmentMovementTaskId() != null) {
+      movementTasks.rejectReplacementPreparation(link.getEquipmentMovementTaskId(), code);
+    }
+    link.rejectReplacement(OffsetDateTime.now(ZoneOffset.UTC));
+    taskLinks.saveAndFlush(link);
+  }
+
+  /** Rejects every prepared pair after one permanent atomic asset-batch rejection. */
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
+  public void rejectReplacementBatch(UUID orderId, UUID batchIdempotencyKey, String code) {
+    List<ShipmentFurnitureMovementTask> links =
+        taskLinks.findReplacementBatchForUpdate(orderId, batchIdempotencyKey);
+    if (links.isEmpty()) throw new LogisticsNotFoundException();
+    OffsetDateTime rejectedAt = OffsetDateTime.now(ZoneOffset.UTC);
+    for (ShipmentFurnitureMovementTask link : links) {
+      if (!link.isReplacementPending()) continue;
+      if (link.getEquipmentMovementTaskId() != null) {
+        movementTasks.rejectReplacementPreparation(link.getEquipmentMovementTaskId(), code);
+      }
+      link.rejectReplacement(rejectedAt);
+    }
+    taskLinks.saveAllAndFlush(links);
+  }
+
+  private LogisticsDocument replacementDocument(UUID orderId, UUID oldRentalItemId) {
+    for (LogisticsDocument document : documents.findAllByRentalOrderIdForUpdate(orderId)) {
+      if (document.getDocumentType() != LogisticsDocumentType.SHIPMENT
+          || document.getState() == LogisticsDocumentState.CANCELLED
+          || document.getState() == LogisticsDocumentState.SHIPPED
+          || document.getState() == LogisticsDocumentState.COMPLETED) {
+        continue;
+      }
+      boolean contains =
+          documentLines.findAllByDocument_IdOrderByLineNumber(document.getId()).stream()
+              .anyMatch(line -> oldRentalItemId.equals(line.getAssetId()));
+      if (contains) return document;
+    }
+    return null;
+  }
+
+  /**
+   * Reuses completed order-level replacement movements when their replacement cabins are first
+   * assigned to a shipment. Checkpoints without a physical movement task intentionally remain
+   * order-only so an ordinary stock-to-cabin task can still be planned when needed.
+   */
+  @Transactional
+  public void attachReplacementMovementsToShipment(
+      LogisticsDocument shipment, List<UUID> rentalItemIds) {
+    if (shipment == null
+        || shipment.getId() == null
+        || shipment.getDocumentType() != LogisticsDocumentType.SHIPMENT
+        || shipment.getRentalOrderId() == null
+        || rentalItemIds == null
+        || rentalItemIds.isEmpty()) {
+      throw new IllegalArgumentException("Shipment replacement attachment is invalid");
+    }
+    Set<UUID> selected = Set.copyOf(rentalItemIds);
+    List<ShipmentFurnitureMovementTask> attachable =
+        taskLinks.findAttachableReplacementMovementsForUpdate(
+            shipment.getRentalOrderId(), selected);
+    Set<UUID> attachedUnits = new HashSet<>();
+    for (ShipmentFurnitureMovementTask link : attachable) {
+      if (!attachedUnits.add(link.getRentalItemId())) {
+        throw new IllegalStateException("Duplicate replacement movement for shipment cabin");
+      }
+      link.attachToShipment(shipment);
+    }
+    if (!attachable.isEmpty()) taskLinks.saveAllAndFlush(attachable);
+  }
 
   /**
    * Returns the current physical-readiness gate for a shipment. The plan is recalculated from the
@@ -80,12 +448,14 @@ public class ShipmentFurnitureTaskService {
 
     RentalOrder order = requiredSavedOrder(shipment);
     List<RentalOrderEquipmentRequirement> desiredRows =
-        requirements
-            .findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(order.getId());
+        requirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(
+            order.getId());
     Map<UUID, Long> orderRequirements = aggregateRequirements(desiredRows);
     List<LogisticsDocumentLine> lines = linesRequired(shipment.getId());
     List<ShipmentFurnitureMovementTask> links =
-        taskLinks.findAllByDocument_IdOrderByUnitNumberAsc(shipment.getId());
+        taskLinks.findAllByDocument_IdOrderByUnitNumberAsc(shipment.getId()).stream()
+            .filter(link -> link.getEquipmentMovementTaskId() != null)
+            .toList();
     if (orderRequirements.isEmpty() && links.isEmpty()) {
       return new ShipmentFurnitureReadinessView(
           shipment.getId(),
@@ -95,16 +465,17 @@ public class ShipmentFurnitureTaskService {
     }
     Map<UUID, List<LogisticsDependencyGateway.OrderEquipmentRequirement>> byUnit =
         requirementsByUnit(desiredRows);
+    List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> composition =
+        activeOrderComposition(order, lines, byUnit);
     Map<UUID, ShipmentFurnitureMovementTask> existingByUnit = existingByUnit(links);
     Map<UUID, EquipmentMovementTask> tasksByUnit = new LinkedHashMap<>();
-    List<ShipmentFurnitureTaskStatusView> taskViews = new ArrayList<>();
     for (ShipmentFurnitureMovementTask link : links) {
       EquipmentMovementTask task = movementTasks.required(link.getEquipmentMovementTaskId());
       tasksByUnit.put(link.getRentalItemId(), task);
-      taskViews.add(toStatusView(link, task));
     }
 
     Set<UUID> lineUnitIds = new HashSet<>();
+    List<ShipmentFurnitureTaskStatusView> taskViews = new ArrayList<>();
     boolean requiresTaskCreation = false;
     boolean awaitingTaskCompletion = false;
     boolean blocked = false;
@@ -112,10 +483,22 @@ public class ShipmentFurnitureTaskService {
       UUID unitId = line.getAssetId();
       lineUnitIds.add(unitId);
       LogisticsDependencyGateway.OrderFurnitureMovementPlan plan =
-          planFor(shipment, order, unitId, byUnit, orderRequirements);
+          planFor(shipment, order, unitId, byUnit, composition);
       ShipmentFurnitureMovementTask link = existingByUnit.get(unitId);
       if (link == null) {
         requiresTaskCreation |= !plan.lines().isEmpty();
+        taskViews.add(
+            new ShipmentFurnitureTaskStatusView(
+                unitId,
+                plan.unitNumber(),
+                null,
+                null,
+                null,
+                null,
+                0,
+                false,
+                false,
+                plan.lines().isEmpty()));
         continue;
       }
 
@@ -127,6 +510,7 @@ public class ShipmentFurnitureTaskService {
       } else {
         awaitingTaskCompletion = true;
       }
+      taskViews.add(toStatusView(link, tasksByUnit.get(unitId), plan.lines().isEmpty()));
     }
     blocked |= existingByUnit.keySet().stream().anyMatch(unitId -> !lineUnitIds.contains(unitId));
 
@@ -134,10 +518,10 @@ public class ShipmentFurnitureTaskService {
         blocked
             ? ShipmentFurnitureReadinessState.BLOCKED
             : requiresTaskCreation
-              ? ShipmentFurnitureReadinessState.REQUIRES_TASK_CREATION
-              : awaitingTaskCompletion
-                ? ShipmentFurnitureReadinessState.AWAITING_TASK_COMPLETION
-                : ShipmentFurnitureReadinessState.READY;
+                ? ShipmentFurnitureReadinessState.REQUIRES_TASK_CREATION
+                : awaitingTaskCompletion
+                    ? ShipmentFurnitureReadinessState.AWAITING_TASK_COMPLETION
+                    : ShipmentFurnitureReadinessState.READY;
     return new ShipmentFurnitureReadinessView(
         shipment.getId(), shipment.getVersion(), state, List.copyOf(taskViews));
   }
@@ -163,17 +547,21 @@ public class ShipmentFurnitureTaskService {
 
   @Transactional
   public ShipmentFurnitureTaskResult createForShipment(
-      UUID actorSubjectId,
-      UUID idempotencyKey,
-      UUID documentId,
-      long expectedVersion) {
+      UUID actorSubjectId, UUID idempotencyKey, UUID documentId, long expectedVersion) {
     if (actorSubjectId == null || idempotencyKey == null || expectedVersion < 0) {
       throw new IllegalArgumentException("Shipment furniture task command is invalid");
     }
+    LogisticsDocument reference = requiredShipment(documentId);
+    if (reference.getRentalOrderId() == null) {
+      throw new LogisticsConflictException(
+          "Мебель можно добавить только в отгрузку из сохранённого заказа");
+    }
+    RentalOrder order =
+        orders
+            .findForUpdate(reference.getRentalOrderId())
+            .orElseThrow(() -> new LogisticsConflictException("Заказ отгрузки не найден"));
     LogisticsDocument shipment =
-        documents
-            .findForUpdate(documentId)
-            .orElseThrow(LogisticsNotFoundException::new);
+        documents.findForUpdate(documentId).orElseThrow(LogisticsNotFoundException::new);
     if (shipment.getDocumentType() != LogisticsDocumentType.SHIPMENT) {
       throw new LogisticsNotFoundException();
     }
@@ -181,23 +569,42 @@ public class ShipmentFurnitureTaskService {
       throw new LogisticsConflictException("Отгрузка была изменена параллельно");
     }
     if (shipment.getState() != LogisticsDocumentState.DRAFT
-        || shipment.getRentalOrderId() == null) {
+        || !order.getId().equals(shipment.getRentalOrderId())) {
       throw new LogisticsConflictException(
           "Мебель можно добавить только в черновик отгрузки из сохранённого заказа");
     }
-    RentalOrder order = requiredSavedOrder(shipment);
+    if (order.getStatus() != RentalOrderStatus.SAVED
+        || !shipment.getWarehouseId().equals(order.getWarehouseId())) {
+      throw new LogisticsConflictException("Сохранённый заказ отгрузки больше не актуален");
+    }
 
     List<RentalOrderEquipmentRequirement> desiredRows =
-        requirements
-            .findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(order.getId());
+        requirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(
+            order.getId());
     Map<UUID, Long> orderRequirements = aggregateRequirements(desiredRows);
     Map<UUID, List<LogisticsDependencyGateway.OrderEquipmentRequirement>> byUnit =
         requirementsByUnit(desiredRows);
+    List<LogisticsDocumentLine> shipmentLines = linesRequired(shipment.getId());
+    Set<UUID> shipmentUnitIds =
+        shipmentLines.stream()
+            .map(LogisticsDocumentLine::getAssetId)
+            .collect(java.util.stream.Collectors.toUnmodifiableSet());
+    if (taskLinks
+        .existsByOrder_IdAndOldRentalItemIdInAndReplacementCompletedAtIsNullAndReplacementRejectedAtIsNull(
+            order.getId(), shipmentUnitIds)) {
+      throw new LogisticsConflictException(
+          "Замена бытовки ещё не завершена; задание мебели для старой бытовки недоступно");
+    }
+    List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> composition =
+        activeOrderComposition(order, shipmentLines, byUnit);
     Map<UUID, ShipmentFurnitureMovementTask> existingByUnit =
-        existingByUnit(taskLinks.findAllByDocument_IdOrderByUnitNumberAsc(shipment.getId()));
+        existingByUnit(
+            taskLinks.findAllByDocument_IdOrderByUnitNumberAsc(shipment.getId()).stream()
+                .filter(link -> link.getEquipmentMovementTaskId() != null)
+                .toList());
 
     List<ShipmentFurnitureTaskView> result = new ArrayList<>();
-    for (LogisticsDocumentLine line : linesRequired(shipment.getId())) {
+    for (LogisticsDocumentLine line : shipmentLines) {
       UUID unitId = line.getAssetId();
       ShipmentFurnitureMovementTask existing = existingByUnit.get(unitId);
       if (existing != null) {
@@ -205,7 +612,7 @@ public class ShipmentFurnitureTaskService {
         continue;
       }
       LogisticsDependencyGateway.OrderFurnitureMovementPlan plan =
-          planFor(shipment, order, unitId, byUnit, orderRequirements);
+          planFor(shipment, order, unitId, byUnit, composition);
       if (plan.lines().isEmpty()) {
         result.add(new ShipmentFurnitureTaskView(unitId, plan.unitNumber(), null, 0));
         continue;
@@ -240,11 +647,7 @@ public class ShipmentFurnitureTaskService {
       ShipmentFurnitureMovementTask link =
           taskLinks.saveAndFlush(
               ShipmentFurnitureMovementTask.create(
-                  shipment,
-                  unitId,
-                  plan.unitNumber(),
-                  task.response().id(),
-                  plan.lines().size()));
+                  shipment, unitId, plan.unitNumber(), task.response().id(), plan.lines().size()));
       result.add(mapper.toView(link));
     }
     return new ShipmentFurnitureTaskResult(
@@ -288,20 +691,21 @@ public class ShipmentFurnitureTaskService {
       RentalOrder order,
       UUID unitId,
       Map<UUID, List<LogisticsDependencyGateway.OrderEquipmentRequirement>> byUnit,
-      Map<UUID, Long> orderRequirements) {
+      List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> composition) {
     LogisticsDependencyGateway.OrderFurnitureMovementPlan plan =
         dependencies.planOrderFurnitureMovements(
             order.getId(),
             shipment.getWarehouseId(),
             unitId,
+            null,
             byUnit.getOrDefault(unitId, List.of()),
-            dependencyRequirements(orderRequirements));
+            composition);
     validatePlan(plan, order.getId(), unitId, shipment.getWarehouseId());
     return plan;
   }
 
   private static ShipmentFurnitureTaskStatusView toStatusView(
-      ShipmentFurnitureMovementTask link, EquipmentMovementTask task) {
+      ShipmentFurnitureMovementTask link, EquipmentMovementTask task, boolean contentReady) {
     return new ShipmentFurnitureTaskStatusView(
         link.getRentalItemId(),
         link.getUnitNumber(),
@@ -309,19 +713,22 @@ public class ShipmentFurnitureTaskService {
         task.getExternalTaskId(),
         task.getTaskBoardTaskId(),
         task.getState(),
-        link.getLineCount());
+        link.getLineCount(),
+        true,
+        task.getState() == EquipmentMovementTaskState.COMPLETED,
+        contentReady);
   }
 
   private List<LogisticsDocumentLine> linesRequired(UUID shipmentId) {
-    List<LogisticsDocumentLine> lines = documentLines.findAllByDocument_IdOrderByLineNumber(shipmentId);
+    List<LogisticsDocumentLine> lines =
+        documentLines.findAllByDocument_IdOrderByLineNumber(shipmentId);
     if (lines.isEmpty()) {
       throw new LogisticsConflictException("В отгрузке нет бытовок из заказа");
     }
     return lines;
   }
 
-  private static Map<UUID, Long> aggregateRequirements(
-      List<RentalOrderEquipmentRequirement> rows) {
+  private static Map<UUID, Long> aggregateRequirements(List<RentalOrderEquipmentRequirement> rows) {
     Map<UUID, Long> values = new LinkedHashMap<>();
     for (RentalOrderEquipmentRequirement row : rows) {
       if (row.getQuantity() > 0) {
@@ -347,7 +754,9 @@ public class ShipmentFurnitureTaskService {
     values.replaceAll(
         (ignored, unitRows) ->
             unitRows.stream()
-                .sorted(Comparator.comparing(LogisticsDependencyGateway.OrderEquipmentRequirement::equipmentId))
+                .sorted(
+                    Comparator.comparing(
+                        LogisticsDependencyGateway.OrderEquipmentRequirement::equipmentId))
                 .toList());
     return values;
   }
@@ -360,6 +769,42 @@ public class ShipmentFurnitureTaskService {
             entry ->
                 new LogisticsDependencyGateway.OrderEquipmentRequirement(
                     entry.getKey(), entry.getValue()))
+        .toList();
+  }
+
+  private List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> activeOrderComposition(
+      RentalOrder order,
+      List<LogisticsDocumentLine> shipmentLines,
+      Map<UUID, List<LogisticsDependencyGateway.OrderEquipmentRequirement>> byUnit) {
+    List<LogisticsDependencyGateway.OrderUnitReservation> active =
+        dependencies.readOrderUnits(order.getId());
+    if (active == null || active.isEmpty()) {
+      throw new LogisticsConflictException("Склад не подтвердил состав заказа для мебели");
+    }
+    Set<UUID> activeIds = new HashSet<>();
+    for (LogisticsDependencyGateway.OrderUnitReservation reservation : active) {
+      if (reservation == null
+          || reservation.unit() == null
+          || reservation.unitId() == null
+          || !reservation.unitId().equals(reservation.unit().id())
+          || !order.getId().equals(reservation.orderId())
+          || !order.getWarehouseId().equals(reservation.warehouseId())
+          || !"ACTIVE".equals(reservation.state())
+          || !activeIds.add(reservation.unitId())) {
+        throw new LogisticsConflictException("Склад вернул некорректный состав заказа для мебели");
+      }
+    }
+    if (shipmentLines.stream()
+        .map(LogisticsDocumentLine::getAssetId)
+        .anyMatch(unitId -> !activeIds.contains(unitId))) {
+      throw new LogisticsConflictException("Состав отгрузки больше не входит в активный заказ");
+    }
+    return activeIds.stream()
+        .sorted()
+        .map(
+            unitId ->
+                new LogisticsDependencyGateway.OrderUnitEquipmentRequirements(
+                    unitId, byUnit.getOrDefault(unitId, List.of())))
         .toList();
   }
 
@@ -388,7 +833,8 @@ public class ShipmentFurnitureTaskService {
           || !warehouseId.equals(line.targetWarehouseId())
           || line.targetLocationKind() == null
           || line.quantity() < 1) {
-        throw new LogisticsConflictException("Складской сервис вернул некорректную строку плана мебели");
+        throw new LogisticsConflictException(
+            "Складской сервис вернул некорректную строку плана мебели");
       }
     }
   }
@@ -405,11 +851,81 @@ public class ShipmentFurnitureTaskService {
         line.quantity());
   }
 
+  /** Asset order context required to reserve a same-order cabin-surplus movement line. */
+  public record OrderMovementReservationContext(
+      UUID orderId,
+      UUID targetRentalItemId,
+      List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> units,
+      UUID replacementSourceReservationId) {
+    public OrderMovementReservationContext(
+        UUID orderId,
+        UUID targetRentalItemId,
+        List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> units) {
+      this(orderId, targetRentalItemId, units, null);
+    }
+  }
+
   private static EquipmentMovementLocationKind location(String value) {
     try {
       return EquipmentMovementLocationKind.valueOf(value);
     } catch (IllegalArgumentException exception) {
-      throw new LogisticsConflictException("Складской сервис вернул неизвестный тип размещения мебели");
+      throw new LogisticsConflictException(
+          "Складской сервис вернул неизвестный тип размещения мебели");
     }
   }
+
+  /** Frozen local intent needed to recover one asset-side cabin replacement idempotently. */
+  public record ReplacementCheckpointCommand(
+      UUID orderId,
+      long expectedOrderVersion,
+      UUID warehouseId,
+      UUID oldRentalItemId,
+      UUID replacementRentalItemId,
+      String reason,
+      UUID actorSubjectId,
+      String actorRole,
+      UUID idempotencyKey,
+      UUID batchIdempotencyKey,
+      int pairIndex,
+      String requestSha256,
+      UUID presentationId) {}
+
+  /** One ordered pair and its already validated direct asset movement plan. */
+  public record ReplacementPreparation(
+      ReplacementCheckpointCommand command,
+      LogisticsDependencyGateway.OrderFurnitureMovementPlan plan) {}
+
+  /** Scalar replacement intent safe to use outside the checkpoint read transaction. */
+  public record ReplacementCheckpoint(
+      UUID id,
+      UUID orderId,
+      UUID warehouseId,
+      UUID documentId,
+      UUID oldRentalItemId,
+      UUID replacementRentalItemId,
+      String reason,
+      UUID actorSubjectId,
+      String actorRole,
+      UUID idempotencyKey,
+      UUID batchIdempotencyKey,
+      int pairIndex,
+      String requestSha256,
+      UUID presentationId,
+      UUID equipmentMovementTaskId,
+      UUID replacementSourceReservationId,
+      OffsetDateTime completedAt,
+      OffsetDateTime rejectedAt) {
+    public boolean pending() {
+      return completedAt == null && rejectedAt == null;
+    }
+  }
+
+  /**
+   * Immutable task state used by cabin-replacement preflight outside the repository transaction.
+   */
+  public record ExistingShipmentFurnitureMovement(
+      UUID linkId,
+      UUID equipmentMovementTaskId,
+      long taskVersion,
+      EquipmentMovementTaskState state) {}
 }

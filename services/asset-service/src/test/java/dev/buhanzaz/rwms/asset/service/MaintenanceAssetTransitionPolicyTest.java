@@ -163,7 +163,6 @@ class MaintenanceAssetTransitionPolicyTest {
     UUID ownerId = UUID.randomUUID();
     List<RentalItemStatus> forbidden = List.of(
         RentalItemStatus.RENTED,
-        RentalItemStatus.BOOKED,
         RentalItemStatus.RESERVED,
         RentalItemStatus.IN_TRANSFER,
         RentalItemStatus.SALE,
@@ -192,5 +191,27 @@ class MaintenanceAssetTransitionPolicyTest {
         MAINTENANCE_REPAIR, ownerId, UUID.randomUUID()))
         .isInstanceOf(AssetConflictException.class)
         .hasMessageContaining("only from WAITING_ESTIMATE_CONFIRMATION");
+  }
+
+  @Test
+  void allowsBookedWithoutAnActiveOrderReservationToRetryQueueOrWriteOff() {
+    UUID ownerId = UUID.randomUUID();
+
+    assertThat(
+            MaintenanceAssetTransitionPolicy.target(
+                RentalItemStatus.BOOKED,
+                QUEUE_FOR_REPAIR,
+                MAINTENANCE_ESTIMATE,
+                ownerId,
+                null))
+        .isEqualTo(RentalItemStatus.REPAIR);
+    assertThat(
+            MaintenanceAssetTransitionPolicy.target(
+                RentalItemStatus.BOOKED,
+                WRITE_OFF,
+                MAINTENANCE_REPAIR,
+                ownerId,
+                null))
+        .isEqualTo(RentalItemStatus.WRITTEN_OFF);
   }
 }

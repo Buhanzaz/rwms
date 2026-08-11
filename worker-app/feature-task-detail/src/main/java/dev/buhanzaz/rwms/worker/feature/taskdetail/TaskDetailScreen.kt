@@ -32,6 +32,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.buhanzaz.rwms.worker.core.database.TaskEvidenceEntity
+import dev.buhanzaz.rwms.worker.core.network.DriverTripDetailsDto
 import dev.buhanzaz.rwms.worker.core.network.TaskEvidenceDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerMediaReferenceDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerWorkDto
@@ -108,6 +109,7 @@ fun TaskDetailScreen(
         sourceMedia = detail?.sourceMedia.orEmpty(),
     )
     val generalSourceMedia = sourceMediaPresentation.general
+    val hasLogisticsSource = isLogisticsDriverTaskSource(detail?.source?.type)
     LaunchedEffect(timerSnapshot?.nextTransitionAt, timerSnapshot?.serverTime) {
         val snapshot = timerSnapshot ?: return@LaunchedEffect
         val nextTransitionAt = snapshot.nextTransitionAt ?: return@LaunchedEffect
@@ -199,6 +201,48 @@ fun TaskDetailScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+            }
+            if (hasLogisticsSource) {
+                if (state.tripRefreshInProgress) {
+                    item {
+                        Text(
+                            "Обновляем данные ходки…",
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                state.tripRefreshError?.let { tripError ->
+                    item {
+                        Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
+                            Column(
+                                Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text(tripError, color = MaterialTheme.colorScheme.error)
+                                OutlinedButton(onClick = viewModel::refresh) {
+                                    Text("Повторить обновление")
+                                }
+                            }
+                        }
+                    }
+                }
+                state.tripDetails?.let { trip ->
+                    item { DriverTripDetailsBlock(trip) }
+                }
+                if (
+                    state.tripRefreshComplete &&
+                    state.tripDetails == null &&
+                    state.tripRefreshError == null
+                ) {
+                    item {
+                        Text(
+                            "Подробности ходки для этого задания не сформированы.",
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
             item {
@@ -358,6 +402,88 @@ fun TaskDetailScreen(
                             Text(comment.text)
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DriverTripDetailsBlock(trip: DriverTripDetailsDto) {
+    val primaryContact = listOfNotNull(
+        trip.primaryContactName?.takeIf(String::isNotBlank),
+        trip.primaryContactPhone?.takeIf(String::isNotBlank),
+    ).joinToString(" · ").ifBlank { "не указан" }
+    val coordinates = listOfNotNull(
+        trip.latitude?.let { "широта $it" },
+        trip.longitude?.let { "долгота $it" },
+    ).joinToString(" · ").ifBlank { "не указаны" }
+    val cabins = driverTripCabinPresentations(trip)
+    Column(
+        modifier = Modifier.padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Ходка №${trip.tripNumber}", style = MaterialTheme.typography.titleLarge)
+        Text("Задание №${trip.taskNumber}", style = MaterialTheme.typography.titleMedium)
+        Text("Операция: ${driverTripOperationLabel(trip.operationType)}")
+        Text("Клиент: ${trip.clientName}")
+        Text("Адрес: ${trip.address?.takeIf(String::isNotBlank) ?: "не указан"}")
+        Text("Координаты: $coordinates")
+        Text("Основной контакт: $primaryContact")
+        if (trip.additionalContacts.isNotEmpty()) {
+            Text("Дополнительные контакты", style = MaterialTheme.typography.titleSmall)
+            trip.additionalContacts.forEach { contact ->
+                Text("${contact.name} · ${contact.phone}")
+            }
+        }
+        Text("Комментарий: ${trip.comment?.takeIf(String::isNotBlank) ?: "не указан"}")
+        Text("Желаемые даты клиента", style = MaterialTheme.typography.titleSmall)
+        if (trip.desiredDeliveryWindows.isEmpty()) {
+            Text("Не указаны", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            trip.desiredDeliveryWindows.forEach { window ->
+                Text(desiredDeliveryWindowLabel(window))
+            }
+        }
+        Text("Назначенная дата", style = MaterialTheme.typography.titleSmall)
+        Text(scheduledTripLabel(trip.scheduledDate))
+        Text("Бытовки", style = MaterialTheme.typography.titleMedium)
+        cabins.forEach { cabin ->
+            Card(Modifier.fillMaxWidth()) {
+                Column(
+                    Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text("Бытовка ${cabin.unitNumber}", style = MaterialTheme.typography.titleMedium)
+                    Text("Мебель по заказу", style = MaterialTheme.typography.titleSmall)
+                    if (cabin.desiredContents.isEmpty()) {
+                        Text("Не требуется", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
+                        cabin.desiredContents.forEach { Text(it) }
+                    }
+                    Text("Фактическое наполнение", style = MaterialTheme.typography.titleSmall)
+                    if (cabin.actualContents.isEmpty()) {
+                        Text("Мебель отсутствует", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
+                        cabin.actualContents.forEach { Text(it) }
+                    }
+                    Text(
+                        "Задание на перемещение: " +
+                            if (cabin.movementTaskCreated) "создано" else "не создано",
+                    )
+                    Text(
+                        "Перемещение мебели: " +
+                            if (cabin.movementTaskCompleted) "выполнено" else "не выполнено",
+                    )
+                    Text(
+                        "Наполнение: " + if (cabin.contentReady) "готово" else "не готово",
+                        color = if (cabin.contentReady) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                        fontWeight = FontWeight.Bold,
+                    )
                 }
             }
         }

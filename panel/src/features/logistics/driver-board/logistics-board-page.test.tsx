@@ -16,6 +16,7 @@ import type { CurrentUser } from "@/features/auth/auth-model"
 import type {
   DriverBoard,
   DriverBoardCard,
+  DriverTripDetails,
 } from "@/features/logistics/driver-board/driver-board-model"
 import { LogisticsBoardPage } from "@/features/logistics/driver-board/logistics-board-page"
 
@@ -28,6 +29,7 @@ Object.defineProperties(HTMLElement.prototype, {
 
 const apiMocks = vi.hoisted(() => ({
   getDriverBoard: vi.fn(),
+  getDriverTask: vi.fn(),
   moveDriverBoardTask: vi.fn(),
   pinDriverBoardTask: vi.fn(),
 }))
@@ -60,6 +62,7 @@ vi.mock("@/features/logistics/driver-board/driver-board-api", async () => {
   return {
     ...actual,
     getDriverBoard: apiMocks.getDriverBoard,
+    getDriverTask: apiMocks.getDriverTask,
     moveDriverBoardTask: apiMocks.moveDriverBoardTask,
     pinDriverBoardTask: apiMocks.pinDriverBoardTask,
   }
@@ -159,6 +162,62 @@ function card(
     priority: 3,
     pinned: false,
     position: 0,
+    tripDetails: null,
+    ...params,
+  }
+}
+
+function tripDetails(
+  params: Partial<DriverTripDetails> = {}
+): DriverTripDetails {
+  return {
+    taskNumber: "123",
+    tripNumber: 1,
+    operationType: "SHIPMENT",
+    clientName: "ООО Тест",
+    address: "Санкт-Петербург, Невский проспект, 1",
+    latitude: 59.9343,
+    longitude: 30.3351,
+    primaryContactName: "Анна",
+    primaryContactPhone: "+79990000001",
+    additionalContacts: [
+      { name: "Пётр", phone: "+79990000002" },
+      { name: "Пётр", phone: "+79990000002" },
+    ],
+    comment: "Позвонить за час",
+    desiredDeliveryWindows: [
+      {
+        startDate: "2026-08-01",
+        endDate: "2026-08-02",
+      },
+    ],
+    scheduledDate: "2026-08-03",
+    cabins: [
+      {
+        cabinId: "00000000-0000-4000-8000-000000000301",
+        unitNumber: "БТ-ОТГ-1",
+        desiredContents: [
+          {
+            equipmentId: "00000000-0000-4000-8000-000000000401",
+            equipmentName: "Кровать",
+            quantity: 4,
+          },
+        ],
+        actualContents: null,
+        movementTaskCreated: true,
+        movementTaskCompleted: false,
+        contentReady: null,
+      },
+      {
+        cabinId: "00000000-0000-4000-8000-000000000302",
+        unitNumber: "БТ-ОТГ-2",
+        desiredContents: [],
+        actualContents: [],
+        movementTaskCreated: false,
+        movementTaskCompleted: false,
+        contentReady: true,
+      },
+    ],
     ...params,
   }
 }
@@ -254,6 +313,10 @@ beforeEach(() => {
     selectedWarehouseId: WAREHOUSE_ID,
   })
   apiMocks.moveDriverBoardTask.mockResolvedValue({})
+  apiMocks.getDriverTask.mockResolvedValue({
+    id: "driver-task",
+    tripDetails: null,
+  })
   apiMocks.pinDriverBoardTask.mockResolvedValue({})
   directoryMocks.listRepairWorkerGroups.mockResolvedValue([
     {
@@ -363,15 +426,12 @@ describe("LogisticsBoardPage", () => {
   })
 
   it("renders a grouped shipment with its client and cabin list without a priority badge", async () => {
-    const groupedShipment = card(
-      "00000000-0000-4000-8000-000000000027",
-      {
-        title: "Отгрузка клиенту ООО Тест",
-        taskText: "Клиент: ООО Тест\nБытовки: БТ-ОТГ-1, БТ-ОТГ-2",
-        unitNumber: "2 бытовки",
-        position: 0,
-      }
-    )
+    const groupedShipment = card("00000000-0000-4000-8000-000000000027", {
+      title: "Отгрузка клиенту ООО Тест",
+      taskText: "Клиент: ООО Тест\nБытовки: БТ-ОТГ-1, БТ-ОТГ-2",
+      unitNumber: "2 бытовки",
+      position: 0,
+    })
     renderPage({
       ...board,
       dates: [{ date: "2026-08-01", tasks: [groupedShipment] }],
@@ -380,13 +440,176 @@ describe("LogisticsBoardPage", () => {
     const groupedCard = await screen.findByTestId(
       `logistics-task-${groupedShipment.externalTaskId}`
     )
-    expect(
-      within(groupedCard).getByText("Бытовки: 2")
-    ).toBeTruthy()
+    expect(within(groupedCard).getByText("Бытовки: 2")).toBeTruthy()
     const details = within(groupedCard).getByLabelText("Детали задания")
     expect(details.textContent).toContain("Клиент: ООО Тест")
     expect(details.textContent).toContain("Бытовки: БТ-ОТГ-1, БТ-ОТГ-2")
     expect(screen.queryByText(/Приоритет/)).toBeNull()
+  })
+
+  it("renders one authoritative two-cabin trip card and loads live cabin readiness in details", async () => {
+    const actor = userEvent.setup()
+    const summary = tripDetails()
+    const groupedShipment = card("00000000-0000-4000-8000-000000000028", {
+      driverTaskId: "00000000-0000-4000-8000-000000000128",
+      title: "Отгрузка клиенту",
+      unitNumber: "2 бытовки",
+      tripDetails: summary,
+    })
+    const liveDetails = tripDetails({
+      cabins: summary.cabins.map((cabin, index) => ({
+        ...cabin,
+        actualContents: [
+          {
+            equipmentId: "00000000-0000-4000-8000-000000000402",
+            equipmentName: index === 0 ? "Стол" : "Стул",
+            quantity: 1,
+            locationKind: "RENTAL_ITEM",
+          },
+        ],
+        movementTaskCompleted: index === 0,
+        contentReady: index === 0,
+      })),
+    })
+    apiMocks.getDriverTask.mockResolvedValue({
+      id: groupedShipment.driverTaskId,
+      tripDetails: liveDetails,
+    })
+    renderPage({
+      ...board,
+      dates: [{ date: "2026-08-03", tasks: [groupedShipment] }],
+    })
+
+    const groupedCard = await screen.findByTestId(
+      `logistics-task-${groupedShipment.externalTaskId}`
+    )
+    expect(
+      within(groupedCard).getByText("Задание №123 · Ходка №1")
+    ).toBeTruthy()
+    expect(within(groupedCard).getByText("ООО Тест · Бытовки: 2")).toBeTruthy()
+    expect(within(groupedCard).getByText("Водитель: Иванов Иван")).toBeTruthy()
+    expect(
+      within(groupedCard).getByText("Санкт-Петербург, Невский проспект, 1")
+    ).toBeTruthy()
+    expect(
+      within(groupedCard).getByText("Координаты: 59.9343, 30.3351")
+    ).toBeTruthy()
+    expect(
+      within(groupedCard).getAllByText("Пётр · +79990000002")
+    ).toHaveLength(2)
+    expect(within(groupedCard).getByText("Бытовка БТ-ОТГ-1")).toBeTruthy()
+    expect(within(groupedCard).getByText("Бытовка БТ-ОТГ-2")).toBeTruthy()
+    expect(
+      within(groupedCard).getByText(/Недоступно в карточке доски/i)
+    ).toBeTruthy()
+    expect(
+      [...dndMocks.sortableData.keys()].filter((key) =>
+        key.startsWith("logistics-task:")
+      )
+    ).toEqual([`logistics-task:${groupedShipment.externalTaskId}`])
+
+    await actor.click(
+      within(groupedCard).getByRole("button", { name: "Подробности ходки" })
+    )
+    const dialog = await screen.findByRole("dialog")
+    await waitFor(() => {
+      expect(apiMocks.getDriverTask).toHaveBeenCalledWith(
+        "logistics-token",
+        groupedShipment.driverTaskId
+      )
+    })
+    expect(within(dialog).getByText("Стол")).toBeTruthy()
+    expect(within(dialog).getByText("Наполнение готово")).toBeTruthy()
+    expect(
+      within(dialog).getByText("Перемещение мебели выполнено")
+    ).toBeTruthy()
+  })
+
+  it("moves a grouped trip with two cabin cards through one board command", async () => {
+    const groupedShipment = card("00000000-0000-4000-8000-000000000029", {
+      position: 0,
+      tripDetails: tripDetails(),
+    })
+    const nextTrip = card("00000000-0000-4000-8000-000000000030", {
+      position: 1,
+      tripDetails: tripDetails({ taskNumber: "124", tripNumber: 2 }),
+    })
+    renderPage({
+      ...board,
+      dates: [{ date: "2026-08-01", tasks: [groupedShipment, nextTrip] }],
+    })
+    await screen.findByTestId(
+      `logistics-task-${groupedShipment.externalTaskId}`
+    )
+    const source = dndMocks.sortableData.get(
+      `logistics-task:${groupedShipment.externalTaskId}`
+    )
+    const target = dndMocks.sortableData.get(
+      `logistics-task:${nextTrip.externalTaskId}`
+    )
+
+    act(() => {
+      dndMocks.onDragEnd?.({
+        active: { data: { current: source } },
+        over: { data: { current: target } },
+      })
+    })
+
+    await waitFor(() => {
+      expect(apiMocks.moveDriverBoardTask).toHaveBeenCalledTimes(1)
+    })
+    expect(apiMocks.moveDriverBoardTask.mock.calls[0]?.[0].externalTaskId).toBe(
+      groupedShipment.externalTaskId
+    )
+  })
+
+  it("shows mixed shipment, return, and transfer trips for different clients and dates", async () => {
+    const shipment = card("00000000-0000-4000-8000-000000000031", {
+      tripDetails: tripDetails(),
+    })
+    const pickup = card("00000000-0000-4000-8000-000000000032", {
+      kind: "RETURN",
+      driverAudience: {
+        mode: "ASSIGNED_DRIVER",
+        workerId: PETR_ID,
+        workerName: "Петров Пётр",
+      },
+      scheduledDate: "2026-08-02",
+      tripDetails: tripDetails({
+        taskNumber: "124",
+        tripNumber: 2,
+        operationType: "RETURN",
+        clientName: "ИП Клиент",
+        scheduledDate: "2026-08-02",
+      }),
+    })
+    const transfer = card("00000000-0000-4000-8000-000000000033", {
+      kind: "TRANSFER",
+      scheduledDate: "2026-08-03",
+      tripDetails: tripDetails({
+        taskNumber: "125",
+        tripNumber: 3,
+        operationType: "TRANSFER",
+        clientName: "Склад назначения",
+        scheduledDate: "2026-08-03",
+      }),
+    })
+    renderPage({
+      ...board,
+      dates: [
+        { date: "2026-08-01", tasks: [shipment] },
+        { date: "2026-08-02", tasks: [pickup] },
+        { date: "2026-08-03", tasks: [transfer] },
+      ],
+    })
+
+    expect(await screen.findByText("ООО Тест · Бытовки: 2")).toBeTruthy()
+    expect(screen.getByText("ИП Клиент · Бытовки: 2")).toBeTruthy()
+    expect(screen.getByText("Склад назначения · Бытовки: 2")).toBeTruthy()
+    expect(screen.getAllByText("Отгрузка").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("Вывоз").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("Перемещение").length).toBeGreaterThan(0)
+    expect(screen.getAllByLabelText(/^Логистика на /i)).toHaveLength(3)
   })
 
   it("ignores drops onto another driver, date, or lane", async () => {

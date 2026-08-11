@@ -40,11 +40,7 @@ public interface LogisticsDependencyGateway {
   RentalItemSnapshot readRentalItemSnapshot(UUID assetId);
 
   OperationLease acquireReturnLease(
-      UUID idempotencyKey,
-      UUID assetId,
-      long expectedAssetVersion,
-      UUID documentId,
-      UUID lineId);
+      UUID idempotencyKey, UUID assetId, long expectedAssetVersion, UUID documentId, UUID lineId);
 
   default OperationLease acquireReturnLease(
       UUID idempotencyKey,
@@ -53,8 +49,7 @@ public interface LogisticsDependencyGateway {
       UUID documentId,
       UUID lineId,
       UUID rentalOrderId) {
-    return acquireReturnLease(
-        idempotencyKey, assetId, expectedAssetVersion, documentId, lineId);
+    return acquireReturnLease(idempotencyKey, assetId, expectedAssetVersion, documentId, lineId);
   }
 
   OperationLease acquireOperationLease(
@@ -74,12 +69,7 @@ public interface LogisticsDependencyGateway {
       UUID lineId,
       UUID rentalOrderId) {
     return acquireOperationLease(
-        idempotencyKey,
-        ownerType,
-        assetId,
-        expectedAssetVersion,
-        documentId,
-        lineId);
+        idempotencyKey, ownerType, assetId, expectedAssetVersion, documentId, lineId);
   }
 
   RentalItemSnapshot applyReturnIntake(
@@ -245,6 +235,83 @@ public interface LogisticsDependencyGateway {
       OffsetDateTime reservedUntil,
       EquipmentMovementPurpose purpose);
 
+  /**
+   * Acquires one movement line with optional authoritative same-order redistribution context.
+   * Legacy stock and free-cabin sources use the context-free overload.
+   */
+  default EquipmentMovementReservation acquireEquipmentMovementReservation(
+      UUID idempotencyKey,
+      UUID movementId,
+      UUID lineId,
+      UUID equipmentId,
+      UUID sourceWarehouseId,
+      UUID sourceRentalItemId,
+      String sourceLocationKind,
+      long expectedSourceBalanceVersion,
+      long quantity,
+      OffsetDateTime reservedUntil,
+      EquipmentMovementPurpose purpose,
+      UUID orderId,
+      UUID targetRentalItemId,
+      List<OrderUnitEquipmentRequirements> units) {
+    if (orderId == null && targetRentalItemId == null && units == null) {
+      return acquireEquipmentMovementReservation(
+          idempotencyKey,
+          movementId,
+          lineId,
+          equipmentId,
+          sourceWarehouseId,
+          sourceRentalItemId,
+          sourceLocationKind,
+          expectedSourceBalanceVersion,
+          quantity,
+          reservedUntil,
+          purpose);
+    }
+    throw unavailable("Order-context equipment movement reservation is not configured");
+  }
+
+  /**
+   * Replays a replacement-owned movement reservation pre-held by the atomic unit swap. The released
+   * source reservation identifies the intentionally no-longer-active old order cabin; ordinary
+   * same-order redistribution keeps using the overload without that identity.
+   */
+  default EquipmentMovementReservation acquireEquipmentMovementReservation(
+      UUID idempotencyKey,
+      UUID movementId,
+      UUID lineId,
+      UUID equipmentId,
+      UUID sourceWarehouseId,
+      UUID sourceRentalItemId,
+      String sourceLocationKind,
+      long expectedSourceBalanceVersion,
+      long quantity,
+      OffsetDateTime reservedUntil,
+      EquipmentMovementPurpose purpose,
+      UUID orderId,
+      UUID targetRentalItemId,
+      List<OrderUnitEquipmentRequirements> units,
+      UUID replacementSourceReservationId) {
+    if (replacementSourceReservationId == null) {
+      return acquireEquipmentMovementReservation(
+          idempotencyKey,
+          movementId,
+          lineId,
+          equipmentId,
+          sourceWarehouseId,
+          sourceRentalItemId,
+          sourceLocationKind,
+          expectedSourceBalanceVersion,
+          quantity,
+          reservedUntil,
+          purpose,
+          orderId,
+          targetRentalItemId,
+          units);
+    }
+    throw unavailable("Replacement equipment movement reservation replay is not configured");
+  }
+
   EquipmentMovementReservation releaseEquipmentMovementReservation(
       UUID idempotencyKey,
       UUID reservationId,
@@ -324,8 +391,7 @@ public interface LogisticsDependencyGateway {
     throw unavailable("Driver task lookup is not configured");
   }
 
-  default DriverBoardTask cancelDriverTask(
-      UUID externalTaskId, long expectedTaskVersion) {
+  default DriverBoardTask cancelDriverTask(UUID externalTaskId, long expectedTaskVersion) {
     throw unavailable("Driver task cancellation is not configured");
   }
 
@@ -402,10 +468,7 @@ public interface LogisticsDependencyGateway {
   }
 
   default CabinCoverChange setCabinCoverFromTaskEvidence(
-      UUID idempotencyKey,
-      UUID cabinId,
-      UUID taskBoardEntryId,
-      UUID evidenceMediaId) {
+      UUID idempotencyKey, UUID cabinId, UUID taskBoardEntryId, UUID evidenceMediaId) {
     throw unavailable("Cabin cover transition is not configured");
   }
 
@@ -426,14 +489,13 @@ public interface LogisticsDependencyGateway {
       String actorRole);
 
   OrderUnitReservation releaseOrderUnit(
-      UUID idempotencyKey,
-      UUID orderId,
-      UUID unitId,
-      UUID actorSubjectId,
-      String actorRole);
+      UUID idempotencyKey, UUID orderId, UUID unitId, UUID actorSubjectId, String actorRole);
 
   List<OrderUnitReservation> releaseAllOrderUnits(
       UUID idempotencyKey, UUID orderId, UUID actorSubjectId, String actorRole);
+
+  /** Live asset-owned equipment availability for one warehouse. */
+  List<EquipmentWarehouseAvailability> readLogisticsEquipmentAvailability(UUID warehouseId);
 
   List<OrderEquipmentReservation> replaceOrderEquipmentReservations(
       UUID idempotencyKey,
@@ -441,27 +503,39 @@ public interface LogisticsDependencyGateway {
       UUID warehouseId,
       UUID actorSubjectId,
       String actorRole,
-      List<OrderEquipmentRequirement> requirements);
+      List<OrderUnitEquipmentRequirements> units);
 
   OrderFurnitureMovementPlan planOrderFurnitureMovements(
       UUID orderId,
       UUID warehouseId,
       UUID unitId,
+      UUID replacementForRentalItemId,
       List<OrderEquipmentRequirement> unitRequirements,
-      List<OrderEquipmentRequirement> orderRequirements);
+      List<OrderUnitEquipmentRequirements> units);
+
+  /**
+   * Atomically swaps an ordered set of active order cabins while preserving the order-wide
+   * furniture reservations and optionally pre-holding each exact existing movement task.
+   */
+  OrderUnitsReplacementReceipt replaceOrderUnits(
+      UUID idempotencyKey,
+      UUID orderId,
+      UUID warehouseId,
+      UUID presentationId,
+      UUID actorSubjectId,
+      String actorRole,
+      List<OrderUnitEquipmentRequirements> units,
+      List<OrderUnitReplacement> replacements);
 
   CabinFurnitureMovementPlan planCabinFurnitureMovements(
-      UUID warehouseId,
-      UUID rentalItemId,
-      List<CabinFurnitureRequirement> requirements);
+      UUID warehouseId, UUID rentalItemId, List<CabinFurnitureRequirement> requirements);
 
   default CabinFacets readAvailableCabinFacets(UUID warehouseId, UUID holdScopeId) {
     throw unavailable("Cabin facets are not configured");
   }
 
   /** Reads a bounded cabin fact page without acquiring or renewing any hold. */
-  default CabinCatalogPage readCabinCatalog(
-      UUID warehouseId, String query, int page, int size) {
+  default CabinCatalogPage readCabinCatalog(UUID warehouseId, String query, int page, int size) {
     throw unavailable("Cabin catalog is not configured");
   }
 
@@ -474,13 +548,11 @@ public interface LogisticsDependencyGateway {
     throw unavailable("Cabin search is not configured");
   }
 
-  default List<AvailableCabin> readCabinSnapshots(
-      UUID warehouseId, List<UUID> rentalItemIds) {
+  default List<AvailableCabin> readCabinSnapshots(UUID warehouseId, List<UUID> rentalItemIds) {
     throw unavailable("Cabin snapshots are not configured");
   }
 
-  default CabinAvailability readCabinAvailability(
-      UUID warehouseId, List<UUID> rentalItemIds) {
+  default CabinAvailability readCabinAvailability(UUID warehouseId, List<UUID> rentalItemIds) {
     throw unavailable("Cabin availability is not configured");
   }
 
@@ -533,10 +605,7 @@ public interface LogisticsDependencyGateway {
   }
 
   default PresentationHolds releasePresentationHolds(
-      UUID idempotencyKey,
-      UUID presentationId,
-      UUID actorSubjectId,
-      String actorRole) {
+      UUID idempotencyKey, UUID presentationId, UUID actorSubjectId, String actorRole) {
     throw unavailable("Presentation holds are not configured");
   }
 
@@ -556,30 +625,48 @@ public interface LogisticsDependencyGateway {
       String tenantSnapshot,
       UUID actorSubjectId,
       String actorRole) {
+    return convertPresentationHolds(
+        idempotencyKey,
+        presentationId,
+        orderId,
+        warehouseId,
+        selectedRentalItemIds,
+        clientId,
+        tenantSnapshot,
+        actorSubjectId,
+        actorRole,
+        null);
+  }
+
+  /**
+   * Atomically converts presentation holds and replaces the complete order furniture composition. A
+   * non-null {@code units} value is authoritative for every resulting active order cabin.
+   */
+  default ConvertedPresentationHolds convertPresentationHolds(
+      UUID idempotencyKey,
+      UUID presentationId,
+      UUID orderId,
+      UUID warehouseId,
+      List<UUID> selectedRentalItemIds,
+      UUID clientId,
+      String tenantSnapshot,
+      UUID actorSubjectId,
+      String actorRole,
+      List<OrderUnitEquipmentRequirements> units) {
     throw unavailable("Presentation hold conversion is not configured");
   }
 
-  default List<CabinMediaSnapshot> readCabinMediaSnapshots(
-      UUID warehouseId, List<UUID> cabinIds) {
+  default List<CabinMediaSnapshot> readCabinMediaSnapshots(UUID warehouseId, List<UUID> cabinIds) {
     throw unavailable("Presentation media snapshots are not configured");
   }
 
   default MediaContent readCabinPresentationMedia(
-      UUID warehouseId,
-      UUID cabinId,
-      UUID mediaId,
-      long generation,
-      String variant) {
+      UUID warehouseId, UUID cabinId, UUID mediaId, long generation, String variant) {
     throw unavailable("Presentation media content is not configured");
   }
 
   record WarehouseIdentity(
-      UUID id,
-      long version,
-      boolean active,
-      String name,
-      String city,
-      String timeZone) {
+      UUID id, long version, boolean active, String name, String city, String timeZone) {
     public WarehouseIdentity(UUID id, long version, boolean active, String timeZone) {
       this(id, version, active, "", "", timeZone);
     }
@@ -712,9 +799,7 @@ public interface LogisticsDependencyGateway {
       UUID activeRepairId, Long activeRepairVersion, String assetStatus) {}
 
   record TransferRepairArrivalPreflight(
-      UUID activeRepairId,
-      boolean priorityRequired,
-      List<UUID> missingQueueDefinitionIds) {}
+      UUID activeRepairId, boolean priorityRequired, List<UUID> missingQueueDefinitionIds) {}
 
   record TransferRepairArrivalCompletion(
       UUID activeRepairId, Long repairVersion, UUID warehouseId) {}
@@ -758,10 +843,7 @@ public interface LogisticsDependencyGateway {
       long stockQuantity) {}
 
   record ReturnEquipmentReceipt(
-      UUID returnId,
-      UUID returnLineId,
-      UUID warehouseId,
-      List<ReturnEquipmentReceiptLine> lines) {}
+      UUID returnId, UUID returnLineId, UUID warehouseId, List<ReturnEquipmentReceiptLine> lines) {}
 
   enum EquipmentHoldAction {
     COMMIT,
@@ -769,7 +851,11 @@ public interface LogisticsDependencyGateway {
   }
 
   record EquipmentHold(
-      UUID holdId, long version, String state, OffsetDateTime expiresAt, OffsetDateTime committedAt) {}
+      UUID holdId,
+      long version,
+      String state,
+      OffsetDateTime expiresAt,
+      OffsetDateTime committedAt) {}
 
   record EquipmentMovementReservation(
       UUID reservationId,
@@ -807,10 +893,7 @@ public interface LogisticsDependencyGateway {
       OffsetDateTime occurredAt) {}
 
   record EquipmentMovementExecutionLine(
-      UUID reservationId,
-      long reservationVersion,
-      UUID lineId,
-      EquipmentMovementEvent movement) {}
+      UUID reservationId, long reservationVersion, UUID lineId, EquipmentMovementEvent movement) {}
 
   record EquipmentMovementExecution(UUID movementId, List<EquipmentMovementExecutionLine> lines) {}
 
@@ -825,12 +908,11 @@ public interface LogisticsDependencyGateway {
       String status,
       OffsetDateTime doneAt) {}
 
-  record WarehouseDriverQueue(
-      UUID warehouseId, UUID queueDefinitionId, UUID workQueueId) {}
+  /** Task-board queue identities resolved for one warehouse driver audience. */
+  record WarehouseDriverQueue(UUID warehouseId, UUID queueDefinitionId, UUID workQueueId) {}
 
   /** Task-board audience transported without introducing a worker aggregate in logistics. */
-  record DriverTaskAudience(
-      DriverTaskAudienceMode mode, UUID workerId, String workerName) {}
+  record DriverTaskAudience(DriverTaskAudienceMode mode, UUID workerId, String workerName) {}
 
   record DriverBoardTask(
       UUID taskId,
@@ -916,11 +998,7 @@ public interface LogisticsDependencyGateway {
       List<DriverBoardDateColumn> dates) {}
 
   record RepairComplexitySnapshot(
-      String type,
-      String name,
-      String color,
-      String plannedMinutes,
-      boolean forcedCapital) {}
+      String type, String name, String color, String plannedMinutes, boolean forcedCapital) {}
 
   record CapitalRepair(
       UUID repairId,
@@ -930,8 +1008,8 @@ public interface LogisticsDependencyGateway {
       RepairComplexitySnapshot complexity,
       long version) {}
 
-  record CapitalRepairPage(
-      List<CapitalRepair> items, int page, int size, long totalElements) {}
+  /** Bounded maintenance-owned capital-repair page used by the driver scheduler. */
+  record CapitalRepairPage(List<CapitalRepair> items, int page, int size, long totalElements) {}
 
   record DriverCompletionEvidence(
       UUID externalTaskId,
@@ -977,10 +1055,7 @@ public interface LogisticsDependencyGateway {
       OffsetDateTime changedAt) {}
 
   record OrderEquipmentContent(
-      UUID equipmentId,
-      String equipmentName,
-      long quantity,
-      String locationKind) {}
+      UUID equipmentId, String equipmentName, long quantity, String locationKind) {}
 
   record OrderRentalItem(
       UUID id,
@@ -1013,8 +1088,8 @@ public interface LogisticsDependencyGateway {
       boolean replayed,
       OrderRentalItem unit) {}
 
-  record OrderUnitCandidate(
-      UUID reservationId, boolean added, OrderRentalItem unit) {}
+  /** Candidate cabin paired with its current order-reservation identity when already selected. */
+  record OrderUnitCandidate(UUID reservationId, boolean added, OrderRentalItem unit) {}
 
   record OrderUnitCandidatePage(
       List<OrderUnitCandidate> content,
@@ -1025,11 +1100,29 @@ public interface LogisticsDependencyGateway {
 
   record OrderEquipmentRequirement(UUID equipmentId, long quantity) {}
 
+  /** Complete desired furniture composition for one order cabin. */
+  record OrderUnitEquipmentRequirements(
+      UUID rentalItemId, List<OrderEquipmentRequirement> requirements) {}
+
+  /** Live warehouse availability of one equipment catalogue position. */
+  record EquipmentWarehouseAvailability(
+      UUID equipmentId,
+      String equipmentName,
+      boolean active,
+      long availableQuantity,
+      Integer maximumPerCabin) {}
+
   record OrderEquipmentReservation(
       UUID equipmentId,
       String equipmentName,
       long quantity,
-      long availableQuantity) {}
+      long availableQuantity,
+      Integer maximumPerCabin) {
+    public OrderEquipmentReservation(
+        UUID equipmentId, String equipmentName, long quantity, long availableQuantity) {
+      this(equipmentId, equipmentName, quantity, availableQuantity, null);
+    }
+  }
 
   record OrderFurnitureMovementPlanLine(
       UUID equipmentId,
@@ -1045,10 +1138,37 @@ public interface LogisticsDependencyGateway {
       long quantity) {}
 
   record OrderFurnitureMovementPlan(
-      UUID orderId,
-      UUID unitId,
-      String unitNumber,
-      List<OrderFurnitureMovementPlanLine> lines) {}
+      UUID orderId, UUID unitId, String unitNumber, List<OrderFurnitureMovementPlanLine> lines) {}
+
+  /** One exact source-fenced line associated with an existing movement task. */
+  record OrderUnitReplacementMovementLine(
+      UUID lineId,
+      UUID equipmentId,
+      UUID sourceBalanceId,
+      long expectedSourceBalanceVersion,
+      UUID targetRentalItemId,
+      long quantity) {}
+
+  /** Existing movement task supplied to the atomic cabin replacement command. */
+  record OrderUnitReplacementMovement(
+      UUID movementId,
+      OffsetDateTime reservedUntil,
+      List<OrderUnitReplacementMovementLine> lines) {}
+
+  /** One ordered old-to-new cabin mapping and its optional exact physical furniture move. */
+  record OrderUnitReplacement(
+      UUID rentalItemId, UUID replacementRentalItemId, OrderUnitReplacementMovement movement) {}
+
+  /** One pair receipt in an atomic same-order cabin replacement batch. */
+  record OrderUnitReplacementReceipt(
+      OrderUnitReservation releasedReservation,
+      OrderUnitReservation replacementReservation,
+      List<EquipmentMovementReservation> movementReservations,
+      boolean contentReady) {}
+
+  /** Complete atomic batch receipt preserving request pair order. */
+  record OrderUnitsReplacementReceipt(
+      List<OrderUnitReplacementReceipt> replacements, boolean replayed) {}
 
   record CabinFurnitureRequirement(UUID equipmentId, long quantity) {}
 
@@ -1096,9 +1216,7 @@ public interface LogisticsDependencyGateway {
     REPLACE
   }
 
-  /**
-   * Immutable wire command frozen before a rental-inquiry search calls asset-service.
-   */
+  /** Immutable wire command frozen before a rental-inquiry search calls asset-service. */
   record CabinSearchCommand(
       UUID warehouseId,
       UUID holdScopeId,
@@ -1122,7 +1240,41 @@ public interface LogisticsDependencyGateway {
       Boolean linoleum,
       Map<String, Object> passport,
       List<String> tags,
-      OffsetDateTime updatedAt) {}
+      List<OrderEquipmentContent> contents,
+      OffsetDateTime updatedAt) {
+    public AvailableCabin(
+        UUID id,
+        long version,
+        UUID warehouseId,
+        String status,
+        String number,
+        String rentalType,
+        String dimensions,
+        String finishing,
+        String category,
+        String characteristics,
+        Boolean linoleum,
+        Map<String, Object> passport,
+        List<String> tags,
+        OffsetDateTime updatedAt) {
+      this(
+          id,
+          version,
+          warehouseId,
+          status,
+          number,
+          rentalType,
+          dimensions,
+          finishing,
+          category,
+          characteristics,
+          linoleum,
+          passport,
+          tags,
+          List.of(),
+          updatedAt);
+    }
+  }
 
   /** Facts-only cabin page returned by asset-service catalog lookup. */
   record CabinCatalogPage(
@@ -1133,16 +1285,17 @@ public interface LogisticsDependencyGateway {
       long totalElements,
       long totalPages) {}
 
-  record CabinSearchGroupResult(
-      CabinSearchGroup group, List<AvailableCabin> cabins) {}
+  /** One search group and the asset-owned cabin snapshots held for that result. */
+  record CabinSearchGroupResult(CabinSearchGroup group, List<AvailableCabin> cabins) {}
 
   record CabinSearchResult(
       UUID warehouseId, OffsetDateTime expiresAt, List<CabinSearchGroupResult> groups) {}
 
+  /** One asset-owned cabin availability decision and optional sanitized reason. */
   record CabinAvailabilityItem(UUID rentalItemId, boolean available, String reason) {}
 
-  record CabinAvailability(
-      UUID warehouseId, List<CabinAvailabilityItem> items) {}
+  /** Warehouse-scoped availability decisions for the exact requested cabin identifiers. */
+  record CabinAvailability(UUID warehouseId, List<CabinAvailabilityItem> items) {}
 
   record PresentationHold(
       UUID holdId,
@@ -1156,14 +1309,35 @@ public interface LogisticsDependencyGateway {
       OffsetDateTime createdAt,
       OffsetDateTime endedAt) {}
 
+  /**
+   * Authoritative presentation hold receipt. Cabins are populated by hold replacement and are
+   * captured under the same asset locks as the hold set; read and release receipts may omit them.
+   */
   record PresentationHolds(
-      UUID presentationId, OffsetDateTime expiresAt, List<PresentationHold> holds) {}
+      UUID presentationId,
+      OffsetDateTime expiresAt,
+      List<PresentationHold> holds,
+      List<AvailableCabin> cabins) {
+    public PresentationHolds(
+        UUID presentationId, OffsetDateTime expiresAt, List<PresentationHold> holds) {
+      this(presentationId, expiresAt, holds, List.of());
+    }
+  }
 
   record ConvertedPresentationHolds(
       UUID presentationId,
       UUID orderId,
       List<OrderUnitReservation> reservations,
-      List<UUID> releasedRentalItemIds) {}
+      List<UUID> releasedRentalItemIds,
+      List<OrderEquipmentReservation> equipmentReservations) {
+    public ConvertedPresentationHolds(
+        UUID presentationId,
+        UUID orderId,
+        List<OrderUnitReservation> reservations,
+        List<UUID> releasedRentalItemIds) {
+      this(presentationId, orderId, reservations, releasedRentalItemIds, List.of());
+    }
+  }
 
   record CabinMediaPhoto(
       UUID mediaId, long generation, int sortOrder, List<String> availableVariants) {}
@@ -1176,5 +1350,4 @@ public interface LogisticsDependencyGateway {
     return new LogisticsDependencyException(
         LogisticsDependencyException.FailureKind.CONFIGURATION, message);
   }
-
 }

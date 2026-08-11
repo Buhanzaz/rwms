@@ -327,6 +327,14 @@ class TaskBoardFlywayMigrationIntegrationTest {
         .containsEntry("script", "V28__driver_task_audience.sql")
         .containsEntry("success", true);
     assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='29'"))
+        .containsEntry("version", "29")
+        .containsEntry("description", "remove shared driver identity")
+        .containsEntry("script", "V29__remove_shared_driver_identity.sql")
+        .containsEntry("success", true);
+    assertThat(
             jdbc.queryForObject(
                 "select to_regprocedure('public.task_board_request_fingerprint_v4(jsonb)')",
                 String.class))
@@ -1329,7 +1337,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(23);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(25);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
 

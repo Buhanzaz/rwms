@@ -64,6 +64,8 @@ import tools.jackson.databind.ObjectMapper;
       "rwms.platform.kafka.enabled=false",
       "rwms.maintenance.task-reconciliation.initial-delay=1h",
       "rwms.maintenance.task-reconciliation.delay=1h",
+      "rwms.maintenance.warehouse-lifecycle.operation-mark-initial-delay=1h",
+      "rwms.maintenance.warehouse-lifecycle.readiness-initial-delay=1h",
       "spring.security.oauth2.resourceserver.jwt.issuer-uri=http://auth.test",
       "rwms.cors.allowed-origins=http://panel.test"
     })
@@ -441,7 +443,7 @@ class MaintenanceRepairLeaseHttpIntegrationTest {
   }
 
   @Test
-  void unrenewableReworkLeaseReturnsCanonicalDependencyProblem() throws Exception {
+  void bookedCabinReplacementDependencyCodeRemainsPublicInCanonicalProblem() throws Exception {
     RepairFixture source = pendingAcceptanceRepair(true);
     JsonNode created =
         mapper.readTree(
@@ -467,7 +469,9 @@ class MaintenanceRepairLeaseHttpIntegrationTest {
             eq(source.repairId().toString())))
         .thenThrow(
             new MaintenanceDependencyException(
-                HttpStatus.CONFLICT, "asset lease is no longer renewable"));
+                HttpStatus.CONFLICT,
+                "BOOKED_UNIT_REPLACEMENT_REQUIRED",
+                "Бытовка забронирована: сначала выполните замену в заказе"));
     UUID correlationId = UUID.randomUUID();
 
     mvc.perform(
@@ -484,8 +488,10 @@ class MaintenanceRepairLeaseHttpIntegrationTest {
         .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
         .andExpect(header().string(CorrelationIdFilter.HEADER_NAME, correlationId.toString()))
         .andExpect(jsonPath("$.status").value(409))
-        .andExpect(jsonPath("$.code").value("MAINTENANCE_DEPENDENCY_UNAVAILABLE"))
-        .andExpect(jsonPath("$.detail").value("asset lease is no longer renewable"))
+        .andExpect(jsonPath("$.code").value("BOOKED_UNIT_REPLACEMENT_REQUIRED"))
+        .andExpect(
+            jsonPath("$.detail")
+                .value("Бытовка забронирована: сначала выполните замену в заказе"))
         .andExpect(jsonPath("$.correlation.correlationId").value(correlationId.toString()));
 
     assertThat(repairs.findById(reworkId).orElseThrow().getExecutionState())

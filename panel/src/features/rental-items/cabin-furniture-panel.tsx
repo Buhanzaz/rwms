@@ -10,9 +10,9 @@ import {
 import {
   CabinFurnitureCompositionDialog,
   CabinFurnitureContents,
-  furnitureEquipmentIds,
   type CabinFurnitureRequirementInput,
 } from "@/features/rental-items/cabin-furniture-composition-dialog"
+import { furnitureEquipmentIds } from "@/features/rental-items/cabin-furniture"
 import { getAssetRentalItem } from "@/features/rental-items/api/asset-rental-items-api"
 
 type CommandAttempt = {

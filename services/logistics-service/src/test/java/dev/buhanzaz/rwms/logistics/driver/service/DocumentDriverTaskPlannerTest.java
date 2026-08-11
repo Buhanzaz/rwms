@@ -1,7 +1,10 @@
 package dev.buhanzaz.rwms.logistics.driver.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -17,7 +20,9 @@ import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskPlanningMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
+import dev.buhanzaz.rwms.logistics.driver.settings.service.ShipmentTaskSettingsService;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
@@ -29,10 +34,14 @@ import org.springframework.test.util.ReflectionTestUtils;
 /** Verifies document-derived task planning without crossing the task-board transport boundary. */
 class DocumentDriverTaskPlannerTest {
   private final DriverLogisticsTaskRepository tasks = mock(DriverLogisticsTaskRepository.class);
+  private final LogisticsDocumentRepository documents = mock(LogisticsDocumentRepository.class);
   private final LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
   private final DriverTaskWorkflowStore workflowStore = mock(DriverTaskWorkflowStore.class);
+  private final ShipmentTaskSettingsService shipmentTaskSettings =
+      mock(ShipmentTaskSettingsService.class);
   private final DocumentDriverTaskPlanner planner =
-      new DocumentDriverTaskPlanner(tasks, dependencies, workflowStore);
+      new DocumentDriverTaskPlanner(
+          tasks, documents, dependencies, workflowStore, shipmentTaskSettings);
 
   @Test
   void shipmentCreatesOneAssignedFixedDateGroupTaskAndReplaysByChecksum() {
@@ -77,8 +86,7 @@ class DocumentDriverTaskPlannerTest {
     assertThat(created.getPriority()).isEqualTo(3);
     assertThat(created.getUnitNumber()).isEqualTo("2 бытовки");
     assertThat(created.getClientSnapshot()).isEqualTo("ООО Клиент");
-    assertThat(created.getComment())
-        .contains("Клиент: ООО Клиент", "БТ-101", "БТ-102");
+    assertThat(created.getComment()).contains("Клиент: ООО Клиент", "БТ-101", "БТ-102");
     assertThat(created.getMembers())
         .extracting(
             member ->
@@ -161,7 +169,7 @@ class DocumentDriverTaskPlannerTest {
   }
 
   @Test
-  void legacyShipmentLineTasksAreNeverRegrouped() {
+  void preStartLegacyShipmentLinesAreCancelledBeforeOneGroupedTripIsCreated() {
     UUID warehouseId = UUID.randomUUID();
     UUID firstAssetId = UUID.randomUUID();
     UUID secondAssetId = UUID.randomUUID();
@@ -179,34 +187,88 @@ class DocumentDriverTaskPlannerTest {
     LogisticsDocumentLine firstLine = persistedLine(document, firstAssetId, 1);
     LogisticsDocumentLine secondLine = persistedLine(document, secondAssetId, 2);
     persist(document);
-    stubDependencies(warehouseId, UUID.randomUUID(), firstAssetId, "БТ-105");
-    stubDependencies(warehouseId, UUID.randomUUID(), secondAssetId, "БТ-106");
-    when(tasks.existsBySourceTypeAndSourceIdIn(
+    UUID queueDefinitionId = UUID.randomUUID();
+    stubDependencies(warehouseId, queueDefinitionId, firstAssetId, "БТ-105");
+    stubDependencies(warehouseId, queueDefinitionId, secondAssetId, "БТ-106");
+    DriverLogisticsTask firstLegacy =
+        legacyTask(document, firstLine, firstAssetId, "БТ-105", queueDefinitionId);
+    DriverLogisticsTask secondLegacy =
+        legacyTask(document, secondLine, secondAssetId, "БТ-106", queueDefinitionId);
+    when(tasks.findAllForUpdateBySourceTypeAndSourceIdIn(
             DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE,
             List.of(firstLine.getId(), secondLine.getId())))
-        .thenReturn(true);
+        .thenReturn(List.of(firstLegacy, secondLegacy));
     when(tasks.findActiveForUpdateBySourceTypeAndSourceIdAndKind(
-            DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE,
-            firstLine.getId(),
-            DriverTaskKind.SHIPMENT))
+            DriverTaskSourceType.LOGISTICS_DOCUMENT, document.getId(), DriverTaskKind.SHIPMENT))
         .thenReturn(Optional.empty());
-    when(tasks.findActiveForUpdateBySourceTypeAndSourceIdAndKind(
-            DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE,
-            secondLine.getId(),
-            DriverTaskKind.SHIPMENT))
-        .thenReturn(Optional.empty());
+    when(dependencies.readDriverTask(firstLegacy.getExternalTaskId()))
+        .thenReturn(waiting(firstLegacy, warehouseId));
+    when(dependencies.readDriverTask(secondLegacy.getExternalTaskId()))
+        .thenReturn(waiting(secondLegacy, warehouseId));
+    when(dependencies.cancelDriverTaskIfPreStart(any(), anyLong(), anyString()))
+        .thenAnswer(
+            invocation ->
+                new LogisticsDependencyGateway.DriverTaskPreStartCancellation(
+                    LogisticsDependencyGateway.DriverTaskPreStartCancellationOutcome.CANCELLED,
+                    UUID.randomUUID(),
+                    invocation.getArgument(0),
+                    2,
+                    "CANCELLED",
+                    null));
 
     planner.plan(document, List.of(firstLine, secondLine));
 
-    verify(tasks, never())
-        .findActiveForUpdateBySourceTypeAndSourceIdAndKind(
-            DriverTaskSourceType.LOGISTICS_DOCUMENT, document.getId(), DriverTaskKind.SHIPMENT);
+    assertThat(firstLegacy.getState()).isEqualTo(DriverTaskState.CANCELLED);
+    assertThat(secondLegacy.getState()).isEqualTo(DriverTaskState.CANCELLED);
     ArgumentCaptor<DriverLogisticsTask> created =
         ArgumentCaptor.forClass(DriverLogisticsTask.class);
-    verify(tasks, times(2)).saveAndFlush(created.capture());
-    assertThat(created.getAllValues())
-        .allSatisfy(
-            task -> assertThat(task.getSourceType()).isEqualTo(DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE));
+    verify(tasks, times(3)).saveAndFlush(created.capture());
+    assertThat(created.getAllValues().getLast().getSourceType())
+        .isEqualTo(DriverTaskSourceType.LOGISTICS_DOCUMENT);
+    assertThat(created.getAllValues().getLast().getMembers()).hasSize(2);
+  }
+
+  @Test
+  void oneStartedLegacyLinePreventsRegroupingBeforeAnySiblingIsCancelled() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID firstAssetId = UUID.randomUUID();
+    UUID secondAssetId = UUID.randomUUID();
+    LogisticsDocument document =
+        LogisticsDocument.createShipment(
+            warehouseId,
+            UUID.randomUUID(),
+            "ООО Клиент",
+            "Иван Петров",
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID());
+    document.scheduleShipment(
+        "Иван Петров", document.getDriverWorkerId(), LocalDate.of(2026, 8, 19));
+    LogisticsDocumentLine firstLine = persistedLine(document, firstAssetId, 1);
+    LogisticsDocumentLine secondLine = persistedLine(document, secondAssetId, 2);
+    persist(document);
+    UUID queueDefinitionId = UUID.randomUUID();
+    stubDependencies(warehouseId, queueDefinitionId, firstAssetId, "БТ-105");
+    stubDependencies(warehouseId, queueDefinitionId, secondAssetId, "БТ-106");
+    DriverLogisticsTask firstLegacy =
+        legacyTask(document, firstLine, firstAssetId, "БТ-105", queueDefinitionId);
+    DriverLogisticsTask startedLegacy =
+        legacyTask(document, secondLine, secondAssetId, "БТ-106", queueDefinitionId);
+    ReflectionTestUtils.setField(startedLegacy, "state", DriverTaskState.FINALIZING);
+    when(tasks.findAllForUpdateBySourceTypeAndSourceIdIn(
+            DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE,
+            List.of(firstLine.getId(), secondLine.getId())))
+        .thenReturn(List.of(firstLegacy, startedLegacy));
+    when(dependencies.readDriverTask(firstLegacy.getExternalTaskId()))
+        .thenReturn(waiting(firstLegacy, warehouseId));
+
+    assertThatThrownBy(() -> planner.plan(document, List.of(firstLine, secondLine)))
+        .isInstanceOf(dev.buhanzaz.rwms.logistics.service.LogisticsConflictException.class);
+
+    assertThat(firstLegacy.getState()).isEqualTo(DriverTaskState.SCHEDULED);
+    assertThat(startedLegacy.getState()).isEqualTo(DriverTaskState.FINALIZING);
+    verify(dependencies, never()).cancelDriverTaskIfPreStart(any(), anyLong(), anyString());
+    verify(tasks, never()).saveAndFlush(any());
   }
 
   @Test
@@ -266,8 +328,7 @@ class DocumentDriverTaskPlannerTest {
     verify(tasks).saveAndFlush(taskCaptor.capture());
     DriverLogisticsTask created = taskCaptor.getValue();
     assertThat(created.getKind()).isEqualTo(DriverTaskKind.TRANSFER);
-    assertThat(created.getDriverAudienceMode())
-        .isEqualTo(DriverTaskAudienceMode.WAREHOUSE_DRIVERS);
+    assertThat(created.getDriverAudienceMode()).isEqualTo(DriverTaskAudienceMode.WAREHOUSE_DRIVERS);
     assertThat(created.getPlannedDriverWorkerId()).isNull();
     assertThat(created.getPlannedDriverNameSnapshot()).isNull();
   }
@@ -378,8 +439,7 @@ class DocumentDriverTaskPlannerTest {
                 assetId, 7, warehouseId, unitNumber, "FREE", List.of()));
   }
 
-  private static LogisticsDocumentLine persistedLine(
-      LogisticsDocument document, UUID assetId) {
+  private static LogisticsDocumentLine persistedLine(LogisticsDocument document, UUID assetId) {
     return persistedLine(document, assetId, 1);
   }
 
@@ -393,5 +453,58 @@ class DocumentDriverTaskPlannerTest {
 
   private static void persist(LogisticsDocument document) {
     ReflectionTestUtils.setField(document, "id", UUID.randomUUID());
+  }
+
+  private static DriverLogisticsTask legacyTask(
+      LogisticsDocument document,
+      LogisticsDocumentLine line,
+      UUID assetId,
+      String unitNumber,
+      UUID queueDefinitionId) {
+    DriverLogisticsTask task =
+        DriverLogisticsTask.create(
+            document.getWarehouseId(),
+            assetId,
+            null,
+            DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE,
+            line.getId(),
+            DriverTaskKind.SHIPMENT,
+            DriverTaskPlanningMode.FIXED_DATE,
+            document.getScheduledDate(),
+            3,
+            "Отгрузка бытовки",
+            unitNumber,
+            queueDefinitionId,
+            DriverTaskAudienceMode.ASSIGNED_DRIVER,
+            document.getDriverWorkerId(),
+            document.getDriverSnapshot(),
+            document.getRequestedBySubjectId(),
+            UUID.randomUUID(),
+            "c".repeat(64));
+    ReflectionTestUtils.setField(task, "id", UUID.randomUUID());
+    task.registerBoardTask(UUID.randomUUID(), 1, UUID.randomUUID(), "WAITING", "SCHEDULED", null);
+    return task;
+  }
+
+  private static LogisticsDependencyGateway.DriverBoardTask waiting(
+      DriverLogisticsTask task, UUID warehouseId) {
+    return new LogisticsDependencyGateway.DriverBoardTask(
+        task.getTaskBoardTaskId(),
+        1,
+        warehouseId,
+        task.getExternalTaskId(),
+        "Отгрузка",
+        task.getUnitNumber(),
+        "Отгрузка",
+        "ACTIVE",
+        task.getScheduledDate(),
+        "SCHEDULED",
+        3,
+        false,
+        null,
+        UUID.randomUUID(),
+        1,
+        "WAITING",
+        0);
   }
 }

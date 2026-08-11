@@ -20,13 +20,15 @@ import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Owns return, shipment and transfer document commands; it records local state and outbox intent transactionally, then recovers external effects through durable workflow state.
+ * Owns return, shipment and transfer document commands; it records local state and outbox intent
+ * transactionally, then recovers external effects through durable workflow state.
  */
 @Service
 @RequiredArgsConstructor
@@ -36,7 +38,8 @@ public class LogisticsDocumentService {
       LogisticsDocumentEffectOperations.RETURN_WAREHOUSE_IDENTITY;
   static final String RETURN_MEDIA_OWNER_PROOF_REGISTER =
       LogisticsDocumentEffectOperations.RETURN_MEDIA_OWNER_PROOF_REGISTER;
-  static final String RETURN_MEDIA_VALIDATE = LogisticsDocumentEffectOperations.RETURN_MEDIA_VALIDATE;
+  static final String RETURN_MEDIA_VALIDATE =
+      LogisticsDocumentEffectOperations.RETURN_MEDIA_VALIDATE;
   static final String RETURN_ASSET_SETTLE_FREE =
       LogisticsDocumentEffectOperations.RETURN_ASSET_SETTLE_FREE;
   static final String RETURN_ASSET_SETTLE_ESTIMATE =
@@ -101,7 +104,8 @@ public class LogisticsDocumentService {
   @Transactional
   public CreateResult createReturn(
       UUID subjectId, UUID idempotencyKey, UUID correlationId, CreateReturnRequest request) {
-    return result(returnCoordinator.createReturn(subjectId, idempotencyKey, correlationId, request));
+    return result(
+        returnCoordinator.createReturn(subjectId, idempotencyKey, correlationId, request));
   }
 
   @Transactional
@@ -112,13 +116,15 @@ public class LogisticsDocumentService {
       CreateReturnRequest request,
       AdmissionTicket admission) {
     return result(
-        returnCoordinator.createReturn(subjectId, idempotencyKey, correlationId, request, admission));
+        returnCoordinator.createReturn(
+            subjectId, idempotencyKey, correlationId, request, admission));
   }
 
   @Transactional
   public CreateResult createShipment(
       UUID subjectId, UUID idempotencyKey, UUID correlationId, CreateShipmentRequest request) {
-    return result(shipmentCoordinator.createShipment(subjectId, idempotencyKey, correlationId, request));
+    return result(
+        shipmentCoordinator.createShipment(subjectId, idempotencyKey, correlationId, request));
   }
 
   @Transactional
@@ -129,13 +135,15 @@ public class LogisticsDocumentService {
       CreateShipmentRequest request,
       AdmissionTicket admission) {
     return result(
-        shipmentCoordinator.createShipment(subjectId, idempotencyKey, correlationId, request, admission));
+        shipmentCoordinator.createShipment(
+            subjectId, idempotencyKey, correlationId, request, admission));
   }
 
   @Transactional
   public CreateResult createTransfer(
       UUID subjectId, UUID idempotencyKey, UUID correlationId, CreateTransferRequest request) {
-    return result(transferCoordinator.createTransfer(subjectId, idempotencyKey, correlationId, request));
+    return result(
+        transferCoordinator.createTransfer(subjectId, idempotencyKey, correlationId, request));
   }
 
   @Transactional
@@ -146,7 +154,8 @@ public class LogisticsDocumentService {
       CreateTransferRequest request,
       AdmissionTicket admission) {
     return result(
-        transferCoordinator.createTransfer(subjectId, idempotencyKey, correlationId, request, admission));
+        transferCoordinator.createTransfer(
+            subjectId, idempotencyKey, correlationId, request, admission));
   }
 
   /**
@@ -158,13 +167,14 @@ public class LogisticsDocumentService {
   public CreateResult replayRentalOrderShipment(
       UUID subjectId, UUID idempotencyKey, String checksum) {
     return resultOrNull(
-        rentalOrderShipmentCoordinator.replayRentalOrderShipment(subjectId, idempotencyKey, checksum));
+        rentalOrderShipmentCoordinator.replayRentalOrderShipment(
+            subjectId, idempotencyKey, checksum));
   }
 
   /**
    * Creates one date/driver-bearing draft for exactly the requested order cabins. The caller owns
-   * the order row lock and has already validated the actor and expected order version. This
-   * command deliberately stops at DRAFT so furniture tasks can be created before preparation.
+   * the order row lock and has already validated the actor and expected order version. This command
+   * deliberately stops at DRAFT so furniture tasks can be created before preparation.
    */
   @Transactional
   public CreateResult createRentalOrderShipment(
@@ -203,17 +213,27 @@ public class LogisticsDocumentService {
   }
 
   /**
-   * Checks whether saved-order edits are still safe. Every non-cancelled rental shipment must be
-   * an untouched draft and must not have a furniture movement task; several such drafts are valid
+   * Checks whether saved-order edits are still safe. Every non-cancelled rental shipment must be an
+   * untouched draft and must not have a furniture movement task; several such drafts are valid
    * because a single order can be split into batches.
    */
   public boolean isRentalOrderShipmentDraftEditable(UUID orderId) {
     return rentalOrderShipmentCoordinator.isRentalOrderShipmentDraftEditable(orderId);
   }
 
+  /** Returns whether at least one current order cabin remains eligible for replacement. */
+  public boolean hasRentalOrderReplaceableUnit(UUID orderId, Set<UUID> activeUnitIds) {
+    return rentalOrderShipmentCoordinator.hasRentalOrderReplaceableUnit(orderId, activeUnitIds);
+  }
+
+  /** Applies the shared per-cabin pre-start predicate before the remote execution fence. */
+  public boolean isRentalOrderUnitReplacementPreStart(UUID orderId, UUID unitId) {
+    return rentalOrderShipmentCoordinator.isRentalOrderUnitReplacementPreStart(orderId, unitId);
+  }
+
   /**
-   * Locks the shipment decision before an order mutation. This serializes a
-   * booking edit with creation of a furniture movement task for the shipment.
+   * Locks the shipment decision before an order mutation. This serializes a booking edit with
+   * creation of a furniture movement task for the shipment.
    */
   @Transactional
   public boolean lockRentalOrderShipmentDraftForOrderEditing(UUID orderId) {
@@ -237,7 +257,7 @@ public class LogisticsDocumentService {
    *
    * <p>The set of already-created return lines makes the operation idempotent across a retry and
    * also keeps older installations safe when they already contain a single multi-line return
-   * document for a shipment.</p>
+   * document for a shipment.
    */
   @Transactional
   public void completeRentalOrderShipment(LogisticsDocument shipment) {
@@ -251,10 +271,9 @@ public class LogisticsDocumentService {
   }
 
   /**
-   * Commits the first durable return-registration attempt before any private
-   * service call. The relay can therefore replay an uncertain outcome through
-   * the same stable operation identifier instead of guessing whether asset
-   * state changed.
+   * Commits the first durable return-registration attempt before any private service call. The
+   * relay can therefore replay an uncertain outcome through the same stable operation identifier
+   * instead of guessing whether asset state changed.
    */
   @Transactional
   public CreateResult registerReturn(
@@ -275,10 +294,9 @@ public class LogisticsDocumentService {
   }
 
   /**
-   * Starts the undamaged-return completion saga after freezing the exact
-   * per-line media generation references. The private media receiver is the
-   * source of truth for ownership and readiness; this service persists only
-   * opaque references and its own durable attempt ledger.
+   * Starts the undamaged-return completion saga after freezing the exact per-line media generation
+   * references. The private media receiver is the source of truth for ownership and readiness; this
+   * service persists only opaque references and its own durable attempt ledger.
    */
   @Transactional
   public CreateResult acceptUndamagedReturn(
@@ -298,7 +316,9 @@ public class LogisticsDocumentService {
             request));
   }
 
-  /** Starts one maintenance-owned draft estimate per return line after proving inspection photos. */
+  /**
+   * Starts one maintenance-owned draft estimate per return line after proving inspection photos.
+   */
   @Transactional
   public CreateResult startReturnEstimates(
       UUID subjectId,
@@ -318,9 +338,9 @@ public class LogisticsDocumentService {
   }
 
   /**
-   * Retains the explicit command only for pre-existing DRAFT documents. New
-   * documents start their durable preparation workflow atomically with their
-   * creation, so the panel never has to coordinate create-and-plan commands.
+   * Retains the explicit command only for pre-existing DRAFT documents. New documents start their
+   * durable preparation workflow atomically with their creation, so the panel never has to
+   * coordinate create-and-plan commands.
    */
   @Transactional
   public CreateResult planShipment(
@@ -365,9 +385,8 @@ public class LogisticsDocumentService {
   }
 
   /**
-   * Confirms a shipment. Keeping a planned date from another calendar day is
-   * an explicit operator decision; all other callers remain protected by the
-   * departure-date guard.
+   * Confirms a shipment. Keeping a planned date from another calendar day is an explicit operator
+   * decision; all other callers remain protected by the departure-date guard.
    */
   @Transactional
   public CreateResult confirmShipmentPreparation(
@@ -416,17 +435,13 @@ public class LogisticsDocumentService {
       long expectedDocumentVersion) {
     return result(
         shipmentCoordinator.cancelShipment(
-            subjectId,
-            idempotencyKey,
-            correlationId,
-            documentId,
-            expectedDocumentVersion));
+            subjectId, idempotencyKey, correlationId, documentId, expectedDocumentVersion));
   }
 
   /**
-   * Begins one independently versioned transfer departure. The asset lease and
-   * canonical effect remain asynchronous, but every required dependency
-   * attempt is committed before the relay is allowed to make a network call.
+   * Begins one independently versioned transfer departure. The asset lease and canonical effect
+   * remain asynchronous, but every required dependency attempt is committed before the relay is
+   * allowed to make a network call.
    */
   @Transactional
   public CreateResult departTransferLine(
@@ -449,9 +464,9 @@ public class LogisticsDocumentService {
   }
 
   /**
-   * Freezes exact media generations before asking media-service for ownership
-   * truth, then lets the durable relay verify the in-transit snapshot and
-   * invoke the one permitted destination assignment effect.
+   * Freezes exact media generations before asking media-service for ownership truth, then lets the
+   * durable relay verify the in-transit snapshot and invoke the one permitted destination
+   * assignment effect.
    */
   @Transactional
   public CreateResult arriveTransferLine(
@@ -476,10 +491,7 @@ public class LogisticsDocumentService {
   }
 
   public TransferArrivalPreflightView transferArrivalPreflight(
-      UUID documentId,
-      UUID lineId,
-      long expectedDocumentVersion,
-      long expectedLineVersion) {
+      UUID documentId, UUID lineId, long expectedDocumentVersion, long expectedLineVersion) {
     return transferCoordinator.transferArrivalPreflight(
         documentId, lineId, expectedDocumentVersion, expectedLineVersion);
   }
@@ -493,16 +505,12 @@ public class LogisticsDocumentService {
       long expectedDocumentVersion) {
     return result(
         transferCoordinator.cancelTransfer(
-            subjectId,
-            idempotencyKey,
-            correlationId,
-            documentId,
-            expectedDocumentVersion));
+            subjectId, idempotencyKey, correlationId, documentId, expectedDocumentVersion));
   }
 
   /**
-   * Records an operator-reviewed reconciliation request without inventing a
-   * reverse physical movement or silently changing source-owned state.
+   * Records an operator-reviewed reconciliation request without inventing a reverse physical
+   * movement or silently changing source-owned state.
    */
   @Transactional
   public CreateResult reconcile(
@@ -574,5 +582,6 @@ public class LogisticsDocumentService {
     return result == null ? null : result(result);
   }
 
+  /** Logistics-document create result with stable idempotency replay truth. */
   public record CreateResult(LogisticsDocumentView response, boolean replayed) {}
 }

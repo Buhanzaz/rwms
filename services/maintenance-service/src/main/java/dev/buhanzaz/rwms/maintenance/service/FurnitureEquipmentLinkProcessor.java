@@ -64,7 +64,13 @@ public class FurnitureEquipmentLinkProcessor {
   private void process(FurnitureEquipmentLinkStore.WorkItem work) {
     try {
       MaintenanceDependencyGateway.FurnitureEquipmentSnapshot snapshot =
-          dependencies.ensureFurnitureEquipment(work.nodeId(), work.requestedName());
+          work.expectedEquipmentVersion() == null && work.maximumPerCabin() == null
+              ? dependencies.ensureFurnitureEquipment(work.nodeId(), work.requestedName())
+              : dependencies.ensureFurnitureEquipment(
+                  work.nodeId(),
+                  work.requestedName(),
+                  work.expectedEquipmentVersion(),
+                  work.maximumPerCabin());
       if (snapshot == null
           || snapshot.equipmentId() == null
           || snapshot.equipmentName() == null
@@ -84,7 +90,12 @@ public class FurnitureEquipmentLinkProcessor {
             "FURNITURE_EQUIPMENT_LINK_CONFLICT",
             "Asset-service returned conflicting furniture equipment truth");
       }
-      links.confirmed(work, snapshot.equipmentId(), snapshot.equipmentName());
+      links.confirmed(
+          work,
+          snapshot.equipmentId(),
+          snapshot.equipmentName(),
+          snapshot.equipmentVersion(),
+          snapshot.maximumPerCabin());
     } catch (MaintenanceConflictException conflict) {
       throw conflict;
     } catch (RuntimeException failure) {

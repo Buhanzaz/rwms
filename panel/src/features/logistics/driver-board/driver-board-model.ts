@@ -1,3 +1,6 @@
+import type { AdditionalContact } from "@/features/clients/domain/clients"
+import type { DesiredDeliveryWindow } from "@/features/orders/domain/orders"
+
 export type DriverTaskKind =
   | "DELIVER_TO_REPAIR"
   | "REMOVE_FROM_REPAIR"
@@ -16,6 +19,18 @@ export type DriverTaskAudience = {
   workerName: string | null
 }
 
+export type DriverTaskSourceType =
+  | "REPAIR"
+  | "ESTIMATE"
+  | "INVENTORY"
+  | "REPAIR_PLACE"
+  | "CAPITAL_REPAIR"
+  | "MANUAL"
+  | "LOGISTICS_DOCUMENT"
+  | "LOGISTICS_DOCUMENT_LINE"
+
+export type DriverTaskPlanningMode = "AUTO" | "FIXED_DATE"
+
 export type DriverTaskWorkflowState =
   | "REGISTERING"
   | "SCHEDULED"
@@ -27,6 +42,86 @@ export type DriverTaskWorkflowState =
 
 export type DriverBoardEntryStatus =
   "WAITING" | "IN_PROGRESS" | "PAUSED" | "DONE" | "CANCELLED"
+
+export type DriverTripDesiredEquipment = {
+  equipmentId: string
+  equipmentName: string
+  quantity: number
+}
+
+export type DriverTripActualEquipment = {
+  equipmentId: string
+  equipmentName: string | null
+  quantity: number
+  locationKind: string
+}
+
+export type DriverTripCabin = {
+  cabinId: string
+  unitNumber: string
+  desiredContents: DriverTripDesiredEquipment[]
+  actualContents: DriverTripActualEquipment[] | null
+  movementTaskCreated: boolean
+  movementTaskCompleted: boolean
+  contentReady: boolean | null
+}
+
+/** Logistics-owned projection shown identically to managers and the driver. */
+export type DriverTripDetails = {
+  taskNumber: string
+  tripNumber: number
+  operationType: string
+  clientName: string
+  address: string | null
+  latitude: number | null
+  longitude: number | null
+  primaryContactName: string | null
+  primaryContactPhone: string | null
+  additionalContacts: AdditionalContact[]
+  comment: string | null
+  desiredDeliveryWindows: DesiredDeliveryWindow[]
+  scheduledDate: string
+  cabins: DriverTripCabin[]
+}
+
+/** Full logistics-owned driver-task response used by the live detail dialog. */
+export type DriverTask = {
+  id: string
+  version: number
+  warehouseId: string
+  cabinId: string
+  repairId: string | null
+  sourceType: DriverTaskSourceType
+  sourceId: string
+  kind: DriverTaskKind
+  planningMode: DriverTaskPlanningMode
+  scheduledDate: string
+  priority: number
+  comment: string | null
+  unitNumber: string
+  driverQueueDefinitionId: string
+  driverAudienceMode: DriverTaskAudienceMode
+  plannedDriverWorkerId: string | null
+  plannedDriverNameSnapshot: string | null
+  externalTaskId: string
+  taskBoardTaskId: string | null
+  taskBoardTaskVersion: number | null
+  taskBoardEntryId: string | null
+  taskBoardEntryStatus: string | null
+  taskBoardDoneAt: string | null
+  state: DriverTaskWorkflowState
+  repairPlaceAllocationId: string | null
+  repairPlaceAllocationVersion: number | null
+  completionMediaId: string | null
+  completionMediaGeneration: number | null
+  coverApplied: boolean
+  repairPlaceEffectApplied: boolean
+  failureCode: string | null
+  createdAt: string
+  updatedAt: string
+  completedAt: string | null
+  tripDetails: DriverTripDetails | null
+}
 
 export type DriverBoardCard = {
   driverTaskId: string | null
@@ -48,6 +143,7 @@ export type DriverBoardCard = {
   priority: number
   pinned: boolean
   position: number
+  tripDetails: DriverTripDetails | null
 }
 
 export type DriverBoardDateColumn = {

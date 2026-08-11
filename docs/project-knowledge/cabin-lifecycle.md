@@ -98,40 +98,40 @@ one warehouse-scoped read:
 - there is no active presentation hold;
 - there is no conflicting operation lease.
 
-The normal client-selection branch is:
+The supported client-selection branch is:
 
-1. `logistics-service` creates an `ACTIVE` rental inquiry.
-2. A manager creates an `ACTIVE` client presentation with an expiry time and
-   a separate view window.
-3. `asset-service` acquires short-lived holds for the selected cabins.
-4. The client reads the token-limited presentation and chooses cabins.
-5. Expired, revoked, or rejected presentations release or eventually expire
-   their holds; they do not create a booking.
+1. `logistics-service` creates an `ACTIVE` inquiry linked to the current
+   `DRAFT` or normally editable `SAVED` order. An assistant inquiry retains its
+   conversation ID; a manual inquiry uses the same entity with no hidden chat.
+2. Assistant clarifications advance one at a time in one conversation. Manual
+   and assistant inquiries remain rediscoverable from the order after reload.
+3. The first selected cabin fixes the order warehouse. Every later search,
+   presentation, assistant query and additional-cabin confirmation uses only
+   that warehouse.
+4. A manager publishes an `ACTIVE` presentation. `asset-service` atomically
+   acquires its short-lived cabin holds and returns the held cabin snapshots;
+   logistics never publishes a pre-hold content snapshot as current truth.
+5. The token-limited presentation exposes the exact selectable count, each
+   cabin's current contents, all active equipment metadata, shared free
+   quantity and the per-cabin maximum. Zero shared availability remains visible
+   when selected held-cabin contents can fulfil the request.
+6. The client chooses cabins and optional furniture separately per cabin.
+   Expired or revoked presentations release or eventually expire their holds
+   and create no booking. A terminal rejected booking may be republished as a
+   new revision; pending or completed booking work remains fenced.
 
-The interactive manager branch keeps the same owners but adds a conversational
-decision layer:
-
-1. the assistant reads logistics facets and asks persisted, independent button
-   questions until every search group has an exact type and finish;
-2. one type-related size is resolved automatically, several sizes remain a
-   choice, and approximate six-metre input is accepted only through a current
-   6x2.4 relation;
-3. `REPLACE` starts a new result set and explicit `APPEND` adds another group;
-   groups such as ОСБ and ЛДСП remain switchable and answerable in either order;
-4. logistics durably freezes each complete selection replace/release command,
-   while asset-service creates, renews or releases the actual holds;
-5. removing cabins sends the complete retained identifier set, immediately
-   releases removed holds and resets the retained hold lifetime. An empty set
-   releases the selection completely.
+The interactive search still stores exact replace/release receipts. `REPLACE`
+starts a result set and explicit `APPEND` adds a group; removing cabins sends
+the complete retained identifier set, and an empty set releases it completely.
 
 Catalog help by number or text is read-only and can explain current types,
 finishes, dimensions, relations, characteristics and linoleum without creating
 or renewing a hold.
 
-The alternative manager branch creates a `DRAFT` rental order directly,
-selects a warehouse, and adds cabins through authoritative order reservations.
-Manual booking drafts also use bounded holds; they are not authoritative after
-expiry.
+The manager first creates the `DRAFT` order, records the client wishes and then
+uses “Add cabins” repeatedly through either the assistant or ordinary
+inquiry/presentation path. Every successful selection appends to that same
+order; it does not create a parallel order or inventory pool.
 
 ## 2. Booking and rental order
 
@@ -140,28 +140,37 @@ expiry.
 Confirming a client presentation is a durable logistics workflow:
 
 1. create a `PENDING` presentation-booking record;
-2. create or resolve the target `DRAFT` order;
-3. select the order warehouse;
-4. convert every presentation hold into an order-unit reservation;
-5. finalize the booking as `COMPLETED`, the presentation as `BOOKED`, and the
+2. resolve and lock the linked `DRAFT` or normally editable `SAVED` order;
+3. validate exact selection cardinality and the order's fixed warehouse;
+4. send every selected cabin with its equipment quantities plus the
+   authoritative composition of all existing order cabins to `asset-service`;
+5. atomically convert all presentation holds into order-unit reservations and
+   replace the one shared order equipment reservation;
+6. store the same per-cabin requirements in the order;
+7. finalize the booking as `COMPLETED`, the presentation as `BOOKED`, and the
    inquiry as `BOOKED`.
 
 The asset reservation changes each selected cabin from `FREE` to `BOOKED`.
-Any failure before complete conversion is rejected or recoverable through the
-same stable booking identity; a partial conversion must not be presented as a
-successful booking.
+Per-cabin quantity must satisfy both live shared capacity and the equipment
+item's `maximumPerCabin`. The conversion is one asset transaction, so another
+manager, presentation or assistant sees the same remaining quantity and no
+partial conversion is presented as success. A crash replays the same booking
+selection and asset receipt.
 
 ### Manual order
 
-A manager may create a `DRAFT` order, select one warehouse, add from 1 to 100
-available cabins, specify desired furniture/equipment and rental terms, and
-then save it for fulfillment. Adding a cabin reserves it in `asset-service`;
-removing it releases that reservation when the order/document guards allow the
-edit. The draft also identifies one logistics-owned rental client and records
-delivery address, optional coordinate pair, contact phone, optional comment and
-one to 31 acceptable delivery dates. Saving requires those delivery facts
-except the comment, and a planned shipment date must be one of the accepted
-dates.
+A manager may create an incomplete `DRAFT` order and then supply delivery
+address, optional coordinates, primary contact, separate client/order
+additional contacts, comment, rental terms and any number of ordered desired
+delivery windows. A new window is a single date or inclusive date range with an
+ordered time range. These wishes are required before final cabin assignment and
+save but remain advisory; the actual trip date/time may be outside them.
+
+Ordinary cabin/furniture add, replace or edit is allowed only while the linked
+trip has no final date/time, shipment has not started and no furniture task has
+crossed the edit cutoff. The same rule applies to `DRAFT` and editable `SAVED`
+orders. Removing an active cabin releases its asset reservation only after the
+same guards pass.
 
 The order lifecycle is:
 
@@ -173,26 +182,60 @@ DRAFT -> SAVED -> FULFILLED -> CLOSED
 
 - `DRAFT` is the normal editable state and the only cancellable state.
 - `SAVED` requires a warehouse and complete per-cabin rental terms.
-- A saved order remains editable only while its linked shipment is still an
-  untouched `DRAFT` without a furniture task.
+- A saved order remains ordinarily editable only while the shared editability
+  rule above is true.
 - `FULFILLED` means every ordered cabin has reached `SHIPPED`, not that it has
   returned.
 - `CLOSED` means every automatically linked return has reached either
   `ACCEPTED` or `ESTIMATE_REQUESTED`.
 
+### Replacement inside the same order
+
+An authorized warehouse manager may replace an unavailable cabin separately
+from ordinary editing until that exact cabin's trip starts:
+
+1. direct replacement selects old/new cabins and records a nonblank reason, or
+   replacement presentation holds alternatives and requires exactly as many
+   selections as target cabins;
+2. replacement confirmation forbids furniture edits and preserves each old
+   cabin's quantities in the target-list/selection order;
+3. any unfinished ordinary furniture task targeting an old cabin is cancelled
+   and its holds released before swap; executing work blocks replacement;
+4. one asset batch validates all pairs, presentation holds and all-order
+   furniture composition before swapping any reservation;
+5. one local transaction moves the existing requirements, document lines,
+   grouped driver members and audit facts, then replans the pre-start grouped
+   trip with the new cabin;
+6. when completed work left physical furniture in the old cabin, the existing
+   equipment-movement task mechanism moves it directly to the replacement.
+   Reservations stay with the order and readiness remains false until `DONE`.
+
+A crash after the asset receipt replays the same ordered batch/checkpoints. A
+permanent rejection leaves the order unchanged and restores any pre-start
+grouped trip cancelled as the execution fence.
+
 ## 3. Preparation and shipment
 
 A saved order can be split into independently scheduled shipments. Every
 shipment contains a selected subset of reserved cabins, freezes the driver and
-scheduled date, and progresses through:
+actual scheduled date/time, and progresses through:
 
 ```text
 DRAFT -> PREPARING -> AWAITING_CONFIRMATION
       -> CONFIRMING_PREPARATION -> SHIPPED
 ```
 
-Preparation acquires asset leases and furniture/equipment holds, validates
-asset snapshots, and creates the required movement task. Confirmation is
+Every newly scheduled shipment, return or transfer creates one grouped driver
+trip with immutable cabin members and a stable order trip number. The one
+warehouse setting limits member count for every trip; no second limit or
+per-cabin driver task is created. Board movement reorders the whole trip and,
+before start, synchronizes the actual document date while preserving its time
+and client wishes.
+
+Preparation acquires asset leases and furniture/equipment holds, validates one
+snapshot containing all active order cabins, and creates the required existing
+movement task. This all-order composition lets physical surplus from another
+trip cabin satisfy the target without double reservation. Confirmation is
 blocked until the furniture task is ready and the effective warehouse date
 permits departure, unless the operator explicitly keeps the planned date
 through the contract-defined override.
@@ -451,6 +494,12 @@ remain in the [full architecture audit](../reviews/20260808-full-architecture-au
     later ordinary booking.
 12. Inventory-derived work: frozen finding plan -> `INVENTORY` repair while
     started work is preserved and duplicate effects replay safely.
+13. Pre-start booked-cabin replacement: old order unit -> one atomic swap ->
+    same order/new unit, with unchanged furniture requirements and an existing
+    old-to-new movement task when physical contents require it.
+14. Multi-cabin trip: one shipment, return or transfer document -> one stable
+    grouped driver task; board movement changes the whole group, never a
+    member.
 
 ## Primary sources
 
@@ -458,8 +507,11 @@ remain in the [full architecture audit](../reviews/20260808-full-architecture-au
   [`RentalItemStatus.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/domain/RentalItemStatus.java)
 - [`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml),
   [`PresentationBookingService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/PresentationBookingService.java),
+  [`RentalOrderUnitReplacementService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderUnitReplacementService.java),
+  [`DocumentDriverTaskPlanner.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DocumentDriverTaskPlanner.java),
   [`RentalOrder.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/domain/RentalOrder.java), and
-  [`LogisticsDocument.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/domain/LogisticsDocument.java)
+  [`LogisticsDocument.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/domain/LogisticsDocument.java), plus
+  [`V47__order_contacts_windows_and_inquiry_target.sql`](../../services/logistics-service/src/main/resources/db/migration/V47__order_contacts_windows_and_inquiry_target.sql)
 - [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml),
   [`MaintenanceApplicationService.java`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/service/MaintenanceApplicationService.java), and maintenance domain enums under
   [`maintenance/domain`](../../services/maintenance-service/src/main/java/dev/buhanzaz/rwms/maintenance/domain/)

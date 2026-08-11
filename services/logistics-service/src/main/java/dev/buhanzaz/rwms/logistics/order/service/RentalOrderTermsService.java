@@ -1,10 +1,7 @@
 package dev.buhanzaz.rwms.logistics.order.service;
 
-import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.ExtendOrderRentalTermsRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderRentalTermExtensionInput;
-import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderRentalTermInput;
-import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.SetOrderRentalTermsRequest;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderAuditEventType;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderCommandReceipt;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
@@ -17,21 +14,18 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 /**
- * Owns the full-vector rental-term edit and the post-shipment extension command. It preserves the
- * local version/receipt fence and document-state checks that distinguish editable terms from rent
- * extensions.
+ * Owns the post-shipment rental-term extension command. Initial terms are fixed by the normal
+ * client-presentation confirmation before a cabin can enter shipment planning.
  */
 @Service
 @RequiredArgsConstructor
 class RentalOrderTermsService {
-  private static final String SET_RENTAL_TERMS = "SET_RENTAL_TERMS";
   private static final String EXTEND_RENTAL_TERMS = "EXTEND_RENTAL_TERMS";
 
   private final RentalOrderCommandStore store;
@@ -40,76 +34,6 @@ class RentalOrderTermsService {
   private final OrderAuthorizer access;
   private final RentalOrderReadService reads;
   private final LogisticsDocumentService documents;
-  private final RentalOrderEditabilityService editability;
-
-  RentalOrderCommandOutcome setRentalTerms(
-      OrderActor actor,
-      UUID orderId,
-      UUID idempotencyKey,
-      SetOrderRentalTermsRequest request) {
-    Map<UUID, Long> requested = rentalTermValues(request.terms());
-    List<String> checksumValues = new ArrayList<>();
-    checksumValues.add(orderId.toString());
-    checksumValues.add(Long.toString(request.expectedVersion()));
-    requested.forEach(
-        (unitId, months) -> {
-          checksumValues.add(unitId.toString());
-          checksumValues.add(Long.toString(months));
-        });
-    String checksum = OrderCommandChecksum.sha256(SET_RENTAL_TERMS, checksumValues);
-    OrderCommandReceipt replay =
-        store.replay(actor, SET_RENTAL_TERMS, idempotencyKey, checksum);
-    if (replay != null) {
-      return new RentalOrderCommandOutcome(reads.visibleDetail(actor, replay.getOrder()), true);
-    }
-
-    RentalOrder order = store.lockedOrder(orderId);
-    editability.requireEditable(actor, order);
-    RentalOrderProblems.requireVersion(order, request.expectedVersion());
-    List<LogisticsDependencyGateway.OrderUnitReservation> units = reads.readUnits(order);
-    Set<UUID> unitIds =
-        units.stream()
-            .map(LogisticsDependencyGateway.OrderUnitReservation::unitId)
-            .collect(Collectors.toUnmodifiableSet());
-    if (!unitIds.equals(requested.keySet())) {
-      throw RentalOrderProblems.conflict(
-          "ORDER_RENTAL_TERMS_MISMATCH",
-          "Срок аренды должен быть задан для каждой выбранной бытовки");
-    }
-    List<RentalOrderUnitTerm> existing =
-        rentalTerms.findAllByOrder_IdOrderByRentalItemIdAsc(orderId);
-    Map<UUID, RentalOrderUnitTerm> existingByUnit =
-        existing.stream()
-            .collect(
-                Collectors.toMap(
-                    RentalOrderUnitTerm::getRentalItemId,
-                    value -> value,
-                    (left, right) -> left,
-                    LinkedHashMap::new));
-    List<RentalOrderUnitTerm> changedTerms = new ArrayList<>();
-    for (Map.Entry<UUID, Long> entry : requested.entrySet()) {
-      RentalOrderUnitTerm term = existingByUnit.get(entry.getKey());
-      if (term == null) {
-        term = RentalOrderUnitTerm.create(order, entry.getKey(), entry.getValue());
-        changedTerms.add(term);
-      } else if (term.getRentalShipmentId() != null
-          && term.getRentalMonths() != entry.getValue()) {
-        throw RentalOrderProblems.conflict(
-            "ORDER_RENTAL_TERM_ASSIGNED",
-            "Срок уже назначен отгрузке; отмените черновик отгрузки или используйте продление после SHIPPED");
-      } else if (term.changeRentalMonths(entry.getValue())) {
-        changedTerms.add(term);
-      }
-    }
-    if (!changedTerms.isEmpty()) {
-      rentalTerms.saveAllAndFlush(changedTerms);
-      order.touch();
-      store.persist(order);
-      changed(order, actor, "rentalTerms");
-    }
-    store.remember(actor, SET_RENTAL_TERMS, idempotencyKey, checksum, order);
-    return new RentalOrderCommandOutcome(reads.detail(order, actor, units), false);
-  }
 
   RentalOrderCommandOutcome extendRentalTerms(
       OrderActor actor,
@@ -165,30 +89,6 @@ class RentalOrderTermsService {
     store.remember(actor, EXTEND_RENTAL_TERMS, idempotencyKey, checksum, order);
     return new RentalOrderCommandOutcome(
         reads.detail(order, actor, reads.readUnits(order)), false);
-  }
-
-  private static Map<UUID, Long> rentalTermValues(List<OrderRentalTermInput> inputs) {
-    if (inputs == null || inputs.isEmpty()) {
-      throw new IllegalArgumentException("Rental terms are required");
-    }
-    Map<UUID, Long> values = new LinkedHashMap<>();
-    for (OrderRentalTermInput input : inputs) {
-      if (input == null
-          || input.unitId() == null
-          || input.rentalMonths() == null
-          || input.rentalMonths() < 1
-          || values.putIfAbsent(input.unitId(), input.rentalMonths()) != null) {
-        throw new IllegalArgumentException("Rental terms are invalid");
-      }
-    }
-    return values.entrySet().stream()
-        .sorted(Map.Entry.comparingByKey())
-        .collect(
-            Collectors.toMap(
-                Map.Entry::getKey,
-                Map.Entry::getValue,
-                (left, right) -> left,
-                LinkedHashMap::new));
   }
 
   private static Map<UUID, Long> rentalTermExtensionValues(

@@ -23,9 +23,8 @@ import lombok.NoArgsConstructor;
 import org.hibernate.proxy.HibernateProxy;
 
 /**
- * Service-local aggregate projection. Canonical cabin and equipment state
- * remains in asset-service; this entity persists only opaque references and
- * immutable logistics snapshots.
+ * Service-local aggregate projection. Canonical cabin and equipment state remains in asset-service;
+ * this entity persists only opaque references and immutable logistics snapshots.
  */
 @Entity
 @Table(name = "logistics_document")
@@ -66,9 +65,8 @@ public class LogisticsDocument {
   private UUID driverWorkerId;
 
   /**
-   * Opaque reference to the selected existing order client.  Logistics keeps
-   * the immutable display snapshot above; the client aggregate remains owned
-   * by the order module.
+   * Opaque reference to the selected existing order client. Logistics keeps the immutable display
+   * snapshot above; the client aggregate remains owned by the order module.
    */
   @Column(name = "client_id")
   private UUID clientId;
@@ -80,8 +78,15 @@ public class LogisticsDocument {
   @Column(name = "scheduled_date")
   private LocalDate scheduledDate;
 
+  /** Historical physical column retained for old rows; new date-only logistics never reads or writes it. */
+  @Getter(AccessLevel.NONE)
+  @Column(name = "scheduled_time")
+  private java.time.LocalTime legacyScheduledTime;
+
+  /** Historical absolute schedule column retained only for JPA validation and old rows. */
+  @Getter(AccessLevel.NONE)
   @Column(name = "scheduled_at")
-  private OffsetDateTime scheduledAt;
+  private OffsetDateTime legacyScheduledAt;
 
   /** Opaque service-local reference used to join one rental lifecycle. */
   @Column(name = "rental_order_id")
@@ -109,13 +114,8 @@ public class LogisticsDocument {
   }
 
   public static LogisticsDocument createReturn(
-      UUID warehouseId,
-      UUID clientId,
-      String partySnapshot,
-      UUID subjectId,
-      UUID correlationId) {
-    return createReturn(
-        warehouseId, clientId, partySnapshot, null, subjectId, correlationId);
+      UUID warehouseId, UUID clientId, String partySnapshot, UUID subjectId, UUID correlationId) {
+    return createReturn(warehouseId, clientId, partySnapshot, null, subjectId, correlationId);
   }
 
   public static LogisticsDocument createReturn(
@@ -126,13 +126,7 @@ public class LogisticsDocument {
       UUID subjectId,
       UUID correlationId) {
     return createReturn(
-        warehouseId,
-        clientId,
-        partySnapshot,
-        driverSnapshot,
-        null,
-        subjectId,
-        correlationId);
+        warehouseId, clientId, partySnapshot, driverSnapshot, null, subjectId, correlationId);
   }
 
   /** Creates a return draft while retaining the stable selected driver identity when supplied. */
@@ -165,13 +159,7 @@ public class LogisticsDocument {
       UUID subjectId,
       UUID correlationId) {
     return createShipment(
-        warehouseId,
-        null,
-        partySnapshot,
-        driverSnapshot,
-        null,
-        subjectId,
-        correlationId);
+        warehouseId, null, partySnapshot, driverSnapshot, null, subjectId, correlationId);
   }
 
   public static LogisticsDocument createShipment(
@@ -182,13 +170,7 @@ public class LogisticsDocument {
       UUID subjectId,
       UUID correlationId) {
     return createShipment(
-        warehouseId,
-        clientId,
-        partySnapshot,
-        driverSnapshot,
-        null,
-        subjectId,
-        correlationId);
+        warehouseId, clientId, partySnapshot, driverSnapshot, null, subjectId, correlationId);
   }
 
   /** Creates a shipment draft with an optional stable task-board driver identity. */
@@ -243,13 +225,7 @@ public class LogisticsDocument {
       UUID subjectId,
       UUID correlationId) {
     return createRentalOrderReturn(
-        warehouseId,
-        clientId,
-        rentalOrderId,
-        null,
-        partySnapshot,
-        subjectId,
-        correlationId);
+        warehouseId, clientId, rentalOrderId, null, partySnapshot, subjectId, correlationId);
   }
 
   public static LogisticsDocument createRentalOrderReturn(
@@ -313,14 +289,15 @@ public class LogisticsDocument {
     if (destinationWarehouseId.equals(warehouseId)) {
       throw new IllegalArgumentException("Transfer destination must differ from origin warehouse");
     }
-    LogisticsDocument document = initialize(
-        LogisticsDocumentType.TRANSFER,
-        warehouseId,
-        destinationWarehouseId,
-        null,
-        null,
-        subjectId,
-        correlationId);
+    LogisticsDocument document =
+        initialize(
+            LogisticsDocumentType.TRANSFER,
+            warehouseId,
+            destinationWarehouseId,
+            null,
+            null,
+            subjectId,
+            correlationId);
     document.scheduledDate = Objects.requireNonNull(scheduledDate, "scheduledDate");
     return document;
   }
@@ -337,7 +314,10 @@ public class LogisticsDocument {
 
   public void beginReturnRegistration() {
     requireSchedule("Return pickup");
-    transition(LogisticsDocumentType.RETURN, LogisticsDocumentState.DRAFT, LogisticsDocumentState.REGISTERING);
+    transition(
+        LogisticsDocumentType.RETURN,
+        LogisticsDocumentState.DRAFT,
+        LogisticsDocumentState.REGISTERING);
   }
 
   public void scheduleReturn(String driver, LocalDate date) {
@@ -363,7 +343,10 @@ public class LogisticsDocument {
   }
 
   public void returnRegistrationConflict() {
-    transition(LogisticsDocumentType.RETURN, LogisticsDocumentState.REGISTERING, LogisticsDocumentState.CONFLICT);
+    transition(
+        LogisticsDocumentType.RETURN,
+        LogisticsDocumentState.REGISTERING,
+        LogisticsDocumentState.CONFLICT);
   }
 
   public void returnRegistrationRequiresReconciliation() {
@@ -381,11 +364,17 @@ public class LogisticsDocument {
   }
 
   public void acceptReturn() {
-    transition(LogisticsDocumentType.RETURN, LogisticsDocumentState.ACCEPTING, LogisticsDocumentState.ACCEPTED);
+    transition(
+        LogisticsDocumentType.RETURN,
+        LogisticsDocumentState.ACCEPTING,
+        LogisticsDocumentState.ACCEPTED);
   }
 
   public void returnAcceptanceConflict() {
-    transition(LogisticsDocumentType.RETURN, LogisticsDocumentState.ACCEPTING, LogisticsDocumentState.CONFLICT);
+    transition(
+        LogisticsDocumentType.RETURN,
+        LogisticsDocumentState.ACCEPTING,
+        LogisticsDocumentState.CONFLICT);
   }
 
   public void returnAcceptanceRequiresReconciliation() {
@@ -425,7 +414,10 @@ public class LogisticsDocument {
 
   public void beginShipmentPreparation() {
     requireSchedule("Shipment");
-    transition(LogisticsDocumentType.SHIPMENT, LogisticsDocumentState.DRAFT, LogisticsDocumentState.PREPARING);
+    transition(
+        LogisticsDocumentType.SHIPMENT,
+        LogisticsDocumentState.DRAFT,
+        LogisticsDocumentState.PREPARING);
   }
 
   public void scheduleShipment(String driver, LocalDate date) {
@@ -445,6 +437,39 @@ public class LogisticsDocument {
     driverWorkerId = workerId;
     scheduledDate = Objects.requireNonNull(date, "scheduledDate");
     touch();
+  }
+
+  /**
+   * Moves the agreed calendar date of a complete pre-start driver trip. The task-board execution
+   * fence remains authoritative for whether the external task is still movable; this transition
+   * prevents a successful whole-trip move from leaving the logistics document on a different date.
+   */
+  public void reschedulePreStartTrip(LocalDate date) {
+    requirePreStartTripReschedule();
+    LocalDate target = Objects.requireNonNull(date, "scheduledDate");
+    if (!target.equals(scheduledDate)) {
+      scheduledDate = target;
+      touch();
+    }
+  }
+
+  /**
+   * Applies the local execution fence without changing the date. Callers can hold the document lock
+   * across the task-board move and prevent a stale WAITING entry from moving an already started
+   * logistics trip remotely.
+   */
+  public void requirePreStartTripReschedule() {
+    boolean allowed =
+        switch (documentType) {
+          case SHIPMENT ->
+              state == LogisticsDocumentState.DRAFT
+                  || state == LogisticsDocumentState.PREPARING
+                  || state == LogisticsDocumentState.AWAITING_CONFIRMATION;
+          case RETURN, TRANSFER -> state == LogisticsDocumentState.DRAFT;
+        };
+    if (!allowed || scheduledDate == null) {
+      throw new IllegalStateException("Document trip cannot be rescheduled after it starts");
+    }
   }
 
   public void requireShipmentDepartureAllowed(OffsetDateTime currentTime) {
@@ -489,7 +514,8 @@ public class LogisticsDocument {
                 || state == LogisticsDocumentState.PREPARING
                 || state == LogisticsDocumentState.AWAITING_CONFIRMATION);
     if (!allowed) {
-      throw new IllegalStateException("Shipment cannot be cancelled in its current lifecycle state");
+      throw new IllegalStateException(
+          "Shipment cannot be cancelled in its current lifecycle state");
     }
     state = LogisticsDocumentState.CANCELLING;
   }
@@ -507,7 +533,8 @@ public class LogisticsDocument {
             && state != LogisticsDocumentState.AWAITING_CONFIRMATION
             && state != LogisticsDocumentState.CONFIRMING_PREPARATION
             && state != LogisticsDocumentState.CANCELLING)) {
-      throw new IllegalStateException("Shipment cannot enter conflict in its current lifecycle state");
+      throw new IllegalStateException(
+          "Shipment cannot enter conflict in its current lifecycle state");
     }
     state = LogisticsDocumentState.CONFLICT;
   }
@@ -518,7 +545,8 @@ public class LogisticsDocument {
             && state != LogisticsDocumentState.AWAITING_CONFIRMATION
             && state != LogisticsDocumentState.CONFIRMING_PREPARATION
             && state != LogisticsDocumentState.CANCELLING)) {
-      throw new IllegalStateException("Shipment cannot require reconciliation in its current lifecycle state");
+      throw new IllegalStateException(
+          "Shipment cannot require reconciliation in its current lifecycle state");
     }
     state = LogisticsDocumentState.RECONCILIATION_REQUIRED;
   }
@@ -526,7 +554,8 @@ public class LogisticsDocument {
   public void beginTransferDeparture() {
     if (documentType != LogisticsDocumentType.TRANSFER
         || (state != LogisticsDocumentState.DRAFT && state != LogisticsDocumentState.DEPARTING)) {
-      throw new IllegalStateException("Transfer departure is not allowed in its current lifecycle state");
+      throw new IllegalStateException(
+          "Transfer departure is not allowed in its current lifecycle state");
     }
     state = LogisticsDocumentState.DEPARTING;
     touch();
@@ -541,23 +570,34 @@ public class LogisticsDocument {
 
   public void beginTransferArrival() {
     if (documentType != LogisticsDocumentType.TRANSFER
-        || (state != LogisticsDocumentState.IN_TRANSIT && state != LogisticsDocumentState.ARRIVING)) {
-      throw new IllegalStateException("Transfer arrival is not allowed in its current lifecycle state");
+        || (state != LogisticsDocumentState.IN_TRANSIT
+            && state != LogisticsDocumentState.ARRIVING)) {
+      throw new IllegalStateException(
+          "Transfer arrival is not allowed in its current lifecycle state");
     }
     state = LogisticsDocumentState.ARRIVING;
     touch();
   }
 
   public void completeTransfer() {
-    transition(LogisticsDocumentType.TRANSFER, LogisticsDocumentState.ARRIVING, LogisticsDocumentState.COMPLETED);
+    transition(
+        LogisticsDocumentType.TRANSFER,
+        LogisticsDocumentState.ARRIVING,
+        LogisticsDocumentState.COMPLETED);
   }
 
   public void beginTransferCancellation() {
-    transition(LogisticsDocumentType.TRANSFER, LogisticsDocumentState.DRAFT, LogisticsDocumentState.CANCELLING);
+    transition(
+        LogisticsDocumentType.TRANSFER,
+        LogisticsDocumentState.DRAFT,
+        LogisticsDocumentState.CANCELLING);
   }
 
   public void cancelTransfer() {
-    transition(LogisticsDocumentType.TRANSFER, LogisticsDocumentState.CANCELLING, LogisticsDocumentState.CANCELLED);
+    transition(
+        LogisticsDocumentType.TRANSFER,
+        LogisticsDocumentState.CANCELLING,
+        LogisticsDocumentState.CANCELLED);
   }
 
   public void transferConflict() {
@@ -566,7 +606,8 @@ public class LogisticsDocument {
             && state != LogisticsDocumentState.DEPARTING
             && state != LogisticsDocumentState.ARRIVING
             && state != LogisticsDocumentState.CANCELLING)) {
-      throw new IllegalStateException("Transfer cannot enter conflict in its current lifecycle state");
+      throw new IllegalStateException(
+          "Transfer cannot enter conflict in its current lifecycle state");
     }
     state = LogisticsDocumentState.CONFLICT;
   }
@@ -577,7 +618,8 @@ public class LogisticsDocument {
             && state != LogisticsDocumentState.DEPARTING
             && state != LogisticsDocumentState.ARRIVING
             && state != LogisticsDocumentState.CANCELLING)) {
-      throw new IllegalStateException("Transfer cannot require reconciliation in its current lifecycle state");
+      throw new IllegalStateException(
+          "Transfer cannot require reconciliation in its current lifecycle state");
     }
     state = LogisticsDocumentState.RECONCILIATION_REQUIRED;
   }
@@ -589,9 +631,11 @@ public class LogisticsDocument {
                 && (state == LogisticsDocumentState.DRAFT
                     || state == LogisticsDocumentState.PREPARING
                     || state == LogisticsDocumentState.AWAITING_CONFIRMATION))
-            || (documentType == LogisticsDocumentType.TRANSFER && state == LogisticsDocumentState.DRAFT);
+            || (documentType == LogisticsDocumentType.TRANSFER
+                && state == LogisticsDocumentState.DRAFT);
     if (!allowed) {
-      throw new IllegalStateException("Document cannot be cancelled in its current lifecycle state");
+      throw new IllegalStateException(
+          "Document cannot be cancelled in its current lifecycle state");
     }
     state = LogisticsDocumentState.CANCELLED;
   }
@@ -662,7 +706,8 @@ public class LogisticsDocument {
 
   private void touch() {
     OffsetDateTime now = currentTime();
-    updatedAt = updatedAt != null && !now.isAfter(updatedAt) ? updatedAt.plus(1, ChronoUnit.MICROS) : now;
+    updatedAt =
+        updatedAt != null && !now.isAfter(updatedAt) ? updatedAt.plus(1, ChronoUnit.MICROS) : now;
   }
 
   private void requireSchedule(String subject) {

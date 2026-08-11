@@ -2,6 +2,9 @@ package dev.buhanzaz.rwms.asset.service;
 
 import static dev.buhanzaz.rwms.asset.api.AssetApiModels.*;
 
+import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderFurnitureMovementPlanLine;
+import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderUnitEquipmentRequirements;
+import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderUnitReplacementMovementBundle;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import java.util.List;
 import java.util.Map;
@@ -238,6 +241,12 @@ public class AssetService {
     return equipment.atWarehouse(warehouseId);
   }
 
+  /** Shared equipment availability read used by logistics booking and presentations. */
+  @Transactional(readOnly = true)
+  public List<EquipmentWarehouseResponse> logisticsEquipmentAvailability(UUID warehouseId) {
+    return equipment.atWarehouse(warehouseId);
+  }
+
   @Transactional(readOnly = true)
   public EquipmentResponse equipment(UUID id) {
     return equipment.equipment(id);
@@ -264,10 +273,21 @@ public class AssetService {
     return equipment.create(subjectId, key, request);
   }
 
+  /**
+   * Ensures the durable maintenance furniture binding; versionless calls preserve existing limits
+   * while version-fenced calls may change or clear them.
+   */
   @Transactional
   public CreateResult<MaintenanceFurnitureEquipmentResponse> ensureMaintenanceFurnitureEquipment(
       UUID subjectId, UUID key, EnsureMaintenanceFurnitureEquipmentRequest request) {
     return maintenance.ensureFurnitureEquipment(subjectId, key, request);
+  }
+
+  /** Returns a bounded live read of asset-owned settings for maintenance editor enrichment. */
+  @Transactional(readOnly = true)
+  public List<MaintenanceFurnitureEquipmentResponse> maintenanceFurnitureEquipmentSnapshots(
+      MaintenanceFurnitureEquipmentSnapshotRequest request) {
+    return maintenance.furnitureEquipmentSnapshots(request);
   }
 
   @Transactional
@@ -299,6 +319,18 @@ public class AssetService {
     rentals.lockOrderRentalItemForOrder(rentalItemId);
   }
 
+  /** Supplies outstanding-only global capacity inputs to the atomic order reservation owner. */
+  OrderEquipmentCapacity orderEquipmentCapacity(
+      UUID equipmentId, UUID warehouseId, UUID orderId) {
+    return equipment.orderCapacity(equipmentId, warehouseId, orderId);
+  }
+
+  /** Physical and outstanding-reservation inputs for one atomic order equipment decision. */
+  record OrderEquipmentCapacity(
+      long allocatableQuantity,
+      long orderPhysicalQuantity,
+      long otherOrderOutstandingQuantity) {}
+
   /** Applies the asset-owned order booking status after the caller joined the canonical locks. */
   RentalItemResponse bookOrderRentalItem(UUID rentalItemId) {
     return rentals.bookOrderRentalItem(rentalItemId);
@@ -308,6 +340,21 @@ public class AssetService {
   RentalItemResponse releaseOrderBooking(UUID rentalItemId) {
     return rentals.releaseOrderBooking(rentalItemId);
   }
+
+  /** Fences every exact old-cabin balance in one batch with ordinary movement reservations. */
+  List<List<LogisticsEquipmentMovementReservationResponse>> reserveReplacementMovements(
+      UUID idempotencyKey, List<ReplacementMovementRequest> requests) {
+    return logistics.reserveReplacementMovements(idempotencyKey, requests);
+  }
+
+  /** Existing logistics movement identity paired with its freshly recomputed exact source plan. */
+  record ReplacementMovementRequest(
+      UUID orderId,
+      UUID releasedSourceReservationId,
+      UUID targetRentalItemId,
+      List<OrderUnitEquipmentRequirements> units,
+      OrderUnitReplacementMovementBundle movement,
+      List<OrderFurnitureMovementPlanLine> exactPlan) {}
 
   @Transactional
   public CreateResult<MovementResponse> dispose(

@@ -160,6 +160,22 @@ public class OrderAuthorizer {
             || canEditWarehouse(actor, order.getWarehouseId()));
   }
 
+  /**
+   * Pure read-side mirror of rental-term extension authorization for an order projection.
+   *
+   * <p>The command still checks that each selected cabin has actually shipped. This affordance
+   * deliberately reports only whether the actor can submit the extension command for a SAVED or
+   * FULFILLED order without making the client reconstruct warehouse or role rules.
+   */
+  public boolean canExtendRentalTerms(OrderActor actor, RentalOrder order) {
+    return actor.writeScope()
+        && isVisible(actor, order)
+        && (order.getStatus() == RentalOrderStatus.SAVED
+            || order.getStatus() == RentalOrderStatus.FULFILLED)
+        && (order.getWarehouseId() == null
+            || canEditWarehouse(actor, order.getWarehouseId()));
+  }
+
   public boolean canReadWarehouse(OrderActor actor, UUID warehouseId) {
     return warehouseId != null
         && (actor.globalAdministrator() || actor.readableWarehouses().contains(warehouseId));

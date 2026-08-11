@@ -2,7 +2,6 @@ package dev.buhanzaz.rwms.logistics.order.service;
 
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
-import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.SelectWarehouseRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.UpdateOrderRequest;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderAuditEventType;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
@@ -19,8 +18,10 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 /**
- * Owns the two core mutable order details: the selected client and selected warehouse. It retains
- * their receipt replay, version fence, and saved-shipment draft synchronization ordering.
+ * Owns mutable manager-entered order details: client, primary contact, comment and selected
+ * warehouse. Client delivery location, additional contacts and receiving preference arrive only
+ * from a normal presentation confirmation. This owner retains command receipt replay, version
+ * fencing, and saved-shipment draft synchronization ordering.
  */
 @Service
 @RequiredArgsConstructor
@@ -39,9 +40,7 @@ class RentalOrderLifecycleService {
   RentalOrderCommandOutcome update(
       OrderActor actor, UUID orderId, UUID idempotencyKey, UpdateOrderRequest request) {
     String checksum =
-        OrderCommandChecksum.sha256(
-            UPDATE_ORDER,
-            updateChecksumValues(orderId, request));
+        OrderCommandChecksum.sha256(UPDATE_ORDER, updateChecksumValues(orderId, request));
     OrderCommandReceipt replay = store.replay(actor, UPDATE_ORDER, idempotencyKey, checksum);
     if (replay != null) {
       return new RentalOrderCommandOutcome(reads.visibleDetail(actor, replay.getOrder()), true);
@@ -53,15 +52,9 @@ class RentalOrderLifecycleService {
     OrderClient nextClient = clientService.required(actor, request.clientId());
     OrderClient previousClient = order.getClient();
     boolean clientChanged = order.changeClient(nextClient);
-    boolean deliveryChanged =
-        order.replaceDeliveryDetails(
-            request.deliveryAddress(),
-            request.latitude(),
-            request.longitude(),
-            request.contactPhone(),
-            request.comment(),
-            request.acceptableDeliveryDates());
-    if (!clientChanged && !deliveryChanged) {
+    boolean managerDetailsChanged =
+        order.replaceManagerOrderDetails(request.contactPhone(), request.comment());
+    if (!clientChanged && !managerDetailsChanged) {
       store.remember(actor, UPDATE_ORDER, idempotencyKey, checksum, order);
       return new RentalOrderCommandOutcome(
           reads.detail(order, actor, reads.readUnits(order)), false);
@@ -81,36 +74,28 @@ class RentalOrderLifecycleService {
           Map.of("displayName", nextClient.getDisplayName()));
       changedFields.add("clientId");
     }
-    if (deliveryChanged) changedFields.add("deliveryDetails");
+    if (managerDetailsChanged) changedFields.add("managerOrderDetails");
     changed(order, actor, String.join(",", changedFields));
     store.remember(actor, UPDATE_ORDER, idempotencyKey, checksum, order);
-    return new RentalOrderCommandOutcome(
-        reads.detail(order, actor, reads.readUnits(order)), false);
+    return new RentalOrderCommandOutcome(reads.detail(order, actor, reads.readUnits(order)), false);
   }
 
-  RentalOrderCommandOutcome selectWarehouse(
-      OrderActor actor,
-      UUID orderId,
-      UUID idempotencyKey,
-      SelectWarehouseRequest request) {
+  RentalOrderCommandOutcome selectWarehouseForPresentation(
+      OrderActor actor, UUID orderId, UUID idempotencyKey, long expectedVersion, UUID warehouseId) {
     String checksum =
         OrderCommandChecksum.sha256(
             SELECT_WAREHOUSE,
-            List.of(
-                orderId.toString(),
-                request.warehouseId().toString(),
-                Long.toString(request.expectedVersion())));
-    OrderCommandReceipt replay =
-        store.replay(actor, SELECT_WAREHOUSE, idempotencyKey, checksum);
+            List.of(orderId.toString(), warehouseId.toString(), Long.toString(expectedVersion)));
+    OrderCommandReceipt replay = store.replay(actor, SELECT_WAREHOUSE, idempotencyKey, checksum);
     if (replay != null) {
       return new RentalOrderCommandOutcome(reads.visibleDetail(actor, replay.getOrder()), true);
     }
     RentalOrder order = store.lockedOrder(orderId);
     access.requireMutable(actor, order);
-    RentalOrderProblems.requireVersion(order, request.expectedVersion());
+    RentalOrderProblems.requireVersion(order, expectedVersion);
     order.requireDraft();
-    access.requireWarehouseEdit(actor, request.warehouseId());
-    if (Objects.equals(order.getWarehouseId(), request.warehouseId())) {
+    access.requireWarehouseEdit(actor, warehouseId);
+    if (Objects.equals(order.getWarehouseId(), warehouseId)) {
       store.remember(actor, SELECT_WAREHOUSE, idempotencyKey, checksum, order);
       return new RentalOrderCommandOutcome(
           reads.detail(order, actor, reads.readUnits(order)), false);
@@ -122,24 +107,24 @@ class RentalOrderLifecycleService {
     }
     LogisticsDependencyGateway.WarehouseIdentity warehouse;
     try {
-      warehouse = dependencies.readWarehouseIdentity(request.warehouseId());
+      warehouse = dependencies.readWarehouseIdentity(warehouseId);
     } catch (LogisticsDependencyException exception) {
       throw RentalOrderProblems.dependencyProblem(exception);
     }
-    if (!request.warehouseId().equals(warehouse.id()) || !warehouse.active()) {
+    if (!warehouseId.equals(warehouse.id()) || !warehouse.active()) {
       throw RentalOrderProblems.conflict("WAREHOUSE_UNAVAILABLE", "Выбранный склад недоступен");
     }
     UUID previous = order.getWarehouseId();
-    order.selectWarehouse(request.warehouseId());
+    order.selectWarehouse(warehouseId);
     store.persist(order);
     audit.append(
         orderId,
         OrderAuditEventType.WAREHOUSE_SELECTED,
         actor,
         "WAREHOUSE",
-        request.warehouseId().toString(),
+        warehouseId.toString(),
         previous == null ? null : Map.of("warehouseId", previous.toString()),
-        Map.of("warehouseId", request.warehouseId().toString()));
+        Map.of("warehouseId", warehouseId.toString()));
     changed(order, actor, "warehouseId");
     store.remember(actor, SELECT_WAREHOUSE, idempotencyKey, checksum, order);
     return new RentalOrderCommandOutcome(reads.detail(order, actor, units), false);
@@ -161,20 +146,11 @@ class RentalOrderLifecycleService {
     values.add(orderId.toString());
     values.add(request.clientId().toString());
     values.add(Long.toString(request.expectedVersion()));
-    values.add(value(request.deliveryAddress()));
-    values.add(decimal(request.latitude()));
-    values.add(decimal(request.longitude()));
     values.add(
         request.contactPhone() == null
             ? ""
             : OrderClientService.normalizePhone(request.contactPhone()));
     values.add(value(request.comment()));
-    if (request.acceptableDeliveryDates() != null) {
-      request.acceptableDeliveryDates().stream()
-          .sorted()
-          .map(java.time.LocalDate::toString)
-          .forEach(values::add);
-    }
     return values;
   }
 
@@ -182,7 +158,4 @@ class RentalOrderLifecycleService {
     return value == null ? "" : value.trim();
   }
 
-  private static String decimal(java.math.BigDecimal value) {
-    return value == null ? "" : value.stripTrailingZeros().toPlainString();
-  }
 }

@@ -19,6 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -35,6 +36,7 @@ import tools.jackson.databind.node.ObjectNode;
  */
 @Service
 public class AssistantConversationService {
+  private static final int MAX_ORDER_RECONCILIATION_ATTEMPTS = 4;
   private static final List<String> FILTER_SUGGESTION_FIELDS =
       List.of("cabinTypes", "finishes", "dimensions", "categories", "characteristics");
 
@@ -69,7 +71,10 @@ public class AssistantConversationService {
   /**
    * A caller-supplied conversation UUID is the stable remote idempotency key. Local preflight and
    * finalization use separate short transactions, so logistics is never called under a database
-   * transaction or advisory lock.
+   * transaction or advisory lock. When an order link is supplied, an active local link is
+   * reopened only after its exact logistics state is rechecked; a terminal link is fenced to
+   * archived before a fresh inquiry is created. Concurrent new keys converge under the
+   * order-scoped finalization lock.
    */
   @Transactional(propagation = Propagation.NOT_SUPPORTED)
   public AssistantApiModels.CreateConversationResponse create(
@@ -78,32 +83,83 @@ public class AssistantConversationService {
       String bearerToken) {
     UUID conversationId =
         request.conversationId() == null ? UUID.randomUUID() : request.conversationId();
+    AssistantConversation orderConversation =
+        creationStore.activeForOrder(request.rentalOrderId(), ownerSubjectId);
+    if (orderConversation != null) {
+      assertExistingLinksMatch(orderConversation, request.clientId(), request.rentalOrderId());
+      AssistantConversation reconciled =
+          reconcileOrderConversation(orderConversation, ownerSubjectId, bearerToken);
+      if (reconciled != null) {
+        assertExistingLinksMatch(reconciled, request.clientId(), request.rentalOrderId());
+        return response(reconciled, null);
+      }
+    }
     AssistantConversation existing = creationStore.existing(conversationId, ownerSubjectId);
     if (existing != null) {
       if (request.newClient() != null) {
         LogisticsClient.InquiryBootstrap replay =
-            logistics.createRentalInquiry(
-                conversationId, null, request.newClient(), bearerToken);
+            createRentalInquiry(
+                conversationId, null, request.newClient(), request.rentalOrderId(), bearerToken);
         AssistantConversation validated =
-            creationStore.createOrValidate(
-                conversationId, ownerSubjectId, replay, null, request.newClient());
+            createOrValidateConversation(
+                conversationId,
+                ownerSubjectId,
+                replay,
+                null,
+                request.newClient(),
+                request.rentalOrderId());
         return response(validated, replay.inquiryStatus());
       }
-      assertExistingClientMatches(existing, request.clientId());
+      assertExistingLinksMatch(existing, request.clientId(), request.rentalOrderId());
       return response(existing, null);
     }
 
     LogisticsClient.InquiryBootstrap inquiry =
-        logistics.createRentalInquiry(
-            conversationId, request.clientId(), request.newClient(), bearerToken);
+        createRentalInquiry(
+            conversationId,
+            request.clientId(),
+            request.newClient(),
+            request.rentalOrderId(),
+            bearerToken);
     AssistantConversation conversation =
-        creationStore.createOrValidate(
+        createOrValidateConversation(
             conversationId,
             ownerSubjectId,
             inquiry,
             request.clientId(),
-            request.newClient());
-    return response(conversation, inquiry.inquiryStatus());
+            request.newClient(),
+            request.rentalOrderId());
+    String status =
+        conversation.getRentalInquiryId().equals(inquiry.rentalInquiryId())
+            ? inquiry.inquiryStatus()
+            : null;
+    return response(conversation, status);
+  }
+
+  private AssistantConversation createOrValidateConversation(
+      UUID conversationId,
+      UUID ownerSubjectId,
+      LogisticsClient.InquiryBootstrap inquiry,
+      UUID clientId,
+      AssistantApiModels.NewClientRequest newClient,
+      UUID rentalOrderId) {
+    return rentalOrderId == null
+        ? creationStore.createOrValidate(
+            conversationId, ownerSubjectId, inquiry, clientId, newClient)
+        : creationStore.createOrValidate(
+            conversationId, ownerSubjectId, inquiry, clientId, newClient, rentalOrderId);
+  }
+
+  private LogisticsClient.InquiryBootstrap createRentalInquiry(
+      UUID conversationId,
+      UUID clientId,
+      AssistantApiModels.NewClientRequest newClient,
+      UUID rentalOrderId,
+      String bearerToken) {
+    return rentalOrderId == null
+        ? logistics.createRentalInquiry(conversationId, clientId, newClient, bearerToken)
+        : logistics.createRentalInquiry(
+            conversationId, clientId, newClient, rentalOrderId, bearerToken);
   }
 
   @Transactional(readOnly = true)
@@ -113,8 +169,33 @@ public class AssistantConversationService {
         .toList();
   }
 
+  /**
+   * Lists the one active order conversation after reconciling its logistics-owned inquiry state.
+   * The remote preflight runs after the repository read transaction has closed; an unfiltered list
+   * uses {@link #list(UUID)} and therefore never performs per-conversation upstream reads.
+   */
+  @Transactional(propagation = Propagation.NOT_SUPPORTED)
+  public List<AssistantApiModels.ConversationResponse> list(
+      UUID ownerSubjectId, UUID rentalOrderId, String bearerToken) {
+    if (rentalOrderId == null) return list(ownerSubjectId);
+    AssistantConversation candidate =
+        conversations
+            .findByOwnerSubjectIdAndRentalOrderIdAndArchivedFalseOrderByUpdatedAtDesc(
+                ownerSubjectId, rentalOrderId)
+            .stream()
+            .findFirst()
+            .orElse(null);
+    if (candidate == null) return List.of();
+    AssistantConversation reconciled =
+        reconcileOrderConversation(candidate, ownerSubjectId, bearerToken);
+    return reconciled == null
+        ? List.of()
+        : List.of(mapper.toConversationResponse(reconciled));
+  }
+
   @Transactional(readOnly = true)
-  public AssistantApiModels.ConversationDetailResponse detail(UUID ownerSubjectId, UUID conversationId) {
+  public AssistantApiModels.ConversationDetailResponse detail(
+      UUID ownerSubjectId, UUID conversationId) {
     return detail(ownerSubjectId, conversationId, null);
   }
 
@@ -172,9 +253,9 @@ public class AssistantConversationService {
   }
 
   /**
-   * This is intentionally based on the same recovered, expiry-checked carousel sent to the
-   * browser, and requires that no client presentation exists for the inquiry. Historical tool
-   * calls or a previously published client link must never make the model ask about a merge.
+   * This is intentionally based on the same recovered, expiry-checked carousel sent to the browser,
+   * and requires that no client presentation exists for the inquiry. Historical tool calls or a
+   * previously published client link must never make the model ask about a merge.
    */
   public boolean hasActiveSearchResult(
       UUID ownerSubjectId, UUID conversationId, String bearerToken) {
@@ -210,17 +291,18 @@ public class AssistantConversationService {
   /** Persists one free-text turn or atomically resolves one exact clarification button answer. */
   @Transactional
   public TurnStart beginTurn(
-      UUID ownerSubjectId,
-      UUID conversationId,
-      AssistantApiModels.TurnRequest request) {
+      UUID ownerSubjectId, UUID conversationId, AssistantApiModels.TurnRequest request) {
     AssistantConversation conversation =
         conversations
             .findByIdAndOwnerSubjectIdAndArchivedFalse(conversationId, ownerSubjectId)
             .orElseThrow(() -> new AssistantNotFoundException("Conversation was not found"));
-    AssistantClarificationService.AnsweredQuestion answered =
-        request.clarificationAnswer() == null
-            ? null
-            : clarifications.answer(conversationId, request.clarificationAnswer());
+    AssistantClarificationService.AnsweredQuestion answered;
+    if (request.clarificationAnswer() == null) {
+      clarifications.requireNoActiveQuestion(conversationId);
+      answered = null;
+    } else {
+      answered = clarifications.answer(conversationId, request.clarificationAnswer());
+    }
     String userText = answered == null ? request.message() : answered.userMessage();
     AssistantMessage userMessage = messages.save(AssistantMessage.user(conversationId, userText));
     conversation.recordActivity();
@@ -228,9 +310,12 @@ public class AssistantConversationService {
     return new TurnStart(
         conversation.getId(),
         conversation.getRentalInquiryId(),
+        conversation.getRentalOrderId(),
         userMessage.getId(),
         userMessage.getContent(),
-        answered == null ? null : answered.question());
+        answered == null ? null : answered.question(),
+        answered == null ? null : answered.nextQuestion(),
+        answered == null ? null : answered.nextToolCallId());
   }
 
   /**
@@ -306,11 +391,7 @@ public class AssistantConversationService {
         .orElseThrow(() -> new AssistantNotFoundException("Conversation was not found"));
     return toolCalls.save(
         AssistantToolCall.start(
-            conversationId,
-            turnMessageId,
-            providerCallId,
-            toolName,
-            arguments));
+            conversationId, turnMessageId, providerCallId, toolName, arguments));
   }
 
   @Transactional
@@ -353,11 +434,56 @@ public class AssistantConversationService {
         .orElseThrow(() -> new AssistantNotFoundException("Conversation was not found"));
   }
 
-  private static void assertExistingClientMatches(
-      AssistantConversation conversation, UUID clientId) {
-    if (clientId == null || !conversation.getClientId().equals(clientId)) {
-      throw new AssistantConflictException("Conversation client is immutable");
+  private static void assertExistingLinksMatch(
+      AssistantConversation conversation, UUID clientId, UUID rentalOrderId) {
+    if (clientId == null
+        || !conversation.getClientId().equals(clientId)
+        || !java.util.Objects.equals(conversation.getRentalOrderId(), rentalOrderId)) {
+      throw new AssistantConflictException("Conversation client and rental order are immutable");
     }
+  }
+
+  /**
+   * Rechecks each order-lock winner through logistics outside a local transaction and archives only
+   * an exact terminal conversation; bounded churn and inconsistent identities fail closed.
+   */
+  private AssistantConversation reconcileOrderConversation(
+      AssistantConversation candidate, UUID ownerSubjectId, String bearerToken) {
+    UUID expectedClientId = candidate.getClientId();
+    UUID expectedRentalOrderId = candidate.getRentalOrderId();
+    Set<UUID> visited = new LinkedHashSet<>();
+    AssistantConversation current = candidate;
+    for (int attempt = 0; attempt < MAX_ORDER_RECONCILIATION_ATTEMPTS; attempt++) {
+      if (!visited.add(current.getId())
+          || !expectedClientId.equals(current.getClientId())
+          || !Objects.equals(expectedRentalOrderId, current.getRentalOrderId())) {
+        throw new AssistantUpstreamException(
+            "Order conversation changed inconsistently during reconciliation");
+      }
+      LogisticsClient.RentalInquiryContext inquiry =
+          logistics.readRentalInquiryContext(current.getRentalInquiryId(), bearerToken);
+      if (!current.getRentalInquiryId().equals(inquiry.inquiryId())
+          || !current.getClientId().equals(inquiry.clientId())
+          || !Objects.equals(current.getRentalOrderId(), inquiry.rentalOrderId())) {
+        throw new AssistantUpstreamException(
+            "Logistics returned mismatched rental inquiry links during reconciliation");
+      }
+      if ("ACTIVE".equals(inquiry.state())) return current;
+      if (!"BOOKED".equals(inquiry.state()) && !"ARCHIVED".equals(inquiry.state())) {
+        throw new AssistantUpstreamException(
+            "Logistics returned an unsupported rental inquiry state during reconciliation");
+      }
+      current =
+          creationStore.archiveTerminalForOrder(
+              ownerSubjectId,
+              current.getRentalOrderId(),
+              current.getClientId(),
+              current.getId(),
+              current.getRentalInquiryId());
+      if (current == null) return null;
+    }
+    throw new AssistantUpstreamException(
+        "Order conversation changed too often during reconciliation");
   }
 
   private AssistantApiModels.CreateConversationResponse response(
@@ -365,7 +491,8 @@ public class AssistantConversationService {
     AssistantApiModels.ConversationResponse response = mapper.toConversationResponse(conversation);
     return new AssistantApiModels.CreateConversationResponse(
         response,
-        new AssistantApiModels.RentalInquirySummary(conversation.getRentalInquiryId(), inquiryStatus),
+        new AssistantApiModels.RentalInquirySummary(
+            conversation.getRentalInquiryId(), inquiryStatus),
         new AssistantApiModels.ClientSummary(
             conversation.getClientId(),
             conversation.getClientType(),
@@ -407,7 +534,8 @@ public class AssistantConversationService {
               JsonNode notices = call.getResultPayload().path("notices");
               if (!notices.isArray()) return;
               List<JsonNode> turnNotices =
-                  noticesByTurn.computeIfAbsent(call.getTurnMessageId(), ignored -> new ArrayList<>());
+                  noticesByTurn.computeIfAbsent(
+                      call.getTurnMessageId(), ignored -> new ArrayList<>());
               for (JsonNode notice : notices) {
                 if (!notice.isObject() || containsJson(turnNotices, notice)) continue;
                 turnNotices.add(notice.deepCopy());
@@ -471,9 +599,7 @@ public class AssistantConversationService {
       SearchAggregate current = SearchAggregate.from(result);
       if (current == null) return null;
       aggregate =
-          aggregate == null
-              ? current
-              : mergeAggregates(aggregate, current, aggregate.resultMode());
+          aggregate == null ? current : mergeAggregates(aggregate, current, aggregate.resultMode());
       if (aggregate == null) return null;
     }
     return aggregate;
@@ -524,9 +650,10 @@ public class AssistantConversationService {
     ObjectNode merged = (ObjectNode) first.deepCopy();
     ObjectNode group = (ObjectNode) merged.path("group").deepCopy();
     int firstQuantity = group.path("quantity").isInt() ? group.path("quantity").intValue() : 0;
-    int secondQuantity = second.path("group").path("quantity").isInt()
-        ? second.path("group").path("quantity").intValue()
-        : 0;
+    int secondQuantity =
+        second.path("group").path("quantity").isInt()
+            ? second.path("group").path("quantity").intValue()
+            : 0;
     if (firstQuantity > 0 && secondQuantity > 0) {
       group.put("quantity", firstQuantity + secondQuantity);
     }
@@ -630,7 +757,8 @@ public class AssistantConversationService {
 
     private static SearchAggregate from(JsonNode result) {
       if (result == null
-          || !AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS.equals(result.path("tool").asText())) {
+          || !AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS.equals(
+              result.path("tool").asText())) {
         return null;
       }
       JsonNode data = result.path("data");
@@ -660,13 +788,7 @@ public class AssistantConversationService {
       }
       JsonNode suggestions = normalizedFilterSuggestions(result.get("filterSuggestions"));
       if (suggestions == null) return null;
-      return new SearchAggregate(
-          warehouseId,
-          expiresAt,
-          groups,
-          notices,
-          suggestions,
-          resultMode);
+      return new SearchAggregate(warehouseId, expiresAt, groups, notices, suggestions, resultMode);
     }
 
     private static JsonNode normalizedFilterSuggestions(JsonNode suggestions) {
@@ -719,12 +841,32 @@ public class AssistantConversationService {
   public record TurnStart(
       UUID conversationId,
       UUID rentalInquiryId,
+      UUID rentalOrderId,
       UUID userMessageId,
       String userMessage,
-      AssistantApiModels.ClarificationQuestionResponse answeredClarification) {
+      AssistantApiModels.ClarificationQuestionResponse answeredClarification,
+      AssistantApiModels.ClarificationQuestionResponse nextClarification,
+      UUID nextClarificationToolCallId) {
     public TurnStart(
         UUID conversationId, UUID rentalInquiryId, UUID userMessageId, String userMessage) {
-      this(conversationId, rentalInquiryId, userMessageId, userMessage, null);
+      this(conversationId, rentalInquiryId, null, userMessageId, userMessage, null, null, null);
+    }
+
+    public TurnStart(
+        UUID conversationId,
+        UUID rentalInquiryId,
+        UUID userMessageId,
+        String userMessage,
+        AssistantApiModels.ClarificationQuestionResponse answeredClarification) {
+      this(
+          conversationId,
+          rentalInquiryId,
+          null,
+          userMessageId,
+          userMessage,
+          answeredClarification,
+          null,
+          null);
     }
   }
 

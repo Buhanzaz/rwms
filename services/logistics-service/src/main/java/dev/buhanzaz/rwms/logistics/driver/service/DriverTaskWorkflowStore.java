@@ -1,15 +1,26 @@
 package dev.buhanzaz.rwms.logistics.driver.service;
 
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderUnitTerm;
+import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderUnitTermRepository;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsNotFoundException;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -19,7 +30,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Owns transaction-scoped claims and confirmations of driver workflow state. It performs no
- * dependency calls, so DriverTaskProcessor executes remote effects outside local write transactions.
+ * dependency calls, so DriverTaskProcessor executes remote effects outside local write
+ * transactions.
  */
 @Service
 @RequiredArgsConstructor
@@ -30,9 +42,13 @@ class DriverTaskWorkflowStore {
    * outage must never strand a physical movement in reconciliation.
    */
   static final int MAX_TRANSIENT_RETRY_COUNT = 5;
+
   static final long MAX_TRANSIENT_RETRY_DELAY_SECONDS = 1L << MAX_TRANSIENT_RETRY_COUNT;
 
   private final DriverLogisticsTaskRepository tasks;
+  private final LogisticsDocumentRepository documents;
+  private final LogisticsDocumentLineRepository documentLines;
+  private final RentalOrderUnitTermRepository rentalTerms;
 
   @Transactional
   public Optional<Work> nextWork(UUID taskId) {
@@ -40,21 +56,22 @@ class DriverTaskWorkflowStore {
         tasks.findForUpdate(taskId).orElseThrow(LogisticsNotFoundException::new);
     if (task.getState().isTerminal() || !task.isDue(now())) return Optional.empty();
     return switch (task.getState()) {
-      case REGISTERING -> Optional.of(
-          new RegisterWork(
-              task.getId(),
-              task.getWarehouseId(),
-              task.getExternalTaskId(),
-              task.getDriverQueueDefinitionId(),
-              task.getUnitNumber(),
-              title(task),
-              description(task),
-              task.getScheduledDate(),
-              task.getPriority(),
-              new LogisticsDependencyGateway.DriverTaskAudience(
-                  task.getDriverAudienceMode(),
-                  task.getPlannedDriverWorkerId(),
-                  task.getPlannedDriverNameSnapshot())));
+      case REGISTERING ->
+          Optional.of(
+              new RegisterWork(
+                  task.getId(),
+                  task.getWarehouseId(),
+                  task.getExternalTaskId(),
+                  task.getDriverQueueDefinitionId(),
+                  task.getUnitNumber(),
+                  title(task),
+                  description(task),
+                  task.getScheduledDate(),
+                  task.getPriority(),
+                  new LogisticsDependencyGateway.DriverTaskAudience(
+                      task.getDriverAudienceMode(),
+                      task.getPlannedDriverWorkerId(),
+                      task.getPlannedDriverNameSnapshot())));
       case SCHEDULED ->
           task.hasManualPromotionHold()
                   && task.getKind().consumesRepairPlace()
@@ -74,8 +91,7 @@ class DriverTaskWorkflowStore {
   }
 
   @Transactional
-  public void confirmRegistration(
-      UUID taskId, LogisticsDependencyGateway.DriverBoardTask board) {
+  public void confirmRegistration(UUID taskId, LogisticsDependencyGateway.DriverBoardTask board) {
     DriverLogisticsTask task = locked(taskId);
     if (task.getState() != DriverTaskState.REGISTERING
         && task.getState() != DriverTaskState.SCHEDULED) {
@@ -97,14 +113,14 @@ class DriverTaskWorkflowStore {
   }
 
   @Transactional
-  public void confirmStatus(
-      UUID taskId, LogisticsDependencyGateway.DriverBoardTask board) {
+  public void confirmStatus(UUID taskId, LogisticsDependencyGateway.DriverBoardTask board) {
     DriverLogisticsTask task = locked(taskId);
     if (task.getState() != DriverTaskState.SCHEDULED
         && task.getState() != DriverTaskState.CURRENT) {
       return;
     }
     requireBoardTask(task, board);
+    synchronizeGroupedDocumentDate(task, board);
     if (matchesCurrentStatus(task, board)) {
       return;
     }
@@ -125,9 +141,104 @@ class DriverTaskWorkflowStore {
   }
 
   /**
+   * Locks and verifies the owning grouped document before a public board move calls task-board. The
+   * surrounding move transaction retains this lock until the remote receipt and local date
+   * projection are confirmed together.
+   */
+  @Transactional
+  public void requireGroupedDocumentMovePreStart(UUID taskId) {
+    DriverLogisticsTask task = locked(taskId);
+    if (task.getSourceType() != DriverTaskSourceType.LOGISTICS_DOCUMENT) {
+      return;
+    }
+    LogisticsDocument document =
+        documents
+            .findForUpdate(task.getSourceId())
+            .orElseThrow(
+                () -> new LogisticsConflictException("Логистический документ ходки не найден"));
+    if (!task.getWarehouseId().equals(document.getWarehouseId())
+        || !matchesDocumentType(task.getKind(), document.getDocumentType())) {
+      throw new LogisticsConflictException("Задание водителя не соответствует документу ходки");
+    }
+    try {
+      document.requirePreStartTripReschedule();
+    } catch (IllegalStateException exception) {
+      throw new LogisticsConflictException("Начатую ходку нельзя перенести или переупорядочить");
+    }
+  }
+
+  /**
+   * Confirms a task-board whole-trip calendar move into the owning document and its rental terms in
+   * the same local transaction as the driver-task snapshot. A later status poll repeats this
+   * method, so a crash after the remote move converges without a browser compensation.
+   */
+  private void synchronizeGroupedDocumentDate(
+      DriverLogisticsTask task, LogisticsDependencyGateway.DriverBoardTask board) {
+    if (task.getSourceType() != DriverTaskSourceType.LOGISTICS_DOCUMENT
+        || !"SCHEDULED".equals(board.lane())
+        || board.scheduledDate() == null) {
+      return;
+    }
+    LogisticsDocument document =
+        documents
+            .findForUpdate(task.getSourceId())
+            .orElseThrow(
+                () -> new LogisticsConflictException("Логистический документ ходки не найден"));
+    if (!task.getWarehouseId().equals(document.getWarehouseId())
+        || !matchesDocumentType(task.getKind(), document.getDocumentType())) {
+      throw new LogisticsConflictException("Задание водителя не соответствует документу ходки");
+    }
+    if (board.scheduledDate().equals(document.getScheduledDate())) {
+      return;
+    }
+    try {
+      document.reschedulePreStartTrip(board.scheduledDate());
+    } catch (IllegalStateException exception) {
+      throw new LogisticsConflictException("Начатую ходку нельзя перенести на другую дату");
+    }
+    synchronizeRentalTerms(document, board.scheduledDate());
+    documents.saveAndFlush(document);
+  }
+
+  private void synchronizeRentalTerms(LogisticsDocument document, java.time.LocalDate date) {
+    if (document.getDocumentType() != LogisticsDocumentType.SHIPMENT
+        || document.getRentalOrderId() == null) {
+      return;
+    }
+    List<UUID> unitIds =
+        documentLines.findAllByDocument_IdOrderByLineNumber(document.getId()).stream()
+            .map(LogisticsDocumentLine::getAssetId)
+            .toList();
+    List<RentalOrderUnitTerm> terms =
+        rentalTerms.findAllByOrder_IdAndRentalItemIdInOrderByRentalItemIdAsc(
+            document.getRentalOrderId(), unitIds);
+    if (terms.size() != unitIds.size()) {
+      throw new LogisticsConflictException(
+          "Для каждой бытовки отгрузки должен быть задан срок аренды");
+    }
+    Map<UUID, RentalOrderUnitTerm> byUnit = new LinkedHashMap<>();
+    terms.forEach(term -> byUnit.put(term.getRentalItemId(), term));
+    for (UUID unitId : unitIds) {
+      RentalOrderUnitTerm term = byUnit.get(unitId);
+      if (term == null) {
+        throw new LogisticsConflictException("Срок аренды бытовки не найден");
+      }
+      term.rescheduleShipment(document.getId(), date);
+    }
+    rentalTerms.saveAllAndFlush(terms);
+  }
+
+  private static boolean matchesDocumentType(
+      DriverTaskKind kind, LogisticsDocumentType documentType) {
+    return (kind == DriverTaskKind.SHIPMENT && documentType == LogisticsDocumentType.SHIPMENT)
+        || (kind == DriverTaskKind.RETURN && documentType == LogisticsDocumentType.RETURN)
+        || (kind == DriverTaskKind.TRANSFER && documentType == LogisticsDocumentType.TRANSFER);
+  }
+
+  /**
    * The relay polls active task-board work as a fallback for missed events. Do not turn an
-   * identical poll response into a local aggregate write: it advances the JPA version and can
-   * race an operator command that has already applied at task-board.
+   * identical poll response into a local aggregate write: it advances the JPA version and can race
+   * an operator command that has already applied at task-board.
    */
   private static boolean matchesCurrentStatus(
       DriverLogisticsTask task, LogisticsDependencyGateway.DriverBoardTask board) {
@@ -138,18 +249,15 @@ class DriverTaskWorkflowStore {
         || !Objects.equals(task.getTaskBoardDoneAt(), board.doneAt())
         || !Objects.equals(task.getScheduledDate(), board.scheduledDate())
         || task.getDriverAudienceMode() != board.driverAudience().mode()
-        || !Objects.equals(
-            task.getPlannedDriverWorkerId(), board.driverAudience().workerId())
-        || !Objects.equals(
-            task.getPlannedDriverNameSnapshot(), board.driverAudience().workerName())
+        || !Objects.equals(task.getPlannedDriverWorkerId(), board.driverAudience().workerId())
+        || !Objects.equals(task.getPlannedDriverNameSnapshot(), board.driverAudience().workerName())
         || task.getRetryCount() != 0
         || task.getFailureCode() != null) {
       return false;
     }
     return "ACTIVE".equals(board.status())
         && (("CURRENT".equals(board.lane()) && task.getState() == DriverTaskState.CURRENT)
-            || ("SCHEDULED".equals(board.lane())
-                && task.getState() == DriverTaskState.SCHEDULED));
+            || ("SCHEDULED".equals(board.lane()) && task.getState() == DriverTaskState.SCHEDULED));
   }
 
   @Transactional
@@ -164,16 +272,12 @@ class DriverTaskWorkflowStore {
           "Task-board returned mismatched driver completion evidence");
     }
     task.captureEvidence(
-        evidence.evidenceId(),
-        evidence.mediaId(),
-        evidence.mediaGeneration(),
-        evidence.entryId());
+        evidence.evidenceId(), evidence.mediaId(), evidence.mediaGeneration(), evidence.entryId());
     tasks.saveAndFlush(task);
   }
 
   @Transactional
-  public void confirmCover(
-      UUID taskId, LogisticsDependencyGateway.CabinCoverChange cover) {
+  public void confirmCover(UUID taskId, LogisticsDependencyGateway.CabinCoverChange cover) {
     DriverLogisticsTask task = locked(taskId);
     if (task.getState() != DriverTaskState.FINALIZING || task.isCoverApplied()) return;
     if (!task.getWarehouseId().equals(cover.warehouseId())
@@ -182,7 +286,7 @@ class DriverTaskWorkflowStore {
       throw new LogisticsConflictException(
           "Media-service returned a mismatched cabin cover result");
     }
-    if (task.isGroupedShipment()) {
+    if (task.isGroupedDocument()) {
       task.markGroupedShipmentMemberCoverApplied(
           cover.cabinId(), cover.coverMediaId(), cover.taskBoardEntryId());
       tasks.saveAndFlush(task);
@@ -200,8 +304,7 @@ class DriverTaskWorkflowStore {
   public void confirmRepairPlaceEffect(
       UUID taskId, LogisticsDependencyGateway.RepairPlaceAllocation allocation) {
     DriverLogisticsTask task = locked(taskId);
-    if (task.getState() != DriverTaskState.FINALIZING
-        || task.isRepairPlaceEffectApplied()) {
+    if (task.getState() != DriverTaskState.FINALIZING || task.isRepairPlaceEffectApplied()) {
       return;
     }
     if (!task.getWarehouseId().equals(allocation.warehouseId())
@@ -210,8 +313,7 @@ class DriverTaskWorkflowStore {
       throw new LogisticsConflictException(
           "Maintenance-service returned a mismatched repair-place effect");
     }
-    String expectedState =
-        task.getKind().consumesRepairPlace() ? "OCCUPIED" : "RELEASED";
+    String expectedState = task.getKind().consumesRepairPlace() ? "OCCUPIED" : "RELEASED";
     if (!expectedState.equals(allocation.state())) {
       throw new LogisticsConflictException(
           "Maintenance-service returned an unexpected repair-place state");
@@ -247,8 +349,7 @@ class DriverTaskWorkflowStore {
   public void confirmReservation(
       UUID taskId, LogisticsDependencyGateway.RepairPlaceAllocation allocation) {
     DriverLogisticsTask task = locked(taskId);
-    if (task.getState() != DriverTaskState.SCHEDULED
-        || !task.getKind().consumesRepairPlace()) {
+    if (task.getState() != DriverTaskState.SCHEDULED || !task.getKind().consumesRepairPlace()) {
       return;
     }
     if (!task.getWarehouseId().equals(allocation.warehouseId())
@@ -279,14 +380,12 @@ class DriverTaskWorkflowStore {
   }
 
   @Transactional
-  public void confirmCurrent(
-      UUID taskId, LogisticsDependencyGateway.DriverBoardTask board) {
+  public void confirmCurrent(UUID taskId, LogisticsDependencyGateway.DriverBoardTask board) {
     DriverLogisticsTask task = locked(taskId);
     if (task.getState() != DriverTaskState.SCHEDULED) return;
     requireBoardTask(task, board);
     if (!"CURRENT".equals(board.lane()) || !"ACTIVE".equals(board.status())) {
-      throw new LogisticsConflictException(
-          "Task-board did not move the driver task to CURRENT");
+      throw new LogisticsConflictException("Task-board did not move the driver task to CURRENT");
     }
     task.moveToCurrent(board.taskVersion(), board.entryId(), board.entryStatus());
     tasks.saveAndFlush(task);
@@ -317,7 +416,7 @@ class DriverTaskWorkflowStore {
       return Optional.of(new EvidenceWork(task.getId(), task.getExternalTaskId()));
     }
     if (!task.isCoverApplied()) {
-      if (task.isGroupedShipment()) {
+      if (task.isGroupedDocument()) {
         var member = task.nextUncoveredGroupedShipmentMember();
         if (member == null) {
           throw new LogisticsConflictException(
@@ -368,13 +467,12 @@ class DriverTaskWorkflowStore {
         || !task.getExternalTaskId().equals(board.externalTaskId())
         || (task.getTaskBoardTaskId() != null
             && !task.getTaskBoardTaskId().equals(board.taskId()))) {
-      throw new LogisticsConflictException(
-          "Task-board returned a mismatched driver task");
+      throw new LogisticsConflictException("Task-board returned a mismatched driver task");
     }
   }
 
   private static String title(DriverLogisticsTask task) {
-    if (task.isGroupedShipment()) {
+    if (task.isGroupedDocument()) {
       return "Отгрузить бытовки";
     }
     return switch (task.getKind()) {
@@ -430,18 +528,10 @@ class DriverTaskWorkflowStore {
       implements Work {}
 
   record RepairPlaceEffectWork(
-      UUID taskId,
-      UUID warehouseId,
-      UUID repairId,
-      long expectedVersion,
-      String transition)
+      UUID taskId, UUID warehouseId, UUID repairId, long expectedVersion, String transition)
       implements Work {}
 
   record ManualReservationReleaseWork(
-      UUID taskId,
-      UUID warehouseId,
-      UUID repairId,
-      UUID allocationId,
-      long expectedVersion)
+      UUID taskId, UUID warehouseId, UUID repairId, UUID allocationId, long expectedVersion)
       implements Work {}
 }

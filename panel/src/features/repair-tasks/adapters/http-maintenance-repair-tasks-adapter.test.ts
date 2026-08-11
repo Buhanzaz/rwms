@@ -65,6 +65,7 @@ import type { RepairTaskWriteCommand } from "@/features/repair-tasks/model/repai
 import type { RepairTaskRentalItemsClient } from "@/features/repair-tasks/ports/repair-task-rental-items-client"
 import { RepairTaskQueueDraftPersistedError } from "@/features/repair-tasks/ports/repair-tasks-client"
 import type { TaskBoardSnapshotDto } from "@/features/task-board/model/task-board"
+import { ApiError } from "@/lib/api-client"
 
 const warehouseId = "00000000-0000-4000-8000-000000000001"
 const rentalItemId = "00000000-0000-4000-8000-000000000002"
@@ -957,6 +958,7 @@ describe("maintenance repair tasks adapter", () => {
       name: "RepairTaskQueueDraftPersistedError",
       taskId: repairId,
       expectedVersion: 4,
+      code: null,
       message: `Черновик ремонта ${repairId} сохранён, но постановка в очередь не выполнена: task-board unavailable`,
     })
     await expect(queued).rejects.toBeInstanceOf(
@@ -973,6 +975,29 @@ describe("maintenance repair tasks adapter", () => {
       "AUTO",
       null
     )
+  })
+
+  it("preserves the booked-unit replacement code after persisting the repair draft", async () => {
+    const queueError = new ApiError(
+      "Бытовка забронирована и требует замены.",
+      409,
+      "BOOKED_UNIT_REPLACEMENT_REQUIRED"
+    )
+    lifecycle.createDirect.mockResolvedValue(repair())
+    lifecycle.queue.mockRejectedValue(queueError)
+    lifecycle.get.mockResolvedValue({ ...repair(), version: 4 })
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    await expect(adapter.queue(writeCommand)).rejects.toMatchObject({
+      name: "RepairTaskQueueDraftPersistedError",
+      taskId: repairId,
+      expectedVersion: 4,
+      code: "BOOKED_UNIT_REPLACEMENT_REQUIRED",
+      cause: queueError,
+    })
   })
 
   it("uses the persisted draft on retry instead of creating another repair", async () => {

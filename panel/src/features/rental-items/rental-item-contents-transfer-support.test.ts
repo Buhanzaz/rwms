@@ -62,6 +62,7 @@ describe("rental-item contents source summary", () => {
       name: "Стол",
       active: true,
       comment: null,
+      maximumPerCabin: null,
       totalQuantity: 2,
       stockQuantity: 0,
       cabinStockQuantity: 2,

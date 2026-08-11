@@ -8,6 +8,8 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.MaintenanceDriverTaskCompensationOutcome;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskAudienceMode;
@@ -18,7 +20,11 @@ import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderUnitTermRepository;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
+import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -28,9 +34,130 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
 class DriverTaskWorkflowStoreTest {
-  private final DriverLogisticsTaskRepository tasks =
-      mock(DriverLogisticsTaskRepository.class);
-  private final DriverTaskWorkflowStore store = new DriverTaskWorkflowStore(tasks);
+  private final DriverLogisticsTaskRepository tasks = mock(DriverLogisticsTaskRepository.class);
+  private final LogisticsDocumentRepository documents = mock(LogisticsDocumentRepository.class);
+  private final LogisticsDocumentLineRepository documentLines =
+      mock(LogisticsDocumentLineRepository.class);
+  private final RentalOrderUnitTermRepository rentalTerms =
+      mock(RentalOrderUnitTermRepository.class);
+  private final DriverTaskWorkflowStore store =
+      new DriverTaskWorkflowStore(tasks, documents, documentLines, rentalTerms);
+
+  @Test
+  void statusRecoveryMovesEveryGroupedDocumentTypeWithoutChangingMembers() {
+    LocalDate originalDate = LocalDate.now(ZoneOffset.UTC).plusDays(1);
+    LocalDate movedDate = originalDate.plusDays(2);
+    UUID warehouseId = UUID.randomUUID();
+    for (LogisticsDocumentType type : LogisticsDocumentType.values()) {
+      UUID documentId = UUID.randomUUID();
+      LogisticsDocument document =
+          scheduledDocument(type, warehouseId, documentId, originalDate);
+      DriverTaskKind kind = DriverTaskKind.valueOf(type.name());
+      UUID cabinId = UUID.randomUUID();
+      DriverLogisticsTask task =
+          DriverLogisticsTask.createGroupedDocument(
+              warehouseId,
+              cabinId,
+              documentId,
+              kind,
+              originalDate,
+              1,
+              3,
+              "Ходка",
+              "Клиент",
+              "1 бытовка",
+              UUID.randomUUID(),
+              DriverTaskAudienceMode.WAREHOUSE_DRIVERS,
+              null,
+              null,
+              UUID.randomUUID(),
+              UUID.randomUUID(),
+              "b".repeat(64));
+      task.addGroupedDocumentMember(UUID.randomUUID(), cabinId, "БТ-1", 1);
+      UUID taskId = UUID.randomUUID();
+      UUID boardTaskId = UUID.randomUUID();
+      UUID entryId = UUID.randomUUID();
+      ReflectionTestUtils.setField(task, "id", taskId);
+      task.registerBoardTask(boardTaskId, 0, entryId, "WAITING", "SCHEDULED", null);
+      when(tasks.findForUpdate(taskId)).thenReturn(Optional.of(task));
+      when(documents.findForUpdate(documentId)).thenReturn(Optional.of(document));
+
+      store.confirmStatus(
+          taskId,
+          new LogisticsDependencyGateway.DriverBoardTask(
+              boardTaskId,
+              1,
+              warehouseId,
+              task.getExternalTaskId(),
+              "Ходка",
+              "1 бытовка",
+              "Клиент",
+              new LogisticsDependencyGateway.DriverTaskAudience(
+                  DriverTaskAudienceMode.WAREHOUSE_DRIVERS, null, null),
+              "ACTIVE",
+              movedDate,
+              "SCHEDULED",
+              3,
+              false,
+              null,
+              entryId,
+              1,
+              "WAITING",
+              0));
+
+      assertThat(task.getScheduledDate()).isEqualTo(movedDate);
+      assertThat(task.getMembers())
+          .singleElement()
+          .satisfies(member -> assertThat(member.getCabinId()).isEqualTo(cabinId));
+      assertThat(document.getScheduledDate()).isEqualTo(movedDate);
+    }
+    verify(documents, times(3)).saveAndFlush(any(LogisticsDocument.class));
+    verify(documentLines, never()).findAllByDocument_IdOrderByLineNumber(any());
+    verify(rentalTerms, never()).saveAllAndFlush(any());
+  }
+
+  @Test
+  void localStartedDocumentFailsThePreflightWithoutChangingItsDate() {
+    LocalDate date = LocalDate.now(ZoneOffset.UTC).plusDays(1);
+    UUID warehouseId = UUID.randomUUID();
+    UUID documentId = UUID.randomUUID();
+    LogisticsDocument document =
+        scheduledDocument(LogisticsDocumentType.SHIPMENT, warehouseId, documentId, date);
+    document.beginShipmentPreparation();
+    document.awaitShipmentConfirmation();
+    document.beginShipmentConfirmation();
+    DriverLogisticsTask task =
+        DriverLogisticsTask.createGroupedDocument(
+            warehouseId,
+            UUID.randomUUID(),
+            documentId,
+            DriverTaskKind.SHIPMENT,
+            date,
+            1,
+            3,
+            "Ходка",
+            "Клиент",
+            "1 бытовка",
+            UUID.randomUUID(),
+            DriverTaskAudienceMode.WAREHOUSE_DRIVERS,
+            null,
+            null,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            "c".repeat(64));
+    UUID taskId = UUID.randomUUID();
+    ReflectionTestUtils.setField(task, "id", taskId);
+    when(tasks.findForUpdate(taskId)).thenReturn(Optional.of(task));
+    when(documents.findForUpdate(documentId)).thenReturn(Optional.of(document));
+
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () -> store.requireGroupedDocumentMovePreStart(taskId))
+        .isInstanceOf(LogisticsConflictException.class)
+        .hasMessageContaining("Начатую ходку");
+
+    assertThat(document.getScheduledDate()).isEqualTo(date);
+    verify(documents, never()).saveAndFlush(any());
+  }
 
   @Test
   void manualCurrentToDateMoveReleasesInboundReservationButKeepsAutomaticFillPaused() {
@@ -60,19 +187,11 @@ class DriverTaskWorkflowStoreTest {
             UUID.randomUUID(),
             "a".repeat(64));
     ReflectionTestUtils.setField(task, "id", taskId);
-    task.registerBoardTask(
-        boardTaskId, 0, boardEntryId, "WAITING", "SCHEDULED", null);
+    task.registerBoardTask(boardTaskId, 0, boardEntryId, "WAITING", "SCHEDULED", null);
     task.reserveRepairPlace(allocationId, 0);
     task.moveToCurrent(1, boardEntryId, "WAITING");
     task.observeBoardTask(
-        boardTaskId,
-        2,
-        boardEntryId,
-        "WAITING",
-        scheduledDate,
-        "SCHEDULED",
-        "ACTIVE",
-        null);
+        boardTaskId, 2, boardEntryId, "WAITING", scheduledDate, "SCHEDULED", "ACTIVE", null);
     task.markManualPromotionHold(5);
     when(tasks.findForUpdate(taskId)).thenReturn(Optional.of(task));
 
@@ -86,17 +205,7 @@ class DriverTaskWorkflowStoreTest {
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
     LogisticsDependencyGateway.RepairPlaceAllocation released =
         new LogisticsDependencyGateway.RepairPlaceAllocation(
-            allocationId,
-            1,
-            warehouseId,
-            repairId,
-            cabinId,
-            "RELEASED",
-            null,
-            null,
-            3,
-            now,
-            now);
+            allocationId, 1, warehouseId, repairId, cabinId, "RELEASED", null, null, 3, now, now);
     store.confirmManualReservationRelease(taskId, released);
 
     assertThat(task.getRepairPlaceAllocationId()).isNull();
@@ -121,8 +230,7 @@ class DriverTaskWorkflowStoreTest {
     OffsetDateTime after = OffsetDateTime.now(ZoneOffset.UTC);
 
     assertThat(task.getState()).isEqualTo(DriverTaskState.REGISTERING);
-    assertThat(task.getRetryCount())
-        .isEqualTo(DriverTaskWorkflowStore.MAX_TRANSIENT_RETRY_COUNT);
+    assertThat(task.getRetryCount()).isEqualTo(DriverTaskWorkflowStore.MAX_TRANSIENT_RETRY_COUNT);
     assertThat(task.getFailureCode()).isEqualTo("DEPENDENCY_TRANSIENT");
     assertThat(task.getNextAttemptAt())
         .isAfter(before)
@@ -146,8 +254,7 @@ class DriverTaskWorkflowStoreTest {
     OffsetDateTime after = OffsetDateTime.now(ZoneOffset.UTC);
 
     assertThat(task.getState()).isEqualTo(DriverTaskState.REGISTERING);
-    assertThat(task.getRetryCount())
-        .isEqualTo(DriverTaskWorkflowStore.MAX_TRANSIENT_RETRY_COUNT);
+    assertThat(task.getRetryCount()).isEqualTo(DriverTaskWorkflowStore.MAX_TRANSIENT_RETRY_COUNT);
     assertThat(task.getNextAttemptAt())
         .isAfter(before)
         .isBeforeOrEqualTo(
@@ -310,9 +417,8 @@ class DriverTaskWorkflowStoreTest {
     assertThat(store.nextWork(taskId)).isEmpty();
     assertThat(task.getState()).isEqualTo(DriverTaskState.COMPLETED);
 
-    when(
-            tasks.findFirstByRepairIdAndKindOrderByCreatedAtDescIdDesc(
-                task.getRepairId(), DriverTaskKind.DELIVER_TO_REPAIR))
+    when(tasks.findFirstByRepairIdAndKindOrderByCreatedAtDescIdDesc(
+            task.getRepairId(), DriverTaskKind.DELIVER_TO_REPAIR))
         .thenReturn(Optional.of(task));
     var compensation =
         new MaintenanceDriverTaskCompensationService(
@@ -338,7 +444,8 @@ class DriverTaskWorkflowStoreTest {
     store.recordFailure(
         configurationTaskId,
         new LogisticsDependencyException(
-            LogisticsDependencyException.FailureKind.CONFIGURATION, "queue configuration is invalid"));
+            LogisticsDependencyException.FailureKind.CONFIGURATION,
+            "queue configuration is invalid"));
     store.recordFailure(
         rejectionTaskId,
         new LogisticsDependencyException(
@@ -367,18 +474,11 @@ class DriverTaskWorkflowStoreTest {
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
     LogisticsDependencyGateway.CabinCoverChange firstCover =
         new LogisticsDependencyGateway.CabinCoverChange(
-            firstCabinId,
-            task.getWarehouseId(),
-            mediaId,
-            1,
-            entryId,
-            0,
-            now);
+            firstCabinId, task.getWarehouseId(), mediaId, 1, entryId, 0, now);
 
     assertThat(store.nextWork(taskId))
         .contains(
-            new DriverTaskWorkflowStore.CoverWork(
-                taskId, firstCabinId, entryId, mediaId, true));
+            new DriverTaskWorkflowStore.CoverWork(taskId, firstCabinId, entryId, mediaId, true));
     store.confirmCover(taskId, firstCover);
     store.confirmCover(taskId, firstCover);
 
@@ -387,22 +487,16 @@ class DriverTaskWorkflowStoreTest {
     assertThat(task.getMembers().get(1).isCoverApplied()).isFalse();
     assertThat(store.nextWork(taskId))
         .contains(
-            new DriverTaskWorkflowStore.CoverWork(
-                taskId, secondCabinId, entryId, mediaId, true));
+            new DriverTaskWorkflowStore.CoverWork(taskId, secondCabinId, entryId, mediaId, true));
 
     store.confirmCover(
         taskId,
         new LogisticsDependencyGateway.CabinCoverChange(
-            secondCabinId,
-            task.getWarehouseId(),
-            mediaId,
-            1,
-            entryId,
-            0,
-            now));
+            secondCabinId, task.getWarehouseId(), mediaId, 1, entryId, 0, now));
 
     assertThat(task.isCoverApplied()).isTrue();
-    assertThat(task.getMembers()).allSatisfy(member -> assertThat(member.isCoverApplied()).isTrue());
+    assertThat(task.getMembers())
+        .allSatisfy(member -> assertThat(member.isCoverApplied()).isTrue());
     assertThat(store.nextWork(taskId)).isEmpty();
     assertThat(task.getState()).isEqualTo(DriverTaskState.COMPLETED);
   }
@@ -451,6 +545,36 @@ class DriverTaskWorkflowStoreTest {
     return task;
   }
 
+  private static LogisticsDocument scheduledDocument(
+      LogisticsDocumentType type,
+      UUID warehouseId,
+      UUID documentId,
+      LocalDate date) {
+    UUID subjectId = UUID.randomUUID();
+    UUID correlationId = UUID.randomUUID();
+    LogisticsDocument document =
+        switch (type) {
+          case SHIPMENT -> {
+            LogisticsDocument shipment =
+                LogisticsDocument.createShipment(
+                    warehouseId, "Клиент", "Водитель", subjectId, correlationId);
+            shipment.scheduleShipment("Водитель", null, date);
+            yield shipment;
+          }
+          case RETURN -> {
+            LogisticsDocument pickup =
+                LogisticsDocument.createReturn(warehouseId, subjectId, correlationId);
+            pickup.scheduleReturn("Водитель", null, date);
+            yield pickup;
+          }
+          case TRANSFER ->
+              LogisticsDocument.createTransfer(
+                  warehouseId, UUID.randomUUID(), date, subjectId, correlationId);
+        };
+    ReflectionTestUtils.setField(document, "id", documentId);
+    return document;
+  }
+
   private static DriverLogisticsTask finalizingRepairDelivery(
       UUID taskId, UUID reservedAllocationId) {
     DriverLogisticsTask task = repairDelivery(taskId);
@@ -482,12 +606,7 @@ class DriverTaskWorkflowStoreTest {
       UUID mediaId) {
     DriverLogisticsTask task = registeringGroupedShipment(taskId, firstCabinId, secondCabinId);
     task.registerBoardTask(
-        boardTaskId,
-        0,
-        entryId,
-        "DONE",
-        "CURRENT",
-        OffsetDateTime.now(ZoneOffset.UTC));
+        boardTaskId, 0, entryId, "DONE", "CURRENT", OffsetDateTime.now(ZoneOffset.UTC));
     task.captureEvidence(UUID.randomUUID(), mediaId, 1, entryId);
     return task;
   }

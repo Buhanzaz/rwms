@@ -101,7 +101,10 @@ final class NoOpMaintenanceDependencyGateway implements MaintenanceDependencyGat
 
   @Override
   public FurnitureEquipmentSnapshot ensureFurnitureEquipment(
-      UUID catalogNodeId, String equipmentName) {
+      UUID catalogNodeId,
+      String equipmentName,
+      Long expectedEquipmentVersion,
+      Integer maximumPerCabin) {
     String canonicalName = equipmentName == null ? "" : equipmentName.trim();
     if (catalogNodeId == null
         || canonicalName.isEmpty()
@@ -109,9 +112,29 @@ final class NoOpMaintenanceDependencyGateway implements MaintenanceDependencyGat
       throw new IllegalArgumentException("Furniture equipment identity is invalid");
     }
     return new FurnitureEquipmentSnapshot(
+        catalogNodeId,
         UUID.nameUUIDFromBytes(
             ("furniture-equipment:" + catalogNodeId).getBytes(StandardCharsets.UTF_8)),
-        canonicalName);
+        canonicalName,
+        expectedEquipmentVersion == null ? 0 : Math.addExact(expectedEquipmentVersion, 1),
+        maximumPerCabin);
+  }
+
+  @Override
+  public List<FurnitureEquipmentSnapshot> furnitureEquipmentSnapshots(
+      List<UUID> catalogNodeIds) {
+    return catalogNodeIds.stream()
+        .map(
+            nodeId ->
+                new FurnitureEquipmentSnapshot(
+                    nodeId,
+                    UUID.nameUUIDFromBytes(
+                        ("furniture-equipment:" + nodeId)
+                            .getBytes(StandardCharsets.UTF_8)),
+                    nodeId.toString(),
+                    0,
+                    null))
+        .toList();
   }
 
   @Override

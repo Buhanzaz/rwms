@@ -5,6 +5,7 @@ import static dev.buhanzaz.rwms.asset.api.AssetApiModels.*;
 import dev.buhanzaz.rwms.asset.security.AssetAuthorizer;
 import dev.buhanzaz.rwms.asset.service.AssetService;
 import jakarta.validation.Valid;
+import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -38,6 +40,13 @@ public class LogisticsAssetController {
       @AuthenticationPrincipal Jwt jwt, @PathVariable UUID id) {
     access.requireLogisticsAssetAccess(jwt);
     return service.logisticsSnapshot(id);
+  }
+
+  @GetMapping("/equipment-availability")
+  public List<EquipmentWarehouseResponse> equipmentAvailability(
+      @AuthenticationPrincipal Jwt jwt, @RequestParam UUID warehouseId) {
+    access.requireLogisticsAssetAccess(jwt);
+    return service.logisticsEquipmentAvailability(warehouseId);
   }
 
   @PostMapping("/operation-leases")

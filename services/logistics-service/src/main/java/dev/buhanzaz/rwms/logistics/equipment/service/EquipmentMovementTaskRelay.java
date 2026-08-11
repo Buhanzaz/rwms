@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.logistics.equipment.service;
 
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
 import dev.buhanzaz.rwms.logistics.equipment.repository.EquipmentMovementTaskRepository;
+import dev.buhanzaz.rwms.logistics.order.service.RentalOrderUnitReplacementService;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -29,12 +30,18 @@ class EquipmentMovementTaskRelay {
 
   private final EquipmentMovementTaskRepository tasks;
   private final EquipmentMovementTaskProcessor processor;
+  private final RentalOrderUnitReplacementService replacements;
 
   @Scheduled(
       fixedDelayString = "${rwms.logistics.equipment-movement.relay-delay:1s}",
       initialDelayString = "${rwms.logistics.equipment-movement.relay-initial-delay:1s}")
   void relayDueTasks() {
+    replacements.recoverPending();
     List<UUID> taskIds = tasks.findDueIds(ACTIVE_STATES, OffsetDateTime.now(ZoneOffset.UTC));
-    for (UUID taskId : taskIds) processor.processUntilIdle(taskId);
+    for (UUID taskId : taskIds) {
+      if (!replacements.recoverPendingMovement(taskId)) {
+        processor.processUntilIdle(taskId);
+      }
+    }
   }
 }

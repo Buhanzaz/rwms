@@ -1,13 +1,22 @@
 package dev.buhanzaz.rwms.logistics.order.service;
 
-import dev.buhanzaz.rwms.logistics.inquiry.service.RentalSettingsService;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
+import dev.buhanzaz.rwms.logistics.domain.ShipmentFurnitureMovementTask;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
+import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
+import dev.buhanzaz.rwms.logistics.driver.service.DocumentDriverTaskPlanner;
+import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskService;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
-import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AddOrderUnitRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderDesiredEquipmentInput;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.SetOrderUnitDesiredEquipmentRequest;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderAuditEventType;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderCommandReceipt;
+import dev.buhanzaz.rwms.logistics.order.domain.AdditionalContact;
+import dev.buhanzaz.rwms.logistics.order.domain.DesiredDeliveryWindow;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderEquipmentRequirement;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
@@ -17,6 +26,10 @@ import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderEquipmentRequirem
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderUnitTermRepository;
 import dev.buhanzaz.rwms.logistics.order.security.OrderActor;
 import dev.buhanzaz.rwms.logistics.order.security.OrderAuthorizer;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
+import dev.buhanzaz.rwms.logistics.repository.ShipmentFurnitureMovementTaskRepository;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -32,6 +45,7 @@ import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Owns rental-item and desired-equipment reservation commands, their audit evidence, and the
@@ -43,9 +57,9 @@ import org.springframework.stereotype.Service;
 class RentalOrderReservationService {
   private static final String SAVE_ORDER = "SAVE_ORDER";
   private static final String CANCEL_ORDER = "CANCEL_ORDER";
-  private static final String ADD_UNIT = "ADD_UNIT";
   private static final String REMOVE_UNIT = "REMOVE_UNIT";
   private static final String SET_DESIRED_EQUIPMENT = "SET_DESIRED_EQUIPMENT";
+  private static final String APPLY_PRESENTATION_SELECTION = "APPLY_PRESENTATION_SELECTION";
 
   private final RentalOrderCommandStore store;
   private final OrderAuditEventRepository auditEvents;
@@ -56,86 +70,19 @@ class RentalOrderReservationService {
   private final LogisticsDependencyGateway dependencies;
   private final RentalOrderReadService reads;
   private final RentalOrderEditabilityService editability;
-  private final RentalSettingsService rentalSettings;
-
-  RentalOrderCommandOutcome addUnit(
-      OrderActor actor,
-      UUID orderId,
-      UUID idempotencyKey,
-      AddOrderUnitRequest request) {
-    String checksum =
-        OrderCommandChecksum.sha256(
-            ADD_UNIT,
-            List.of(
-                orderId.toString(),
-                request.unitId().toString(),
-                Long.toString(request.expectedVersion())));
-    OrderCommandReceipt replay = store.replay(actor, ADD_UNIT, idempotencyKey, checksum);
-    if (replay != null) {
-      return new RentalOrderCommandOutcome(reads.visibleDetail(actor, replay.getOrder()), true);
-    }
-
-    RentalOrder order = store.lockedOrder(orderId);
-    editability.requireEditable(actor, order);
-    RentalOrderProblems.requireVersion(order, request.expectedVersion());
-    UUID warehouseId = requiredWarehouse(order);
-    List<LogisticsDependencyGateway.OrderUnitReservation> currentUnits = reads.readUnits(order);
-    LogisticsDependencyGateway.OrderUnitReservation current =
-        findCurrentUnit(orderId, request.unitId(), currentUnits);
-    if (current != null) {
-      boolean recorded = !ensureUnitAddedEvidence(order, current, actor);
-      store.remember(actor, ADD_UNIT, idempotencyKey, checksum, order);
-      return new RentalOrderCommandOutcome(reads.detail(order, actor, currentUnits), recorded);
-    }
-    try {
-      LogisticsDependencyGateway.OrderUnitReservation reservation =
-          dependencies.reserveOrderUnit(
-              idempotencyKey,
-              orderId,
-              warehouseId,
-              request.unitId(),
-              order.getClient().getId(),
-              order.getClient().getDisplayName(),
-              draftReservationExpiresAt(order, actor),
-              actor.subjectId(),
-              actor.role());
-      requireReservation(reservation, orderId, request.unitId(), warehouseId, "ACTIVE");
-      if (!actor.subjectId().equals(reservation.addedBySubjectId())
-          || !actor.role().equals(reservation.addedByRole())) {
-        throw RentalOrderProblems.invalidDependencyResponse();
-      }
-      ensureUnitAddedEvidence(order, reservation, actor);
-      editability.synchronizeSavedShipmentDraft(order, actor, reads.readUnits(order));
-      store.remember(actor, ADD_UNIT, idempotencyKey, checksum, order);
-      return new RentalOrderCommandOutcome(
-          reads.detail(order, actor, reads.readUnits(order)), false);
-    } catch (LogisticsDependencyException exception) {
-      String code = exception.dependencyCode();
-      if ("UNIT_ALREADY_RESERVED".equals(code)) {
-        throw new OrderUnitConflictException(
-            orderId,
-            request.unitId(),
-            code,
-            "Бытовка уже занята другим активным заказом");
-      }
-      OrderProblemException problem = RentalOrderProblems.dependencyProblem(exception);
-      if (problem.status() == HttpStatus.CONFLICT) {
-        throw new OrderUnitConflictException(
-            orderId, request.unitId(), problem.code(), problem.getMessage());
-      }
-      throw problem;
-    }
-  }
+  private final LogisticsDocumentRepository documents;
+  private final LogisticsDocumentLineRepository documentLines;
+  private final DriverLogisticsTaskRepository driverTasks;
+  private final ShipmentFurnitureMovementTaskRepository furnitureTaskLinks;
+  private final EquipmentMovementTaskService movementTasks;
+  private final DocumentDriverTaskPlanner driverTaskPlanner;
 
   RentalOrderCommandOutcome removeUnit(
-      OrderActor actor,
-      UUID orderId,
-      UUID unitId,
-      long expectedVersion,
-      UUID idempotencyKey) {
+      OrderActor actor, UUID orderId, UUID unitId, long expectedVersion, UUID idempotencyKey) {
     String checksum =
         OrderCommandChecksum.sha256(
-            REMOVE_UNIT, List.of(orderId.toString(), unitId.toString(), Long.toString(expectedVersion)));
+            REMOVE_UNIT,
+            List.of(orderId.toString(), unitId.toString(), Long.toString(expectedVersion)));
     OrderCommandReceipt replay = store.replay(actor, REMOVE_UNIT, idempotencyKey, checksum);
     if (replay != null) {
       return new RentalOrderCommandOutcome(reads.visibleDetail(actor, replay.getOrder()), true);
@@ -148,7 +95,9 @@ class RentalOrderReservationService {
     LogisticsDependencyGateway.OrderUnitReservation current =
         findCurrentUnit(orderId, unitId, currentUnits);
     editability.requireUnitNotAssignedToShipment(orderId, unitId);
-    if (order.getStatus() == RentalOrderStatus.SAVED && current != null && currentUnits.size() == 1) {
+    if (order.getStatus() == RentalOrderStatus.SAVED
+        && current != null
+        && currentUnits.size() == 1) {
       throw RentalOrderProblems.conflict(
           "ORDER_UNITS_REQUIRED", "Сохранённое бронирование должно содержать хотя бы одну бытовку");
     }
@@ -162,7 +111,8 @@ class RentalOrderReservationService {
           dependencies.releaseOrderUnit(
               idempotencyKey, orderId, unitId, actor.subjectId(), actor.role());
       requireReservation(released, orderId, unitId, warehouseId, "RELEASED");
-      if (current == null && !released.replayed()) throw RentalOrderProblems.invalidDependencyResponse();
+      if (current == null && !released.replayed())
+        throw RentalOrderProblems.invalidDependencyResponse();
       if (current != null && !current.reservationId().equals(released.reservationId())) {
         throw RentalOrderProblems.invalidDependencyResponse();
       }
@@ -173,7 +123,13 @@ class RentalOrderReservationService {
               warehouseId,
               actor.subjectId(),
               actor.role(),
-              dependencyRequirements(remainingRequirements));
+              dependencyUnitRequirements(
+                  currentUnits.stream()
+                      .filter(reservation -> !unitId.equals(reservation.unitId()))
+                      .toList(),
+                  existingRequirements,
+                  unitId,
+                  Map.of()));
       Map<UUID, LogisticsDependencyGateway.OrderEquipmentReservation> reservationByEquipment =
           requireEquipmentReservations(furnitureReservations, remainingRequirements);
       boolean furnitureChanged =
@@ -190,9 +146,7 @@ class RentalOrderReservationService {
       ensureUnitAddedEvidence(order, released, actor);
       boolean recorded =
           hasReservationEvidence(
-              orderId,
-              OrderAuditEventType.RESERVATION_RELEASED,
-              released.reservationId());
+              orderId, OrderAuditEventType.RESERVATION_RELEASED, released.reservationId());
       if (!recorded || furnitureChanged) {
         order.touch();
         store.persist(order);
@@ -238,8 +192,9 @@ class RentalOrderReservationService {
     RentalOrderProblems.requireVersion(order, request.expectedVersion());
     RentalOrderProblems.requireVersion(order, request.expectedVersion());
     UUID warehouseId = requiredWarehouse(order);
+    List<LogisticsDependencyGateway.OrderUnitReservation> currentUnits = reads.readUnits(order);
     LogisticsDependencyGateway.OrderUnitReservation unit =
-        requireCurrentUnit(orderId, unitId, reads.readUnits(order));
+        requireCurrentUnit(orderId, unitId, currentUnits);
     List<RentalOrderEquipmentRequirement> existing =
         equipmentRequirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(
             orderId);
@@ -253,7 +208,7 @@ class RentalOrderReservationService {
               warehouseId,
               actor.subjectId(),
               actor.role(),
-              dependencyRequirements(aggregate));
+              dependencyUnitRequirements(currentUnits, existing, unitId, desired));
     } catch (LogisticsDependencyException exception) {
       throw RentalOrderProblems.dependencyProblem(exception);
     }
@@ -268,8 +223,468 @@ class RentalOrderReservationService {
       changed(order, actor, "desiredEquipment");
     }
     store.remember(actor, SET_DESIRED_EQUIPMENT, idempotencyKey, checksum, order);
+    return new RentalOrderCommandOutcome(reads.detail(order, actor, reads.readUnits(order)), false);
+  }
+
+  RentalOrderCommandOutcome applyPresentationSelection(
+      OrderActor actor,
+      UUID orderId,
+      UUID idempotencyKey,
+      LogisticsDependencyGateway.ConvertedPresentationHolds conversion,
+      Map<UUID, Map<UUID, Long>> selectedRequirements,
+      DesiredDeliveryWindow desiredDeliveryWindow,
+      long rentalMonths,
+      String deliveryAddress,
+      BigDecimal latitude,
+      BigDecimal longitude,
+      List<AdditionalContact> additionalContacts,
+      List<String> legacyDesiredDeliveryTimes) {
+    if (selectedRequirements == null
+        || selectedRequirements.isEmpty()
+        || desiredDeliveryWindow == null
+        || rentalMonths < 1) {
+      throw new IllegalArgumentException("Presentation selection is required");
+    }
+    List<AdditionalContact> normalizedContacts =
+        additionalContacts == null ? List.of() : List.copyOf(additionalContacts);
+    List<String> checksumValues =
+        presentationChecksumValues(
+            orderId,
+            desiredDeliveryWindow,
+            rentalMonths,
+            deliveryAddress,
+            latitude,
+            longitude,
+            normalizedContacts,
+            selectedRequirements);
+    String checksum = OrderCommandChecksum.sha256(APPLY_PRESENTATION_SELECTION, checksumValues);
+    String legacyChecksum =
+        legacyPresentationChecksum(
+            orderId,
+            desiredDeliveryWindow,
+            rentalMonths,
+            legacyDesiredDeliveryTimes,
+            selectedRequirements);
+    OrderCommandReceipt replay =
+        store.replay(actor, APPLY_PRESENTATION_SELECTION, idempotencyKey, checksum, legacyChecksum);
+    if (replay != null) {
+      return new RentalOrderCommandOutcome(reads.visibleDetail(actor, replay.getOrder()), true);
+    }
+
+    RentalOrder order = store.lockedOrder(orderId);
+    editability.requireEditable(actor, order);
+    requiredWarehouse(order);
+    List<LogisticsDependencyGateway.OrderUnitReservation> currentUnits = reads.readUnits(order);
+    Map<UUID, LogisticsDependencyGateway.OrderUnitReservation> unitsById =
+        currentUnits.stream()
+            .collect(
+                Collectors.toMap(
+                    LogisticsDependencyGateway.OrderUnitReservation::unitId,
+                    value -> value,
+                    (left, right) -> left,
+                    LinkedHashMap::new));
+    if (!unitsById.keySet().containsAll(selectedRequirements.keySet())) {
+      throw RentalOrderProblems.conflict(
+          "PRESENTATION_CONVERSION_INVALID", "Не все выбранные бытовки добавлены в заказ");
+    }
+    List<RentalOrderEquipmentRequirement> existing =
+        equipmentRequirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(
+            orderId);
+    List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> composition =
+        dependencyUnitRequirements(currentUnits, existing, selectedRequirements);
+    Map<UUID, Long> aggregate = aggregateComposition(composition);
+    if (conversion == null || conversion.equipmentReservations() == null) {
+      throw RentalOrderProblems.invalidDependencyResponse();
+    }
+    Map<UUID, LogisticsDependencyGateway.OrderEquipmentReservation> reservationsByEquipment =
+        requireEquipmentReservations(conversion.equipmentReservations(), aggregate);
+    Map<UUID, RentalOrderUnitTerm> rentalTermsByUnit =
+        rentalTerms.findAllByOrder_IdOrderByRentalItemIdAsc(orderId).stream()
+            .collect(
+                Collectors.toMap(
+                    RentalOrderUnitTerm::getRentalItemId,
+                    value -> value,
+                    (left, right) -> left,
+                    LinkedHashMap::new));
+    List<RentalOrderUnitTerm> newRentalTerms = new ArrayList<>();
+    boolean changed = false;
+    for (Map.Entry<UUID, Map<UUID, Long>> selection : selectedRequirements.entrySet()) {
+      LogisticsDependencyGateway.OrderUnitReservation unit = unitsById.get(selection.getKey());
+      changed |= ensureUnitAddedEvidence(order, unit, actor);
+      changed |=
+          applyDesiredRequirements(
+              order,
+              selection.getKey(),
+              unit.unit().number(),
+              existing,
+              selection.getValue(),
+              reservationsByEquipment,
+              actor);
+      RentalOrderUnitTerm existingTerm = rentalTermsByUnit.get(selection.getKey());
+      if (existingTerm == null) {
+        newRentalTerms.add(RentalOrderUnitTerm.create(order, selection.getKey(), rentalMonths));
+      } else if (existingTerm.getRentalMonths() != rentalMonths) {
+        throw RentalOrderProblems.conflict(
+            "PRESENTATION_RENTAL_TERM_IMMUTABLE",
+            "Срок аренды выбранной бытовки уже зафиксирован другим бронированием");
+      }
+    }
+    boolean desiredWindowChanged = order.replaceClientDesiredDeliveryWindow(desiredDeliveryWindow);
+    boolean deliveryDetailsChanged =
+        deliveryAddress == null
+            ? false
+            : order.replaceClientDeliveryDetails(
+                deliveryAddress, latitude, longitude, normalizedContacts);
+    if (!newRentalTerms.isEmpty()) {
+      rentalTerms.saveAllAndFlush(newRentalTerms);
+    }
+    if (changed || desiredWindowChanged || deliveryDetailsChanged || !newRentalTerms.isEmpty()) {
+      if (!desiredWindowChanged && !deliveryDetailsChanged) {
+        order.touch();
+      }
+      store.persist(order);
+      changed(
+          order,
+          actor,
+          "unitsAndDesiredEquipment,desiredDeliveryWindow,clientDeliveryDetails,rentalTerms");
+    }
+    editability.synchronizeSavedShipmentDraft(order, actor, currentUnits);
+    store.remember(actor, APPLY_PRESENTATION_SELECTION, idempotencyKey, checksum, order);
+    return new RentalOrderCommandOutcome(reads.detail(order, actor, currentUnits), false);
+  }
+
+  private static List<String> presentationChecksumValues(
+      UUID orderId,
+      DesiredDeliveryWindow desiredDeliveryWindow,
+      long rentalMonths,
+      String deliveryAddress,
+      BigDecimal latitude,
+      BigDecimal longitude,
+      List<AdditionalContact> additionalContacts,
+      Map<UUID, Map<UUID, Long>> selectedRequirements) {
+    List<String> values = new ArrayList<>();
+    values.add(orderId.toString());
+    values.add(desiredDeliveryWindow.getStartDate().toString());
+    values.add(desiredDeliveryWindow.getEndDate().toString());
+    values.add(Long.toString(rentalMonths));
+    values.add(deliveryAddress == null ? "" : deliveryAddress);
+    values.add(decimal(latitude));
+    values.add(decimal(longitude));
+    additionalContacts.forEach(
+        contact -> {
+          values.add(contact.getName());
+          values.add(contact.getPhone());
+        });
+    appendPresentationSelectionChecksumValues(values, selectedRequirements);
+    return values;
+  }
+
+  /**
+   * Reconstructs only the V48 checksum shape when a durable booking still contains its retired
+   * client time fields. New date-only receipts never produce this compatible checksum.
+   */
+  private static String legacyPresentationChecksum(
+      UUID orderId,
+      DesiredDeliveryWindow desiredDeliveryWindow,
+      long rentalMonths,
+      List<String> legacyDesiredDeliveryTimes,
+      Map<UUID, Map<UUID, Long>> selectedRequirements) {
+    if (legacyDesiredDeliveryTimes == null || legacyDesiredDeliveryTimes.size() != 2) return null;
+    List<String> values = new ArrayList<>();
+    values.add(orderId.toString());
+    values.add(desiredDeliveryWindow.getStartDate().toString());
+    values.add(desiredDeliveryWindow.getEndDate().toString());
+    values.add(legacyDesiredDeliveryTimes.getFirst());
+    values.add(legacyDesiredDeliveryTimes.get(1));
+    values.add(Long.toString(rentalMonths));
+    appendPresentationSelectionChecksumValues(values, selectedRequirements);
+    return OrderCommandChecksum.sha256(APPLY_PRESENTATION_SELECTION, values);
+  }
+
+  private static void appendPresentationSelectionChecksumValues(
+      List<String> values, Map<UUID, Map<UUID, Long>> selectedRequirements) {
+    selectedRequirements.entrySet().stream()
+        .sorted(Map.Entry.comparingByKey())
+        .forEach(
+            unit -> {
+              values.add(unit.getKey().toString());
+              unit.getValue().entrySet().stream()
+                  .sorted(Map.Entry.comparingByKey())
+                  .forEach(
+                      equipment -> {
+                        values.add(equipment.getKey().toString());
+                        values.add(Long.toString(equipment.getValue()));
+                      });
+            });
+  }
+
+  private static String decimal(BigDecimal value) {
+    return value == null ? "" : value.stripTrailingZeros().toPlainString();
+  }
+
+  /**
+   * Builds the authoritative post-conversion furniture composition while selected cabins are still
+   * held by the presentation. The result is replay-stable after asset conversion because selected
+   * requirements override any local state for the same cabin.
+   */
+  @Transactional(readOnly = true)
+  List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> presentationComposition(
+      OrderActor actor, UUID orderId, Map<UUID, Map<UUID, Long>> selectedRequirements) {
+    if (selectedRequirements == null || selectedRequirements.isEmpty()) {
+      throw new IllegalArgumentException("Presentation selection is required");
+    }
+    RentalOrder order = store.requiredOrder(orderId);
+    editability.requireEditable(actor, order);
+    UUID warehouseId = requiredWarehouse(order);
+    List<LogisticsDependencyGateway.OrderUnitReservation> currentUnits = reads.readUnits(order);
+    if (currentUnits.stream().anyMatch(unit -> !warehouseId.equals(unit.warehouseId()))) {
+      throw RentalOrderProblems.conflict(
+          "ORDER_WAREHOUSE_LOCKED", "В заказ нельзя добавить бытовки с другого склада");
+    }
+    List<RentalOrderEquipmentRequirement> existing =
+        equipmentRequirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(
+            orderId);
+    Map<UUID, Map<UUID, Long>> requirementsByUnit = new LinkedHashMap<>();
+    currentUnits.forEach(unit -> requirementsByUnit.put(unit.unitId(), new LinkedHashMap<>()));
+    selectedRequirements
+        .keySet()
+        .forEach(unitId -> requirementsByUnit.putIfAbsent(unitId, new LinkedHashMap<>()));
+    for (RentalOrderEquipmentRequirement requirement : existing) {
+      if (requirement.getQuantity() > 0
+          && !selectedRequirements.containsKey(requirement.getRentalItemId())) {
+        Map<UUID, Long> unit = requirementsByUnit.get(requirement.getRentalItemId());
+        if (unit != null) {
+          unit.put(requirement.getEquipmentId(), requirement.getQuantity());
+        }
+      }
+    }
+    selectedRequirements.forEach(
+        (unitId, desired) -> requirementsByUnit.get(unitId).putAll(desired));
+    return requirementsByUnit.entrySet().stream()
+        .sorted(Map.Entry.comparingByKey())
+        .map(
+            entry ->
+                new LogisticsDependencyGateway.OrderUnitEquipmentRequirements(
+                    entry.getKey(), dependencyRequirements(entry.getValue())))
+        .toList();
+  }
+
+  /** Builds the authoritative post-swap per-cabin furniture composition for asset replay. */
+  @Transactional(readOnly = true)
+  List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> replacementComposition(
+      UUID orderId, UUID oldRentalItemId, UUID replacementRentalItemId) {
+    return replacementComposition(orderId, Map.of(oldRentalItemId, replacementRentalItemId));
+  }
+
+  /** Builds one authoritative post-swap composition for every pair in an atomic batch. */
+  @Transactional(readOnly = true)
+  List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> replacementComposition(
+      UUID orderId, Map<UUID, UUID> replacements) {
+    if (replacements == null || replacements.isEmpty()) {
+      throw new IllegalArgumentException("Replacement mapping is required");
+    }
+    RentalOrder order = store.requiredOrder(orderId);
+    List<LogisticsDependencyGateway.OrderUnitReservation> currentUnits = reads.readUnits(order);
+    Set<UUID> currentIds =
+        currentUnits.stream()
+            .map(LogisticsDependencyGateway.OrderUnitReservation::unitId)
+            .collect(Collectors.toUnmodifiableSet());
+    Set<UUID> newIds = Set.copyOf(replacements.values());
+    if (newIds.size() != replacements.size()
+        || !java.util.Collections.disjoint(replacements.keySet(), newIds)
+        || !currentIds.containsAll(replacements.keySet())
+        || currentIds.stream().anyMatch(newIds::contains)) {
+      throw RentalOrderProblems.conflict(
+          "REPLACEMENT_COMPOSITION_INVALID", "Состав бытовок заказа изменился во время замены");
+    }
+    List<RentalOrderEquipmentRequirement> existing =
+        equipmentRequirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(
+            orderId);
+    Map<UUID, List<LogisticsDependencyGateway.OrderEquipmentRequirement>> byUnit =
+        new LinkedHashMap<>();
+    for (RentalOrderEquipmentRequirement requirement : existing) {
+      if (requirement.getQuantity() < 1) continue;
+      UUID target =
+          replacements.getOrDefault(requirement.getRentalItemId(), requirement.getRentalItemId());
+      byUnit
+          .computeIfAbsent(target, ignored -> new ArrayList<>())
+          .add(
+              new LogisticsDependencyGateway.OrderEquipmentRequirement(
+                  requirement.getEquipmentId(), requirement.getQuantity()));
+    }
+    return currentUnits.stream()
+        .map(unit -> replacements.getOrDefault(unit.unitId(), unit.unitId()))
+        .distinct()
+        .sorted()
+        .map(
+            unitId ->
+                new LogisticsDependencyGateway.OrderUnitEquipmentRequirements(
+                    unitId,
+                    byUnit.getOrDefault(unitId, List.of()).stream()
+                        .sorted(
+                            java.util.Comparator.comparing(
+                                LogisticsDependencyGateway.OrderEquipmentRequirement::equipmentId))
+                        .toList()))
+        .toList();
+  }
+
+  /**
+   * Commits a complete replayable asset replacement batch into the existing order, document lines,
+   * grouped trip members, audit stream, and movement links in one local transaction.
+   */
+  @Transactional
+  RentalOrderCommandOutcome finalizeReplacements(
+      UUID orderId,
+      UUID batchIdempotencyKey,
+      LogisticsDependencyGateway.OrderUnitsReplacementReceipt receipt) {
+    RentalOrder order = store.lockedOrder(orderId);
+    List<ShipmentFurnitureMovementTask> links =
+        furnitureTaskLinks.findReplacementBatchForUpdate(orderId, batchIdempotencyKey);
+    if (links.isEmpty()) {
+      throw RentalOrderProblems.conflict("REPLACEMENT_NOT_FOUND", "Замена бытовки не найдена");
+    }
+    OrderActor actor = replacementActor(links.getFirst(), order.getWarehouseId());
+    if (links.stream().allMatch(link -> link.getReplacementCompletedAt() != null)) {
+      return new RentalOrderCommandOutcome(reads.visibleDetail(actor, order), true);
+    }
+    if (links.stream().anyMatch(link -> !link.isReplacementPending())
+        || receipt == null
+        || receipt.replacements() == null
+        || receipt.replacements().size() != links.size()) {
+      throw RentalOrderProblems.conflict("REPLACEMENT_REJECTED", "Замена бытовки была отклонена");
+    }
+
+    for (int index = 0; index < links.size(); index++) {
+      ShipmentFurnitureMovementTask link = links.get(index);
+      LogisticsDependencyGateway.OrderUnitReplacementReceipt pair =
+          receipt.replacements().get(index);
+      if (!orderId.equals(link.getOrder().getId())
+          || !batchIdempotencyKey.equals(link.getReplacementBatchIdempotencyKey())
+          || link.getReplacementPairIndex() != index) {
+        throw RentalOrderProblems.invalidDependencyResponse();
+      }
+      requireReplacementReceipt(link, order, pair);
+      if (link.getEquipmentMovementTaskId() == null) {
+        if (!pair.movementReservations().isEmpty()) {
+          throw RentalOrderProblems.invalidDependencyResponse();
+        }
+      } else {
+        if (pair.contentReady()) {
+          throw RentalOrderProblems.invalidDependencyResponse();
+        }
+        movementTasks.validateReplacementReservations(
+            link.getEquipmentMovementTaskId(), pair.movementReservations());
+      }
+    }
+
+    List<RentalOrderEquipmentRequirement> allRequirements =
+        equipmentRequirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(
+            orderId);
+    List<RentalOrderUnitTerm> terms = rentalTerms.findAllByOrder_IdOrderByRentalItemIdAsc(orderId);
+    Map<UUID, UUID> mappings =
+        links.stream()
+            .collect(
+                Collectors.toMap(
+                    ShipmentFurnitureMovementTask::getOldRentalItemId,
+                    ShipmentFurnitureMovementTask::getRentalItemId,
+                    (left, right) -> left,
+                    LinkedHashMap::new));
+    allRequirements.forEach(
+        requirement -> {
+          UUID replacement = mappings.get(requirement.getRentalItemId());
+          if (replacement != null) requirement.transferToRentalItem(replacement);
+        });
+    terms.forEach(
+        term -> {
+          UUID replacement = mappings.get(term.getRentalItemId());
+          if (replacement != null) term.transferToRentalItem(replacement);
+        });
+    equipmentRequirements.saveAllAndFlush(allRequirements);
+    rentalTerms.saveAllAndFlush(terms);
+
+    boolean audited = false;
+    Set<UUID> affectedDocumentIds = new java.util.LinkedHashSet<>();
+    for (int index = 0; index < links.size(); index++) {
+      ShipmentFurnitureMovementTask link = links.get(index);
+      LogisticsDependencyGateway.OrderUnitReplacementReceipt pair =
+          receipt.replacements().get(index);
+      UUID oldUnitId = link.getOldRentalItemId();
+      UUID newUnitId = link.getRentalItemId();
+      if (link.getDocument() != null) {
+        replaceDocumentLine(
+            link.getDocument().getId(),
+            oldUnitId,
+            newUnitId,
+            pair.replacementReservation().unit().version());
+        affectedDocumentIds.add(link.getDocument().getId());
+        ShipmentFurnitureMovementTask oldLink =
+            furnitureTaskLinks
+                .findByDocument_IdAndRentalItemId(link.getDocument().getId(), oldUnitId)
+                .orElse(null);
+        if (oldLink != null && !oldLink.getId().equals(link.getId()) && !oldLink.isReplacement()) {
+          furnitureTaskLinks.delete(oldLink);
+        }
+      }
+      if (!auditEvents.existsByOrderIdAndEventTypeAndSubjectTypeAndSubjectId(
+          orderId,
+          OrderAuditEventType.UNIT_REPLACED,
+          "UNIT_REPLACEMENT",
+          link.getId().toString())) {
+        Map<String, Object> previous = new LinkedHashMap<>();
+        previous.put("rentalItemId", oldUnitId.toString());
+        previous.put("unitNumber", pair.releasedReservation().unit().number());
+        Map<String, Object> replacement = new LinkedHashMap<>();
+        replacement.put("rentalItemId", newUnitId.toString());
+        replacement.put("unitNumber", pair.replacementReservation().unit().number());
+        if (link.getReplacementReason() != null) {
+          replacement.put("reason", link.getReplacementReason());
+        }
+        audit.append(
+            orderId,
+            OrderAuditEventType.UNIT_REPLACED,
+            actor,
+            "UNIT_REPLACEMENT",
+            link.getId().toString(),
+            Map.copyOf(previous),
+            Map.copyOf(replacement));
+        audited = true;
+      }
+      link.completeReplacement(
+          link.getEquipmentMovementTaskId() == null
+              ? null
+              : pair.releasedReservation().reservationId(),
+          now());
+      if (link.getEquipmentMovementTaskId() != null) {
+        movementTasks.resumeReplacementReservationReplay(link.getEquipmentMovementTaskId());
+      }
+    }
+    for (UUID documentId : affectedDocumentIds) {
+      LogisticsDocument document =
+          documents
+              .findForUpdate(documentId)
+              .orElseThrow(
+                  () ->
+                      RentalOrderProblems.conflict(
+                          "REPLACEMENT_DOCUMENT_NOT_FOUND", "Ходка замены не найдена"));
+      driverTaskPlanner.plan(
+          document, documentLines.findAllByDocument_IdOrderByLineNumber(documentId));
+    }
+    if (audited) {
+      order.touch();
+      store.persist(order);
+      changed(order, actor, "unitsAndDesiredEquipment");
+    }
+    furnitureTaskLinks.saveAllAndFlush(links);
+    for (ShipmentFurnitureMovementTask link : links) {
+      store.remember(
+          actor,
+          "REPLACE_UNIT",
+          link.getReplacementIdempotencyKey(),
+          link.getReplacementRequestSha256(),
+          order);
+    }
     return new RentalOrderCommandOutcome(
-        reads.detail(order, actor, reads.readUnits(order)), false);
+        reads.detail(order, actor, reads.readUnits(order)), receipt.replayed());
   }
 
   RentalOrderCommandOutcome cancel(
@@ -310,8 +725,10 @@ class RentalOrderReservationService {
         released.stream()
             .map(LogisticsDependencyGateway.OrderUnitReservation::unitId)
             .collect(Collectors.toUnmodifiableSet());
-    if (expectedUnitIds.size() != active.size()) throw RentalOrderProblems.invalidDependencyResponse();
-    if (releasedUnitIds.size() != released.size()) throw RentalOrderProblems.invalidDependencyResponse();
+    if (expectedUnitIds.size() != active.size())
+      throw RentalOrderProblems.invalidDependencyResponse();
+    if (releasedUnitIds.size() != released.size())
+      throw RentalOrderProblems.invalidDependencyResponse();
     if (!active.isEmpty() && !expectedUnitIds.equals(releasedUnitIds)) {
       throw RentalOrderProblems.invalidDependencyResponse();
     }
@@ -407,6 +824,7 @@ class RentalOrderReservationService {
 
     RentalOrder order = store.lockedOrder(orderId);
     access.requireVisible(actor, order);
+    editability.requireNoPendingReplacement(orderId);
     boolean firstSave = order.getStatus() == RentalOrderStatus.DRAFT;
     if (firstSave) {
       access.requireMutable(actor, order);
@@ -422,7 +840,7 @@ class RentalOrderReservationService {
       } catch (IllegalStateException exception) {
         throw RentalOrderProblems.conflict(
             "ORDER_DELIVERY_DETAILS_REQUIRED",
-            "Укажите адрес, координаты, контактный телефон и дни приёмки заказа");
+            "Укажите адрес и контактный телефон заказа");
       }
     }
     List<LogisticsDependencyGateway.OrderUnitReservation> units = reads.readUnits(order);
@@ -464,7 +882,7 @@ class RentalOrderReservationService {
     if (!unitIds.equals(configured)) {
       throw RentalOrderProblems.conflict(
           "ORDER_RENTAL_TERMS_REQUIRED",
-          "Перед сохранением задайте срок аренды для каждой выбранной бытовки");
+          "Перед сохранением подтвердите выбранный клиентом срок аренды для каждой бытовки");
     }
   }
 
@@ -492,7 +910,8 @@ class RentalOrderReservationService {
                 null,
                 actor.subjectId(),
                 actor.role());
-        requireReservation(synchronizedUnit, order.getId(), current.unitId(), warehouseId, "ACTIVE");
+        requireReservation(
+            synchronizedUnit, order.getId(), current.unitId(), warehouseId, "ACTIVE");
         synchronizedUnits.add(synchronizedUnit);
       } catch (LogisticsDependencyException exception) {
         throw RentalOrderProblems.dependencyProblem(exception);
@@ -520,10 +939,7 @@ class RentalOrderReservationService {
         .sorted(Map.Entry.comparingByKey())
         .collect(
             Collectors.toMap(
-                Map.Entry::getKey,
-                Map.Entry::getValue,
-                (left, right) -> left,
-                LinkedHashMap::new));
+                Map.Entry::getKey, Map.Entry::getValue, (left, right) -> left, LinkedHashMap::new));
   }
 
   private static Map<UUID, Long> aggregateRequirements(
@@ -536,15 +952,13 @@ class RentalOrderReservationService {
         aggregate.merge(requirement.getEquipmentId(), requirement.getQuantity(), Math::addExact);
       }
     }
-    desired.forEach((equipmentId, quantity) -> aggregate.merge(equipmentId, quantity, Math::addExact));
+    desired.forEach(
+        (equipmentId, quantity) -> aggregate.merge(equipmentId, quantity, Math::addExact));
     return aggregate.entrySet().stream()
         .sorted(Map.Entry.comparingByKey())
         .collect(
             Collectors.toMap(
-                Map.Entry::getKey,
-                Map.Entry::getValue,
-                (left, right) -> left,
-                LinkedHashMap::new));
+                Map.Entry::getKey, Map.Entry::getValue, (left, right) -> left, LinkedHashMap::new));
   }
 
   private static List<LogisticsDependencyGateway.OrderEquipmentRequirement> dependencyRequirements(
@@ -555,6 +969,80 @@ class RentalOrderReservationService {
                 new LogisticsDependencyGateway.OrderEquipmentRequirement(
                     entry.getKey(), entry.getValue()))
         .toList();
+  }
+
+  private static List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements>
+      dependencyUnitRequirements(
+          List<LogisticsDependencyGateway.OrderUnitReservation> units,
+          List<RentalOrderEquipmentRequirement> existing,
+          UUID replacedUnitId,
+          Map<UUID, Long> desired) {
+    Map<UUID, Map<UUID, Long>> requirementsByUnit = new LinkedHashMap<>();
+    for (LogisticsDependencyGateway.OrderUnitReservation unit : units) {
+      requirementsByUnit.put(unit.unitId(), new LinkedHashMap<>());
+    }
+    for (RentalOrderEquipmentRequirement requirement : existing) {
+      if (requirement.getQuantity() > 0 && !replacedUnitId.equals(requirement.getRentalItemId())) {
+        Map<UUID, Long> unitRequirements = requirementsByUnit.get(requirement.getRentalItemId());
+        if (unitRequirements != null) {
+          unitRequirements.put(requirement.getEquipmentId(), requirement.getQuantity());
+        }
+      }
+    }
+    Map<UUID, Long> replacement = requirementsByUnit.get(replacedUnitId);
+    if (replacement != null) {
+      replacement.putAll(desired);
+    }
+    return requirementsByUnit.entrySet().stream()
+        .sorted(Map.Entry.comparingByKey())
+        .map(
+            entry ->
+                new LogisticsDependencyGateway.OrderUnitEquipmentRequirements(
+                    entry.getKey(), dependencyRequirements(entry.getValue())))
+        .toList();
+  }
+
+  private static List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements>
+      dependencyUnitRequirements(
+          List<LogisticsDependencyGateway.OrderUnitReservation> units,
+          List<RentalOrderEquipmentRequirement> existing,
+          Map<UUID, Map<UUID, Long>> replacements) {
+    Map<UUID, Map<UUID, Long>> requirementsByUnit = new LinkedHashMap<>();
+    for (LogisticsDependencyGateway.OrderUnitReservation unit : units) {
+      requirementsByUnit.put(unit.unitId(), new LinkedHashMap<>());
+    }
+    for (RentalOrderEquipmentRequirement requirement : existing) {
+      if (requirement.getQuantity() > 0
+          && !replacements.containsKey(requirement.getRentalItemId())) {
+        Map<UUID, Long> unitRequirements = requirementsByUnit.get(requirement.getRentalItemId());
+        if (unitRequirements != null) {
+          unitRequirements.put(requirement.getEquipmentId(), requirement.getQuantity());
+        }
+      }
+    }
+    replacements.forEach(
+        (unitId, desired) -> {
+          Map<UUID, Long> target = requirementsByUnit.get(unitId);
+          if (target != null) target.putAll(desired);
+        });
+    return requirementsByUnit.entrySet().stream()
+        .sorted(Map.Entry.comparingByKey())
+        .map(
+            entry ->
+                new LogisticsDependencyGateway.OrderUnitEquipmentRequirements(
+                    entry.getKey(), dependencyRequirements(entry.getValue())))
+        .toList();
+  }
+
+  private static Map<UUID, Long> aggregateComposition(
+      List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> composition) {
+    Map<UUID, Long> aggregate = new LinkedHashMap<>();
+    for (LogisticsDependencyGateway.OrderUnitEquipmentRequirements unit : composition) {
+      for (LogisticsDependencyGateway.OrderEquipmentRequirement requirement : unit.requirements()) {
+        aggregate.merge(requirement.equipmentId(), requirement.quantity(), Math::addExact);
+      }
+    }
+    return aggregate;
   }
 
   private static Map<UUID, LogisticsDependencyGateway.OrderEquipmentReservation>
@@ -572,6 +1060,7 @@ class RentalOrderReservationService {
           || reservation.equipmentName().isBlank()
           || reservation.quantity() < 1
           || reservation.availableQuantity() < 0
+          || reservation.maximumPerCabin() != null && reservation.maximumPerCabin() < 1
           || actual.putIfAbsent(reservation.equipmentId(), reservation) != null
           || !Objects.equals(expected.get(reservation.equipmentId()), reservation.quantity())) {
         throw RentalOrderProblems.invalidDependencyResponse();
@@ -604,7 +1093,8 @@ class RentalOrderReservationService {
       long nextQuantity = desired.getOrDefault(requirement.getEquipmentId(), 0L);
       LogisticsDependencyGateway.OrderEquipmentReservation reservation =
           reservations.get(requirement.getEquipmentId());
-      String nextName = reservation == null ? requirement.getEquipmentName() : reservation.equipmentName();
+      String nextName =
+          reservation == null ? requirement.getEquipmentName() : reservation.equipmentName();
       if (requirement.change(nextName, nextQuantity)) {
         changedRequirements.add(requirement);
         appendDesiredEquipmentEvidence(
@@ -621,17 +1111,14 @@ class RentalOrderReservationService {
       if (current.containsKey(entry.getKey())) {
         continue;
       }
-      LogisticsDependencyGateway.OrderEquipmentReservation reservation = reservations.get(entry.getKey());
+      LogisticsDependencyGateway.OrderEquipmentReservation reservation =
+          reservations.get(entry.getKey());
       if (reservation == null) {
         throw RentalOrderProblems.invalidDependencyResponse();
       }
       RentalOrderEquipmentRequirement created =
           RentalOrderEquipmentRequirement.create(
-              order,
-              unitId,
-              entry.getKey(),
-              reservation.equipmentName(),
-              entry.getValue());
+              order, unitId, entry.getKey(), reservation.equipmentName(), entry.getValue());
       changedRequirements.add(created);
       appendDesiredEquipmentEvidence(
           order.getId(),
@@ -723,9 +1210,7 @@ class RentalOrderReservationService {
   }
 
   private void appendUnitReleasedEvidence(
-      UUID orderId,
-      LogisticsDependencyGateway.OrderUnitReservation reservation,
-      OrderActor actor) {
+      UUID orderId, LogisticsDependencyGateway.OrderUnitReservation reservation, OrderActor actor) {
     audit.append(
         orderId,
         OrderAuditEventType.UNIT_REMOVED,
@@ -756,10 +1241,9 @@ class RentalOrderReservationService {
   }
 
   private static LogisticsDependencyGateway.OrderUnitReservation requireCurrentUnit(
-      UUID orderId,
-      UUID unitId,
-      List<LogisticsDependencyGateway.OrderUnitReservation> units) {
-    LogisticsDependencyGateway.OrderUnitReservation current = findCurrentUnit(orderId, unitId, units);
+      UUID orderId, UUID unitId, List<LogisticsDependencyGateway.OrderUnitReservation> units) {
+    LogisticsDependencyGateway.OrderUnitReservation current =
+        findCurrentUnit(orderId, unitId, units);
     if (current == null) {
       throw new OrderProblemException(
           HttpStatus.NOT_FOUND, "ORDER_UNIT_NOT_FOUND", "Бытовка не добавлена в этот заказ");
@@ -768,9 +1252,7 @@ class RentalOrderReservationService {
   }
 
   private static LogisticsDependencyGateway.OrderUnitReservation findCurrentUnit(
-      UUID orderId,
-      UUID unitId,
-      List<LogisticsDependencyGateway.OrderUnitReservation> units) {
+      UUID orderId, UUID unitId, List<LogisticsDependencyGateway.OrderUnitReservation> units) {
     return units.stream()
         .filter(value -> orderId.equals(value.orderId()) && unitId.equals(value.unitId()))
         .findFirst()
@@ -800,20 +1282,93 @@ class RentalOrderReservationService {
     }
   }
 
+  private static void requireReplacementReceipt(
+      ShipmentFurnitureMovementTask link,
+      RentalOrder order,
+      LogisticsDependencyGateway.OrderUnitReplacementReceipt receipt) {
+    if (receipt == null
+        || receipt.releasedReservation() == null
+        || receipt.replacementReservation() == null
+        || receipt.movementReservations() == null) {
+      throw RentalOrderProblems.invalidDependencyResponse();
+    }
+    requireReservation(
+        receipt.releasedReservation(),
+        order.getId(),
+        link.getOldRentalItemId(),
+        order.getWarehouseId(),
+        "RELEASED");
+    requireReservation(
+        receipt.replacementReservation(),
+        order.getId(),
+        link.getRentalItemId(),
+        order.getWarehouseId(),
+        "ACTIVE");
+  }
+
+  private static OrderActor replacementActor(ShipmentFurnitureMovementTask link, UUID warehouseId) {
+    String role = link.getReplacementActorRole();
+    boolean global = Set.of("SYSTEM_ADMIN", "WMS_ADMIN").contains(role);
+    boolean local = "WAREHOUSE_MANAGER".equals(role);
+    return new OrderActor(
+        link.getReplacementActorSubjectId(),
+        role,
+        link.getReplacementActorSubjectId().toString(),
+        Set.of(warehouseId),
+        Set.of(warehouseId),
+        global,
+        local,
+        true,
+        true);
+  }
+
+  private void replaceDocumentLine(
+      UUID documentId, UUID oldUnitId, UUID newUnitId, long assetVersion) {
+    LogisticsDocument document =
+        documents
+            .findForUpdate(documentId)
+            .orElseThrow(
+                () ->
+                    RentalOrderProblems.conflict(
+                        "REPLACEMENT_DOCUMENT_NOT_FOUND", "Отгрузка замены не найдена"));
+    if (document.getState() == LogisticsDocumentState.SHIPPED
+        || document.getState() == LogisticsDocumentState.DEPARTING
+        || document.getState() == LogisticsDocumentState.IN_TRANSIT
+        || document.getState() == LogisticsDocumentState.COMPLETED) {
+      throw RentalOrderProblems.conflict(
+          "REPLACEMENT_SHIPMENT_STARTED", "Начатую ходку нельзя перевести на другую бытовку");
+    }
+    List<LogisticsDocumentLine> lines =
+        documentLines.findAllByDocument_IdOrderByLineNumber(documentId);
+    LogisticsDocumentLine line =
+        lines.stream()
+            .filter(value -> oldUnitId.equals(value.getAssetId()))
+            .findFirst()
+            .orElseThrow(
+                () ->
+                    RentalOrderProblems.conflict(
+                        "REPLACEMENT_DOCUMENT_LINE_NOT_FOUND",
+                        "Заменяемая бытовка отсутствует в ходке"));
+    if (driverTasks
+        .findActiveForUpdateBySourceTypeAndSourceIdAndKind(
+            DriverTaskSourceType.LOGISTICS_DOCUMENT, documentId, DriverTaskKind.SHIPMENT)
+        .isPresent()) {
+      throw RentalOrderProblems.conflict(
+          "REPLACEMENT_TRIP_FENCE_LOST", "Ходка должна быть остановлена перед заменой бытовки");
+    }
+    line.replaceRentalItem(oldUnitId, newUnitId, assetVersion);
+    documentLines.saveAndFlush(line);
+  }
+
+  private static OffsetDateTime now() {
+    return OffsetDateTime.now(ZoneOffset.UTC).truncatedTo(ChronoUnit.MICROS);
+  }
+
   private static UUID requiredWarehouse(RentalOrder order) {
     if (order.getWarehouseId() == null) {
       throw RentalOrderProblems.conflict(
           "ORDER_WAREHOUSE_REQUIRED", "Сначала выберите склад заказа");
     }
     return order.getWarehouseId();
-  }
-
-  private OffsetDateTime draftReservationExpiresAt(RentalOrder order, OrderActor actor) {
-    if (order.getStatus() != RentalOrderStatus.DRAFT) {
-      return null;
-    }
-    return OffsetDateTime.now(ZoneOffset.UTC)
-        .truncatedTo(ChronoUnit.MICROS)
-        .plusMinutes(rentalSettings.draftReservationHoldMinutes(actor));
   }
 }

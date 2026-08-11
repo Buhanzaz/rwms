@@ -22,14 +22,9 @@ public final class AssistantApiModels {
 
   /** Inline client identity accepted when a conversation creates its logistics inquiry. */
   public record NewClientRequest(
-      @NotBlank
-          @Pattern(regexp = "INDIVIDUAL|LEGAL_ENTITY")
-          String clientType,
+      @NotBlank @Pattern(regexp = "INDIVIDUAL|LEGAL_ENTITY") String clientType,
       @NotBlank @Size(max = 512) String displayName,
-      @NotBlank
-          @Size(max = 32)
-          @Pattern(regexp = "^(?:\\+|8)[0-9() .-]{6,31}$")
-          String phone,
+      @NotBlank @Size(max = 32) @Pattern(regexp = "^(?:\\+|8)[0-9() .-]{6,31}$") String phone,
       @Pattern(regexp = "(?s).*\\S.*") @Size(max = 255) String contactPerson,
       @Email @Size(max = 320) String email,
       @Pattern(regexp = "(?s).*\\S.*") @Size(max = 2000) String comment,
@@ -42,13 +37,27 @@ public final class AssistantApiModels {
     }
   }
 
-  /** Creates one conversation from either an existing client or a validated inline client. */
+  /**
+   * Creates one conversation from either an existing client or a validated inline client. An
+   * order-linked conversation can use only the immutable existing order client.
+   */
   public record CreateConversationRequest(
-      UUID conversationId, UUID clientId, @Valid NewClientRequest newClient) {
+      UUID conversationId, UUID clientId, @Valid NewClientRequest newClient, UUID rentalOrderId) {
+    public CreateConversationRequest(
+        UUID conversationId, UUID clientId, NewClientRequest newClient) {
+      this(conversationId, clientId, newClient, null);
+    }
+
     @AssertTrue(message = "Exactly one of clientId or newClient is required")
     @JsonIgnore
     public boolean isClientSourceExclusive() {
       return (clientId == null) != (newClient == null);
+    }
+
+    @AssertTrue(message = "An order-linked conversation requires an existing client")
+    @JsonIgnore
+    public boolean isOrderClientImmutable() {
+      return rentalOrderId == null || (clientId != null && newClient == null);
     }
   }
 
@@ -58,12 +67,38 @@ public final class AssistantApiModels {
       long version,
       UUID clientId,
       UUID rentalInquiryId,
+      UUID rentalOrderId,
       String clientType,
       String clientDisplayName,
       boolean archived,
       OffsetDateTime archivedAt,
       OffsetDateTime createdAt,
-      OffsetDateTime updatedAt) {}
+      OffsetDateTime updatedAt) {
+    public ConversationResponse(
+        UUID id,
+        long version,
+        UUID clientId,
+        UUID rentalInquiryId,
+        String clientType,
+        String clientDisplayName,
+        boolean archived,
+        OffsetDateTime archivedAt,
+        OffsetDateTime createdAt,
+        OffsetDateTime updatedAt) {
+      this(
+          id,
+          version,
+          clientId,
+          rentalInquiryId,
+          null,
+          clientType,
+          clientDisplayName,
+          archived,
+          archivedAt,
+          createdAt,
+          updatedAt);
+    }
+  }
 
   /** Minimal client identity returned after conversation creation. */
   public record ClientSummary(UUID id, String clientType, String displayName) {}
@@ -126,10 +161,11 @@ public final class AssistantApiModels {
   /** Stable button identity and the exact metadata value submitted back to the assistant. */
   public record ClarificationOptionResponse(UUID id, String label, String value) {}
 
-  /** Persisted independently answerable question exposed on reload and through SSE. */
+  /** Persisted queue entry exposed after answer or while it is the sole actionable head. */
   public record ClarificationQuestionResponse(
       UUID id,
       String branchKey,
+      int sequenceNumber,
       String kind,
       String prompt,
       String status,
@@ -137,6 +173,20 @@ public final class AssistantApiModels {
       UUID answeredOptionId,
       OffsetDateTime createdAt,
       OffsetDateTime answeredAt) {
+    public ClarificationQuestionResponse(
+        UUID id,
+        String branchKey,
+        String kind,
+        String prompt,
+        String status,
+        List<ClarificationOptionResponse> options,
+        UUID answeredOptionId,
+        OffsetDateTime createdAt,
+        OffsetDateTime answeredAt) {
+      this(
+          id, branchKey, 1, kind, prompt, status, options, answeredOptionId, createdAt, answeredAt);
+    }
+
     public ClarificationQuestionResponse {
       options = options == null ? List.of() : List.copyOf(options);
     }
@@ -144,8 +194,7 @@ public final class AssistantApiModels {
 
   /** Replaces the authoritative inquiry selection; an empty ID list releases every hold. */
   public record CabinSelectionRequest(
-      @NotNull UUID warehouseId,
-      @NotNull @Size(max = 100) List<@NotNull UUID> rentalItemIds) {
+      @NotNull UUID warehouseId, @NotNull @Size(max = 100) List<@NotNull UUID> rentalItemIds) {
     public CabinSelectionRequest {
       rentalItemIds = rentalItemIds == null ? null : List.copyOf(rentalItemIds);
     }
@@ -165,8 +214,8 @@ public final class AssistantApiModels {
   }
 
   /**
-   * Stable SSE envelope. The event name is also emitted as the SSE event field
-   * so clients can use either EventSource listeners or the JSON body.
+   * Stable SSE envelope. The event name is also emitted as the SSE event field so clients can use
+   * either EventSource listeners or the JSON body.
    */
   public record TurnEvent(
       @NotBlank String event,

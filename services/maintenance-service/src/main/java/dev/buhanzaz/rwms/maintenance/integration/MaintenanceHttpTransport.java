@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.maintenance.integration;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceDependencyException;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.oauth2.client.OAuth2AuthorizeRequest;
@@ -17,6 +18,11 @@ import org.springframework.web.client.RestClientResponseException;
  * policy. Remote-owner payloads, URLs, and response validation stay in their owner clients.
  */
 final class MaintenanceHttpTransport {
+  private static final String BOOKED_UNIT_REPLACEMENT_REQUIRED =
+      "BOOKED_UNIT_REPLACEMENT_REQUIRED";
+  private static final Pattern BOOKED_UNIT_REPLACEMENT_PROBLEM =
+      Pattern.compile("\\\"code\\\"\\s*:\\s*\\\"BOOKED_UNIT_REPLACEMENT_REQUIRED\\\"");
+
   private final RestClient client;
   private final OAuth2AuthorizedClientManager authorizedClients;
 
@@ -81,12 +87,26 @@ final class MaintenanceHttpTransport {
     return "Bearer " + authorized.getAccessToken().getTokenValue();
   }
 
+  /**
+   * Maps dependency failures without leaking foreign error vocabularies. Only the exact asset-owned
+   * booked-unit replacement conflict is deliberately allow-listed for the maintenance API.
+   */
   RuntimeException dependencyFailure(RuntimeException exception) {
     if (exception instanceof MaintenanceDependencyException known) {
       return known;
     }
     if (exception instanceof RestClientResponseException response) {
       HttpStatus status = HttpStatus.resolve(response.getStatusCode().value());
+      if (status == HttpStatus.CONFLICT
+          && BOOKED_UNIT_REPLACEMENT_PROBLEM
+              .matcher(response.getResponseBodyAsString())
+              .find()) {
+        return new MaintenanceDependencyException(
+            HttpStatus.CONFLICT,
+            BOOKED_UNIT_REPLACEMENT_REQUIRED,
+            "Бытовка забронирована: сначала выполните замену в заказе",
+            exception);
+      }
       return new MaintenanceDependencyException(
           status == null ? HttpStatus.SERVICE_UNAVAILABLE : status,
           "Maintenance dependency rejected the command",

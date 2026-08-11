@@ -190,10 +190,18 @@ function OrderMobileCard({
               {managerName}
             </OrderMobileDetail>
             <OrderMobileDetail label="Склад">{warehouseName}</OrderMobileDetail>
-            <OrderMobileDetail label="Адрес">
-              {order.deliveryAddress ?? "Не указан"}
+            <OrderMobileDetail label="Основной контакт клиента">
+              {order.client.contactPerson ?? order.client.displayName}:{" "}
+              {order.client.phone ?? "телефон не указан"}
             </OrderMobileDetail>
-            <OrderMobileDetail label="Телефон">
+            <OrderMobileDetail label="Доп. контакты клиента">
+              {order.client.additionalContacts.length === 0
+                ? "Не указаны"
+                : order.client.additionalContacts
+                    .map((contact) => `${contact.name}: ${contact.phone}`)
+                    .join("; ")}
+            </OrderMobileDetail>
+            <OrderMobileDetail label="Контакт заказа">
               {order.contactPhone ?? "Не указан"}
             </OrderMobileDetail>
             <OrderMobileDetail label="Бытовки">
@@ -448,10 +456,13 @@ export function OrdersListPage() {
                       <SortIndicator label="Склад" />
                     </th>
                     <th className={GRID_HEADER_CELL_CLASS}>
-                      <SortIndicator label="Адрес" />
+                      <SortIndicator label="Основной контакт клиента" />
                     </th>
                     <th className={GRID_HEADER_CELL_CLASS}>
-                      <SortIndicator label="Телефон" />
+                      <SortIndicator label="Доп. контакты клиента" />
+                    </th>
+                    <th className={GRID_HEADER_CELL_CLASS}>
+                      <SortIndicator label="Контакт заказа" />
                     </th>
                     <th className={GRID_HEADER_CELL_CLASS}>
                       <SortIndicator label="Бытовки" />
@@ -524,7 +535,21 @@ export function OrdersListPage() {
                         </td>
                         <td className={GRID_CELL_CLASS}>
                           <div className="min-w-0 truncate">
-                            {order.deliveryAddress ?? "Не указан"}
+                            {order.client.contactPerson ??
+                              order.client.displayName}
+                            : {order.client.phone ?? "телефон не указан"}
+                          </div>
+                        </td>
+                        <td className={GRID_CELL_CLASS}>
+                          <div className="min-w-0 truncate">
+                            {order.client.additionalContacts.length === 0
+                              ? "Не указаны"
+                              : order.client.additionalContacts
+                                  .map(
+                                    (contact) =>
+                                      `${contact.name}: ${contact.phone}`
+                                  )
+                                  .join("; ")}
                           </div>
                         </td>
                         <td className={GRID_CELL_CLASS}>

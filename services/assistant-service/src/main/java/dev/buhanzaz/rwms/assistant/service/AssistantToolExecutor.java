@@ -23,8 +23,7 @@ import tools.jackson.databind.node.ObjectNode;
 @Component
 public class AssistantToolExecutor {
   private static final Set<String> EMPTY_ARGUMENT_FIELDS = Set.of();
-  private static final Set<String> REMOVE_ARGUMENT_FIELDS =
-      Set.of("rentalItemIds", "numbers");
+  private static final Set<String> REMOVE_ARGUMENT_FIELDS = Set.of("rentalItemIds", "numbers");
 
   private final AssistantConversationService conversations;
   private final LogisticsClient logistics;
@@ -49,9 +48,9 @@ public class AssistantToolExecutor {
   }
 
   /**
-   * Converts an untrusted provider tool request into an audited allow-listed invocation. A tool
-   * row is persisted before the upstream call, and all validation or upstream failures are stored
-   * and emitted as safe provider context rather than escaping as raw data.
+   * Converts an untrusted provider tool request into an audited allow-listed invocation. A tool row
+   * is persisted before the upstream call, and all validation or upstream failures are stored and
+   * emitted as safe provider context rather than escaping as raw data.
    */
   public ToolExecution execute(
       UUID ownerSubjectId,
@@ -66,8 +65,7 @@ public class AssistantToolExecutor {
       arguments = mapper.readTree(requested.arguments());
       validateTool(requested.name(), arguments);
     } catch (RuntimeException invalid) {
-      return persistRejectedCall(
-          ownerSubjectId, conversationId, turnMessageId, requested, events);
+      return persistRejectedCall(ownerSubjectId, conversationId, turnMessageId, requested, events);
     }
 
     AssistantToolCall record =
@@ -82,6 +80,11 @@ public class AssistantToolExecutor {
         new AssistantApiModels.TurnEvent(
             "tool.started", conversationId, null, record.getId(), null, null, null));
     try {
+      LogisticsClient.RentalInquiryContext inquiry =
+          logistics.readRentalInquiryContext(rentalInquiryId, bearerToken);
+      if (!"ACTIVE".equals(inquiry.state())) {
+        throw new AssistantInquiryArchivedException();
+      }
       JsonNode result =
           dispatch(
               requested.name(),
@@ -90,6 +93,7 @@ public class AssistantToolExecutor {
               turnMessageId,
               record.getId(),
               arguments,
+              inquiry.warehouseId(),
               bearerToken,
               events);
       conversations.completeToolCall(record.getId(), result);
@@ -149,11 +153,13 @@ public class AssistantToolExecutor {
       UUID turnMessageId,
       UUID toolCallId,
       JsonNode arguments,
+      UUID fixedWarehouseId,
       String bearerToken,
       Consumer<AssistantApiModels.TurnEvent> events) {
     return switch (toolName) {
       case AssistantToolDefinitions.LIST_AVAILABLE_CABIN_FACETS ->
-          normalizeFacets(logistics.listAvailableCabinFacets(rentalInquiryId, bearerToken));
+          normalizeFacets(
+              logistics.listAvailableCabinFacets(rentalInquiryId, bearerToken), fixedWarehouseId);
       case AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS ->
           cabinSearch.search(
               conversationId,
@@ -161,6 +167,7 @@ public class AssistantToolExecutor {
               turnMessageId,
               toolCallId,
               arguments,
+              fixedWarehouseId,
               bearerToken,
               events);
       case AssistantToolDefinitions.REQUEST_CABIN_CLARIFICATIONS ->
@@ -170,10 +177,11 @@ public class AssistantToolExecutor {
               turnMessageId,
               toolCallId,
               arguments,
+              fixedWarehouseId,
               bearerToken,
               events);
       case AssistantToolDefinitions.LOOKUP_CABIN_CATALOG ->
-          cabinReference.execute(rentalInquiryId, arguments, bearerToken);
+          cabinReference.execute(rentalInquiryId, arguments, fixedWarehouseId, bearerToken);
       case AssistantToolDefinitions.REMOVE_SELECTED_CABINS ->
           selections.remove(
               rentalInquiryId,
@@ -208,9 +216,12 @@ public class AssistantToolExecutor {
     }
   }
 
-  private static JsonNode normalizeFacets(JsonNode raw) {
+  private static JsonNode normalizeFacets(JsonNode raw, UUID fixedWarehouseId) {
     if (raw == null) throw new AssistantUpstreamException("Logistics returned no tool result");
-    JsonNode validated = raw.deepCopy();
+    JsonNode validated =
+        fixedWarehouseId == null
+            ? raw.deepCopy()
+            : AssistantCabinFacetMetadata.from(raw, fixedWarehouseId).scopedFacetProjection();
     AssistantToolResultSanitizer.rejectContactFields(validated);
     AssistantToolResultSanitizer.rejectWarehouseBusinessCode(validated);
     ObjectNode normalized = JsonNodeFactory.instance.objectNode();
@@ -292,7 +303,10 @@ public class AssistantToolExecutor {
   }
 
   private static JsonNode failureCode(RuntimeException failure) {
-    if (failure instanceof IllegalArgumentException) return failure("TOOL_ARGUMENTS_INVALID");
+    if (failure instanceof IllegalArgumentException
+        || failure instanceof AssistantConflictException) {
+      return failure("TOOL_ARGUMENTS_INVALID");
+    }
     if (failure instanceof AssistantInquiryArchivedException) return failure("INQUIRY_ARCHIVED");
     if (failure instanceof AssistantUpstreamException) return failure("LOGISTICS_UNAVAILABLE");
     return failure("TOOL_FAILED");

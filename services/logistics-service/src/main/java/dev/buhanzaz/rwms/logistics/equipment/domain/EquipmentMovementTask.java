@@ -23,9 +23,8 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.proxy.HibernateProxy;
 
 /**
- * A single physical furniture movement. Source balances are reserved before a
- * board task is shown to a worker; asset balances change only after that task
- * has been completed.
+ * A single physical furniture movement. Source balances are reserved before a board task is shown
+ * to a worker; asset balances change only after that task has been completed.
  */
 @Entity
 @Table(
@@ -37,7 +36,9 @@ import org.hibernate.proxy.HibernateProxy;
       @UniqueConstraint(
           name = "uk_equipment_movement_task_cancellation_key",
           columnNames = {"cancellation_requested_by_subject_id", "cancellation_idempotency_key"}),
-      @UniqueConstraint(name = "uk_equipment_movement_task_external", columnNames = "external_task_id"),
+      @UniqueConstraint(
+          name = "uk_equipment_movement_task_external",
+          columnNames = "external_task_id"),
       @UniqueConstraint(
           name = "uk_equipment_movement_task_owner",
           columnNames = {"owner_type", "owner_id"})
@@ -165,7 +166,8 @@ public class EquipmentMovementTask {
         || deadlineAt == null
         || createdBySubjectId == null
         || idempotencyKey == null) {
-      throw new IllegalArgumentException("Equipment movement task ownership and deadline are required");
+      throw new IllegalArgumentException(
+          "Equipment movement task ownership and deadline are required");
     }
     if (plannedDurationMinutes == null || plannedDurationMinutes < 1) {
       throw new IllegalArgumentException("plannedDurationMinutes is invalid");
@@ -238,13 +240,26 @@ public class EquipmentMovementTask {
     scheduleImmediately();
   }
 
-  public void registerBoardTask(UUID taskId, long taskVersion, String taskStatus, OffsetDateTime doneAt) {
+  /** Keeps a replacement-owned movement dormant until the atomic asset swap pre-holds its lines. */
+  public void deferReplacementPreparation(OffsetDateTime retryAt) {
+    requireState(EquipmentMovementTaskState.RESERVING);
+    OffsetDateTime required = Objects.requireNonNull(retryAt, "retryAt");
+    if (!required.isBefore(deadlineAt)) {
+      throw new IllegalArgumentException("Replacement retry must precede the movement deadline");
+    }
+    nextAttemptAt = required;
+    touch();
+  }
+
+  public void registerBoardTask(
+      UUID taskId, long taskVersion, String taskStatus, OffsetDateTime doneAt) {
     if (taskId == null || taskVersion < 0 || !"ACTIVE".equals(taskStatus)) {
       throw new IllegalArgumentException("Task-board registration result is invalid");
     }
     if (state != EquipmentMovementTaskState.REGISTERING_TASK
         && state != EquipmentMovementTaskState.AWAITING_WORKER) {
-      throw new IllegalStateException("Movement task cannot register a board task in its current state");
+      throw new IllegalStateException(
+          "Movement task cannot register a board task in its current state");
     }
     if (taskBoardTaskId != null && !taskBoardTaskId.equals(taskId)) {
       throw new IllegalStateException("Movement task has a conflicting board task");
@@ -308,13 +323,15 @@ public class EquipmentMovementTask {
       EquipmentMovementTaskState targetState,
       String code) {
     if (actorSubjectId == null || nextCancellationIdempotencyKey == null) {
-      throw new IllegalArgumentException("Movement cancellation actor and Idempotency-Key are required");
+      throw new IllegalArgumentException(
+          "Movement cancellation actor and Idempotency-Key are required");
     }
     if (cancellationIdempotencyKey != null) {
       if (!nextCancellationIdempotencyKey.equals(cancellationIdempotencyKey)
           || !actorSubjectId.equals(cancellationRequestedBySubjectId)
           || !Objects.equals(checksum, cancellationRequestSha256)) {
-        throw new IllegalStateException("Equipment movement task cancellation has already been requested");
+        throw new IllegalStateException(
+            "Equipment movement task cancellation has already been requested");
       }
       return;
     }
@@ -387,7 +404,8 @@ public class EquipmentMovementTask {
 
   private void requireState(EquipmentMovementTaskState expected) {
     if (state != expected) {
-      throw new IllegalStateException("Equipment movement task lifecycle transition is not allowed");
+      throw new IllegalStateException(
+          "Equipment movement task lifecycle transition is not allowed");
     }
   }
 
@@ -436,7 +454,9 @@ public class EquipmentMovementTask {
         this instanceof HibernateProxy proxy
             ? proxy.getHibernateLazyInitializer().getPersistentClass()
             : getClass();
-    return thisClass == otherClass && id != null && Objects.equals(id, ((EquipmentMovementTask) other).id);
+    return thisClass == otherClass
+        && id != null
+        && Objects.equals(id, ((EquipmentMovementTask) other).id);
   }
 
   @Override

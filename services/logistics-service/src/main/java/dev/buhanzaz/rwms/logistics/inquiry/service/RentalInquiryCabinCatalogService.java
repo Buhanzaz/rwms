@@ -130,6 +130,16 @@ public class RentalInquiryCabinCatalogService {
         source.linoleum(),
         source.passport(),
         source.tags(),
+        source.contents().stream()
+            .map(
+                content ->
+                    new dev.buhanzaz.rwms.logistics.order.api.OrderApiModels
+                        .OrderEquipmentContentResponse(
+                        content.equipmentId(),
+                        content.equipmentName(),
+                        content.quantity(),
+                        content.locationKind()))
+            .toList(),
         source.updatedAt());
   }
 

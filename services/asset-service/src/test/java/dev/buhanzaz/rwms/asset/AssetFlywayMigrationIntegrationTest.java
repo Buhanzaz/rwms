@@ -89,7 +89,7 @@ class AssetFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsTransferredWarehouseData() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(35);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(37);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains(
@@ -134,6 +134,11 @@ class AssetFlywayMigrationIntegrationTest {
     assertThat(columnCount("order_unit_reservation", "source_status")).isZero();
     assertThat(columnCount("order_equipment_reservation", "order_id")).isEqualTo(1);
     assertThat(columnCount("order_equipment_reservation", "equipment_id")).isEqualTo(1);
+    assertThat(columnCount("equipment_catalog_item", "maximum_per_cabin")).isEqualTo(1);
+    assertThat(
+            constraintDefinition(
+                "equipment_catalog_item", "ck_equipment_catalog_maximum_per_cabin"))
+        .contains("maximum_per_cabin IS NULL", "maximum_per_cabin > 0");
     assertThat(columnCount("equipment_catalog_item", "code")).isZero();
     assertThat(columnCount("asset_classifier", "code")).isZero();
     assertThat(columnCount("rental_item", "rental_type")).isZero();
@@ -187,6 +192,23 @@ class AssetFlywayMigrationIntegrationTest {
         .isGreaterThan(195);
     assertThat(columnCount("equipment_allocation_hold", "source_balance_id")).isEqualTo(1);
     assertThat(columnCount("equipment_allocation_hold", "executed_at")).isEqualTo(1);
+    assertThat(columnCount("equipment_allocation_hold", "order_id")).isEqualTo(1);
+    assertThat(columnCount("equipment_allocation_hold", "target_rental_item_id")).isEqualTo(1);
+    assertThat(columnCount("equipment_allocation_hold", "order_units")).isEqualTo(1);
+    assertThat(columnCount("equipment_allocation_hold", "replacement_source_reservation_id"))
+        .isEqualTo(1);
+    assertThat(
+            constraintDefinition(
+                "equipment_allocation_hold", "ck_equipment_hold_order_context"))
+        .contains(
+            "order_id IS NULL",
+            "target_rental_item_id IS NULL",
+            "order_units IS NULL",
+            "replacement_source_reservation_id IS NULL",
+            "order_id IS NOT NULL",
+            "target_rental_item_id IS NOT NULL",
+            "order_units IS NOT NULL");
+    assertThat(toRegclass("ix_equipment_hold_active_order_target")).isNotNull();
     assertThat(integer("""
         select count(*) from pg_trigger
         where not tgisinternal
@@ -231,12 +253,12 @@ class AssetFlywayMigrationIntegrationTest {
         """, existingId, UUID.randomUUID());
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(33);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(35);
     latest.validate();
 
     assertThat(appliedVersions())
         .containsExactly(
-            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35");
+            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35", "36", "37");
     assertThat(columnCount("rental_item", "number")).isZero();
     assertThat(columnCount("rental_item", "display_canonical_number")).isEqualTo(1);
     assertThat(columnCount("rental_item", "identity_match_key")).isEqualTo(1);
@@ -291,11 +313,11 @@ class AssetFlywayMigrationIntegrationTest {
     int outboxCount = integer("select count(*) from outbox_event");
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(28);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(30);
     latest.validate();
     assertThat(appliedVersions())
         .containsExactly(
-            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35");
+            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35", "36", "37");
     assertOldPanelTechnicalMetadataRemoved();
     assertLegacyIdentityMetadataRemoved();
     JsonNode unrelated = json(jdbc.queryForObject(
@@ -383,7 +405,7 @@ class AssetFlywayMigrationIntegrationTest {
         order by snapshot.aggregate_version desc limit 1
         """, correctedAggregateId);
     latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(27);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(29);
     latest.validate();
 
     assertThat(integer("select count(*) from rental_item")).isEqualTo(195);

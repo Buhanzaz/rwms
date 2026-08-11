@@ -192,25 +192,20 @@ describe("AppSidebar collapsed desktop navigation", () => {
     expect(screen.queryByText("Задания водителей")).toBeNull()
   })
 
-  it("groups chat, booking, clients and orders in Rental for every signed-in user", () => {
+  it("groups chat, clients and orders in Rental for every signed-in user", () => {
     const first = renderSidebar()
     expect(screen.getByText("Аренда")).toBeTruthy()
     const chat = screen.getByRole("link", { name: "Чат" })
-    const booking = screen.getByRole("link", { name: "Бронирование" })
     const clients = screen.getByRole("link", { name: "Клиенты" })
     const orders = screen.getByRole("link", { name: "Заказы" })
 
     expect(
-      chat.compareDocumentPosition(booking) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy()
-    expect(
-      booking.compareDocumentPosition(clients) &
-        Node.DOCUMENT_POSITION_FOLLOWING
+      chat.compareDocumentPosition(clients) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
     expect(
       clients.compareDocumentPosition(orders) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
-    expect(booking.getAttribute("href")).toBe("/booking")
+    expect(screen.queryByRole("link", { name: "Бронирование" })).toBeNull()
     expect(clients.getAttribute("href")).toBe("/clients")
     expect(orders.getAttribute("href")).toBe("/orders")
 
@@ -221,7 +216,7 @@ describe("AppSidebar collapsed desktop navigation", () => {
 
     expect(screen.getByText("Аренда")).toBeTruthy()
     expect(screen.getByRole("link", { name: "Чат" })).toBeTruthy()
-    expect(screen.getByRole("link", { name: "Бронирование" })).toBeTruthy()
+    expect(screen.queryByRole("link", { name: "Бронирование" })).toBeNull()
     expect(screen.getByRole("link", { name: "Клиенты" })).toBeTruthy()
     expect(screen.getByRole("link", { name: "Заказы" })).toBeTruthy()
   })
@@ -424,12 +419,12 @@ describe("AppSidebar collapsed desktop navigation", () => {
     ).toContain("pb-0")
     expect(
       screen
-        .getByRole("link", { name: "Бронирование" })
+        .getByRole("link", { name: "Чат" })
         .closest('[data-slot="sidebar-group"]')?.className
     ).toContain("py-0")
     expect(
       screen
-        .getByRole("link", { name: "Бронирование" })
+        .getByRole("link", { name: "Чат" })
         .closest('[data-slot="sidebar-group"]')?.className
     ).toContain("mt-2")
     expect(

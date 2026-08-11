@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react"
+import { useState, type FormEvent } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { toast } from "sonner"
 
@@ -8,10 +8,8 @@ import {
   rentalItemCreationOptionsQueryKey,
   updateAssetRentalItemPassport,
 } from "@/features/rental-items/api/asset-rental-items-api"
-import {
-  RentalItemCompositionFields,
-  type RentalItemCompositionFormValue,
-} from "@/features/rental-items/rental-item-composition-fields"
+import { RentalItemCompositionFields } from "@/features/rental-items/rental-item-composition-fields"
+import type { RentalItemCompositionFormValue } from "@/features/rental-items/rental-item-composition"
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 import { Button } from "@/components/ui/button"
 import {
@@ -45,17 +43,28 @@ function compositionFromRentalItem(
   }
 }
 
-export function RentalItemPassportDialog({
-  open,
-  rentalItem,
-  onOpenChange,
-  onSaved,
-}: {
+type RentalItemPassportDialogProps = {
   open: boolean
   rentalItem: RentalItemDto
   onOpenChange: (open: boolean) => void
   onSaved: (rentalItem: RentalItemDto) => void
-}) {
+}
+
+export function RentalItemPassportDialog(props: RentalItemPassportDialogProps) {
+  return (
+    <RentalItemPassportDialogContent
+      key={`${props.rentalItem.id}:${props.rentalItem.version}:${props.open}`}
+      {...props}
+    />
+  )
+}
+
+function RentalItemPassportDialogContent({
+  open,
+  rentalItem,
+  onOpenChange,
+  onSaved,
+}: RentalItemPassportDialogProps) {
   const { accessToken } = useAuth()
   const [value, setValue] = useState<RentalItemCompositionFormValue>(() =>
     compositionFromRentalItem(rentalItem)
@@ -66,13 +75,6 @@ export function RentalItemPassportDialog({
     queryFn: () => getRentalItemCreationOptions(accessToken, rentalItem.warehouseId),
     enabled: Boolean(open && accessToken),
   })
-
-  useEffect(() => {
-    if (open) {
-      setValue(compositionFromRentalItem(rentalItem))
-      setSubmitted(false)
-    }
-  }, [open, rentalItem])
 
   const saveMutation = useMutation({
     mutationFn: () => {

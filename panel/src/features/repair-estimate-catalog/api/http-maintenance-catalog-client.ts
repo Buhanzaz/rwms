@@ -17,10 +17,17 @@ export type MaintenanceCatalogRoutingInput = {
   queueType: string
 }
 
-export type MaintenanceFurnitureEquipmentReference = {
-  equipmentId: string
+export type MaintenanceFurnitureEquipmentReferenceInput = {
+  equipmentId: string | null
   equipmentName: string
+  equipmentVersion: number | null
+  maximumPerCabin: number | null
 }
+
+export type MaintenanceFurnitureEquipmentReference = Omit<
+  MaintenanceFurnitureEquipmentReferenceInput,
+  "equipmentId"
+> & { equipmentId: string }
 
 export type MaintenanceCabinCharacteristicReference = {
   characteristicId: string
@@ -42,7 +49,7 @@ export type MaintenanceCatalogNodeInput = {
   commonItem: boolean
   showInMainMenu: boolean
   furnitureCategory: boolean
-  furnitureEquipment: MaintenanceFurnitureEquipmentReference | null
+  furnitureEquipment: MaintenanceFurnitureEquipmentReferenceInput | null
   forcesCapitalRepair: boolean
   characteristicId: string | null
   routing: MaintenanceCatalogRoutingInput | null
@@ -53,10 +60,11 @@ export type MaintenanceCatalogNodeInput = {
 
 export type MaintenanceCatalogNode = Omit<
   MaintenanceCatalogNodeInput,
-  "routing" | "characteristicId"
+  "routing" | "characteristicId" | "furnitureEquipment"
 > & {
   catalogVersionId: string
   routing: MaintenanceCatalogRouting | null
+  furnitureEquipment: MaintenanceFurnitureEquipmentReference | null
   characteristic: MaintenanceCabinCharacteristicReference | null
 }
 

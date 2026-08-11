@@ -1,7 +1,10 @@
 package dev.buhanzaz.rwms.logistics.inquiry.service;
 
 import dev.buhanzaz.rwms.logistics.inquiry.api.RentalInquiryApiModels.ConfirmClientPresentationRequest;
+import dev.buhanzaz.rwms.logistics.inquiry.api.RentalInquiryApiModels.PresentationCabinSelectionInput;
+import dev.buhanzaz.rwms.logistics.inquiry.api.RentalInquiryApiModels.PresentationEquipmentSelectionInput;
 import dev.buhanzaz.rwms.logistics.inquiry.domain.ClientPresentation;
+import dev.buhanzaz.rwms.logistics.inquiry.domain.ClientPresentationMode;
 import dev.buhanzaz.rwms.logistics.inquiry.domain.PresentationBooking;
 import dev.buhanzaz.rwms.logistics.inquiry.domain.PresentationBookingState;
 import dev.buhanzaz.rwms.logistics.inquiry.domain.RentalInquiry;
@@ -9,12 +12,21 @@ import dev.buhanzaz.rwms.logistics.inquiry.eventing.RentalInquiryBookedOutboxSto
 import dev.buhanzaz.rwms.logistics.inquiry.repository.ClientPresentationRepository;
 import dev.buhanzaz.rwms.logistics.inquiry.repository.PresentationBookingRepository;
 import dev.buhanzaz.rwms.logistics.inquiry.repository.RentalInquiryRepository;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AdditionalContactInput;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.DesiredDeliveryWindowInput;
+import dev.buhanzaz.rwms.logistics.order.domain.AdditionalContact;
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
@@ -26,7 +38,8 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Coordinates local booking persistence and idempotency records used by presentation booking commands.
+ * Coordinates local booking persistence and idempotency records used by presentation booking
+ * commands.
  */
 @Service
 @RequiredArgsConstructor
@@ -40,11 +53,8 @@ public class PresentationBookingStore {
 
   @Transactional
   public PresentationBooking begin(
-      String token,
-      UUID idempotencyKey,
-      ConfirmClientPresentationRequest request) {
-    ClientPresentation resolved =
-        presentationService.resolveForBookingStatus(token);
+      String token, UUID idempotencyKey, ConfirmClientPresentationRequest request) {
+    ClientPresentation resolved = presentationService.resolveForBookingStatus(token);
     ClientPresentation presentation =
         presentations
             .findForUpdate(resolved.getId())
@@ -53,11 +63,39 @@ public class PresentationBookingStore {
     if (presentation.getRevision() != resolved.getRevision()
         || !presentation.getViewUntil().isAfter(timestamp)) {
       throw new OrderProblemException(
-          HttpStatus.GONE,
-          "CLIENT_PRESENTATION_GONE",
-          "Срок действия представления истёк");
+          HttpStatus.GONE, "CLIENT_PRESENTATION_GONE", "Срок действия представления истёк");
     }
-    List<UUID> selected = unique(request.selectedRentalItemIds());
+    List<PresentationCabinSelectionInput> selections = normalized(request.selections());
+    List<DesiredDeliveryWindowInput> desiredDeliveryWindows =
+        normalizedWindows(request.desiredDeliveryWindows());
+    Long rentalMonths = request.rentalMonths();
+    String deliveryAddress = request.deliveryAddress();
+    BigDecimal latitude = request.latitude();
+    BigDecimal longitude = request.longitude();
+    List<AdditionalContactInput> additionalContacts =
+        normalizedAdditionalContacts(request.additionalContacts());
+    if (presentation.getMode() == ClientPresentationMode.NORMAL) {
+      desiredDeliveryWindows = requiredNormalWindow(desiredDeliveryWindows);
+      rentalMonths = requiredRentalMonths(rentalMonths);
+      deliveryAddress = requiredNormalDeliveryAddress(deliveryAddress);
+      requireCoordinatePair(latitude, longitude);
+      latitude = normalizedDecimal(latitude);
+      longitude = normalizedDecimal(longitude);
+    } else if (hasReplacementOnlyConfirmationFields(request)) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "REPLACEMENT_CLIENT_CONFIRMATION_FIELDS_FORBIDDEN",
+          "При замене сохраняются условия заказа без изменения даты, срока и адреса");
+    } else {
+      desiredDeliveryWindows = List.of();
+      rentalMonths = null;
+      deliveryAddress = null;
+      latitude = null;
+      longitude = null;
+      additionalContacts = List.of();
+    }
+    List<UUID> selected =
+        selections.stream().map(PresentationCabinSelectionInput::rentalItemId).toList();
     List<UUID> available = presentationService.currentCabinIds(presentation);
     if (!new LinkedHashSet<>(available).containsAll(selected)) {
       throw new OrderProblemException(
@@ -65,15 +103,42 @@ public class PresentationBookingStore {
           "CLIENT_PRESENTATION_SELECTION_INVALID",
           "Выбраны бытовки, которых нет в представлении");
     }
-    String selectedJson = write(selected);
+    if (presentation.getMode() == ClientPresentationMode.REPLACEMENT
+        && selected.size() != presentationService.replacementUnitIds(presentation).size()) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "CLIENT_PRESENTATION_SELECTION_COUNT_INVALID",
+          "Количество выбранных бытовок должно соответствовать количеству заменяемых");
+    }
+    if (presentation.getMode() == ClientPresentationMode.REPLACEMENT
+        && selections.stream().anyMatch(selection -> !selection.equipment().isEmpty())) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "REPLACEMENT_EQUIPMENT_EDIT_FORBIDDEN",
+          "При замене мебель переносится без изменения количества");
+    }
+    String selectedJson = write(selections);
+    String desiredWindowsJson = write(desiredDeliveryWindows);
+    String additionalContactsJson =
+        presentation.getMode() == ClientPresentationMode.NORMAL ? write(additionalContacts) : null;
     PresentationBooking existing =
         bookings
             .findByPresentationIdAndPresentationRevision(
                 presentation.getId(), presentation.getRevision())
             .orElse(null);
     if (existing != null) {
+      boolean legacyDeliveryReceipt = legacyDeliveryReceipt(existing);
       if (!existing.getIdempotencyKey().equals(idempotencyKey)
-          || !existing.getSelectedItemIdsJson().equals(selectedJson)) {
+          || !selected(existing.getSelectedItemIdsJson()).equals(selections)
+          || !desiredWindows(existing.getDesiredDeliveryWindowsJson())
+              .equals(desiredDeliveryWindows)
+          || !Objects.equals(existing.getRentalMonths(), rentalMonths)
+          || (!legacyDeliveryReceipt
+              && (!Objects.equals(existing.getDeliveryAddress(), deliveryAddress)
+                  || !equalDecimal(existing.getLatitude(), latitude)
+                  || !equalDecimal(existing.getLongitude(), longitude)
+                  || !additionalContacts(existing.getAdditionalContactsJson())
+                      .equals(additionalContacts)))) {
         throw new OrderProblemException(
             HttpStatus.CONFLICT,
             "CLIENT_PRESENTATION_ALREADY_SUBMITTED",
@@ -93,15 +158,19 @@ public class PresentationBookingStore {
             presentation.getRevision(),
             idempotencyKey,
             selectedJson,
+            desiredWindowsJson,
+            rentalMonths,
+            deliveryAddress,
+            latitude,
+            longitude,
+            additionalContactsJson,
             timestamp));
   }
 
   @Transactional(readOnly = true)
   public BookingContext context(UUID bookingId) {
     PresentationBooking booking =
-        bookings
-            .findById(bookingId)
-            .orElseThrow(() -> notFound("Бронирование не найдено"));
+        bookings.findById(bookingId).orElseThrow(() -> notFound("Бронирование не найдено"));
     ClientPresentation presentation =
         presentations
             .findById(booking.getPresentationId())
@@ -111,7 +180,17 @@ public class PresentationBookingStore {
             .findById(presentation.getInquiryId())
             .orElseThrow(() -> notFound("Диалог аренды не найден"));
     return new BookingContext(
-        booking, presentation, inquiry, selected(booking.getSelectedItemIdsJson()));
+        booking,
+        presentation,
+        inquiry,
+        selected(booking.getSelectedItemIdsJson()),
+        desiredWindows(booking.getDesiredDeliveryWindowsJson()),
+        booking.getRentalMonths(),
+        booking.getDeliveryAddress(),
+        booking.getLatitude(),
+        booking.getLongitude(),
+        additionalContacts(booking.getAdditionalContactsJson()),
+        legacyDesiredDeliveryTimes(booking.getDesiredDeliveryWindowsJson()));
   }
 
   @Transactional
@@ -175,14 +254,16 @@ public class PresentationBookingStore {
     bookings.saveAndFlush(booking);
     presentations.saveAndFlush(presentation);
     inquiries.saveAndFlush(inquiry);
-    outbox.append(
-        inquiry.getId(),
-        inquiry.getVersion(),
-        inquiry.getConversationId(),
-        booking.getId(),
-        booking.getOrderId(),
-        inquiry.getManagerId(),
-        timestamp);
+    if (inquiry.getConversationId() != null) {
+      outbox.append(
+          inquiry.getId(),
+          inquiry.getVersion(),
+          inquiry.getConversationId(),
+          booking.getId(),
+          booking.getOrderId(),
+          inquiry.getManagerId(),
+          timestamp);
+    }
   }
 
   @Transactional(readOnly = true)
@@ -195,31 +276,240 @@ public class PresentationBookingStore {
         .toList();
   }
 
-  private String write(List<UUID> values) {
+  private String write(List<?> values) {
     try {
       return json.writeValueAsString(values);
     } catch (JacksonException exception) {
-      throw new IllegalArgumentException("Selected cabins cannot be serialized", exception);
+      throw new IllegalArgumentException("Booking receipt values cannot be serialized", exception);
     }
   }
 
-  private List<UUID> selected(String value) {
+  private List<PresentationCabinSelectionInput> selected(String value) {
     try {
-      return json.readValue(value, new TypeReference<List<UUID>>() {});
-    } catch (JacksonException exception) {
+      var tree = json.readTree(value);
+      List<PresentationCabinSelectionInput> result = new ArrayList<>();
+      for (var item : tree) {
+        if (item.isString()) {
+          result.add(
+              new PresentationCabinSelectionInput(UUID.fromString(item.stringValue()), List.of()));
+        } else {
+          result.add(json.treeToValue(item, PresentationCabinSelectionInput.class));
+        }
+      }
+      return List.copyOf(result);
+    } catch (JacksonException | IllegalArgumentException exception) {
       throw new IllegalStateException("Stored booking selection is corrupt", exception);
     }
   }
 
-  private static List<UUID> unique(List<UUID> values) {
+  private List<DesiredDeliveryWindowInput> desiredWindows(String value) {
+    try {
+      var tree = json.readTree(value);
+      if (!tree.isArray()) {
+        throw new IllegalArgumentException("Stored desired delivery windows are not an array");
+      }
+      List<DesiredDeliveryWindowInput> result = new ArrayList<>();
+      for (var item : tree) {
+        var startDate = item.get("startDate");
+        var endDate = item.get("endDate");
+        if (startDate == null || endDate == null || !startDate.isString() || !endDate.isString()) {
+          throw new IllegalArgumentException("Stored desired delivery window is invalid");
+        }
+        result.add(
+            new DesiredDeliveryWindowInput(
+                LocalDate.parse(startDate.stringValue()), LocalDate.parse(endDate.stringValue())));
+      }
+      return normalizedWindows(result);
+    } catch (JacksonException | IllegalArgumentException exception) {
+      throw new IllegalStateException("Stored desired delivery windows are corrupt", exception);
+    }
+  }
+
+  private List<AdditionalContactInput> additionalContacts(String value) {
+    if (value == null || value.isBlank()) return List.of();
+    try {
+      return normalizedAdditionalContacts(
+          json.readValue(value, new TypeReference<List<AdditionalContactInput>>() {}));
+    } catch (JacksonException | IllegalArgumentException exception) {
+      throw new IllegalStateException("Stored booking additional contacts are corrupt", exception);
+    }
+  }
+
+  /**
+   * Reads optional legacy time strings only to accept an existing pre-date-only local command
+   * receipt. They never reach a public response or a new order preference.
+   */
+  private List<String> legacyDesiredDeliveryTimes(String value) {
+    try {
+      var tree = json.readTree(value);
+      if (!tree.isArray() || tree.size() != 1) return List.of();
+      var window = tree.get(0);
+      var timeFrom = window.get("timeFrom");
+      var timeTo = window.get("timeTo");
+      if (timeFrom == null
+          || timeTo == null
+          || !timeFrom.isString()
+          || !timeTo.isString()) {
+        return List.of();
+      }
+      LocalTime from = LocalTime.parse(timeFrom.stringValue());
+      LocalTime to = LocalTime.parse(timeTo.stringValue());
+      return from.isBefore(to) ? List.of(from.toString(), to.toString()) : List.of();
+    } catch (JacksonException | IllegalArgumentException exception) {
+      throw new IllegalStateException("Stored desired delivery windows are corrupt", exception);
+    }
+  }
+
+  private static List<PresentationCabinSelectionInput> normalized(
+      List<PresentationCabinSelectionInput> values) {
     if (values == null || values.isEmpty() || values.size() > 100) {
-      throw new IllegalArgumentException("selectedRentalItemIds size is invalid");
+      throw new IllegalArgumentException("Presentation selections size is invalid");
     }
-    LinkedHashSet<UUID> unique = new LinkedHashSet<>(values);
-    if (unique.size() != values.size() || unique.contains(null)) {
-      throw new IllegalArgumentException("selectedRentalItemIds must be unique");
+    LinkedHashSet<UUID> unitIds = new LinkedHashSet<>();
+    List<PresentationCabinSelectionInput> selections = new ArrayList<>(values.size());
+    for (PresentationCabinSelectionInput value : values) {
+      if (value == null
+          || value.rentalItemId() == null
+          || !unitIds.add(value.rentalItemId())
+          || value.equipment() == null) {
+        throw new IllegalArgumentException("Presentation cabin selections must be unique");
+      }
+      LinkedHashSet<UUID> equipmentIds = new LinkedHashSet<>();
+      List<PresentationEquipmentSelectionInput> equipment =
+          value.equipment().stream()
+              .peek(
+                  item -> {
+                    if (item == null
+                        || item.equipmentId() == null
+                        || item.quantity() == null
+                        || item.quantity() < 1
+                        || !equipmentIds.add(item.equipmentId())) {
+                      throw new IllegalArgumentException(
+                          "Presentation equipment selections are invalid");
+                    }
+                  })
+              .sorted(Comparator.comparing(PresentationEquipmentSelectionInput::equipmentId))
+              .toList();
+      selections.add(new PresentationCabinSelectionInput(value.rentalItemId(), equipment));
     }
-    return List.copyOf(unique);
+    return List.copyOf(selections);
+  }
+
+  private static List<DesiredDeliveryWindowInput> normalizedWindows(
+      List<DesiredDeliveryWindowInput> values) {
+    if (values == null || values.isEmpty()) return List.of();
+    for (DesiredDeliveryWindowInput value : values) {
+      if (value == null
+          || value.startDate() == null
+          || value.endDate() == null
+          || !value.hasOrderedDates()) {
+        throw new IllegalArgumentException("Desired delivery window is invalid");
+      }
+    }
+    return List.copyOf(values);
+  }
+
+  private static List<DesiredDeliveryWindowInput> requiredNormalWindow(
+      List<DesiredDeliveryWindowInput> values) {
+    if (values.size() != 1) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "CLIENT_PRESENTATION_DELIVERY_WINDOW_REQUIRED",
+          "Выберите одну желаемую дату получения бытовок");
+    }
+    DesiredDeliveryWindowInput window = values.getFirst();
+    if (!window.startDate().equals(window.endDate())) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "CLIENT_PRESENTATION_DELIVERY_WINDOW_INVALID",
+          "В представлении можно выбрать только один календарный день");
+    }
+    return values;
+  }
+
+  private static Long requiredRentalMonths(Long value) {
+    if (value == null || value < 1) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "CLIENT_PRESENTATION_RENTAL_MONTHS_REQUIRED",
+          "Укажите срок аренды в месяцах");
+    }
+    return value;
+  }
+
+  private static String requiredNormalDeliveryAddress(String value) {
+    String normalized = value == null ? "" : value.trim();
+    if (normalized.isEmpty() || normalized.length() > 1_000) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "CLIENT_PRESENTATION_DELIVERY_ADDRESS_REQUIRED",
+          "Укажите адрес доставки бытовок");
+    }
+    return normalized;
+  }
+
+  private static void requireCoordinatePair(BigDecimal latitude, BigDecimal longitude) {
+    if ((latitude == null) != (longitude == null)) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "CLIENT_PRESENTATION_COORDINATES_INVALID",
+          "Широта и долгота указываются вместе");
+    }
+    if (latitude != null
+        && (latitude.compareTo(BigDecimal.valueOf(-90)) < 0
+            || latitude.compareTo(BigDecimal.valueOf(90)) > 0
+            || longitude.compareTo(BigDecimal.valueOf(-180)) < 0
+            || longitude.compareTo(BigDecimal.valueOf(180)) > 0)) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "CLIENT_PRESENTATION_COORDINATES_INVALID",
+          "Координаты доставки некорректны");
+    }
+  }
+
+  private static List<AdditionalContactInput> normalizedAdditionalContacts(
+      List<AdditionalContactInput> values) {
+    if (values == null || values.isEmpty()) return List.of();
+    List<AdditionalContactInput> result = new ArrayList<>(values.size());
+    for (AdditionalContactInput value : values) {
+      if (value == null) {
+        throw new IllegalArgumentException("Additional contacts are invalid");
+      }
+      AdditionalContact normalized = AdditionalContact.create(value.name(), value.phone());
+      result.add(new AdditionalContactInput(normalized.getName(), normalized.getPhone()));
+    }
+    return List.copyOf(result);
+  }
+
+  private static boolean hasReplacementOnlyConfirmationFields(
+      ConfirmClientPresentationRequest request) {
+    return request.desiredDeliveryWindows() != null
+        || request.rentalMonths() != null
+        || request.deliveryAddress() != null
+        || request.latitude() != null
+        || request.longitude() != null
+        || request.additionalContacts() != null;
+  }
+
+  private static boolean equalDecimal(BigDecimal left, BigDecimal right) {
+    return left == null ? right == null : right != null && left.compareTo(right) == 0;
+  }
+
+  /**
+   * Identifies a V48 or older receipt which has a retired client time payload but no V49 delivery
+   * snapshot. Its selection, date and term stay fenced; only the unavailable snapshot is skipped
+   * so reconciliation can preserve the order facts it never recorded.
+   */
+  private boolean legacyDeliveryReceipt(PresentationBooking booking) {
+    return booking.getDeliveryAddress() == null
+        && booking.getLatitude() == null
+        && booking.getLongitude() == null
+        && booking.getAdditionalContactsJson() == null
+        && !legacyDesiredDeliveryTimes(booking.getDesiredDeliveryWindowsJson()).isEmpty();
+  }
+
+  private static BigDecimal normalizedDecimal(BigDecimal value) {
+    return value == null ? null : value.stripTrailingZeros();
   }
 
   private static OrderProblemException notFound(String message) {
@@ -235,5 +525,16 @@ public class PresentationBookingStore {
       PresentationBooking booking,
       ClientPresentation presentation,
       RentalInquiry inquiry,
-      List<UUID> selectedRentalItemIds) {}
+      List<PresentationCabinSelectionInput> selections,
+      List<DesiredDeliveryWindowInput> desiredDeliveryWindows,
+      Long rentalMonths,
+      String deliveryAddress,
+      BigDecimal latitude,
+      BigDecimal longitude,
+      List<AdditionalContactInput> additionalContacts,
+      List<String> legacyDesiredDeliveryTimes) {
+    public List<UUID> selectedRentalItemIds() {
+      return selections.stream().map(PresentationCabinSelectionInput::rentalItemId).toList();
+    }
+  }
 }

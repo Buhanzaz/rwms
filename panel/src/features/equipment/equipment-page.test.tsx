@@ -71,6 +71,7 @@ function equipmentItem(
     name,
     active: true,
     comment: null,
+    maximumPerCabin: null,
     totalQuantity: 12,
     stockQuantity: 7,
     cabinStockQuantity: 5,

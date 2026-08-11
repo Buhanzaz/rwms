@@ -54,6 +54,7 @@ const ORDER_CREATED_AT = "2026-08-01T09:00:00Z"
 const candidate: OrderUnitCandidate = {
   reservationId: "33333333-3333-4333-8333-333333333333",
   added: true,
+  reservationState: "ACTIVE",
   desiredContents: [],
   unit: {
     id: CABIN_ID,

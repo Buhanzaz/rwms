@@ -95,9 +95,9 @@ import {
 import {
   CabinFurnitureCompositionDialog,
   CabinFurnitureContents,
-  furnitureEquipmentIds,
   type CabinFurnitureRequirementInput,
 } from "@/features/rental-items/cabin-furniture-composition-dialog"
+import { furnitureEquipmentIds } from "@/features/rental-items/cabin-furniture"
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 import {
   TRANSFER_FURNITURE_READINESS_QUERY_KEY,
@@ -181,6 +181,10 @@ function formatDate(value: string) {
     dateStyle: "medium",
     timeZone: "UTC",
   }).format(new Date(Date.UTC(year, month - 1, day)))
+}
+
+function formatSchedule(date: string) {
+  return formatDate(date)
 }
 
 function localCalendarDate() {
@@ -344,10 +348,14 @@ export function WarehouseTransfersPage() {
   const furnitureReadinessDocuments = useMemo(() => {
     const documents = query.data ?? []
     const expandedDetail = detailQuery.data
-    if (!expandedDetail || expandedId !== expandedDetail.id) return documents
-    return documents.map((document) =>
-      document.id === expandedDetail.id ? expandedDetail : document
-    )
+    const currentDocuments =
+      !expandedDetail || expandedId !== expandedDetail.id
+        ? documents
+        : documents.map((document) =>
+            document.id === expandedDetail.id ? expandedDetail : document
+          )
+
+    return currentDocuments.filter(needsFurnitureReadiness)
   }, [detailQuery.data, expandedId, query.data])
   const furnitureReadinessQueries = useQueries({
     queries: furnitureReadinessDocuments.map((document) => ({
@@ -802,7 +810,7 @@ export function WarehouseTransfersPage() {
                 label: "Дата задания",
                 className: "w-48",
                 getSortValue: (document) => document.scheduledDate,
-                render: (document) => formatDate(document.scheduledDate),
+                render: (document) => formatSchedule(document.scheduledDate),
               },
               {
                 id: "updatedAt",
@@ -875,7 +883,7 @@ export function WarehouseTransfersPage() {
                         warehouse.id === document.destinationWarehouseId
                     )
                   )}
-                  {` · ${formatDate(document.scheduledDate)}`}
+                  {` · ${formatSchedule(document.scheduledDate)}`}
                 </CardDescription>
                 <CardAction>
                   <Badge variant={statusVariant(document.state)}>

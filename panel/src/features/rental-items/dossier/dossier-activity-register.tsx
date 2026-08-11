@@ -1,6 +1,16 @@
 import { useState, type FormEvent } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { FilterIcon } from "@hugeicons/core-free-icons"
+import {
+  ArrowUpRight01Icon,
+  ChevronDownIcon,
+  ClipboardCheckIcon,
+  ClipboardPenLineIcon,
+  FilterIcon,
+  Settings02Icon,
+  TruckDeliveryIcon,
+  Wrench01Icon,
+} from "@hugeicons/core-free-icons"
+import { Link } from "react-router-dom"
 
 import { ApiError } from "@/lib/api-client"
 import { Badge } from "@/components/ui/badge"
@@ -13,6 +23,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
@@ -23,14 +38,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
+import { Separator } from "@/components/ui/separator"
+import { Skeleton } from "@/components/ui/skeleton"
 import { useResponsiveFiltersOpen } from "@/hooks/use-responsive-filters-open"
 import {
   formatDossierActorLabel,
@@ -47,6 +56,7 @@ import {
   type DossierSourceType,
   type DossierVisibility,
 } from "@/features/rental-items/dossier/model/dossier-service"
+import { cn } from "@/lib/utils"
 
 const ALL_ACTIVITY_CODES = "ALL_ACTIVITY_CODES"
 const ALL_SOURCE_TYPES = "ALL_SOURCE_TYPES"
@@ -262,8 +272,11 @@ export function DossierActivityFiltersPanel({
                 </FieldLabel>
                 <Input
                   id="dossier-occurred-from"
+                  name="dossier-occurred-from"
                   value={draft.occurredFrom ?? ""}
-                  placeholder="2026-07-18T00:00:00Z"
+                  placeholder="2026-07-18T00:00:00Z…"
+                  autoComplete="off"
+                  spellCheck={false}
                   onChange={(event) =>
                     setDraft((current) => ({
                       ...current,
@@ -278,8 +291,11 @@ export function DossierActivityFiltersPanel({
                 </FieldLabel>
                 <Input
                   id="dossier-occurred-before"
+                  name="dossier-occurred-before"
                   value={draft.occurredBefore ?? ""}
-                  placeholder="2026-07-19T00:00:00Z"
+                  placeholder="2026-07-19T00:00:00Z…"
+                  autoComplete="off"
+                  spellCheck={false}
                   onChange={(event) =>
                     setDraft((current) => ({
                       ...current,
@@ -309,191 +325,386 @@ export function DossierActivityFiltersPanel({
   )
 }
 
-function CoverageCard({
-  visibility,
-  loaded,
-}: {
-  visibility: DossierVisibility
-  loaded: number
-}) {
-  const partial = visibility === "PARTIAL"
+/** Visual category for one cabin-history timeline marker. */
+type TimelineCategory =
+  "INTERNAL" | "LOGISTICS" | "ESTIMATE" | "REPAIR" | "INVENTORY"
 
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex flex-wrap items-center gap-2">
-          <CardTitle>Покрытие проекции</CardTitle>
-          <Badge variant={partial ? "outline" : "secondary"}>
-            {visibility}
-          </Badge>
-          <Badge variant="outline">Загружено: {loaded}</Badge>
-        </div>
-        <CardDescription>
-          {partial
-            ? "Покрытие частичное: часть producer facts отсутствует или не видна текущему пользователю. Скрытые строки и их количество сервис не раскрывает."
-            : "Dossier-service сообщает полное покрытие для видимой проекции и текущих фильтров."}
-        </CardDescription>
-      </CardHeader>
-    </Card>
-  )
+/** Activities joined only by a canonical source or media-folder identity. */
+type TimelineGroup = {
+  key: string
+  category: TimelineCategory
+  activities: DossierActivity[]
 }
 
-function ActorCell({
-  activity,
-  display,
-  showTechnicalActorDetails,
-}: {
-  activity: DossierActivity
-  display: DossierActorDisplay | undefined
-  showTechnicalActorDetails: boolean
-}) {
-  const actor = activity.actorRef
-  if (!actor) {
-    return <span className="text-muted-foreground">Автор не указан</span>
-  }
+const timelineCategoryPresentation = {
+  INTERNAL: { label: "Внутренняя операция", icon: Settings02Icon },
+  LOGISTICS: { label: "Логистика", icon: TruckDeliveryIcon },
+  ESTIMATE: { label: "Смета", icon: ClipboardPenLineIcon },
+  REPAIR: { label: "Ремонт и приёмка", icon: Wrench01Icon },
+  INVENTORY: { label: "Инвентаризация", icon: ClipboardCheckIcon },
+} as const
 
+const mediaStateLabel = {
+  PROCESSING: "Обработка",
+  READY: "Готово",
+  FAILED: "Ошибка",
+  DELETED: "Удалено",
+} as const
+
+function activityTimestamp(activity: DossierActivity) {
+  const parsed = Date.parse(activity.occurredAt ?? activity.recordedAt)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function timelineCategory(activity: DossierActivity): TimelineCategory {
+  if (activity.activityCode.startsWith("ESTIMATE_")) return "ESTIMATE"
+  if (activity.activityCode.startsWith("REPAIR_")) return "REPAIR"
+  if (activity.activityCode.startsWith("INVENTORY_")) return "INVENTORY"
+  if (activity.activityCode.startsWith("MEDIA_")) {
+    return activity.sourceRef.secondaryId &&
+      activity.sourceRef.secondaryId !== activity.cabinId
+      ? "INVENTORY"
+      : "INTERNAL"
+  }
+  if (
+    activity.activityCode === "CABIN_LOGISTICS_EFFECT_APPLIED" ||
+    activity.activityCode === "CABIN_WAREHOUSE_CHANGED"
+  ) {
+    return "LOGISTICS"
+  }
+  return "INTERNAL"
+}
+
+function timelineGroupKey(
+  activity: DossierActivity,
+  category: TimelineCategory
+) {
+  if (category === "ESTIMATE") {
+    return `estimate:${activity.sourceRef.aggregateId}`
+  }
+  if (category === "REPAIR") {
+    return `repair:${activity.sourceRef.aggregateId}`
+  }
+  if (category === "INVENTORY") {
+    return `inventory:${activity.sourceRef.secondaryId ?? activity.sourceRef.aggregateId}`
+  }
+  if (activity.activityCode.startsWith("MEDIA_")) {
+    const folderIds = new Set(activity.media.map((item) => item.folderId))
+    if (folderIds.size === 1) {
+      return `media-folder:${[...folderIds][0]}`
+    }
+  }
+  return `activity:${activity.activityId}`
+}
+
+function buildTimelineGroups(activities: DossierActivity[]) {
+  const grouped = new Map<string, TimelineGroup>()
+  activities.forEach((activity) => {
+    const category = timelineCategory(activity)
+    const key = timelineGroupKey(activity, category)
+    const existing = grouped.get(key)
+    if (existing) {
+      existing.activities.push(activity)
+    } else {
+      grouped.set(key, { key, category, activities: [activity] })
+    }
+  })
+
+  return [...grouped.values()]
+    .map((group) => ({
+      ...group,
+      activities: [...group.activities].sort(
+        (left, right) =>
+          activityTimestamp(left) - activityTimestamp(right) ||
+          left.activityId.localeCompare(right.activityId)
+      ),
+    }))
+    .sort((left, right) => {
+      const leftLatest = left.activities.at(-1)
+      const rightLatest = right.activities.at(-1)
+      if (!leftLatest || !rightLatest) return 0
+      return (
+        activityTimestamp(leftLatest) - activityTimestamp(rightLatest) ||
+        left.key.localeCompare(right.key)
+      )
+    })
+}
+
+function pluralize(value: number, one: string, few: string, many: string) {
+  const mod100 = value % 100
+  const mod10 = value % 10
+  if (mod100 >= 11 && mod100 <= 14) return many
+  if (mod10 === 1) return one
+  if (mod10 >= 2 && mod10 <= 4) return few
+  return many
+}
+
+function groupMedia(group: TimelineGroup) {
+  return [
+    ...new Map(
+      group.activities.flatMap((activity) =>
+        activity.media.map((item) => [item.mediaId, item] as const)
+      )
+    ).values(),
+  ]
+}
+
+function timelineGroupTitle(group: TimelineGroup) {
+  const latest = group.activities.at(-1)
+  if (!latest) return "Операция"
+  const media = groupMedia(group)
+  if (
+    media.length > 0 &&
+    group.activities.every((activity) =>
+      activity.activityCode.startsWith("MEDIA_")
+    )
+  ) {
+    const noun = pluralize(
+      media.length,
+      "фотография",
+      "фотографии",
+      "фотографий"
+    )
+    const allReady = group.activities.every(
+      (activity) => activity.activityCode === "MEDIA_READY"
+    )
+    const verb =
+      media.length % 10 === 1 && media.length % 100 !== 11
+        ? "Добавлена"
+        : media.length % 10 >= 2 &&
+            media.length % 10 <= 4 &&
+            (media.length % 100 < 11 || media.length % 100 > 14)
+          ? "Добавлены"
+          : "Добавлено"
+    return allReady
+      ? `${verb} ${media.length} ${noun}`
+      : `Фотографии операции: ${media.length}`
+  }
+  return activityLabel[latest.activityCode]
+}
+
+function timelineGroupSummary(group: TimelineGroup) {
+  const parts: string[] = []
+  if (group.activities.length > 1) {
+    parts.push(
+      `${group.activities.length} ${pluralize(group.activities.length, "событие", "события", "событий")}`
+    )
+  }
+  const mediaCount = groupMedia(group).length
+  if (mediaCount > 0) {
+    parts.push(`${mediaCount} ${pluralize(mediaCount, "фото", "фото", "фото")}`)
+  }
+  return parts.join(" · ")
+}
+
+function timelineGroupRange(group: TimelineGroup) {
+  const first = group.activities[0]
+  const last = group.activities.at(-1)
+  if (!first || !last) return "Время не указано"
+  const firstValue = first.occurredAt ?? first.recordedAt
+  const lastValue = last.occurredAt ?? last.recordedAt
+  if (firstValue === lastValue) return formatInstant(lastValue)
+  return `${formatInstant(firstValue)} — ${formatInstant(lastValue)}`
+}
+
+function actorLabel(
+  activity: DossierActivity,
+  actorDisplays: Map<string, DossierActorDisplay>
+) {
+  return activity.actorRef
+    ? formatDossierActorLabel(
+        activity.actorRef,
+        actorDisplays.get(activity.actorRef.subjectId)
+      )
+    : "Автор не указан"
+}
+
+function groupActorSummary(
+  group: TimelineGroup,
+  actorDisplays: Map<string, DossierActorDisplay>
+) {
+  const labels = [
+    ...new Set(
+      group.activities.map((activity) => actorLabel(activity, actorDisplays))
+    ),
+  ]
+  if (labels.length <= 1) return labels[0] ?? "Автор не указан"
+  return `${labels[0]} и ещё ${labels.length - 1}`
+}
+
+function timelineGroupLink(group: TimelineGroup) {
+  const source = group.activities.at(-1)?.sourceRef
+  if (!source) return null
+  if (group.category === "ESTIMATE") {
+    return {
+      label: "Открыть смету",
+      to: `/estimates?estimateId=${encodeURIComponent(source.aggregateId)}`,
+    }
+  }
+  if (group.category === "REPAIR") {
+    return {
+      label: "Открыть ремонт",
+      to: `/repairs?repairId=${encodeURIComponent(source.aggregateId)}`,
+    }
+  }
+  if (group.category === "INVENTORY") {
+    return { label: "Открыть историю инвентаризаций", to: "/inventory/history" }
+  }
+  if (group.category === "LOGISTICS") {
+    if (source.aggregateType === "RETURN") {
+      return { label: "Открыть возвраты", to: "/logistics/returns" }
+    }
+    if (
+      source.aggregateType === "TRANSFER" ||
+      group.activities.some(
+        (activity) => activity.activityCode === "CABIN_WAREHOUSE_CHANGED"
+      )
+    ) {
+      return { label: "Открыть перемещения", to: "/logistics/transfers" }
+    }
+    if (source.aggregateType === "SHIPMENT") {
+      return { label: "Открыть отгрузки", to: "/logistics/shipments" }
+    }
+  }
+  return null
+}
+
+function TechnicalActorDetails({ activity }: { activity: DossierActivity }) {
+  const actor = activity.actorRef
+  if (!actor) return null
   return (
-    <div className="flex flex-col gap-2">
-      <p className="font-medium">{formatDossierActorLabel(actor, display)}</p>
-      {showTechnicalActorDetails ? (
-        <div
-          className="flex flex-col gap-1 text-xs text-muted-foreground"
-          data-testid={`technical-actor-${activity.activityId}`}
-        >
-          <p className="font-mono">actor: {actor.principalType}</p>
-          <p className="font-mono">
-            subject: {activity.sourceRef.aggregateType}
-          </p>
-          <p className="font-mono">
-            entityType: {activity.sourceRef.aggregateType}
-          </p>
-          {actor.profileRevision ? (
-            <p className="font-mono">
-              profileRevision: {actor.profileRevision}
-            </p>
-          ) : null}
-        </div>
+    <div
+      className="flex flex-col gap-1 text-xs text-muted-foreground"
+      data-testid={`technical-actor-${activity.activityId}`}
+    >
+      <p className="font-mono">actor: {actor.principalType}</p>
+      <p className="font-mono">subject: {activity.sourceRef.aggregateType}</p>
+      <p className="font-mono">
+        entityType: {activity.sourceRef.aggregateType}
+      </p>
+      {actor.profileRevision ? (
+        <p className="font-mono">profileRevision: {actor.profileRevision}</p>
       ) : null}
     </div>
   )
 }
 
-function ActivityTable({
-  activities,
-  actorDisplays,
-  showTechnicalActorDetails,
-}: {
-  activities: DossierActivity[]
-  actorDisplays: Map<string, DossierActorDisplay>
-  showTechnicalActorDetails: boolean
-}) {
+function ActivityMediaSummary({ activity }: { activity: DossierActivity }) {
+  const counts = new Map<string, number>()
+  activity.media.forEach((item) => {
+    counts.set(item.state, (counts.get(item.state) ?? 0) + 1)
+  })
+  if (counts.size === 0) return null
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Подтверждённые события</CardTitle>
-        <CardDescription>
-          {showTechnicalActorDetails
-            ? "Имя и роль автора получены из auth-service. Типы автора и источника показаны отдельно как технические данные."
-            : "Показаны понятное описание действия и пользователь, выполнивший его."}
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Время</TableHead>
-              <TableHead>Событие</TableHead>
-              <TableHead>Автор</TableHead>
-              <TableHead>Фото</TableHead>
-              {showTechnicalActorDetails ? (
-                <TableHead>Источник</TableHead>
-              ) : null}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {activities.length === 0 ? (
-              <TableRow>
-                <TableCell
-                  colSpan={showTechnicalActorDetails ? 5 : 4}
-                  className="h-24 text-center text-muted-foreground"
-                >
-                  Событий нет
-                </TableCell>
-              </TableRow>
-            ) : (
-              activities.map((activity) => (
-                <TableRow key={activity.activityId}>
-                  <TableCell className="min-w-48 align-top">
-                    <p>
-                      {activity.occurredAt
-                        ? formatInstant(activity.occurredAt)
-                        : "Бизнес-время не указано"}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Записано: {formatInstant(activity.recordedAt)}
-                    </p>
-                  </TableCell>
-                  <TableCell className="min-w-64 align-top">
-                    <Badge variant="outline">
-                      {activityLabel[activity.activityCode]}
-                    </Badge>
-                    {showTechnicalActorDetails ? (
-                      <p className="mt-2 text-xs text-muted-foreground">
-                        Подтверждено dossier-service
-                      </p>
-                    ) : null}
-                  </TableCell>
-                  <TableCell className="min-w-72 align-top">
-                    <ActorCell
-                      activity={activity}
-                      display={
-                        activity.actorRef
-                          ? actorDisplays.get(activity.actorRef.subjectId)
-                          : undefined
-                      }
-                      showTechnicalActorDetails={showTechnicalActorDetails}
-                    />
-                  </TableCell>
-                  <TableCell className="min-w-72 align-top">
-                    {activity.media.length === 0 ? (
-                      <span className="text-muted-foreground">Нет</span>
-                    ) : (
-                      <div className="flex flex-col gap-2">
-                        {activity.media.map((media) => (
-                          <div key={media.mediaId}>
-                            <Badge variant="secondary">{media.state}</Badge>
-                            {showTechnicalActorDetails ? (
-                              <p className="mt-1 text-xs text-muted-foreground">
-                                Версия {media.generation}
-                              </p>
-                            ) : null}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </TableCell>
-                  {showTechnicalActorDetails ? (
-                    <TableCell className="min-w-80 align-top">
-                      <p className="font-mono text-xs">
-                        {sourceLabel(activity)}
-                      </p>
-                    </TableCell>
-                  ) : null}
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
+    <div className="flex flex-wrap gap-2">
+      {[...counts.entries()].map(([state, count]) => (
+        <Badge key={state} variant="secondary">
+          {mediaStateLabel[state as keyof typeof mediaStateLabel]}: {count}
+        </Badge>
+      ))}
+    </div>
   )
 }
 
-function ResolvedActivityTable({
+function TimelineGroupDetails({
+  group,
+  actorDisplays,
+  showTechnicalActorDetails,
+}: {
+  group: TimelineGroup
+  actorDisplays: Map<string, DossierActorDisplay>
+  showTechnicalActorDetails: boolean
+}) {
+  const link = timelineGroupLink(group)
+  const mediaCount = groupMedia(group).length
+  return (
+    <div className="flex min-w-0 flex-col gap-4 px-3 pt-1 pb-4">
+      <Separator />
+      <dl className="grid gap-3 text-sm sm:grid-cols-3">
+        <div className="flex flex-col gap-1">
+          <dt className="text-muted-foreground">Когда</dt>
+          <dd className="font-medium">{timelineGroupRange(group)}</dd>
+        </div>
+        <div className="flex flex-col gap-1">
+          <dt className="text-muted-foreground">Кто</dt>
+          <dd className="font-medium">
+            {groupActorSummary(group, actorDisplays)}
+          </dd>
+        </div>
+        <div className="flex flex-col gap-1">
+          <dt className="text-muted-foreground">Состав операции</dt>
+          <dd className="font-medium">
+            {group.activities.length}{" "}
+            {pluralize(
+              group.activities.length,
+              "событие",
+              "события",
+              "событий"
+            )}
+            {mediaCount > 0 ? `, ${mediaCount} фото` : ""}
+          </dd>
+        </div>
+      </dl>
+      <div className="flex flex-col gap-2">
+        <h4 className="text-sm font-medium">Ход операции</h4>
+        <ol className="flex flex-col gap-3">
+          {group.activities.map((activity) => (
+            <li
+              key={activity.activityId}
+              className="grid min-w-0 gap-2 rounded-lg bg-muted/50 p-3 text-sm sm:grid-cols-[11rem_minmax(0,1fr)]"
+            >
+              <div className="flex flex-col gap-1 text-muted-foreground">
+                <time dateTime={activity.occurredAt ?? activity.recordedAt}>
+                  {activity.occurredAt
+                    ? formatInstant(activity.occurredAt)
+                    : "Время операции не указано"}
+                </time>
+                <span>Записано: {formatInstant(activity.recordedAt)}</span>
+              </div>
+              <div className="flex min-w-0 flex-col gap-2">
+                <p className="font-medium">
+                  {activityLabel[activity.activityCode]}
+                </p>
+                <p className="text-muted-foreground">
+                  {actorLabel(activity, actorDisplays)}
+                </p>
+                <ActivityMediaSummary activity={activity} />
+                {showTechnicalActorDetails ? (
+                  <div className="flex flex-col gap-2">
+                    <p className="font-mono text-xs break-all text-muted-foreground">
+                      {sourceLabel(activity)} · {activity.sourceRef.aggregateId}
+                    </p>
+                    <TechnicalActorDetails activity={activity} />
+                  </div>
+                ) : null}
+              </div>
+            </li>
+          ))}
+        </ol>
+      </div>
+      {link ? (
+        <Button variant="outline" size="sm" className="self-start" asChild>
+          <Link to={link.to}>
+            {link.label}
+            <HugeiconsIcon
+              icon={ArrowUpRight01Icon}
+              data-icon="inline-end"
+              aria-hidden="true"
+            />
+          </Link>
+        </Button>
+      ) : null}
+    </div>
+  )
+}
+
+function ActivityTimeline({
   activities,
+  visibility,
   showTechnicalActorDetails,
 }: {
   activities: DossierActivity[]
+  visibility: DossierVisibility
   showTechnicalActorDetails: boolean
 }) {
   const actorDisplays = useDossierActorDisplays(
@@ -501,12 +712,135 @@ function ResolvedActivityTable({
       activity.actorRef ? [activity.actorRef.subjectId] : []
     )
   )
+  const groups = buildTimelineGroups(activities)
+  const partial = visibility === "PARTIAL"
+
   return (
-    <ActivityTable
-      activities={activities}
-      actorDisplays={actorDisplays}
-      showTechnicalActorDetails={showTechnicalActorDetails}
-    />
+    <Card data-testid="dossier-timeline">
+      <CardHeader>
+        <div className="flex flex-wrap items-center gap-2">
+          <CardTitle className="text-balance">История операций</CardTitle>
+          <Badge variant={partial ? "outline" : "secondary"}>
+            {visibility}
+          </Badge>
+          <Badge variant="outline">Загружено: {activities.length}</Badge>
+          <Badge variant="outline">Групп: {groups.length}</Badge>
+          {showTechnicalActorDetails ? (
+            <Badge variant="outline">Подтверждено dossier-service</Badge>
+          ) : null}
+        </div>
+        <CardDescription>
+          {partial
+            ? "История может быть неполной: показаны только доступные подтверждённые события. Нажмите на операцию, чтобы раскрыть детали."
+            : "Подтверждённые события собраны по операциям. Нажмите на строку, чтобы увидеть полный состав."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {groups.length === 0 ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            Событий нет
+          </p>
+        ) : (
+          <ol
+            className="flex flex-col"
+            aria-label="Хронология операций бытовки"
+          >
+            {groups.map((group, index) => {
+              const latest = index === groups.length - 1
+              const presentation = timelineCategoryPresentation[group.category]
+              const Icon = presentation.icon
+              const summary = timelineGroupSummary(group)
+              const latestActivity = group.activities.at(-1)
+              return (
+                <li
+                  key={group.key}
+                  className="relative grid grid-cols-[2.5rem_minmax(0,1fr)] gap-3 pb-2 last:pb-0"
+                >
+                  {index < groups.length - 1 ? (
+                    <span
+                      className="absolute top-10 bottom-0 left-[1.21875rem] w-px bg-history-past/40"
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                  <span
+                    className={cn(
+                      "relative flex size-10 items-center justify-center rounded-full",
+                      latest
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-history-past text-history-past-foreground"
+                    )}
+                    data-timeline-state={latest ? "latest" : "past"}
+                    data-timeline-category={group.category}
+                    aria-hidden="true"
+                  >
+                    <HugeiconsIcon icon={Icon} />
+                  </span>
+                  <Collapsible className="min-w-0">
+                    <CollapsibleTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        className="group h-auto w-full justify-between gap-3 px-3 py-2 text-left whitespace-normal hover:bg-muted/70 hover:text-foreground dark:hover:bg-muted/70"
+                      >
+                        <span className="flex min-w-0 flex-1 flex-col items-start gap-1">
+                          <span className="flex flex-wrap items-center gap-2">
+                            <Badge variant="outline">
+                              {presentation.label}
+                            </Badge>
+                            {latest ? <Badge>Последнее действие</Badge> : null}
+                          </span>
+                          <span className="font-medium">
+                            {timelineGroupTitle(group)}
+                          </span>
+                          <span className="flex max-w-full flex-wrap gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                            <time
+                              className="tabular-nums"
+                              dateTime={
+                                latestActivity?.occurredAt ??
+                                latestActivity?.recordedAt
+                              }
+                            >
+                              {timelineGroupRange(group)}
+                            </time>
+                            <span aria-hidden="true">·</span>
+                            <span className="truncate">
+                              {groupActorSummary(group, actorDisplays)}
+                            </span>
+                            {summary ? (
+                              <>
+                                <span aria-hidden="true">·</span>
+                                <span>{summary}</span>
+                              </>
+                            ) : null}
+                          </span>
+                          {showTechnicalActorDetails && latestActivity ? (
+                            <span className="font-mono text-xs text-muted-foreground">
+                              {sourceLabel(latestActivity)}
+                            </span>
+                          ) : null}
+                        </span>
+                        <HugeiconsIcon
+                          icon={ChevronDownIcon}
+                          data-icon="inline-end"
+                          className="transition-transform group-data-[state=open]:rotate-180 motion-reduce:transition-none"
+                          aria-hidden="true"
+                        />
+                      </Button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <TimelineGroupDetails
+                        group={group}
+                        actorDisplays={actorDisplays}
+                        showTechnicalActorDetails={showTechnicalActorDetails}
+                      />
+                    </CollapsibleContent>
+                  </Collapsible>
+                </li>
+              )
+            })}
+          </ol>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 
@@ -529,13 +863,18 @@ export function DossierActivityRegister({
 }) {
   if (isLoading) {
     return (
-      <Card>
+      <Card aria-busy="true">
         <CardHeader>
-          <CardTitle>Загрузка истории...</CardTitle>
+          <CardTitle>Загрузка истории…</CardTitle>
           <CardDescription>
             Получаем подтверждённые события из dossier-service.
           </CardDescription>
         </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-4/5" />
+        </CardContent>
       </Card>
     )
   }
@@ -561,9 +900,9 @@ export function DossierActivityRegister({
 
   return (
     <div className="flex flex-col gap-4">
-      <CoverageCard visibility={visibility} loaded={activities.length} />
-      <ResolvedActivityTable
+      <ActivityTimeline
         activities={activities}
+        visibility={visibility}
         showTechnicalActorDetails={showTechnicalActorDetails}
       />
       {hasNextPage ? (
@@ -573,7 +912,7 @@ export function DossierActivityRegister({
           disabled={isFetchingNextPage}
           onClick={onLoadMore}
         >
-          {isFetchingNextPage ? "Загрузка..." : "Загрузить ещё"}
+          {isFetchingNextPage ? "Загрузка…" : "Загрузить ещё"}
         </Button>
       ) : null}
     </div>

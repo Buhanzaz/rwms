@@ -392,10 +392,15 @@ entered; extracted collaborators do not introduce a second transaction policy.
 | Task board | Read projection, external registration/mutation, logistics tasks, driver-audience validation/visibility, worker execution and ordering; workforce profile, credential and group owners |
 | Inventory | Session, read, finding/validation/review, planning, completion, statistics, publication and projection owners |
 | Maintenance | Catalog, estimate, repair, transfer, inbound and reconciliation owners; separate inventory maintenance/publication and property-disposition facades |
-| Logistics | Return, shipment, transfer, reconciliation and rental-order document hooks; one document-line driver-intent planner; rental-order read/create/lifecycle/reservation/terms/shipment owners |
+| Logistics | Return, shipment, transfer, reconciliation and rental-order document hooks; one grouped document driver-intent planner; rental-order read/create/lifecycle/reservation/terms/shipment/replacement owners |
 | Worker task UI | Server-scoped personal-logistics/shared-movement, group-role and qualification-only panels, with adaptive two-pane presentation and existing task-detail/camera/upload navigation; the stored audience mode is presentational and grants no access |
-| Assistant | Conversation creation store, durable clarification branches, cabin search/reference tools and selection delegation; logistics and asset remain the command owners |
+| Assistant | Conversation creation store, one durable ordered clarification queue, cabin search/reference tools and selection delegation; only the visible `PENDING` head is actionable and logistics/asset remain the command owners |
 | Private HTTP adapters | Logistics and maintenance gateway facades delegate by remote owner to warehouse, asset, task-board, logistics, maintenance or media clients over one technical OAuth/HTTP transport each |
+
+The assistant queue invariant is owned by
+[`AssistantClarificationService.java`](../../services/assistant-service/src/main/java/dev/buhanzaz/rwms/assistant/service/AssistantClarificationService.java)
+and its lossless schema transition is
+[`V6__order_linked_sequential_conversations.sql`](../../services/assistant-service/src/main/resources/db/migration/V6__order_linked_sequential_conversations.sql).
 
 Compatibility facades contain delegation and small public-result adapters, not
 repository bags or hidden workflow bases. Extracted types do not refer back to

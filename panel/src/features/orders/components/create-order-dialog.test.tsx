@@ -49,7 +49,11 @@ const delivery = {
   longitude: 37.62,
   contactPhone: "+7 999 123-45-67",
   comment: null,
-  acceptableDeliveryDates: ["2026-08-15"],
+  additionalContacts: [],
+}
+const managerOrderInput = {
+  contactPhone: delivery.contactPhone,
+  comment: delivery.comment,
 }
 const order = {
   id: "33333333-3333-4333-8333-333333333333",
@@ -66,11 +70,19 @@ const order = {
   createdBy: "11111111-1111-4111-8111-111111111111",
   createdByDisplayName: "Менеджер",
   warehouseId: null,
+  ...delivery,
+  desiredDeliveryWindows: [],
   unitCount: 0,
   createdAt: "2026-07-19T08:00:00Z",
   updatedAt: "2026-07-19T08:00:00Z",
   units: [],
-  permissions: { canEdit: true, canViewOtherManagers: false },
+  movements: [],
+  permissions: {
+    canEdit: true,
+    canReplaceUnits: false,
+    canExtendRentalTerms: false,
+    canViewOtherManagers: false,
+  },
 }
 
 function clientPage(content: unknown[]) {
@@ -102,21 +114,9 @@ function renderDialog(onCreated = vi.fn(), initialClientId?: string) {
   }
 }
 
-function fillDelivery() {
-  fireEvent.change(screen.getByLabelText("Адрес доставки"), {
-    target: { value: delivery.deliveryAddress },
-  })
-  fireEvent.change(screen.getByLabelText("Широта"), {
-    target: { value: String(delivery.latitude) },
-  })
-  fireEvent.change(screen.getByLabelText("Долгота"), {
-    target: { value: String(delivery.longitude) },
-  })
+async function fillDelivery() {
   fireEvent.change(screen.getByLabelText("Контактный телефон заказа"), {
     target: { value: delivery.contactPhone },
-  })
-  fireEvent.change(screen.getByLabelText("Допустимая дата приёмки 1"), {
-    target: { value: delivery.acceptableDeliveryDates[0] },
   })
 }
 
@@ -131,6 +131,7 @@ beforeEach(() => {
         phone: delivery.contactPhone,
         contactPerson: "Пётр Петров",
         email: null,
+        additionalContacts: [],
       },
     ])
   )
@@ -146,6 +147,7 @@ beforeEach(() => {
     responsibleManagerDisplayName: "Менеджер",
     comment: null,
     source: null,
+    additionalContacts: [],
     createdAt: "2026-08-09T08:00:00Z",
     updatedAt: "2026-08-09T08:00:00Z",
   })
@@ -181,27 +183,17 @@ describe("CreateOrderDialog", () => {
     expect(clientsApi.getClient).toHaveBeenCalledWith("orders-token", CLIENT_ID)
   })
 
-  it("announces incomplete delivery metadata and focuses the first invalid field", async () => {
+  it("shows only manager-owned order fields", async () => {
     renderDialog(vi.fn(), CLIENT_ID)
     await screen.findByDisplayValue("ООО Петров")
 
-    const submit = screen.getByRole("button", {
-      name: "Создать бронирование",
-    })
-    fireEvent.submit(submit.closest("form")!)
+    expect(screen.queryByLabelText("Адрес доставки")).toBeNull()
+    expect(screen.queryByLabelText("Широта")).toBeNull()
+    expect(screen.queryByLabelText("Долгота")).toBeNull()
+    expect(screen.getByLabelText("Контактный телефон заказа")).toBeTruthy()
+    expect(screen.getByLabelText("Комментарий к заказу")).toBeTruthy()
+    expect(screen.queryByText("Дополнительные контакты заказа")).toBeNull()
 
-    expect(
-      (
-        await screen.findByText(
-          "Проверьте обязательные поля доставки и приёмки."
-        )
-      ).getAttribute("role")
-    ).toBe("alert")
-    await waitFor(() =>
-      expect(document.activeElement).toBe(
-        screen.getByLabelText("Адрес доставки")
-      )
-    )
     expect(ordersApi.createOrder).not.toHaveBeenCalled()
   })
 
@@ -288,7 +280,7 @@ describe("CreateOrderDialog", () => {
     fireEvent.change(screen.getByLabelText("Основное контактное лицо"), {
       target: { value: "Иван Иванов" },
     })
-    fillDelivery()
+    await fillDelivery()
     await user.click(
       screen.getByRole("button", { name: "Создать бронирование" })
     )
@@ -306,14 +298,15 @@ describe("CreateOrderDialog", () => {
             email: null,
             comment: null,
             source: null,
+            additionalContacts: [],
           },
-          ...delivery,
+          ...managerOrderInput,
         },
       })
     )
   })
 
-  it("links an explicitly selected existing client", async () => {
+  it("links an explicitly selected existing client without client-owned dates", async () => {
     const user = userEvent.setup()
     renderDialog()
 
@@ -321,17 +314,31 @@ describe("CreateOrderDialog", () => {
     await user.type(input, "Петров")
     const existingClient = await screen.findByText("ООО Петров")
     await user.click(existingClient)
-    fillDelivery()
+    await fillDelivery()
     await user.click(
       screen.getByRole("button", { name: "Создать бронирование" })
     )
 
-    await waitFor(() =>
-      expect(ordersApi.createOrder).toHaveBeenCalledWith({
-        accessToken: "orders-token",
-        idempotencyKey: "99999999-9999-4999-8999-999999999999",
-        input: { clientId: CLIENT_ID, ...delivery },
-      })
+    await waitFor(() => expect(ordersApi.createOrder).toHaveBeenCalledOnce())
+    expect(ordersApi.createOrder).toHaveBeenCalledWith({
+      accessToken: "orders-token",
+      idempotencyKey: "99999999-9999-4999-8999-999999999999",
+      input: { clientId: CLIENT_ID, ...managerOrderInput },
+    })
+    expect(ordersApi.createOrder.mock.calls[0]?.[0].input).not.toHaveProperty(
+      "desiredDeliveryWindows"
+    )
+    expect(ordersApi.createOrder.mock.calls[0]?.[0].input).not.toHaveProperty(
+      "deliveryAddress"
+    )
+    expect(ordersApi.createOrder.mock.calls[0]?.[0].input).not.toHaveProperty(
+      "latitude"
+    )
+    expect(ordersApi.createOrder.mock.calls[0]?.[0].input).not.toHaveProperty(
+      "longitude"
+    )
+    expect(ordersApi.createOrder.mock.calls[0]?.[0].input).not.toHaveProperty(
+      "additionalContacts"
     )
   })
 
@@ -341,7 +348,8 @@ describe("CreateOrderDialog", () => {
     renderDialog()
 
     const input = screen.getByPlaceholderText("Например, ООО Петров")
-    await user.type(input, "  ООО   Новый клиент  ")
+    await user.click(input)
+    await user.paste("  ООО   Новый клиент  ")
     expect(ordersApi.createOrder).not.toHaveBeenCalled()
 
     await user.click(
@@ -355,15 +363,13 @@ describe("CreateOrderDialog", () => {
     ) as HTMLInputElement
     expect(manager.value).toBe("Мария Менеджер")
     expect(manager.readOnly).toBe(true)
-    await user.type(
-      screen.getByLabelText("Основной телефон"),
-      "+7 999 765-43-21"
-    )
-    await user.type(
-      screen.getByLabelText("Основное контактное лицо"),
-      "Анна Петрова"
-    )
-    fillDelivery()
+    fireEvent.change(screen.getByLabelText("Основной телефон"), {
+      target: { value: "+7 999 765-43-21" },
+    })
+    fireEvent.change(screen.getByLabelText("Основное контактное лицо"), {
+      target: { value: "Анна Петрова" },
+    })
+    await fillDelivery()
     await user.click(
       screen.getByRole("button", { name: "Создать бронирование" })
     )
@@ -381,12 +387,13 @@ describe("CreateOrderDialog", () => {
             email: null,
             comment: null,
             source: null,
+            additionalContacts: [],
           },
-          ...delivery,
+          ...managerOrderInput,
         },
       })
     )
-  })
+  }, 10_000)
 
   it("reuses the logical-command idempotency key after an uncertain error", async () => {
     ordersApi.createOrder
@@ -400,7 +407,7 @@ describe("CreateOrderDialog", () => {
       "Петров"
     )
     await user.click(await screen.findByText("ООО Петров"))
-    fillDelivery()
+    await fillDelivery()
     await user.click(
       screen.getByRole("button", { name: "Создать бронирование" })
     )
