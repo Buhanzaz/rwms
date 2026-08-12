@@ -55,19 +55,16 @@ vi.mock("@/features/logistics/returns/api", () => ({
 vi.mock("@/features/logistics/order-tasks-api", () => ({
   createOrderShipment: orderShipmentApi.createOrderShipment,
 }))
-vi.mock(
-  "@/features/settings/logistics/api/shipment-task-settings-api",
-  () => ({
-    getShipmentTaskSettings: shipmentTaskSettingsApi.getShipmentTaskSettings,
-    shipmentTaskSettingsKeys: {
-      warehouse: (warehouseId: string) => [
-        "logistics",
-        "shipment-task-settings",
-        warehouseId,
-      ],
-    },
-  })
-)
+vi.mock("@/features/settings/logistics/api/shipment-task-settings-api", () => ({
+  getShipmentTaskSettings: shipmentTaskSettingsApi.getShipmentTaskSettings,
+  shipmentTaskSettingsKeys: {
+    warehouse: (warehouseId: string) => [
+      "logistics",
+      "shipment-task-settings",
+      warehouseId,
+    ],
+  },
+}))
 vi.mock("@/features/orders/api/orders-api", () => ({
   ORDERS_QUERY_KEY: ["orders"],
   getOrder: ordersApi.getOrder,
@@ -236,10 +233,21 @@ function savedOrder() {
     status: "SAVED" as const,
     client: {
       id: "66666666-6666-4666-8666-666666666666",
+      version: 3,
       type: "LEGAL_ENTITY" as const,
       displayName: "ООО Тест",
-      phone: null,
+      phone: "+79990000002",
+      contactPerson: "Анна Петрова",
       email: null,
+      responsibleManagerId: "99999999-9999-4999-8999-999999999999",
+      responsibleManagerDisplayName: "Менеджер",
+      comment: null,
+      source: null,
+      additionalContacts: [
+        { name: "Сергей Клиентский", phone: "+79990000003" },
+      ],
+      createdAt: "2026-07-01T08:00:00Z",
+      updatedAt: "2026-07-30T08:00:00Z",
     },
     managerId: "99999999-9999-4999-8999-999999999999",
     managerDisplayName: "Менеджер",
@@ -251,7 +259,7 @@ function savedOrder() {
     longitude: 30.3351,
     contactPhone: "+79990000001",
     comment: "Позвонить за час",
-    additionalContacts: [],
+    additionalContacts: [{ name: "Ольга По Заказу", phone: "+79990000004" }],
     desiredDeliveryWindows: [
       {
         startDate: currentUtcDate(),
@@ -261,7 +269,11 @@ function savedOrder() {
     unitCount: 1,
     createdAt: "2026-07-30T08:00:00Z",
     updatedAt: "2026-07-30T08:00:00Z",
-    permissions: { canEdit: true, canReplaceUnits: false, canViewOtherManagers: true },
+    permissions: {
+      canEdit: true,
+      canReplaceUnits: false,
+      canViewOtherManagers: true,
+    },
     units: [
       {
         reservationId: "88888888-8888-4888-8888-888888888888",
@@ -442,30 +454,7 @@ beforeEach(() => {
         ORDER_ID,
         {
           status: "available",
-          order: {
-            id: ORDER_ID,
-            version: 7,
-            number: "ORD-000001",
-            desiredDeliveryWindows: [
-              {
-                startDate: currentUtcDate(),
-                endDate: currentUtcDate(),
-              },
-            ],
-            units: [
-              {
-                reservationId: "88888888-8888-4888-8888-888888888888",
-                added: true,
-                unit: { id: ASSET_ID },
-                desiredContents: [],
-                rentalTerm: {
-                  rentalMonths: 3,
-                  shipmentDate: null,
-                  returnDate: null,
-                },
-              },
-            ],
-          },
+          order: savedOrder(),
         },
       ],
     ]),
@@ -488,9 +477,35 @@ describe("LogisticsOrderTasksPage", () => {
       screen.getAllByRole("button", { name: "Показать бытовки" })[0]
     )
 
+    const overview = screen.getAllByRole("region", {
+      name: "Заказ и контакты клиента",
+    })[0]
+    expect(
+      within(overview)
+        .getByRole("link", { name: "Заказ ORD-000001" })
+        .getAttribute("href")
+    ).toBe(`/orders/${ORDER_ID}`)
+    expect(
+      within(overview).getByText("Санкт-Петербург, Невский проспект, 1")
+    ).toBeTruthy()
+    expect(within(overview).getByText("Анна Петрова")).toBeTruthy()
+    expect(
+      within(overview)
+        .getByRole("link", { name: "+79990000001" })
+        .getAttribute("href")
+    ).toBe("tel:+79990000001")
+    expect(
+      within(overview).getByRole("link", { name: "+79990000002" })
+    ).toBeTruthy()
+    expect(within(overview).getByText("Сергей Клиентский")).toBeTruthy()
+    expect(within(overview).getByText("Ольга По Заказу")).toBeTruthy()
+    expect(within(overview).getByText("59.9343, 30.3351")).toBeTruthy()
+    expect(within(overview).getByText("Позвонить за час")).toBeTruthy()
+
     expect(screen.getAllByText("Бытовка БЫТ-001").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("Требуются действия").length).toBeGreaterThan(0)
     await user.click(screen.getAllByRole("button", { name: "Детали" })[0])
-    expect(screen.getAllByText("Стол").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("Стол — 1 шт.").length).toBeGreaterThan(0)
     expect(screen.getAllByText("Проверить мебель").length).toBeGreaterThan(0)
 
     const checkbox = screen.getAllByRole("checkbox", {
@@ -526,6 +541,12 @@ describe("LogisticsOrderTasksPage", () => {
     const dialog = await screen.findByRole("dialog", {
       name: "Создать отгрузку",
     })
+    const selectedCabins = within(dialog).getByRole("region", {
+      name: "Выбранные бытовки и наполнение",
+    })
+    expect(within(selectedCabins).getByText("Бытовка БЫТ-001")).toBeTruthy()
+    expect(within(selectedCabins).getByText("Требуются действия")).toBeTruthy()
+    expect(within(selectedCabins).getByText(/Стол — 1 шт\./)).toBeTruthy()
     await user.selectOptions(
       within(dialog).getByRole("combobox", { name: "Водитель" }),
       "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -642,9 +663,9 @@ describe("LogisticsOrderTasksPage", () => {
     await user.click(second)
 
     expect((third as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.getAllByText("Лимит одного задания: 2.").length).toBeGreaterThan(
-      0
-    )
+    expect(
+      screen.getAllByText("Лимит одного задания: 2.").length
+    ).toBeGreaterThan(0)
     expect(screen.getAllByText(/Выбрано бытовок:/).length).toBeGreaterThan(0)
 
     await user.click(
@@ -658,6 +679,12 @@ describe("LogisticsOrderTasksPage", () => {
         /Выбрано бытовок: 2 из 2\. Выбранные бытовки будут объединены/
       )
     ).toBeTruthy()
+    const selectedCabins = within(dialog).getByRole("region", {
+      name: "Выбранные бытовки и наполнение",
+    })
+    expect(within(selectedCabins).getByText("Бытовка БЫТ-001")).toBeTruthy()
+    expect(within(selectedCabins).getByText("Бытовка БЫТ-002")).toBeTruthy()
+    expect(within(selectedCabins).queryByText("Бытовка БЫТ-003")).toBeNull()
   })
 
   it("revalidates the cap when it changes while a shipment dialog is open", async () => {
@@ -807,6 +834,11 @@ describe("LogisticsOrderTasksPage", () => {
     const dialog = await screen.findByRole("dialog", {
       name: "Возврат из аренды",
     })
+    const selectedCabins = within(dialog).getByRole("region", {
+      name: "Выбранные бытовки и наполнение",
+    })
+    expect(within(selectedCabins).getByText("Бытовка БЫТ-001")).toBeTruthy()
+    expect(within(selectedCabins).getByText("Требуются действия")).toBeTruthy()
     await user.selectOptions(
       within(dialog).getByRole("combobox", { name: "Водитель" }),
       "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"

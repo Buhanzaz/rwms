@@ -44,6 +44,8 @@ import {
 import { LogisticsDriverPicker } from "@/features/logistics/logistics-driver-picker"
 import { DesiredTripScheduleFields } from "@/features/logistics/desired-trip-schedule-fields"
 import { DRIVER_BOARD_QUERY_KEY } from "@/features/logistics/driver-board/driver-board-api"
+import { CabinFurnitureSummary } from "@/features/logistics/order-tasks/cabin-furniture-summary"
+import { OrderCustomerOverview } from "@/features/logistics/order-tasks/order-customer-overview"
 import {
   logisticsAssetLabel,
   logisticsOrderLabel,
@@ -63,6 +65,11 @@ import {
   type ReturnDocumentState,
 } from "@/features/logistics/returns/model"
 import { StartReturnEstimatesDialog } from "@/features/logistics/returns/start-return-estimates-dialog"
+import {
+  SHIPMENTS_QUERY_KEY,
+  listShipments,
+} from "@/features/logistics/shipments/api"
+import type { ShipmentDocument } from "@/features/logistics/shipments/model"
 import type { RepairTaskWorkerSnapshotDto } from "@/features/repair-tasks/model/repair-task"
 import type { DesiredDeliveryWindow } from "@/features/orders/domain/orders"
 import { useResponsiveFiltersOpen } from "@/hooks/use-responsive-filters-open"
@@ -73,6 +80,8 @@ type ReturnFilters = LogisticsDocumentFiltersState<ReturnDocumentState> & {
   counterparties: string[]
   drivers: string[]
 }
+
+type LinkedDocumentReadState = "loading" | "available" | "unavailable"
 
 const EMPTY_FILTERS: ReturnFilters = {
   states: [],
@@ -95,6 +104,26 @@ function formatDate(value: string) {
 
 function formatSchedule(date: string | null) {
   return date ? formatDate(date) : "Не назначена"
+}
+
+function formatOptionalDate(date: string | null | undefined) {
+  return date ? formatDate(date) : "—"
+}
+
+function rentalMonthLabel(value: number) {
+  return `${value} мес.`
+}
+
+function linkedShipmentDriverLabel(
+  document: ShipmentDocument | undefined,
+  state: LinkedDocumentReadState,
+  hasShipmentReference: boolean
+) {
+  if (state === "loading") return "Загружаем…"
+  if (state === "unavailable") return "Данные отгрузки недоступны"
+  if (!hasShipmentReference) return "Отгрузка не связана"
+  if (!document) return "Данные отгрузки недоступны"
+  return document.driverSnapshot ?? "Не назначен"
 }
 
 function matchesDateRange(
@@ -194,6 +223,21 @@ export function LogisticsReturnsPage() {
     enabled: Boolean(accessToken && selectedWarehouseId),
     refetchInterval: 5_000,
   })
+  const shipmentsQuery = useQuery({
+    queryKey: [...SHIPMENTS_QUERY_KEY, "return-links", selectedWarehouseId],
+    queryFn: () => listShipments(accessToken!, selectedWarehouseId!),
+    enabled: Boolean(accessToken && selectedWarehouseId),
+    refetchInterval: 5_000,
+  })
+  const shipmentsById = useMemo(
+    () =>
+      new Map(
+        (shipmentsQuery.data ?? []).map(
+          (document) => [document.id, document] as const
+        )
+      ),
+    [shipmentsQuery.data]
+  )
   const referenceLabels = useLogisticsReferenceLabels(
     accessToken,
     query.data ?? []
@@ -468,9 +512,21 @@ export function LogisticsReturnsPage() {
             items={rows}
             expandedItemId={expandedId}
             renderExpandedRow={(document) => (
-              <ReturnLines
+              <ReturnDetails
                 document={document}
                 referenceLabels={referenceLabels}
+                linkedShipment={
+                  document.rentalShipmentId
+                    ? shipmentsById.get(document.rentalShipmentId)
+                    : undefined
+                }
+                linkedShipmentState={
+                  shipmentsQuery.isLoading
+                    ? "loading"
+                    : shipmentsQuery.isError
+                      ? "unavailable"
+                      : "available"
+                }
                 selectedLineId={selectedLineId}
               />
             )}
@@ -540,13 +596,27 @@ export function LogisticsReturnsPage() {
                   </Badge>
                 </CardAction>
               </CardHeader>
-              <CardContent>
-                <ReturnLines
-                  document={document}
-                  referenceLabels={referenceLabels}
-                  selectedLineId={selectedLineId}
-                />
-              </CardContent>
+              {expandedId === document.id ? (
+                <CardContent>
+                  <ReturnDetails
+                    document={document}
+                    referenceLabels={referenceLabels}
+                    linkedShipment={
+                      document.rentalShipmentId
+                        ? shipmentsById.get(document.rentalShipmentId)
+                        : undefined
+                    }
+                    linkedShipmentState={
+                      shipmentsQuery.isLoading
+                        ? "loading"
+                        : shipmentsQuery.isError
+                          ? "unavailable"
+                          : "available"
+                    }
+                    selectedLineId={selectedLineId}
+                  />
+                </CardContent>
+              ) : null}
               <CardFooter className="flex-wrap gap-2">
                 {actions(document)}
               </CardFooter>
@@ -570,6 +640,7 @@ export function LogisticsReturnsPage() {
         <ReturnPickupDialog
           accessToken={accessToken}
           document={pickupTarget}
+          referenceLabels={referenceLabels}
           desiredDeliveryWindows={desiredWindowsForReturn(
             referenceLabels,
             pickupTarget
@@ -634,6 +705,7 @@ export function LogisticsReturnsPage() {
 function ReturnPickupDialog({
   accessToken,
   document,
+  referenceLabels,
   desiredDeliveryWindows,
   pending,
   onOpenChange,
@@ -641,6 +713,7 @@ function ReturnPickupDialog({
 }: {
   accessToken: string
   document: ReturnDocument
+  referenceLabels: LogisticsReferenceLabels
   desiredDeliveryWindows: readonly DesiredDeliveryWindow[]
   pending: boolean
   onOpenChange: (open: boolean) => void
@@ -674,7 +747,7 @@ function ReturnPickupDialog({
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl">
         <form className="flex flex-col gap-4" onSubmit={submit}>
           <DialogHeader>
             <DialogTitle>Создать вывоз</DialogTitle>
@@ -683,6 +756,10 @@ function ReturnPickupDialog({
               остаются отдельным ориентиром логиста.
             </DialogDescription>
           </DialogHeader>
+          <ReturnCabinFillingSummaries
+            document={document}
+            referenceLabels={referenceLabels}
+          />
           <FieldGroup>
             <LogisticsDriverPicker
               accessToken={accessToken}
@@ -722,19 +799,138 @@ function ReturnPickupDialog({
   )
 }
 
-function ReturnLines({
+function ReturnDetails({
   document,
   referenceLabels,
+  linkedShipment,
+  linkedShipmentState,
   selectedLineId,
 }: {
   document: ReturnDocument
   referenceLabels: LogisticsReferenceLabels
+  linkedShipment: ShipmentDocument | undefined
+  linkedShipmentState: LinkedDocumentReadState
+  selectedLineId: string | null
+}) {
+  const orderId =
+    document.rentalOrderId ??
+    document.lines.find((line) => line.rentalOrderId)?.rentalOrderId ??
+    null
+  const orderReference = orderId
+    ? referenceLabels.orders.get(orderId)
+    : undefined
+  const order =
+    orderReference?.status === "available" ? orderReference.order : null
+
+  return (
+    <div className="grid min-w-0 gap-3">
+      <OrderCustomerOverview
+        order={order}
+        orderId={orderId}
+        orderNumber={
+          orderId ? referenceLabels.orderNumbers.get(orderId) : undefined
+        }
+        state={orderReference?.status ?? "unavailable"}
+      />
+      <ReturnLines
+        document={document}
+        referenceLabels={referenceLabels}
+        linkedShipment={linkedShipment}
+        linkedShipmentState={linkedShipmentState}
+        selectedLineId={selectedLineId}
+      />
+    </div>
+  )
+}
+
+function ReturnCabinFillingSummaries({
+  document,
+  referenceLabels,
+}: {
+  document: ReturnDocument
+  referenceLabels: LogisticsReferenceLabels
+}) {
+  return (
+    <section
+      aria-label="Бытовки возврата"
+      className="grid max-h-72 gap-2 overflow-y-auto pr-1"
+    >
+      {document.lines.map((line) => {
+        const orderId = line.rentalOrderId ?? document.rentalOrderId
+        const orderReference = orderId
+          ? referenceLabels.orders.get(orderId)
+          : undefined
+        const assetReference = referenceLabels.assets.get(line.assetId)
+        const desired =
+          orderReference?.status === "available"
+            ? (orderReference.order.units.find(
+                (candidate) => candidate.unit.id === line.assetId
+              )?.desiredContents ?? [])
+            : []
+        const actual =
+          assetReference?.status === "available"
+            ? assetReference.asset.contentsItems
+            : []
+        const unavailable =
+          assetReference?.status !== "available" ||
+          (Boolean(orderId) && orderReference?.status !== "available")
+
+        return (
+          <div
+            key={line.id}
+            className="grid min-w-0 gap-2 rounded-lg border p-3"
+          >
+            <p className="text-sm font-medium break-words">
+              Бытовка {logisticsAssetLabel(referenceLabels, line.assetId)}
+            </p>
+            <CabinFurnitureSummary
+              desired={desired}
+              actual={actual}
+              unavailable={unavailable}
+            />
+          </div>
+        )
+      })}
+    </section>
+  )
+}
+
+function ReturnLines({
+  document,
+  referenceLabels,
+  linkedShipment,
+  linkedShipmentState,
+  selectedLineId,
+}: {
+  document: ReturnDocument
+  referenceLabels: LogisticsReferenceLabels
+  linkedShipment: ShipmentDocument | undefined
+  linkedShipmentState: LinkedDocumentReadState
   selectedLineId: string | null
 }) {
   return (
     <div className="grid gap-2">
       {document.lines.map((line) => {
         const orderId = line.rentalOrderId ?? document.rentalOrderId
+        const orderReference = orderId
+          ? referenceLabels.orders.get(orderId)
+          : undefined
+        const assetReference = referenceLabels.assets.get(line.assetId)
+        const actualContents =
+          assetReference?.status === "available"
+            ? assetReference.asset.contentsItems
+            : []
+        const desiredUnit =
+          orderReference?.status === "available"
+            ? orderReference.order.units.find(
+                (candidate) => candidate.unit.id === line.assetId
+              )
+            : undefined
+        const desiredContents = desiredUnit?.desiredContents ?? []
+        const fillingUnavailable =
+          assetReference?.status !== "available" ||
+          (Boolean(orderId) && orderReference?.status !== "available")
+        const rentalTerm = desiredUnit?.rentalTerm ?? null
         return (
           <Card
             key={line.id}
@@ -762,11 +958,47 @@ function ReturnLines({
                 <Badge variant="outline">Строка {line.lineNumber}</Badge>
               </CardAction>
             </CardHeader>
-            {line.tenantSnapshot ? (
-              <CardContent className="text-sm text-muted-foreground">
-                Арендатор: {line.tenantSnapshot}
-              </CardContent>
-            ) : null}
+            <CardContent className="grid min-w-0 gap-4">
+              <div className="grid min-w-0 gap-2 text-sm sm:grid-cols-2">
+                <p className="break-words">
+                  <span className="text-muted-foreground">От кого:</span>{" "}
+                  {line.tenantSnapshot ?? document.partySnapshot ?? "—"}
+                </p>
+                <p className="break-words">
+                  <span className="text-muted-foreground">Отгрузил:</span>{" "}
+                  {linkedShipmentDriverLabel(
+                    linkedShipment,
+                    linkedShipmentState,
+                    Boolean(document.rentalShipmentId)
+                  )}
+                </p>
+                <p className="break-words">
+                  <span className="text-muted-foreground">Привёз:</span>{" "}
+                  {document.driverSnapshot ?? "Не назначен"}
+                </p>
+              </div>
+              {rentalTerm ? (
+                <div className="grid gap-1 rounded-lg border bg-muted/20 p-3 text-sm">
+                  <p className="font-medium">
+                    Срок аренды: {rentalMonthLabel(rentalTerm.rentalMonths)}
+                  </p>
+                  <p className="text-muted-foreground">
+                    Когда уехала: {formatOptionalDate(rentalTerm.shipmentDate)}{" "}
+                    · Возврат по сроку:{" "}
+                    {formatOptionalDate(rentalTerm.returnDate)}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Срок аренды недоступен.
+                </p>
+              )}
+              <CabinFurnitureSummary
+                desired={desiredContents}
+                actual={actualContents}
+                unavailable={fillingUnavailable}
+              />
+            </CardContent>
           </Card>
         )
       })}

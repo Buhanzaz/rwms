@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState, type FormEvent } from "react"
+import { useMemo, useRef, useState, type FormEvent } from "react"
 import {
   useMutation,
   useQueries,
@@ -49,7 +49,6 @@ import {
   FieldGroup,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
@@ -65,6 +64,13 @@ import {
 import { LogisticsDriverPicker } from "@/features/logistics/logistics-driver-picker"
 import { DesiredTripScheduleFields } from "@/features/logistics/desired-trip-schedule-fields"
 import { DRIVER_BOARD_QUERY_KEY } from "@/features/logistics/driver-board/driver-board-api"
+import { CabinFurnitureSummary } from "@/features/logistics/order-tasks/cabin-furniture-summary"
+import { OrderCustomerOverview } from "@/features/logistics/order-tasks/order-customer-overview"
+import {
+  RETURNS_QUERY_KEY,
+  listReturns,
+} from "@/features/logistics/returns/api"
+import type { ReturnDocument } from "@/features/logistics/returns/model"
 import {
   logisticsAssetLabel,
   logisticsOrderLabel,
@@ -133,6 +139,24 @@ function formatDate(value: string) {
 
 function formatSchedule(date: string | null) {
   return date ? formatDate(date) : "Не назначена"
+}
+
+function formatOptionalDate(date: string | null | undefined) {
+  return date ? formatDate(date) : "—"
+}
+
+function rentalMonthLabel(value: number) {
+  return `${value} мес.`
+}
+
+function linkedReturnDriverLabel(
+  document: ReturnDocument | undefined,
+  state: LinkedDocumentReadState
+) {
+  if (state === "loading") return "Загружаем…"
+  if (state === "unavailable") return "Данные возврата недоступны"
+  if (!document) return "Возврат не создан"
+  return document.driverSnapshot ?? "Не назначен"
 }
 
 function matchesDateRange(
@@ -212,6 +236,8 @@ type ShipmentFurnitureMovementTaskReference =
   | { status: "unavailable" }
   | { status: "available"; task: EquipmentMovementTask }
 
+type LinkedDocumentReadState = "loading" | "available" | "unavailable"
+
 export function LogisticsShipmentsPage() {
   const { selectedWarehouseId } = useWarehouse()
   const { accessToken, currentUser } = useAuth()
@@ -245,6 +271,23 @@ export function LogisticsShipmentsPage() {
     enabled: Boolean(accessToken && selectedWarehouseId),
     refetchInterval: 5_000,
   })
+  const returnsQuery = useQuery({
+    queryKey: [...RETURNS_QUERY_KEY, "shipment-links", selectedWarehouseId],
+    queryFn: () => listReturns(accessToken!, selectedWarehouseId!),
+    enabled: Boolean(accessToken && selectedWarehouseId),
+    refetchInterval: 5_000,
+  })
+  const returnsByShipmentId = useMemo(() => {
+    const result = new Map<string, ReturnDocument[]>()
+    ;(returnsQuery.data ?? []).forEach((document) => {
+      if (!document.rentalShipmentId) return
+      result.set(document.rentalShipmentId, [
+        ...(result.get(document.rentalShipmentId) ?? []),
+        document,
+      ])
+    })
+    return result
+  }, [returnsQuery.data])
   const furnitureReadinessShipments = useMemo(
     () => (query.data ?? []).filter(needsFurnitureReadiness),
     [query.data]
@@ -833,9 +876,17 @@ export function LogisticsShipmentsPage() {
             items={rows}
             expandedItemId={expandedId}
             renderExpandedRow={(shipment) => (
-              <ShipmentLines
+              <ShipmentDetails
                 shipment={shipment}
                 referenceLabels={referenceLabels}
+                linkedReturns={returnsByShipmentId.get(shipment.id) ?? []}
+                linkedReturnsState={
+                  returnsQuery.isLoading
+                    ? "loading"
+                    : returnsQuery.isError
+                      ? "unavailable"
+                      : "available"
+                }
                 furnitureReadiness={furnitureReadinessByShipmentId.get(
                   shipment.id
                 )}
@@ -911,9 +962,17 @@ export function LogisticsShipmentsPage() {
               </CardHeader>
               {expandedId === shipment.id ? (
                 <CardContent>
-                  <ShipmentLines
+                  <ShipmentDetails
                     shipment={shipment}
                     referenceLabels={referenceLabels}
+                    linkedReturns={returnsByShipmentId.get(shipment.id) ?? []}
+                    linkedReturnsState={
+                      returnsQuery.isLoading
+                        ? "loading"
+                        : returnsQuery.isError
+                          ? "unavailable"
+                          : "available"
+                    }
                     furnitureReadiness={furnitureReadinessByShipmentId.get(
                       shipment.id
                     )}
@@ -944,6 +1003,7 @@ export function LogisticsShipmentsPage() {
         <ShipmentScheduleDialog
           accessToken={accessToken}
           document={scheduleTarget.document}
+          referenceLabels={referenceLabels}
           desiredDeliveryWindows={desiredWindowsForShipment(
             referenceLabels,
             scheduleTarget.document
@@ -1056,6 +1116,7 @@ function ShipmentDateDecisionDialog({
 function ShipmentScheduleDialog({
   accessToken,
   document,
+  referenceLabels,
   desiredDeliveryWindows,
   futureDateWarning,
   pending,
@@ -1064,6 +1125,7 @@ function ShipmentScheduleDialog({
 }: {
   accessToken: string
   document: ShipmentDocument
+  referenceLabels: LogisticsReferenceLabels
   desiredDeliveryWindows: readonly DesiredDeliveryWindow[]
   futureDateWarning: boolean
   pending: boolean
@@ -1102,7 +1164,7 @@ function ShipmentScheduleDialog({
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl">
         <form className="flex flex-col gap-4" onSubmit={submit}>
           <DialogHeader>
             <DialogTitle>
@@ -1114,6 +1176,10 @@ function ShipmentScheduleDialog({
                 : "Назначьте водителя и фактическую дату ходки. Пожелания клиента остаются отдельным ориентиром."}
             </DialogDescription>
           </DialogHeader>
+          <ShipmentCabinFillingSummaries
+            shipment={document}
+            referenceLabels={referenceLabels}
+          />
           <FieldGroup>
             {existingDriver ? (
               <Field>
@@ -1162,14 +1228,120 @@ function ShipmentScheduleDialog({
   )
 }
 
-function ShipmentLines({
+function ShipmentDetails({
   shipment,
   referenceLabels,
+  linkedReturns,
+  linkedReturnsState,
   furnitureReadiness,
   furnitureMovementTasksById,
 }: {
   shipment: ShipmentDocument
   referenceLabels: LogisticsReferenceLabels
+  linkedReturns: readonly ReturnDocument[]
+  linkedReturnsState: LinkedDocumentReadState
+  furnitureReadiness: ShipmentFurnitureReadiness | undefined
+  furnitureMovementTasksById: ReadonlyMap<
+    string,
+    ShipmentFurnitureMovementTaskReference
+  >
+}) {
+  const orderId =
+    shipment.rentalOrderId ??
+    shipment.lines.find((line) => line.rentalOrderId)?.rentalOrderId ??
+    null
+  const orderReference = orderId
+    ? referenceLabels.orders.get(orderId)
+    : undefined
+  const order =
+    orderReference?.status === "available" ? orderReference.order : null
+
+  return (
+    <div className="grid min-w-0 gap-3">
+      <OrderCustomerOverview
+        order={order}
+        orderId={orderId}
+        orderNumber={
+          orderId ? referenceLabels.orderNumbers.get(orderId) : undefined
+        }
+        state={orderReference?.status ?? "unavailable"}
+      />
+      <ShipmentLines
+        shipment={shipment}
+        referenceLabels={referenceLabels}
+        linkedReturns={linkedReturns}
+        linkedReturnsState={linkedReturnsState}
+        furnitureReadiness={furnitureReadiness}
+        furnitureMovementTasksById={furnitureMovementTasksById}
+      />
+    </div>
+  )
+}
+
+function ShipmentCabinFillingSummaries({
+  shipment,
+  referenceLabels,
+}: {
+  shipment: ShipmentDocument
+  referenceLabels: LogisticsReferenceLabels
+}) {
+  return (
+    <section
+      aria-label="Бытовки отгрузки"
+      className="grid max-h-72 gap-2 overflow-y-auto pr-1"
+    >
+      {shipment.lines.map((line) => {
+        const orderId = line.rentalOrderId ?? shipment.rentalOrderId
+        const orderReference = orderId
+          ? referenceLabels.orders.get(orderId)
+          : undefined
+        const assetReference = referenceLabels.assets.get(line.assetId)
+        const desired =
+          orderReference?.status === "available"
+            ? (orderReference.order.units.find(
+                (candidate) => candidate.unit.id === line.assetId
+              )?.desiredContents ?? [])
+            : []
+        const actual =
+          assetReference?.status === "available"
+            ? assetReference.asset.contentsItems
+            : []
+        const unavailable =
+          assetReference?.status !== "available" ||
+          (Boolean(orderId) && orderReference?.status !== "available")
+
+        return (
+          <div
+            key={line.id}
+            className="grid min-w-0 gap-2 rounded-lg border p-3"
+          >
+            <p className="text-sm font-medium break-words">
+              Бытовка {logisticsAssetLabel(referenceLabels, line.assetId)}
+            </p>
+            <CabinFurnitureSummary
+              desired={desired}
+              actual={actual}
+              unavailable={unavailable}
+            />
+          </div>
+        )
+      })}
+    </section>
+  )
+}
+
+function ShipmentLines({
+  shipment,
+  referenceLabels,
+  linkedReturns,
+  linkedReturnsState,
+  furnitureReadiness,
+  furnitureMovementTasksById,
+}: {
+  shipment: ShipmentDocument
+  referenceLabels: LogisticsReferenceLabels
+  linkedReturns: readonly ReturnDocument[]
+  linkedReturnsState: LinkedDocumentReadState
   furnitureReadiness: ShipmentFurnitureReadiness | undefined
   furnitureMovementTasksById: ReadonlyMap<
     string,
@@ -1194,6 +1366,14 @@ function ShipmentLines({
                 (candidate) => candidate.unit.id === line.assetId
               )
             : undefined
+        const desiredContents = desiredUnit?.desiredContents ?? []
+        const fillingUnavailable =
+          assetReference?.status !== "available" ||
+          (Boolean(orderId) && orderReference?.status !== "available")
+        const linkedReturn = linkedReturns.find((document) =>
+          document.lines.some((candidate) => candidate.assetId === line.assetId)
+        )
+        const rentalTerm = desiredUnit?.rentalTerm ?? null
         const furnitureTasks = (furnitureReadiness?.tasks ?? []).filter(
           (task) => {
             const movementTask = furnitureMovementTasksById.get(task.taskId)
@@ -1231,44 +1411,48 @@ function ShipmentLines({
               </CardAction>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
-              {line.tenantSnapshot ? (
-                <p className="text-sm text-muted-foreground">
-                  Арендатор: {line.tenantSnapshot}
+              <div className="grid min-w-0 gap-2 text-sm sm:grid-cols-2">
+                <p className="break-words">
+                  <span className="text-muted-foreground">Арендатор:</span>{" "}
+                  {line.tenantSnapshot ?? shipment.partySnapshot ?? "—"}
                 </p>
-              ) : null}
-              <EquipmentComposition
-                title="Фактический состав сейчас"
-                status={assetReference?.status ?? "unavailable"}
-                items={actualContents}
-                emptyMessage="Бытовка сейчас пуста."
-                unavailableMessage="Актуальный состав бытовки недоступен."
+                <p className="break-words">
+                  <span className="text-muted-foreground">Отгрузил:</span>{" "}
+                  {shipment.driverSnapshot ?? "Не назначен"}
+                </p>
+                <p className="break-words">
+                  <span className="text-muted-foreground">Привёз:</span>{" "}
+                  {linkedReturnDriverLabel(linkedReturn, linkedReturnsState)}
+                </p>
+              </div>
+              {rentalTerm ? (
+                <div className="grid gap-1 rounded-lg border bg-muted/20 p-3 text-sm">
+                  <p className="font-medium">
+                    Срок аренды: {rentalMonthLabel(rentalTerm.rentalMonths)}
+                  </p>
+                  <p className="text-muted-foreground">
+                    Когда уехала: {formatOptionalDate(rentalTerm.shipmentDate)}{" "}
+                    · Возврат по сроку:{" "}
+                    {formatOptionalDate(rentalTerm.returnDate)}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Срок аренды недоступен.
+                </p>
+              )}
+              <CabinFurnitureSummary
+                desired={desiredContents}
+                actual={actualContents}
+                unavailable={fillingUnavailable}
               />
-              {orderId ? (
-                <>
-                  <Separator />
-                  <EquipmentComposition
-                    title="Сохранённый состав по заказу"
-                    status={orderReference?.status ?? "unavailable"}
-                    items={desiredUnit?.desiredContents ?? []}
-                    emptyMessage={
-                      desiredUnit
-                        ? "По заказу дополнительное оборудование не требуется."
-                        : "Бытовка отсутствует в сохранённом заказе."
-                    }
-                    unavailableMessage="Состав сохранённого заказа недоступен."
-                  />
-                </>
-              ) : null}
               {furnitureTasks.length > 0 ? (
-                <>
-                  <Separator />
-                  <FurnitureMovementTasks
-                    assetId={line.assetId}
-                    furnitureTasks={furnitureTasks}
-                    referenceLabels={referenceLabels}
-                    movementTasksById={furnitureMovementTasksById}
-                  />
-                </>
+                <FurnitureMovementTasks
+                  assetId={line.assetId}
+                  furnitureTasks={furnitureTasks}
+                  referenceLabels={referenceLabels}
+                  movementTasksById={furnitureMovementTasksById}
+                />
               ) : null}
             </CardContent>
           </Card>
@@ -1278,74 +1462,11 @@ function ShipmentLines({
   )
 }
 
-type EquipmentCompositionItem = {
+type EquipmentLabelItem = {
   equipmentId?: string
   equipmentName?: string | null
   name?: string
   quantity: number
-}
-
-type CompositionStatus = "loading" | "available" | "unavailable"
-
-function EquipmentComposition({
-  title,
-  status,
-  items,
-  emptyMessage,
-  unavailableMessage,
-}: {
-  title: string
-  status: CompositionStatus
-  items: readonly EquipmentCompositionItem[]
-  emptyMessage: string
-  unavailableMessage: string
-}) {
-  const titleId = useId()
-
-  return (
-    <section aria-labelledby={titleId} className="flex flex-col gap-2">
-      <h3 id={titleId} className="text-sm font-medium">
-        {title}
-      </h3>
-      {status === "loading" ? (
-        <div aria-live="polite" className="flex flex-col gap-2">
-          <Skeleton className="h-4 w-3/4" />
-          <Skeleton className="h-4 w-1/2" />
-        </div>
-      ) : null}
-      {status === "unavailable" ? (
-        <p className="text-sm text-muted-foreground">{unavailableMessage}</p>
-      ) : null}
-      {status === "available" && items.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{emptyMessage}</p>
-      ) : null}
-      {status === "available" && items.length > 0 ? (
-        <EquipmentCompositionRows items={items} />
-      ) : null}
-    </section>
-  )
-}
-
-function EquipmentCompositionRows({
-  items,
-}: {
-  items: readonly EquipmentCompositionItem[]
-}) {
-  return (
-    <ul className="flex flex-col gap-1 text-sm">
-      {items.map((item, index) => (
-        <li
-          key={`${item.equipmentId ?? item.name ?? "equipment"}-${index}`}
-          className="flex items-baseline justify-between gap-3"
-        >
-          <span>{equipmentLabel(item)}</span>
-          <span className="shrink-0 text-muted-foreground">
-            × {item.quantity}
-          </span>
-        </li>
-      ))}
-    </ul>
-  )
 }
 
 function FurnitureMovementTasks({
@@ -1440,7 +1561,7 @@ function FurnitureMovementTasks({
   )
 }
 
-function equipmentLabel(item: EquipmentCompositionItem) {
+function equipmentLabel(item: EquipmentLabelItem) {
   const name = item.equipmentName?.trim() || item.name?.trim() || "Оборудование"
   return name
 }

@@ -181,6 +181,18 @@ contexts and screens are usable.
 - Shipment and return forms select an active driver by opaque worker ID. A
   warehouse transfer has no responsible driver because it creates shared
   warehouse movement work.
+- Expanded rows on `/logistics/order-tasks`, `/logistics/shipments`, and
+  `/logistics/returns` show the linked order and customer overview before the
+  cabin list: address, named contacts, phones, coordinates, rental term, and
+  outbound/return drivers remain visible when their authoritative reads are
+  available. Each cabin compares order-desired furniture with its current
+  asset-service contents and shows a text-labelled required, action-needed,
+  loaded, empty, or unavailable state. Scheduling dialogs repeat the furniture
+  summary for exactly the cabins in the pending command.
+- The warehouse-transfer adapter validates the complete current logistics
+  document shape. Transfer-only responses require null driver and rental
+  shipment fields and are rejected explicitly when required fields are missing
+  or contain shipment data; the panel never fabricates a successful transfer.
 - `/logistics/board` shows only shipment and return cards in horizontal calendar
   columns. Each date contains independently collapsible active-driver queues and
   an unassigned queue only when such cards exist. Current and scheduled lanes

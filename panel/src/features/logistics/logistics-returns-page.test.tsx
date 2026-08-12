@@ -35,6 +35,9 @@ const ordersApi = vi.hoisted(() => ({
 const equipmentApi = vi.hoisted(() => ({
   getEquipmentItems: vi.fn(),
 }))
+const shipmentApi = vi.hoisted(() => ({
+  listShipments: vi.fn(),
+}))
 const authState = vi.hoisted(() => ({
   level: "EDIT" as "VIEW" | "EDIT" | "MANAGE",
 }))
@@ -59,6 +62,11 @@ vi.mock("@/features/rental-items/api/asset-rental-items-api", () => ({
 vi.mock("@/features/orders/api/orders-api", () => ({
   ORDERS_QUERY_KEY: ["orders"],
   getOrder: ordersApi.getOrder,
+}))
+
+vi.mock("@/features/logistics/shipments/api", () => ({
+  SHIPMENTS_QUERY_KEY: ["logistics", "shipments"],
+  listShipments: shipmentApi.listShipments,
 }))
 
 vi.mock("@/features/logistics/logistics-driver-picker", () => ({
@@ -169,6 +177,7 @@ const IDEMPOTENCY_KEY = "99999999-9999-4999-8999-999999999999"
 const DRIVER_WORKER_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 const ASSET_NUMBER = "БЫТ-041"
 const ORDER_NUMBER = "ORD-000007"
+const SHIPMENT_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 
 function returnLine(
   id: string,
@@ -207,6 +216,7 @@ function returnDocument(
     equipmentMovementTaskId: null,
     scheduledDate: state === "DRAFT" ? null : "2026-07-18",
     rentalOrderId: ORDER_ID,
+    rentalShipmentId: SHIPMENT_ID,
     lines,
     createdAt: "2026-07-18T08:00:00Z",
     updatedAt: "2026-07-18T08:10:00Z",
@@ -263,18 +273,65 @@ beforeEach(() => {
   rentalItemsApi.getAssetRentalItem.mockResolvedValue({
     id: ASSET_ID,
     number: ASSET_NUMBER,
+    contentsItems: [
+      {
+        equipmentId: EQUIPMENT_ID,
+        equipmentName: "Стул",
+        name: "Стул",
+        quantity: 2,
+      },
+    ],
   })
   ordersApi.getOrder.mockResolvedValue({
     id: ORDER_ID,
     number: ORDER_NUMBER,
+    status: "SAVED",
+    client: {
+      id: CLIENT_ID,
+      displayName: "ООО Тест",
+      contactPerson: "Анна Смирнова",
+      phone: "+7 900 100-20-30",
+      additionalContacts: [
+        { name: "Павел Сидоров", phone: "+7 900 200-30-40" },
+      ],
+    },
+    deliveryAddress: "Москва, ул. Тестовая, 1",
+    latitude: 55.751244,
+    longitude: 37.618423,
+    contactPhone: "+7 900 300-40-50",
+    comment: "Позвонить за час",
+    additionalContacts: [{ name: "Олег Кузнецов", phone: "+7 900 400-50-60" }],
     desiredDeliveryWindows: [
       {
         startDate: "2026-07-23",
         endDate: "2026-07-23",
       },
     ],
-    units: [{ unit: { id: ASSET_ID, number: ASSET_NUMBER } }],
+    units: [
+      {
+        unit: { id: ASSET_ID, number: ASSET_NUMBER },
+        desiredContents: [
+          {
+            equipmentId: EQUIPMENT_ID,
+            equipmentName: "Стул",
+            quantity: 2,
+          },
+        ],
+        rentalTerm: {
+          rentalMonths: 3,
+          shipmentDate: "2026-07-18",
+          returnDate: "2026-10-18",
+        },
+      },
+    ],
   })
+  shipmentApi.listShipments.mockResolvedValue([
+    {
+      id: SHIPMENT_ID,
+      driverSnapshot: "Иванов Иван",
+      lines: [{ assetId: ASSET_ID }],
+    },
+  ])
   equipmentApi.getEquipmentItems.mockResolvedValue([
     {
       id: EQUIPMENT_ID,
@@ -294,8 +351,12 @@ afterEach(() => {
 
 describe("LogisticsReturnsPage", () => {
   it("shows cabin and order numbers in the return composition", async () => {
+    const user = userEvent.setup()
     renderPage()
 
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Показать состав" }))[0]!
+    )
     expect(
       (await screen.findAllByText(`Бытовка ${ASSET_NUMBER}`)).length
     ).toBeGreaterThan(0)
@@ -309,6 +370,60 @@ describe("LogisticsReturnsPage", () => {
     expect(ordersApi.getOrder).toHaveBeenCalledWith("return-token", ORDER_ID)
     expect(screen.queryByText(new RegExp(ASSET_ID))).toBeNull()
     expect(screen.queryByText(new RegExp(ORDER_ID))).toBeNull()
+  })
+
+  it("shows the customer, rental, filling, and both drivers when a return is expanded", async () => {
+    returnApi.listReturns.mockResolvedValue([
+      {
+        ...returnDocument(DOCUMENT_ID, "REGISTERING", 3),
+        partySnapshot: "ООО Тест",
+        driverSnapshot: "Петров Пётр",
+        driverWorkerId: DRIVER_WORKER_ID,
+      },
+    ])
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Показать состав" }))[0]!
+    )
+
+    expect(
+      screen.getAllByRole("region", { name: "Заказ и контакты клиента" }).length
+    ).toBeGreaterThan(0)
+    expect(screen.getAllByText("Анна Смирнова").length).toBeGreaterThan(0)
+    expect(
+      screen.getAllByText("Москва, ул. Тестовая, 1").length
+    ).toBeGreaterThan(0)
+    expect(screen.getAllByText("55.751244, 37.618423").length).toBeGreaterThan(
+      0
+    )
+    expect(screen.getAllByText("Наполнение загружено").length).toBeGreaterThan(
+      0
+    )
+    expect(screen.getAllByText("Срок аренды: 3 мес.").length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Когда уехала:/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Отгрузил:/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText("Иванов Иван").length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Привёз:/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText("Петров Пётр").length).toBeGreaterThan(0)
+  })
+
+  it("does not claim an outbound driver when the linked shipment read fails", async () => {
+    shipmentApi.listShipments.mockRejectedValue(
+      new Error("shipments unavailable")
+    )
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Показать состав" }))[0]!
+    )
+
+    expect(
+      (await screen.findAllByText("Данные отгрузки недоступны")).length
+    ).toBeGreaterThan(0)
+    expect(screen.queryByText("Иванов Иван")).toBeNull()
   })
 
   it("keeps VIEW access read-only while preserving service reads", async () => {
@@ -423,6 +538,12 @@ describe("LogisticsReturnsPage", () => {
       (await screen.findAllByRole("button", { name: "Создать вывоз" }))[0]!
     )
 
+    const pickupDialog = screen.getByRole("dialog")
+    expect(
+      pickupDialog.querySelector('[aria-label="Бытовки возврата"]')
+    ).toBeTruthy()
+    expect(screen.getByText(`Бытовка ${ASSET_NUMBER}`)).toBeTruthy()
+    expect(screen.getByText("Наполнение загружено")).toBeTruthy()
     expect(screen.getByRole("combobox", { name: "Водитель" })).toBeTruthy()
     expect(screen.getByText("Фактическая дата вывоза")).toBeTruthy()
     expect(document.querySelector('[data-slot="calendar"]')).toBeTruthy()

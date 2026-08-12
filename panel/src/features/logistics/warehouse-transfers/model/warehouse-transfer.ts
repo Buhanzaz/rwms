@@ -43,11 +43,15 @@ export type TransferDocument = {
   warehouseId: string
   destinationWarehouseId: string
   partySnapshot: null
+  driverSnapshot: null
+  driverWorkerId: null
   clientId: null
   equipmentMovementTaskId: string | null
   scheduledDate: string
-  /** Compatibility field returned as null by logistics-service. */
+  /** Transfers are warehouse-owned and never belong to a rental order. */
   rentalOrderId: null
+  /** Transfers are not created from rental shipments. */
+  rentalShipmentId: null
   lines: TransferLine[]
   createdAt: string
   updatedAt: string

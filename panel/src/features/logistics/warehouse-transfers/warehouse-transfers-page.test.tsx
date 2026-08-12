@@ -234,10 +234,13 @@ function transferDocument(
     warehouseId: SOURCE_WAREHOUSE_ID,
     destinationWarehouseId: DESTINATION_WAREHOUSE_ID,
     partySnapshot: null,
+    driverSnapshot: null,
+    driverWorkerId: null,
     clientId: null,
     equipmentMovementTaskId: EQUIPMENT_TASK_ID,
     scheduledDate: "2026-07-19",
     rentalOrderId: null,
+    rentalShipmentId: null,
     lines: [
       {
         id: LINE_ID,

@@ -33,6 +33,9 @@ const ordersApi = vi.hoisted(() => ({
 const equipmentMovementTasksApi = vi.hoisted(() => ({
   getEquipmentMovementTask: vi.fn(),
 }))
+const returnApi = vi.hoisted(() => ({
+  listReturns: vi.fn(),
+}))
 const authState = vi.hoisted(() => ({
   level: "EDIT" as "VIEW" | "EDIT" | "MANAGE",
 }))
@@ -65,6 +68,11 @@ vi.mock("@/features/orders/api/orders-api", () => ({
 
 vi.mock("@/features/logistics/api/equipment-movement-tasks-api", () => ({
   getEquipmentMovementTask: equipmentMovementTasksApi.getEquipmentMovementTask,
+}))
+
+vi.mock("@/features/logistics/returns/api", () => ({
+  RETURNS_QUERY_KEY: ["logistics", "returns"],
+  listReturns: returnApi.listReturns,
 }))
 
 vi.mock("@/features/logistics/logistics-driver-picker", () => ({
@@ -149,6 +157,7 @@ const EXTERNAL_FURNITURE_TASK_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 const EQUIPMENT_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 const EQUIPMENT_TASK_LINE_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
 const RETURN_TASK_LINE_ID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+const RETURN_ID = "abababab-abab-4bab-8bab-abababababab"
 const DRIVER_WORKER_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 const ASSET_NUMBER = "БЫТ-041"
 const ORDER_NUMBER = "ORD-000007"
@@ -259,6 +268,22 @@ beforeEach(() => {
   ordersApi.getOrder.mockResolvedValue({
     id: ORDER_ID,
     number: ORDER_NUMBER,
+    status: "SAVED",
+    client: {
+      id: CLIENT_ID,
+      displayName: "ООО Тест",
+      contactPerson: "Анна Смирнова",
+      phone: "+7 900 100-20-30",
+      additionalContacts: [
+        { name: "Павел Сидоров", phone: "+7 900 200-30-40" },
+      ],
+    },
+    deliveryAddress: "Москва, ул. Тестовая, 1",
+    latitude: 55.751244,
+    longitude: 37.618423,
+    contactPhone: "+7 900 300-40-50",
+    comment: "Позвонить за час",
+    additionalContacts: [{ name: "Олег Кузнецов", phone: "+7 900 400-50-60" }],
     desiredDeliveryWindows: [
       {
         startDate: "2026-07-20",
@@ -275,9 +300,22 @@ beforeEach(() => {
             quantity: 2,
           },
         ],
+        rentalTerm: {
+          rentalMonths: 3,
+          shipmentDate: "2026-07-18",
+          returnDate: "2026-10-18",
+        },
       },
     ],
   })
+  returnApi.listReturns.mockResolvedValue([
+    {
+      id: RETURN_ID,
+      rentalShipmentId: DRAFT_ID,
+      driverSnapshot: "Петров Пётр",
+      lines: [{ assetId: ASSET_ID }],
+    },
+  ])
   equipmentMovementTasksApi.getEquipmentMovementTask.mockResolvedValue({
     id: FURNITURE_TASK_ID,
     externalTaskId: EXTERNAL_FURNITURE_TASK_ID,
@@ -313,6 +351,63 @@ describe("LogisticsShipmentsPage", () => {
     expect(ordersApi.getOrder).toHaveBeenCalledWith("shipment-token", ORDER_ID)
     expect(screen.queryByText(new RegExp(ASSET_ID))).toBeNull()
     expect(screen.queryByText(new RegExp(ORDER_ID))).toBeNull()
+  })
+
+  it("shows order contacts, rental details, drivers, and the cabin filling status when expanded", async () => {
+    shipmentApi.listShipments.mockResolvedValue([
+      shipmentDocument(DRAFT_ID, "SHIPPED", 6),
+    ])
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Показать состав" }))[0]!
+    )
+
+    expect(
+      screen.getAllByRole("region", { name: "Заказ и контакты клиента" }).length
+    ).toBeGreaterThan(0)
+    expect(screen.getAllByText("Анна Смирнова").length).toBeGreaterThan(0)
+    expect(
+      screen.getAllByText("Москва, ул. Тестовая, 1").length
+    ).toBeGreaterThan(0)
+    expect(screen.getAllByText("55.751244, 37.618423").length).toBeGreaterThan(
+      0
+    )
+    expect(
+      screen.getAllByRole("link", { name: "+7 900 300-40-50" }).length
+    ).toBeGreaterThan(0)
+    expect(screen.getAllByText("Требуется наполнение").length).toBeGreaterThan(
+      0
+    )
+    expect(screen.getAllByText("Срок аренды: 3 мес.").length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Когда уехала:/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Отгрузил:/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Привёз:/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText("Петров Пётр").length).toBeGreaterThan(0)
+  })
+
+  it("keeps unavailable owner data neutral instead of claiming a filling mismatch", async () => {
+    ordersApi.getOrder.mockRejectedValue(new Error("orders unavailable"))
+    rentalItemsApi.getAssetRentalItem.mockRejectedValue(
+      new Error("assets unavailable")
+    )
+    returnApi.listReturns.mockRejectedValue(new Error("returns unavailable"))
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Показать состав" }))[0]!
+    )
+
+    expect(
+      (await screen.findAllByText("Наполнение недоступно")).length
+    ).toBeGreaterThan(0)
+    expect(screen.queryByText("Требуется наполнение")).toBeNull()
+    expect(screen.queryByText("Требуются действия")).toBeNull()
+    expect(
+      (await screen.findAllByText("Данные возврата недоступны")).length
+    ).toBeGreaterThan(0)
   })
 
   it("shows empty current contents, saved desired contents, and linked task lines for the cabin", async () => {
@@ -377,14 +472,12 @@ describe("LogisticsShipmentsPage", () => {
     )
 
     expect(
-      (await screen.findAllByText("Бытовка сейчас пуста.")).length
+      (await screen.findAllByText("Требуется наполнение")).length
     ).toBeGreaterThan(0)
-    expect(
-      screen.getAllByRole("heading", {
-        name: "Сохранённый состав по заказу",
-      }).length
-    ).toBeGreaterThan(0)
-    expect(screen.getAllByText("Конвектор").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("Требуется:").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("В бытовке:").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("Конвектор — 2 шт.").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("нет").length).toBeGreaterThan(0)
     expect(screen.getAllByText("× 2").length).toBeGreaterThan(0)
 
     await waitFor(() =>
@@ -499,6 +592,17 @@ describe("LogisticsShipmentsPage", () => {
     await user.click(
       (await screen.findAllByRole("button", { name: "Отгрузить" }))[0]!
     )
+
+    const scheduleDialog = screen.getByRole("dialog")
+    expect(
+      within(scheduleDialog).getByRole("region", { name: "Бытовки отгрузки" })
+    ).toBeTruthy()
+    expect(
+      within(scheduleDialog).getByText(`Бытовка ${ASSET_NUMBER}`)
+    ).toBeTruthy()
+    expect(
+      within(scheduleDialog).getByText("Требуется наполнение")
+    ).toBeTruthy()
 
     await user.selectOptions(
       screen.getByRole("combobox", { name: "Водитель" }),

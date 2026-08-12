@@ -28,10 +28,13 @@ const document: TransferDocument = {
   warehouseId: SOURCE_WAREHOUSE_ID,
   destinationWarehouseId: DESTINATION_WAREHOUSE_ID,
   partySnapshot: null,
+  driverSnapshot: null,
+  driverWorkerId: null,
   clientId: null,
   equipmentMovementTaskId: EQUIPMENT_TASK_ID,
   scheduledDate: "2026-07-19",
   rentalOrderId: null,
+  rentalShipmentId: null,
   lines: [
     {
       id: LINE_ID,
@@ -62,13 +65,8 @@ function commandInit(call: unknown[]) {
 afterEach(() => vi.unstubAllGlobals())
 
 describe("HttpWarehouseTransferClient", () => {
-  it("accepts the real transfer shape with document-level rentalOrderId: null", () => {
-    expect(
-      parseTransferDocument({
-        ...document,
-        rentalOrderId: null,
-      })
-    ).toEqual(document)
+  it("accepts every required canonical transfer document field", () => {
+    expect(parseTransferDocument(document)).toEqual(document)
   })
 
   it("lists and gets canonical transfers through the same-origin gateway", async () => {
@@ -159,8 +157,8 @@ describe("HttpWarehouseTransferClient", () => {
       ],
     }
 
-    await client.create(command)
-    await client.create(command)
+    await expect(client.create(command)).resolves.toEqual(document)
+    await expect(client.create(command)).resolves.toEqual(document)
 
     for (const call of fetchMock.mock.calls) {
       const [rawUrl] = call
@@ -414,6 +412,18 @@ describe("HttpWarehouseTransferClient", () => {
       await expect(
         client.list("transfer-token", SOURCE_WAREHOUSE_ID)
       ).rejects.toThrow("Сервис логистики вернул некорректный ответ")
+    }
+  })
+
+  it("rejects transfer documents with shipment-only driver or rental-shipment values", () => {
+    for (const invalidDocument of [
+      { ...document, driverSnapshot: "Иванов Иван" },
+      { ...document, driverWorkerId: EQUIPMENT_TASK_ID },
+      { ...document, rentalShipmentId: EQUIPMENT_TASK_ID },
+    ]) {
+      expect(() => parseTransferDocument(invalidDocument)).toThrow(
+        "Сервис логистики вернул некорректный ответ"
+      )
     }
   })
 

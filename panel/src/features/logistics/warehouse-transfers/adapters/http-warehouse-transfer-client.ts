@@ -36,10 +36,13 @@ const DOCUMENT_KEYS = [
   "warehouseId",
   "destinationWarehouseId",
   "partySnapshot",
+  "driverSnapshot",
+  "driverWorkerId",
   "clientId",
   "equipmentMovementTaskId",
   "scheduledDate",
   "rentalOrderId",
+  "rentalShipmentId",
   "lines",
   "createdAt",
   "updatedAt",
@@ -250,7 +253,10 @@ export function parseTransferDocument(value: unknown): TransferDocument {
   if (
     source.documentType !== "TRANSFER" ||
     source.partySnapshot !== null ||
+    source.driverSnapshot !== null ||
+    source.driverWorkerId !== null ||
     nullableUuid(source.clientId) !== null ||
+    source.rentalShipmentId !== null ||
     warehouseId === destinationWarehouseId ||
     lines.length === 0
   ) {
@@ -265,6 +271,8 @@ export function parseTransferDocument(value: unknown): TransferDocument {
     warehouseId,
     destinationWarehouseId,
     partySnapshot: null,
+    driverSnapshot: null,
+    driverWorkerId: null,
     clientId: null,
     equipmentMovementTaskId: nullableUuid(source.equipmentMovementTaskId),
     scheduledDate: (() => {
@@ -274,6 +282,7 @@ export function parseTransferDocument(value: unknown): TransferDocument {
       if (nullableUuid(source.rentalOrderId) !== null) invalidResponse()
       return null
     })(),
+    rentalShipmentId: null,
     lines,
     createdAt: timestamp(source.createdAt),
     updatedAt: timestamp(source.updatedAt),

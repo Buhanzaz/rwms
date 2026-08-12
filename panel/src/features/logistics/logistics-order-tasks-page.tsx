@@ -46,6 +46,8 @@ import {
 import { LogisticsDriverPicker } from "@/features/logistics/logistics-driver-picker"
 import { DesiredTripScheduleFields } from "@/features/logistics/desired-trip-schedule-fields"
 import { DRIVER_BOARD_QUERY_KEY } from "@/features/logistics/driver-board/driver-board-api"
+import { CabinFurnitureSummary } from "@/features/logistics/order-tasks/cabin-furniture-summary"
+import { OrderCustomerOverview } from "@/features/logistics/order-tasks/order-customer-overview"
 import { createOrderShipment } from "@/features/logistics/order-tasks-api"
 import {
   RETURNS_QUERY_KEY,
@@ -344,6 +346,39 @@ function orderFromLabels(
   if (!orderId) return null
   const reference = labels.orders.get(orderId)
   return reference?.status === "available" ? reference.order : null
+}
+
+function taskOrderId(task: RentalOrderTask) {
+  return (
+    task.document.rentalOrderId ??
+    task.document.lines.find((line) => line.rentalOrderId)?.rentalOrderId ??
+    null
+  )
+}
+
+function taskOrderContext(
+  task: RentalOrderTask,
+  referenceLabels: LogisticsReferenceLabels
+) {
+  const orderId = taskOrderId(task)
+  if (task.order) {
+    return { orderId, order: task.order, state: "available" as const }
+  }
+  if (!orderId) {
+    return { orderId, order: null, state: "unavailable" as const }
+  }
+
+  const reference = referenceLabels.orders.get(orderId)
+  return {
+    orderId,
+    order: reference?.status === "available" ? reference.order : null,
+    state:
+      reference?.status === "available"
+        ? ("available" as const)
+        : reference?.status === "loading"
+          ? ("loading" as const)
+          : ("unavailable" as const),
+  }
 }
 
 function unitTerm(order: OrderDetail | null, assetId: string) {
@@ -1094,6 +1129,10 @@ export function LogisticsOrderTasksPage() {
             expandedItemId={expandedId}
             renderExpandedRow={(task) => (
               <div className="grid gap-2 pr-2">
+                <RentalOrderTaskOverview
+                  task={task}
+                  referenceLabels={referenceLabels}
+                />
                 <RentalOrderTaskLines
                   task={task}
                   referenceLabels={referenceLabels}
@@ -1264,6 +1303,10 @@ export function LogisticsOrderTasksPage() {
               </CardHeader>
               {expandedId === task.id ? (
                 <CardContent className="grid gap-2">
+                  <RentalOrderTaskOverview
+                    task={task}
+                    referenceLabels={referenceLabels}
+                  />
                   <RentalOrderTaskLines
                     task={task}
                     referenceLabels={referenceLabels}
@@ -1371,6 +1414,10 @@ export function LogisticsOrderTasksPage() {
           selectedLineCount={
             selectedTaskId === scheduleTarget.id ? selectedLineIds.length : 0
           }
+          selectedLineIds={
+            selectedTaskId === scheduleTarget.id ? selectedLineIds : []
+          }
+          referenceLabels={referenceLabels}
           shipmentTaskCap={shipmentTaskCap}
           pending={shipmentCreateMutation.isPending || returnMutation.isPending}
           onOpenChange={(open) => !open && setScheduleTarget(null)}
@@ -1390,6 +1437,26 @@ export function LogisticsOrderTasksPage() {
         />
       ) : null}
     </div>
+  )
+}
+
+function RentalOrderTaskOverview({
+  task,
+  referenceLabels,
+}: {
+  task: RentalOrderTask
+  referenceLabels: LogisticsReferenceLabels
+}) {
+  const { orderId, order, state } = taskOrderContext(task, referenceLabels)
+  return (
+    <OrderCustomerOverview
+      order={order}
+      orderId={orderId}
+      orderNumber={
+        orderId ? referenceLabels.orderNumbers.get(orderId) : undefined
+      }
+      state={state}
+    />
   )
 }
 
@@ -1595,6 +1662,7 @@ function RentalOrderTaskLines({
         const desired =
           order?.units.find(({ unit }) => unit.id === line.assetId)
             ?.desiredContents ?? []
+        const furnitureUnavailable = !order || !asset
         const term = unitTerm(order, line.assetId)
         const selected = selectedLineIds.includes(line.id)
         const shipmentLimitUnavailable =
@@ -1660,6 +1728,13 @@ function RentalOrderTaskLines({
                 </Button>
               </CardAction>
             </CardHeader>
+            <CardContent>
+              <CabinFurnitureSummary
+                desired={desired}
+                actual={asset?.contentsItems ?? []}
+                unavailable={furnitureUnavailable}
+              />
+            </CardContent>
             {expanded ? (
               <CardContent className="grid gap-3">
                 <div className="grid gap-2 text-sm sm:grid-cols-2">
@@ -1727,18 +1802,6 @@ function RentalOrderTaskLines({
                   >
                     Возврат
                   </Button>
-                ) : null}
-                <CompositionBlock
-                  title="Фактическое наполнение"
-                  items={asset?.contentsItems ?? []}
-                  unavailable={!asset}
-                />
-                {orderId ? (
-                  <CompositionBlock
-                    title="Наполнение по заказу"
-                    items={desired}
-                    unavailable={!order}
-                  />
                 ) : null}
                 {asset?.comment ? (
                   <p className="text-sm">
@@ -1808,40 +1871,53 @@ function ShipmentDateDecisionDialog({
   )
 }
 
-function CompositionBlock({
-  title,
-  items,
-  unavailable,
+function SelectedCabinFurniture({
+  task,
+  selectedLineIds,
+  referenceLabels,
 }: {
-  title: string
-  items: readonly {
-    equipmentName?: string | null
-    name?: string
-    quantity: number
-  }[]
-  unavailable: boolean
+  task: RentalOrderTask
+  selectedLineIds: readonly string[]
+  referenceLabels: LogisticsReferenceLabels
 }) {
+  const { order } = taskOrderContext(task, referenceLabels)
+  const selectedLines = task.document.lines.filter((line) =>
+    selectedLineIds.includes(line.id)
+  )
+
   return (
-    <section className="grid gap-1">
-      <h3 className="text-sm font-medium">{title}</h3>
-      {unavailable ? (
-        <p className="text-sm text-muted-foreground">Состав недоступен.</p>
-      ) : null}
-      {!unavailable && items.length === 0 ? (
-        <p className="text-sm text-muted-foreground">Пусто.</p>
-      ) : null}
-      {!unavailable && items.length > 0 ? (
-        <ul className="grid gap-1 text-sm">
-          {items.map((item, index) => (
-            <li
-              key={`${item.equipmentName ?? item.name ?? "item"}-${index}`}
-              className="flex justify-between gap-3"
-            >
-              <span>{item.equipmentName ?? item.name ?? "Оборудование"}</span>
-              <span className="text-muted-foreground">{item.quantity}</span>
-            </li>
-          ))}
-        </ul>
+    <section
+      aria-label="Выбранные бытовки и наполнение"
+      className="grid max-h-[45vh] gap-2 overflow-y-auto rounded-lg border p-3"
+    >
+      <h3 className="font-medium">Выбранные бытовки</h3>
+      {selectedLines.map((line) => {
+        const assetReference = referenceLabels.assets.get(line.assetId)
+        const asset =
+          assetReference?.status === "available" ? assetReference.asset : null
+        const desired =
+          order?.units.find(({ unit }) => unit.id === line.assetId)
+            ?.desiredContents ?? []
+        return (
+          <article
+            key={line.id}
+            className="grid min-w-0 gap-2 rounded-md border p-2"
+          >
+            <h4 className="text-sm font-semibold break-words">
+              Бытовка {logisticsAssetLabel(referenceLabels, line.assetId)}
+            </h4>
+            <CabinFurnitureSummary
+              desired={desired}
+              actual={asset?.contentsItems ?? []}
+              unavailable={!order || !asset}
+            />
+          </article>
+        )
+      })}
+      {selectedLines.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          Выбранные бытовки недоступны.
+        </p>
       ) : null}
     </section>
   )
@@ -1852,6 +1928,8 @@ function TaskScheduleDialog({
   task,
   desiredDeliveryWindows,
   selectedLineCount,
+  selectedLineIds,
+  referenceLabels,
   shipmentTaskCap,
   pending,
   onOpenChange,
@@ -1861,6 +1939,8 @@ function TaskScheduleDialog({
   task: RentalOrderTask
   desiredDeliveryWindows: readonly DesiredDeliveryWindow[]
   selectedLineCount: number
+  selectedLineIds: readonly string[]
+  referenceLabels: LogisticsReferenceLabels
   shipmentTaskCap: number | null
   pending: boolean
   onOpenChange: (open: boolean) => void
@@ -1897,7 +1977,7 @@ function TaskScheduleDialog({
   const isShipment = task.kind === "SHIPMENT"
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl">
         <form className="flex flex-col gap-4" onSubmit={submit}>
           <DialogHeader>
             <DialogTitle>
@@ -1909,6 +1989,11 @@ function TaskScheduleDialog({
                 : "Назначьте водителя и дату вывоза выбранных бытовок."}
             </DialogDescription>
           </DialogHeader>
+          <SelectedCabinFurniture
+            task={task}
+            selectedLineIds={selectedLineIds}
+            referenceLabels={referenceLabels}
+          />
           <FieldGroup>
             <LogisticsDriverPicker
               accessToken={accessToken}
