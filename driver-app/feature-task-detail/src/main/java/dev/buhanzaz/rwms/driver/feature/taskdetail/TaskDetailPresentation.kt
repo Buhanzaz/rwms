@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.driver.feature.taskdetail
 
+import dev.buhanzaz.rwms.driver.core.database.DriverAssignmentEntity
 import dev.buhanzaz.rwms.driver.core.database.DriverTaskEntity
 import dev.buhanzaz.rwms.driver.core.network.DriverTripDetailsDto
 import dev.buhanzaz.rwms.driver.core.network.DriverTripDesiredDeliveryWindowDto
@@ -30,16 +31,84 @@ internal data class PhotoCapturePresentation(
     val message: String?,
 )
 
-/** A visible photo control must never silently ignore a tap while detail loads. */
-internal fun photoCapturePresentation(hasLoadedDetail: Boolean): PhotoCapturePresentation =
-    if (hasLoadedDetail) {
-        PhotoCapturePresentation(enabled = true, message = null)
-    } else {
-        PhotoCapturePresentation(
+/** Allows capture only for a loaded, in-progress task owned by this driver or its pending TAKE. */
+internal fun photoCapturePresentation(
+    hasLoadedDetail: Boolean,
+    currentDriverId: String,
+    effectiveTaskStatus: String?,
+    assignments: List<DriverAssignmentEntity>,
+    hasPendingTake: Boolean,
+): PhotoCapturePresentation {
+    if (!hasLoadedDetail) {
+        return PhotoCapturePresentation(
             enabled = false,
             message = "Загружаем карточку задания. Добавление фото станет доступно после синхронизации.",
         )
     }
+    if (effectiveTaskStatus == "WAITING") {
+        return PhotoCapturePresentation(
+            enabled = false,
+            message = "Сначала нажмите «Взять», затем добавьте фотографию результата.",
+        )
+    }
+    if (effectiveTaskStatus == "PAUSED") {
+        return PhotoCapturePresentation(
+            enabled = false,
+            message = "Задание на паузе. Нажмите «Продолжить», чтобы добавить фотографию.",
+        )
+    }
+    if (effectiveTaskStatus != "IN_PROGRESS") {
+        return PhotoCapturePresentation(
+            enabled = false,
+            message = "Фото результата можно добавить только во время выполнения задания.",
+        )
+    }
+    val isCurrentParticipant = assignments.any { assignment ->
+        assignment.driverId == currentDriverId &&
+            (assignment.status == "ACTIVE" || assignment.status == "PAUSED")
+    }
+    return if (isCurrentParticipant || hasPendingTake) {
+        PhotoCapturePresentation(enabled = true, message = null)
+    } else {
+        PhotoCapturePresentation(
+            enabled = false,
+            message = "Добавлять фото может только водитель, который взял это задание.",
+        )
+    }
+}
+
+/** Separates server-ready evidence from durable local evidence that cannot complete the task yet. */
+internal data class EvidenceCountPresentation(
+    val readyLabel: String,
+    val locallyStoredNotReadyLabel: String?,
+)
+
+/** Keeps locally durable evidence from being presented as server-ready completion evidence. */
+internal fun evidenceCountPresentation(
+    readyEvidenceCount: Int,
+    locallyStoredEvidenceStates: List<String>,
+): EvidenceCountPresentation {
+    val locallyStoredNotReadyCount = locallyStoredEvidenceStates.count { it != "READY" }
+    return EvidenceCountPresentation(
+        readyLabel = "Готово на сервере: ${readyEvidenceCount.coerceAtLeast(0)}",
+        locallyStoredNotReadyLabel = locallyStoredNotReadyCount.takeIf { it > 0 }?.let {
+            "Сохранено локально, ещё не готово: $it"
+        },
+    )
+}
+
+/** Uses the optimistic task status only while its durable action is waiting for synchronization. */
+internal fun effectiveTaskStatus(
+    task: DriverTaskEntity?,
+    serverStatus: String?,
+): String? = if (task?.locallyPending == true) task.status else serverStatus ?: task?.status
+
+/** Describes whether a logistics task targets one assigned driver or the shared warehouse pool. */
+internal fun logisticsTaskAudienceLabel(driverAudienceMode: String?): String = when (driverAudienceMode) {
+    ASSIGNED_DRIVER_AUDIENCE_MODE -> "Логистическое задание · индивидуальное назначение"
+    WAREHOUSE_DRIVERS_AUDIENCE_MODE -> "Логистическое задание · общее для водителей склада"
+    else -> "Логистическое задание"
+}
 
 internal fun evidencePresentation(
     state: String,
@@ -80,8 +149,9 @@ internal fun evidencePresentation(
         )
     } else if (mediaId == null) {
         EvidencePresentation(
-            status = "Нужно новое фото",
-            message = "Срок старой попытки истёк — снимите фото заново.",
+            status = "Фото сохранено локально",
+            message = "Сервер ещё не принял фото. После начала задания приложение повторит " +
+                "отправку, если офлайн-допуск ещё действует; иначе потребуется новое фото.",
             canRetryReservation = false,
         )
     } else {
@@ -189,6 +259,13 @@ internal fun scheduledTripLabel(date: String): String = displayDate(date)
 
 internal fun isLogisticsDriverTaskSource(type: String?): Boolean =
     type == "LOGISTICS_DRIVER_TASK"
+
+/** Mirrors the rich logistics read contract, which authorizes only exact assigned drivers. */
+internal fun canReadRichLogisticsDetails(
+    sourceType: String?,
+    driverAudienceMode: String?,
+): Boolean = isLogisticsDriverTaskSource(sourceType) &&
+    driverAudienceMode == ASSIGNED_DRIVER_AUDIENCE_MODE
 
 private fun displayDate(raw: String): String = runCatching {
     LocalDate.parse(raw).format(DRIVER_DATE_FORMATTER)
@@ -350,3 +427,6 @@ private fun quantityLabel(quantity: Double, unit: String?): String {
     val amount = BigDecimal.valueOf(quantity).stripTrailingZeros().toPlainString()
     return listOf(amount, unit?.trim()?.takeIf(String::isNotBlank)).joinToString(" ")
 }
+
+internal const val ASSIGNED_DRIVER_AUDIENCE_MODE = "ASSIGNED_DRIVER"
+internal const val WAREHOUSE_DRIVERS_AUDIENCE_MODE = "WAREHOUSE_DRIVERS"

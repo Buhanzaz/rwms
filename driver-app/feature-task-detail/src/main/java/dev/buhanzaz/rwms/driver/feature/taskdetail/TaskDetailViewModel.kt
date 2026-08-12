@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.flowOf
@@ -61,10 +62,12 @@ internal data class TaskDetailRefreshOutcome(
 
 /**
  * Refreshes task-board first, persists that authoritative detail, and only then follows a
- * logistics source reference. The caller-provided fence prevents a response for an obsolete
- * screen key or refresh generation from entering UI state.
+ * logistics source reference when the task targets one exact assigned driver. The
+ * caller-provided fence prevents a response for an obsolete screen key or refresh generation
+ * from entering UI state.
  */
 internal suspend fun loadTaskDetail(
+    driverAudienceMode: String?,
     fetchDetail: suspend () -> DriverTaskDetailDto,
     persistDetail: suspend (DriverTaskDetailDto) -> Unit,
     fetchLogisticsTrip: suspend (String) -> DriverTripDetailsDto?,
@@ -94,13 +97,14 @@ internal suspend fun loadTaskDetail(
     if (!isCurrent()) return TaskDetailRefreshOutcome(accepted = false)
 
     val source = detail.source
-    if (source?.type != LOGISTICS_DRIVER_TASK_SOURCE_TYPE) {
+    if (!canReadRichLogisticsDetails(source?.type, driverAudienceMode)) {
         return TaskDetailRefreshOutcome(accepted = true)
     }
+    val logisticsSourceId = requireNotNull(source).sourceId
 
     onLogisticsFetchStarted()
     val tripDetails = try {
-        fetchLogisticsTrip(source.sourceId)
+        fetchLogisticsTrip(logisticsSourceId)
     } catch (exception: CancellationException) {
         throw exception
     } catch (_: Exception) {
@@ -127,6 +131,7 @@ data class TaskDetailUiState(
     val queuePurpose: String? = null,
     val session: DriverSessionEntity? = null,
     val assignments: List<DriverAssignmentEntity> = emptyList(),
+    val hasPendingTake: Boolean = false,
     val evidence: List<TaskEvidenceEntity> = emptyList(),
     val retryableEvidenceIds: Set<String> = emptySet(),
     val kpiPalette: DriverKpiPaletteDto? = null,
@@ -142,6 +147,7 @@ private data class SupportingState(
     val evidence: List<TaskEvidenceEntity>,
     val retryableEvidenceIds: Set<String>,
     val assignments: List<DriverAssignmentEntity>,
+    val pendingTakeEntryIds: Set<String>,
     val session: DriverSessionEntity?,
     val categoryPurposes: Map<String, String>,
     val kpiPalette: DriverKpiPaletteDto?,
@@ -203,10 +209,23 @@ class TaskDetailViewModel @Inject constructor(
                         }
                         .mapTo(mutableSetOf()) { (_, payload) -> payload.evidenceId }
                 }
+                val pendingTakeEntryIds = outbox.asSequence()
+                    .filter { it.kind == DriverLocalStore.OUTBOX_ACTION }
+                    .mapNotNull { operation ->
+                        runCatching {
+                            json.decodeFromString<PendingDriverAction>(
+                                localStore.decryptOutboxPayload(operation),
+                            )
+                        }.getOrNull()
+                            ?.takeIf { it.action == DriverTaskAction.TAKE.wireValue }
+                            ?.let { operation.entryId }
+                    }
+                    .toSet()
                 SupportingState(
                     evidence = evidence,
                     retryableEvidenceIds = retryable,
                     assignments = assignments,
+                    pendingTakeEntryIds = pendingTakeEntryIds,
                     session = session,
                     categoryPurposes = categories.associate { it.queueId to it.queuePurpose },
                     kpiPalette = session?.kpiPaletteJson?.let { encoded ->
@@ -231,6 +250,7 @@ class TaskDetailViewModel @Inject constructor(
                     queuePurpose = task?.categoryId?.let(evidenceWithRetry.categoryPurposes::get),
                     session = evidenceWithRetry.session,
                     assignments = evidenceWithRetry.assignments,
+                    hasPendingTake = requested.entryId in evidenceWithRetry.pendingTakeEntryIds,
                     evidence = evidenceWithRetry.evidence.filter { it.entryId == requested.entryId },
                     retryableEvidenceIds = evidenceWithRetry.retryableEvidenceIds,
                     kpiPalette = evidenceWithRetry.kpiPalette,
@@ -243,6 +263,13 @@ class TaskDetailViewModel @Inject constructor(
             }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TaskDetailUiState())
+
+    /** Waits for the selected task row before deciding whether rich logistics read is allowed. */
+    private suspend fun currentDriverAudienceMode(requested: DetailKey): String? =
+        localStore.observeTasks(requested.userId)
+            .first { tasks -> tasks.any { task -> task.entryId == requested.entryId } }
+            .first { task -> task.entryId == requested.entryId }
+            .driverAudienceMode
 
     fun bind(userId: String, entryId: String) {
         val next = DetailKey(userId, entryId)
@@ -263,7 +290,10 @@ class TaskDetailViewModel @Inject constructor(
             val isCurrent = {
                 key.value == current && refreshGeneration.get() == generation
             }
+            val driverAudienceMode = currentDriverAudienceMode(current)
+            if (!isCurrent()) return@launch
             val outcome = loadTaskDetail(
+                driverAudienceMode = driverAudienceMode,
                 fetchDetail = { gateway.detail(current.entryId) },
                 persistDetail = { projections.applyDetail(current.userId, it) },
                 fetchLogisticsTrip = gateway::logisticsTripDetails,
@@ -376,8 +406,6 @@ class TaskDetailViewModel @Inject constructor(
         }
     }
 }
-
-private const val LOGISTICS_DRIVER_TASK_SOURCE_TYPE = "LOGISTICS_DRIVER_TASK"
 
 private fun String.statusAfterAction(): String = when (this) {
     "TAKE", "RESUME" -> "IN_PROGRESS"

@@ -8,11 +8,14 @@ import org.junit.Test
 
 class DriverDownloadsTest {
     @Test
-    fun `main menu contains exactly warehouse work and downloads`() {
+    fun `main menu contains warehouse work logistics and downloads`() {
         val items = driverMenuItems(pendingDownloadCount = 2)
 
-        assertThat(items.map { it.title }).containsExactly("Работа на складе", "Загрузки").inOrder()
-        assertThat(items[1].description).contains("2")
+        assertThat(items.map { it.title })
+            .containsExactly("Работа на складе", "Логистика", "Загрузки")
+            .inOrder()
+        assertThat(items[0].description).doesNotContain("Логистика")
+        assertThat(items[2].description).contains("2")
     }
 
     @Test

@@ -89,10 +89,109 @@ class TaskDetailPresentationTest {
 
     @Test
     fun `photo button is visibly unavailable until its route index is loaded`() {
-        val presentation = photoCapturePresentation(hasLoadedDetail = false)
+        val presentation = photoCapturePresentation(
+            hasLoadedDetail = false,
+            currentDriverId = "driver-current",
+            effectiveTaskStatus = "IN_PROGRESS",
+            assignments = listOf(assignment("driver-current", "Текущий", "ACTIVE")),
+            hasPendingTake = false,
+        )
 
         assertThat(presentation.enabled).isFalse()
         assertThat(presentation.message).contains("Загружаем карточку")
+    }
+
+    @Test
+    fun `waiting screenshot state tells driver to take task before adding photo`() {
+        val presentation = photoCapturePresentation(
+            hasLoadedDetail = true,
+            currentDriverId = "driver-current",
+            effectiveTaskStatus = "WAITING",
+            assignments = emptyList(),
+            hasPendingTake = false,
+        )
+
+        assertThat(presentation.enabled).isFalse()
+        assertThat(presentation.message).contains("Сначала нажмите «Взять»")
+    }
+
+    @Test
+    fun `optimistic pending take enables photo while assignment projection catches up`() {
+        val presentation = photoCapturePresentation(
+            hasLoadedDetail = true,
+            currentDriverId = "driver-current",
+            effectiveTaskStatus = "IN_PROGRESS",
+            assignments = emptyList(),
+            hasPendingTake = true,
+        )
+
+        assertThat(presentation.enabled).isTrue()
+        assertThat(presentation.message).isNull()
+    }
+
+    @Test
+    fun `active or paused current participant can add photo to in progress task`() {
+        listOf("ACTIVE", "PAUSED").forEach { assignmentStatus ->
+            val presentation = photoCapturePresentation(
+                hasLoadedDetail = true,
+                currentDriverId = "driver-current",
+                effectiveTaskStatus = "IN_PROGRESS",
+                assignments = listOf(assignment("driver-current", "Текущий", assignmentStatus)),
+                hasPendingTake = false,
+            )
+
+            assertThat(presentation.enabled).isTrue()
+            assertThat(presentation.message).isNull()
+        }
+    }
+
+    @Test
+    fun `paused task tells participant to resume before adding photo`() {
+        val presentation = photoCapturePresentation(
+            hasLoadedDetail = true,
+            currentDriverId = "driver-current",
+            effectiveTaskStatus = "PAUSED",
+            assignments = listOf(assignment("driver-current", "Текущий", "PAUSED")),
+            hasPendingTake = false,
+        )
+
+        assertThat(presentation.enabled).isFalse()
+        assertThat(presentation.message).contains("Нажмите «Продолжить»")
+    }
+
+    @Test
+    fun `nonparticipant cannot add photo to another drivers active task`() {
+        val presentation = photoCapturePresentation(
+            hasLoadedDetail = true,
+            currentDriverId = "driver-current",
+            effectiveTaskStatus = "IN_PROGRESS",
+            assignments = listOf(assignment("driver-other", "Другой", "ACTIVE")),
+            hasPendingTake = false,
+        )
+
+        assertThat(presentation.enabled).isFalse()
+        assertThat(presentation.message).contains("только водитель, который взял")
+    }
+
+    @Test
+    fun `ready and locally stored non ready photo counts are presented separately`() {
+        val presentation = evidenceCountPresentation(
+            readyEvidenceCount = 1,
+            locallyStoredEvidenceStates = listOf("READY", "CAPTURED", "UPLOADING"),
+        )
+
+        assertThat(presentation.readyLabel).isEqualTo("Готово на сервере: 1")
+        assertThat(presentation.locallyStoredNotReadyLabel)
+            .isEqualTo("Сохранено локально, ещё не готово: 2")
+    }
+
+    @Test
+    fun `logistics audience wording distinguishes shared warehouse task`() {
+        assertThat(logisticsTaskAudienceLabel(ASSIGNED_DRIVER_AUDIENCE_MODE))
+            .isEqualTo("Логистическое задание · индивидуальное назначение")
+        assertThat(logisticsTaskAudienceLabel(WAREHOUSE_DRIVERS_AUDIENCE_MODE))
+            .isEqualTo("Логистическое задание · общее для водителей склада")
+        assertThat(logisticsTaskAudienceLabel(null)).isEqualTo("Логистическое задание")
     }
 
     @Test
@@ -116,7 +215,7 @@ class TaskDetailPresentationTest {
     }
 
     @Test
-    fun `legacy failure without original reservation asks for a new photo`() {
+    fun `terminal reservation failure explains that the local photo is retained`() {
         val presentation = evidencePresentation(
             state = "REVIEW_REQUIRED",
             uploadPercent = 0,
@@ -124,8 +223,9 @@ class TaskDetailPresentationTest {
             hasValidReservationPayload = false,
         )
 
-        assertThat(presentation.status).isEqualTo("Нужно новое фото")
-        assertThat(presentation.message).contains("снимите фото заново")
+        assertThat(presentation.status).isEqualTo("Фото сохранено локально")
+        assertThat(presentation.message).contains("повторит отправку")
+        assertThat(presentation.message).contains("иначе потребуется новое фото")
         assertThat(presentation.message).doesNotContain("404")
         assertThat(presentation.message).doesNotContain("{")
         assertThat(presentation.canRetryReservation).isFalse()

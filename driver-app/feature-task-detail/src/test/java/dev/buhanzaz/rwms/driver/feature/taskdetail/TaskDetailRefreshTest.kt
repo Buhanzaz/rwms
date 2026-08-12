@@ -17,6 +17,7 @@ class TaskDetailRefreshTest {
         var requestedSourceId: String? = null
 
         val outcome = loadTaskDetail(
+            driverAudienceMode = ASSIGNED_DRIVER_AUDIENCE_MODE,
             fetchDetail = { detail },
             persistDetail = { persisted = it },
             fetchLogisticsTrip = { sourceId ->
@@ -40,6 +41,7 @@ class TaskDetailRefreshTest {
         var logisticsCalls = 0
 
         val outcome = loadTaskDetail(
+            driverAudienceMode = ASSIGNED_DRIVER_AUDIENCE_MODE,
             fetchDetail = { detailWithSource("MAINTENANCE_REPAIR", "repair-1") },
             persistDetail = {},
             fetchLogisticsTrip = {
@@ -61,6 +63,7 @@ class TaskDetailRefreshTest {
         var persisted: DriverTaskDetailDto? = null
 
         val outcome = loadTaskDetail(
+            driverAudienceMode = ASSIGNED_DRIVER_AUDIENCE_MODE,
             fetchDetail = { detail },
             persistDetail = { persisted = it },
             fetchLogisticsTrip = { error("logistics unavailable") },
@@ -79,6 +82,7 @@ class TaskDetailRefreshTest {
         var current = true
 
         val outcome = loadTaskDetail(
+            driverAudienceMode = ASSIGNED_DRIVER_AUDIENCE_MODE,
             fetchDetail = { detailWithSource("LOGISTICS_DRIVER_TASK", "driver-task-1") },
             persistDetail = {},
             fetchLogisticsTrip = {
@@ -90,6 +94,48 @@ class TaskDetailRefreshTest {
 
         assertThat(outcome.accepted).isFalse()
         assertThat(outcome.tripDetails).isNull()
+        assertThat(outcome.tripError).isNull()
+    }
+
+    @Test
+    fun `shared warehouse logistics task never requests assigned driver rich details`() = runTest {
+        var logisticsCalls = 0
+
+        val outcome = loadTaskDetail(
+            driverAudienceMode = WAREHOUSE_DRIVERS_AUDIENCE_MODE,
+            fetchDetail = { detailWithSource("LOGISTICS_DRIVER_TASK", "driver-task-shared") },
+            persistDetail = {},
+            fetchLogisticsTrip = {
+                logisticsCalls += 1
+                error("assigned-driver endpoint must not be called")
+            },
+            isCurrent = { true },
+        )
+
+        assertThat(logisticsCalls).isEqualTo(0)
+        assertThat(outcome.accepted).isTrue()
+        assertThat(outcome.logisticsRequested).isFalse()
+        assertThat(outcome.tripDetails).isNull()
+        assertThat(outcome.tripError).isNull()
+    }
+
+    @Test
+    fun `unknown driver audience fails closed without requesting rich details`() = runTest {
+        var logisticsCalls = 0
+
+        val outcome = loadTaskDetail(
+            driverAudienceMode = null,
+            fetchDetail = { detailWithSource("LOGISTICS_DRIVER_TASK", "driver-task-unknown") },
+            persistDetail = {},
+            fetchLogisticsTrip = {
+                logisticsCalls += 1
+                tripDetails()
+            },
+            isCurrent = { true },
+        )
+
+        assertThat(logisticsCalls).isEqualTo(0)
+        assertThat(outcome.logisticsRequested).isFalse()
         assertThat(outcome.tripError).isNull()
     }
 

@@ -192,8 +192,10 @@ custom-scheme redirect receiver. Their task-board namespaces and device
 registrations are surface-bound, so a token for one app cannot read or mutate
 the other surface.
 
-DriverApp exposes exactly two main destinations: warehouse work and durable
-uploads. WorkerApp contains ordinary worker work plus active secondary
+DriverApp exposes exactly three main destinations: warehouse work, personal
+dated logistics and durable uploads. The dated surface selects only
+`ASSIGNED_DRIVER` work; shared `WAREHOUSE_DRIVERS` movements remain on the
+warehouse board. WorkerApp contains ordinary worker work plus active secondary
 logistics collaboration, but no driver board, driver trip read or driver take
 surface. Both retain encrypted JPEG evidence and durable outbox state across a
 process or device restart; server projections remain authoritative.
@@ -203,8 +205,9 @@ Evidence:
 [`DriverAuthConfiguration.kt`](../../driver-app/core-auth/src/main/java/dev/buhanzaz/rwms/driver/core/auth/DriverAuthConfiguration.kt),
 [`WorkerGatewayApi.kt`](../../worker-app/core-network/src/main/java/dev/buhanzaz/rwms/worker/core/network/WorkerGatewayApi.kt),
 [`DriverGatewayApi.kt`](../../driver-app/core-network/src/main/java/dev/buhanzaz/rwms/driver/core/network/DriverGatewayApi.kt),
+[`DriverApp.kt`](../../driver-app/app/src/main/java/dev/buhanzaz/rwms/driver/DriverApp.kt),
 and
-[`DriverApp.kt`](../../driver-app/app/src/main/java/dev/buhanzaz/rwms/driver/DriverApp.kt).
+[`LogisticsScreen.kt`](../../driver-app/feature-tasks/src/main/java/dev/buhanzaz/rwms/driver/feature/tasks/LogisticsScreen.kt).
 
 ### Client Problem Details and retry boundary
 

@@ -14,16 +14,25 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/** Narrow encryption boundary for durable pending payloads and deterministic local tests. */
+interface PendingPayloadCodec {
+    fun encrypt(plainText: String): String
+
+    fun decrypt(encoded: String): String
+}
+
 /** Encrypts unsent command/conflict bodies independently from Room's metadata. */
 @Singleton
-class PendingPayloadCipher @Inject constructor(@ApplicationContext private val context: Context) {
-    fun encrypt(plainText: String): String {
+class PendingPayloadCipher @Inject constructor(
+    @ApplicationContext private val context: Context,
+) : PendingPayloadCodec {
+    override fun encrypt(plainText: String): String {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, secretKey()) }
         return Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" +
             Base64.encodeToString(cipher.doFinal(plainText.toByteArray(StandardCharsets.UTF_8)), Base64.NO_WRAP)
     }
 
-    fun decrypt(encoded: String): String {
+    override fun decrypt(encoded: String): String {
         val parts = encoded.split(":", limit = 2)
         require(parts.size == 2) { "Malformed encrypted pending payload" }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {

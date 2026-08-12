@@ -94,7 +94,7 @@ class TaskQueueSectionsTest {
         val groups = listOf(group("general", "Разнорабочие"))
         val groupTask = task("general-task", "general-queue", "Общие работы", 10, 0)
         val personalTask = task("slinger-task", "slinger-queue", "Стропальщики", 20, 0)
-        val columns = buildWorkBoardColumns(
+        val columns = buildWarehouseWorkColumns(
             groups = groups,
             categories = listOf(
                 category("general-queue", "Общие работы", 10, groupIds = listOf("general")),
@@ -116,7 +116,7 @@ class TaskQueueSectionsTest {
     }
 
     @Test
-    fun `driver audience creates separate personal logistics and shared movement tables`() {
+    fun `personal logistics is separated from shared warehouse movements`() {
         val driverCategory = category(
             queueId = "drivers",
             name = "Водители",
@@ -129,29 +129,55 @@ class TaskQueueSectionsTest {
             .copy(driverAudienceMode = "WAREHOUSE_DRIVERS")
         val legacyUnclassified = task("legacy", "drivers", "Водители", 5, 2)
 
-        val columns = buildWorkBoardColumns(
+        val columns = buildWarehouseWorkColumns(
             groups = emptyList(),
             categories = listOf(driverCategory),
             tasks = listOf(shared, legacyUnclassified, assigned),
             assignments = emptyList(),
         )
+        val logistics = buildLogisticsTasksForDate(
+            categories = listOf(driverCategory),
+            tasks = listOf(shared, legacyUnclassified, assigned),
+            scheduledDate = "2026-07-26",
+        )
 
         assertThat(columns.map { it.name })
-            .containsExactly("Логистика", "Перемещения")
-            .inOrder()
-        assertThat(columns[0].description).isEqualTo("Только назначенные вам задания")
-        assertThat(columns[0].sections.single().tasks.map { it.entryId })
-            .containsExactly("shipment")
-        assertThat(columns[1].description).isEqualTo("Общие задания водителей склада")
-        assertThat(columns[1].sections.single().tasks.map { it.entryId })
+            .containsExactly("Перемещения")
+        assertThat(columns.single().description).isEqualTo("Общие задания водителей склада")
+        assertThat(columns.single().sections.single().tasks.map { it.entryId })
             .containsExactly("movement")
+        assertThat(logistics.map { it.entryId }).containsExactly("shipment")
+    }
+
+    @Test
+    fun `logistics projection filters date and unauthorized queues`() {
+        val driverCategory = category(
+            queueId = "drivers",
+            name = "Водители",
+            sortOrder = 5,
+            queuePurpose = "LOGISTICS_DRIVER",
+        )
+        val today = task("today", "drivers", "Водители", 5, 1)
+            .copy(driverAudienceMode = "ASSIGNED_DRIVER", scheduledDate = "2026-08-12")
+        val tomorrow = task("tomorrow", "drivers", "Водители", 5, 0)
+            .copy(driverAudienceMode = "ASSIGNED_DRIVER", scheduledDate = "2026-08-13")
+        val revoked = task("revoked", "revoked-drivers", "Старая очередь", 1, 0)
+            .copy(driverAudienceMode = "ASSIGNED_DRIVER", scheduledDate = "2026-08-12")
+
+        val tasks = buildLogisticsTasksForDate(
+            categories = listOf(driverCategory),
+            tasks = listOf(revoked, tomorrow, today),
+            scheduledDate = "2026-08-12",
+        )
+
+        assertThat(tasks.map { it.entryId }).containsExactly("today")
     }
 
     @Test
     fun `live assignment restricts a shared queue card to the assigned group`() {
         val shared = category("shared", "Общая очередь", 10, groupIds = listOf("a", "b"))
         val task = task("assigned", "shared", "Общая очередь", 10, 0)
-        val columns = buildWorkBoardColumns(
+        val columns = buildWarehouseWorkColumns(
             groups = listOf(group("a", "Группа А"), group("b", "Группа Б")),
             categories = listOf(shared),
             tasks = listOf(task),

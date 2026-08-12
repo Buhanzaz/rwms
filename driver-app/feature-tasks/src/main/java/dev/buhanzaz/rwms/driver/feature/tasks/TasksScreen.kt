@@ -104,7 +104,7 @@ fun TasksScreen(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            val columns = buildWorkBoardColumns(
+            val columns = buildWarehouseWorkColumns(
                 groups = state.groups,
                 categories = state.categories,
                 tasks = state.tasks,
@@ -317,13 +317,6 @@ private fun TaskQueueSectionPanel(
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.titleMedium,
                 )
-                if (section.queuePurpose == "LOGISTICS_DRIVER") {
-                    Text(
-                        "Логистика",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
                 Text(
                     section.tasks.size.toString(),
                     style = MaterialTheme.typography.labelLarge,
@@ -358,13 +351,15 @@ private fun TaskQueueSectionPanel(
 
 /** Renders one expandable task summary and preserves navigation to photo-rich details. */
 @Composable
-private fun TaskRow(
+internal fun TaskRow(
     task: DriverTaskEntity,
     kpiPalette: DriverKpiPaletteDto?,
     onOpen: () -> Unit,
     presentationKey: String,
+    initiallyExpanded: Boolean = false,
+    showScheduledDate: Boolean = true,
 ) {
-    var expanded by rememberSaveable(presentationKey) { mutableStateOf(false) }
+    var expanded by rememberSaveable(presentationKey) { mutableStateOf(initiallyExpanded) }
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
             .testTag("task-card-$presentationKey")
@@ -397,7 +392,9 @@ private fun TaskRow(
                 )
             }
             taskCabinCaption(task.unitNumber)?.let { caption -> Text(caption) }
-            Text("Дата: ${task.scheduledDate}", style = MaterialTheme.typography.bodyMedium)
+            if (showScheduledDate) {
+                Text("Дата: ${task.scheduledDate}", style = MaterialTheme.typography.bodyMedium)
+            }
             val timer = queueTaskTimerPresentation(task)
             val elapsed = timer?.elapsed ?: queueTaskElapsedLabel(task)
             elapsed?.let {

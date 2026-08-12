@@ -114,18 +114,19 @@ internal fun buildTaskQueueSections(
 
 /**
  * Projects service-issued queue/group bindings into independently collapsible
- * driver-role columns. Group-bound queues stay under their group role. A
- * driver queue becomes two explicit tables: assigned work is personal
- * logistics, while warehouse-shared work is movement. Every other
- * qualification-only category becomes its own personal column because the
- * local projection exposes the authorized category name, but deliberately
- * does not guess a missing qualification name or queue-to-class binding.
+ * warehouse-work columns. Group-bound queues stay under their group role and
+ * warehouse-shared driver work stays in the movement column. Personally
+ * assigned logistics is deliberately excluded because it belongs to the
+ * separate dated logistics surface. Every other qualification-only category
+ * becomes its own personal column because the local projection exposes the
+ * authorized category name, but deliberately does not guess a missing
+ * qualification name or queue-to-class binding.
  *
  * A live assignment is more specific than a category audience: once present,
  * the card is visible only in the assigned group (or in qualification-only
  * work when the assignment deliberately has no group).
  */
-internal fun buildWorkBoardColumns(
+internal fun buildWarehouseWorkColumns(
     groups: List<DriverGroupEntity>,
     categories: List<DriverCategoryEntity>,
     tasks: List<DriverTaskEntity>,
@@ -186,22 +187,10 @@ internal fun buildWorkBoardColumns(
             )
         }
 
-    val driverColumns = if (driverCategories.isEmpty()) {
+    val movementColumns = if (driverCategories.isEmpty()) {
         emptyList()
     } else {
         listOf(
-            WorkBoardColumn(
-                id = DRIVER_LOGISTICS_COLUMN_ID,
-                name = "Логистика",
-                personal = true,
-                sections = buildTaskQueueSections(
-                    categories = driverCategories,
-                    tasks = driverTasks.filter {
-                        it.driverAudienceMode == ASSIGNED_DRIVER_AUDIENCE
-                    },
-                ),
-                description = "Только назначенные вам задания",
-            ),
             WorkBoardColumn(
                 id = DRIVER_MOVEMENTS_COLUMN_ID,
                 name = "Перемещения",
@@ -228,7 +217,34 @@ internal fun buildWorkBoardColumns(
                 sections = listOf(section),
             )
         }
-    return driverColumns + groupColumns + qualificationColumns
+    return movementColumns + groupColumns + qualificationColumns
+}
+
+/**
+ * Selects the driver's personal logistics queue for one calendar date. Once
+ * the independent category projection is present, tasks outside an authorized
+ * logistics-driver queue fail closed. A legacy cache without categories may
+ * still show explicitly classified personal tasks until the next full sync.
+ */
+internal fun buildLogisticsTasksForDate(
+    categories: List<DriverCategoryEntity>,
+    tasks: List<DriverTaskEntity>,
+    scheduledDate: String,
+): List<DriverTaskEntity> {
+    val logisticsQueueIds = categories.asSequence()
+        .filter { it.queuePurpose == LOGISTICS_DRIVER_QUEUE_PURPOSE }
+        .mapTo(mutableSetOf(), DriverCategoryEntity::queueId)
+    return tasks.asSequence()
+        .filter { it.driverAudienceMode == ASSIGNED_DRIVER_AUDIENCE }
+        .filter { it.scheduledDate == scheduledDate }
+        .filter { categories.isEmpty() || it.categoryId in logisticsQueueIds }
+        .sortedWith(
+            compareBy<DriverTaskEntity>(DriverTaskEntity::categorySortOrder)
+                .thenBy(DriverTaskEntity::queuePosition)
+                .thenByDescending(DriverTaskEntity::priority)
+                .thenBy(DriverTaskEntity::localId),
+        )
+        .toList()
 }
 
 internal fun DriverCategoryEntity.groupIds(): Set<String> =
@@ -260,5 +276,4 @@ private const val QUALIFICATION_COLUMN_PREFIX = "qualification-"
 private const val LOGISTICS_DRIVER_QUEUE_PURPOSE = "LOGISTICS_DRIVER"
 private const val ASSIGNED_DRIVER_AUDIENCE = "ASSIGNED_DRIVER"
 private const val WAREHOUSE_DRIVERS_AUDIENCE = "WAREHOUSE_DRIVERS"
-private const val DRIVER_LOGISTICS_COLUMN_ID = "driver-logistics"
 private const val DRIVER_MOVEMENTS_COLUMN_ID = "driver-movements"

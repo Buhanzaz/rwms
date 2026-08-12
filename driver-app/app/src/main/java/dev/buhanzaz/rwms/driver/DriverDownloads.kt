@@ -155,6 +155,7 @@ fun DriverMainMenuScreen(
     userId: String,
     displayName: String,
     onWorks: () -> Unit,
+    onLogistics: () -> Unit,
     onDownloads: () -> Unit,
     onProfile: () -> Unit,
     viewModel: DriverDownloadsViewModel = hiltViewModel(),
@@ -183,6 +184,7 @@ fun DriverMainMenuScreen(
                     modifier = Modifier.fillMaxWidth().clickable(
                         onClick = when (item.destination) {
                             DriverMenuDestination.WORKS -> onWorks
+                            DriverMenuDestination.LOGISTICS -> onLogistics
                             DriverMenuDestination.DOWNLOADS -> onDownloads
                         },
                     ),
@@ -292,14 +294,20 @@ internal data class DriverMenuItem(
 /**
  * Defines driver UI/presentation state; it does not decide a server task transition.
  */
-internal enum class DriverMenuDestination { WORKS, DOWNLOADS }
+internal enum class DriverMenuDestination { WORKS, LOGISTICS, DOWNLOADS }
 
 internal fun driverMenuItems(pendingDownloadCount: Int): List<DriverMenuItem> = listOf(
     DriverMenuItem(
         title = "Работа на складе",
-        description = "Логистика, ремонт, КПП и внутренние перемещения",
+        description = "Ремонт, КПП и внутренние перемещения",
         accent = Color(0xFF0069A8),
         destination = DriverMenuDestination.WORKS,
+    ),
+    DriverMenuItem(
+        title = "Логистика",
+        description = "Отгрузки и возвраты по датам",
+        accent = Color(0xFF0069A8),
+        destination = DriverMenuDestination.LOGISTICS,
     ),
     DriverMenuItem(
         title = "Загрузки",

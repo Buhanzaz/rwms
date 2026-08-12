@@ -58,13 +58,15 @@ fun TaskDetailScreen(
     val detail = state.detail
     val task = state.task
     val session = state.session
-    val photoCapture = photoCapturePresentation(detail != null)
     val cabinNumber = cabinNumberForDisplay(task?.unitNumber, detail?.taskObject?.label)
-    val displayedStatus = when {
-        task?.locallyPending == true -> task.status
-        detail != null -> detail.status
-        else -> task?.status
-    }
+    val displayedStatus = effectiveTaskStatus(task = task, serverStatus = detail?.status)
+    val photoCapture = photoCapturePresentation(
+        hasLoadedDetail = detail != null,
+        currentDriverId = userId,
+        effectiveTaskStatus = displayedStatus,
+        assignments = state.assignments,
+        hasPendingTake = state.hasPendingTake,
+    )
     val readyServerEvidence = detail?.evidence.orEmpty()
         .filter { evidence -> evidence.state == "READY" && !evidence.readPath.isNullOrBlank() }
     val readyEvidenceIds = readyServerEvidence.mapTo(mutableSetOf()) { it.evidenceId }.apply {
@@ -83,6 +85,10 @@ fun TaskDetailScreen(
     val localEvidenceWithoutServerPhoto = state.evidence.filterNot { local ->
         readyServerEvidence.any { remote -> remote.evidenceId == local.evidenceId }
     }
+    val evidenceCount = evidenceCountPresentation(
+        readyEvidenceCount = readyEvidenceCount,
+        locallyStoredEvidenceStates = state.evidence.map(TaskEvidenceEntity::state),
+    )
     val plannedDurationMinutes = detail?.plannedDurationMinutes ?: task?.plannedDurationMinutes
     val timerSnapshot = detail?.timerSnapshot ?: task?.serverTimerSnapshotOrNull()
     var elapsedSinceSnapshotSeconds by remember(timerSnapshot) { mutableStateOf(0L) }
@@ -109,7 +115,10 @@ fun TaskDetailScreen(
         sourceMedia = detail?.sourceMedia.orEmpty(),
     )
     val generalSourceMedia = sourceMediaPresentation.general
-    val hasLogisticsSource = isLogisticsDriverTaskSource(detail?.source?.type)
+    val showsRichLogisticsDetails = canReadRichLogisticsDetails(
+        sourceType = detail?.source?.type,
+        driverAudienceMode = task?.driverAudienceMode,
+    )
     LaunchedEffect(timerSnapshot?.nextTransitionAt, timerSnapshot?.serverTime) {
         val snapshot = timerSnapshot ?: return@LaunchedEffect
         val nextTransitionAt = snapshot.nextTransitionAt ?: return@LaunchedEffect
@@ -196,14 +205,14 @@ fun TaskDetailScreen(
             } else {
                 item {
                     Text(
-                        "Логистическое задание · индивидуальное назначение",
+                        logisticsTaskAudienceLabel(task?.driverAudienceMode),
                         modifier = Modifier.padding(horizontal = 16.dp),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
-            if (hasLogisticsSource) {
+            if (showsRichLogisticsDetails) {
                 if (state.tripRefreshInProgress) {
                     item {
                         Text(
@@ -321,7 +330,14 @@ fun TaskDetailScreen(
                         onClick = { onCamera(requireNotNull(detail).routeIndex) },
                         enabled = photoCapture.enabled,
                     ) { Text("Добавить фото") }
-                    Text("$readyEvidenceCount готово")
+                    Text(evidenceCount.readyLabel)
+                }
+                evidenceCount.locallyStoredNotReadyLabel?.let { label ->
+                    Text(
+                        label,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
                 photoCapture.message?.let { message ->
                     Text(
@@ -650,7 +666,7 @@ private fun EvidenceRow(
             presentation.message?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
             evidence.lastError?.let {
                 Text(
-                    "Последняя попытка отправки не удалась. Фото сохранено и будет отправлено повторно.",
+                    "Последняя попытка отправки не удалась. Фото остаётся сохранённым на устройстве.",
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodyMedium,
                 )

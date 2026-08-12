@@ -101,15 +101,8 @@ class TaskQueueListComposeTest {
     }
 
     @Test
-    fun driverTablesExplainPersonalLogisticsAndSharedMovements() {
+    fun warehouseBoardExplainsSharedMovementsWithoutPersonalLogistics() {
         val columns = listOf(
-            WorkBoardColumn(
-                id = "driver-logistics",
-                name = "Логистика",
-                personal = true,
-                sections = emptyList(),
-                description = "Только назначенные вам задания",
-            ),
             WorkBoardColumn(
                 id = "driver-movements",
                 name = "Перемещения",
@@ -126,8 +119,6 @@ class TaskQueueListComposeTest {
             }
         }
 
-        compose.onNodeWithText("Логистика").assertIsDisplayed()
-        compose.onNodeWithText("Только назначенные вам задания").assertIsDisplayed()
         compose.onNodeWithText("Перемещения").assertIsDisplayed()
         compose.onNodeWithText("Общие задания водителей склада").assertIsDisplayed()
     }

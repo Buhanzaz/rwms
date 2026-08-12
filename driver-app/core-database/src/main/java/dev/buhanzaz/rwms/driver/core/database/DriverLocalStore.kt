@@ -77,7 +77,7 @@ data class ServerTimeAnchor(
 @Singleton
 class DriverLocalStore @Inject constructor(
     private val database: DriverDatabase,
-    private val pendingPayloadCipher: PendingPayloadCipher,
+    private val pendingPayloadCipher: PendingPayloadCodec,
     private val json: Json,
 ) {
     fun observeTasks(userId: String): Flow<List<DriverTaskEntity>> = database.taskDao().observeTasks(userId)
@@ -146,7 +146,71 @@ class DriverLocalStore @Inject constructor(
                     lastError = null,
                 ),
             )
+            if (
+                action.statusAfterAction == STATUS_IN_PROGRESS &&
+                action.payload.action in ACTIONS_STARTING_WORK
+            ) {
+                recoverRejectedEvidenceAfterWorkStarted(action, now)
+            }
         }
+    }
+
+    /**
+     * Recreates only reservation effects rejected before TAKE/RESUME reached the server. The
+     * original capture time and stable identities are retained, while ACTION is ordered first.
+     */
+    private suspend fun recoverRejectedEvidenceAfterWorkStarted(
+        action: OptimisticAction,
+        actionCreatedAtEpochMillis: Long,
+    ) {
+        val session = requireNotNull(database.sessionDao().session(action.userId)) {
+            "Сначала обновите данные задания"
+        }
+        val leaseId = session.leaseId ?: return
+        val leaseExpiresAt = session.leaseExpiresAtEpochMillis ?: return
+        val leaseIssuedAt = leaseExpiresAt - OFFLINE_LEASE_DURATION_MILLIS
+        database.evidenceDao()
+            .recoverableReviewEvidence(action.userId, action.entryId)
+            .filter { evidence -> evidence.isValidForReservationRecovery(leaseIssuedAt, leaseExpiresAt) }
+            .forEachIndexed { index, evidence ->
+                if (database.outboxDao().operationCount(evidence.reservationOperationId) != 0) {
+                    return@forEachIndexed
+                }
+                val reservationCreatedAt = actionCreatedAtEpochMillis + index + 1L
+                val payload = PendingEvidenceReservation(
+                    operationId = evidence.reservationOperationId,
+                    evidenceId = evidence.evidenceId,
+                    routeIndex = evidence.routeIndex,
+                    capturedAt = evidence.capturedAt,
+                    offlineLeaseId = leaseId,
+                    contentType = evidence.contentType,
+                    sizeBytes = evidence.sizeBytes,
+                    sha256 = evidence.sha256,
+                )
+                database.outboxDao().insert(
+                    DriverOutboxEntity(
+                        operationId = evidence.reservationOperationId,
+                        userId = action.userId,
+                        entryId = action.entryId,
+                        kind = OUTBOX_EVIDENCE_RESERVATION,
+                        encryptedPayload = pendingPayloadCipher.encrypt(json.encodeToString(payload)),
+                        expectedVersion = null,
+                        state = OUTBOX_PENDING,
+                        retryCount = 0,
+                        createdAtEpochMillis = reservationCreatedAt,
+                        updatedAtEpochMillis = reservationCreatedAt,
+                        lastError = null,
+                    ),
+                )
+                check(
+                    database.evidenceDao().markReservationRecovered(
+                        evidenceId = evidence.evidenceId,
+                        userId = action.userId,
+                        entryId = action.entryId,
+                        now = reservationCreatedAt,
+                    ) == 1,
+                ) { "Evidence changed while its reservation was being recovered" }
+            }
     }
 
     /**
@@ -306,8 +370,36 @@ class DriverLocalStore @Inject constructor(
         const val OUTBOX_PENDING = "PENDING"
         const val OUTBOX_RETRY = "RETRY"
         const val EVIDENCE_CAPTURED = "CAPTURED"
+
+        private const val STATUS_IN_PROGRESS = "IN_PROGRESS"
+        private const val OFFLINE_LEASE_DURATION_MILLIS = 24L * 60L * 60L * 1_000L
+        private val ACTIONS_STARTING_WORK = setOf("TAKE", "RESUME")
     }
 }
+
+/** Returns whether persisted metadata can safely reproduce the original reservation request. */
+private fun TaskEvidenceEntity.isValidForReservationRecovery(
+    leaseIssuedAtEpochMillis: Long,
+    leaseExpiresAtEpochMillis: Long,
+): Boolean {
+    val capturedAtEpochMillis = runCatching { Instant.parse(capturedAt).toEpochMilli() }.getOrNull() ?: return false
+    return capturedAtEpochMillis in leaseIssuedAtEpochMillis..leaseExpiresAtEpochMillis &&
+        reviewReason == PRE_ACTIVATION_EVIDENCE_REJECTION &&
+        routeIndex >= 0 &&
+        encryptedFilePath.isNotBlank() &&
+        fileName.isNotBlank() &&
+        contentType == "image/jpeg" &&
+        sizeBytes in 1..MAX_RECOVERABLE_EVIDENCE_BYTES &&
+        RECOVERABLE_EVIDENCE_SHA_256.matches(sha256) &&
+        runCatching { UUID.fromString(evidenceId) }.isSuccess &&
+        reservationOperationId == evidenceId &&
+        uploadOperationId == stableMediaUploadOperationId(evidenceId)
+}
+
+private const val PRE_ACTIVATION_EVIDENCE_REJECTION =
+    "Добавить новую фотографию можно только к заданию в работе"
+private const val MAX_RECOVERABLE_EVIDENCE_BYTES = 15L * 1_024L * 1_024L
+private val RECOVERABLE_EVIDENCE_SHA_256 = Regex("^[0-9a-f]{64}$")
 
 /** The media API binds the driver upload idempotency key to clientReferenceId. */
 internal fun stableMediaUploadOperationId(evidenceId: String): String =

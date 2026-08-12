@@ -155,6 +155,9 @@ interface DriverOutboxDao {
     )
     suspend fun pendingActionCount(userId: String, entryId: String): Int
 
+    @Query("SELECT COUNT(*) FROM driver_outbox WHERE operationId = :operationId")
+    suspend fun operationCount(operationId: String): Int
+
     @Query("UPDATE driver_outbox SET state = :state, retryCount = :retryCount, lastError = :lastError, updatedAtEpochMillis = :now WHERE operationId = :operationId")
     suspend fun updateState(operationId: String, state: String, retryCount: Int, lastError: String?, now: Long)
 
@@ -176,6 +179,18 @@ interface TaskEvidenceDao {
     @Query("SELECT * FROM task_evidence WHERE evidenceId = :evidenceId AND userId = :userId LIMIT 1")
     suspend fun evidence(userId: String, evidenceId: String): TaskEvidenceEntity?
 
+    @Query(
+        """
+        SELECT * FROM task_evidence
+        WHERE userId = :userId
+          AND entryId = :entryId
+          AND state = 'REVIEW_REQUIRED'
+          AND mediaId IS NULL
+        ORDER BY createdAtEpochMillis, evidenceId
+        """,
+    )
+    suspend fun recoverableReviewEvidence(userId: String, entryId: String): List<TaskEvidenceEntity>
+
     @Query("SELECT COUNT(*) FROM task_evidence WHERE userId = :userId AND entryId = :entryId AND state = 'READY'")
     suspend fun readyCount(userId: String, entryId: String): Int
 
@@ -190,6 +205,30 @@ interface TaskEvidenceDao {
 
     @Query("UPDATE task_evidence SET lastError = :error, updatedAtEpochMillis = :now WHERE evidenceId = :evidenceId")
     suspend fun updateUploadError(evidenceId: String, error: String, now: Long)
+
+    @Query(
+        """
+        UPDATE task_evidence
+        SET state = 'CAPTURED',
+            mediaId = NULL,
+            mediaGeneration = NULL,
+            reviewReason = NULL,
+            uploadPercent = 0,
+            lastError = NULL,
+            updatedAtEpochMillis = :now
+        WHERE evidenceId = :evidenceId
+          AND userId = :userId
+          AND entryId = :entryId
+          AND state = 'REVIEW_REQUIRED'
+          AND mediaId IS NULL
+        """,
+    )
+    suspend fun markReservationRecovered(
+        evidenceId: String,
+        userId: String,
+        entryId: String,
+        now: Long,
+    ): Int
 }
 
 @Dao

@@ -44,8 +44,8 @@ android {
         applicationId = "dev.buhanzaz.rwms.driver"
         minSdk = 23
         targetSdk = 36
-        versionCode = 16
-        versionName = "0.1.15"
+        versionCode = 18
+        versionName = "0.1.17"
         testInstrumentationRunner = "dev.buhanzaz.rwms.driver.HiltDriverTestRunner"
         manifestPlaceholders["appAuthRedirectScheme"] = "rwms-driver-auth"
     }

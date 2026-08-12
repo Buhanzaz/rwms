@@ -31,6 +31,7 @@ import dev.buhanzaz.rwms.driver.core.ui.DriverScreenScaffold
 import dev.buhanzaz.rwms.driver.feature.camera.CameraScreen
 import dev.buhanzaz.rwms.driver.feature.login.LoginScreen
 import dev.buhanzaz.rwms.driver.feature.taskdetail.TaskDetailScreen
+import dev.buhanzaz.rwms.driver.feature.tasks.LogisticsScreen
 import dev.buhanzaz.rwms.driver.feature.tasks.TasksScreen
 import java.util.UUID
 import kotlinx.serialization.Serializable
@@ -59,12 +60,16 @@ fun DriverApp(
 }
 
 @Serializable
-/** Root navigation destination containing the two driver menu actions. */
+/** Root navigation destination containing the three driver menu actions. */
 private data object MenuRoute : NavKey
 
 @Serializable
 /** List-pane destination for server-authorized warehouse work. */
 private data object BoardRoute : NavKey
+
+@Serializable
+/** List-pane destination for the driver's personal dated logistics queue. */
+private data object LogisticsRoute : NavKey
 
 @Serializable
 /** Detail destination keyed by the task-board entry identity. */
@@ -120,6 +125,7 @@ private fun DriverNavigation(userId: String, displayName: String, onLogout: () -
                     userId = userId,
                     displayName = displayName,
                     onWorks = dropUnlessResumed { backStack.add(BoardRoute) },
+                    onLogistics = dropUnlessResumed { backStack.add(LogisticsRoute) },
                     onDownloads = dropUnlessResumed { backStack.add(DownloadsRoute) },
                     onProfile = dropUnlessResumed { backStack.add(ProfileRoute) },
                 )
@@ -130,6 +136,17 @@ private fun DriverNavigation(userId: String, displayName: String, onLogout: () -
                     backStack.add(TaskRoute(entryId))
                 }
                 TasksScreen(
+                    userId = userId,
+                    onTask = openTask,
+                    onBack = { backStack.removeLastOrNull() },
+                )
+            }
+            entry<LogisticsRoute>(metadata = DriverListDetailScene.listPane()) {
+                val openTask: (String) -> Unit = dropUnlessResumedWithArgument { entryId ->
+                    backStack.removeAll { it is TaskRoute }
+                    backStack.add(TaskRoute(entryId))
+                }
+                LogisticsScreen(
                     userId = userId,
                     onTask = openTask,
                     onBack = { backStack.removeLastOrNull() },

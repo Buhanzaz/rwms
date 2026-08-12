@@ -564,12 +564,24 @@ and
    At least one result photo must have reached media state `READY`; after that,
    either participant may complete the entry. The one owner transition closes
    it for both clients and resumes the interrupted group work.
-10. DriverApp exposes exactly warehouse work and durable uploads as its two
-    main destinations. Grouped-trip detail remains logistics-owned and is
-    available only to the planned assigned driver with `driver.tasks`. Its
-    CameraX capture, encrypted evidence store and WorkManager outbox survive
-    restart, and the Uploads destination permits explicit retry without
-    inventing local task success.
+10. DriverApp exposes warehouse work, dated personal logistics and durable
+    uploads as three main destinations. The logistics surface defaults to the
+    device-local current date and filters only task-board-issued
+    `ASSIGNED_DRIVER` work; shared `WAREHOUSE_DRIVERS` movement stays on the
+    warehouse board. Grouped-trip detail remains logistics-owned and is
+    requested only for the planned `ASSIGNED_DRIVER` with `driver.tasks`;
+    shared movement uses its task-board detail and never turns the expected
+    logistics authorization boundary into a false refresh error.
+11. DriverApp enables result capture only for effective `IN_PROGRESS` work by
+    the participating driver. A server-READY photo and a merely retained local
+    JPEG are displayed as different states. If a pre-activation reservation
+    was terminally rejected, the next activating `TAKE` or `RESUME` may
+    atomically restore the same encrypted evidence reservation after the action
+    command, but only when its original capture time is within the active
+    24-hour offline lease. The client preserves the original timestamp and
+    stable IDs; expired evidence requires a new capture. CameraX storage and
+    the WorkManager outbox survive restart, and Uploads never invents local
+    task success.
 
 Evidence:
 [`DocumentDriverTaskPlanner.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DocumentDriverTaskPlanner.java),
@@ -579,6 +591,9 @@ Evidence:
 [`MobileTaskSurfacePolicy.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/MobileTaskSurfacePolicy.java),
 [`WorkerPushDispatcher.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/push/WorkerPushDispatcher.java),
 [`TaskBoardReadProjectionService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardReadProjectionService.java),
+[`WorkerTaskBoardService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/WorkerTaskBoardService.java),
+[`DriverLocalStore.kt`](../../driver-app/core-database/src/main/java/dev/buhanzaz/rwms/driver/core/database/DriverLocalStore.kt),
+[`TaskDetailScreen.kt`](../../driver-app/feature-task-detail/src/main/java/dev/buhanzaz/rwms/driver/feature/taskdetail/TaskDetailScreen.kt),
 [`logistics-board-page.tsx`](../../panel/src/features/logistics/driver-board/logistics-board-page.tsx),
 [`Worker TasksScreen.kt`](../../worker-app/feature-tasks/src/main/java/dev/buhanzaz/rwms/worker/feature/tasks/TasksScreen.kt),
 and

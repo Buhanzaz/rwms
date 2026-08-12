@@ -338,6 +338,10 @@ abstract class DriverDatabase : RoomDatabase() {
 object DriverDatabaseModule {
     @Provides
     @Singleton
+    fun pendingPayloadCodec(cipher: PendingPayloadCipher): PendingPayloadCodec = cipher
+
+    @Provides
+    @Singleton
     fun database(@ApplicationContext context: Context): DriverDatabase =
         Room.databaseBuilder(context, DriverDatabase::class.java, DriverDatabase.DATABASE_NAME)
             .addMigrations(
