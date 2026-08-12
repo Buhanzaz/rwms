@@ -338,7 +338,7 @@ are combined only in a deterministic driver/task snapshot. Rental-order create
 and ordinary manager edit commands carry only the client, primary phone and
 comment. A normal public presentation confirmation owns the delivery address,
 optional complete coordinate pair, order-owned additional contacts, one to five
-distinct same-day client delivery preferences and positive rental duration; nullable
+distinct date-only client delivery preferences and positive rental duration; nullable
 contacts normalize to an empty list. Desired-delivery windows remain order-owned
 read state: legacy physical time columns can retain old values but no public
 command or projection exposes them. A draft can save without client delivery
@@ -455,9 +455,13 @@ completion evidence is applied idempotently to every grouped cabin. Shipment
 and return use assigned or unassigned audiences; transfer is warehouse-shared
 and identity-free.
 
-The board and driver detail expose structured trip facts including contacts,
-desired and actual dates, cabin contents and movement/readiness state.
-Drag-and-drop moves only the whole grouped task. Logistics locks and verifies
+The owner projection retains structured trip facts including contacts, desired
+and actual dates, cabin contents and movement/readiness state. The panel's
+dated logistics board deliberately renders only grouped shipment/return cards
+with that projection: it hides raw legacy cards, task/trip numbers and desired
+dates, labels the actual scheduled day as `Дата выполнения задания`, and shows
+actual cabin contents with exactly one final filling status. Drag-and-drop
+moves only the whole grouped task. Logistics locks and verifies
 the document is pre-start before the bounded version-fenced task-board call,
 then synchronizes the document date and rental terms while retaining the desired
 delivery date; a later status poll converges a lost local

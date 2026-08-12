@@ -111,16 +111,20 @@ contexts and screens are usable.
   logistics inquiry with `conversationId: null`. It never creates a hidden
   assistant conversation and never reuses an active AI-linked inquiry. A route
   without an order shows an explicit unsupported state.
-- Every NORMAL public cabin card has the exact actions `Выбрать` and
-  `Добавить мебель`. Furniture is drafted independently for each selected
-  cabin. Its effective capacity uses the refreshed shared availability, that
-  cabin's existing draft, and physical contents in selected held cabins without
-  double counting, then applies nullable `maximumPerCabin`. The presentation
-  polls and refetches on focus/reconnect; a smaller refreshed pool keeps the
-  explainable draft, marks it invalid, and disables confirmation while the
-  atomic server confirmation remains authoritative. A public presentation
-  collects client-selected desired dates; the manager order detail shows the
-  returned values read-only and never overwrites them.
+- Every NORMAL public cabin card uses a labelled `Выбрать бытовку …` checkbox.
+  A selected cabin exposes `Добавить наполнение`, which opens a compact,
+  scrollable dialog rather than an inline/full-screen editor. The type selector
+  shows `Название: доступно — число`; the client adds each type once and changes
+  its quantity with bounded `−`/`+` controls. Filling is drafted independently
+  for each selected cabin. Its effective capacity uses the refreshed shared
+  availability, that cabin's existing draft, and physical contents in selected
+  held cabins without double counting, then applies nullable `maximumPerCabin`.
+  The presentation polls and refetches on focus/reconnect; a smaller refreshed
+  pool keeps the explainable draft, marks it invalid, and disables confirmation
+  while the atomic server confirmation remains authoritative. A public
+  presentation collects one to five independent, date-only client wishes; the
+  manager order detail shows the returned values read-only and never overwrites
+  them.
 - A REPLACEMENT presentation requires the server's exact selection count and
   preserves client click order. It has no furniture editor: desired quantities
   remain reserved and transfer to the corresponding replacement in the current
@@ -131,11 +135,11 @@ contexts and screens are usable.
 - Order creation and edit screens persist the selected client, editable order
   contact phone, and comment only. The public presentation's second step
   collects the delivery address, optional coordinate pair, zero or more
-  order-owned additional contacts, the desired date, and the initial rental
-  duration. The returned `desiredDeliveryWindows` are read-only on order detail
-  as a client selection and remain distinct from the logistics-owned scheduled
-  date. A DRAFT detail requires a nonblank contact phone, selected
-  warehouse, and one or more cabins; it never offers a manager command for the
+  order-owned additional contacts, one to five independently selected desired
+  dates, and the initial rental duration. The returned `desiredDeliveryWindows`
+  are read-only on order detail as a client selection and remain distinct from
+  the logistics-owned scheduled date. A DRAFT detail requires a nonblank contact
+  phone, selected warehouse, and one or more cabins; it never offers a manager command for the
   initial per-cabin term. After a cabin is
   actually shipped/rented, its card shows duration, shipment date, and
   calculated return date. `Продлить аренду` selects one or more such cabins,
@@ -198,6 +202,13 @@ contexts and screens are usable.
   an unassigned queue only when such cards exist. Current and scheduled lanes
   remain distinct inside the same driver section, and cards collapse
   independently.
+- The dated board renders only grouped shipment/return projections; legacy
+  cards without a trip projection and transfers are hidden. A card headline is
+  `Отгрузить бытовку` or `Вернуть бытовку`, never a task/trip number or raw
+  legacy text. It shows `Дата выполнения задания`, not the client wish. Each
+  cabin shows actual filling as `Название: Nшт` and exactly one final status:
+  gray `Нет наполнения`, orange `Ожидает наполнения`, yellow `Ожидает выноса
+  наполнения`, or green `Наполнение готово`.
 - A logistics card can be reordered only inside its existing date, lane and
   driver queue. The client sends task and entry versions with the new index; it
   never changes the driver audience through drag and drop.

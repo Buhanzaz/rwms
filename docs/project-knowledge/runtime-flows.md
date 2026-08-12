@@ -457,9 +457,10 @@ and
    assistant presentations rediscoverable after reload. The first selected
    cabin fixes the order warehouse for every later search and confirmation.
 5. A normal presentation publishes atomically held cabin snapshots and live
-   equipment metadata. Its public confirmation requires one to five distinct same-day
-   client dates, a positive initial rental duration, delivery address, optional
-   complete latitude/longitude pair and nullable additional contacts normalized
+   equipment metadata. Its public confirmation requires one to five distinct,
+   independently selected date-only client dates, a positive initial rental
+   duration, delivery address, optional complete latitude/longitude pair and
+   nullable additional contacts normalized
    to an empty list, without prefill from a linked order. Confirmation stores
    those normalized facts with the existing durable booking receipt, carries
    furniture quantities per cabin, atomically converts all selected holds plus
@@ -526,11 +527,15 @@ and
    active worker and primary driver qualification, replaces the supplied name
    with its authoritative snapshot, and stores the audience with the task.
 4. The logistics board reads task-board placement plus a batched logistics trip
-   projection. Every card/detail includes operation, address/coordinates,
-   primary and additional contacts, client wishes, actual scheduled date, cabins and
-   per-cabin desired/actual furniture, movement-task state and readiness. Board
-   enrichment performs at most one asset order read per distinct rental order;
-   an unavailable owner snapshot is explicit rather than false readiness.
+   projection. The owner projection retains operation, address/coordinates,
+   contacts, client wishes, actual scheduled date, cabins and per-cabin
+   desired/actual furniture, movement-task state and readiness. The panel
+   renders only grouped shipment/return projections, suppresses legacy raw
+   cards, task/trip numbers and client wishes, and displays the scheduled day as
+   `Дата выполнения задания`; each cabin uses actual contents plus exactly one
+   final filling status. Board enrichment performs at most one asset order read
+   per distinct rental order; an unavailable owner snapshot is explicit rather
+   than false readiness.
 5. Dragging a card always moves the whole grouped task. A locked local
    pre-start check runs before task-board; after version-fenced remote success
    logistics synchronizes the owning document date while preserving the desired
