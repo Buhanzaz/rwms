@@ -276,7 +276,7 @@ public class AuthorizationServerConfiguration {
                     instanceof OAuth2AuthorizationCodeRequestAuthenticationProvider authorizationCode) {
                 authorizationCode.setAuthenticationValidator(
                         new OAuth2AuthorizationCodeRequestAuthenticationValidator()
-                                .andThen(AuthorizationServerConfiguration::validateWorkerPkceS256));
+                                .andThen(AuthorizationServerConfiguration::validateMobilePkceS256));
             }
         });
     }
@@ -291,10 +291,11 @@ public class AuthorizationServerConfiguration {
      * @throws OAuth2AuthorizationCodeRequestAuthenticationException when an Android client omits
      *     S256
      */
-    static void validateWorkerPkceS256(
+    static void validateMobilePkceS256(
             OAuth2AuthorizationCodeRequestAuthenticationContext context) {
         String clientId = context.getRegisteredClient().getClientId();
         if (!OAuthClientProperties.WORKER_ANDROID_CLIENT_ID.equals(clientId)
+                && !OAuthClientProperties.DRIVER_ANDROID_CLIENT_ID.equals(clientId)
                 && !OAuthClientProperties.MANAGER_ANDROID_CLIENT_ID.equals(clientId)) {
             return;
         }

@@ -4,13 +4,7 @@ import { useQuery } from "@tanstack/react-query"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -37,70 +31,123 @@ function formatDate(value: string) {
   )
 }
 
-function operationLabel(value: string) {
-  switch (value) {
-    case "SHIPMENT":
-      return "Отгрузка"
-    case "RETURN":
-      return "Вывоз"
-    case "TRANSFER":
-      return "Перемещение"
-    default:
-      return value
-  }
-}
-
-function desiredWindowLabel(
-  window: DriverTripDetails["desiredDeliveryWindows"][number]
-) {
-  return (
-    window.startDate === window.endDate
-      ? formatDate(window.startDate)
-      : `${formatDate(window.startDate)} — ${formatDate(window.endDate)}`
-  )
-}
-
-function EquipmentList({
+function ActualEquipmentList({
   items,
 }: {
-  items: readonly (DriverTripDesiredEquipment | DriverTripActualEquipment)[]
+  items: readonly DriverTripActualEquipment[]
 }) {
-  if (items.length === 0) {
-    return <p className="text-sm text-muted-foreground">Не требуется.</p>
-  }
+  const visibleItems = items.filter(
+    (item) => Number.isFinite(item.quantity) && item.quantity > 0
+  )
+  if (visibleItems.length === 0) return null
+
   return (
     <ul className="flex flex-col gap-1 text-sm">
-      {items.map((item) => (
-        <li
-          key={`${item.equipmentId}:${"locationKind" in item ? item.locationKind : "desired"}`}
-          className="flex items-baseline justify-between gap-3"
-        >
-          <span>{item.equipmentName?.trim() || "Оборудование"}</span>
-          <span className="shrink-0 text-muted-foreground">
-            × {item.quantity}
-          </span>
+      {visibleItems.map((item, index) => (
+        <li key={`${item.equipmentId}:${item.locationKind}:${index}`}>
+          {item.equipmentName?.trim() || "Оборудование"}: {item.quantity}шт
         </li>
       ))}
     </ul>
   )
 }
 
-/** Renders the logistics-owned trip projection without deriving readiness. */
+/** One final, user-facing state of a cabin's physical filling. */
+type CabinContentStatus =
+  "empty" | "awaiting-filling" | "awaiting-removal" | "ready"
+
+const CABIN_CONTENT_STATUS_PRESENTATION: Record<
+  CabinContentStatus,
+  { label: string; className: string }
+> = {
+  empty: {
+    label: "Нет наполнения",
+    className: "border-border bg-muted text-muted-foreground",
+  },
+  "awaiting-filling": {
+    label: "Ожидает наполнения",
+    className:
+      "border-[color:var(--status-repair-fg)] bg-[var(--status-repair-bg)] text-[var(--status-repair-fg)]",
+  },
+  "awaiting-removal": {
+    label: "Ожидает выноса наполнения",
+    className:
+      "border-[color:var(--acceptance-time-warning-fg)] bg-[var(--acceptance-time-warning-bg)] text-[var(--acceptance-time-warning-fg)]",
+  },
+  ready: {
+    label: "Наполнение готово",
+    className:
+      "border-[color:var(--status-free-fg)] bg-[var(--status-free-bg)] text-[var(--status-free-fg)]",
+  },
+}
+
+function quantitiesByEquipment(
+  items: readonly (DriverTripDesiredEquipment | DriverTripActualEquipment)[]
+) {
+  const quantities = new Map<string, number>()
+
+  items.forEach((item, index) => {
+    if (!Number.isFinite(item.quantity) || item.quantity <= 0) return
+    const equipmentId = item.equipmentId.trim()
+    const key = equipmentId || `unidentified:${index}`
+    quantities.set(key, (quantities.get(key) ?? 0) + item.quantity)
+  })
+
+  return quantities
+}
+
+function contentsMatch(
+  desired: ReadonlyMap<string, number>,
+  actual: ReadonlyMap<string, number>
+) {
+  return (
+    desired.size === actual.size &&
+    [...desired].every(
+      ([equipmentId, quantity]) => actual.get(equipmentId) === quantity
+    )
+  )
+}
+
+/**
+ * Applies the logistics projection's readiness rules without using its legacy
+ * summary flag: unavailable facts are never presented as ready.
+ */
+function cabinContentStatus(
+  cabin: DriverTripDetails["cabins"][number]
+): CabinContentStatus {
+  if (cabin.actualContents === null) return "awaiting-filling"
+
+  const desired = quantitiesByEquipment(cabin.desiredContents)
+  const actual = quantitiesByEquipment(cabin.actualContents)
+
+  if (desired.size === 0 && actual.size === 0) return "empty"
+  if (
+    actual.size === 0 ||
+    (cabin.movementTaskCreated && !cabin.movementTaskCompleted)
+  ) {
+    return "awaiting-filling"
+  }
+  if (desired.size === 0) return "awaiting-removal"
+  if (contentsMatch(desired, actual)) return "ready"
+
+  return "awaiting-filling"
+}
+
+function logisticsTripTitle(kind: DriverBoardCard["kind"]) {
+  if (kind === "SHIPMENT") return "Отгрузить бытовку"
+  if (kind === "RETURN") return "Вернуть бытовку"
+  return "Логистическая ходка"
+}
+
+/** Renders the logistics-owned trip projection with its final filling states. */
 export function DriverTripDetailsView({
   details,
-  live,
 }: {
   details: DriverTripDetails
   live: boolean
 }) {
   return (
     <div className="flex flex-col gap-3" aria-label="Данные водительской ходки">
-      <div className="flex flex-wrap gap-1">
-        <Badge variant="secondary">Задание №{details.taskNumber}</Badge>
-        <Badge variant="outline">Ходка №{details.tripNumber}</Badge>
-        <Badge variant="outline">{operationLabel(details.operationType)}</Badge>
-      </div>
-
       <section className="flex flex-col gap-1 text-sm">
         <h3 className="font-medium">Клиент и маршрут</h3>
         <p>{details.clientName}</p>
@@ -144,93 +191,46 @@ export function DriverTripDetailsView({
 
       <Separator />
 
-      <section className="flex flex-col gap-2 text-sm">
-        <h3 className="font-medium">Желаемые даты клиента</h3>
-        {details.desiredDeliveryWindows.length > 0 ? (
-          <div className="flex flex-wrap gap-1">
-            {details.desiredDeliveryWindows.map((window, index) => (
-              <Badge
-                key={`${window.startDate}:${window.endDate}:${index}`}
-                variant="outline"
-              >
-                {desiredWindowLabel(window)}
-              </Badge>
-            ))}
-          </div>
-        ) : (
-          <p className="text-muted-foreground">Пожелания не указаны.</p>
-        )}
-        <p>Фактически назначено: {formatDate(details.scheduledDate)}</p>
+      <section className="flex flex-col gap-1 text-sm">
+        <p>Дата выполнения задания: {formatDate(details.scheduledDate)}</p>
       </section>
 
       <Separator />
 
       <section className="flex flex-col gap-2" aria-label="Бытовки ходки">
         <h3 className="text-sm font-medium">Бытовки</h3>
-        {details.cabins.map((cabin) => (
-          <Card key={cabin.cabinId} size="sm">
-            <CardHeader>
-              <CardTitle>Бытовка {cabin.unitNumber}</CardTitle>
-              <CardDescription>
-                Подготовка наполнения к этой ходке
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              <section className="flex flex-col gap-1">
-                <h4 className="text-sm font-medium">Нужно по заказу</h4>
-                <EquipmentList items={cabin.desiredContents} />
-              </section>
-              <section className="flex flex-col gap-1">
-                <h4 className="text-sm font-medium">Фактически в бытовке</h4>
-                {cabin.actualContents === null ? (
-                  <p className="text-sm text-muted-foreground">
-                    Недоступно в карточке доски. Откройте подробности ходки для
-                    актуального состава.
-                  </p>
-                ) : (
-                  <EquipmentList items={cabin.actualContents} />
-                )}
-              </section>
-              <div className="flex flex-wrap gap-1">
+        {details.cabins.map((cabin) => {
+          const status = cabinContentStatus(cabin)
+          const presentation = CABIN_CONTENT_STATUS_PRESENTATION[status]
+
+          return (
+            <Card
+              key={cabin.cabinId}
+              size="sm"
+              aria-label={`Бытовка ${cabin.unitNumber}`}
+            >
+              <CardHeader>
+                <CardTitle>Бытовка - {cabin.unitNumber}</CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                <section className="flex flex-col gap-1">
+                  <h4 className="text-sm font-medium">Наполнение</h4>
+                  {cabin.actualContents ? (
+                    <ActualEquipmentList items={cabin.actualContents} />
+                  ) : null}
+                </section>
                 <Badge
-                  variant={cabin.movementTaskCreated ? "secondary" : "outline"}
+                  variant="outline"
+                  className={presentation.className}
+                  aria-label={`Статус наполнения: ${presentation.label}`}
+                  data-content-status={status}
                 >
-                  {cabin.movementTaskCreated
-                    ? "Задание на мебель создано"
-                    : "Задание на мебель не создано"}
+                  {presentation.label}
                 </Badge>
-                <Badge
-                  variant={
-                    cabin.movementTaskCompleted ? "secondary" : "outline"
-                  }
-                >
-                  {cabin.movementTaskCompleted
-                    ? "Перемещение мебели выполнено"
-                    : "Перемещение мебели не выполнено"}
-                </Badge>
-                {cabin.contentReady === null ? (
-                  <Badge variant="outline">
-                    Готовность наполнения — в подробностях
-                  </Badge>
-                ) : (
-                  <Badge
-                    variant={cabin.contentReady ? "secondary" : "destructive"}
-                  >
-                    {cabin.contentReady
-                      ? "Наполнение готово"
-                      : "Наполнение не готово"}
-                  </Badge>
-                )}
-              </div>
-              {!live &&
-              (cabin.actualContents === null || cabin.contentReady === null) ? (
-                <p className="text-xs text-muted-foreground">
-                  Карточка не подменяет live-проверку состава и готовности.
-                </p>
-              ) : null}
-            </CardContent>
-          </Card>
-        ))}
+              </CardContent>
+            </Card>
+          )
+        })}
       </section>
     </div>
   )
@@ -265,12 +265,9 @@ export function DriverTripDetailsDialog({ card }: { card: DriverBoardCard }) {
       </Button>
       <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>
-            Задание №{card.tripDetails.taskNumber} · Ходка №
-            {card.tripDetails.tripNumber}
-          </DialogTitle>
+          <DialogTitle>{logisticsTripTitle(card.kind)}</DialogTitle>
           <DialogDescription>
-            Актуальная информация для выполнения всей сгруппированной ходки.
+            Актуальная информация для выполнения сгруппированной ходки.
           </DialogDescription>
         </DialogHeader>
         {query.isLoading ? (

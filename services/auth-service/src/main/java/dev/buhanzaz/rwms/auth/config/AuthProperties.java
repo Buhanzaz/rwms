@@ -17,6 +17,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param workerOrigin trusted worker Android App Link origin
  * @param workerRedirectUri dedicated Android sign-in App Link
  * @param workerPostLogoutRedirectUri authorized Android post-logout App Link
+ * @param driverOrigin trusted driver Android App Link origin
+ * @param driverRedirectUri dedicated driver Android sign-in callback
+ * @param driverPostLogoutRedirectUri authorized driver Android post-logout target
  * @param devDefaultCredentials whether development-only fallback credentials and ephemeral signing
  *     keys are allowed
  * @param bootstrapAdminUsername configured bootstrap system-administrator name
@@ -34,10 +37,12 @@ public record AuthProperties(
         String workerOrigin,
         String workerRedirectUri,
         String workerPostLogoutRedirectUri,
+        String driverOrigin,
+        String driverRedirectUri,
+        String driverPostLogoutRedirectUri,
         boolean devDefaultCredentials,
         String bootstrapAdminUsername,
         String bootstrapAdminPassword,
         String signingKeyStore,
         String signingKeyStorePassword,
-        String signingKeyAlias) {
-}
+        String signingKeyAlias) {}

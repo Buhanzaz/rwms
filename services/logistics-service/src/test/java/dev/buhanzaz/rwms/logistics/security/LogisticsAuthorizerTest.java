@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.security;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -114,6 +115,42 @@ class LogisticsAuthorizerTest {
         .hasMessageContaining("Global administrator");
   }
 
+  @Test
+  void exactAssignedDriverUsesWorkerClaimAndDriverScopeInsteadOfSessionSubject() {
+    UUID unrelatedSessionSubject = UUID.randomUUID();
+    Jwt driver = workerJwt(unrelatedSessionSubject, SUBJECT, "driver.tasks");
+
+    assertThat(authorizer.isExactAssignedDriver(driver, "ASSIGNED_DRIVER", SUBJECT)).isTrue();
+    assertThat(authorizer.isExactAssignedDriver(driver, "WAREHOUSE_DRIVERS", SUBJECT)).isFalse();
+    assertThat(authorizer.isExactAssignedDriver(driver, "UNASSIGNED", SUBJECT)).isFalse();
+    assertThat(authorizer.isExactAssignedDriver(driver, "ASSIGNED_DRIVER", DESTINATION)).isFalse();
+  }
+
+  @Test
+  void workerAppScopeAndUserSubjectCannotReadAssignedDriverDetail() {
+    Jwt workerApp = workerJwt(UUID.randomUUID(), SUBJECT, "worker.tasks");
+    Jwt formerUserShape =
+        userJwt(
+            "worker.tasks",
+            List.of(Map.of("warehouseId", WAREHOUSE.toString(), "level", "VIEW")));
+
+    assertThat(authorizer.isExactAssignedDriver(workerApp, "ASSIGNED_DRIVER", SUBJECT)).isFalse();
+    assertThat(
+            authorizer.isExactAssignedDriver(
+                workerJwt(UUID.randomUUID(), SUBJECT, "worker.tasks driver.tasks"),
+                "ASSIGNED_DRIVER",
+                SUBJECT))
+        .isFalse();
+    assertThat(authorizer.isExactAssignedDriver(formerUserShape, "ASSIGNED_DRIVER", SUBJECT))
+        .isFalse();
+    assertThat(
+            authorizer.isExactAssignedDriver(
+                workerJwt(UUID.randomUUID(), "not-a-uuid", "driver.tasks"),
+                "ASSIGNED_DRIVER",
+                SUBJECT))
+        .isFalse();
+  }
+
   private static Jwt userJwt(String scope, List<Map<String, String>> warehouseAccess) {
     return userJwt(scope, null, warehouseAccess);
   }
@@ -144,6 +181,19 @@ class LogisticsAuthorizerTest {
         .claim("principal_type", "SERVICE")
         .claim("client_id", clientId)
         .claim("scope", scopes)
+        .build();
+  }
+
+  private static Jwt workerJwt(UUID sessionSubject, Object workerId, String scope) {
+    return Jwt.withTokenValue("token")
+        .header("alg", "none")
+        .subject(sessionSubject.toString())
+        .issuedAt(Instant.now())
+        .expiresAt(Instant.now().plusSeconds(60))
+        .claim("principal_type", "WORKER")
+        .claim("worker_id", String.valueOf(workerId))
+        .claim("warehouse_id", WAREHOUSE.toString())
+        .claim("scope", scope)
         .build();
   }
 }

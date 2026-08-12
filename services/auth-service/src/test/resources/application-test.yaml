@@ -21,7 +21,7 @@ rwms:
     panel-redirect-uri: http://localhost:8080/auth/callback
     panel-post-logout-redirect-uri: http://localhost:8080/
     worker-origin: http://localhost:8082
-    worker-redirect-uri: http://localhost:8082/auth/callback
+    worker-redirect-uri: http://localhost:8082/auth/worker/callback
     worker-post-logout-redirect-uri: http://localhost:8082/
     dev-default-credentials: true
     bootstrap-admin-username: admin
@@ -68,12 +68,28 @@ rwms:
         - client-id: rwms-worker-android
           client-name: RWMS Рабочий
           enabled: true
-          revision: 2
+          revision: 3
           authentication-methods: [none]
           grant-types: [authorization_code, refresh_token]
-          redirect-uris: [http://localhost:8082/auth/callback]
+          redirect-uris: [http://localhost:8082/auth/worker/callback]
           post-logout-redirect-uris: [http://localhost:8082/]
           scopes: [openid, profile, offline_access, worker.tasks]
+          require-proof-key: true
+          allowed-principal-types: [WORKER]
+          audiences: [rwms-services]
+          allowed-origins: [http://localhost:8082]
+          access-token-ttl: 5m
+          refresh-token-ttl: 30d
+          reuse-refresh-tokens: false
+        - client-id: rwms-driver-android
+          client-name: RWMS Водитель
+          enabled: true
+          revision: 1
+          authentication-methods: [none]
+          grant-types: [authorization_code, refresh_token]
+          redirect-uris: [http://localhost:8082/auth/driver/callback]
+          post-logout-redirect-uris: [http://localhost:8082/]
+          scopes: [openid, profile, offline_access, driver.tasks]
           require-proof-key: true
           allowed-principal-types: [WORKER]
           audiences: [rwms-services]

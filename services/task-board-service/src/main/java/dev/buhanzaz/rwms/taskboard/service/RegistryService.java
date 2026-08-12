@@ -467,7 +467,7 @@ public class RegistryService {
     queue.setHoldingPeriodMinutes(holding ? request.holdingPeriodMinutes() : null);
     queue.setNotificationThreshold(holding ? request.notificationThreshold() : null);
     queue.setNotifyWhenThresholdReached(holding && request.notifyWhenThresholdReached());
-    queue.setResultPhotoMinCount(request.resultPhotoMinCount());
+    queue.setResultPhotoMinCount(Math.max(1, request.resultPhotoMinCount()));
   }
 
   private void replaceBindings(WorkQueue queue, List<QueueBindingRequest> requested) {
@@ -492,7 +492,10 @@ public class RegistryService {
             });
     int order = 0;
     for (QueueBindingRequest request : unique.values()) {
-      ParticipationPolicy policy = request.participationPolicy();
+      boolean logisticsSecondary =
+          queue.getPurpose() == QueuePurpose.LOGISTICS_DRIVER && order > 0;
+      ParticipationPolicy policy =
+          logisticsSecondary ? ParticipationPolicy.REQUIRED : request.participationPolicy();
       if (policy == null) {
         throw new IllegalArgumentException("Для класса рабочего обязательна политика участия");
       }
@@ -506,9 +509,10 @@ public class RegistryService {
       binding.setQueue(queue);
       binding.setWorkerClass(requireClass(request.workerClassId()));
       binding.setBindingOrder(order);
-      binding.setStopTaskOnTake(request.stopTaskOnTake());
+      binding.setStopTaskOnTake(logisticsSecondary || request.stopTaskOnTake());
       binding.setParticipationPolicy(policy);
-      binding.setNotifyOnPrimaryTake(order > 0 && request.notifyOnPrimaryTake());
+      binding.setNotifyOnPrimaryTake(
+          order > 0 && (logisticsSecondary || request.notifyOnPrimaryTake()));
       projectionWriter.save(bindings, binding);
       order++;
     }

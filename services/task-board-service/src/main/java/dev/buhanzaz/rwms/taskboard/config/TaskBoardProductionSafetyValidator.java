@@ -40,7 +40,10 @@ public class TaskBoardProductionSafetyValidator implements ApplicationRunner {
         !productionProfile
             && Arrays.stream(environment.getActiveProfiles())
                 .anyMatch(profile -> profile.equals("dev") || profile.equals("test"));
-    if (!localProfile) requireKafkaCutover();
+    if (!localProfile) {
+      requireKafkaCutover();
+      requireFcmPush();
+    }
     List.of(
             new Endpoint("AUTH_ISSUER", "spring.security.oauth2.resourceserver.jwt.issuer-uri"),
             new Endpoint(
@@ -49,10 +52,19 @@ public class TaskBoardProductionSafetyValidator implements ApplicationRunner {
             new Endpoint(
                 "WAREHOUSE_SERVICE_INTERNAL_BASE_URL", "rwms.warehouse.lifecycle.base-url"))
         .forEach(endpoint -> requireEndpoint(endpoint, !localProfile));
-    String origins = requireText("PANEL_ORIGIN/WORKER_ORIGIN", "rwms.cors.allowed-origins");
+    String origins =
+        requireText("PANEL_ORIGIN/WORKER_ORIGIN/DRIVER_ORIGIN", "rwms.cors.allowed-origins");
     for (String origin : origins.split(",")) {
       requireUri("CORS origin", origin.trim(), !localProfile, true);
     }
+  }
+
+  private void requireFcmPush() {
+    if (!environment.getProperty(
+        "rwms.task-board.push.fcm.enabled", Boolean.class, false)) {
+      throw new IllegalStateException("TASK_BOARD_FCM_ENABLED должен быть true вне dev/test");
+    }
+    requireText("TASK_BOARD_FCM_PROJECT_ID", "rwms.task-board.push.fcm.project-id");
   }
 
   private void requireKafkaCutover() {

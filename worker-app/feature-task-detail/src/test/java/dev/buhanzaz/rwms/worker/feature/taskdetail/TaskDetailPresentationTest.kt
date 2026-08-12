@@ -2,11 +2,6 @@ package dev.buhanzaz.rwms.worker.feature.taskdetail
 
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.worker.core.database.WorkerAssignmentEntity
-import dev.buhanzaz.rwms.worker.core.network.DriverTripActualEquipmentDto
-import dev.buhanzaz.rwms.worker.core.network.DriverTripCabinDto
-import dev.buhanzaz.rwms.worker.core.network.DriverTripDesiredDeliveryWindowDto
-import dev.buhanzaz.rwms.worker.core.network.DriverTripDesiredEquipmentDto
-import dev.buhanzaz.rwms.worker.core.network.DriverTripDetailsDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerTaskTimerSnapshotDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerMediaReferenceDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerWorkDto
@@ -16,77 +11,6 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class TaskDetailPresentationTest {
-    @Test
-    fun `trip operation labels preserve unknown server values`() {
-        assertThat(driverTripOperationLabel("SHIPMENT")).isEqualTo("Доставка / аренда")
-        assertThat(driverTripOperationLabel("RETURN")).isEqualTo("Вывоз")
-        assertThat(driverTripOperationLabel("TRANSFER")).isEqualTo("Перемещение")
-        assertThat(driverTripOperationLabel("CUSTOM_OPERATION")).isEqualTo("CUSTOM_OPERATION")
-    }
-
-    @Test
-    fun `desired and assigned logistics dates never include time`() {
-        val singleDay = desiredDeliveryWindowLabel(
-            DriverTripDesiredDeliveryWindowDto(
-                startDate = "2026-08-11",
-                endDate = "2026-08-11",
-            ),
-        )
-        val dateRange = desiredDeliveryWindowLabel(
-            DriverTripDesiredDeliveryWindowDto(
-                startDate = "2026-08-13",
-                endDate = "2026-08-15",
-            ),
-        )
-
-        assertThat(singleDay).isEqualTo("11.08.2026")
-        assertThat(dateRange).isEqualTo("13.08.2026–15.08.2026")
-        assertThat(scheduledTripLabel("2026-08-12")).isEqualTo("12.08.2026")
-    }
-
-    @Test
-    fun `grouped trip keeps one readiness presentation per cabin`() {
-        val presentations = driverTripCabinPresentations(
-            trip(
-                cabins = listOf(
-                    DriverTripCabinDto(
-                        cabinId = "cabin-1",
-                        unitNumber = "БТ-101",
-                        desiredContents = listOf(
-                            DriverTripDesiredEquipmentDto("bed", "Кровать", 4),
-                        ),
-                        actualContents = listOf(
-                            DriverTripActualEquipmentDto("bed", "Кровать", 4, "CABIN"),
-                        ),
-                        movementTaskCreated = true,
-                        movementTaskCompleted = true,
-                        contentReady = true,
-                    ),
-                    DriverTripCabinDto(
-                        cabinId = "cabin-2",
-                        unitNumber = "БТ-102",
-                        desiredContents = listOf(
-                            DriverTripDesiredEquipmentDto("table", "Стол", 1),
-                        ),
-                        actualContents = emptyList(),
-                        movementTaskCreated = true,
-                        movementTaskCompleted = false,
-                        contentReady = false,
-                    ),
-                ),
-            ),
-        )
-
-        assertThat(presentations.map { it.unitNumber }).containsExactly("БТ-101", "БТ-102")
-            .inOrder()
-        assertThat(presentations.first().desiredContents).containsExactly("Кровать: 4")
-        assertThat(presentations.first().actualContents).containsExactly("Кровать: 4 · CABIN")
-        assertThat(presentations.first().contentReady).isTrue()
-        assertThat(presentations.last().movementTaskCreated).isTrue()
-        assertThat(presentations.last().movementTaskCompleted).isFalse()
-        assertThat(presentations.last().contentReady).isFalse()
-    }
-
     @Test
     fun `photo button is visibly unavailable until its route index is loaded`() {
         val presentation = photoCapturePresentation(hasLoadedDetail = false)
@@ -342,19 +266,22 @@ class TaskDetailPresentationTest {
     @Test
     fun `take payload can only use the manager selected current group`() {
         assertThat(
-            selectedGroupForAction(WorkerTaskAction.TAKE, "group-current", "GENERAL"),
+            selectedGroupForAction(WorkerTaskAction.TAKE, "group-current"),
         ).isEqualTo("group-current")
 
         val failure = assertThrows(IllegalArgumentException::class.java) {
-            selectedGroupForAction(WorkerTaskAction.TAKE, null, "GENERAL")
+            selectedGroupForAction(WorkerTaskAction.TAKE, null)
         }
         assertThat(failure).hasMessageThat().contains("Руководитель")
+        assertThrows(IllegalArgumentException::class.java) {
+            selectedGroupForAction(WorkerTaskAction.JOIN, null)
+        }
     }
 
     @Test
-    fun `driver can take a logistics task without a current group`() {
+    fun `stale waiting logistics task never exposes a driver take action`() {
         val presentation = taskActionPresentation(
-            currentWorkerId = "driver",
+            currentWorkerId = "slinger",
             taskStatus = "WAITING",
             availabilityMode = "AVAILABLE",
             queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE,
@@ -363,14 +290,8 @@ class TaskDetailPresentationTest {
             hasCurrentGroup = false,
         )
 
-        assertThat(presentation.actions).containsExactly(WorkerTaskAction.TAKE)
-        assertThat(
-            selectedGroupForAction(
-                WorkerTaskAction.TAKE,
-                currentGroupId = null,
-                queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE,
-            ),
-        ).isNull()
+        assertThat(presentation.actions).isEmpty()
+        assertThat(presentation.actionsEnabled).isFalse()
     }
 
     @Test
@@ -380,9 +301,9 @@ class TaskDetailPresentationTest {
             taskStatus = "IN_PROGRESS",
             availabilityMode = "OPTIONAL_JOIN",
             queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE,
-            assignments = listOf(assignment("driver", "Водитель", "ACTIVE")),
+            assignments = listOf(assignment("primary", "Основной исполнитель", "ACTIVE")),
             locallyPending = false,
-            hasCurrentGroup = false,
+            hasCurrentGroup = true,
         )
 
         assertThat(presentation.actions).containsExactly(WorkerTaskAction.JOIN)
@@ -390,10 +311,9 @@ class TaskDetailPresentationTest {
         assertThat(
             selectedGroupForAction(
                 WorkerTaskAction.JOIN,
-                currentGroupId = null,
-                queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE,
+                currentGroupId = "slinger-group",
             ),
-        ).isNull()
+        ).isEqualTo("slinger-group")
     }
 
     @Test
@@ -403,13 +323,35 @@ class TaskDetailPresentationTest {
             taskStatus = "IN_PROGRESS",
             availabilityMode = "REQUIRED_JOIN",
             queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE,
-            assignments = listOf(assignment("driver", "Водитель", "ACTIVE")),
+            assignments = listOf(assignment("primary", "Основной исполнитель", "ACTIVE")),
             locallyPending = false,
             hasCurrentGroup = false,
         )
 
-        assertThat(presentation.actions).containsExactly(WorkerTaskAction.JOIN)
-        assertThat(presentation.message).contains("требуется присоединиться")
+        assertThat(presentation.actions).isEmpty()
+        assertThat(presentation.message).contains("текущую группу")
+    }
+
+    @Test
+    fun `primary driver assignment never exposes driver actions in WorkerApp`() {
+        val presentation = taskActionPresentation(
+            currentWorkerId = "dual-role-worker",
+            taskStatus = "IN_PROGRESS",
+            availabilityMode = "REQUIRED_JOIN",
+            queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE,
+            assignments = listOf(
+                assignment(
+                    workerId = "dual-role-worker",
+                    workerName = "Водитель",
+                    status = "ACTIVE",
+                    workerGroupId = null,
+                ),
+            ),
+            locallyPending = false,
+        )
+
+        assertThat(presentation.actions).isEmpty()
+        assertThat(presentation.actionsEnabled).isFalse()
     }
 
     @Test
@@ -523,7 +465,7 @@ class TaskDetailPresentationTest {
             currentWorkerId = "worker-current",
             taskStatus = "IN_PROGRESS",
             availabilityMode = "MANDATORY",
-            assignments = listOf(assignment("worker-other", "Водитель", "ACTIVE")),
+            assignments = listOf(assignment("worker-other", "Основной исполнитель", "ACTIVE")),
             locallyPending = false,
         )
 
@@ -531,7 +473,7 @@ class TaskDetailPresentationTest {
         assertThat(presentation.actionsEnabled).isTrue()
         assertThat(presentation.takeLabel).isEqualTo("Взять срочное")
         assertThat(presentation.message).isEqualTo("Срочное задание: присоединитесь к выполнению")
-        assertThat(presentation.performers).containsExactly("Водитель")
+        assertThat(presentation.performers).containsExactly("Основной исполнитель")
     }
 
     @Test
@@ -592,6 +534,7 @@ class TaskDetailPresentationTest {
         workerId: String,
         workerName: String,
         status: String,
+        workerGroupId: String? = "group",
     ) = WorkerAssignmentEntity(
         localId = "user:entry:$workerId",
         userId = "worker-current",
@@ -599,7 +542,7 @@ class TaskDetailPresentationTest {
         assignmentId = "assignment-$workerId",
         workerId = workerId,
         workerName = workerName,
-        workerGroupId = "group",
+        workerGroupId = workerGroupId,
         workerGroupName = "Разнорабочие",
         status = status,
         assignedAt = "2026-07-26T10:00:00Z",
@@ -608,20 +551,4 @@ class TaskDetailPresentationTest {
         finishedAt = null,
     )
 
-    private fun trip(cabins: List<DriverTripCabinDto>) = DriverTripDetailsDto(
-        taskNumber = "123",
-        tripNumber = 1,
-        operationType = "SHIPMENT",
-        clientName = "ООО Стройка",
-        address = "Санкт-Петербург",
-        latitude = 59.9,
-        longitude = 30.3,
-        primaryContactName = "Иван",
-        primaryContactPhone = "+79990000001",
-        additionalContacts = emptyList(),
-        comment = null,
-        desiredDeliveryWindows = emptyList(),
-        scheduledDate = "2026-08-12",
-        cabins = cabins,
-    )
 }

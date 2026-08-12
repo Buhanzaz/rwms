@@ -345,6 +345,10 @@ class GatewayRouteSecurityParityTest {
                 "taskBoardWorkerEventsRoute",
                 configuration.taskBoardWorkerEventsRoute(properties, upstream, sse)),
             candidate(
+                "task-board-service",
+                "taskBoardDriverEventsRoute",
+                configuration.taskBoardDriverEventsRoute(properties, upstream, sse)),
+            candidate(
                 "asset-service",
                 "assetEventsRoute",
                 configuration.assetEventsRoute(properties, upstream, sse)),
@@ -553,6 +557,9 @@ class GatewayRouteSecurityParityTest {
         Map.entry(
             new RouteKey(HttpMethod.GET, "/api/task-board/worker/v1/events"),
             "taskBoardWorkerEventsRoute"),
+        Map.entry(
+            new RouteKey(HttpMethod.GET, "/api/task-board/driver/v1/events"),
+            "taskBoardDriverEventsRoute"),
         Map.entry(new RouteKey(HttpMethod.GET, "/api/asset/v1/events"), "assetEventsRoute"),
         Map.entry(new RouteKey(HttpMethod.GET, "/api/media/v1/events"), "mediaEventsRoute"),
         Map.entry(

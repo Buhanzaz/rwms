@@ -18,7 +18,7 @@ consistency boundaries. Each domain therefore owns its state and transitions,
 while clients see one public edge:
 
 ```text
-panel / manager Android / worker Android
+panel / manager Android / worker Android / driver Android
                     |
                     v
           stateless API gateway
@@ -52,7 +52,8 @@ The split protects four important properties:
 | --- | --- | --- |
 | [`panel/`](panel/) | React/TypeScript web client | Main manager and operations panel |
 | [`app/`](app/) | Android manager client | Mobile manager workflows |
-| [`worker-app/`](worker-app/) | Android worker client | Worker authentication, assignments, task execution, and media capture |
+| [`worker-app/`](worker-app/) | Android worker client | Ordinary worker assignments plus active slinger collaboration, shared completion, and media capture |
+| [`driver-app/`](driver-app/) | Android driver client | Driver-only warehouse work and durable upload recovery |
 | [`worker-download-site/`](worker-download-site/) | Independent public OpenNext/Sites release surface | [Signed WorkerApp 0.1.14 APK download page](https://rwms-worker-download.lebaagatabx.chatgpt.site) |
 | [`api-gateway-service`](services/api-gateway-service/) | Stateless Spring edge | Public `/auth/**` and `/api/**` routing, JWT edge policy, bounded streaming, and transport failures |
 | [`auth-service`](services/auth-service/) | Stateful Spring service | OIDC/OAuth2, users, workers, roles, clients, and warehouse grants |
@@ -118,6 +119,7 @@ smallest product decision needed.
 | [`panel/`](panel/) | Primary web panel |
 | [`app/`](app/) | Manager Android app |
 | [`worker-app/`](worker-app/) | Worker Android app |
+| [`driver-app/`](driver-app/) | Driver Android app |
 | [`worker-download-site/`](worker-download-site/) | Public WorkerApp 0.1.14 APK download page |
 | [`docs/project-knowledge/`](docs/project-knowledge/) | Maintained architecture and domain navigation layer |
 | [`docs/reviews/`](docs/reviews/) | Evidence-backed audits and remediation plans |

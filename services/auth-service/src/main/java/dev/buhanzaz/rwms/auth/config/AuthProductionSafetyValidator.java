@@ -59,9 +59,13 @@ public class AuthProductionSafetyValidator implements InitializingBean {
                         new Endpoint("PANEL_POST_LOGOUT_REDIRECT_URI", properties.panelPostLogoutRedirectUri()),
                         new Endpoint("WORKER_ORIGIN", properties.workerOrigin()),
                         new Endpoint("WORKER_REDIRECT_URI", properties.workerRedirectUri()),
-                        new Endpoint("WORKER_POST_LOGOUT_REDIRECT_URI", properties.workerPostLogoutRedirectUri()))
+                        new Endpoint("WORKER_POST_LOGOUT_REDIRECT_URI", properties.workerPostLogoutRedirectUri()),
+                        new Endpoint("DRIVER_ORIGIN", properties.driverOrigin()),
+                        new Endpoint("DRIVER_REDIRECT_URI", properties.driverRedirectUri()),
+                        new Endpoint("DRIVER_POST_LOGOUT_REDIRECT_URI", properties.driverPostLogoutRedirectUri()))
                 .forEach(this::requireHttps);
         requireWorkerAppLinks();
+        requireDriverAppLinks();
     }
 
     private void requireKafkaCutover() {
@@ -169,6 +173,23 @@ public class AuthProductionSafetyValidator implements InitializingBean {
                 || redirect.getQuery() != null) {
             throw new IllegalStateException(
                     "WORKER_REDIRECT_URI must be a dedicated query-free Android App Link");
+        }
+    }
+
+    private void requireDriverAppLinks() {
+        URI origin = URI.create(properties.driverOrigin());
+        URI redirect = URI.create(properties.driverRedirectUri());
+        URI postLogout = URI.create(properties.driverPostLogoutRedirectUri());
+        if (!sameOrigin(origin, redirect) || !sameOrigin(origin, postLogout)) {
+            throw new IllegalStateException(
+                    "DRIVER_REDIRECT_URI and DRIVER_POST_LOGOUT_REDIRECT_URI must use DRIVER_ORIGIN");
+        }
+        if (redirect.getPath() == null
+                || redirect.getPath().isBlank()
+                || "/".equals(redirect.getPath())
+                || redirect.getQuery() != null) {
+            throw new IllegalStateException(
+                    "DRIVER_REDIRECT_URI must be a dedicated query-free Android callback");
         }
     }
 

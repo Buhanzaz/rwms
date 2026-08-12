@@ -61,7 +61,8 @@ type Principal struct {
 // WorkerPrincipal is deliberately separate from Principal. A worker token is
 // not a reduced user token: it has no warehouse-grant list and it must never
 // inherit USER routes or permissions by accident. The media API only admits
-// this principal for the task-board work-result scope.
+// this principal for one task-board work-result scope: worker.tasks or
+// driver.tasks, but never both.
 type WorkerPrincipal struct {
 	// SubjectID is the auth-service subject that owns a refresh-token/session
 	// lineage. WorkerID is the task-board worker identity used for every owner
@@ -141,7 +142,8 @@ func (validator *Validator) Validate(ctx context.Context, authorization string) 
 }
 
 // ValidateWorker verifies a bearer token and returns the deliberately limited
-// WORKER principal accepted only by task-board media routes.
+// WORKER principal accepted only by task-board media routes. Exactly one of
+// worker.tasks and driver.tasks must be present.
 func (validator *Validator) ValidateWorker(ctx context.Context, authorization string) (WorkerPrincipal, error) {
 	claims, err := validator.validateClaims(ctx, authorization)
 	if err != nil {
@@ -169,7 +171,7 @@ func (validator *Validator) ValidateWorker(ctx context.Context, authorization st
 	if err != nil {
 		return WorkerPrincipal{}, ErrForbidden
 	}
-	if _, allowed := scopes["worker.tasks"]; !allowed {
+	if !hasExactlyOneTaskScope(scopes) {
 		return WorkerPrincipal{}, ErrForbidden
 	}
 	return WorkerPrincipal{
@@ -178,16 +180,22 @@ func (validator *Validator) ValidateWorker(ctx context.Context, authorization st
 	}, nil
 }
 
-// RequireTaskAccess confirms the worker token's sole warehouse and
-// worker.tasks scope before a task-board media operation proceeds.
+// RequireTaskAccess confirms the worker token's sole warehouse and exactly one
+// of worker.tasks or driver.tasks before a task-board media operation proceeds.
 func (principal WorkerPrincipal) RequireTaskAccess(warehouseID uuid.UUID) error {
 	if warehouseID == uuid.Nil || warehouseID != principal.WarehouseID {
 		return ErrForbidden
 	}
-	if _, allowed := principal.Scopes["worker.tasks"]; !allowed {
+	if !hasExactlyOneTaskScope(principal.Scopes) {
 		return ErrForbidden
 	}
 	return nil
+}
+
+func hasExactlyOneTaskScope(scopes map[string]struct{}) bool {
+	_, worker := scopes["worker.tasks"]
+	_, driver := scopes["driver.tasks"]
+	return worker != driver
 }
 
 // ValidateService verifies a bearer token and returns a single-scope SERVICE

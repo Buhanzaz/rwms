@@ -14,6 +14,8 @@ import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.authorization.AuthorizationDecision;
+import org.springframework.security.authorization.AuthorizationManager;
 import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtIssuerValidator;
@@ -21,6 +23,7 @@ import org.springframework.security.oauth2.jwt.JwtTimestampValidator;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.intercept.RequestAuthorizationContext;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -78,7 +81,9 @@ public class GatewaySecurityConfiguration {
                     "/error")
                 .permitAll()
                 .requestMatchers("/api/task-board/worker/v1/**")
-                .hasAuthority("SCOPE_worker.tasks")
+                .access(exactTaskScope("SCOPE_worker.tasks", "SCOPE_driver.tasks"))
+                .requestMatchers("/api/task-board/driver/v1/**")
+                .access(exactTaskScope("SCOPE_driver.tasks", "SCOPE_worker.tasks"))
                 .requestMatchers("/api/**", "/actuator/prometheus")
                 .authenticated()
                 .anyRequest()
@@ -108,6 +113,26 @@ public class GatewaySecurityConfiguration {
     http.csrf(AbstractHttpConfigurer::disable);
     http.cors(Customizer.withDefaults());
     return http.build();
+  }
+
+  /**
+   * Requires one native task scope while rejecting the other application scope.
+   *
+   * <p>This keeps WorkerApp and DriverApp tokens non-interchangeable even when a misconfigured
+   * identity happens to contain both authorities.
+   */
+  private static AuthorizationManager<RequestAuthorizationContext> exactTaskScope(
+      String requiredAuthority, String forbiddenAuthority) {
+    return (authentication, context) -> {
+      var principal = authentication.get();
+      boolean required =
+          principal.getAuthorities().stream()
+              .anyMatch(authority -> requiredAuthority.equals(authority.getAuthority()));
+      boolean forbidden =
+          principal.getAuthorities().stream()
+              .anyMatch(authority -> forbiddenAuthority.equals(authority.getAuthority()));
+      return new AuthorizationDecision(principal.isAuthenticated() && required && !forbidden);
+    };
   }
 
   /**

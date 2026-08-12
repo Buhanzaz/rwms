@@ -233,6 +233,44 @@ class GatewayRouteIntegrationTest {
   }
 
   @Test
+  void driverTaskBoardSurfaceRequiresDedicatedScopeAtTheGateway() throws Exception {
+    TASK_BOARD_REQUESTS.clear();
+
+    mvc.perform(
+            publicGet("/api/task-board/driver/v1/feed")
+                .with(
+                    jwt()
+                        .jwt(token -> token.audience(List.of("rwms-services")))
+                        .authorities(new SimpleGrantedAuthority("SCOPE_worker.tasks"))))
+        .andExpect(status().isForbidden());
+    assertThat(TASK_BOARD_REQUESTS).isEmpty();
+
+    mvc.perform(
+            publicGet("/api/task-board/driver/v1/feed")
+                .with(
+                    jwt()
+                        .jwt(token -> token.audience(List.of("rwms-services")))
+                        .authorities(
+                            new SimpleGrantedAuthority("SCOPE_worker.tasks"),
+                            new SimpleGrantedAuthority("SCOPE_driver.tasks"))))
+        .andExpect(status().isForbidden());
+    assertThat(TASK_BOARD_REQUESTS).isEmpty();
+
+    mvc.perform(
+            publicGet("/api/task-board/driver/v1/feed")
+                .with(
+                    jwt()
+                        .jwt(token -> token.audience(List.of("rwms-services")))
+                        .authorities(new SimpleGrantedAuthority("SCOPE_driver.tasks"))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.path").value("/api/driver/v1/feed"));
+    assertThat(TASK_BOARD_REQUESTS)
+        .singleElement()
+        .extracting(CapturedRequest::path)
+        .isEqualTo("/api/driver/v1/feed");
+  }
+
+  @Test
   void proxiesPublicAssetPathsWithoutCookiesAndNeverRewritesTheirVersionedPath() throws Exception {
     ASSET_REQUESTS.clear();
 

@@ -44,6 +44,9 @@ public class SecurityConfiguration {
           authorize
               .requestMatchers("/api/worker/v1/**")
               .hasAuthority("SCOPE_worker.tasks");
+          authorize
+              .requestMatchers("/api/driver/v1/**")
+              .hasAuthority("SCOPE_driver.tasks");
           if (bypassEnabled) {
             authorize.anyRequest().permitAll();
           } else {

@@ -54,7 +54,7 @@ Gateway решает действительно общие задачи публ
 
 ## Как проходит запрос
 
-1. Panel, manager app, worker app или внешний публичный клиент обращается к
+1. Panel, manager app, WorkerApp, DriverApp или внешний публичный клиент обращается к
    настроенному публичному хосту по `/auth/**` или `/api/**`.
 2. Gateway валидирует host и удаляет forwarding-метаданные, пришедшие от
    клиента. Для OIDC relay он восстанавливает публичные значения только из
@@ -99,7 +99,7 @@ API gateway: проверка host/headers, CORS, JWT, route policy, observabili
 | Публичная точка входа | Приватный target / обработка пути | Важное ограничение |
 | --- | --- | --- |
 | `/auth/**` | `auth-service`; `/auth` удаляется перед пересылкой | `/auth/callback` принадлежит panel; `/auth/api/internal/**` никогда не пересылается. |
-| `/api/task-board/**` | `task-board-service`; внешний префикс меняется на downstream `/api/**` | Internal-пути запрещены. Worker event stream имеет отдельный SSE-маршрут и scope. |
+| `/api/task-board/**` | `task-board-service`; внешний префикс меняется на downstream `/api/**` | Internal-пути запрещены. Потоки событий WorkerApp и DriverApp имеют отдельные SSE-маршруты и точные scopes. |
 | `/api/warehouse/**` | настроенный target `warehouse-service`, путь без изменений | Internal-пути запрещены; текущий маршрут зарезервирован для warehouse API W1. |
 | `/api/asset/**` | `asset-service`, путь без изменений | Internal-пути запрещены. HTML-import commit обслуживает отдельный handler. |
 | `/api/maintenance/**` | `maintenance-service`, путь без изменений | Internal-пути запрещены. |
@@ -112,8 +112,9 @@ API gateway: проверка host/headers, CORS, JWT, route policy, observabili
 
 Специальные маршруты намеренно имеют приоритет над общими маршрутами сервиса:
 
-- `GET /api/task-board/worker/v1/events`, `GET /api/asset/v1/events` и
-  `GET /api/media/v1/events` проходят через ограниченный асинхронный SSE proxy.
+- `GET /api/task-board/worker/v1/events`, `GET /api/task-board/driver/v1/events`,
+  `GET /api/asset/v1/events` и `GET /api/media/v1/events` проходят через
+  ограниченный асинхронный SSE proxy.
 - `POST /api/asset/v1/html-imports/*/commit` и
   `PUT /api/media/v1/upload-sessions/*/content` используют специальные
   ограниченные прокси для поддерживаемого долгого трафика.
@@ -138,8 +139,9 @@ Endpoint добавляется в эту таблицу только после
 - По умолчанию `/api/**` требует аутентификацию. Приватные маршруты явно
   запрещены; публичные OIDC, health, Android App Links и документированный
   public client-presentation — узкие исключения.
-- Worker namespace task-board требует `SCOPE_worker.tasks` на границе.
-  Доменные сервисы всё равно принимают собственные решения авторизации.
+- Namespace WorkerApp требует ровно `SCOPE_worker.tasks`, а namespace DriverApp —
+  ровно `SCOPE_driver.tasks`; токен одного native-клиента не проходит в поверхность
+  другого. Доменные сервисы всё равно принимают собственные решения авторизации.
 - CORS использует явный allow-list origin, явный набор методов/заголовков и
   credentials там, где они нужны. Wildcard origin отклоняется startup-проверкой.
 - Production-проверка применяет одну policy ко всем downstream: каждый target

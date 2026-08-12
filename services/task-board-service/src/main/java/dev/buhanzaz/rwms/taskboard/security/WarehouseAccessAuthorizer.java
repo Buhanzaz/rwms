@@ -43,6 +43,22 @@ public class WarehouseAccessAuthorizer {
       throw new AccessDeniedException("Required task scope is missing");
   }
 
+  /** Requires a WORKER principal carrying the exact native-client task surface scope. */
+  public void requireMobileTaskScope(Jwt jwt, String requiredScope) {
+    if (developmentAuthBypass) return;
+    String otherScope =
+        switch (requiredScope) {
+          case "worker.tasks" -> "driver.tasks";
+          case "driver.tasks" -> "worker.tasks";
+          default -> throw new AccessDeniedException("Unsupported mobile task scope");
+        };
+    if (!"WORKER".equals(jwt.getClaimAsString("principal_type"))
+        || !hasScope(jwt, requiredScope)
+        || hasScope(jwt, otherScope)) {
+      throw new AccessDeniedException("Required mobile task scope is missing");
+    }
+  }
+
   /**
    * Requires the requested warehouse access level.
    *

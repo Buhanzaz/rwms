@@ -1,9 +1,9 @@
-package dev.buhanzaz.rwms.worker.feature.taskdetail
+package dev.buhanzaz.rwms.driver.feature.taskdetail
 
 import com.google.common.truth.Truth.assertThat
-import dev.buhanzaz.rwms.worker.core.network.DriverTripDetailsDto
-import dev.buhanzaz.rwms.worker.core.network.TaskSourceReferenceDto
-import dev.buhanzaz.rwms.worker.core.network.WorkerTaskDetailDto
+import dev.buhanzaz.rwms.driver.core.network.DriverTripDetailsDto
+import dev.buhanzaz.rwms.driver.core.network.TaskSourceReferenceDto
+import dev.buhanzaz.rwms.driver.core.network.DriverTaskDetailDto
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
@@ -13,7 +13,7 @@ class TaskDetailRefreshTest {
     fun `logistics source persists task board detail then reads exact source task`() = runTest {
         val detail = detailWithSource("LOGISTICS_DRIVER_TASK", "driver-task-1")
         val trip = tripDetails()
-        var persisted: WorkerTaskDetailDto? = null
+        var persisted: DriverTaskDetailDto? = null
         var requestedSourceId: String? = null
 
         val outcome = loadTaskDetail(
@@ -58,7 +58,7 @@ class TaskDetailRefreshTest {
     @Test
     fun `logistics failure preserves persisted ordinary detail and reports only trip error`() = runTest {
         val detail = detailWithSource("LOGISTICS_DRIVER_TASK", "driver-task-1")
-        var persisted: WorkerTaskDetailDto? = null
+        var persisted: DriverTaskDetailDto? = null
 
         val outcome = loadTaskDetail(
             fetchDetail = { detail },
@@ -93,8 +93,8 @@ class TaskDetailRefreshTest {
         assertThat(outcome.tripError).isNull()
     }
 
-    private fun detailWithSource(type: String, sourceId: String): WorkerTaskDetailDto =
-        WorkerTaskDetailDto(
+    private fun detailWithSource(type: String, sourceId: String): DriverTaskDetailDto =
+        DriverTaskDetailDto(
             entryId = "entry-1",
             version = 1,
             taskId = "task-1",

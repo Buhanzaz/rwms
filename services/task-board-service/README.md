@@ -20,7 +20,7 @@ keeping source-domain facts and decisions with their original owners.
 | Queue standard | Global definitions, warehouse bindings, ordering, capabilities, and usage references | Maintenance/logistics register only contract-defined references |
 | Workforce | Worker classes, workers, groups, current membership, and credentials workflow | Auth-service owns credential material and token issuance |
 | Operational work | Tasks, route entries, assignment, pinning, movement, pause/resume/complete, and history | Source domain owns why the work exists and its aggregate state |
-| Worker execution | Scoped feed/context, offline action lease, evidence reservation, SSE/FCM invalidation | Worker app refreshes authoritative REST state and uploads media through media-service |
+| Native execution | Separate driver/worker feeds, offline action leases, evidence reservation, SSE and transactional FCM invalidation | DriverApp and WorkerApp refresh authoritative REST state and upload media through media-service |
 | KPI | Warehouse palette/schedule revisions and emitted daily evidence | Analytics owns the KPI read projection |
 | Warehouse lifecycle | Local operation marks, admission fence, draining blockers, exact-version readiness | Warehouse-service owns lifecycle state and admission decisions |
 
@@ -45,8 +45,9 @@ task / route / queue-entry transaction
           +--> worker invalidation
           +--> Kafka fact for projections/owners
 
-worker app --> feed/detail --> take/action/evidence reservation
-          --> media upload --> media fact --> evidence state --> completion
+driver app --> primary feed/detail --> take/action/evidence reservation
+worker app --> ordinary work + active slinger feed --> join/action/evidence reservation
+           --> media upload --> media fact --> shared completion
 ```
 
 A source-owned task uses a stable external identity so a retry finds the same
@@ -61,10 +62,18 @@ worker must be active in the same warehouse and have the primary qualification o
 Task-board ignores a caller-supplied display name and stores its authoritative worker snapshot.
 Unassigned tasks remain dispatcher work. An assigned task is visible only to that driver. A waiting
 identity-free shared task is visible to every qualified warehouse driver until one takes it, after
-which only the actual assignee retains access. The worker feed always emits nullable
-`driverAudience`: null classifies ordinary work, while a non-null value classifies logistics driver
-work. Only the private source replan boundary may replace audience under the shared task/entry
-version fence; public board movement does not.
+which only the actual assignee retains access. DriverApp receives only primary bindings through
+`/api/driver/v1/**`; WorkerApp receives ordinary work and only active secondary logistics work
+through `/api/worker/v1/**`. A driver take persists a `TASK_JOIN_AVAILABLE` push for eligible
+slingers. The waiting logistics task is announced only on the DriverApp SSE surface; WorkerApp
+receives neither a pre-take `NEW_TASK` nor a cross-surface entry ID. A slinger joins from the
+current group; if that worker was executing another group task, task-board pauses the whole
+previous entry and resumes it after the shared task closes. Every
+logistics-driver secondary binding is required and interrupting, and completion by either assigned
+participant requires at least one READY result photo. A group-less primary assignment never
+satisfies a secondary binding, even when that driver also has the slinger qualification. Only the
+private source replan boundary may replace audience under the shared task/entry version fence;
+public board movement does not.
 
 ## Internal application structure
 
@@ -83,6 +92,8 @@ components own the decisions:
 | `TaskBoardQueuePositionCoordinator` | Advisory locks, stream fences and persisted queue/pin ordering only |
 | `TaskBoardRoutePayloadCodec` | The single canonical route JSON and fingerprint codec |
 | `DriverTaskAudienceService` | Logistics-driver audience shape, qualification, visibility and execution authorization |
+| `MobileTaskSurfacePolicy` | Non-overlapping DriverApp primary and WorkerApp secondary capabilities |
+| `WorkerPushOutbox` / `WorkerPushDispatcher` | Transactional slinger notification, leased FCM delivery and bounded recovery |
 | `WorkforceService` | Stable worker/group API facade over three lifecycle owners |
 | `WorkforceProfileService` | Worker profile and qualification mutation with the credential lock span |
 | `WorkforceCredentialLifecycleService` | Durable auth credential intents, completion/failure fencing, reconciliation and deletion recovery |
@@ -115,6 +126,7 @@ The public gateway maps `/api/task-board/**` to this service's downstream
 | `/api/warehouses/{warehouseId}/task-board/**` | Warehouse-authorized user | Board reads and operational commands |
 | `/api/warehouses/{warehouseId}/task-board/kpi-settings/**` | Warehouse manager/admin | Palette and effective schedule revisions |
 | `/api/worker/v1/**` | Worker credential and `worker.tasks` scope | Context, feed, detail, actions, evidence reservations, devices, and events |
+| `/api/driver/v1/**` | Worker credential and `driver.tasks` scope | Driver-only context, primary feed, actions, evidence reservations, devices, and events |
 | `/api/internal/task-board/v1/maintenance/**` | Exact maintenance-service identity | Routing and catalog preflight |
 | `/api/internal/task-board/v1/tasks/**` | Exact source service identity | Idempotent task synchronization and evidence reads |
 | `/api/internal/task-board/v1/logistics/**` | Exact logistics-service identity | Driver/equipment task integration |
@@ -124,12 +136,19 @@ Private paths are service-to-service boundaries and are never exposed as client
 shortcuts. Their exact `principal_type`, `client_id`, scope, source ownership,
 and warehouse checks are part of the contract.
 
-## Worker stream and offline execution
+## Native streams and offline execution
 
 `GET /api/worker/v1/events` is an SSE invalidation stream. The current producer
 emits a `FEED_CHANGED` signal when a client subscribes and for subsequent
 changes; the worker app also performs periodic authoritative REST refresh.
 Payloads are not a complete task projection.
+
+`GET /api/driver/v1/events` has the same invalidation-only semantics. Device
+registrations are surface-bound and accept current Firebase Installation IDs
+(`targetKind=FID`) plus legacy registration tokens. A driver's successful TAKE
+stores the slinger notification in `worker_push_outbox` in the same transaction;
+the leased dispatcher retries transient FCM failures, revokes invalid targets,
+and never sends slinger calls to DriverApp installations.
 
 `WorkerTaskDetail.source` always appears and is null for ordinary work. For source-owned work it
 contains only the existing immutable source type and ID. A worker client can use a
@@ -177,17 +196,23 @@ Migration
 clears obsolete worker IDs/names from `WAREHOUSE_DRIVERS` tasks and tightens the database constraint
 so shared and unassigned audiences remain identity-free.
 
+[`V30__driver_worker_surfaces_and_push_outbox.sql`](src/main/resources/db/migration/V30__driver_worker_surfaces_and_push_outbox.sql)
+separates WorkerApp/DriverApp installations, adds the leased push outbox, normalizes every configured
+logistics secondary binding to required/interrupting/notified, and raises its result-photo minimum
+to one. It does not invent a missing slinger class; each active logistics-driver queue must have an
+explicit primary driver binding and at least one secondary slinger binding.
+
 ## Security and isolation
 
-- All API chains validate JWT issuer/audience; worker routes require the narrow
-  worker scope.
+- All API chains validate JWT issuer/audience; worker and driver routes require
+  the non-interchangeable `worker.tasks` and `driver.tasks` scopes.
 - Manager commands enforce user role, warehouse access, and command-specific
   write permission in `WarehouseAccessAuthorizer` and services.
 - Internal task, queue-reference, maintenance, and logistics operations require
   exact service identity/scope and validate source ownership.
 - Auth-service remains the credential owner. Task-board persists only the
   operational credential workflow state needed for reconciliation.
-- CORS uses explicit panel and worker origins. Browser/mobile clients use the
+- CORS uses explicit panel, worker, and driver origins. Browser/mobile clients use the
   gateway; services use private routes and client credentials.
 - The worker-credential, warehouse-lifecycle read/confirm, and warehouse-timezone
   OAuth registrations all use `TASK_BOARD_CLIENT_SECRET`. The `dev` profile
@@ -206,6 +231,9 @@ so shared and unassigned audiences remain identity-free.
   and have explicit reconciliation commands rather than local rollback.
 - Worker media inbox rows remain pending until their referenced evidence exists;
   a reconciler retries them idempotently.
+- Slinger push is at least once: an expired lease can be reclaimed, transient
+  failures use bounded delay, invalid installations are revoked, and exhausted
+  rows remain `DEAD` for operations rather than pretending delivery.
 - Warehouse readiness cannot succeed while task/queue/credential/evidence or
   operation-mark work is unresolved.
 - Outbox and sanitized DLT recovery preserve the immutable envelope and audit
@@ -252,7 +280,8 @@ at the gateway.
 Provide database credentials, HTTPS auth issuer and token URI, the
 task-board service secret, worker offline-lease secret, private auth worker-
 credential URL, private warehouse lifecycle URL, explicit CORS origins, Kafka
-brokers, and `TASK_BOARD_KAFKA_ENABLED=true`.
+brokers, `TASK_BOARD_KAFKA_ENABLED=true`, `TASK_BOARD_FCM_ENABLED=true`,
+`TASK_BOARD_FCM_PROJECT_ID`, and Google Application Default Credentials.
 
 `TaskBoardProductionSafetyValidator` rejects missing/insecure endpoints,
 disabled Kafka, topic drift, unsafe binder retry/DLT settings, topic
@@ -269,8 +298,8 @@ bash ./gradlew :services:task-board-service:javadoc
 bash ./gradlew :platform:architecture-tests:test
 ```
 
-Changes to worker actions or streams require worker-app contract/unit tests and
-an exact APK build. Changes to source-task integration, Kafka families, or
+Changes to native actions or streams require WorkerApp and DriverApp
+contract/unit tests and exact APK builds. Changes to source-task integration, Kafka families, or
 warehouse lifecycle require focused producer/consumer, idempotency, version-gap,
 dependency-outage, and recovery coverage.
 
@@ -294,12 +323,15 @@ dependency-outage, and recovery coverage.
 - [Canonical OpenAPI](../../contracts/openapi/task-board-service.yaml)
 - [Task-board controller](src/main/java/dev/buhanzaz/rwms/taskboard/api/TaskBoardController.java)
 - [Worker API](src/main/java/dev/buhanzaz/rwms/taskboard/api/WorkerTaskBoardController.java)
+- [Driver API](src/main/java/dev/buhanzaz/rwms/taskboard/api/DriverTaskBoardController.java)
 - [Task-board application service](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardService.java)
 - [Task-board read projection](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardReadProjectionService.java)
 - [External task registration](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardExternalRegistrationService.java)
 - [External task mutation](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardExternalMutationService.java)
 - [Queue position coordinator](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardQueuePositionCoordinator.java)
 - [Worker application service](src/main/java/dev/buhanzaz/rwms/taskboard/service/WorkerTaskBoardService.java)
+- [Mobile surface policy](src/main/java/dev/buhanzaz/rwms/taskboard/service/MobileTaskSurfacePolicy.java)
+- [Push outbox](src/main/java/dev/buhanzaz/rwms/taskboard/push/WorkerPushOutbox.java)
 - [Workforce service](src/main/java/dev/buhanzaz/rwms/taskboard/service/WorkforceService.java)
 - [Production safety validator](src/main/java/dev/buhanzaz/rwms/taskboard/config/TaskBoardProductionSafetyValidator.java)
 - [Event store](src/main/java/dev/buhanzaz/rwms/taskboard/eventing/TaskBoardEventStore.java)

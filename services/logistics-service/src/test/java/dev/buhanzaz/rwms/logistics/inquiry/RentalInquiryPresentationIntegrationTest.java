@@ -1924,7 +1924,7 @@ class RentalInquiryPresentationIntegrationTest {
   }
 
   @Test
-  void publishedSelectionCreatesOneDraftForOriginalManagerAndArchivesInquiry() {
+  void publishedSelectionCreatesOneDraftWithChronologicallyOrderedClientDaysAndArchivesInquiry() {
     RentalInquiryResponse inquiry = createInquiry();
     ClientPresentationResponse published = publish(inquiry.id(), List.of(CABIN_1, CABIN_2));
     String token = token(published);
@@ -1951,9 +1951,16 @@ class RentalInquiryPresentationIntegrationTest {
                       });
             });
 
+    List<LocalDate> selectedDays =
+        List.of(
+            LocalDate.of(2026, 8, 19),
+            LocalDate.of(2026, 8, 11),
+            LocalDate.of(2026, 8, 15),
+            LocalDate.of(2026, 8, 13),
+            LocalDate.of(2026, 8, 17));
     UUID bookingKey = UUID.randomUUID();
     PresentationBookingResponse booking =
-        bookings.confirm(token, bookingKey, confirmation(CABIN_1));
+        bookings.confirm(token, bookingKey, confirmation(CABIN_1, selectedDays, 2L));
 
     assertThat(booking.state()).isEqualTo("COMPLETED");
     assertThat(booking.orderId()).isNotNull();
@@ -1970,12 +1977,17 @@ class RentalInquiryPresentationIntegrationTest {
         .containsEntry("client_id", inquiry.client().id())
         .containsEntry("warehouse_id", WAREHOUSE);
     assertThat(rentalOrders.get(actor, booking.orderId()).desiredDeliveryWindows())
-        .singleElement()
-        .satisfies(
-            window -> {
-              assertThat(window.startDate()).isEqualTo(LocalDate.of(2026, 8, 11));
-              assertThat(window.endDate()).isEqualTo(LocalDate.of(2026, 8, 11));
-            });
+        .containsExactly(
+            new dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.DesiredDeliveryWindowResponse(
+                LocalDate.of(2026, 8, 11), LocalDate.of(2026, 8, 11)),
+            new dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.DesiredDeliveryWindowResponse(
+                LocalDate.of(2026, 8, 13), LocalDate.of(2026, 8, 13)),
+            new dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.DesiredDeliveryWindowResponse(
+                LocalDate.of(2026, 8, 15), LocalDate.of(2026, 8, 15)),
+            new dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.DesiredDeliveryWindowResponse(
+                LocalDate.of(2026, 8, 17), LocalDate.of(2026, 8, 17)),
+            new dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.DesiredDeliveryWindowResponse(
+                LocalDate.of(2026, 8, 19), LocalDate.of(2026, 8, 19)));
     assertThat(
             jdbc.queryForObject(
                 "select rental_months from rental_order_unit_term where order_id=? and rental_item_id=?",
@@ -2004,7 +2016,19 @@ class RentalInquiryPresentationIntegrationTest {
                 booking.orderId()))
         .isOne();
 
-    PresentationBookingResponse replay = bookings.confirm(token, bookingKey, confirmation(CABIN_1));
+    PresentationBookingResponse replay =
+        bookings.confirm(
+            token,
+            bookingKey,
+            confirmation(
+                CABIN_1,
+                List.of(
+                    LocalDate.of(2026, 8, 15),
+                    LocalDate.of(2026, 8, 19),
+                    LocalDate.of(2026, 8, 13),
+                    LocalDate.of(2026, 8, 17),
+                    LocalDate.of(2026, 8, 11)),
+                2L));
     assertThat(replay.bookingId()).isEqualTo(booking.bookingId());
     assertThat(replay.orderId()).isEqualTo(booking.orderId());
     verify(dependencies, times(1))
@@ -2042,7 +2066,7 @@ class RentalInquiryPresentationIntegrationTest {
   }
 
   @Test
-  void normalPresentationRequiresOneClientDateAddressAndPositiveRentalMonths() {
+  void normalPresentationRequiresOneToFiveDistinctClientDatesAddressAndPositiveRentalMonths() {
     RentalInquiryResponse inquiry = createInquiry();
     ClientPresentationResponse published = publish(inquiry.id(), List.of(CABIN_1));
     String token = token(published);
@@ -2070,6 +2094,48 @@ class RentalInquiryPresentationIntegrationTest {
                             new DesiredDeliveryWindowInput(
                                 LocalDate.of(2026, 8, 11),
                                 LocalDate.of(2026, 8, 12))),
+                        2L)))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            failure ->
+                assertThat(failure.code()).isEqualTo("CLIENT_PRESENTATION_DELIVERY_WINDOW_INVALID"));
+    assertThatThrownBy(
+            () ->
+                bookings.confirm(
+                    token,
+                    UUID.randomUUID(),
+                    new ConfirmClientPresentationRequest(
+                        selections,
+                        List.of(
+                            new DesiredDeliveryWindowInput(
+                                LocalDate.of(2026, 8, 11), LocalDate.of(2026, 8, 11)),
+                            new DesiredDeliveryWindowInput(
+                                LocalDate.of(2026, 8, 11), LocalDate.of(2026, 8, 11))),
+                        2L)))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            failure ->
+                assertThat(failure.code()).isEqualTo("CLIENT_PRESENTATION_DELIVERY_WINDOW_INVALID"));
+    assertThatThrownBy(
+            () ->
+                bookings.confirm(
+                    token,
+                    UUID.randomUUID(),
+                    new ConfirmClientPresentationRequest(
+                        selections,
+                        List.of(
+                            new DesiredDeliveryWindowInput(
+                                LocalDate.of(2026, 8, 11), LocalDate.of(2026, 8, 11)),
+                            new DesiredDeliveryWindowInput(
+                                LocalDate.of(2026, 8, 12), LocalDate.of(2026, 8, 12)),
+                            new DesiredDeliveryWindowInput(
+                                LocalDate.of(2026, 8, 13), LocalDate.of(2026, 8, 13)),
+                            new DesiredDeliveryWindowInput(
+                                LocalDate.of(2026, 8, 14), LocalDate.of(2026, 8, 14)),
+                            new DesiredDeliveryWindowInput(
+                                LocalDate.of(2026, 8, 15), LocalDate.of(2026, 8, 15)),
+                            new DesiredDeliveryWindowInput(
+                                LocalDate.of(2026, 8, 16), LocalDate.of(2026, 8, 16))),
                         2L)))
         .isInstanceOfSatisfying(
             OrderProblemException.class,
@@ -2911,6 +2977,18 @@ class RentalInquiryPresentationIntegrationTest {
     return confirmation(
         cabinId,
         date,
+        rentalMonths,
+        "Санкт-Петербург, Тестовая улица, 1",
+        null,
+        null,
+        null);
+  }
+
+  private ConfirmClientPresentationRequest confirmation(
+      UUID cabinId, List<LocalDate> dates, long rentalMonths) {
+    return new ConfirmClientPresentationRequest(
+        List.of(new PresentationCabinSelectionInput(cabinId, List.of())),
+        dates.stream().map(date -> new DesiredDeliveryWindowInput(date, date)).toList(),
         rentalMonths,
         "Санкт-Петербург, Тестовая улица, 1",
         null,

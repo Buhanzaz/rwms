@@ -114,16 +114,16 @@ internal fun buildTaskQueueSections(
 
 /**
  * Projects service-issued queue/group bindings into independently collapsible
- * worker-role columns. Group-bound queues stay under their group role. A
- * driver queue becomes two explicit tables: assigned work is personal
- * logistics, while warehouse-shared work is movement. Every other
+ * worker-role columns. Group-bound queues stay under their group role. Every
  * qualification-only category becomes its own personal column because the
  * local projection exposes the authorized category name, but deliberately
  * does not guess a missing qualification name or queue-to-class binding.
  *
- * A live assignment is more specific than a category audience: once present,
- * the card is visible only in the assigned group (or in qualification-only
- * work when the assignment deliberately has no group).
+ * A live ordinary assignment is more specific than a category audience. For
+ * shared logistics, the primary performer's group-less assignment is not the
+ * slinger's placement, so the server-authorized secondary category remains in
+ * the slinger's group/qualification panel. Waiting logistics cache rows are
+ * hidden locally and can never restore the removed driver TAKE surface.
  */
 internal fun buildWorkBoardColumns(
     groups: List<WorkerGroupEntity>,
@@ -135,45 +135,54 @@ internal fun buildWorkBoardColumns(
         .filter { it.status == "ACTIVE" || it.status == "PAUSED" }
         .groupBy { it.entryId }
     val categoriesByQueue = categories.associateBy { it.queueId }
+    val activeWorkerTasks = tasks.filter { task ->
+        categoriesByQueue[task.categoryId]?.queuePurpose != LOGISTICS_DRIVER_QUEUE_PURPOSE ||
+            task.status == "IN_PROGRESS" || task.status == "PAUSED"
+    }
 
     fun visibleInGroup(task: WorkerTaskEntity, groupId: String): Boolean {
+        val category = categoriesByQueue[task.categoryId]
+        if (category?.queuePurpose == LOGISTICS_DRIVER_QUEUE_PURPOSE) {
+            // Task-board has already limited this active driver task to a
+            // matching secondary worker. Until JOIN creates the slinger's own
+            // assignment, the driver's group-less assignment must not hide it.
+            return groupId in category.groupIds()
+        }
         val liveAssignments = liveAssignmentsByEntry[task.entryId].orEmpty()
         if (liveAssignments.isNotEmpty()) {
             return liveAssignments.any { it.workerGroupId == groupId }
         }
-        return groupId in categoriesByQueue[task.categoryId]?.groupIds().orEmpty()
+        return groupId in category?.groupIds().orEmpty()
     }
 
     fun visibleAsPersonal(task: WorkerTaskEntity): Boolean {
+        val category = categoriesByQueue[task.categoryId]
+        if (category?.queuePurpose == LOGISTICS_DRIVER_QUEUE_PURPOSE) {
+            return category.groupIds().isEmpty()
+        }
         val liveAssignments = liveAssignmentsByEntry[task.entryId].orEmpty()
         if (liveAssignments.isNotEmpty()) {
             return liveAssignments.any { it.workerGroupId == null }
         }
-        return categoriesByQueue[task.categoryId]?.groupIds().orEmpty().isEmpty()
+        return category?.groupIds().orEmpty().isEmpty()
     }
 
-    val driverCategories = categories.filter {
-        it.queuePurpose == LOGISTICS_DRIVER_QUEUE_PURPOSE
-    }
-    val driverQueueIds = driverCategories.mapTo(mutableSetOf()) { it.queueId }
-    val driverTasks = tasks.filter { it.categoryId in driverQueueIds }
     val qualificationCategories = categories.filter {
-        it.groupIds().isEmpty() && it.queuePurpose != LOGISTICS_DRIVER_QUEUE_PURPOSE
+        it.groupIds().isEmpty()
     }
     val qualificationQueueIds = qualificationCategories.mapTo(mutableSetOf()) { it.queueId }
-    val qualificationTasks = tasks.filter(::visibleAsPersonal)
+    val qualificationTasks = activeWorkerTasks.filter(::visibleAsPersonal)
         .filter { it.categoryId in qualificationQueueIds }
     val groupColumns = groups
         .distinctBy { it.groupId }
         .sortedWith(compareBy(WorkerGroupEntity::name, WorkerGroupEntity::groupId))
         .map { group ->
             val authorizedCategories = categories.filter { category ->
-                category.queuePurpose != LOGISTICS_DRIVER_QUEUE_PURPOSE &&
-                    (group.groupId in category.groupIds() ||
-                        tasks.any { task ->
-                            task.categoryId == category.queueId &&
-                                visibleInGroup(task, group.groupId)
-                        })
+                group.groupId in category.groupIds() ||
+                    activeWorkerTasks.any { task ->
+                        task.categoryId == category.queueId &&
+                            visibleInGroup(task, group.groupId)
+                    }
             }
             WorkBoardColumn(
                 id = group.groupId,
@@ -181,41 +190,11 @@ internal fun buildWorkBoardColumns(
                 personal = false,
                 sections = buildTaskQueueSections(
                     categories = authorizedCategories,
-                    tasks = tasks.filter { visibleInGroup(it, group.groupId) },
+                    tasks = activeWorkerTasks.filter { visibleInGroup(it, group.groupId) },
                 ),
             )
         }
 
-    val driverColumns = if (driverCategories.isEmpty()) {
-        emptyList()
-    } else {
-        listOf(
-            WorkBoardColumn(
-                id = DRIVER_LOGISTICS_COLUMN_ID,
-                name = "Логистика",
-                personal = true,
-                sections = buildTaskQueueSections(
-                    categories = driverCategories,
-                    tasks = driverTasks.filter {
-                        it.driverAudienceMode == ASSIGNED_DRIVER_AUDIENCE
-                    },
-                ),
-                description = "Только назначенные вам задания",
-            ),
-            WorkBoardColumn(
-                id = DRIVER_MOVEMENTS_COLUMN_ID,
-                name = "Перемещения",
-                personal = true,
-                sections = buildTaskQueueSections(
-                    categories = driverCategories,
-                    tasks = driverTasks.filter {
-                        it.driverAudienceMode == WAREHOUSE_DRIVERS_AUDIENCE
-                    },
-                ),
-                description = "Общие задания водителей склада",
-            ),
-        )
-    }
     val qualificationColumns = buildTaskQueueSections(
         qualificationCategories,
         qualificationTasks,
@@ -228,7 +207,7 @@ internal fun buildWorkBoardColumns(
                 sections = listOf(section),
             )
         }
-    return driverColumns + groupColumns + qualificationColumns
+    return groupColumns + qualificationColumns
 }
 
 internal fun WorkerCategoryEntity.groupIds(): Set<String> =
@@ -258,7 +237,3 @@ private fun unsignedQueueDurationLabel(seconds: Long): String =
 private const val GROUP_IDS_SEPARATOR = '\u001F'
 private const val QUALIFICATION_COLUMN_PREFIX = "qualification-"
 private const val LOGISTICS_DRIVER_QUEUE_PURPOSE = "LOGISTICS_DRIVER"
-private const val ASSIGNED_DRIVER_AUDIENCE = "ASSIGNED_DRIVER"
-private const val WAREHOUSE_DRIVERS_AUDIENCE = "WAREHOUSE_DRIVERS"
-private const val DRIVER_LOGISTICS_COLUMN_ID = "driver-logistics"
-private const val DRIVER_MOVEMENTS_COLUMN_ID = "driver-movements"

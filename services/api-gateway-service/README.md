@@ -56,7 +56,7 @@ the network edge.
 
 ## How a request is handled
 
-1. A panel, manager app, worker app, or external public client calls the
+1. A panel, manager app, WorkerApp, DriverApp, or external public client calls the
    configured public host using `/auth/**` or `/api/**`.
 2. The gateway validates the request host and removes client-supplied forwarding
    metadata. For the OIDC relay it reconstructs the public forwarding values
@@ -101,7 +101,7 @@ replacement for the owning service's OpenAPI contract.
 | Public entry point | Private target/path treatment | Important restriction |
 | --- | --- | --- |
 | `/auth/**` | auth-service; `/auth` is removed before forwarding | `/auth/callback` is panel-owned; `/auth/api/internal/**` is never forwarded. |
-| `/api/task-board/**` | task-board-service; external prefix becomes downstream `/api/**` | Internal paths are denied. The worker event stream has its own SSE route and scope. |
+| `/api/task-board/**` | task-board-service; external prefix becomes downstream `/api/**` | Internal paths are denied. WorkerApp and DriverApp event streams have separate SSE routes and exact scopes. |
 | `/api/warehouse/**` | configured warehouse-service target, unchanged | Internal paths are denied; the current route is reserved for the W1 warehouse API. |
 | `/api/asset/**` | asset-service, unchanged | Internal paths are denied. HTML-import commit uses a dedicated handler. |
 | `/api/maintenance/**` | maintenance-service, unchanged | Internal paths are denied. |
@@ -115,8 +115,9 @@ replacement for the owning service's OpenAPI contract.
 The dedicated routes are intentionally more specific than their general service
 routes:
 
-- `GET /api/task-board/worker/v1/events`, `GET /api/asset/v1/events`, and
-  `GET /api/media/v1/events` use the bounded asynchronous SSE proxy.
+- `GET /api/task-board/worker/v1/events`, `GET /api/task-board/driver/v1/events`,
+  `GET /api/asset/v1/events`, and `GET /api/media/v1/events` use the bounded
+  asynchronous SSE proxy.
 - `POST /api/asset/v1/html-imports/*/commit` and
   `PUT /api/media/v1/upload-sessions/*/content` use specialized bounded
   forwarding for supported long-running traffic.
@@ -141,8 +142,10 @@ implements the following policy:
 - `/api/**` is authenticated by default. Private routes are denied explicitly;
   public OIDC, health, Android App Links, and the documented public client
   presentation are narrow exceptions.
-- The worker task-board namespace requires `SCOPE_worker.tasks` at the edge.
-  Services still make their own domain authorization decisions.
+- The WorkerApp task-board namespace requires exactly `SCOPE_worker.tasks` and
+  the DriverApp namespace requires exactly `SCOPE_driver.tasks` at the edge;
+  neither native token crosses into the other surface. Services still make
+  their own domain authorization decisions.
 - CORS uses an explicit configured origin allow-list, an explicit method/header
   set, and credentials where needed. Wildcard origins are rejected by startup
   safety validation.

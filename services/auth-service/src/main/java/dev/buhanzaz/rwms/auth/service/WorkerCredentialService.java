@@ -47,7 +47,8 @@ public class WorkerCredentialService {
 
     /**
      * Creates or reconfigures a worker credential, with exact retries returning the existing state
-     * without a duplicate event.
+     * without a duplicate event. A real reconfiguration revokes persisted authorizations under the
+     * previous login before replacing the profile and credential.
      *
      * @param workerId external worker identifier
      * @param request requested warehouse, application login, and password
@@ -102,6 +103,7 @@ public class WorkerCredentialService {
         if (exactRetry) {
             return response(subject);
         }
+        authorizationRevocations.revokePrincipal(profile.username());
         AuthSubject updated = projectionWriter.updateWorker(
                 subject,
                 normalizedWorkerId,

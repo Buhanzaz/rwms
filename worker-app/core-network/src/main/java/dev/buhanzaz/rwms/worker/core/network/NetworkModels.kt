@@ -128,20 +128,6 @@ data class WorkerAssignmentDto(
 
 @Serializable
 /**
- * Server-owned driver visibility attached to one worker-feed entry.
- *
- * The authenticated feed is already authorization-filtered. WorkerApp uses
- * only the mode to place an entry in the personal logistics or shared
- * movement table; it never broadens visibility locally.
- */
-data class WorkerDriverTaskAudienceDto(
-    val mode: String,
-    val workerId: String?,
-    val workerName: String?,
-)
-
-@Serializable
-/**
  * Public-worker-gateway response/read payload for WorkerFeedEntryDto. It is a transport boundary model, not persisted domain state.
  */
 data class WorkerFeedEntryDto(
@@ -164,7 +150,6 @@ data class WorkerFeedEntryDto(
     val assignments: List<WorkerAssignmentDto>,
     val readyEvidenceCount: Int,
     val resultPhotoMinCount: Int,
-    val driverAudience: WorkerDriverTaskAudienceDto?,
     // Older persisted feed fixtures have no schedule-aware timer. Null keeps
     // them decodable, but the UI does not continue their wall-clock timer.
     val timerSnapshot: WorkerTaskTimerSnapshotDto? = null,
@@ -351,79 +336,6 @@ data class WorkerTaskDetailDto(
     val timerSnapshot: WorkerTaskTimerSnapshotDto? = null,
 )
 
-/** Additional client or order contact visible to the assigned driver. */
-@Serializable
-data class DriverTripAdditionalContactDto(
-    val name: String,
-    val phone: String,
-)
-
-/** Advisory client-requested delivery date or date range; it contains no time of day. */
-@Serializable
-data class DriverTripDesiredDeliveryWindowDto(
-    val startDate: String,
-    val endDate: String,
-)
-
-/** Furniture requested for one cabin in the order. */
-@Serializable
-data class DriverTripDesiredEquipmentDto(
-    val equipmentId: String,
-    val equipmentName: String,
-    val quantity: Long,
-)
-
-/** Current physical furniture observed in one cabin. */
-@Serializable
-data class DriverTripActualEquipmentDto(
-    val equipmentId: String,
-    val equipmentName: String?,
-    val quantity: Long,
-    val locationKind: String,
-)
-
-/** One cabin member of a grouped logistics trip and its live filling readiness. */
-@Serializable
-data class DriverTripCabinDto(
-    val cabinId: String,
-    val unitNumber: String,
-    val desiredContents: List<DriverTripDesiredEquipmentDto>,
-    val actualContents: List<DriverTripActualEquipmentDto>,
-    val movementTaskCreated: Boolean,
-    val movementTaskCompleted: Boolean,
-    val contentReady: Boolean,
-)
-
-/**
- * Logistics-owned structured facts needed by the assigned driver to execute one trip.
- *
- * The public worker payload deliberately exposes client preferences and the assigned trip
- * as dates only; it does not expose time-of-day fields.
- */
-@Serializable
-data class DriverTripDetailsDto(
-    val taskNumber: String,
-    val tripNumber: Int,
-    val operationType: String,
-    val clientName: String,
-    val address: String?,
-    val latitude: Double?,
-    val longitude: Double?,
-    val primaryContactName: String?,
-    val primaryContactPhone: String?,
-    val additionalContacts: List<DriverTripAdditionalContactDto>,
-    val comment: String?,
-    val desiredDeliveryWindows: List<DriverTripDesiredDeliveryWindowDto>,
-    val scheduledDate: String,
-    val cabins: List<DriverTripCabinDto>,
-)
-
-/** Minimal read boundary for the public logistics driver-task response. */
-@Serializable
-data class DriverTaskTripDetailsResponseDto(
-    val tripDetails: DriverTripDetailsDto?,
-)
-
 @Serializable(with = WorkerActionRequestDtoSerializer::class)
 /**
  * Exact seven-field public worker action command. The canonical required-null
@@ -476,12 +388,15 @@ data class WorkerInvalidationEventDto(
     val occurredAt: String,
 )
 
-@Serializable
 /**
- * Public-worker-gateway response/read payload for WorkerDeviceRegistrationRequestDto. It is a transport boundary model, not persisted domain state.
+ * Registers a push target using the explicit server contract discriminator.
+ * WorkerApp sends a Firebase Installation ID with `targetKind=FID`; `token`
+ * remains the canonical transport field name and never contains an FCM token.
  */
+@Serializable
 data class WorkerDeviceRegistrationRequestDto(
     val provider: String = "FCM",
+    val targetKind: String,
     val token: String,
     val appVersion: String,
     val sdkInt: Int,

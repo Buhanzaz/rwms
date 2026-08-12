@@ -9,6 +9,7 @@ import dev.buhanzaz.rwms.taskboard.domain.GroupOperationalStatus;
 import dev.buhanzaz.rwms.taskboard.domain.ParticipationPolicy;
 import dev.buhanzaz.rwms.taskboard.domain.QueuePurpose;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
+import dev.buhanzaz.rwms.taskboard.push.WorkerPushOutbox;
 import java.nio.charset.StandardCharsets;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -55,6 +56,8 @@ public class WorkerTaskBoardService {
   private final WorkerInvalidationHub invalidations;
   private final TaskBoardEntryOwnerProofService ownerProofs;
   private final KpiSettingsService kpiSettings;
+  private final MobileTaskSurfacePolicy surfacePolicy;
+  private final WorkerPushOutbox pushOutbox;
 
   public WorkerTaskBoardService(
       TaskBoardService taskBoard,
@@ -64,7 +67,9 @@ public class WorkerTaskBoardService {
       WorkerOfflineLeaseCodec leases,
       WorkerInvalidationHub invalidations,
       TaskBoardEntryOwnerProofService ownerProofs,
-      KpiSettingsService kpiSettings) {
+      KpiSettingsService kpiSettings,
+      MobileTaskSurfacePolicy surfacePolicy,
+      WorkerPushOutbox pushOutbox) {
     this.taskBoard = taskBoard;
     this.workforce = workforce;
     this.registry = registry;
@@ -73,11 +78,19 @@ public class WorkerTaskBoardService {
     this.invalidations = invalidations;
     this.ownerProofs = ownerProofs;
     this.kpiSettings = kpiSettings;
+    this.surfacePolicy = surfacePolicy;
+    this.pushOutbox = pushOutbox;
   }
 
-  /** Returns a worker's current access context, feed revision and offline lease. */
+  /** Returns the WorkerApp-compatible access context. */
   public WorkerContext context(UUID workerId, UUID warehouseId) {
-    WorkerAccess access = access(workerId, warehouseId);
+    return context(MobileTaskSurface.WORKER, workerId, warehouseId);
+  }
+
+  /** Returns the selected native surface's access context, revision and offline lease. */
+  public WorkerContext context(
+      MobileTaskSurface surface, UUID workerId, UUID warehouseId) {
+    WorkerAccess access = access(surface, workerId, warehouseId);
     OffsetDateTime now = now();
     long revision = revision();
     WorkerDto worker = access.worker();
@@ -95,7 +108,7 @@ public class WorkerTaskBoardService {
                         group.workerClass().id(),
                         group.workerClass().name()))
             .orElse(null),
-        operationalAvailability(access),
+        operationalAvailability(surface, access),
         access.groups().stream()
             .map(
                 group ->
@@ -112,7 +125,7 @@ public class WorkerTaskBoardService {
                         qualification.workerClass().id(),
                         qualification.workerClass().name()))
             .toList(),
-        access.categories().stream().map(queue -> category(queue, access)).toList(),
+        access.categories().stream().map(queue -> category(surface, queue, access)).toList(),
         workerKpiPalette(warehouseId),
         now,
         revision,
@@ -126,8 +139,23 @@ public class WorkerTaskBoardService {
    */
   public FeedPage feed(
       UUID workerId, UUID warehouseId, String encodedCursor, int requestedLimit) {
+    return feed(
+        MobileTaskSurface.WORKER,
+        workerId,
+        warehouseId,
+        encodedCursor,
+        requestedLimit);
+  }
+
+  /** Returns one authorized feed page for the selected native task surface. */
+  public FeedPage feed(
+      MobileTaskSurface surface,
+      UUID workerId,
+      UUID warehouseId,
+      String encodedCursor,
+      int requestedLimit) {
     int limit = Math.max(1, Math.min(MAX_LIMIT, requestedLimit));
-    WorkerAccess access = access(workerId, warehouseId);
+    WorkerAccess access = access(surface, workerId, warehouseId);
     long currentRevision = revision();
     Cursor cursor =
         encodedCursor == null
@@ -140,13 +168,19 @@ public class WorkerTaskBoardService {
     Map<UUID, WorkerCategory> categories = new LinkedHashMap<>();
     access
         .categories()
-        .forEach(queue -> categories.put(queue.id(), category(queue, access)));
-    TaskBoardSnapshot snapshot = taskBoard.workerSnapshot(warehouseId, workerId);
+        .forEach(queue -> categories.put(queue.id(), category(surface, queue, access)));
+    TaskBoardSnapshot snapshot = taskBoard.workerSnapshot(surface, warehouseId, workerId);
     List<CategoryEntry> visible = new ArrayList<>();
     for (BoardColumnDto column : snapshot.columns()) {
       WorkerCategory workerCategory = categories.get(column.queueId());
       if (workerCategory == null) continue;
       for (BoardEntryDto entry : column.entries()) {
+        WorkQueueDto queue =
+            access.categories().stream()
+                .filter(candidate -> candidate.id().equals(column.queueId()))
+                .findFirst()
+                .orElseThrow();
+        if (!surfacePolicy.includesFeedEntry(surface, queue, entry)) continue;
         visible.add(new CategoryEntry(workerCategory, feedEntry(entry, workerCategory)));
       }
     }
@@ -180,17 +214,24 @@ public class WorkerTaskBoardService {
         etag);
   }
 
-  /** Returns task detail after verifying that the worker may see the entry. */
+  /** Returns WorkerApp-compatible task detail. */
   public WorkerTaskDetail detail(UUID workerId, UUID warehouseId, UUID entryId) {
-    WorkerAccess access = access(workerId, warehouseId);
-    BoardEntryDto entry = taskBoard.workerEntry(warehouseId, entryId, workerId);
+    return detail(MobileTaskSurface.WORKER, workerId, warehouseId, entryId);
+  }
+
+  /** Returns task detail after enforcing the selected surface and worker audience. */
+  public WorkerTaskDetail detail(
+      MobileTaskSurface surface, UUID workerId, UUID warehouseId, UUID entryId) {
+    WorkerAccess access = access(surface, workerId, warehouseId);
+    BoardEntryDto entry = taskBoard.workerEntry(surface, warehouseId, entryId, workerId);
     WorkQueueDto queue =
         access.categories().stream()
             .filter(candidate -> candidate.id().equals(entry.queueId()))
             .findFirst()
             .orElseThrow(() -> new NotFoundException("Задание не найдено"));
+    surfacePolicy.requireDetailVisible(surface, queue, entry, workerId);
     BoardTaskRegistrationDto task = registration(warehouseId, entry);
-    int photoMinimum = resultPhotoMinimum(queue);
+    int photoMinimum = surfacePolicy.resultPhotoMinimum(queue);
     List<WorkerRelatedStep> related =
         task == null
             ? List.of()
@@ -269,11 +310,12 @@ public class WorkerTaskBoardService {
                         reference.recordedAt()))
             .toList();
     List<TaskEvidence> evidence = evidence(entry.id());
+    List<WorkerAssignmentSnapshot> assignmentSnapshots = assignments(entry);
     long readyEvidenceCount =
         evidence.stream().filter(item -> "READY".equals(item.state())).count();
-    WorkerCategory workerCategory = category(queue, access);
+    WorkerCategory workerCategory = category(surface, queue, access);
     List<AudienceSelector> audienceSelectors = new ArrayList<>();
-    queue.bindings().stream()
+    surfaceBindings(surface, queue, access).stream()
         .map(
             binding ->
                 new AudienceSelector(
@@ -308,7 +350,7 @@ public class WorkerTaskBoardService {
         entry.activeWorkSeconds(),
         entry.timerSnapshot(),
         List.copyOf(audienceSelectors),
-        assignments(entry),
+        assignmentSnapshots,
         works,
         materials,
         comments,
@@ -316,19 +358,40 @@ public class WorkerTaskBoardService {
         evidence,
         related,
         photoMinimum,
-        entry.status().name().equals("IN_PROGRESS") && readyEvidenceCount >= photoMinimum);
+        entry.status().name().equals("IN_PROGRESS")
+            && readyEvidenceCount >= photoMinimum
+            && surfacePolicy.isActiveParticipant(
+                surface, queue.purpose(), workerId, assignmentSnapshots));
   }
 
+  /** Reserves WorkerApp-compatible task evidence. */
   @Transactional
-  /** Reserves an idempotent media-evidence upload for an authorized worker action. */
   public TaskEvidence reserveEvidence(
       UUID workerId,
       UUID warehouseId,
       UUID entryId,
       String idempotencyKey,
       EvidenceReservationRequest request) {
+    return reserveEvidence(
+        MobileTaskSurface.WORKER,
+        workerId,
+        warehouseId,
+        entryId,
+        idempotencyKey,
+        request);
+  }
+
+  /** Reserves an idempotent media-evidence upload for an authorized native surface. */
+  @Transactional
+  public TaskEvidence reserveEvidence(
+      MobileTaskSurface surface,
+      UUID workerId,
+      UUID warehouseId,
+      UUID entryId,
+      String idempotencyKey,
+      EvidenceReservationRequest request) {
     requireIdempotencyKey(idempotencyKey, request.operationId());
-    WorkerTaskDetail current = detail(workerId, warehouseId, entryId);
+    WorkerTaskDetail current = detail(surface, workerId, warehouseId, entryId);
     if (request.routeIndex() != current.routeIndex()) {
       throw new ConflictException("Фотография относится к другому шагу задания");
     }
@@ -365,7 +428,9 @@ public class WorkerTaskBoardService {
           "Добавить новую фотографию можно только к заданию в работе");
     }
 
-    BoardEntryDto entry = taskBoard.workerEntry(warehouseId, entryId, workerId);
+    BoardEntryDto entry = taskBoard.workerEntry(surface, warehouseId, entryId, workerId);
+    surfacePolicy.requireActiveParticipant(
+        surface, entry.queuePurpose(), workerId, current.assignments());
     UUID workerGroupId =
         current.assignments().stream()
             .filter(assignment -> workerId.equals(assignment.workerId()))
@@ -419,18 +484,30 @@ public class WorkerTaskBoardService {
         findEvidence(request.evidenceId(), request.operationId())
             .orElseThrow(() -> new IllegalStateException("Резервирование фотографии не сохранено"))
             .dto();
-    invalidations.actionApplied(workerId, entryId, revision());
+    invalidations.actionApplied(surface, workerId, entryId, revision());
     return reserved;
   }
 
+  /** Registers one WorkerApp installation for backward-compatible callers. */
   @Transactional
-  /** Registers one authenticated worker-device installation for push invalidations. */
   public DeviceRegistrationResult registerDevice(
       UUID workerId,
       UUID warehouseId,
       String installationId,
       WorkerDeviceRegistrationRequest request) {
-    access(workerId, warehouseId);
+    return registerDevice(
+        MobileTaskSurface.WORKER, workerId, warehouseId, installationId, request);
+  }
+
+  /** Registers one authenticated native-app installation on its server-fixed surface. */
+  @Transactional
+  public DeviceRegistrationResult registerDevice(
+      MobileTaskSurface surface,
+      UUID workerId,
+      UUID warehouseId,
+      String installationId,
+      WorkerDeviceRegistrationRequest request) {
+    access(surface, workerId, warehouseId);
     String normalizedInstallationId = requireInstallationId(installationId);
     if (!"FCM".equals(request.provider())) {
       throw new IllegalArgumentException("Поддерживается только provider FCM");
@@ -438,7 +515,7 @@ public class WorkerTaskBoardService {
     List<DeviceOwner> existing =
         jdbc.query(
             """
-            select worker_id,warehouse_id
+            select worker_id,warehouse_id,app_surface
               from worker_device_registration
              where installation_id=?
              for update
@@ -446,24 +523,32 @@ public class WorkerTaskBoardService {
             (result, row) ->
                 new DeviceOwner(
                     result.getObject("worker_id", UUID.class),
-                    result.getObject("warehouse_id", UUID.class)),
+                    result.getObject("warehouse_id", UUID.class),
+                    result.getString("app_surface")),
             normalizedInstallationId);
     if (!existing.isEmpty()
         && (!existing.getFirst().workerId().equals(workerId)
             || !existing.getFirst().warehouseId().equals(warehouseId))) {
       throw new ConflictException("Установка приложения принадлежит другому рабочему");
     }
+    if (!existing.isEmpty()
+        && !existing.getFirst().appSurface().equals(surface.name())) {
+      throw new ConflictException("Установка зарегистрирована другим приложением");
+    }
     boolean created = existing.isEmpty();
+    String targetKind = normalizedTargetKind(request.targetKind());
     try {
       jdbc.update(
           """
           insert into worker_device_registration(
-              installation_id,worker_id,warehouse_id,provider,provider_token,status,
+              installation_id,worker_id,warehouse_id,provider,provider_token,target_kind,
+              app_surface,status,
               app_version,sdk_int,locale,registered_at,updated_at)
-          values (?,?,?,?,?,'ACTIVE',?,?,?,clock_timestamp(),clock_timestamp())
+          values (?,?,?,?,?,?,?,'ACTIVE',?,?,?,clock_timestamp(),clock_timestamp())
           on conflict (installation_id) do update
              set provider=excluded.provider,
                  provider_token=excluded.provider_token,
+                 target_kind=excluded.target_kind,
                  status='ACTIVE',
                  app_version=excluded.app_version,
                  sdk_int=excluded.sdk_int,
@@ -475,11 +560,13 @@ public class WorkerTaskBoardService {
           warehouseId,
           request.provider(),
           request.token().trim(),
+          targetKind,
+          surface.name(),
           request.appVersion(),
           request.sdkInt(),
           request.locale());
     } catch (DuplicateKeyException exception) {
-      throw new ConflictException("FCM token уже зарегистрирован другой установкой");
+      throw new ConflictException("FCM-адресат уже зарегистрирован другой установкой");
     }
     WorkerDeviceRegistration registration =
         jdbc.queryForObject(
@@ -504,40 +591,70 @@ public class WorkerTaskBoardService {
     return new DeviceRegistrationResult(registration, created);
   }
 
+  /** Removes one WorkerApp installation for backward-compatible callers. */
   @Transactional
-  /** Removes an installation only when it belongs to the authenticated worker and warehouse. */
   public void unregisterDevice(
       UUID workerId, UUID warehouseId, String installationId) {
-    access(workerId, warehouseId);
+    unregisterDevice(MobileTaskSurface.WORKER, workerId, warehouseId, installationId);
+  }
+
+  /** Removes an installation only from its authenticated worker, warehouse and app surface. */
+  @Transactional
+  public void unregisterDevice(
+      MobileTaskSurface surface,
+      UUID workerId,
+      UUID warehouseId,
+      String installationId) {
+    access(surface, workerId, warehouseId);
     int deleted =
         jdbc.update(
             """
             delete from worker_device_registration
              where installation_id=? and worker_id=? and warehouse_id=?
+               and app_surface=?
             """,
             requireInstallationId(installationId),
             workerId,
-            warehouseId);
+            warehouseId,
+            surface.name());
     if (deleted != 1) {
       throw new NotFoundException("Регистрация устройства не найдена");
     }
   }
 
-  @Transactional
   /**
    * Applies a worker task action exactly once for its idempotency key and offline lease.
    *
    * <p>A replay returns the already-applied outcome; a divergent replay or stale observed version
    * is a conflict rather than an implicit overwrite.
    */
+  @Transactional
   public WorkerActionAppliedResult applyAction(
       UUID workerId,
       UUID warehouseId,
       UUID entryId,
       String idempotencyKey,
       WorkerActionRequest request) {
+    return applyAction(
+        MobileTaskSurface.WORKER,
+        workerId,
+        warehouseId,
+        entryId,
+        idempotencyKey,
+        request);
+  }
+
+  /** Applies a replay-safe command after enforcing the selected native surface capability. */
+  @Transactional
+  public WorkerActionAppliedResult applyAction(
+      MobileTaskSurface surface,
+      UUID workerId,
+      UUID warehouseId,
+      UUID entryId,
+      String idempotencyKey,
+      WorkerActionRequest request) {
     requireIdempotencyKey(idempotencyKey, request.operationId());
-    WorkerTaskDetail current = detail(workerId, warehouseId, entryId);
+    WorkerTaskDetail current = detail(surface, workerId, warehouseId, entryId);
     boolean primaryTakeTriggersNotification =
         request.action() == WorkerAction.TAKE && "WAITING".equals(current.status());
     ActionReplay replay = replay(request.operationId());
@@ -549,11 +666,17 @@ public class WorkerTaskBoardService {
       return new WorkerActionAppliedResult("REPLAYED", current.version(), current);
     }
 
-    WorkerAccess access = access(workerId, warehouseId);
+    WorkerAccess access = access(surface, workerId, warehouseId);
     UUID currentGroupId = access.worker().currentGroupId();
-    BoardEntryDto commandEntry = taskBoard.workerEntry(warehouseId, entryId, workerId);
+    BoardEntryDto commandEntry =
+        taskBoard.workerEntry(surface, warehouseId, entryId, workerId);
     boolean individualLogistics =
         commandEntry.queuePurpose() == QueuePurpose.LOGISTICS_DRIVER;
+    surfacePolicy.requireActionAllowed(surface, commandEntry.queuePurpose(), request.action());
+    if (request.action() != WorkerAction.TAKE && request.action() != WorkerAction.JOIN) {
+      surfacePolicy.requireActiveParticipant(
+          surface, commandEntry.queuePurpose(), workerId, current.assignments());
+    }
     if (request.action() == WorkerAction.TAKE) {
       if (!individualLogistics
           && (currentGroupId == null
@@ -574,6 +697,16 @@ public class WorkerTaskBoardService {
     if (request.action() == WorkerAction.JOIN && !"IN_PROGRESS".equals(current.status())) {
       throw new ConflictException("Присоединиться можно только к заданию в работе");
     }
+    if (request.action() == WorkerAction.JOIN && individualLogistics) {
+      if (currentGroupId == null) {
+        throw new ConflictException("Стропальщику не назначена текущая группа");
+      }
+      if (request.workerGroupId() != null
+          && !currentGroupId.equals(request.workerGroupId())) {
+        throw new ConflictException(
+            "К логистическому заданию можно присоединиться только текущей группой");
+      }
+    }
     leases.requireValid(
         request.offlineLeaseId(), workerId, warehouseId, request.occurredAt(), now());
     String previousCorrelation = MDC.get(CorrelationIdFilter.MDC_KEY);
@@ -588,7 +721,9 @@ public class WorkerTaskBoardService {
                     request.expectedVersion(),
                     request.action() == WorkerAction.TAKE && !individualLogistics
                         ? currentGroupId
-                        : null,
+                        : request.action() == WorkerAction.JOIN && individualLogistics
+                            ? currentGroupId
+                            : null,
                     workerId),
                 workerId);
         case PAUSE ->
@@ -628,14 +763,16 @@ public class WorkerTaskBoardService {
         MDC.put(CorrelationIdFilter.MDC_KEY, previousCorrelation);
       }
     }
-    WorkerTaskDetail changed = detail(workerId, warehouseId, entryId);
+    WorkerTaskDetail changed = detail(surface, workerId, warehouseId, entryId);
     long changedRevision = revision();
     Set<UUID> notifiedWorkerIds =
         primaryTakeTriggersNotification
-            ? notifiedWorkerIds(warehouseId, current.audienceSelectors())
+            ? notifiedWorkerIds(warehouseId, commandEntry.queueId(), workerId)
             : Set.of();
+    pushOutbox.enqueueJoinAvailable(
+        notifiedWorkerIds, warehouseId, entryId, changedRevision);
     invalidations.actionApplied(
-        workerId, entryId, changedRevision, notifiedWorkerIds);
+        surface, workerId, entryId, changedRevision, notifiedWorkerIds);
     return new WorkerActionAppliedResult("APPLIED", changed.version(), changed);
   }
 
@@ -648,7 +785,8 @@ public class WorkerTaskBoardService {
     return value == null ? 0 : value;
   }
 
-  private WorkerAccess access(UUID workerId, UUID warehouseId) {
+  private WorkerAccess access(
+      MobileTaskSurface surface, UUID workerId, UUID warehouseId) {
     WorkerDto worker =
         workforce.listWorkers(warehouseId).stream()
             .filter(candidate -> candidate.id().equals(workerId) && candidate.active())
@@ -671,16 +809,16 @@ public class WorkerTaskBoardService {
         registry.listQueues(warehouseId).stream()
             .filter(queue -> queue.active() && !queue.hidden())
             .filter(
-                queue ->
-                    queue.bindings().stream()
-                        .anyMatch(binding -> classIds.contains(binding.workerClass().id())))
+                queue -> surfacePolicy.includesQueue(surface, queue, classIds))
             .sorted(Comparator.comparingInt(WorkQueueDto::sortOrder))
             .toList();
     return new WorkerAccess(worker, groups, qualifications, categories);
   }
 
-  private static String operationalAvailability(WorkerAccess access) {
-    if (access.worker().currentGroupId() == null
+  private static String operationalAvailability(
+      MobileTaskSurface surface, WorkerAccess access) {
+    if (surface == MobileTaskSurface.DRIVER
+        && access.worker().currentGroupId() == null
         && access.categories().stream()
             .anyMatch(
                 queue ->
@@ -700,15 +838,17 @@ public class WorkerTaskBoardService {
     return access.worker().operationalAvailability().name();
   }
 
-  private WorkerCategory category(WorkQueueDto queue, WorkerAccess access) {
+  private WorkerCategory category(
+      MobileTaskSurface surface, WorkQueueDto queue, WorkerAccess access) {
     Set<UUID> workerClassIds = new LinkedHashSet<>();
     access
         .qualifications()
         .forEach(value -> workerClassIds.add(value.workerClass().id()));
     access.groups().forEach(value -> workerClassIds.add(value.workerClass().id()));
     Set<String> modes = new LinkedHashSet<>();
-    queue.bindings().stream()
-        .filter(binding -> workerClassIds.contains(binding.workerClass().id()))
+    List<QueueBindingDto> visibleBindings =
+        surfacePolicy.bindings(surface, queue, workerClassIds);
+    visibleBindings.stream()
         .forEach(
             binding -> {
               if (binding.primary()) {
@@ -722,7 +862,7 @@ public class WorkerTaskBoardService {
               }
             });
     Set<UUID> boundWorkerClassIds =
-        queue.bindings().stream()
+        visibleBindings.stream()
             .map(binding -> binding.workerClass().id())
             .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
     List<UUID> groupIds =
@@ -738,7 +878,17 @@ public class WorkerTaskBoardService {
         queue.sortOrder(),
         List.copyOf(modes),
         groupIds,
-        resultPhotoMinimum(queue));
+        surfacePolicy.resultPhotoMinimum(queue));
+  }
+
+  private List<QueueBindingDto> surfaceBindings(
+      MobileTaskSurface surface, WorkQueueDto queue, WorkerAccess access) {
+    Set<UUID> workerClassIds = new LinkedHashSet<>();
+    access
+        .qualifications()
+        .forEach(value -> workerClassIds.add(value.workerClass().id()));
+    access.groups().forEach(value -> workerClassIds.add(value.workerClass().id()));
+    return surfacePolicy.bindings(surface, queue, workerClassIds);
   }
 
   private WorkerKpiPalette workerKpiPalette(UUID warehouseId) {
@@ -806,10 +956,6 @@ public class WorkerTaskBoardService {
     }
   }
 
-  private int resultPhotoMinimum(WorkQueueDto queue) {
-    return queue.resultPhotoMinCount();
-  }
-
   private static String availabilityMode(WorkerCategory category, String entryStatus) {
     if ("IN_PROGRESS".equals(entryStatus)
         && category.audienceModes().contains(REQUIRED_JOIN)) {
@@ -828,26 +974,37 @@ public class WorkerTaskBoardService {
   }
 
   private Set<UUID> notifiedWorkerIds(
-      UUID warehouseId, List<AudienceSelector> audienceSelectors) {
+      UUID warehouseId, UUID queueId, UUID primaryWorkerId) {
+    WorkQueueDto queue =
+        registry.listQueues(warehouseId).stream()
+            .filter(candidate -> candidate.id().equals(queueId))
+            .findFirst()
+            .orElseThrow(() -> new NotFoundException("Очередь не найдена"));
     Set<UUID> notifiedClassIds =
-        audienceSelectors.stream()
-            .filter(selector -> "WORKER_CLASS".equals(selector.kind()))
-            .filter(AudienceSelector::notifyOnPrimaryTake)
+        queue.bindings().stream()
+            .filter(binding -> !binding.primary())
             .filter(
-                selector ->
-                    REQUIRED_JOIN.equals(selector.mode())
-                        || OPTIONAL_JOIN.equals(selector.mode()))
-            .map(AudienceSelector::id)
+                binding ->
+                    queue.purpose() == QueuePurpose.LOGISTICS_DRIVER
+                        || binding.notifyOnPrimaryTake())
+            .map(binding -> binding.workerClass().id())
             .collect(java.util.stream.Collectors.toSet());
     if (notifiedClassIds.isEmpty()) return Set.of();
     List<WorkerDto> activeWorkers =
-        workforce.listWorkers(warehouseId).stream().filter(WorkerDto::active).toList();
+        workforce.listWorkers(warehouseId).stream()
+            .filter(WorkerDto::active)
+            .filter(worker -> worker.currentGroupId() != null)
+            .filter(
+                worker ->
+                    worker.operationalAvailability() == GroupOperationalStatus.AVAILABLE)
+            .toList();
     Set<UUID> activeWorkerIds =
         activeWorkers.stream()
             .map(WorkerDto::id)
             .collect(java.util.stream.Collectors.toSet());
     Set<UUID> result =
         activeWorkers.stream()
+            .filter(worker -> !worker.id().equals(primaryWorkerId))
             .filter(
                 worker ->
                     worker.qualifications().stream()
@@ -861,11 +1018,13 @@ public class WorkerTaskBoardService {
                 java.util.stream.Collectors.toCollection(LinkedHashSet::new));
     workforce.listGroups(warehouseId).stream()
         .filter(WorkerGroupDto::active)
+        .filter(group -> group.operationalStatus() == GroupOperationalStatus.AVAILABLE)
         .filter(group -> notifiedClassIds.contains(group.workerClass().id()))
         .flatMap(group -> group.members().stream())
         .filter(GroupMemberDto::active)
         .map(GroupMemberDto::workerId)
         .filter(activeWorkerIds::contains)
+        .filter(workerId -> !workerId.equals(primaryWorkerId))
         .forEach(result::add);
     return Set.copyOf(result);
   }
@@ -1081,6 +1240,14 @@ public class WorkerTaskBoardService {
     return value.trim();
   }
 
+  private String normalizedTargetKind(String value) {
+    String normalized = value == null || value.isBlank() ? "TOKEN" : value.trim();
+    if (!Set.of("TOKEN", "FID").contains(normalized)) {
+      throw new IllegalArgumentException("targetKind должен быть TOKEN или FID");
+    }
+    return normalized;
+  }
+
   private String requireLogin(WorkerDto worker) {
     if (worker.appLogin() == null || worker.appLogin().isBlank()) {
       throw new ConflictException("У рабочего не настроен логин");
@@ -1147,5 +1314,6 @@ public class WorkerTaskBoardService {
       long sizeBytes,
       String sha256) {}
 
-  private record DeviceOwner(UUID workerId, UUID warehouseId) {}
+  /** Persisted owner and native surface fence for one registered installation. */
+  private record DeviceOwner(UUID workerId, UUID warehouseId, String appSurface) {}
 }

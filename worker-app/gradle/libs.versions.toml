@@ -25,6 +25,7 @@ serialization = "1.11.0"
 coil = "3.3.0"
 appauth = "0.11.1"
 firebase-messaging = "25.1.1"
+firebase-installations = "19.0.1"
 profileinstaller = "1.4.1"
 desugar = "2.0.3"
 coroutines = "1.10.2"
@@ -89,6 +90,7 @@ coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" 
 coil-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil" }
 appauth = { module = "net.openid:appauth", version.ref = "appauth" }
 firebase-messaging = { module = "com.google.firebase:firebase-messaging", version.ref = "firebase-messaging" }
+firebase-installations = { module = "com.google.firebase:firebase-installations", version.ref = "firebase-installations" }
 coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 

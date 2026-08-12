@@ -272,7 +272,7 @@ public final class RentalInquiryApiModels {
   public record ConfirmClientPresentationRequest(
       @NotNull @Size(min = 1, max = 100)
           List<@NotNull @Valid PresentationCabinSelectionInput> selections,
-      List<@NotNull @Valid DesiredDeliveryWindowInput> desiredDeliveryWindows,
+      @Size(max = 5) List<@NotNull @Valid DesiredDeliveryWindowInput> desiredDeliveryWindows,
       @Min(1) Long rentalMonths,
       @Size(min = 1, max = 1_000) String deliveryAddress,
       @DecimalMin("-90") @DecimalMax("90") @Digits(integer = 2, fraction = 6) BigDecimal latitude,

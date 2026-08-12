@@ -477,8 +477,8 @@ class ReturnCompletionSagaIntegrationTest {
         new BigDecimal("55.750000"),
         new BigDecimal("37.620000"),
         List.of());
-    order.replaceClientDesiredDeliveryWindow(
-        DesiredDeliveryWindow.create(LocalDate.now(), LocalDate.now()));
+    order.replaceClientDesiredDeliveryWindows(
+        List.of(DesiredDeliveryWindow.create(LocalDate.now(), LocalDate.now())));
     order.selectWarehouse(WAREHOUSE);
     order.saveForFulfillment();
     order.fulfill();

@@ -29,8 +29,8 @@ Russian version: [README.ru.md](README.ru.md).
 ### Transport contract gate
 
 [`WorkerGatewayApiContractBoundaryTest.kt`](core-network/src/test/java/dev/buhanzaz/rwms/worker/core/network/WorkerGatewayApiContractBoundaryTest.kt)
-pins all 12 declared `WorkerGatewayApi` methods to their canonical public
-OpenAPI source: ten fixed gateway routes and exactly two allowlisted dynamic
+pins all 11 declared `WorkerGatewayApi` methods to their canonical public
+OpenAPI source: nine fixed gateway routes and exactly two allowlisted dynamic
 media routes. It rejects internal/private namespaces and service origins,
 eagerly resolves every Retrofit/kotlinx.serialization request and response
 converter, and checks every active worker/task-board and media JSON root
@@ -50,16 +50,18 @@ projections, Problem Details, media payloads, and every other DTO.
 
 The root menu contains Work, Downloads, and Profile. Work displays only the
 categories, groups, assignments, KPI palette, task identifiers, materials,
-works, comments, and media references supplied in the worker feed. Task-board
-filters logistics work before it reaches the device: an assigned driver sees
-their own task, while every qualified warehouse driver can see an unclaimed
-warehouse-shared movement. Unassigned dispatcher work is not exposed.
+works, comments, and media references supplied in the worker feed. WorkerApp
+has no driver work surface or driver trip read. Task-board exposes a joint
+`LOGISTICS_DRIVER` task here only after its primary performer has taken it and
+only to an eligible secondary worker; a stale cached waiting entry is hidden
+locally as an additional fail-closed guard.
 
-The server-issued driver audience splits a driver's work into two independently
-collapsible tables. “Logistics” contains only work assigned to the authenticated
-driver; “Movements” contains warehouse-shared driver work. After another driver
-takes a shared movement it disappears from other feeds, because task-board —
-not the client — owns that visibility transition. Other group-bound roles and
+The eligible slinger joins an active joint task with the current group ID when
+one exists. The owning service pauses the previous assignment timer for that
+group and later resumes it according to the server workflow. Once joined, the
+slinger can pause, resume, or complete the shared task. Completion requires at
+least one server-`READY` photo; either joined participant may complete, and the
+server closes the same task for both. Ordinary group-bound roles and
 qualification-only categories keep their own panels; queues and task cards can
 also collapse. Panels stack on a narrow screen and use a two-pane horizontal
 board from 720 dp. A card shows cabin, scheduled date and authoritative elapsed
@@ -68,16 +70,6 @@ time; its expanded state adds status, optional budget timer and photo count.
 and durable upload flow. The Downloads screen remains the recovery surface for
 failed or pending uploads and explicit retry. The task screen records a work
 result and JPEG evidence but never decides a task transition locally.
-
-For a task-board detail whose immutable source is `LOGISTICS_DRIVER_TASK`, the
-detail screen follows that source ID through the public logistics driver-task
-GET and renders the live grouped-trip facts: operation, client, address and
-coordinates, primary and additional contacts, comments, client-requested
-dates, separately assigned date, and one filling/readiness card per
-cabin. These logistics facts are not copied into Room. A failed logistics read
-leaves the ordinary task detail and actions usable and exposes an explicit
-retry; switching tasks or opening a non-logistics source clears the ephemeral
-trip state.
 
 Server-provided KPI ranges determine colors; no local green/yellow/red policy
 is invented. Worker-facing work data does not expose price/cost fields.
@@ -94,8 +86,9 @@ is invented. Worker-facing work data does not expose price/cost fields.
   Unique connected WorkManager work sends actions, reserves/uploads/finalizes
   evidence, waits for 'READY', then refreshes the feed.
 - FCM and SSE carry invalidation/revision signals only. They trigger a focused
-  refresh; they never replace the authoritative feed. Foreground polling also
-  periodically refreshes the feed.
+  refresh; they never replace the authoritative feed. FCM device registration
+  uses `targetKind=FID` with the Firebase Installation ID, never a messaging
+  registration token. Foreground polling also periodically refreshes the feed.
 
 ## Errors, concurrency, and retries
 

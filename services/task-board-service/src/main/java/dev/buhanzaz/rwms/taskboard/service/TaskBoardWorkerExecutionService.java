@@ -301,8 +301,18 @@ class TaskBoardWorkerExecutionService {
       if (selected == null || !authenticatedWorkerId.equals(selected.getId()))
         throw new ConflictException("Worker token может взять задачу только на себя");
       if (entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER) {
-        if (group != null) {
-          throw new ConflictException("Логистическое задание выполняется без бригады");
+        if (joiningSecondary) {
+          WorkerGroup currentGroup = selected.getCurrentGroup();
+          if (currentGroup == null) {
+            throw new ConflictException("Стропальщику не назначена текущая группа");
+          }
+          if (group != null && !group.equals(currentGroup)) {
+            throw new ConflictException(
+                "Присоединиться можно только из текущей группы рабочего");
+          }
+          group = currentGroup;
+        } else if (group != null) {
+          throw new ConflictException("Водитель берёт логистическое задание без бригады");
         }
       } else {
         WorkerGroup currentGroup = selected.getCurrentGroup();
@@ -325,14 +335,16 @@ class TaskBoardWorkerExecutionService {
     if (selected != null && !selected.isActive()) throw new ConflictException("Рабочий неактивен");
     if (entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER) {
       if (joiningSecondary) {
-        throw new ConflictException(
-            "К логистическому заданию нельзя присоединить второго водителя");
-      }
-      if (selected == null || group != null) {
+        if (selected == null || group == null) {
+          throw new ConflictException(
+              "К логистическому заданию присоединяется стропальщик из текущей группы");
+        }
+      } else if (selected == null || group != null) {
         throw new ConflictException(
             "Логистическое задание назначается одному водителю без бригады");
+      } else {
+        driverAudiences.requireExecutableBy(entry, selected);
       }
-      driverAudiences.requireExecutableBy(entry, selected);
     }
     if (!joiningSecondary) {
       ensureFirstAvailable(entry, selected == null ? null : selected.getId());
@@ -364,7 +376,7 @@ class TaskBoardWorkerExecutionService {
       throw new ConflictException("Для этого класса присоединение не настроено");
     }
     List<Worker> assigned =
-        assignedGroup != null
+        assignedGroup != null && selected == null
             ? members.findAllByWorkerGroupIdAndActiveTrue(assignedGroup.getId()).stream()
                 .map(WorkerGroupMember::getWorker)
                 .filter(Worker::isActive)
@@ -396,7 +408,11 @@ class TaskBoardWorkerExecutionService {
     if (assignedGroup != null) {
       kpiEvidence.refreshGroup(warehouseId, assignedGroup.getId(), now);
     }
-    boolean stopCurrentWork = takeBinding != null && takeBinding.isStopTaskOnTake();
+    boolean stopCurrentWork =
+        takeBinding != null
+            && (takeBinding.isStopTaskOnTake()
+                || (joiningSecondary
+                    && entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER));
     if (assignedGroup != null && !stopCurrentWork) {
       boolean alreadyWorking =
           assignments
@@ -680,25 +696,36 @@ class TaskBoardWorkerExecutionService {
   }
 
   private void ensureRequiredSecondaryAssignments(QueueEntry entry) {
-    List<WorkQueueClassBinding> required =
+    List<WorkQueueClassBinding> secondary =
         bindings.findAllByQueueIdOrderByBindingOrderAscIdAsc(entry.getQueue().getId()).stream()
             .filter(binding -> binding.getBindingOrder() > 0)
+            .toList();
+    if (entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER
+        && secondary.isEmpty()) {
+      throw new ConflictException(
+          "Для логистической очереди не настроен вторичный класс стропальщиков");
+    }
+    List<WorkQueueClassBinding> required =
+        secondary.stream()
             .filter(
                 binding ->
-                    binding.getParticipationPolicy() == ParticipationPolicy.REQUIRED)
+                    entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER
+                        || binding.getParticipationPolicy() == ParticipationPolicy.REQUIRED)
             .toList();
     if (required.isEmpty()) return;
-    Set<UUID> liveWorkerIds =
+    boolean logisticsDriver = entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER;
+    Set<UUID> liveSecondaryWorkerIds =
         assignments.findAllByQueueEntryIdAndStatusIn(
                 entry.getId(), Set.of(AssignmentStatus.ACTIVE, AssignmentStatus.PAUSED))
             .stream()
+            .filter(assignment -> !logisticsDriver || assignment.getWorkerGroup() != null)
             .map(TaskAssignment::getWorker)
             .filter(Objects::nonNull)
             .map(Worker::getId)
             .collect(java.util.stream.Collectors.toSet());
     for (WorkQueueClassBinding binding : required) {
       boolean assigned =
-          liveWorkerIds.stream()
+          liveSecondaryWorkerIds.stream()
               .flatMap(workerId -> workforce.activeQualifications(workerId).stream())
               .anyMatch(
                   qualification ->

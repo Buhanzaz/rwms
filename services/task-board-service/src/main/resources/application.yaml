@@ -205,6 +205,14 @@ rwms:
         relay-delay: ${TASK_BOARD_KAFKA_OUTBOX_RELAY_DELAY:1s}
         lease-duration: ${TASK_BOARD_KAFKA_OUTBOX_LEASE_DURATION:30s}
         instance-id: ${TASK_BOARD_KAFKA_INSTANCE_ID:task-board-service}
+    push:
+      fcm:
+        enabled: ${TASK_BOARD_FCM_ENABLED:false}
+        project-id: ${TASK_BOARD_FCM_PROJECT_ID:}
+        dispatcher-delay: ${TASK_BOARD_FCM_DISPATCHER_DELAY:2s}
+        lease-duration: ${TASK_BOARD_FCM_LEASE_DURATION:30s}
+        batch-size: ${TASK_BOARD_FCM_BATCH_SIZE:50}
+        max-attempts: ${TASK_BOARD_FCM_MAX_ATTEMPTS:8}
   security:
     queue-registry-client-ids: ${TASK_BOARD_QUEUE_REGISTRY_CLIENT_IDS:maintenance-service}
   worker:
@@ -220,4 +228,4 @@ rwms:
       reconciliation:
         enabled: ${TASK_BOARD_WAREHOUSE_LIFECYCLE_RECONCILIATION_ENABLED:true}
   cors:
-    allowed-origins: ${PANEL_ORIGIN},${WORKER_ORIGIN}
+    allowed-origins: ${PANEL_ORIGIN},${WORKER_ORIGIN},${DRIVER_ORIGIN}

@@ -7,6 +7,7 @@ import dev.buhanzaz.rwms.taskboard.domain.AssignmentStatus;
 import dev.buhanzaz.rwms.taskboard.domain.BoardTask;
 import dev.buhanzaz.rwms.taskboard.domain.DriverTaskAudienceMode;
 import dev.buhanzaz.rwms.taskboard.domain.EntryStatus;
+import dev.buhanzaz.rwms.taskboard.domain.GroupOperationalStatus;
 import dev.buhanzaz.rwms.taskboard.domain.ParticipationPolicy;
 import dev.buhanzaz.rwms.taskboard.domain.QueueEntry;
 import dev.buhanzaz.rwms.taskboard.domain.QueuePurpose;
@@ -153,6 +154,57 @@ class DriverTaskAudienceService {
             assignment ->
                 assignment.getWorker() != null
                     && workerId.equals(assignment.getWorker().getId()));
+  }
+
+  /**
+   * Tests the active secondary-slinger audience used only by WorkerApp.
+   *
+   * <p>A secondary worker cannot discover a waiting driver task. After the primary driver starts
+   * it, every active worker matching a secondary class may join. A secondary assignment retains
+   * direct-detail access long enough to observe shared completion, while the primary driver's
+   * group-less assignment remains confined to DriverApp even for a dual-qualified worker.
+   */
+  boolean isVisibleToMobileWorker(QueueEntry entry, UUID workerId) {
+    if (entry.getQueue() == null
+        || entry.getQueue().getPurpose() != QueuePurpose.LOGISTICS_DRIVER
+        || workerId == null
+        || entry.getStatus() == EntryStatus.WAITING) {
+      return false;
+    }
+    var workerAssignments =
+        assignments.findAllByQueueEntryIdAndStatusIn(entry.getId(), EXECUTOR_ASSIGNMENTS).stream()
+            .filter(
+                assignment ->
+                    assignment.getWorker() != null
+                        && workerId.equals(assignment.getWorker().getId()))
+            .toList();
+    if (workerAssignments.stream().anyMatch(assignment -> assignment.getWorkerGroup() != null)) {
+      return true;
+    }
+    if (!workerAssignments.isEmpty()) return false;
+    if (entry.getStatus() != EntryStatus.IN_PROGRESS
+        && entry.getStatus() != EntryStatus.PAUSED) {
+      return false;
+    }
+    Worker worker;
+    try {
+      worker = workforce.requireWorker(entry.getTask().getWarehouseId(), workerId);
+    } catch (NotFoundException ignored) {
+      return false;
+    }
+    if (!worker.isActive()) return false;
+    Set<UUID> workerClassIds =
+        workforce.activeQualifications(workerId).stream()
+            .map(qualification -> qualification.getWorkerClass().getId())
+            .collect(java.util.stream.Collectors.toSet());
+    if (worker.getCurrentGroup() == null
+        || !worker.getCurrentGroup().isActive()
+        || worker.getCurrentGroup().getOperationalStatus()
+            != GroupOperationalStatus.AVAILABLE) return false;
+    workerClassIds.add(worker.getCurrentGroup().getWorkerClass().getId());
+    return bindings.findAllByQueueIdOrderByBindingOrderAscIdAsc(entry.getQueue().getId()).stream()
+        .filter(binding -> binding.getBindingOrder() > 0)
+        .anyMatch(binding -> workerClassIds.contains(binding.getWorkerClass().getId()));
   }
 
   /** Rejects an execution attempt that is outside the persisted driver audience. */

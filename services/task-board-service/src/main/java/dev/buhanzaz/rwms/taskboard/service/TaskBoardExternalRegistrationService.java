@@ -680,12 +680,16 @@ class TaskBoardExternalRegistrationService {
     List<TaskAvailabilityNotification> notifications =
         entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId()).stream()
             .filter(entry -> entry.getEntryType() == EntryType.REAL)
-            .map(
+            .flatMap(
                 entry ->
-                    new TaskAvailabilityNotification(
-                        entry.getId(),
-                        notificationWorkerIds(task, entry.getQueue()),
-                        task.getPriority() <= 1))
+                    java.util.Arrays.stream(MobileTaskSurface.values())
+                        .map(
+                            surface ->
+                                new TaskAvailabilityNotification(
+                                    surface,
+                                    entry.getId(),
+                                    notificationWorkerIds(task, entry.getQueue(), surface),
+                                    task.getPriority() <= 1)))
             .filter(notification -> !notification.workerIds().isEmpty())
             .toList();
     if (notifications.isEmpty()) return;
@@ -696,6 +700,7 @@ class TaskBoardExternalRegistrationService {
           notifications.forEach(
               notification ->
                   workerInvalidations.taskAvailable(
+                      notification.surface(),
                       notification.workerIds(),
                       notification.entryId(),
                       revision,
@@ -714,9 +719,14 @@ class TaskBoardExternalRegistrationService {
     }
   }
 
-  private Set<UUID> eligibleWorkerIds(UUID warehouseId, WorkQueue queue) {
+  private Set<UUID> eligibleWorkerIds(
+      UUID warehouseId, WorkQueue queue, MobileTaskSurface surface) {
     Set<UUID> workerClassIds =
         bindings.findAllByQueueId(queue.getId()).stream()
+            .filter(
+                binding ->
+                    surface == MobileTaskSurface.WORKER
+                        || binding.getBindingOrder() == 0)
             .map(binding -> binding.getWorkerClass().getId())
             .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
     if (workerClassIds.isEmpty()) return Set.of();
@@ -740,25 +750,32 @@ class TaskBoardExternalRegistrationService {
             .map(WorkerDto::id)
             .collect(
                 java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-    workforce.listGroups(warehouseId).stream()
-        .filter(WorkerGroupDto::active)
-        .filter(group -> workerClassIds.contains(group.workerClass().id()))
-        .flatMap(group -> group.members().stream())
-        .filter(GroupMemberDto::active)
-        .map(GroupMemberDto::workerId)
-        .filter(activeWorkerIds::contains)
-        .forEach(result::add);
+    if (queue.getPurpose() != QueuePurpose.LOGISTICS_DRIVER) {
+      workforce.listGroups(warehouseId).stream()
+          .filter(WorkerGroupDto::active)
+          .filter(group -> workerClassIds.contains(group.workerClass().id()))
+          .flatMap(group -> group.members().stream())
+          .filter(GroupMemberDto::active)
+          .map(GroupMemberDto::workerId)
+          .filter(activeWorkerIds::contains)
+          .forEach(result::add);
+    }
     return Set.copyOf(result);
   }
 
-  private Set<UUID> notificationWorkerIds(BoardTask task, WorkQueue queue) {
+  private Set<UUID> notificationWorkerIds(
+      BoardTask task, WorkQueue queue, MobileTaskSurface surface) {
+    if (queue.getPurpose() == QueuePurpose.LOGISTICS_DRIVER
+        && surface == MobileTaskSurface.WORKER) {
+      return Set.of();
+    }
     if (task.getDriverAudienceMode() == DriverTaskAudienceMode.UNASSIGNED) {
       return Set.of();
     }
     if (task.getDriverAudienceMode() == DriverTaskAudienceMode.ASSIGNED_DRIVER) {
       return Set.of(task.getPlannedDriverWorkerId());
     }
-    return eligibleWorkerIds(task.getWarehouseId(), queue);
+    return eligibleWorkerIds(task.getWarehouseId(), queue, surface);
   }
 
   private long workerRevision() {
@@ -798,5 +815,5 @@ class TaskBoardExternalRegistrationService {
    * exposes work that was not durably registered.
    */
   private record TaskAvailabilityNotification(
-      UUID entryId, Set<UUID> workerIds, boolean urgent) {}
+      MobileTaskSurface surface, UUID entryId, Set<UUID> workerIds, boolean urgent) {}
 }

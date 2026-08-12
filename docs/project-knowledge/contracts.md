@@ -1,6 +1,6 @@
 # Contract Map And Evolution Rules
 
-Status: Confirmed repository layout as of 2026-08-07.
+Status: Confirmed repository layout as of 2026-08-12.
 
 ## Canonical Locations
 
@@ -32,7 +32,7 @@ creation requires an `Idempotency-Key`; type, name and phone are mandatory,
 while a legal entity additionally requires a contact person. Client and order
 commands carry separate additional-contact lists. Order create/update carries
 only the client, primary phone and optional comment. `NORMAL` public
-presentation confirmation carries exactly one same-day
+presentation confirmation carries one to five distinct same-day
 `desiredDeliveryWindows[{startDate,endDate}]`, positive `rentalMonths`, required
 `deliveryAddress`, an optional complete latitude/longitude pair and nullable
 `additionalContacts` normalized to an empty list. `REPLACEMENT` rejects all of
@@ -98,6 +98,50 @@ Evidence:
 [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml),
 and
 [`task-board-events-v1.schema.json`](../../contracts/events/task-board/task-board-events-v1.schema.json).
+
+### Native Driver And Slinger Task Surfaces
+
+[`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml)
+defines two non-interchangeable native families. Canonical downstream
+`/driver/v1/**` is exposed by the gateway as
+`/api/task-board/driver/v1/**` and requires a WORKER JWT with
+`driver.tasks`; `/worker/v1/**` becomes `/api/task-board/worker/v1/**` and
+requires `worker.tasks`. Driver actions contain only `TAKE`, `PAUSE`, `RESUME`
+and `COMPLETE`. Worker actions retain `JOIN`, but a logistics `TAKE` is rejected
+on the worker surface and a logistics `JOIN` is rejected until the primary
+driver has activated the task.
+
+The driver feed contains primary bindings only. The worker feed contains
+ordinary worker assignments plus only active/paused logistics entries for an
+eligible secondary slinger; it never exposes waiting driver work. A slinger
+`JOIN` supplies the current `workerGroupId`, allowing task-board to pause the
+whole previous group entry and resume it after the shared task closes. Every
+configured logistics secondary is required. `LOGISTICS_DRIVER` completion by
+either assigned participant requires at least one result photo linked to a
+`READY` media generation and closes the same entry for both.
+
+Native device registration remains wire-compatible: omitted `targetKind`
+means legacy `TOKEN`, while current clients send `FID` and put the Firebase
+Installation ID in the existing `token` property. Task-board binds each
+installation to WORKER or DRIVER and persists `TASK_JOIN_AVAILABLE` before
+attempting at-least-once WorkerApp delivery. The event is an invalidation, not
+an authorization grant or a complete projection.
+
+The public logistics rich-detail operation
+`/api/logistics/v1/driver-tasks/{taskId}` accepts a driver only when the token
+has `driver.tasks`, the WORKER identity equals the planned assigned worker and
+the task audience is `ASSIGNED_DRIVER`. Media accepts a WORKER upload/read
+token with exactly one of `worker.tasks` and `driver.tasks`; all existing
+worker, warehouse and owner proofs still apply.
+
+Evidence:
+[`task-board OpenAPI`](../../contracts/openapi/task-board-service.yaml),
+[`logistics OpenAPI`](../../contracts/openapi/logistics-service.yaml),
+[`media OpenAPI`](../../contracts/openapi/media-service.yaml),
+[`MobileTaskSurfacePolicy.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/MobileTaskSurfacePolicy.java),
+[`LogisticsAuthorizer.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/security/LogisticsAuthorizer.java),
+and
+[`media validator`](../../services/media-service/internal/auth/validator.go).
 
 ### Media Upload Session Recovery
 
@@ -281,21 +325,22 @@ anonymous client-presentation operations; every other route is bearer
 protected.
 
 The gateway inventory resolves every canonical domain-public operation through
-the current functional routers and the real edge security chain. It covers 265
+the current functional routers and the real edge security chain. It covers 273
 domain-public operations, proves the four logistics presentation operations are
 the only anonymous domain routes, and proves canonical internal operations and
 reserved internal/private aliases are not public gateway routes. Auth callbacks
 and media health remain explicit owner-specific exclusions rather than hidden
 route gaps.
 
-Manager and worker Retrofit gates inventory all declared client methods,
-eagerly validate their converters and exercise representative encode/decode
-fixtures for every consumed JSON root family. Manager has 62 methods (60 fixed
-public gateway paths and two media-only guarded `@Url` methods); worker has 11
-(nine fixed and two guarded media methods). The worker action serializer emits
-all seven required contract properties, including explicit `null` for the
-required nullable `workerGroupId` and `evidenceId`, without enabling global
-explicit-null serialization.
+Manager, worker and driver Retrofit gates inventory all declared client
+methods, eagerly validate their converters and exercise representative
+encode/decode fixtures for every consumed JSON root family. Manager has 62
+methods (60 fixed public gateway paths and two media-only guarded `@Url`
+methods); worker has 11 (nine fixed and two guarded media methods); driver has
+12 (ten fixed and two guarded media methods). The worker and driver action
+serializers emit all seven required contract properties, including explicit
+`null` for required nullable `workerGroupId` and `evidenceId`, without enabling
+global explicit-null serialization.
 
 Evidence:
 [`inventory parity`](../../services/inventory-service/src/test/java/dev/buhanzaz/rwms/inventory/config/InventoryRouteSecurityParityTest.java),
@@ -303,8 +348,10 @@ Evidence:
 [`gateway parity`](../../services/api-gateway-service/src/test/java/dev/buhanzaz/rwms/gateway/config/GatewayRouteSecurityParityTest.java),
 [`manager boundary`](../../app/src/test/java/dev/buhanzaz/rwms/manager/network/RwmsApiContractBoundaryTest.kt),
 [`worker boundary`](../../worker-app/core-network/src/test/java/dev/buhanzaz/rwms/worker/core/network/WorkerGatewayApiContractBoundaryTest.kt),
+[`driver boundary`](../../driver-app/core-network/src/test/java/dev/buhanzaz/rwms/driver/core/network/DriverGatewayApiContractBoundaryTest.kt),
+[`worker action serializer`](../../worker-app/core-network/src/main/java/dev/buhanzaz/rwms/worker/core/network/WorkerActionRequestDtoSerializer.kt),
 and
-[`worker action serializer`](../../worker-app/core-network/src/main/java/dev/buhanzaz/rwms/worker/core/network/WorkerActionRequestDtoSerializer.kt).
+[`driver action serializer`](../../driver-app/core-network/src/main/java/dev/buhanzaz/rwms/driver/core/network/DriverActionRequestDtoSerializer.kt).
 
 ## Safe Change Procedure
 

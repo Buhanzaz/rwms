@@ -101,38 +101,6 @@ class TaskQueueListComposeTest {
     }
 
     @Test
-    fun driverTablesExplainPersonalLogisticsAndSharedMovements() {
-        val columns = listOf(
-            WorkBoardColumn(
-                id = "driver-logistics",
-                name = "Логистика",
-                personal = true,
-                sections = emptyList(),
-                description = "Только назначенные вам задания",
-            ),
-            WorkBoardColumn(
-                id = "driver-movements",
-                name = "Перемещения",
-                personal = true,
-                sections = emptyList(),
-                description = "Общие задания водителей склада",
-            ),
-        )
-        compose.setContent {
-            MaterialTheme {
-                Box(Modifier.size(width = 800.dp, height = 400.dp)) {
-                    WorkBoardColumns(columns, kpiPalette = null, onTask = {})
-                }
-            }
-        }
-
-        compose.onNodeWithText("Логистика").assertIsDisplayed()
-        compose.onNodeWithText("Только назначенные вам задания").assertIsDisplayed()
-        compose.onNodeWithText("Перемещения").assertIsDisplayed()
-        compose.onNodeWithText("Общие задания водителей склада").assertIsDisplayed()
-    }
-
-    @Test
     fun roleAndQueuePanelsCollapseIndependently() {
         val section = TaskQueueSection(
             queueId = "repair",

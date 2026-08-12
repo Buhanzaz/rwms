@@ -40,6 +40,7 @@ public record OAuthClientProperties(List<Client> clients) {
                     "warehouse.lifecycle.read",
                     "warehouse.lifecycle.confirm");
     static final String WORKER_ANDROID_CLIENT_ID = "rwms-worker-android";
+    static final String DRIVER_ANDROID_CLIENT_ID = "rwms-driver-android";
     public static final String MANAGER_ANDROID_CLIENT_ID = "rwms-manager-android";
     static final Set<String> MANAGER_ANDROID_SCOPES = Set.of(
             "openid",

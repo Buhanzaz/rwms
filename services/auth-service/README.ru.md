@@ -54,7 +54,7 @@ Auth-service владеет:
 ## Как работают вход и выпуск токена
 
 ```text
-Panel / manager app / worker app
+Panel / manager app / WorkerApp / DriverApp
           |
           | Authorization Code + PKCE через public /auth/**
           v
@@ -80,6 +80,15 @@ post-logout URI, allowed origins, PKCE и сроки жизни токенов.
 свои native authorization-server paths (`/oauth2/**`, `/login`, `/logout` и
 `/api/**`); gateway снимает ровно один префикс `/auth`. Callback panel остаётся
 `/auth/callback`, принадлежит panel и не пересылается в auth-service.
+
+WorkerApp и DriverApp используют одну WORKER credential identity, но два
+непересекающихся public clients; authorization requests обоих клиентов требуют
+PKCE `S256`. `rwms-worker-android` возвращает
+query-free HTTPS `/auth/worker/callback` и получает `worker.tasks`;
+`rwms-driver-android` возвращает `/auth/driver/callback` и получает только
+`driver.tasks`. Native login clients валидируют и потребляют redirect Location
+в памяти, поэтому ни один Android manifest не открывает custom-scheme или App
+Link receiver. Оба client ID выбирают login surface для worker credentials.
 
 User access и ID tokens содержат канонические claims `sub`,
 `preferred_username`, `principal_type=USER`, `global_role` и camel-case
@@ -121,9 +130,9 @@ warehouse accesses используют optimistic concurrency. `409` означ
   session. Уже выпущенные self-contained access tokens действуют только до
   своего короткого configured lifetime (в текущей managed-client policy — пять
   минут).
-- При изменении пароля, relevant entitlement или client access удаляются
-  сохранённые authorizations и consents. Там, где изменение касается одного
-  client audience, применяется client-specific revocation.
+- При изменении логина или пароля, relevant entitlement или client access
+  удаляются сохранённые authorizations и consents. Там, где изменение касается
+  одного client audience, применяется client-specific revocation.
 - Physical user deletion намеренно fail-closed. Поддерживаемая операция —
   disable, пока не доказано отсутствие внешней audit history и active sessions.
 - Последнего active `SYSTEM_ADMIN` нельзя отключить, понизить или удалить;
@@ -150,6 +159,11 @@ Security-relevant изменение конфигурации или секре�
 Это лучше, чем пересоздавать clients на каждом старте: stable client IDs
 сохраняют корректное состояние, а осмысленная revision делает security change
 проверяемым и не позволяет случайно реактивировать client при rollback деплоя.
+
+Managed mobile inventory включает USER-only manager client и два указанных
+WORKER-only WorkerApp/DriverApp clients. Изменение callback, scope или principal
+type требует собственной revision и согласованного client release; refresh
+token одного mobile client нельзя обменять через client ID другого.
 
 ## Проверка warehouse grants
 
@@ -233,7 +247,11 @@ local issuer `http://localhost:9000`; production использует gateway is
   `AUTH_SIGNING_KEY_ALIAS` для persistent PKCS12 signing key;
 - `AUTH_DB_URL`, `AUTH_DB_USERNAME` и `AUTH_DB_PASSWORD` с non-loopback
   PostgreSQL endpoint и отдельными deployment credentials;
-- public HTTPS issuer/base, allowed origins и registered redirect URIs.
+- public HTTPS issuer/base, allowed origins и registered redirect URIs;
+- `WORKER_ORIGIN`, `WORKER_REDIRECT_URI`, `WORKER_POST_LOGOUT_REDIRECT_URI`,
+  `DRIVER_ORIGIN`, `DRIVER_REDIRECT_URI` и
+  `DRIVER_POST_LOGOUT_REDIRECT_URI`: same-origin HTTPS значения с отдельными
+  query-free callbacks.
 
 Вне dev/test startup не допускает отсутствующие bootstrap credentials, client
 secrets, signing material, а также отсутствующие или development-default

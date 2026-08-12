@@ -9,7 +9,6 @@ import dev.buhanzaz.rwms.worker.core.database.WorkerTaskEntity
 import dev.buhanzaz.rwms.worker.core.network.WorkerAssignmentDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerCategoryDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerContextDto
-import dev.buhanzaz.rwms.worker.core.network.WorkerDriverTaskAudienceDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerFeedCategoryDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerFeedEntryDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerIdentityDto
@@ -166,29 +165,6 @@ class FullSyncConflictResolutionRobolectricTest {
             .containsExactly("electric")
     }
 
-    @Test
-    fun fullFeedPersistsServerOwnedDriverAudienceClassification() = runTest {
-        val drivers = category("drivers", "Водители", sortOrder = 5).copy(
-            type = "MOVEMENT",
-            queuePurpose = "LOGISTICS_DRIVER",
-        )
-        writer.commitContextAndFeed(
-            context = context(categories = listOf(drivers)),
-            revision = 12,
-            serverTime = "2026-08-10T10:00:00Z",
-            categories = listOf(
-                WorkerFeedCategoryDto(
-                    category = drivers,
-                    entries = listOf(driverFeedEntry()),
-                ),
-            ),
-            etag = "\"feed-12\"",
-        )
-
-        assertThat(database.taskDao().task(USER_ID, ENTRY_ID)?.driverAudienceMode)
-            .isEqualTo("ASSIGNED_DRIVER")
-    }
-
     private fun context(
         categories: List<WorkerCategoryDto> = emptyList(),
         revision: Long = 11,
@@ -222,34 +198,6 @@ class FullSyncConflictResolutionRobolectricTest {
         sortOrder = sortOrder,
         audienceModes = listOf("AVAILABLE"),
         resultPhotoMinCount = 1,
-    )
-
-    private fun driverFeedEntry() = WorkerFeedEntryDto(
-        entryId = ENTRY_ID,
-        version = 4,
-        taskId = "task",
-        routeIndex = 0,
-        title = "Отгрузить бытовку",
-        unitNumber = "БТ-1",
-        taskText = null,
-        scheduledDate = "2026-08-10",
-        deadlineAt = null,
-        priority = 3,
-        queuePosition = 0,
-        status = "WAITING",
-        availabilityMode = "AVAILABLE",
-        plannedDurationMinutes = null,
-        activeStartedAt = null,
-        activeWorkSeconds = 0,
-        assignments = emptyList(),
-        readyEvidenceCount = 0,
-        resultPhotoMinCount = 1,
-        driverAudience = WorkerDriverTaskAudienceDto(
-            mode = "ASSIGNED_DRIVER",
-            workerId = "11111111-1111-1111-1111-111111111111",
-            workerName = "Водитель",
-        ),
-        timerSnapshot = null,
     )
 
     private fun conflict(userId: String, operationId: String) = WorkerConflictEntity(

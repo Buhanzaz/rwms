@@ -673,7 +673,9 @@ paths:
       operationId: getDriverTask
       description: >-
         Returns the logistics-owned task to a warehouse-authorized manager, or to the exact
-        assigned driver subject for an ASSIGNED_DRIVER task. Unassigned and warehouse-wide tasks
+        assigned DriverApp WORKER for an ASSIGNED_DRIVER task when the token has driver.tasks and
+        its worker_id equals plannedDriverWorkerId. The session sub is not a worker identity;
+        worker.tasks does not authorize this rich detail. UNASSIGNED and WAREHOUSE_DRIVERS tasks
         remain manager-only until a concrete driver is assigned.
       responses:
         "200": { $ref: "#/components/responses/DriverTask" }
@@ -4140,10 +4142,10 @@ components:
           description: Exact selection cardinality for REPLACEMENT; null for NORMAL.
         requiresDesiredDeliveryWindows:
           type: boolean
-          description: True for NORMAL presentations, which collect one desired client receiving date before confirmation; false for REPLACEMENT.
+          description: True for NORMAL presentations, which collect one to five independent desired client receiving dates before confirmation; false for REPLACEMENT.
         desiredDeliveryWindows:
           type: array
-          description: Empty for NORMAL because the client supplies its date at confirmation; REPLACEMENT exposes existing date-only order preferences read-only.
+          description: Empty for NORMAL because the client supplies one to five independent dates at confirmation; REPLACEMENT exposes existing date-only order preferences read-only.
           items: { $ref: "#/components/schemas/DesiredDeliveryWindow" }
         equipmentAvailability:
           type: array
@@ -4237,7 +4239,10 @@ components:
           items: { $ref: "#/components/schemas/PresentationCabinSelectionInput" }
         desiredDeliveryWindows:
           type: [array, "null"]
-          description: Required only for NORMAL. It contains exactly one date-only calendar day; it must be absent for REPLACEMENT.
+          description: Required only for NORMAL. It contains one to five distinct date-only calendar days, each selected independently; it must be absent for REPLACEMENT.
+          minItems: 1
+          maxItems: 5
+          uniqueItems: true
           items: { $ref: "#/components/schemas/DesiredDeliveryWindowInput" }
         rentalMonths:
           type: [integer, "null"]
@@ -4323,7 +4328,7 @@ components:
           minimum: 1
         requiresDesiredDeliveryWindows:
           type: boolean
-          description: True for NORMAL presentations, which collect one desired client receiving date; false for REPLACEMENT.
+          description: True for NORMAL presentations, which collect one to five independent desired client receiving dates; false for REPLACEMENT.
         desiredDeliveryWindows:
           type: array
           description: Empty for NORMAL; existing date-only order preferences are read-only for REPLACEMENT.

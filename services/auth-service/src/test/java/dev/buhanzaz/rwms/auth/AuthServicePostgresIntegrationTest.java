@@ -59,7 +59,15 @@ class AuthServicePostgresIntegrationTest {
                         Integer.class))
                 .isEqualTo(1);
         assertThat(jdbc.queryForObject("select count(*) from auth_subject", Integer.class)).isEqualTo(1);
-        assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isEqualTo(6);
+        assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isEqualTo(8);
+        assertThat(clients.findByClientId("rwms-driver-android"))
+                .isNotNull()
+                .satisfies(driver -> {
+                    assertThat(driver.getScopes())
+                            .contains("openid", "profile", "offline_access", "driver.tasks")
+                            .doesNotContain("worker.tasks");
+                    assertThat(driver.getClientSettings().isRequireProofKey()).isTrue();
+                });
         assertThat(jdbc.queryForMap(
                         "select client_authentication_methods, authorization_grant_types, scopes, client_settings "
                                 + "from oauth2_registered_client where client_id = ?",

@@ -165,22 +165,24 @@ work.
 - Resolution and date: none. Kafka retention alone is not an acceptable
   archive or reconciliation source.
 
-## Worker Invalidation Replay Semantics
+## Worker And Driver Invalidation Replay Semantics
 
 - Status: `Open`
-- Affected owner and consumers: task-board-service, worker Android app and API
+- Affected owner and consumers: task-board-service, WorkerApp, DriverApp and API
   gateway SSE transport.
-- Requested behavior: reconnecting a worker must have one documented recovery
-  rule after missed invalidations.
+- Requested behavior: reconnecting either native task client must have one
+  documented recovery rule after missed invalidations.
 - Conflicting contract or invariant: OpenAPI tells clients to reconnect with
   `Last-Event-ID`, while task-board currently emits a new in-memory
   `FEED_CHANGED` invalidation on connection and does not replay the supplied
-  cursor. The worker also performs periodic authoritative refreshes.
+  cursor. Both native clients also perform periodic authoritative refreshes.
 - Evidence:
   [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml),
   [`WorkerTaskBoardController.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/api/WorkerTaskBoardController.java),
+  [`DriverTaskBoardController.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/api/DriverTaskBoardController.java),
   [`WorkerInvalidationHub.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/WorkerInvalidationHub.java),
-  [`WorkerRealtimeCoordinator.kt`](../../worker-app/core-sync/src/main/java/dev/buhanzaz/rwms/worker/core/sync/WorkerRealtimeCoordinator.kt).
+  [`WorkerRealtimeCoordinator.kt`](../../worker-app/core-sync/src/main/java/dev/buhanzaz/rwms/worker/core/sync/WorkerRealtimeCoordinator.kt),
+  [`DriverRealtimeCoordinator.kt`](../../driver-app/core-sync/src/main/java/dev/buhanzaz/rwms/driver/core/sync/DriverRealtimeCoordinator.kt).
 - Smallest decision needed: choose invalidation-only reconnect with mandatory
   full refresh and no replay promise, or a durable ordered replay log with
   cursor expiry and resync semantics.
@@ -190,7 +192,7 @@ work.
 ## Android Release Publication Trust
 
 - Status: `Open`
-- Affected owner and consumers: manager Android app, worker Android app,
+- Affected owner and consumers: manager Android app, WorkerApp, DriverApp,
   manager-download-site, worker-download-site, release engineering and device
   administrators.
 - Requested behavior: every published APK must be traceable to one reviewed
@@ -201,7 +203,8 @@ work.
   reviewed signed 0.1.11 APK through one validated manifest, a versioned
   Worker-owned download route and a SHA-256 check, but there is still no shared
   release registry, documented signing authority/retention policy or
-  organization-wide checksum-verification flow.
+  organization-wide checksum-verification flow. DriverApp has no assigned
+  download-site or published release contract yet.
 - Evidence:
   [`manager app build`](../../app/build.gradle.kts),
   [`download preparation`](../../manager-download-site/scripts/prepare-sites-worker.mjs),
@@ -209,13 +212,15 @@ work.
   [`static page`](../../manager-download-site/public/index.html),
   [`worker manifest`](../../worker-download-site/release.json),
   [`worker route`](../../worker-download-site/scripts/build-site.mjs),
-  [`worker app build`](../../worker-app/app/build.gradle.kts).
+  [`worker app build`](../../worker-app/app/build.gradle.kts),
+  [`driver app build`](../../driver-app/app/build.gradle.kts).
 - Smallest decision needed: choose the supported page implementation, release
   signing authority and key custody, artifact repository/retention policy, and
   manifest fields used as the only rendered version source.
 - Resolution and date: the WorkerApp publication portion was completed on
   2026-08-10 under an explicit reviewed release scope. The overall question
-  remains open for ManagerApp and the organization-wide release policy.
+  remains open for ManagerApp, DriverApp and the organization-wide release
+  policy.
 
 ## Media Terminal Retry Authorization
 

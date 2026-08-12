@@ -40,6 +40,10 @@ This design solves four concrete problems:
 - **Authoritative access:** public reads and mutations require a USER/WORKER
   JWT plus a current local owner proof and warehouse scope. Caller-provided
   owner or warehouse values are never trusted by themselves.
+- **Task evidence clients:** a `WORKER` principal may access
+  `TASK_BOARD_ENTRY/WORK_RESULT` media with exactly one of `worker.tasks` or
+  `driver.tasks`, its exact `worker_id`, and its single `warehouse_id`; a token
+  carrying both task scopes is rejected.
 - **Recoverable delivery:** PostgreSQL owns state and exact replay; Kafka
   carries at-least-once facts through a transactional outbox and idempotent
   consumers. A broker outage cannot make Kafka the media database.

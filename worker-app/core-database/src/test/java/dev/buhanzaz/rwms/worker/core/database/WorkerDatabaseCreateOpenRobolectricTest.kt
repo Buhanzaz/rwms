@@ -1,10 +1,10 @@
 package dev.buhanzaz.rwms.worker.core.database
 
 import androidx.room.Room
-import com.google.common.truth.Truth.assertThat
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
+import com.google.common.truth.Truth.assertThat
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -483,6 +483,109 @@ class WorkerDatabaseCreateOpenRobolectricTest {
             assertThat(cursor.isNull(0)).isTrue()
         }
         versionSeven.close()
+        context.deleteDatabase(name)
+    }
+
+    @Test
+    fun migrationSevenToEightRemovesDriverTableClassificationAndPreservesTask() {
+        val context = RuntimeEnvironment.getApplication()
+        val name = "worker-room-remove-driver-classification.db"
+        context.deleteDatabase(name)
+        val versionSeven = openHelper(
+            context = context,
+            name = name,
+            version = 7,
+            onCreate = { database ->
+                database.execSQL(
+                    """
+                    CREATE TABLE `worker_task` (
+                        `localId` TEXT NOT NULL,
+                        `userId` TEXT NOT NULL,
+                        `entryId` TEXT NOT NULL,
+                        `taskId` TEXT NOT NULL,
+                        `version` INTEGER NOT NULL,
+                        `categoryId` TEXT NOT NULL,
+                        `categoryName` TEXT NOT NULL,
+                        `categorySortOrder` INTEGER NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `unitNumber` TEXT,
+                        `taskText` TEXT,
+                        `scheduledDate` TEXT NOT NULL,
+                        `deadlineAt` TEXT,
+                        `priority` INTEGER NOT NULL,
+                        `queuePosition` INTEGER NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `availabilityMode` TEXT NOT NULL,
+                        `plannedDurationMinutes` INTEGER,
+                        `activeStartedAt` TEXT,
+                        `activeWorkSeconds` INTEGER NOT NULL,
+                        `readyEvidenceCount` INTEGER NOT NULL,
+                        `resultPhotoMinCount` INTEGER NOT NULL,
+                        `lastServerRevision` INTEGER NOT NULL,
+                        `locallyPending` INTEGER NOT NULL,
+                        `updatedAtEpochMillis` INTEGER NOT NULL,
+                        `timerCountedActiveSeconds` INTEGER,
+                        `timerRemainingSeconds` INTEGER,
+                        `timerRemainingPercent` REAL,
+                        `timerState` TEXT,
+                        `timerNextTransitionAt` TEXT,
+                        `timerServerTime` TEXT,
+                        `driverAudienceMode` TEXT,
+                        PRIMARY KEY(`localId`)
+                    )
+                    """.trimIndent(),
+                )
+                database.execSQL(
+                    """
+                    CREATE INDEX `index_worker_task_userId_categorySortOrder_queuePosition`
+                    ON `worker_task` (`userId`, `categorySortOrder`, `queuePosition`)
+                    """.trimIndent(),
+                )
+                database.execSQL(
+                    """
+                    CREATE UNIQUE INDEX `index_worker_task_userId_entryId`
+                    ON `worker_task` (`userId`, `entryId`)
+                    """.trimIndent(),
+                )
+            },
+        )
+        versionSeven.writableDatabase.execSQL(
+            """
+            INSERT INTO `worker_task` (
+                `localId`, `userId`, `entryId`, `taskId`, `version`, `categoryId`,
+                `categoryName`, `categorySortOrder`, `title`, `scheduledDate`, `priority`,
+                `queuePosition`, `status`, `availabilityMode`, `activeWorkSeconds`,
+                `readyEvidenceCount`, `resultPhotoMinCount`, `lastServerRevision`,
+                `locallyPending`, `updatedAtEpochMillis`, `driverAudienceMode`
+            ) VALUES (
+                'worker:entry', 'worker', 'entry', 'task', 4, 'joint',
+                'Совместная работа', 10, 'Погрузить бытовку', '2026-08-12', 3,
+                0, 'IN_PROGRESS', 'REQUIRED_JOIN', 120,
+                0, 1, 12, 0, 1, 'ASSIGNED_DRIVER'
+            )
+            """.trimIndent(),
+        )
+        versionSeven.close()
+
+        val versionEight = openHelper(
+            context = context,
+            name = name,
+            version = 8,
+            onCreate = { error("Expected the version 7 database to exist") },
+            onUpgrade = { database -> WorkerDatabase.MIGRATION_7_8.migrate(database) },
+        )
+        val database = versionEight.writableDatabase
+
+        assertThat(columns(database, "worker_task")).doesNotContain("driverAudienceMode")
+        database.query(
+            "SELECT `title`, `status`, `availabilityMode` FROM `worker_task` WHERE `localId`='worker:entry'",
+        ).use { cursor ->
+            assertThat(cursor.moveToFirst()).isTrue()
+            assertThat(cursor.getString(0)).isEqualTo("Погрузить бытовку")
+            assertThat(cursor.getString(1)).isEqualTo("IN_PROGRESS")
+            assertThat(cursor.getString(2)).isEqualTo("REQUIRED_JOIN")
+        }
+        versionEight.close()
         context.deleteDatabase(name)
     }
 

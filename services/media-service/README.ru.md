@@ -41,6 +41,10 @@ Kafka — отдельное представление и никогда не �
 - **Авторитетный доступ.** Публичные read/mutation требуют USER/WORKER JWT,
   актуальный local owner proof и доступ к складу. Пара owner/warehouse,
   присланная вызывающей стороной, сама по себе не считается доказательством.
+- **Клиенты task evidence.** Principal `WORKER` получает доступ к медиа
+  `TASK_BOARD_ENTRY/WORK_RESULT` с ровно одним scope: `worker.tasks` или
+  `driver.tasks`, своим точным `worker_id` и единственным `warehouse_id`;
+  токен с обоими task scopes отклоняется.
 - **Восстановимая доставка.** PostgreSQL владеет состоянием и точным replay;
   Kafka переносит at-least-once факты через transactional outbox и
   идемпотентных consumers. Недоступность брокера не превращает Kafka в базу

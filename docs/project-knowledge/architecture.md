@@ -1,6 +1,6 @@
 # Current Architecture
 
-Status: Confirmed repository structure as of 2026-08-08.
+Status: Confirmed repository structure as of 2026-08-12.
 
 Primary evidence:
 
@@ -11,6 +11,7 @@ Primary evidence:
 - [`panel/package.json`](../../panel/package.json)
 - [`app/README.md`](../../app/README.md)
 - [`worker-app/README.md`](../../worker-app/README.md)
+- [`driver-app/README.md`](../../driver-app/README.md)
 
 ## Runtime Context
 
@@ -19,6 +20,7 @@ flowchart LR
     Panel[Web panel] --> Gateway[API gateway]
     Manager[Manager Android app] --> Gateway
     Worker[Worker Android app] --> Gateway
+    Driver[Driver Android app] --> Gateway
     Gateway --> Auth[Auth service]
     Gateway --> Domain[Public domain APIs]
     Domain --> ServiceDB[(Service-owned PostgreSQL)]
@@ -83,7 +85,7 @@ Evidence:
 
 ## Client Boundaries
 
-- `panel/`, `app/` and `worker-app/` use the public gateway.
+- `panel/`, `app/`, `worker-app/` and `driver-app/` use the public gateway.
 - Browser requests are same-origin `/auth/**` and `/api/**` only.
 - Clients do not call `/api/internal/**` or direct service database/storage
   endpoints.
@@ -111,25 +113,28 @@ and
 
 ### Android transport contract boundary
 
-Manager and worker Retrofit declarations are executable inventories rather than
-implicit conventions. The manager inventory contains 62 methods: 60 fixed
-public-gateway routes plus two media-only dynamic URLs whose callers enforce the
-same public media origin. The worker inventory contains 11 methods: nine fixed
-public-gateway routes and the same two guarded media URL families. Converter
-construction and representative request/response fixtures cover every consumed
-JSON root family.
+Manager, worker and driver Retrofit declarations are executable inventories
+rather than implicit conventions. The manager inventory contains 62 methods:
+60 fixed public-gateway routes plus two media-only dynamic URLs whose callers
+enforce the same public media origin. The worker inventory contains 11 methods:
+nine fixed public-gateway routes and the same two guarded media URL families.
+The driver inventory contains 12 methods: ten fixed public-gateway routes and
+two guarded media URL families. Converter construction and representative
+request/response fixtures cover every consumed JSON root family.
 
-`WorkerActionRequestDto` has a targeted serializer because the canonical worker
-action request requires the nullable `workerGroupId` and `evidenceId` properties
-to be present. It emits both keys explicitly while the rest of the worker keeps
-its established `explicitNulls = false` behavior. Neither client may call an
+The worker and driver action DTOs have targeted serializers because their
+canonical requests require nullable `workerGroupId` and `evidenceId`
+properties to be present. They emit both keys explicitly while each app keeps
+its established `explicitNulls = false` behavior. No client may call an
 internal/private service path or a direct service origin.
 
 Evidence:
 [`manager contract boundary`](../../app/src/test/java/dev/buhanzaz/rwms/manager/network/RwmsApiContractBoundaryTest.kt),
 [`worker contract boundary`](../../worker-app/core-network/src/test/java/dev/buhanzaz/rwms/worker/core/network/WorkerGatewayApiContractBoundaryTest.kt),
+[`driver contract boundary`](../../driver-app/core-network/src/test/java/dev/buhanzaz/rwms/driver/core/network/DriverGatewayApiContractBoundaryTest.kt),
+[`worker action serializer`](../../worker-app/core-network/src/main/java/dev/buhanzaz/rwms/worker/core/network/WorkerActionRequestDtoSerializer.kt),
 and
-[`worker action serializer`](../../worker-app/core-network/src/main/java/dev/buhanzaz/rwms/worker/core/network/WorkerActionRequestDtoSerializer.kt).
+[`driver action serializer`](../../driver-app/core-network/src/main/java/dev/buhanzaz/rwms/driver/core/network/DriverActionRequestDtoSerializer.kt).
 
 ### Authenticated browser state boundary
 
@@ -177,6 +182,29 @@ Evidence:
 [`MaintenanceCatalogCache`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/MaintenanceCatalogCache.kt),
 [`ManagerAuth`](../../app/src/main/java/dev/buhanzaz/rwms/manager/auth/ManagerAuth.kt),
 and the [manager manifest](../../app/src/main/AndroidManifest.xml).
+
+WorkerApp and DriverApp are separate packages, OAuth clients, encrypted stores
+and Room/WorkManager recovery domains. WorkerApp uses the HTTPS
+`/auth/worker/callback` and exact `worker.tasks` scope; DriverApp uses
+`/auth/driver/callback` and exact `driver.tasks` scope. Both native login
+clients validate and consume the callback in memory without exporting a
+custom-scheme redirect receiver. Their task-board namespaces and device
+registrations are surface-bound, so a token for one app cannot read or mutate
+the other surface.
+
+DriverApp exposes exactly two main destinations: warehouse work and durable
+uploads. WorkerApp contains ordinary worker work plus active secondary
+logistics collaboration, but no driver board, driver trip read or driver take
+surface. Both retain encrypted JPEG evidence and durable outbox state across a
+process or device restart; server projections remain authoritative.
+
+Evidence:
+[`WorkerAuthConfiguration.kt`](../../worker-app/core-auth/src/main/java/dev/buhanzaz/rwms/worker/core/auth/WorkerAuthConfiguration.kt),
+[`DriverAuthConfiguration.kt`](../../driver-app/core-auth/src/main/java/dev/buhanzaz/rwms/driver/core/auth/DriverAuthConfiguration.kt),
+[`WorkerGatewayApi.kt`](../../worker-app/core-network/src/main/java/dev/buhanzaz/rwms/worker/core/network/WorkerGatewayApi.kt),
+[`DriverGatewayApi.kt`](../../driver-app/core-network/src/main/java/dev/buhanzaz/rwms/driver/core/network/DriverGatewayApi.kt),
+and
+[`DriverApp.kt`](../../driver-app/app/src/main/java/dev/buhanzaz/rwms/driver/DriverApp.kt).
 
 ### Client Problem Details and retry boundary
 
@@ -389,11 +417,12 @@ entered; extracted collaborators do not introduce a second transaction policy.
 | --- | --- |
 | Manager `ManagerViewModel` | Workspace/auth, inventory, shipment, return, transfer, maintenance catalog/read/editor/persistence and media coordinators connected through narrow ports |
 | Asset application | Rental items, logistics effects, equipment, maintenance and classifiers; separate inventory capture/projection/furniture/source, HTML-import and property-disposition facades |
-| Task board | Read projection, external registration/mutation, logistics tasks, driver-audience validation/visibility, worker execution and ordering; workforce profile, credential and group owners |
+| Task board | Read projection, external registration/mutation, logistics tasks, driver-audience validation/visibility, non-overlapping native mobile surfaces, transactional slinger push, worker execution and ordering; workforce profile, credential and group owners |
 | Inventory | Session, read, finding/validation/review, planning, completion, statistics, publication and projection owners |
 | Maintenance | Catalog, estimate, repair, transfer, inbound and reconciliation owners; separate inventory maintenance/publication and property-disposition facades |
 | Logistics | Return, shipment, transfer, reconciliation and rental-order document hooks; one grouped document driver-intent planner; rental-order read/create/lifecycle/reservation/terms/shipment/replacement owners |
-| Worker task UI | Server-scoped personal-logistics/shared-movement, group-role and qualification-only panels, with adaptive two-pane presentation and existing task-detail/camera/upload navigation; the stored audience mode is presentational and grants no access |
+| Worker task UI | Ordinary group/qualification work plus active joined logistics-secondary work; JOIN uses the current group and reuses the task-detail/camera/durable-upload navigation; there is no driver board or driver-trip surface |
+| Driver task UI | Driver-only primary warehouse work plus durable uploads; TAKE/PAUSE/RESUME/COMPLETE and CameraX evidence, with no JOIN or slinger notification handling |
 | Assistant | Conversation creation store, one durable ordered clarification queue, cabin search/reference tools and selection delegation; only the visible `PENDING` head is actionable and logistics/asset remain the command owners |
 | Private HTTP adapters | Logistics and maintenance gateway facades delegate by remote owner to warehouse, asset, task-board, logistics, maintenance or media clients over one technical OAuth/HTTP transport each |
 
@@ -529,11 +558,12 @@ producer/consumer compatibility tests.
 
 Owner-specific route gates close that second half. Inventory and logistics
 compare their canonical method/path sets with merged Spring controller mappings
-and exercise the production security chains. The gateway resolves all 265
-canonical domain-public operations through its 16 owner routers, keeps exactly
+and exercise the production security chains. The gateway resolves all 273
+canonical domain-public operations through its 17 domain routers, keeps exactly
 four logistics presentation operations anonymous, and rejects canonical
 internal operations plus reserved private/internal aliases. The current focused
-route/security gate is 9/9.
+route/security gate also proves that WorkerApp and DriverApp SSE routes win over
+the generic task-board route and that their scopes are not interchangeable.
 
 Media-service has an independent Go structural gate. It requires one module and
 one `cmd/media-service` executable, builds an acyclic role-directed module-local

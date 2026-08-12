@@ -5,6 +5,20 @@ import org.junit.Test
 
 class WorkerPushInvalidationTest {
     @Test
+    fun `device registration uses the stable Firebase installation id target`() {
+        val request = workerDeviceRegistrationRequest(
+            firebaseInstallationId = "fid-42",
+            appVersion = "0.1.16",
+            sdkInt = 36,
+            locale = "ru-RU",
+        )
+
+        assertThat(request.provider).isEqualTo("FCM")
+        assertThat(request.targetKind).isEqualTo("FID")
+        assertThat(request.token).isEqualTo("fid-42")
+    }
+
+    @Test
     fun `accepts only the minimal data-only invalidation contract`() {
         assertThat(
             WorkerPushInvalidation.from(

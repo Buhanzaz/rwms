@@ -172,9 +172,9 @@ public class RentalOrderService {
   }
 
   /**
-   * Applies one confirmed normal presentation's per-cabin furniture selection, client date,
-   * delivery facts and initial duration to its existing target order using the same editability and
-   * order-wide asset reservation boundary as manual editing.
+   * Applies one confirmed normal presentation's per-cabin furniture selection, independently
+   * selected client receiving days, delivery facts and initial duration to its existing target
+   * order using the same editability and order-wide asset reservation boundary as manual editing.
    */
   @Transactional
   public MutationResult applyPresentationSelection(
@@ -184,7 +184,7 @@ public class RentalOrderService {
       dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.ConvertedPresentationHolds
           conversion,
       Map<UUID, Map<UUID, Long>> selectedRequirements,
-      DesiredDeliveryWindow desiredDeliveryWindow,
+      List<DesiredDeliveryWindow> desiredDeliveryWindows,
       long rentalMonths,
       String deliveryAddress,
       BigDecimal latitude,
@@ -198,7 +198,7 @@ public class RentalOrderService {
             idempotencyKey,
             conversion,
             selectedRequirements,
-            desiredDeliveryWindow,
+            desiredDeliveryWindows,
             rentalMonths,
             deliveryAddress,
             latitude,

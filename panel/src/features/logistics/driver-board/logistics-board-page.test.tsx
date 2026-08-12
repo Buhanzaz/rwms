@@ -162,7 +162,7 @@ function card(
     priority: 3,
     pinned: false,
     position: 0,
-    tripDetails: null,
+    tripDetails: tripDetails(),
     ...params,
   }
 }
@@ -342,7 +342,7 @@ afterEach(() => {
 })
 
 describe("LogisticsBoardPage", () => {
-  it("renders date columns with collapsible driver queues and only shipment or return cards", async () => {
+  it("renders date columns with collapsible driver queues and only grouped shipment or return cards", async () => {
     const actor = userEvent.setup()
     renderPage()
 
@@ -353,12 +353,11 @@ describe("LogisticsBoardPage", () => {
     const petrQueue = within(firstDate).getByLabelText(
       "Очередь водителя: Петров Пётр"
     )
-    expect(
-      within(ivanQueue).getByTestId(
-        `logistics-task-${firstShipment.externalTaskId}`
-      )
-    ).toBeTruthy()
-    expect(within(ivanQueue).getByText("Бытовка БТ-ОТГ-1")).toBeTruthy()
+    const firstCard = within(ivanQueue).getByTestId(
+      `logistics-task-${firstShipment.externalTaskId}`
+    )
+    expect(firstCard).toBeTruthy()
+    expect(within(firstCard).getByText("Бытовка - БТ-ОТГ-1")).toBeTruthy()
     expect(
       within(petrQueue).getByTestId(
         `logistics-task-${petrReturn.externalTaskId}`
@@ -425,29 +424,40 @@ describe("LogisticsBoardPage", () => {
     ).not.toHaveProperty("targetDriverAudience")
   })
 
-  it("renders a grouped shipment with its client and cabin list without a priority badge", async () => {
+  it("renders only grouped shipment or return cards and never exposes legacy task text", async () => {
+    const legacyShipment = card("00000000-0000-4000-8000-000000000026", {
+      title: "Устаревшее задание №77",
+      taskText: "Устаревший текст задания",
+      tripDetails: null,
+    })
     const groupedShipment = card("00000000-0000-4000-8000-000000000027", {
-      title: "Отгрузка клиенту ООО Тест",
-      taskText: "Клиент: ООО Тест\nБытовки: БТ-ОТГ-1, БТ-ОТГ-2",
+      title: "Старый заголовок отгрузки",
+      taskText: "Старый текст отгрузки",
       unitNumber: "2 бытовки",
-      position: 0,
+      position: 1,
     })
     renderPage({
       ...board,
-      dates: [{ date: "2026-08-01", tasks: [groupedShipment] }],
+      dates: [{ date: "2026-08-01", tasks: [legacyShipment, groupedShipment] }],
     })
 
     const groupedCard = await screen.findByTestId(
       `logistics-task-${groupedShipment.externalTaskId}`
     )
-    expect(within(groupedCard).getByText("Бытовки: 2")).toBeTruthy()
-    const details = within(groupedCard).getByLabelText("Детали задания")
-    expect(details.textContent).toContain("Клиент: ООО Тест")
-    expect(details.textContent).toContain("Бытовки: БТ-ОТГ-1, БТ-ОТГ-2")
-    expect(screen.queryByText(/Приоритет/)).toBeNull()
+    expect(within(groupedCard).getByText("Отгрузить бытовку")).toBeTruthy()
+    expect(within(groupedCard).getByText("ООО Тест · Бытовки: 2")).toBeTruthy()
+    expect(
+      screen.queryByTestId(`logistics-task-${legacyShipment.externalTaskId}`)
+    ).toBeNull()
+    expect(screen.queryByText("Устаревшее задание №77")).toBeNull()
+    expect(screen.queryByText("Устаревший текст задания")).toBeNull()
+    expect(screen.queryByText("Старый заголовок отгрузки")).toBeNull()
+    expect(screen.queryByText("Старый текст отгрузки")).toBeNull()
+    expect(screen.queryByText(/Задание №/)).toBeNull()
+    expect(screen.queryByText(/Ходка №/)).toBeNull()
   })
 
-  it("renders one authoritative two-cabin trip card and loads live cabin readiness in details", async () => {
+  it("uses compact trip details and loads current actual filling in the dialog", async () => {
     const actor = userEvent.setup()
     const summary = tripDetails()
     const groupedShipment = card("00000000-0000-4000-8000-000000000028", {
@@ -463,7 +473,7 @@ describe("LogisticsBoardPage", () => {
           {
             equipmentId: "00000000-0000-4000-8000-000000000402",
             equipmentName: index === 0 ? "Стол" : "Стул",
-            quantity: 1,
+            quantity: index === 0 ? 4 : 2,
             locationKind: "RENTAL_ITEM",
           },
         ],
@@ -483,9 +493,10 @@ describe("LogisticsBoardPage", () => {
     const groupedCard = await screen.findByTestId(
       `logistics-task-${groupedShipment.externalTaskId}`
     )
-    expect(
-      within(groupedCard).getByText("Задание №123 · Ходка №1")
-    ).toBeTruthy()
+    expect(within(groupedCard).getByText("Отгрузить бытовку")).toBeTruthy()
+    expect(within(groupedCard).queryByText(/Задание №/)).toBeNull()
+    expect(within(groupedCard).queryByText(/Ходка №/)).toBeNull()
+    expect(within(groupedCard).queryByText("Отгрузка")).toBeNull()
     expect(within(groupedCard).getByText("ООО Тест · Бытовки: 2")).toBeTruthy()
     expect(within(groupedCard).getByText("Водитель: Иванов Иван")).toBeTruthy()
     expect(
@@ -497,11 +508,24 @@ describe("LogisticsBoardPage", () => {
     expect(
       within(groupedCard).getAllByText("Пётр · +79990000002")
     ).toHaveLength(2)
-    expect(within(groupedCard).getByText("Бытовка БТ-ОТГ-1")).toBeTruthy()
-    expect(within(groupedCard).getByText("Бытовка БТ-ОТГ-2")).toBeTruthy()
+    expect(within(groupedCard).getByText("Бытовка - БТ-ОТГ-1")).toBeTruthy()
+    expect(within(groupedCard).getByText("Бытовка - БТ-ОТГ-2")).toBeTruthy()
     expect(
-      within(groupedCard).getByText(/Недоступно в карточке доски/i)
+      within(groupedCard).getByText(/Дата выполнения задания:/)
     ).toBeTruthy()
+    expect(within(groupedCard).queryByText("Желаемые даты клиента")).toBeNull()
+    expect(within(groupedCard).queryByText(/Фактически назначено/)).toBeNull()
+    expect(within(groupedCard).queryByText(/Нужно по заказу/)).toBeNull()
+    expect(within(groupedCard).queryByText(/Фактически в бытовке/)).toBeNull()
+    expect(within(groupedCard).queryByText(/Перемещение мебели/)).toBeNull()
+    expect(
+      within(groupedCard).queryByText(/Недоступно в карточке доски/i)
+    ).toBeNull()
+    expect(
+      within(groupedCard).getAllByLabelText(/^Статус наполнения:/)
+    ).toHaveLength(2)
+    expect(within(groupedCard).getByText("Ожидает наполнения")).toBeTruthy()
+    expect(within(groupedCard).getByText("Нет наполнения")).toBeTruthy()
     expect(
       [...dndMocks.sortableData.keys()].filter((key) =>
         key.startsWith("logistics-task:")
@@ -518,11 +542,142 @@ describe("LogisticsBoardPage", () => {
         groupedShipment.driverTaskId
       )
     })
-    expect(within(dialog).getByText("Стол")).toBeTruthy()
-    expect(within(dialog).getByText("Наполнение готово")).toBeTruthy()
-    expect(
-      within(dialog).getByText("Перемещение мебели выполнено")
-    ).toBeTruthy()
+    expect(within(dialog).getByText("Стол: 4шт")).toBeTruthy()
+    expect(within(dialog).getByText("Стул: 2шт")).toBeTruthy()
+    expect(within(dialog).getByText("Ожидает наполнения")).toBeTruthy()
+    expect(within(dialog).getByText("Ожидает выноса наполнения")).toBeTruthy()
+    expect(within(dialog).queryByText(/Задание №/)).toBeNull()
+    expect(within(dialog).queryByText(/Ходка №/)).toBeNull()
+  })
+
+  it("shows exactly one filling status for every cabin", async () => {
+    const statusTrip = tripDetails({
+      cabins: [
+        {
+          cabinId: "00000000-0000-4000-8000-000000000311",
+          unitNumber: "БТ-ПУСТО",
+          desiredContents: [],
+          actualContents: [],
+          movementTaskCreated: false,
+          movementTaskCompleted: false,
+          contentReady: false,
+        },
+        {
+          cabinId: "00000000-0000-4000-8000-000000000312",
+          unitNumber: "БТ-ЖДЕТ",
+          desiredContents: [
+            {
+              equipmentId: "00000000-0000-4000-8000-000000000411",
+              equipmentName: "Стол",
+              quantity: 4,
+            },
+          ],
+          actualContents: [],
+          movementTaskCreated: false,
+          movementTaskCompleted: false,
+          contentReady: true,
+        },
+        {
+          cabinId: "00000000-0000-4000-8000-000000000313",
+          unitNumber: "БТ-ВЫНОС",
+          desiredContents: [],
+          actualContents: [
+            {
+              equipmentId: "00000000-0000-4000-8000-000000000412",
+              equipmentName: "Стул",
+              quantity: 2,
+              locationKind: "RENTAL_ITEM",
+            },
+          ],
+          movementTaskCreated: false,
+          movementTaskCompleted: true,
+          contentReady: true,
+        },
+        {
+          cabinId: "00000000-0000-4000-8000-000000000314",
+          unitNumber: "БТ-ГОТОВО",
+          desiredContents: [
+            {
+              equipmentId: "00000000-0000-4000-8000-000000000413",
+              equipmentName: "Стол",
+              quantity: 4,
+            },
+          ],
+          actualContents: [
+            {
+              equipmentId: "00000000-0000-4000-8000-000000000413",
+              equipmentName: "Стол",
+              quantity: 4,
+              locationKind: "RENTAL_ITEM",
+            },
+          ],
+          movementTaskCreated: true,
+          movementTaskCompleted: true,
+          contentReady: false,
+        },
+        {
+          cabinId: "00000000-0000-4000-8000-000000000315",
+          unitNumber: "БТ-НЕДОСТУПНО",
+          desiredContents: [
+            {
+              equipmentId: "00000000-0000-4000-8000-000000000414",
+              equipmentName: "Кровать",
+              quantity: 1,
+            },
+          ],
+          actualContents: null,
+          movementTaskCreated: false,
+          movementTaskCompleted: false,
+          contentReady: true,
+        },
+        {
+          cabinId: "00000000-0000-4000-8000-000000000316",
+          unitNumber: "БТ-В-РАБОТЕ",
+          desiredContents: [
+            {
+              equipmentId: "00000000-0000-4000-8000-000000000415",
+              equipmentName: "Стол",
+              quantity: 1,
+            },
+          ],
+          actualContents: [
+            {
+              equipmentId: "00000000-0000-4000-8000-000000000415",
+              equipmentName: "Стол",
+              quantity: 1,
+              locationKind: "RENTAL_ITEM",
+            },
+          ],
+          movementTaskCreated: true,
+          movementTaskCompleted: false,
+          contentReady: true,
+        },
+      ],
+    })
+    const groupedShipment = card("00000000-0000-4000-8000-000000000034", {
+      tripDetails: statusTrip,
+    })
+    renderPage({
+      ...board,
+      dates: [{ date: "2026-08-01", tasks: [groupedShipment] }],
+    })
+
+    const groupedCard = await screen.findByTestId(
+      `logistics-task-${groupedShipment.externalTaskId}`
+    )
+    const statuses =
+      within(groupedCard).getAllByLabelText(/^Статус наполнения:/)
+    expect(statuses).toHaveLength(statusTrip.cabins.length)
+    expect(statuses.map((status) => status.textContent)).toEqual([
+      "Нет наполнения",
+      "Ожидает наполнения",
+      "Ожидает выноса наполнения",
+      "Наполнение готово",
+      "Ожидает наполнения",
+      "Ожидает наполнения",
+    ])
+    expect(within(groupedCard).getByText("Стол: 4шт")).toBeTruthy()
+    expect(within(groupedCard).getByText("Стул: 2шт")).toBeTruthy()
   })
 
   it("moves a grouped trip with two cabin cards through one board command", async () => {
@@ -563,7 +718,7 @@ describe("LogisticsBoardPage", () => {
     )
   })
 
-  it("shows mixed shipment, return, and transfer trips for different clients and dates", async () => {
+  it("shows grouped shipment and return trips while hiding transfers", async () => {
     const shipment = card("00000000-0000-4000-8000-000000000031", {
       tripDetails: tripDetails(),
     })
@@ -605,11 +760,11 @@ describe("LogisticsBoardPage", () => {
 
     expect(await screen.findByText("ООО Тест · Бытовки: 2")).toBeTruthy()
     expect(screen.getByText("ИП Клиент · Бытовки: 2")).toBeTruthy()
-    expect(screen.getByText("Склад назначения · Бытовки: 2")).toBeTruthy()
-    expect(screen.getAllByText("Отгрузка").length).toBeGreaterThan(0)
-    expect(screen.getAllByText("Вывоз").length).toBeGreaterThan(0)
-    expect(screen.getAllByText("Перемещение").length).toBeGreaterThan(0)
-    expect(screen.getAllByLabelText(/^Логистика на /i)).toHaveLength(3)
+    expect(screen.getByText("Отгрузить бытовку")).toBeTruthy()
+    expect(screen.getByText("Вернуть бытовку")).toBeTruthy()
+    expect(screen.queryByText("Склад назначения · Бытовки: 2")).toBeNull()
+    expect(screen.queryByText("Перемещение")).toBeNull()
+    expect(screen.getAllByLabelText(/^Логистика на /i)).toHaveLength(2)
   })
 
   it("ignores drops onto another driver, date, or lane", async () => {

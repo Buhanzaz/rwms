@@ -11,12 +11,13 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.function.Supplier;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
- * Holds worker-scoped SSE connections and sends invalidation signals.
+ * Holds native-surface- and worker-scoped SSE connections and sends invalidation signals.
  *
  * <p>An event never grants data access or transports a complete task projection. The worker app
  * must reload the authorized feed after receiving it, which preserves authorization and avoids
@@ -25,17 +26,29 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 @Component
 public class WorkerInvalidationHub {
   private static final long STREAM_TIMEOUT_MILLIS = Duration.ofMinutes(30).toMillis();
-  private final Map<UUID, Set<SseEmitter>> emitters = new ConcurrentHashMap<>();
+  private final Map<SubscriptionKey, Set<SseEmitter>> emitters = new ConcurrentHashMap<>();
+  private final Supplier<SseEmitter> emitterFactory;
 
-  /** Opens a bounded stream and immediately emits the current feed revision. */
-  public SseEmitter subscribe(UUID workerId, long revision) {
-    SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MILLIS);
-    emitters.computeIfAbsent(workerId, ignored -> new CopyOnWriteArraySet<>()).add(emitter);
-    emitter.onCompletion(() -> remove(workerId, emitter));
-    emitter.onTimeout(() -> remove(workerId, emitter));
-    emitter.onError(ignored -> remove(workerId, emitter));
+  /** Creates production emitters with the bounded native-stream timeout. */
+  public WorkerInvalidationHub() {
+    this(() -> new SseEmitter(STREAM_TIMEOUT_MILLIS));
+  }
+
+  /** Supplies capturing emitters for focused surface-isolation tests. */
+  WorkerInvalidationHub(Supplier<SseEmitter> emitterFactory) {
+    this.emitterFactory = emitterFactory;
+  }
+
+  /** Opens one bounded native-surface stream and immediately emits the current feed revision. */
+  public SseEmitter subscribe(MobileTaskSurface surface, UUID workerId, long revision) {
+    SubscriptionKey key = new SubscriptionKey(surface, workerId);
+    SseEmitter emitter = emitterFactory.get();
+    emitters.computeIfAbsent(key, ignored -> new CopyOnWriteArraySet<>()).add(emitter);
+    emitter.onCompletion(() -> remove(key, emitter));
+    emitter.onTimeout(() -> remove(key, emitter));
+    emitter.onError(ignored -> remove(key, emitter));
     send(
-        workerId,
+        key,
         emitter,
         new WorkerInvalidationEvent(
             UUID.randomUUID(),
@@ -46,22 +59,28 @@ public class WorkerInvalidationHub {
     return emitter;
   }
 
-  /** Broadcasts an action invalidation, preserving a narrower signal for the acting worker. */
-  public void actionApplied(UUID actorWorkerId, UUID entryId, long revision) {
-    actionApplied(actorWorkerId, entryId, revision, Set.of());
+  /** Broadcasts an action invalidation without leaking its entry ID to the other native surface. */
+  public void actionApplied(
+      MobileTaskSurface actorSurface, UUID actorWorkerId, UUID entryId, long revision) {
+    actionApplied(actorSurface, actorWorkerId, entryId, revision, Set.of());
   }
 
-  /** Broadcasts an action invalidation and marks workers eligible to join the task. */
+  /** Broadcasts an action and exposes JOIN identity only to eligible WorkerApp streams. */
   public void actionApplied(
+      MobileTaskSurface actorSurface,
       UUID actorWorkerId,
       UUID entryId,
       long revision,
       Set<UUID> joinWorkerIds) {
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
     emitters.forEach(
-        (workerId, workerEmitters) -> {
-          boolean actor = workerId.equals(actorWorkerId);
-          boolean joinAvailable = !actor && joinWorkerIds.contains(workerId);
+        (key, workerEmitters) -> {
+          boolean actor =
+              key.surface() == actorSurface && key.workerId().equals(actorWorkerId);
+          boolean joinAvailable =
+              key.surface() == MobileTaskSurface.WORKER
+                  && !key.workerId().equals(actorWorkerId)
+                  && joinWorkerIds.contains(key.workerId());
           WorkerInvalidationEvent event =
               new WorkerInvalidationEvent(
                   UUID.randomUUID(),
@@ -71,7 +90,7 @@ public class WorkerInvalidationHub {
                       : joinAvailable ? "TASK_JOIN_AVAILABLE" : "FEED_CHANGED",
                   actor || joinAvailable ? entryId : null,
                   now);
-          workerEmitters.forEach(emitter -> send(workerId, emitter, event));
+          workerEmitters.forEach(emitter -> send(key, emitter, event));
         });
   }
 
@@ -79,11 +98,11 @@ public class WorkerInvalidationHub {
   public void feedChanged(long revision) {
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
     emitters.forEach(
-        (workerId, workerEmitters) -> {
+        (key, workerEmitters) -> {
           WorkerInvalidationEvent event =
               new WorkerInvalidationEvent(
                   UUID.randomUUID(), revision, "FEED_CHANGED", null, now);
-          workerEmitters.forEach(emitter -> send(workerId, emitter, event));
+          workerEmitters.forEach(emitter -> send(key, emitter, event));
         });
   }
 
@@ -94,36 +113,42 @@ public class WorkerInvalidationHub {
    * can display any task data.
    */
   public void taskAvailable(
-      Set<UUID> audienceWorkerIds, UUID entryId, long revision, boolean urgent) {
+      MobileTaskSurface surface,
+      Set<UUID> audienceWorkerIds,
+      UUID entryId,
+      long revision,
+      boolean urgent) {
     if (audienceWorkerIds.isEmpty()) return;
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
     String type = urgent ? "URGENT_TASK" : "NEW_TASK";
     audienceWorkerIds.forEach(
         workerId -> {
-          Set<SseEmitter> workerEmitters = emitters.get(workerId);
+          SubscriptionKey key = new SubscriptionKey(surface, workerId);
+          Set<SseEmitter> workerEmitters = emitters.get(key);
           if (workerEmitters == null) return;
           WorkerInvalidationEvent event =
               new WorkerInvalidationEvent(
                   UUID.randomUUID(), revision, type, entryId, now);
-          workerEmitters.forEach(emitter -> send(workerId, emitter, event));
+          workerEmitters.forEach(emitter -> send(key, emitter, event));
         });
   }
 
   @Scheduled(fixedDelayString = "PT15S")
   void keepAlive() {
     emitters.forEach(
-        (workerId, workerEmitters) ->
+        (key, workerEmitters) ->
             workerEmitters.forEach(
                 emitter -> {
                   try {
                     emitter.send(SseEmitter.event().comment("keep-alive"));
                   } catch (IOException | IllegalStateException exception) {
-                    remove(workerId, emitter);
+                    remove(key, emitter);
                   }
                 }));
   }
 
-  private void send(UUID workerId, SseEmitter emitter, WorkerInvalidationEvent event) {
+  private void send(
+      SubscriptionKey key, SseEmitter emitter, WorkerInvalidationEvent event) {
     try {
       emitter.send(
           SseEmitter.event()
@@ -131,14 +156,17 @@ public class WorkerInvalidationHub {
               .name("worker-invalidation")
               .data(event));
     } catch (IOException | IllegalStateException exception) {
-      remove(workerId, emitter);
+      remove(key, emitter);
     }
   }
 
-  private void remove(UUID workerId, SseEmitter emitter) {
-    Set<SseEmitter> workerEmitters = emitters.get(workerId);
+  private void remove(SubscriptionKey key, SseEmitter emitter) {
+    Set<SseEmitter> workerEmitters = emitters.get(key);
     if (workerEmitters == null) return;
     workerEmitters.remove(emitter);
-    if (workerEmitters.isEmpty()) emitters.remove(workerId, workerEmitters);
+    if (workerEmitters.isEmpty()) emitters.remove(key, workerEmitters);
   }
+
+  /** Exact native capability and authenticated worker owning one SSE subscription set. */
+  private record SubscriptionKey(MobileTaskSurface surface, UUID workerId) {}
 }

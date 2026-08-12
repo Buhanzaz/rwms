@@ -168,6 +168,21 @@ func TestOpenAPIParsesAndExposesOnlyApprovedRuntimePaths(t *testing.T) {
 	}
 }
 
+func TestTaskEvidenceContractRequiresOneWorkerOrDriverScope(t *testing.T) {
+	root := repositoryRoot(t)
+	var document map[string]any
+	if err := yaml.Unmarshal(readContract(t, filepath.Join(root, "contracts", "openapi", "media-service.yaml")), &document); err != nil {
+		t.Fatalf("decode media-service.yaml: %v", err)
+	}
+	upload := objectAt(t, objectAt(t, objectAt(t, document, "paths"), "/api/media/v1/upload-sessions"), "post")
+	description := stringAt(t, upload, "description")
+	for _, required := range []string{"WORKER", "exactly one", "worker.tasks", "driver.tasks", "worker_id"} {
+		if !strings.Contains(description, required) {
+			t.Fatalf("upload authorization description %q does not contain %q", description, required)
+		}
+	}
+}
+
 func TestPublicMediaContractUsesOnlySameOriginOpaqueContentPaths(t *testing.T) {
 	root := repositoryRoot(t)
 	var document map[string]any

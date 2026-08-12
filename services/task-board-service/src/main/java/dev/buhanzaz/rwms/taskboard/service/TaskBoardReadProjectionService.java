@@ -175,6 +175,12 @@ class TaskBoardReadProjectionService {
    * ordered queue; only its first waiting entry is actionable for a driver.
    */
   TaskBoardSnapshot workerSnapshot(UUID warehouseId, UUID workerId) {
+    return workerSnapshot(MobileTaskSurface.WORKER, warehouseId, workerId);
+  }
+
+  /** Builds the task projection with the exact audience rules of one native surface. */
+  TaskBoardSnapshot workerSnapshot(
+      MobileTaskSurface surface, UUID warehouseId, UUID workerId) {
     TaskBoardSnapshot ordinary = snapshot(warehouseId, null, false);
     List<BoardColumnDto> columns = new ArrayList<>(ordinary.columns());
     for (WorkQueue queue : queues.findAllActiveOrderedByWarehouseId(warehouseId)) {
@@ -184,7 +190,7 @@ class TaskBoardReadProjectionService {
               .filter(entry -> entry.getQueue() != null && entry.getQueue().equals(queue))
               .filter(entry -> entry.getEntryType() == EntryType.REAL)
               .filter(entry -> entry.getTask().getLane() == TaskLane.CURRENT)
-              .filter(entry -> driverAudiences.isVisibleTo(entry, workerId))
+              .filter(entry -> isVisibleToSurface(surface, entry, workerId))
               .sorted(Comparator.comparingInt(QueueEntry::getQueuePosition))
               .toList();
       Map<UUID, TaskSourceReferenceDto> sources = sourceReferences(logisticsEntries);
@@ -209,12 +215,25 @@ class TaskBoardReadProjectionService {
 
   /** Resolves a worker-visible entry and hides driver tasks outside its planned audience. */
   BoardEntryDto workerEntry(UUID warehouseId, UUID entryId, UUID workerId) {
+    return workerEntry(MobileTaskSurface.WORKER, warehouseId, entryId, workerId);
+  }
+
+  /** Resolves an entry only through the exact audience rules of one native surface. */
+  BoardEntryDto workerEntry(
+      MobileTaskSurface surface, UUID warehouseId, UUID entryId, UUID workerId) {
     QueueEntry entry = requireEntry(warehouseId, entryId);
     if (entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER
-        && !driverAudiences.isVisibleTo(entry, workerId)) {
+        && !isVisibleToSurface(surface, entry, workerId)) {
       throw new NotFoundException("Задание не найдено");
     }
     return dto(entry);
+  }
+
+  private boolean isVisibleToSurface(
+      MobileTaskSurface surface, QueueEntry entry, UUID workerId) {
+    return surface == MobileTaskSurface.DRIVER
+        ? driverAudiences.isVisibleTo(entry, workerId)
+        : driverAudiences.isVisibleToMobileWorker(entry, workerId);
   }
 
   TaskWorkerContentDto workerContent(UUID warehouseId, UUID entryId) {

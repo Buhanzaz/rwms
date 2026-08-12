@@ -23,8 +23,7 @@ import retrofit2.http.Url
 
 /**
  * Pins every worker Retrofit operation to the public operations in
- * `contracts/openapi/task-board-service.yaml`, `contracts/openapi/logistics-service.yaml`, and
- * `contracts/openapi/media-service.yaml`.
+ * `contracts/openapi/task-board-service.yaml` and `contracts/openapi/media-service.yaml`.
  * All active JSON request/response roots have current canonical fixtures. Binary media bodies,
  * `ResponseBody`, and the `Unit` unregister response are converter-checked but intentionally are
  * not represented as JSON fixtures.
@@ -44,7 +43,7 @@ class WorkerGatewayApiContractBoundaryTest {
             .filterNot(Method::isSynthetic)
             .associateBy(Method::getName)
 
-        assertThat(expected).hasSize(12)
+        assertThat(expected).hasSize(11)
         assertWithMessage(
             "WorkerGatewayApi method inventory must stay synchronized with canonical public OpenAPI",
         ).that(methods.keys)
@@ -223,7 +222,8 @@ class WorkerGatewayApiContractBoundaryTest {
             """.trimIndent(),
         )
         val request = WorkerDeviceRegistrationRequestDto(
-            token = "opaque-fcm-token",
+            targetKind = "FID",
+            token = "firebase-installation-id",
             appVersion = "0.3.0",
             sdkInt = 36,
             locale = "ru-RU",
@@ -232,7 +232,8 @@ class WorkerGatewayApiContractBoundaryTest {
 
         assertThat(registration.status).isEqualTo("ACTIVE")
         assertThat(encoded).contains("\"provider\":\"FCM\"")
-        assertThat(encoded).contains("\"token\":\"opaque-fcm-token\"")
+        assertThat(encoded).contains("\"targetKind\":\"FID\"")
+        assertThat(encoded).contains("\"token\":\"firebase-installation-id\"")
         assertThat(encoded).contains("\"sdkInt\":36")
     }
 
@@ -388,7 +389,6 @@ private fun assertWorkerPublicGatewayPath(
 
 private fun expectedWorkerRoutes(): Map<String, WorkerContractRoute> {
     val taskBoard = "contracts/openapi/task-board-service.yaml"
-    val logistics = "contracts/openapi/logistics-service.yaml"
     val media = "contracts/openapi/media-service.yaml"
     fun route(verb: String, gatewayPath: String, source: String): WorkerContractRoute =
         WorkerContractRoute(verb, gatewayPath, source)
@@ -397,7 +397,6 @@ private fun expectedWorkerRoutes(): Map<String, WorkerContractRoute> {
         "workerContext" to route("GET", "/api/task-board/worker/v1/context", "$taskBoard /worker/v1/context"),
         "workerFeed" to route("GET", "/api/task-board/worker/v1/feed", "$taskBoard /worker/v1/feed"),
         "workerTaskDetail" to route("GET", "/api/task-board/worker/v1/entries/{entryId}", "$taskBoard /worker/v1/entries/{entryId}"),
-        "logisticsDriverTask" to route("GET", "/api/logistics/v1/driver-tasks/{taskId}", "$logistics getDriverTask"),
         "applyAction" to route("POST", "/api/task-board/worker/v1/entries/{entryId}/actions", "$taskBoard /worker/v1/entries/{entryId}/actions"),
         "reserveEvidence" to route("POST", "/api/task-board/worker/v1/entries/{entryId}/evidence-reservations", "$taskBoard /worker/v1/entries/{entryId}/evidence-reservations"),
         "registerDevice" to route("PUT", "/api/task-board/worker/v1/devices/{installationId}", "$taskBoard /worker/v1/devices/{installationId}"),

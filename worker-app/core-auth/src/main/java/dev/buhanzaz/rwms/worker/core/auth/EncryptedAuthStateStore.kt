@@ -22,7 +22,6 @@ private val Context.workerAuthDataStore by preferencesDataStore(name = "worker_a
 private val encryptedStateKey = stringPreferencesKey("encrypted_auth_state")
 private val encryptedWorkerIdKey = stringPreferencesKey("encrypted_worker_id")
 private val encryptedInstallationIdKey = stringPreferencesKey("encrypted_installation_id")
-private val encryptedFcmTokenKey = stringPreferencesKey("encrypted_fcm_token")
 private const val KEYSTORE_PROVIDER = "AndroidKeyStore"
 private const val AUTH_KEY_ALIAS = "rwms-worker-auth-state-v1"
 
@@ -66,9 +65,9 @@ class EncryptedAuthStateStore @Inject constructor(
     }
 
     /**
-     * The installation identity and FCM token are device credentials, not a
-     * browser/session cache. They deliberately survive local logout so a later
-     * authenticated session can renew the same server-side registration.
+     * The installation identity is a device credential, not a browser/session
+     * cache. It deliberately survives local logout so a later authenticated
+     * session can renew the same server-side registration.
      */
     suspend fun readInstallationId(): String? = context.workerAuthDataStore.data.first()[encryptedInstallationIdKey]
         ?.let { encrypted -> runCatching { decrypt(encrypted) }.getOrNull() }
@@ -77,13 +76,6 @@ class EncryptedAuthStateStore @Inject constructor(
         context.workerAuthDataStore.edit { preferences ->
             preferences[encryptedInstallationIdKey] = encrypt(installationId)
         }
-    }
-
-    suspend fun readFcmToken(): String? = context.workerAuthDataStore.data.first()[encryptedFcmTokenKey]
-        ?.let { encrypted -> runCatching { decrypt(encrypted) }.getOrNull() }
-
-    suspend fun writeFcmToken(token: String) {
-        context.workerAuthDataStore.edit { preferences -> preferences[encryptedFcmTokenKey] = encrypt(token) }
     }
 
     private fun encrypt(plainText: String): String {

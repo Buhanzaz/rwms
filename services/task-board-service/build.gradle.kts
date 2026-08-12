@@ -19,6 +19,7 @@ dependencies {
     implementation(libs.spring.cloud.stream)
     implementation(libs.spring.cloud.stream.binder.kafka)
     implementation("io.micrometer:micrometer-tracing-bridge-otel")
+    implementation("com.google.firebase:firebase-admin:9.10.0")
 
     runtimeOnly("io.micrometer:micrometer-registry-prometheus")
     runtimeOnly("io.opentelemetry:opentelemetry-exporter-otlp")

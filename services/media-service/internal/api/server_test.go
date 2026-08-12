@@ -176,33 +176,37 @@ func TestCreateUploadReturnsOnlySameOriginContentPath(t *testing.T) {
 	}
 }
 
-func TestWorkerCreatesTaskBoardEvidenceWithServerDerivedWorkerActor(t *testing.T) {
-	warehouseID, entryID, workerID, subjectID, evidenceID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	repository := &repositoryStub{createAsset: persistence.AssetRecord{
-		ID: uuid.New(), UploadSessionID: uuid.New(), UploadExpiresAt: time.Now().Add(time.Minute),
-	}}
-	worker := auth.WorkerPrincipal{
-		SubjectID: subjectID, WorkerID: workerID, WarehouseID: warehouseID,
-		Scopes: map[string]struct{}{"worker.tasks": {}},
-	}
-	server := newTestServer(t, repository, validatorStub{err: auth.ErrForbidden, workerPrincipal: worker}, &storeStub{})
-	body := fmt.Sprintf(`{"ownerType":"TASK_BOARD_ENTRY","ownerId":"%s","clientReferenceId":"%s","warehouseId":"%s","context":"WORK_RESULT","fileName":"result.jpg","contentType":"image/jpeg","contentLength":128,"checksumSha256":"%s"}`,
-		entryID, evidenceID, warehouseID, strings.Repeat("a", 64))
-	request := httptest.NewRequest(http.MethodPost, "/api/media/v1/upload-sessions", strings.NewReader(body))
-	request.Header.Set("Authorization", "Bearer worker")
-	request.Header.Set("Idempotency-Key", evidenceID.String())
-	response := httptest.NewRecorder()
+func TestTaskScopedWorkerCreatesTaskBoardEvidenceWithServerDerivedWorkerActor(t *testing.T) {
+	for _, taskScope := range []string{"worker.tasks", "driver.tasks"} {
+		t.Run(taskScope, func(t *testing.T) {
+			warehouseID, entryID, workerID, subjectID, evidenceID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+			repository := &repositoryStub{createAsset: persistence.AssetRecord{
+				ID: uuid.New(), UploadSessionID: uuid.New(), UploadExpiresAt: time.Now().Add(time.Minute),
+			}}
+			worker := auth.WorkerPrincipal{
+				SubjectID: subjectID, WorkerID: workerID, WarehouseID: warehouseID,
+				Scopes: map[string]struct{}{taskScope: {}},
+			}
+			server := newTestServer(t, repository, validatorStub{err: auth.ErrForbidden, workerPrincipal: worker}, &storeStub{})
+			body := fmt.Sprintf(`{"ownerType":"TASK_BOARD_ENTRY","ownerId":"%s","clientReferenceId":"%s","warehouseId":"%s","context":"WORK_RESULT","fileName":"result.jpg","contentType":"image/jpeg","contentLength":128,"checksumSha256":"%s"}`,
+				entryID, evidenceID, warehouseID, strings.Repeat("a", 64))
+			request := httptest.NewRequest(http.MethodPost, "/api/media/v1/upload-sessions", strings.NewReader(body))
+			request.Header.Set("Authorization", "Bearer worker")
+			request.Header.Set("Idempotency-Key", evidenceID.String())
+			response := httptest.NewRecorder()
 
-	server.Handler().ServeHTTP(response, request)
+			server.Handler().ServeHTTP(response, request)
 
-	if response.Code != http.StatusCreated {
-		t.Fatalf("response = %d %s", response.Code, response.Body.String())
-	}
-	command := repository.createCommand
-	if command.PrincipalType != persistence.PrincipalTypeWorker || command.SubjectID != subjectID ||
-		command.WorkerID == nil || *command.WorkerID != workerID || command.Actor.SubjectID != workerID ||
-		command.ClientReferenceID == nil || *command.ClientReferenceID != evidenceID || command.OwnerID != entryID.String() {
-		t.Fatalf("worker evidence command = %#v", command)
+			if response.Code != http.StatusCreated {
+				t.Fatalf("response = %d %s", response.Code, response.Body.String())
+			}
+			command := repository.createCommand
+			if command.PrincipalType != persistence.PrincipalTypeWorker || command.SubjectID != subjectID ||
+				command.WorkerID == nil || *command.WorkerID != workerID || command.Actor.SubjectID != workerID ||
+				command.ClientReferenceID == nil || *command.ClientReferenceID != evidenceID || command.OwnerID != entryID.String() {
+				t.Fatalf("worker evidence command = %#v", command)
+			}
+		})
 	}
 }
 

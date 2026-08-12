@@ -19,7 +19,7 @@ RWMS — система управления складскими и аренд�
 клиенты видят одну публичную границу:
 
 ```text
-panel / manager Android / worker Android
+panel / manager Android / worker Android / driver Android
                     |
                     v
           stateless API gateway
@@ -53,7 +53,8 @@ media-service дополнительно владеет приватными о�
 | --- | --- | --- |
 | [`panel/`](panel/) | Web-клиент React/TypeScript | Основная панель менеджеров и операций |
 | [`app/`](app/) | Android-клиент менеджера | Мобильные сценарии менеджера |
-| [`worker-app/`](worker-app/) | Android-клиент работника | Вход работника, назначения, исполнение задач и съёмка медиа |
+| [`worker-app/`](worker-app/) | Android-клиент работника | Обычные назначения и активная совместная работа стропальщика, общее завершение и съёмка медиа |
+| [`driver-app/`](driver-app/) | Android-клиент водителя | Только складские задания водителя и надёжное восстановление загрузок |
 | [`worker-download-site/`](worker-download-site/) | Независимая публичная OpenNext/Sites release-площадка | [Страница скачивания подписанного WorkerApp APK 0.1.14](https://rwms-worker-download.lebaagatabx.chatgpt.site) |
 | [`api-gateway-service`](services/api-gateway-service/) | Stateless Spring edge | Публичные `/auth/**` и `/api/**`, edge-политика JWT, ограниченные стримы и transport failures |
 | [`auth-service`](services/auth-service/) | Stateful Spring-сервис | OIDC/OAuth2, пользователи, работники, роли, клиенты и доступ к складам |
@@ -118,6 +119,7 @@ work. Браузер никогда не координирует согласо
 | [`panel/`](panel/) | Основная web-панель |
 | [`app/`](app/) | Android-приложение менеджера |
 | [`worker-app/`](worker-app/) | Android-приложение работника |
+| [`driver-app/`](driver-app/) | Android-приложение водителя |
 | [`worker-download-site/`](worker-download-site/) | Публичная страница скачивания WorkerApp APK 0.1.14 |
 | [`docs/project-knowledge/`](docs/project-knowledge/) | Поддерживаемая навигация по архитектуре и домену |
 | [`docs/reviews/`](docs/reviews/) | Аудиты с доказательствами и планы исправлений |

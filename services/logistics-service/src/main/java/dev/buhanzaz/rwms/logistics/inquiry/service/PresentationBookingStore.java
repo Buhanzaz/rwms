@@ -75,7 +75,7 @@ public class PresentationBookingStore {
     List<AdditionalContactInput> additionalContacts =
         normalizedAdditionalContacts(request.additionalContacts());
     if (presentation.getMode() == ClientPresentationMode.NORMAL) {
-      desiredDeliveryWindows = requiredNormalWindow(desiredDeliveryWindows);
+      desiredDeliveryWindows = requiredNormalWindows(desiredDeliveryWindows);
       rentalMonths = requiredRentalMonths(rentalMonths);
       deliveryAddress = requiredNormalDeliveryAddress(deliveryAddress);
       requireCoordinatePair(latitude, longitude);
@@ -409,22 +409,40 @@ public class PresentationBookingStore {
     return List.copyOf(values);
   }
 
-  private static List<DesiredDeliveryWindowInput> requiredNormalWindow(
+  /**
+   * Validates and chronologically orders the independently selected client receiving days kept in
+   * a normal-presentation receipt.
+   */
+  private static List<DesiredDeliveryWindowInput> requiredNormalWindows(
       List<DesiredDeliveryWindowInput> values) {
-    if (values.size() != 1) {
+    if (values.isEmpty()) {
       throw new OrderProblemException(
           HttpStatus.CONFLICT,
           "CLIENT_PRESENTATION_DELIVERY_WINDOW_REQUIRED",
-          "Выберите одну желаемую дату получения бытовок");
+          "Выберите хотя бы одну желаемую дату получения бытовок");
     }
-    DesiredDeliveryWindowInput window = values.getFirst();
-    if (!window.startDate().equals(window.endDate())) {
+    if (values.size() > 5) {
       throw new OrderProblemException(
           HttpStatus.CONFLICT,
           "CLIENT_PRESENTATION_DELIVERY_WINDOW_INVALID",
-          "В представлении можно выбрать только один календарный день");
+          "В представлении можно выбрать не более пяти желаемых дат получения бытовок");
     }
-    return values;
+    LinkedHashSet<LocalDate> days = new LinkedHashSet<>();
+    for (DesiredDeliveryWindowInput window : values) {
+      if (!window.startDate().equals(window.endDate())) {
+        throw new OrderProblemException(
+            HttpStatus.CONFLICT,
+            "CLIENT_PRESENTATION_DELIVERY_WINDOW_INVALID",
+            "В представлении можно выбрать только отдельные календарные дни");
+      }
+      if (!days.add(window.startDate())) {
+        throw new OrderProblemException(
+            HttpStatus.CONFLICT,
+            "CLIENT_PRESENTATION_DELIVERY_WINDOW_INVALID",
+            "Одна и та же желаемая дата получения бытовок указана несколько раз");
+      }
+    }
+    return values.stream().sorted(Comparator.comparing(DesiredDeliveryWindowInput::startDate)).toList();
   }
 
   private static Long requiredRentalMonths(Long value) {

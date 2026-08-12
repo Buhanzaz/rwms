@@ -10,6 +10,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import dev.buhanzaz.rwms.taskboard.domain.QueueType;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
 import dev.buhanzaz.rwms.taskboard.eventing.WorkerMediaEventProcessor;
+import dev.buhanzaz.rwms.taskboard.push.WorkerPushClient;
+import dev.buhanzaz.rwms.taskboard.push.WorkerPushDispatcher;
+import dev.buhanzaz.rwms.taskboard.push.WorkerPushOutbox;
 import dev.buhanzaz.rwms.taskboard.service.KpiSettingsService;
 import dev.buhanzaz.rwms.taskboard.service.RegistryService;
 import dev.buhanzaz.rwms.taskboard.service.TaskBoardService;
@@ -17,10 +20,15 @@ import dev.buhanzaz.rwms.taskboard.service.WorkerOfflineLeaseCodec;
 import dev.buhanzaz.rwms.taskboard.service.WorkerTaskBoardService;
 import dev.buhanzaz.rwms.taskboard.service.WorkforceService;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -41,6 +49,7 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
   @Autowired KpiSettingsService kpiSettings;
   @Autowired WorkerOfflineLeaseCodec leases;
   @Autowired WorkerMediaEventProcessor mediaEvents;
+  @Autowired WorkerPushOutbox pushOutbox;
   @Autowired JdbcTemplate jdbc;
 
   @BeforeEach
@@ -420,6 +429,88 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
                 """
                     .formatted(sourceMediaId)))
         .isPositive();
+  }
+
+  @Test
+  void fidPushOutboxRetriesThenDeliversAndRevokesInvalidInstallation() {
+    var worker =
+        workforce.createWorker(
+            WAREHOUSE,
+            new WorkerRequest(
+                0L,
+                "Push worker",
+                null,
+                null,
+                null,
+                true,
+                null,
+                null,
+                null,
+                List.of()));
+    workerBoard.registerDevice(
+        worker.id(),
+        WAREHOUSE,
+        "push-worker-installation",
+        new WorkerDeviceRegistrationRequest(
+            "FCM", "FID", "push-worker-fid", "0.1.16", 36, "ru-RU"));
+
+    AtomicInteger attempts = new AtomicInteger();
+    AtomicBoolean invalid = new AtomicBoolean();
+    AtomicReference<WorkerPushClient.Target> observedTarget = new AtomicReference<>();
+    WorkerPushClient client =
+        (message, target) -> {
+          observedTarget.set(target);
+          if (invalid.get()) {
+            throw new WorkerPushClient.DeliveryException(
+                "invalid installation", true, false, null);
+          }
+          if (attempts.getAndIncrement() == 0) {
+            throw new WorkerPushClient.DeliveryException("temporary outage", false, true, null);
+          }
+        };
+    WorkerPushDispatcher dispatcher =
+        new WorkerPushDispatcher(pushOutbox, client, Duration.ofSeconds(30), 10, 3);
+    UUID retryEntryId = UUID.randomUUID();
+    pushOutbox.enqueueJoinAvailable(Set.of(worker.id()), WAREHOUSE, retryEntryId, 42);
+
+    dispatcher.dispatch();
+    assertThat(
+            jdbc.queryForMap(
+                "select status,attempt_count,last_error from worker_push_outbox where entry_id=?",
+                retryEntryId))
+        .containsEntry("status", "PENDING")
+        .containsEntry("attempt_count", 1)
+        .containsEntry("last_error", "temporary outage");
+    jdbc.update(
+        "update worker_push_outbox set available_at=clock_timestamp() where entry_id=?",
+        retryEntryId);
+
+    dispatcher.dispatch();
+    assertThat(
+            jdbc.queryForMap(
+                "select status,attempt_count from worker_push_outbox where entry_id=?",
+                retryEntryId))
+        .containsEntry("status", "SENT")
+        .containsEntry("attempt_count", 2);
+    assertThat(observedTarget.get().targetKind()).isEqualTo("FID");
+    assertThat(observedTarget.get().value()).isEqualTo("push-worker-fid");
+
+    invalid.set(true);
+    UUID invalidEntryId = UUID.randomUUID();
+    pushOutbox.enqueueJoinAvailable(Set.of(worker.id()), WAREHOUSE, invalidEntryId, 43);
+    dispatcher.dispatch();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select status from worker_push_outbox where entry_id=?",
+                String.class,
+                invalidEntryId))
+        .isEqualTo("SENT");
+    assertThat(
+            jdbc.queryForObject(
+                "select status from worker_device_registration where installation_id='push-worker-installation'",
+                String.class))
+        .isEqualTo("REVOKED");
   }
 
   private boolean latestOwnerProofActive(UUID entryId) {

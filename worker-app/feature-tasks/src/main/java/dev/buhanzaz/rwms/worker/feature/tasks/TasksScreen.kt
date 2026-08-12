@@ -317,13 +317,6 @@ private fun TaskQueueSectionPanel(
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.titleMedium,
                 )
-                if (section.queuePurpose == "LOGISTICS_DRIVER") {
-                    Text(
-                        "Логистика",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
                 Text(
                     section.tasks.size.toString(),
                     style = MaterialTheme.typography.labelLarge,

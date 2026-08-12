@@ -31,11 +31,14 @@ import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.repository.ShipmentFurnitureMovementTaskRepository;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -226,13 +229,18 @@ class RentalOrderReservationService {
     return new RentalOrderCommandOutcome(reads.detail(order, actor, reads.readUnits(order)), false);
   }
 
+  /**
+   * Applies a confirmed normal presentation inside the order's fenced command boundary. The one to
+   * five independently selected days are canonicalized before replay lookup so their client click
+   * order cannot create a second command outcome.
+   */
   RentalOrderCommandOutcome applyPresentationSelection(
       OrderActor actor,
       UUID orderId,
       UUID idempotencyKey,
       LogisticsDependencyGateway.ConvertedPresentationHolds conversion,
       Map<UUID, Map<UUID, Long>> selectedRequirements,
-      DesiredDeliveryWindow desiredDeliveryWindow,
+      List<DesiredDeliveryWindow> desiredDeliveryWindows,
       long rentalMonths,
       String deliveryAddress,
       BigDecimal latitude,
@@ -241,16 +249,17 @@ class RentalOrderReservationService {
       List<String> legacyDesiredDeliveryTimes) {
     if (selectedRequirements == null
         || selectedRequirements.isEmpty()
-        || desiredDeliveryWindow == null
         || rentalMonths < 1) {
       throw new IllegalArgumentException("Presentation selection is required");
     }
+    List<DesiredDeliveryWindow> normalizedDesiredDeliveryWindows =
+        normalizedPresentationDesiredDeliveryWindows(desiredDeliveryWindows);
     List<AdditionalContact> normalizedContacts =
         additionalContacts == null ? List.of() : List.copyOf(additionalContacts);
     List<String> checksumValues =
         presentationChecksumValues(
             orderId,
-            desiredDeliveryWindow,
+            normalizedDesiredDeliveryWindows,
             rentalMonths,
             deliveryAddress,
             latitude,
@@ -261,7 +270,7 @@ class RentalOrderReservationService {
     String legacyChecksum =
         legacyPresentationChecksum(
             orderId,
-            desiredDeliveryWindow,
+            normalizedDesiredDeliveryWindows,
             rentalMonths,
             legacyDesiredDeliveryTimes,
             selectedRequirements);
@@ -329,7 +338,8 @@ class RentalOrderReservationService {
             "Срок аренды выбранной бытовки уже зафиксирован другим бронированием");
       }
     }
-    boolean desiredWindowChanged = order.replaceClientDesiredDeliveryWindow(desiredDeliveryWindow);
+    boolean desiredWindowChanged =
+        order.replaceClientDesiredDeliveryWindows(normalizedDesiredDeliveryWindows);
     boolean deliveryDetailsChanged =
         deliveryAddress == null
             ? false
@@ -346,7 +356,7 @@ class RentalOrderReservationService {
       changed(
           order,
           actor,
-          "unitsAndDesiredEquipment,desiredDeliveryWindow,clientDeliveryDetails,rentalTerms");
+          "unitsAndDesiredEquipment,desiredDeliveryWindows,clientDeliveryDetails,rentalTerms");
     }
     editability.synchronizeSavedShipmentDraft(order, actor, currentUnits);
     store.remember(actor, APPLY_PRESENTATION_SELECTION, idempotencyKey, checksum, order);
@@ -355,7 +365,7 @@ class RentalOrderReservationService {
 
   private static List<String> presentationChecksumValues(
       UUID orderId,
-      DesiredDeliveryWindow desiredDeliveryWindow,
+      List<DesiredDeliveryWindow> desiredDeliveryWindows,
       long rentalMonths,
       String deliveryAddress,
       BigDecimal latitude,
@@ -364,8 +374,11 @@ class RentalOrderReservationService {
       Map<UUID, Map<UUID, Long>> selectedRequirements) {
     List<String> values = new ArrayList<>();
     values.add(orderId.toString());
-    values.add(desiredDeliveryWindow.getStartDate().toString());
-    values.add(desiredDeliveryWindow.getEndDate().toString());
+    desiredDeliveryWindows.forEach(
+        window -> {
+          values.add(window.getStartDate().toString());
+          values.add(window.getEndDate().toString());
+        });
     values.add(Long.toString(rentalMonths));
     values.add(deliveryAddress == null ? "" : deliveryAddress);
     values.add(decimal(latitude));
@@ -385,11 +398,14 @@ class RentalOrderReservationService {
    */
   private static String legacyPresentationChecksum(
       UUID orderId,
-      DesiredDeliveryWindow desiredDeliveryWindow,
+      List<DesiredDeliveryWindow> desiredDeliveryWindows,
       long rentalMonths,
       List<String> legacyDesiredDeliveryTimes,
       Map<UUID, Map<UUID, Long>> selectedRequirements) {
-    if (legacyDesiredDeliveryTimes == null || legacyDesiredDeliveryTimes.size() != 2) return null;
+    if (desiredDeliveryWindows.size() != 1
+        || legacyDesiredDeliveryTimes == null
+        || legacyDesiredDeliveryTimes.size() != 2) return null;
+    DesiredDeliveryWindow desiredDeliveryWindow = desiredDeliveryWindows.getFirst();
     List<String> values = new ArrayList<>();
     values.add(orderId.toString());
     values.add(desiredDeliveryWindow.getStartDate().toString());
@@ -399,6 +415,28 @@ class RentalOrderReservationService {
     values.add(Long.toString(rentalMonths));
     appendPresentationSelectionChecksumValues(values, selectedRequirements);
     return OrderCommandChecksum.sha256(APPLY_PRESENTATION_SELECTION, values);
+  }
+
+  /**
+   * Canonicalizes up to five distinct one-day preferences before they affect idempotency or a
+   * rental order.
+   */
+  private static List<DesiredDeliveryWindow> normalizedPresentationDesiredDeliveryWindows(
+      List<DesiredDeliveryWindow> values) {
+    if (values == null || values.isEmpty() || values.size() > 5) {
+      throw new IllegalArgumentException("One to five desired delivery days are required");
+    }
+    LinkedHashSet<LocalDate> selectedDays = new LinkedHashSet<>();
+    for (DesiredDeliveryWindow window : values) {
+      if (window == null
+          || window.getStartDate() == null
+          || window.getEndDate() == null
+          || !window.getStartDate().equals(window.getEndDate())
+          || !selectedDays.add(window.getStartDate())) {
+        throw new IllegalArgumentException("Desired delivery days must be distinct calendar days");
+      }
+    }
+    return values.stream().sorted(Comparator.comparing(DesiredDeliveryWindow::getStartDate)).toList();
   }
 
   private static void appendPresentationSelectionChecksumValues(

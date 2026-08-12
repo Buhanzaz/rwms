@@ -27,7 +27,7 @@ import javax.inject.Singleton
         WorkerConflictEntity::class,
         WorkerInvalidationEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 /**
@@ -327,6 +327,90 @@ abstract class WorkerDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE `worker_task` ADD COLUMN `driverAudienceMode` TEXT")
             }
         }
+
+        /** Removes the obsolete local driver-table classification while preserving worker tasks. */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE `worker_task_new` (
+                        `localId` TEXT NOT NULL,
+                        `userId` TEXT NOT NULL,
+                        `entryId` TEXT NOT NULL,
+                        `taskId` TEXT NOT NULL,
+                        `version` INTEGER NOT NULL,
+                        `categoryId` TEXT NOT NULL,
+                        `categoryName` TEXT NOT NULL,
+                        `categorySortOrder` INTEGER NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `unitNumber` TEXT,
+                        `taskText` TEXT,
+                        `scheduledDate` TEXT NOT NULL,
+                        `deadlineAt` TEXT,
+                        `priority` INTEGER NOT NULL,
+                        `queuePosition` INTEGER NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `availabilityMode` TEXT NOT NULL,
+                        `plannedDurationMinutes` INTEGER,
+                        `activeStartedAt` TEXT,
+                        `activeWorkSeconds` INTEGER NOT NULL,
+                        `readyEvidenceCount` INTEGER NOT NULL,
+                        `resultPhotoMinCount` INTEGER NOT NULL,
+                        `lastServerRevision` INTEGER NOT NULL,
+                        `locallyPending` INTEGER NOT NULL,
+                        `updatedAtEpochMillis` INTEGER NOT NULL,
+                        `timerCountedActiveSeconds` INTEGER,
+                        `timerRemainingSeconds` INTEGER,
+                        `timerRemainingPercent` REAL,
+                        `timerState` TEXT,
+                        `timerNextTransitionAt` TEXT,
+                        `timerServerTime` TEXT,
+                        PRIMARY KEY(`localId`)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO `worker_task_new` (
+                        `localId`, `userId`, `entryId`, `taskId`, `version`, `categoryId`,
+                        `categoryName`, `categorySortOrder`, `title`, `unitNumber`, `taskText`,
+                        `scheduledDate`, `deadlineAt`, `priority`, `queuePosition`, `status`,
+                        `availabilityMode`, `plannedDurationMinutes`, `activeStartedAt`,
+                        `activeWorkSeconds`, `readyEvidenceCount`, `resultPhotoMinCount`,
+                        `lastServerRevision`, `locallyPending`, `updatedAtEpochMillis`,
+                        `timerCountedActiveSeconds`, `timerRemainingSeconds`,
+                        `timerRemainingPercent`, `timerState`, `timerNextTransitionAt`,
+                        `timerServerTime`
+                    )
+                    SELECT
+                        `localId`, `userId`, `entryId`, `taskId`, `version`, `categoryId`,
+                        `categoryName`, `categorySortOrder`, `title`, `unitNumber`, `taskText`,
+                        `scheduledDate`, `deadlineAt`, `priority`, `queuePosition`, `status`,
+                        `availabilityMode`, `plannedDurationMinutes`, `activeStartedAt`,
+                        `activeWorkSeconds`, `readyEvidenceCount`, `resultPhotoMinCount`,
+                        `lastServerRevision`, `locallyPending`, `updatedAtEpochMillis`,
+                        `timerCountedActiveSeconds`, `timerRemainingSeconds`,
+                        `timerRemainingPercent`, `timerState`, `timerNextTransitionAt`,
+                        `timerServerTime`
+                    FROM `worker_task`
+                    """.trimIndent(),
+                )
+                db.execSQL("DROP TABLE `worker_task`")
+                db.execSQL("ALTER TABLE `worker_task_new` RENAME TO `worker_task`")
+                db.execSQL(
+                    """
+                    CREATE INDEX `index_worker_task_userId_categorySortOrder_queuePosition`
+                    ON `worker_task` (`userId`, `categorySortOrder`, `queuePosition`)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE UNIQUE INDEX `index_worker_task_userId_entryId`
+                    ON `worker_task` (`userId`, `entryId`)
+                    """.trimIndent(),
+                )
+            }
+        }
     }
 }
 
@@ -347,6 +431,7 @@ object WorkerDatabaseModule {
                 WorkerDatabase.MIGRATION_4_5,
                 WorkerDatabase.MIGRATION_5_6,
                 WorkerDatabase.MIGRATION_6_7,
+                WorkerDatabase.MIGRATION_7_8,
             )
             .build()
 }

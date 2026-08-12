@@ -24,22 +24,27 @@ internal data class TaskActionPresentation(
     val takeLabel: String,
 )
 
+/**
+ * Carries the manager-selected group on TAKE and JOIN when available, allowing
+ * task-board to pause the slinger group's previous assignment atomically.
+ */
 internal fun selectedGroupForAction(
     action: WorkerTaskAction,
     currentGroupId: String?,
-    queuePurpose: String?,
 ): String? {
-    if (action == WorkerTaskAction.TAKE && queuePurpose != LOGISTICS_DRIVER_QUEUE_PURPOSE) {
+    if (action == WorkerTaskAction.TAKE || action == WorkerTaskAction.JOIN) {
         requireNotNull(currentGroupId) { "Руководитель ещё не выбрал текущую группу" }
     }
     return when (action) {
-        WorkerTaskAction.TAKE -> currentGroupId
-            .takeUnless { queuePurpose == LOGISTICS_DRIVER_QUEUE_PURPOSE }
-        WorkerTaskAction.JOIN -> null
+        WorkerTaskAction.TAKE, WorkerTaskAction.JOIN -> currentGroupId
         else -> currentGroupId
     }
 }
 
+/**
+ * Fails closed for waiting logistics entries: WorkerApp can only JOIN an
+ * already active shared task and can act further only after assignment.
+ */
 internal fun taskActionPresentation(
     currentWorkerId: String,
     taskStatus: String?,
@@ -50,13 +55,17 @@ internal fun taskActionPresentation(
     hasCurrentGroup: Boolean = true,
     operationalAvailability: String = "AVAILABLE",
 ): TaskActionPresentation {
-    val isIndividualLogistics = queuePurpose == LOGISTICS_DRIVER_QUEUE_PURPOSE
+    val isSecondaryLogistics = queuePurpose == LOGISTICS_DRIVER_QUEUE_PURPOSE
     val liveAssignments = assignments.filter { it.status == "ACTIVE" || it.status == "PAUSED" }
     val currentWorkerHasActiveAssignment = liveAssignments.any {
-        it.workerId == currentWorkerId && it.status == "ACTIVE"
+        it.workerId == currentWorkerId &&
+            it.status == "ACTIVE" &&
+            (!isSecondaryLogistics || it.workerGroupId != null)
     }
     val currentWorkerHasPausedAssignment = liveAssignments.any {
-        it.workerId == currentWorkerId && it.status == "PAUSED"
+        it.workerId == currentWorkerId &&
+            it.status == "PAUSED" &&
+            (!isSecondaryLogistics || it.workerGroupId != null)
     }
     val assignedOnlyToOthers = liveAssignments.isNotEmpty() &&
         liveAssignments.none { it.workerId == currentWorkerId }
@@ -71,6 +80,7 @@ internal fun taskActionPresentation(
         assignedOnlyToOthers
     val candidateActions = when {
         taskStatus == "WAITING" &&
+            !isSecondaryLogistics &&
             availabilityMode != "SECONDARY_PENDING" &&
             liveAssignments.isEmpty() ->
             listOf(WorkerTaskAction.TAKE)
@@ -88,9 +98,8 @@ internal fun taskActionPresentation(
     }
     val actions = when {
         operationalAvailability != "AVAILABLE" -> emptyList()
-        !isIndividualLogistics &&
-            !hasCurrentGroup &&
-            WorkerTaskAction.TAKE in candidateActions ->
+        !hasCurrentGroup &&
+            candidateActions.any { it == WorkerTaskAction.TAKE || it == WorkerTaskAction.JOIN } ->
             emptyList()
         else -> candidateActions
     }
@@ -102,15 +111,14 @@ internal fun taskActionPresentation(
     val message = when {
         locallyPending -> "Действие ожидает синхронизации"
         operationalAvailability != "AVAILABLE" -> "Рабочий временно недоступен"
-        !isIndividualLogistics &&
-            !hasCurrentGroup &&
-            WorkerTaskAction.TAKE in candidateActions ->
+        !hasCurrentGroup &&
+            candidateActions.any { it == WorkerTaskAction.TAKE || it == WorkerTaskAction.JOIN } ->
             "Руководитель ещё не выбрал текущую группу"
         taskStatus == "WAITING" && availabilityMode == "SECONDARY_PENDING" ->
             "Ожидает основного исполнителя"
         canJoinMandatoryTask -> "Срочное задание: присоединитесь к выполнению"
         canJoinRequiredTask -> "Для продолжения задания требуется присоединиться"
-        canJoinOptionalLogisticsTask -> "Водитель принял задание — можно присоединиться"
+        canJoinOptionalLogisticsTask -> "Активное совместное задание — можно присоединиться"
         actions.isNotEmpty() -> null
         assignedOnlyToOthers -> "Задание выполняет другой рабочий"
         else -> "Действия недоступны в текущем состоянии"
@@ -124,6 +132,7 @@ internal fun taskActionPresentation(
     )
 }
 
+/** Selects the required READY photo used to complete a shared logistics task. */
 internal fun completionEvidenceId(
     queuePurpose: String?,
     readyEvidenceIds: Set<String>,

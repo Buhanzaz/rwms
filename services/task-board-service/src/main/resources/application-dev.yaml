@@ -34,4 +34,4 @@ rwms:
     lifecycle:
       base-url: ${WAREHOUSE_SERVICE_INTERNAL_BASE_URL:http://localhost:8083}
   cors:
-    allowed-origins: ${PANEL_ORIGIN:http://localhost:8080},${WORKER_ORIGIN:http://localhost:8082}
+    allowed-origins: ${PANEL_ORIGIN:http://localhost:8080},${WORKER_ORIGIN:http://localhost:8082},${DRIVER_ORIGIN:http://localhost:8082}

@@ -79,6 +79,27 @@ public class GatewayRouteConfiguration {
         .build();
   }
 
+  /** Relays the DriverApp invalidation stream through the bounded asynchronous SSE proxy. */
+  @Bean
+  @Order(-101)
+  RouterFunction<ServerResponse> taskBoardDriverEventsRoute(
+      GatewayProperties properties,
+      GatewayUpstreamProblemHandler upstreamProblems,
+      SseProxyHandler sseProxyHandler) {
+    RequestPredicate driverEventsPath =
+        path("/api/task-board/driver/v1/events")
+            .and(method(HttpMethod.GET))
+            .and(request -> safePath(request.path()));
+    return route("task-board-driver-events")
+        .route(driverEventsPath, sseProxyHandler)
+        .before(uri(properties.getRoutes().getTaskBoardUri()))
+        .before(stripPrefix(2))
+        .before(prefixPath("/api"))
+        .before(removeRequestHeader(HttpHeaders.COOKIE))
+        .onError(upstreamProblems::supports, upstreamProblems::handle)
+        .build();
+  }
+
   /** Relays the public asset invalidation stream through the bounded asynchronous SSE proxy. */
   @Bean
   @Order(-99)
@@ -121,9 +142,8 @@ public class GatewayRouteConfiguration {
    * Relays public task-board APIs and rewrites their external prefix to the downstream
    * {@code /api} namespace.
    *
-   * <p>It excludes both the private namespace and the exact worker event stream owned by
-   * {@link #taskBoardWorkerEventsRoute(GatewayProperties, GatewayUpstreamProblemHandler,
-   * SseProxyHandler)}.
+   * <p>It excludes the private namespace and the exact native event streams owned by their
+   * asynchronous SSE routes.
    */
   @Bean
   RouterFunction<ServerResponse> taskBoardRoutes(
@@ -137,8 +157,10 @@ public class GatewayRouteConfiguration {
             .and(
                 request ->
                     request.method() != HttpMethod.GET
-                        || !decodedPath(request.path())
-                            .equals("/api/task-board/worker/v1/events"));
+                        || (!decodedPath(request.path())
+                                .equals("/api/task-board/worker/v1/events")
+                            && !decodedPath(request.path())
+                                .equals("/api/task-board/driver/v1/events")));
     return route("task-board-service")
         .route(publicTaskBoardPath, http())
         .before(uri(properties.getRoutes().getTaskBoardUri()))

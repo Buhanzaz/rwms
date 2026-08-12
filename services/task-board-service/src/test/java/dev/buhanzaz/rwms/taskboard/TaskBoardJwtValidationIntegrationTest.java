@@ -144,6 +144,24 @@ class TaskBoardJwtValidationIntegrationTest {
         .andExpect(status().isNoContent());
   }
 
+  @Test
+  void driverSurfaceRequiresDedicatedDriverTasksScope() throws Exception {
+    mockMvc
+        .perform(
+            get("/api/driver/v1/security-probe")
+                .header(
+                    HttpHeaders.AUTHORIZATION,
+                    bearer(token(TRUSTED, ISSUER, "rwms-services", 60, "worker.tasks"))))
+        .andExpect(status().isForbidden());
+    mockMvc
+        .perform(
+            get("/api/driver/v1/security-probe")
+                .header(
+                    HttpHeaders.AUTHORIZATION,
+                    bearer(token(TRUSTED, ISSUER, "rwms-services", 60, "driver.tasks"))))
+        .andExpect(status().isNoContent());
+  }
+
   private String token(KeyMaterial key, String issuer, String audience, long expirySeconds)
       throws Exception {
     return token(key, issuer, audience, expirySeconds, "rwms.read");
@@ -207,6 +225,10 @@ class TaskBoardJwtValidationIntegrationTest {
       return org.springframework.web.servlet.function.RouterFunctions.route()
           .GET(
               "/api/worker/v1/security-probe",
+              request ->
+                  org.springframework.web.servlet.function.ServerResponse.noContent().build())
+          .GET(
+              "/api/driver/v1/security-probe",
               request ->
                   org.springframework.web.servlet.function.ServerResponse.noContent().build())
           .build();

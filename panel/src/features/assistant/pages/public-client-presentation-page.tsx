@@ -17,6 +17,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Calendar } from "@/components/ui/calendar"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Card,
   CardContent,
@@ -34,6 +35,7 @@ import {
 } from "@/components/ui/dialog"
 import {
   Field,
+  FieldContent,
   FieldDescription,
   FieldError,
   FieldGroup,
@@ -75,15 +77,19 @@ import type { DesiredDeliveryWindow } from "@/features/orders/domain/orders"
 import { ApiError } from "@/lib/api-client"
 import { cn } from "@/lib/utils"
 
+const MAX_DESIRED_DELIVERY_DATES = 5
+
 export function PublicClientPresentationPage() {
   const { token = "" } = useParams()
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [furnitureDraft, setFurnitureDraft] = useState<FurnitureDraft>({})
   const [furnitureCabinId, setFurnitureCabinId] = useState<string | null>(null)
+  const [furnitureEquipmentId, setFurnitureEquipmentId] = useState("")
   const [normalStep, setNormalStep] = useState<"selection" | "details">(
     "selection"
   )
-  const [desiredDate, setDesiredDate] = useState<Date>()
+  const [desiredDates, setDesiredDates] = useState<Date[]>([])
+  const [desiredDateError, setDesiredDateError] = useState<string | null>(null)
   const [rentalMonths, setRentalMonths] = useState(1)
   const [deliveryAddress, setDeliveryAddress] = useState("")
   const [coordinates, setCoordinates] = useState("")
@@ -125,14 +131,14 @@ export function PublicClientPresentationPage() {
         draft: furnitureDraft,
       })
     : []
-  const desiredWindowInput = useMemo<DesiredDeliveryWindow | null>(() => {
-    if (!desiredDate) return null
-    const date = calendarDateValue(desiredDate)
-    return {
-      startDate: date,
-      endDate: date,
-    }
-  }, [desiredDate])
+  const desiredWindowInputs = useMemo<DesiredDeliveryWindow[]>(
+    () =>
+      [...desiredDates]
+        .map(calendarDateValue)
+        .sort((left, right) => left.localeCompare(right))
+        .map((date) => ({ startDate: date, endDate: date })),
+    [desiredDates]
+  )
   const normalizedDeliveryAddress = deliveryAddress.trim()
   const parsedCoordinates = parseCoordinates(coordinates)
   const parsedAdditionalContacts = parseAdditionalContacts(additionalContacts)
@@ -151,7 +157,7 @@ export function PublicClientPresentationPage() {
       if (!presentation) throw new Error("Представление ещё не загружено.")
       if (presentation.mode === "NORMAL") {
         if (
-          !desiredWindowInput ||
+          desiredWindowInputs.length === 0 ||
           rentalMonths < 1 ||
           !normalizedDeliveryAddress ||
           parsedCoordinates.error ||
@@ -181,7 +187,7 @@ export function PublicClientPresentationPage() {
       const bookingPreferences =
         presentation.mode === "NORMAL"
           ? {
-              desiredDeliveryWindows: [desiredWindowInput!],
+              desiredDeliveryWindows: desiredWindowInputs,
               rentalMonths,
               deliveryAddress: normalizedDeliveryAddress,
               ...(parsedCoordinates.latitude === null
@@ -246,6 +252,37 @@ export function PublicClientPresentationPage() {
   const furnitureCabin = presentation.groups
     .flatMap((group) => group.cabins)
     .find((cabin) => cabin.id === furnitureCabinId)
+  const furniturePositions = furnitureCabin
+    ? presentation.equipmentAvailability.filter(
+        (equipment) =>
+          desiredQuantity(
+            furnitureDraft,
+            furnitureCabin.id,
+            equipment.equipmentId
+          ) > 0
+      )
+    : []
+  const addableFurnitureEquipment = furnitureCabin
+    ? presentation.equipmentAvailability.filter(
+        (equipment) =>
+          !furniturePositions.some(
+            (position) => position.equipmentId === equipment.equipmentId
+          )
+      )
+    : []
+  const selectedFurnitureEquipment = addableFurnitureEquipment.find(
+    (equipment) => equipment.equipmentId === furnitureEquipmentId
+  )
+  const selectedFurnitureCapacity =
+    furnitureCabin && selectedFurnitureEquipment
+      ? equipmentCapacityForCabin({
+          presentation,
+          selectedIds,
+          draft: furnitureDraft,
+          cabinId: furnitureCabin.id,
+          equipmentId: selectedFurnitureEquipment.equipmentId,
+        })
+      : 0
   const selectedCabinList = selectedCabins(presentation, selectedIds)
   const normalDetailsStep = normalPresentation && normalStep === "details"
   const canAdvanceToDetails =
@@ -259,7 +296,7 @@ export function PublicClientPresentationPage() {
     selectionCountValid &&
     (!normalPresentation ||
       (normalDetailsStep &&
-        desiredWindowInput !== null &&
+        desiredWindowInputs.length > 0 &&
         rentalMonths > 0 &&
         normalizedDeliveryAddress.length > 0 &&
         parsedCoordinates.error === null &&
@@ -287,6 +324,85 @@ export function PublicClientPresentationPage() {
       return
     }
     setSelectedIds([...selectedIds, cabinId])
+  }
+
+  function selectDesiredDates(nextDates: Date[] | undefined) {
+    const uniqueDates = Array.from(
+      new Map(
+        (nextDates ?? []).map((date) => [calendarDateValue(date), date])
+      ).values()
+    ).sort((left, right) =>
+      calendarDateValue(left).localeCompare(calendarDateValue(right))
+    )
+    if (uniqueDates.length > MAX_DESIRED_DELIVERY_DATES) {
+      setDesiredDateError(
+        `Можно выбрать не больше ${MAX_DESIRED_DELIVERY_DATES} дней.`
+      )
+      return
+    }
+    setDesiredDateError(null)
+    setDesiredDates(uniqueDates)
+  }
+
+  function addFurniturePosition(equipmentId: string) {
+    const currentFurnitureCabin = furnitureCabin
+    const currentPresentation = presentation
+    if (!currentFurnitureCabin || !currentPresentation) return
+    setFurnitureDraft((current) => {
+      if (desiredQuantity(current, currentFurnitureCabin.id, equipmentId) > 0) {
+        return current
+      }
+      const capacity = equipmentCapacityForCabin({
+        presentation: currentPresentation,
+        selectedIds,
+        draft: current,
+        cabinId: currentFurnitureCabin.id,
+        equipmentId,
+      })
+      if (capacity < 1) return current
+      return {
+        ...current,
+        [currentFurnitureCabin.id]: {
+          ...current[currentFurnitureCabin.id],
+          [equipmentId]: 1,
+        },
+      }
+    })
+    setFurnitureEquipmentId("")
+  }
+
+  function changeFurnitureQuantity(equipmentId: string, delta: number) {
+    const currentFurnitureCabin = furnitureCabin
+    const currentPresentation = presentation
+    if (!currentFurnitureCabin || !currentPresentation) return
+    setFurnitureDraft((current) => {
+      const currentQuantity = desiredQuantity(
+        current,
+        currentFurnitureCabin.id,
+        equipmentId
+      )
+      const capacity = equipmentCapacityForCabin({
+        presentation: currentPresentation,
+        selectedIds,
+        draft: current,
+        cabinId: currentFurnitureCabin.id,
+        equipmentId,
+      })
+      const quantity = Math.max(0, Math.min(capacity, currentQuantity + delta))
+      const cabinDraft = { ...current[currentFurnitureCabin.id] }
+      if (quantity === 0) {
+        delete cabinDraft[equipmentId]
+      } else {
+        cabinDraft[equipmentId] = quantity
+      }
+      const next = { ...current }
+      if (Object.keys(cabinDraft).length === 0) {
+        delete next[currentFurnitureCabin.id]
+      } else {
+        next[currentFurnitureCabin.id] = cabinDraft
+      }
+      return next
+    })
   }
 
   return (
@@ -341,7 +457,7 @@ export function PublicClientPresentationPage() {
               <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
                 {presentation.mode === "REPLACEMENT"
                   ? `Нужно выбрать ровно ${requiredSelectionCount ?? 0}. Порядок выбора соответствует порядку заменяемых бытовок.`
-                  : "Выберите бытовки и при необходимости добавьте мебель отдельно в каждую из них."}
+                  : "Выберите бытовки и при необходимости добавьте наполнение отдельно в каждую из них."}
               </p>
             </div>
             <Badge variant={viewOnly ? "outline" : "secondary"}>
@@ -376,11 +492,11 @@ export function PublicClientPresentationPage() {
 
           {presentation.mode === "REPLACEMENT" ? (
             <Alert>
-              <AlertTitle>Мебель останется в заказе</AlertTitle>
+              <AlertTitle>Наполнение останется в заказе</AlertTitle>
               <AlertDescription>
-                Количества мебели сохраняются. Если мебель уже физически
-                находится в старой бытовке, склад получит задание переместить её
-                в выбранную замену.
+                Количества наполнения сохраняются. Если наполнение уже физически
+                находится в старой бытовке, склад получит задание переместить
+                его в выбранную замену.
               </AlertDescription>
             </Alert>
           ) : null}
@@ -432,8 +548,8 @@ export function PublicClientPresentationPage() {
               <CardHeader>
                 <CardTitle>Выбранные бытовки и наполнение</CardTitle>
                 <CardDescription>
-                  Проверьте выбранные бытовки. Чтобы изменить выбор или мебель,
-                  вернитесь на предыдущий шаг.
+                  Проверьте выбранные бытовки. Чтобы изменить выбор или
+                  наполнение, вернитесь на предыдущий шаг.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -479,23 +595,50 @@ export function PublicClientPresentationPage() {
                 считаться от фактической даты отгрузки.
               </FieldDescription>
               <FieldGroup className="gap-5">
-                <Field data-invalid={!desiredDate || undefined}>
-                  <FieldLabel>Желаемая дата получения</FieldLabel>
+                <Field
+                  data-invalid={
+                    desiredDates.length === 0 || Boolean(desiredDateError)
+                      ? true
+                      : undefined
+                  }
+                >
+                  <FieldLabel>Желаемые даты получения</FieldLabel>
                   <div className="w-fit max-w-full overflow-x-auto rounded-lg border">
                     <Calendar
-                      mode="single"
+                      mode="multiple"
                       locale={ru}
-                      selected={desiredDate}
-                      disabled={viewOnly || Boolean(effectiveBooking)}
+                      selected={desiredDates}
+                      disabled={(date) =>
+                        viewOnly ||
+                        Boolean(effectiveBooking) ||
+                        (desiredDates.length >= MAX_DESIRED_DELIVERY_DATES &&
+                          !desiredDates.some(
+                            (selectedDate) =>
+                              calendarDateValue(selectedDate) ===
+                              calendarDateValue(date)
+                          ))
+                      }
                       aria-label="Календарь выбора желаемой даты получения"
-                      onSelect={setDesiredDate}
+                      aria-invalid={desiredDates.length === 0}
+                      onSelect={selectDesiredDates}
                     />
                   </div>
                   <FieldDescription>
-                    {desiredDate
-                      ? `Выбрано: ${formatCalendarDate(calendarDateValue(desiredDate))}.`
-                      : "Выберите один день в календаре."}
+                    Выберите до {MAX_DESIRED_DELIVERY_DATES} отдельных дней.
                   </FieldDescription>
+                  <FieldDescription>
+                    {`Выбрано дней: ${desiredDates.length} из ${MAX_DESIRED_DELIVERY_DATES}.`}
+                  </FieldDescription>
+                  {desiredDates.length > 0 ? (
+                    <FieldDescription>
+                      {desiredWindowInputs
+                        .map((window) => formatCalendarDate(window.startDate))
+                        .join(", ")}
+                    </FieldDescription>
+                  ) : null}
+                  {desiredDateError ? (
+                    <FieldError>{desiredDateError}</FieldError>
+                  ) : null}
                 </Field>
 
                 <Field>
@@ -632,7 +775,10 @@ export function PublicClientPresentationPage() {
                       disabled={viewOnly || Boolean(effectiveBooking)}
                       furnitureDisabled={presentation.mode === "REPLACEMENT"}
                       onToggle={() => toggleCabin(cabin.id)}
-                      onAddFurniture={() => setFurnitureCabinId(cabin.id)}
+                      onAddFurniture={() => {
+                        setFurnitureEquipmentId("")
+                        setFurnitureCabinId(cabin.id)
+                      }}
                     />
                   ))}
                 </div>
@@ -720,124 +866,193 @@ export function PublicClientPresentationPage() {
       <Dialog
         open={Boolean(furnitureCabin)}
         onOpenChange={(open) => {
-          if (!open) setFurnitureCabinId(null)
+          if (!open) {
+            setFurnitureEquipmentId("")
+            setFurnitureCabinId(null)
+          }
         }}
       >
-        <DialogContent>
+        <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>
-              Добавить мебель в бытовку {furnitureCabin?.number ?? ""}
+              Добавить наполнение в бытовку {furnitureCabin?.number ?? ""}
             </DialogTitle>
             <DialogDescription>
-              Свободное количество общее для всех выбранных бытовок и всех
-              каналов бронирования. Лимит применяется отдельно к каждой позиции.
+              «Доступно» учитывает общий остаток, наполнение в выбранных
+              бытовках и ограничение для одной бытовки.
             </DialogDescription>
           </DialogHeader>
           {furnitureCabin ? (
             <FieldGroup>
               {presentation.equipmentAvailability.length === 0 ? (
                 <FieldDescription>
-                  Свободная мебель сейчас отсутствует.
+                  Доступного наполнения сейчас нет.
                 </FieldDescription>
               ) : (
-                presentation.equipmentAvailability.map((equipment) => {
-                  const capacity = equipmentCapacityForCabin({
-                    presentation,
-                    selectedIds,
-                    draft: furnitureDraft,
-                    cabinId: furnitureCabin.id,
-                    equipmentId: equipment.equipmentId,
-                  })
-                  const quantity = desiredQuantity(
-                    furnitureDraft,
-                    furnitureCabin.id,
-                    equipment.equipmentId
-                  )
-                  return (
-                    <Field key={equipment.equipmentId} className="gap-1">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <p
-                          className="min-w-0 flex-1 truncate text-sm font-medium"
-                          title={equipment.equipmentName}
-                        >
-                          {equipment.equipmentName}
-                        </p>
-                        <Button
-                          type="button"
-                          size="icon-sm"
-                          variant="outline"
-                          disabled={quantity === 0}
-                          aria-label={`Уменьшить количество: ${equipment.equipmentName}`}
-                          onClick={() =>
-                            setFurnitureDraft((current) => {
-                              const currentQuantity = desiredQuantity(
-                                current,
-                                furnitureCabin.id,
-                                equipment.equipmentId
-                              )
-                              return {
-                                ...current,
-                                [furnitureCabin.id]: {
-                                  ...current[furnitureCabin.id],
-                                  [equipment.equipmentId]: Math.max(
-                                    0,
-                                    currentQuantity - 1
-                                  ),
-                                },
-                              }
+                <>
+                  <Field>
+                    <FieldLabel htmlFor="public-presentation-furniture-type">
+                      Тип наполнения
+                    </FieldLabel>
+                    <Select
+                      value={furnitureEquipmentId}
+                      onValueChange={setFurnitureEquipmentId}
+                    >
+                      <SelectTrigger
+                        id="public-presentation-furniture-type"
+                        className="w-full"
+                      >
+                        <SelectValue placeholder="Выберите тип наполнения" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {addableFurnitureEquipment.map((equipment) => {
+                            const capacity = equipmentCapacityForCabin({
+                              presentation,
+                              selectedIds,
+                              draft: furnitureDraft,
+                              cabinId: furnitureCabin.id,
+                              equipmentId: equipment.equipmentId,
                             })
-                          }
-                        >
-                          <HugeiconsIcon icon={MinusSignIcon} />
-                        </Button>
-                        <output
-                          aria-label={`Количество: ${equipment.equipmentName}`}
-                          className="w-6 text-center text-sm font-medium tabular-nums"
-                        >
-                          {quantity}
-                        </output>
-                        <Button
-                          type="button"
-                          size="icon-sm"
-                          variant="outline"
-                          disabled={quantity >= capacity}
-                          aria-label={`Увеличить количество: ${equipment.equipmentName}`}
-                          onClick={() =>
-                            setFurnitureDraft((current) => {
-                              const currentQuantity = desiredQuantity(
-                                current,
-                                furnitureCabin.id,
-                                equipment.equipmentId
-                              )
-                              return {
-                                ...current,
-                                [furnitureCabin.id]: {
-                                  ...current[furnitureCabin.id],
-                                  [equipment.equipmentId]: Math.min(
-                                    capacity,
-                                    currentQuantity + 1
-                                  ),
-                                },
-                              }
-                            })
-                          }
-                        >
-                          <HugeiconsIcon icon={Add01Icon} />
-                        </Button>
-                      </div>
-                      <FieldDescription className="text-xs">
-                        Свободно сейчас: {equipment.availableQuantity} · в этой
-                        бытовке: {capacity} · лимит:{" "}
-                        {equipment.maximumPerCabin ?? "нет"}
+                            return (
+                              <SelectItem
+                                key={equipment.equipmentId}
+                                value={equipment.equipmentId}
+                                disabled={capacity < 1}
+                              >
+                                {equipment.equipmentName}: доступно — {capacity}
+                              </SelectItem>
+                            )
+                          })}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    {addableFurnitureEquipment.length === 0 ? (
+                      <FieldDescription>
+                        Все доступные позиции уже добавлены.
                       </FieldDescription>
-                    </Field>
-                  )
-                })
+                    ) : null}
+                  </Field>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={
+                      !selectedFurnitureEquipment ||
+                      selectedFurnitureCapacity < 1
+                    }
+                    onClick={() => {
+                      if (selectedFurnitureEquipment) {
+                        addFurniturePosition(
+                          selectedFurnitureEquipment.equipmentId
+                        )
+                      }
+                    }}
+                  >
+                    <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+                    Добавить наполнение
+                  </Button>
+
+                  <FieldSet className="gap-3">
+                    <FieldLegend variant="label">
+                      Добавленные позиции
+                    </FieldLegend>
+                    {furniturePositions.length === 0 ? (
+                      <FieldDescription>
+                        Наполнение пока не выбрано.
+                      </FieldDescription>
+                    ) : (
+                      <FieldGroup className="gap-3">
+                        {furniturePositions.map((equipment) => {
+                          const capacity = equipmentCapacityForCabin({
+                            presentation,
+                            selectedIds,
+                            draft: furnitureDraft,
+                            cabinId: furnitureCabin.id,
+                            equipmentId: equipment.equipmentId,
+                          })
+                          const quantity = desiredQuantity(
+                            furnitureDraft,
+                            furnitureCabin.id,
+                            equipment.equipmentId
+                          )
+                          return (
+                            <Field
+                              key={equipment.equipmentId}
+                              className="rounded-lg border p-3"
+                            >
+                              <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p
+                                    className="truncate text-sm font-medium"
+                                    title={equipment.equipmentName}
+                                  >
+                                    {equipment.equipmentName}
+                                  </p>
+                                  <FieldDescription className="text-xs">
+                                    Доступно: {capacity} шт.
+                                  </FieldDescription>
+                                </div>
+                                <div
+                                  role="group"
+                                  aria-label={`Количество наполнения: ${equipment.equipmentName}`}
+                                  className="flex items-center gap-2"
+                                >
+                                  <Button
+                                    type="button"
+                                    size="icon-sm"
+                                    variant="outline"
+                                    aria-label={`Уменьшить количество: ${equipment.equipmentName}`}
+                                    onClick={() =>
+                                      changeFurnitureQuantity(
+                                        equipment.equipmentId,
+                                        -1
+                                      )
+                                    }
+                                  >
+                                    <HugeiconsIcon icon={MinusSignIcon} />
+                                  </Button>
+                                  <output
+                                    aria-label={`Количество: ${equipment.equipmentName}`}
+                                    className="min-w-8 text-center text-sm font-medium tabular-nums"
+                                  >
+                                    {quantity}
+                                  </output>
+                                  <Button
+                                    type="button"
+                                    size="icon-sm"
+                                    variant="outline"
+                                    disabled={quantity >= capacity}
+                                    aria-label={`Увеличить количество: ${equipment.equipmentName}`}
+                                    onClick={() =>
+                                      changeFurnitureQuantity(
+                                        equipment.equipmentId,
+                                        1
+                                      )
+                                    }
+                                  >
+                                    <HugeiconsIcon icon={Add01Icon} />
+                                  </Button>
+                                </div>
+                              </div>
+                            </Field>
+                          )
+                        })}
+                      </FieldGroup>
+                    )}
+                  </FieldSet>
+                </>
               )}
             </FieldGroup>
           ) : null}
           <DialogFooter>
-            <Button type="button" onClick={() => setFurnitureCabinId(null)}>
+            <Button
+              type="button"
+              onClick={() => {
+                setFurnitureEquipmentId("")
+                setFurnitureCabinId(null)
+              }}
+            >
               Готово
             </Button>
           </DialogFooter>
@@ -851,7 +1066,7 @@ export function PublicClientPresentationPage() {
             <DialogDescription>
               {presentation.mode === "REPLACEMENT"
                 ? `Выбранные ${selectedIds.length} бытовки заменят недоступные в текущем заказе в указанном порядке.`
-                : `В текущий заказ попадут выбранные бытовки (${selectedIds.length}) и мебель по каждой из них.`}
+                : `В текущий заказ попадут выбранные бытовки (${selectedIds.length}) и наполнение по каждой из них.`}
             </DialogDescription>
           </DialogHeader>
           {confirmMutation.isError ? (
@@ -937,6 +1152,7 @@ function PublicCabinCard({
     const quantity = furniture[equipment.equipmentId] ?? 0
     return quantity > 0 ? [`${equipment.equipmentName} — ${quantity}`] : []
   })
+  const selectionCheckboxId = `public-presentation-cabin-${cabin.id}`
 
   return (
     <article
@@ -968,26 +1184,36 @@ function PublicCabinCard({
               Бытовка {cabin.number}
             </h3>
           </div>
-          <div className="flex flex-wrap justify-end gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant={selected ? "secondary" : "default"}
-              disabled={disabled}
-              aria-pressed={selected}
-              onClick={onToggle}
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Field
+              orientation="horizontal"
+              data-disabled={disabled || undefined}
+              className="w-auto gap-2"
             >
-              {selected ? "Убрать выбор" : "Выбрать"}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={disabled || !selected || furnitureDisabled}
-              onClick={onAddFurniture}
-            >
-              Добавить мебель
-            </Button>
+              <Checkbox
+                id={selectionCheckboxId}
+                checked={selected}
+                disabled={disabled}
+                onCheckedChange={onToggle}
+              />
+              <FieldContent>
+                <FieldLabel htmlFor={selectionCheckboxId}>
+                  Выбрать бытовку {cabin.number}
+                </FieldLabel>
+              </FieldContent>
+            </Field>
+            {selected && !furnitureDisabled ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={disabled}
+                onClick={onAddFurniture}
+              >
+                <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+                Добавить наполнение
+              </Button>
+            ) : null}
           </div>
         </div>
         <dl className="mt-6 grid grid-cols-2 gap-x-5 gap-y-4 text-sm">
@@ -1017,7 +1243,7 @@ function PublicCabinCard({
         {selectedFurniture.length > 0 ? (
           <div className="mt-5 flex flex-col gap-2">
             <p className="text-xs font-medium text-muted-foreground">
-              Добавленная мебель
+              Добавленное наполнение
             </p>
             <div className="flex flex-wrap gap-2">
               {selectedFurniture.map((label) => (
@@ -1036,7 +1262,7 @@ function PublicCabinCard({
             <div className="flex flex-wrap gap-2">
               {cabin.currentContents.map((item) => (
                 <Badge key={item.equipmentId} variant="outline">
-                  {item.equipmentName ?? "Мебель"} — {item.quantity}
+                  {item.equipmentName ?? "Наполнение"} — {item.quantity}
                 </Badge>
               ))}
             </div>

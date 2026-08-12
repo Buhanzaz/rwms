@@ -68,6 +68,13 @@ public class TaskBoardService {
     return readProjections.workerSnapshot(warehouseId, workerId);
   }
 
+  /** Returns the feed projection under the exact native surface's audience policy. */
+  @Transactional(readOnly = true)
+  public TaskBoardSnapshot workerSnapshot(
+      MobileTaskSurface surface, UUID warehouseId, UUID workerId) {
+    return readProjections.workerSnapshot(surface, warehouseId, workerId);
+  }
+
   @Transactional(readOnly = true)
   public BoardEntryDto entry(UUID warehouseId, UUID entryId) {
     return readProjections.entry(warehouseId, entryId);
@@ -77,6 +84,13 @@ public class TaskBoardService {
   /** Returns an entry only when the authenticated worker may discover its driver audience. */
   public BoardEntryDto workerEntry(UUID warehouseId, UUID entryId, UUID workerId) {
     return readProjections.workerEntry(warehouseId, entryId, workerId);
+  }
+
+  /** Returns an entry only when its audience is visible to the exact native surface. */
+  @Transactional(readOnly = true)
+  public BoardEntryDto workerEntry(
+      MobileTaskSurface surface, UUID warehouseId, UUID entryId, UUID workerId) {
+    return readProjections.workerEntry(surface, warehouseId, entryId, workerId);
   }
 
   @Transactional(readOnly = true)

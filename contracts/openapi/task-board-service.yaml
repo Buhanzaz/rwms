@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Task Board Service API
-  version: 1.5.0
+  version: 1.6.0
   description: >-
     Canonical F2 inventory of the active task-board, workforce and queue
     registry HTTP API. All warehouse-scoped operations validate the warehouse
@@ -990,7 +990,9 @@ paths:
       description: >-
         Streams authorization-filtered invalidations only. Event payloads
         contain identifiers and revisions, never the task snapshot. Clients
-        reconnect with Last-Event-ID and fetch the affected resource.
+        reconnect with Last-Event-ID and fetch the affected resource. A waiting
+        logistics-driver task is never announced here; TASK_JOIN_AVAILABLE is
+        emitted only after the driver takes it.
       parameters:
         - name: Last-Event-ID
           in: header
@@ -1104,6 +1106,208 @@ paths:
     delete:
       operationId: unregisterWorkerDevice
       description: Removes only the authenticated worker's installation binding.
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /driver/v1/context:
+    get:
+      operationId: getDriverContext
+      description: >-
+        Returns the authenticated driver's profile, primary queue categories,
+        server-time anchor and server-issued 24-hour offline lease. Driver and
+        warehouse identity are derived exclusively from the WORKER JWT carrying
+        driver.tasks.
+      responses:
+        '200':
+          description: Current authenticated driver context.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerContext' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /driver/v1/feed:
+    get:
+      operationId: getDriverFeed
+      description: >-
+        Returns only entries from primary queue bindings visible to the
+        authenticated driver. This includes assigned or shared current
+        logistics work and matching ordinary warehouse queues; cursors are
+        opaque and If-None-Match applies to the requested page.
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            oneOf:
+              - { type: string, minLength: 1, maxLength: 512 }
+              - { type: 'null' }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 50, default: 50 }
+        - name: If-None-Match
+          in: header
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 256 }
+      responses:
+        '200':
+          description: Current page of the authenticated driver feed.
+          headers:
+            ETag:
+              required: true
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerFeed' }
+        '304':
+          description: The requested feed page has not changed.
+          headers:
+            ETag:
+              required: true
+              schema: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /driver/v1/entries/{entryId}:
+    parameters:
+      - $ref: '#/components/parameters/EntryId'
+    get:
+      operationId: getDriverTaskDetail
+      description: >-
+        Returns a sanitized primary-binding task snapshot. An entry outside the
+        authenticated driver's current audience is indistinguishable from a
+        missing entry.
+      responses:
+        '200':
+          description: Current driver-visible entry detail.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerTaskDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /driver/v1/events:
+    get:
+      operationId: streamDriverEvents
+      description: >-
+        Streams authorization-filtered invalidations only. Event payloads carry
+        identifiers and revisions, never task data; the client reloads its
+        driver-authorized feed after every signal. TASK_JOIN_AVAILABLE and its
+        entry identity are confined to the WorkerApp stream.
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        '200':
+          description: Server-sent driver invalidation event stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              x-rwms-event-data-schema:
+                $ref: '#/components/schemas/WorkerInvalidationEvent'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /driver/v1/entries/{entryId}/actions:
+    parameters:
+      - $ref: '#/components/parameters/EntryId'
+    post:
+      operationId: applyDriverAction
+      description: >-
+        Applies or replays a driver transition. A driver can take primary work,
+        pause, resume or complete assigned work; JOIN is reserved for the worker
+        surface. Idempotency-Key must equal operationId.
+      parameters:
+        - $ref: '#/components/parameters/WorkerIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DriverActionRequest' }
+      responses:
+        '200':
+          description: Applied command or byte-equivalent idempotent replay.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerActionAppliedResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Stale, expired-lease, changed-replay or invalid-state conflict.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/WorkerActionConflictProblem' }
+  /driver/v1/entries/{entryId}/evidence-reservations:
+    parameters:
+      - $ref: '#/components/parameters/EntryId'
+    post:
+      operationId: reserveDriverTaskEvidence
+      description: >-
+        Reserves a stable evidenceId for driver completion media. Actor and
+        assignment metadata are derived from the driver JWT and task-board
+        state; Idempotency-Key must equal operationId.
+      parameters:
+        - $ref: '#/components/parameters/WorkerIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EvidenceReservationRequest' }
+      responses:
+        '200':
+          description: Existing reservation returned for an identical replay.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskEvidence' }
+        '201':
+          description: Evidence reservation created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskEvidence' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /driver/v1/devices/{installationId}:
+    parameters:
+      - name: installationId
+        in: path
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 128 }
+    put:
+      operationId: registerDriverDevice
+      description: >-
+        Creates or replaces the authenticated driver's app installation. The
+        server fixes its DRIVER surface and never transfers it between workers.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkerDeviceRegistrationRequest' }
+      responses:
+        '200':
+          description: Current device registration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerDeviceRegistration' }
+        '201':
+          description: Device registration created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerDeviceRegistration' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      operationId: unregisterDriverDevice
+      description: Removes only the authenticated driver's DRIVER installation.
       responses:
         '204': { $ref: '#/components/responses/NoContent' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -2903,6 +3107,18 @@ components:
         offlineLeaseId: { type: string, format: uuid }
         evidenceId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
       additionalProperties: false
+    DriverActionRequest:
+      type: object
+      required: [operationId, action, expectedVersion, workerGroupId, occurredAt, offlineLeaseId, evidenceId]
+      properties:
+        operationId: { type: string, format: uuid }
+        action: { type: string, enum: [TAKE, PAUSE, RESUME, COMPLETE] }
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        workerGroupId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        occurredAt: { type: string, format: date-time }
+        offlineLeaseId: { type: string, format: uuid }
+        evidenceId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+      additionalProperties: false
     WorkerActionAppliedResult:
       type: object
       required: [outcome, currentVersion, entry]
@@ -2960,7 +3176,19 @@ components:
       required: [provider, token, appVersion, sdkInt, locale]
       properties:
         provider: { type: string, const: FCM }
-        token: { type: string, minLength: 1, maxLength: 4096, writeOnly: true }
+        targetKind:
+          type: string
+          enum: [TOKEN, FID]
+          default: TOKEN
+          description: >-
+            Firebase target represented by token. Omission means the legacy FCM
+            registration-token form; current Android clients send FID.
+        token:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          writeOnly: true
+          description: Registration token or Firebase Installation ID according to targetKind.
         appVersion: { type: string, minLength: 1, maxLength: 64 }
         sdkInt: { type: integer, minimum: 23, maximum: 1000 }
         locale: { type: string, minLength: 2, maxLength: 35 }

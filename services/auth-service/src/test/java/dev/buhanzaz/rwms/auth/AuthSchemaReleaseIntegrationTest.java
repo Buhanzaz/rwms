@@ -221,6 +221,7 @@ class AuthSchemaReleaseIntegrationTest {
         List<RegisteredClient> clients = List.of(
                 publicClient("rwms-panel", "rwms.read"),
                 publicClient("rwms-worker-android", "worker.tasks"),
+                publicClient("rwms-driver-android", "driver.tasks"),
                 serviceClient("task-board-service", "worker-credentials.manage"),
                 serviceClient("auth-service", "warehouse.read"));
         clients.forEach(repository::save);

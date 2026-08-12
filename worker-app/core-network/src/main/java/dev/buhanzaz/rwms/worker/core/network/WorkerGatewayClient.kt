@@ -37,10 +37,6 @@ class WorkerGatewayClient @Inject constructor(
 
     suspend fun detail(entryId: String): WorkerTaskDetailDto = api.workerTaskDetail(entryId).bodyOrProblem(json)
 
-    /** Reads live logistics-owned trip facts without copying them into the worker Room projection. */
-    suspend fun logisticsTripDetails(taskId: String): DriverTripDetailsDto? =
-        api.logisticsDriverTask(taskId).bodyOrProblem(json).tripDetails
-
     suspend fun action(entryId: String, request: WorkerActionRequestDto): WorkerActionResultDto =
         api.applyAction(entryId, request.operationId, request).bodyOrProblem(json)
 

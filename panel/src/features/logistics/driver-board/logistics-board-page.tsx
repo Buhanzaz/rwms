@@ -102,7 +102,7 @@ type LogisticsDriverSection = {
   scheduledTasks: DriverBoardCard[]
 }
 
-/** Date projection that keeps hidden movement cards for global queue indexes. */
+/** Date projection that retains unrendered source cards for queue indexes. */
 type LogisticsDateColumn = {
   date: string
   allCurrentTasks: DriverBoardCard[]
@@ -151,11 +151,10 @@ function orderCards(cards: DriverBoardCard[]) {
     )
 }
 
-function isLogisticsTask(card: DriverBoardCard) {
+function isSupportedLogisticsTrip(card: DriverBoardCard) {
   return (
-    card.kind === "SHIPMENT" ||
-    card.kind === "RETURN" ||
-    (card.kind === "TRANSFER" && card.tripDetails != null)
+    card.tripDetails !== null &&
+    (card.kind === "SHIPMENT" || card.kind === "RETURN")
   )
 }
 
@@ -163,20 +162,10 @@ function isTaskMovable(card: DriverBoardCard) {
   return card.taskStatus === "ACTIVE" && card.entryStatus === "WAITING"
 }
 
-function cabinSummary(unitNumber: string | null) {
-  const value = unitNumber?.trim()
-  if (!value) return "Бытовка без номера"
-
-  const groupedCount = /^(\d+)\s+бытов(?:ка|ки|ок)(?:\s|$)/iu.exec(value)
-  if (groupedCount) {
-    const count = Number(groupedCount[1])
-    return count === 1 ? "Бытовка" : `Бытовки: ${count}`
-  }
-
-  if (/^бытов(?:ка|ки)(?:\s|:|$)/iu.test(value)) return value
-
-  const plural = /[,;\n]|\s+и\s+|\s\/\s|\s\+\s/u.test(value)
-  return `${plural ? "Бытовки" : "Бытовка"} ${value}`
+function logisticsTripTitle(kind: DriverBoardCard["kind"]) {
+  if (kind === "SHIPMENT") return "Отгрузить бытовку"
+  if (kind === "RETURN") return "Вернуть бытовку"
+  return "Логистическая ходка"
 }
 
 function driverSectionKey(card: DriverBoardCard) {
@@ -339,10 +328,7 @@ function LogisticsTaskCard({
   const [expanded, setExpanded] = useState(true)
   const dragDisabled = disabled || !isTaskMovable(card)
   const trip = card.tripDetails
-  const cabins = trip
-    ? `Бытовки: ${trip.cabins.length}`
-    : cabinSummary(card.unitNumber)
-  const tripLabel = trip ? `ходку №${trip.tripNumber}` : "логистическое задание"
+  const taskTitle = logisticsTripTitle(card.kind)
   const item: LogisticsDragItem = {
     type: "logistics-task",
     card,
@@ -370,6 +356,10 @@ function LogisticsTaskCard({
     opacity: isDragging ? 0 : 1,
   }
 
+  if (!trip) return null
+
+  const cabins = `Бытовки: ${trip.cabins.length}`
+
   return (
     <div
       ref={setNodeRef}
@@ -378,7 +368,7 @@ function LogisticsTaskCard({
       className={cn(
         !dragDisabled && "cursor-grab touch-none active:cursor-grabbing"
       )}
-      aria-label={`Переместить ${tripLabel}: ${cabins}`}
+      aria-label={`Переместить ${taskTitle}: ${cabins}`}
       {...attributes}
       {...listeners}
     >
@@ -391,13 +381,9 @@ function LogisticsTaskCard({
           )}
         >
           <CardHeader>
-            <CardTitle className="line-clamp-2 pr-10">
-              {trip
-                ? `Задание №${trip.taskNumber} · Ходка №${trip.tripNumber}`
-                : card.title}
-            </CardTitle>
+            <CardTitle className="line-clamp-2 pr-10">{taskTitle}</CardTitle>
             <CardDescription>
-              {trip ? `${trip.clientName} · ${cabins}` : cabins}
+              {trip.clientName} · {cabins}
             </CardDescription>
             <CardAction className="flex items-center gap-1">
               <CollapsibleTrigger asChild>
@@ -453,9 +439,6 @@ function LogisticsTaskCard({
           <CollapsibleContent asChild>
             <CardContent className="flex flex-col gap-2">
               <div className="flex flex-wrap gap-1">
-                <Badge variant="secondary">
-                  {card.kind === "SHIPMENT" ? "Отгрузка" : "Возврат"}
-                </Badge>
                 <Badge
                   variant={
                     card.entryStatus === "IN_PROGRESS" ? "default" : "outline"
@@ -467,22 +450,8 @@ function LogisticsTaskCard({
                   Водитель: {card.driverAudience.workerName ?? "не назначен"}
                 </Badge>
               </div>
-              {trip ? (
-                <>
-                  <DriverTripDetailsView details={trip} live={false} />
-                  <DriverTripDetailsDialog card={card} />
-                </>
-              ) : null}
-              {!trip &&
-              card.taskText?.trim() &&
-              card.taskText.trim() !== card.title.trim() ? (
-                <p
-                  aria-label="Детали задания"
-                  className="text-sm whitespace-pre-wrap"
-                >
-                  {card.taskText.trim()}
-                </p>
-              ) : null}
+              <DriverTripDetailsView details={trip} live={false} />
+              <DriverTripDetailsDialog card={card} />
             </CardContent>
           </CollapsibleContent>
         </Card>
@@ -737,7 +706,7 @@ function logisticsDateColumns(board: DriverBoard) {
   const columns = new Map<string, LogisticsDateColumn>()
   for (const source of board.dates) {
     const allScheduledTasks = orderCards(source.tasks)
-    const scheduledTasks = allScheduledTasks.filter(isLogisticsTask)
+    const scheduledTasks = allScheduledTasks.filter(isSupportedLogisticsTrip)
     if (scheduledTasks.length === 0) continue
     columns.set(source.date, {
       date: source.date,
@@ -748,7 +717,7 @@ function logisticsDateColumns(board: DriverBoard) {
     })
   }
   const allCurrentTasks = orderCards(board.current)
-  const currentTasks = allCurrentTasks.filter(isLogisticsTask)
+  const currentTasks = allCurrentTasks.filter(isSupportedLogisticsTrip)
   if (currentTasks.length > 0) {
     const existing = columns.get(board.currentDate)
     columns.set(board.currentDate, {
@@ -1077,10 +1046,14 @@ export function LogisticsBoardPage() {
                 {activeItem ? (
                   <Card size="sm" className="w-72 shadow-lg" aria-hidden>
                     <CardHeader>
-                      <CardTitle>{activeItem.card.title}</CardTitle>
-                      <CardDescription>
-                        {cabinSummary(activeItem.card.unitNumber)}
-                      </CardDescription>
+                      <CardTitle>
+                        {logisticsTripTitle(activeItem.card.kind)}
+                      </CardTitle>
+                      {activeItem.card.tripDetails ? (
+                        <CardDescription>
+                          Бытовки: {activeItem.card.tripDetails.cabins.length}
+                        </CardDescription>
+                      ) : null}
                     </CardHeader>
                   </Card>
                 ) : null}

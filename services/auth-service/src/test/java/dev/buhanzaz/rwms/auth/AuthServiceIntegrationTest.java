@@ -130,7 +130,14 @@ class AuthServiceIntegrationTest {
         var worker = clients.findByClientId("rwms-worker-android");
         assertThat(worker.getClientSettings().isRequireProofKey()).isTrue();
         assertThat(worker.getScopes()).contains("openid", "profile", "offline_access", "worker.tasks");
-        assertThat(worker.getRedirectUris()).containsExactly("http://localhost:8082/auth/callback");
+        assertThat(worker.getRedirectUris()).containsExactly("http://localhost:8082/auth/worker/callback");
+        var driver = clients.findByClientId("rwms-driver-android");
+        assertThat(driver.getClientSettings().isRequireProofKey()).isTrue();
+        assertThat(driver.getScopes()).contains("openid", "profile", "offline_access", "driver.tasks");
+        assertThat(driver.getRedirectUris()).containsExactly("http://localhost:8082/auth/driver/callback");
+        assertThat(driver.getAuthorizationGrantTypes())
+                .extracting(org.springframework.security.oauth2.core.AuthorizationGrantType::getValue)
+                .containsExactlyInAnyOrder("authorization_code", "refresh_token");
         assertThat(worker.getAuthorizationGrantTypes())
                 .extracting(org.springframework.security.oauth2.core.AuthorizationGrantType::getValue)
                 .containsExactlyInAnyOrder("authorization_code", "refresh_token");
@@ -200,6 +207,65 @@ class AuthServiceIntegrationTest {
     }
 
     @Test
+    void driverAuthorizationCodeIssuesWorkerIdentityWithDriverScopeOnly() throws Exception {
+        String workerId = UUID.randomUUID().toString();
+        workerCredentials.configure(
+                workerId,
+                new WorkerCredentialRequest("spb", "driver.oauth", "driver-password"));
+
+        OAuthTokens tokens = authorizeWorkerClient(
+                "driver.oauth",
+                "driver-password",
+                "rwms-driver-android",
+                "http://localhost:8082/auth/driver/callback",
+                "openid profile offline_access driver.tasks");
+        var jwt = jwtDecoder.decode(tokens.accessToken());
+
+        assertThat(jwt.getClaimAsString("principal_type")).isEqualTo("WORKER");
+        assertThat(jwt.getClaimAsString("worker_id")).isEqualTo(workerId);
+        assertThat(jwt.getClaimAsString("scope"))
+                .contains("driver.tasks")
+                .doesNotContain("worker.tasks");
+    }
+
+    @Test
+    void driverCredentialReconfigurationReplacesLoginAndPassword() throws Exception {
+        String workerId = UUID.randomUUID().toString();
+        workerCredentials.configure(
+                workerId,
+                new WorkerCredentialRequest("spb", "driver.old", "driver-old-password"));
+        OAuthTokens oldTokens = authorizeWorkerClient(
+                "driver.old",
+                "driver-old-password",
+                "rwms-driver-android",
+                "http://localhost:8082/auth/driver/callback",
+                "openid profile offline_access driver.tasks");
+
+        workerCredentials.configure(
+                workerId,
+                new WorkerCredentialRequest("spb", "driver.new", "driver-new-password"));
+
+        refreshPublicClient(
+                "rwms-driver-android", oldTokens.refreshToken(), status().isBadRequest());
+        mvc.perform(formLogin().user("driver.old").password("driver-old-password"))
+                .andExpect(unauthenticated());
+        mvc.perform(formLogin().user("driver.new").password("driver-old-password"))
+                .andExpect(unauthenticated());
+        OAuthTokens tokens = authorizeWorkerClient(
+                "driver.new",
+                "driver-new-password",
+                "rwms-driver-android",
+                "http://localhost:8082/auth/driver/callback",
+                "openid profile offline_access driver.tasks");
+
+        var jwt = jwtDecoder.decode(tokens.accessToken());
+        assertThat(jwt.getClaimAsString("worker_id")).isEqualTo(workerId);
+        assertThat(jwt.getClaimAsString("scope"))
+                .contains("driver.tasks")
+                .doesNotContain("worker.tasks");
+    }
+
+    @Test
     void workerAuthorizationRequiresPkceS256() throws Exception {
         workerCredentials.configure(
                 UUID.randomUUID().toString(),
@@ -215,7 +281,7 @@ class AuthServiceIntegrationTest {
                         .session(session)
                         .queryParam("response_type", "code")
                         .queryParam("client_id", "rwms-worker-android")
-                        .queryParam("redirect_uri", "http://localhost:8082/auth/callback")
+                        .queryParam("redirect_uri", "http://localhost:8082/auth/worker/callback")
                         .queryParam("scope", "openid profile offline_access worker.tasks")
                         .queryParam("state", "plain-pkce-state")
                         .queryParam(
@@ -228,9 +294,43 @@ class AuthServiceIntegrationTest {
                 .getHeader("Location");
 
         assertThat(location)
-                .startsWith("http://localhost:8082/auth/callback")
+                .startsWith("http://localhost:8082/auth/worker/callback")
                 .contains("error=invalid_request")
                 .contains("state=plain-pkce-state");
+    }
+
+    @Test
+    void driverAuthorizationRequiresPkceS256() throws Exception {
+        workerCredentials.configure(
+                UUID.randomUUID().toString(),
+                new WorkerCredentialRequest("spb", "driver.pkce", "driver-password"));
+        MockHttpSession session = (MockHttpSession) mvc.perform(
+                        formLogin().user("driver.pkce").password("driver-password"))
+                .andExpect(authenticated())
+                .andReturn()
+                .getRequest()
+                .getSession(false);
+
+        String location = mvc.perform(get("/oauth2/authorize")
+                        .session(session)
+                        .queryParam("response_type", "code")
+                        .queryParam("client_id", "rwms-driver-android")
+                        .queryParam("redirect_uri", "http://localhost:8082/auth/driver/callback")
+                        .queryParam("scope", "openid profile offline_access driver.tasks")
+                        .queryParam("state", "plain-driver-pkce-state")
+                        .queryParam(
+                                "code_challenge",
+                                "plain-code-verifier-000000000000000000000000000000")
+                        .queryParam("code_challenge_method", "plain"))
+                .andExpect(status().is3xxRedirection())
+                .andReturn()
+                .getResponse()
+                .getHeader("Location");
+
+        assertThat(location)
+                .startsWith("http://localhost:8082/auth/driver/callback")
+                .contains("error=invalid_request")
+                .contains("state=plain-driver-pkce-state");
     }
 
     @Test
@@ -480,7 +580,7 @@ class AuthServiceIntegrationTest {
         var initial = mvc.perform(get("/oauth2/authorize")
                         .queryParam("response_type", "code")
                         .queryParam("client_id", "rwms-worker-android")
-                        .queryParam("redirect_uri", "http://localhost:8082/auth/callback")
+                        .queryParam("redirect_uri", "http://localhost:8082/auth/worker/callback")
                         .queryParam("scope", "openid profile offline_access worker.tasks")
                         .queryParam("state", "worker-login-surface-state")
                         .queryParam("code_challenge", challenge)
@@ -499,6 +599,30 @@ class AuthServiceIntegrationTest {
         mvc.perform(get("/login").session(session).queryParam("error", ""))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl("/login?surface=worker&error"));
+    }
+
+    @Test
+    void driverAuthorizationUsesWorkerCredentialLoginSurface() throws Exception {
+        String verifier = "rwms-driver-login-surface-verifier-0000000000000000000000";
+        String challenge = Base64.getUrlEncoder().withoutPadding().encodeToString(
+                MessageDigest.getInstance("SHA-256")
+                        .digest(verifier.getBytes(StandardCharsets.US_ASCII)));
+        var initial = mvc.perform(get("/oauth2/authorize")
+                        .queryParam("response_type", "code")
+                        .queryParam("client_id", "rwms-driver-android")
+                        .queryParam("redirect_uri", "http://localhost:8082/auth/driver/callback")
+                        .queryParam("scope", "openid profile offline_access driver.tasks")
+                        .queryParam("state", "driver-login-surface-state")
+                        .queryParam("code_challenge", challenge)
+                        .queryParam("code_challenge_method", "S256"))
+                .andExpect(status().is3xxRedirection())
+                .andReturn();
+        MockHttpSession session = (MockHttpSession) initial.getRequest().getSession(false);
+        assertThat(session).isNotNull();
+
+        mvc.perform(get("/login").session(session))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/login?surface=worker"));
     }
 
     @Test
@@ -1000,6 +1124,21 @@ class AuthServiceIntegrationTest {
     }
 
     private OAuthTokens authorizeWorker(String username, String password) throws Exception {
+        return authorizeWorkerClient(
+                username,
+                password,
+                "rwms-worker-android",
+                "http://localhost:8082/auth/worker/callback",
+                "openid profile offline_access worker.tasks");
+    }
+
+    private OAuthTokens authorizeWorkerClient(
+            String username,
+            String password,
+            String clientId,
+            String redirectUri,
+            String scope)
+            throws Exception {
         MockHttpSession session = (MockHttpSession) mvc.perform(
                         formLogin().user(username).password(password))
                 .andExpect(authenticated())
@@ -1014,9 +1153,9 @@ class AuthServiceIntegrationTest {
         String location = mvc.perform(get("/oauth2/authorize")
                         .session(session)
                         .queryParam("response_type", "code")
-                        .queryParam("client_id", "rwms-worker-android")
-                        .queryParam("redirect_uri", "http://localhost:8082/auth/callback")
-                        .queryParam("scope", "openid profile offline_access worker.tasks")
+                        .queryParam("client_id", clientId)
+                        .queryParam("redirect_uri", redirectUri)
+                        .queryParam("scope", scope)
                         .queryParam("state", UUID.randomUUID().toString())
                         .queryParam("nonce", UUID.randomUUID().toString())
                         .queryParam("code_challenge", challenge)
@@ -1033,9 +1172,9 @@ class AuthServiceIntegrationTest {
         String body = mvc.perform(post("/oauth2/token")
                         .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                         .param("grant_type", "authorization_code")
-                        .param("client_id", "rwms-worker-android")
+                        .param("client_id", clientId)
                         .param("code", code)
-                        .param("redirect_uri", "http://localhost:8082/auth/callback")
+                        .param("redirect_uri", redirectUri)
                         .param("code_verifier", verifier))
                 .andExpect(status().isOk())
                 .andReturn()

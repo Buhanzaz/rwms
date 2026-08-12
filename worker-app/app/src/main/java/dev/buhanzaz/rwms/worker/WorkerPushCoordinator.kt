@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.worker
 
 import android.content.Context
 import android.os.Build
+import com.google.firebase.installations.FirebaseInstallations
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.buhanzaz.rwms.worker.core.auth.EncryptedAuthStateStore
 import dev.buhanzaz.rwms.worker.core.auth.WorkerAuthRepository
@@ -16,6 +17,7 @@ import java.util.Locale
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.coroutines.resume
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -23,12 +25,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlin.coroutines.resume
-import kotlinx.coroutines.suspendCancellableCoroutine
-import com.google.firebase.messaging.FirebaseMessaging
 
 /** Push is an optional invalidation transport. It never decides task state or connectivity. */
 sealed interface WorkerPushCapability {
@@ -59,10 +59,25 @@ data class WorkerPushInvalidation(
     }
 }
 
-@Singleton
+/** Builds the FID-targeted registration payload without exposing a messaging token. */
+internal fun workerDeviceRegistrationRequest(
+    firebaseInstallationId: String,
+    appVersion: String,
+    sdkInt: Int,
+    locale: String,
+): WorkerDeviceRegistrationRequestDto = WorkerDeviceRegistrationRequestDto(
+    targetKind = "FID",
+    token = firebaseInstallationId,
+    appVersion = appVersion,
+    sdkInt = sdkInt,
+    locale = locale,
+)
+
 /**
- * Defines worker application UI or lifecycle state; it does not decide a server task transition.
+ * Registers this installation by Firebase Installation ID and converts push
+ * data into durable invalidations; it never trusts push as task state.
  */
+@Singleton
 class WorkerPushCoordinator @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val authStateStore: EncryptedAuthStateStore,
@@ -81,11 +96,9 @@ class WorkerPushCoordinator @Inject constructor(
         scope.launch { register(userId) }
     }
 
-    /** Firebase calls this even when no activity exists. Store first, then renew if possible. */
-    fun onNewToken(token: String) {
-        if (token.isBlank()) return
+    /** A messaging-token rotation prompts renewal by stable Firebase Installation ID. */
+    fun onMessagingTokenChanged() {
         scope.launch {
-            authStateStore.writeFcmToken(token)
             mutableCapability.value = WorkerPushCapability.Unknown
             val userId = auth.cachedWorkerIdentity()
             if (userId != null) register(userId)
@@ -131,18 +144,16 @@ class WorkerPushCoordinator @Inject constructor(
             mutableCapability.value = WorkerPushCapability.FirebaseUnavailable
             return@withLock
         }
-        val storedToken = authStateStore.readFcmToken()
-        val token = storedToken ?: requestFcmToken()
-        if (token.isNullOrBlank()) {
+        val firebaseInstallationId = requestFirebaseInstallationId()
+        if (firebaseInstallationId.isNullOrBlank()) {
             mutableCapability.value = WorkerPushCapability.FirebaseUnavailable
             return@withLock
         }
-        if (storedToken == null) authStateStore.writeFcmToken(token)
         val storedInstallationId = authStateStore.readInstallationId()
         val installationId = storedInstallationId ?: UUID.randomUUID().toString()
         if (storedInstallationId == null) authStateStore.writeInstallationId(installationId)
-        val request = WorkerDeviceRegistrationRequestDto(
-            token = token,
+        val request = workerDeviceRegistrationRequest(
+            firebaseInstallationId = firebaseInstallationId,
             appVersion = appVersion(),
             sdkInt = Build.VERSION.SDK_INT,
             locale = Locale.getDefault().toLanguageTag(),
@@ -158,9 +169,8 @@ class WorkerPushCoordinator @Inject constructor(
             }
     }
 
-    @Suppress("DEPRECATION")
-    private suspend fun requestFcmToken(): String? = suspendCancellableCoroutine { continuation ->
-        runCatching { FirebaseMessaging.getInstance().token }
+    private suspend fun requestFirebaseInstallationId(): String? = suspendCancellableCoroutine { continuation ->
+        runCatching { FirebaseInstallations.getInstance().id }
             .onSuccess { task ->
                 task.addOnCompleteListener { result ->
                     if (continuation.isActive) {

@@ -114,6 +114,26 @@ class TaskBoardSecurityPolicyTest {
   }
 
   @Test
+  void workerAndDriverMobileScopesCannotCrossSurfaces() {
+    WarehouseAccessAuthorizer authorizer =
+        new WarehouseAccessAuthorizer(new MockEnvironment(), false);
+    Jwt worker = jwt("WORKER", "worker.tasks");
+    Jwt driver = jwt("WORKER", "driver.tasks");
+
+    authorizer.requireMobileTaskScope(worker, "worker.tasks");
+    authorizer.requireMobileTaskScope(driver, "driver.tasks");
+    assertThatThrownBy(() -> authorizer.requireMobileTaskScope(worker, "driver.tasks"))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> authorizer.requireMobileTaskScope(driver, "worker.tasks"))
+        .isInstanceOf(AccessDeniedException.class);
+    Jwt mixed = jwt("WORKER", "worker.tasks driver.tasks");
+    assertThatThrownBy(() -> authorizer.requireMobileTaskScope(mixed, "worker.tasks"))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> authorizer.requireMobileTaskScope(mixed, "driver.tasks"))
+        .isInstanceOf(AccessDeniedException.class);
+  }
+
+  @Test
   void malformedWarehouseAccessClaimsFailClosed() {
     WarehouseAccessAuthorizer authorizer =
         new WarehouseAccessAuthorizer(new MockEnvironment(), false);
@@ -205,7 +225,10 @@ class TaskBoardSecurityPolicyTest {
     environment.setProperty(
         "rwms.warehouse.lifecycle.base-url", "https://warehouse.example.test");
     environment.setProperty(
-        "rwms.cors.allowed-origins", "https://panel.example.test,https://worker.example.test");
+        "rwms.cors.allowed-origins",
+        "https://panel.example.test,https://worker.example.test,https://driver.example.test");
+    environment.setProperty("rwms.task-board.push.fcm.enabled", "true");
+    environment.setProperty("rwms.task-board.push.fcm.project-id", "rwms-test");
     environment.setProperty("rwms.platform.kafka.enabled", "true");
     List<String> destinations =
         List.of(

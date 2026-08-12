@@ -5,6 +5,7 @@ import static dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.*;
 import dev.buhanzaz.rwms.taskboard.security.AccessLevel;
 import dev.buhanzaz.rwms.taskboard.security.WarehouseAccessAuthorizer;
 import dev.buhanzaz.rwms.taskboard.service.WorkerInvalidationHub;
+import dev.buhanzaz.rwms.taskboard.service.MobileTaskSurface;
 import dev.buhanzaz.rwms.taskboard.service.WorkerTaskBoardService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -58,7 +59,8 @@ public class WorkerTaskBoardController {
   @GetMapping("/context")
   public WorkerContext context(@AuthenticationPrincipal Jwt jwt) {
     WorkerPrincipal principal = principal(jwt, false);
-    return service.context(principal.workerId(), principal.warehouseId());
+    return service.context(
+        MobileTaskSurface.WORKER, principal.workerId(), principal.warehouseId());
   }
 
   /**
@@ -75,7 +77,12 @@ public class WorkerTaskBoardController {
       @RequestHeader(name = HttpHeaders.IF_NONE_MATCH, required = false) String ifNoneMatch) {
     WorkerPrincipal principal = principal(jwt, false);
     WorkerTaskBoardService.FeedPage page =
-        service.feed(principal.workerId(), principal.warehouseId(), cursor, limit);
+        service.feed(
+            MobileTaskSurface.WORKER,
+            principal.workerId(),
+            principal.warehouseId(),
+            cursor,
+            limit);
     if (cursor == null && page.etag().equals(ifNoneMatch)) {
       return ResponseEntity.status(HttpStatus.NOT_MODIFIED).eTag(page.etag()).build();
     }
@@ -87,7 +94,8 @@ public class WorkerTaskBoardController {
   public WorkerTaskDetail detail(
       @AuthenticationPrincipal Jwt jwt, @PathVariable UUID entryId) {
     WorkerPrincipal principal = principal(jwt, false);
-    return service.detail(principal.workerId(), principal.warehouseId(), entryId);
+    return service.detail(
+        MobileTaskSurface.WORKER, principal.workerId(), principal.warehouseId(), entryId);
   }
 
   /**
@@ -100,7 +108,8 @@ public class WorkerTaskBoardController {
       @AuthenticationPrincipal Jwt jwt,
       @RequestHeader(name = "Last-Event-ID", required = false) String lastEventId) {
     WorkerPrincipal principal = principal(jwt, false);
-    return invalidations.subscribe(principal.workerId(), service.revision());
+    return invalidations.subscribe(
+        MobileTaskSurface.WORKER, principal.workerId(), service.revision());
   }
 
   /** Applies an idempotent worker action using the issued offline lease and observed entry version. */
@@ -112,6 +121,7 @@ public class WorkerTaskBoardController {
       @Valid @RequestBody WorkerActionRequest request) {
     WorkerPrincipal principal = principal(jwt, true);
     return service.applyAction(
+        MobileTaskSurface.WORKER,
         principal.workerId(),
         principal.warehouseId(),
         entryId,
@@ -130,6 +140,7 @@ public class WorkerTaskBoardController {
     return ResponseEntity.status(HttpStatus.CREATED)
         .body(
             service.reserveEvidence(
+                MobileTaskSurface.WORKER,
                 principal.workerId(),
                 principal.warehouseId(),
                 entryId,
@@ -146,7 +157,11 @@ public class WorkerTaskBoardController {
     WorkerPrincipal principal = principal(jwt, true);
     WorkerTaskBoardService.DeviceRegistrationResult result =
         service.registerDevice(
-            principal.workerId(), principal.warehouseId(), installationId, request);
+            MobileTaskSurface.WORKER,
+            principal.workerId(),
+            principal.warehouseId(),
+            installationId,
+            request);
     return ResponseEntity.status(result.created() ? HttpStatus.CREATED : HttpStatus.OK)
         .body(result.registration());
   }
@@ -157,12 +172,15 @@ public class WorkerTaskBoardController {
       @AuthenticationPrincipal Jwt jwt, @PathVariable String installationId) {
     WorkerPrincipal principal = principal(jwt, true);
     service.unregisterDevice(
-        principal.workerId(), principal.warehouseId(), installationId);
+        MobileTaskSurface.WORKER,
+        principal.workerId(),
+        principal.warehouseId(),
+        installationId);
     return ResponseEntity.noContent().build();
   }
 
   private WorkerPrincipal principal(Jwt jwt, boolean write) {
-    access.requireTaskScope(jwt, write);
+    access.requireMobileTaskScope(jwt, MobileTaskSurface.WORKER.scope());
     if (!"WORKER".equals(jwt.getClaimAsString("principal_type"))) {
       throw new AccessDeniedException("WORKER principal is required");
     }

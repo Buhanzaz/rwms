@@ -379,9 +379,9 @@ paths:
       summary: Authorize one constrained same-origin upload session
       operationId: createUploadSession
       description: >-
-        Requires USER with rwms.write and warehouse EDIT, or WORKER with
-        worker.tasks only for TASK_BOARD_ENTRY/WORK_RESULT and a current owner
-        proof containing its worker_id. Only proven canonical owner/context
+        Requires USER with rwms.write and warehouse EDIT, or WORKER with exactly
+        one of worker.tasks or driver.tasks only for TASK_BOARD_ENTRY/WORK_RESULT
+        and a current owner proof containing its worker_id. Only proven canonical owner/context
         pairs declared by MediaOwnerType are accepted.
         At most 100 live media assets may belong to one owner. The
         returned content path is same-origin and never reveals a MinIO origin

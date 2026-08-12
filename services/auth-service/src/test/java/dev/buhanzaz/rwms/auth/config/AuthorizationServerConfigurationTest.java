@@ -52,6 +52,9 @@ class AuthorizationServerConfigurationTest {
                 "https://worker.example.test",
                 "https://worker.example.test/oauth/callback",
                 "https://worker.example.test/logout",
+                "https://driver.example.test",
+                "https://driver.example.test/auth/callback",
+                "https://driver.example.test/logout",
                 false,
                 "admin",
                 "long-production-password",
@@ -74,6 +77,9 @@ class AuthorizationServerConfigurationTest {
                 "http://localhost:8082",
                 "http://localhost:8082/auth/callback",
                 "http://localhost:8082/",
+                "http://localhost:8083",
+                "http://localhost:8083/auth/callback",
+                "http://localhost:8083/",
                 false,
                 "admin",
                 "long-production-password",
@@ -177,6 +183,9 @@ class AuthorizationServerConfigurationTest {
                             "https://worker.example.test",
                             "https://worker.example.test/auth/callback",
                             "https://worker.example.test/",
+                            "https://driver.example.test",
+                            "https://driver.example.test/auth/callback",
+                            "https://driver.example.test/",
                             false,
                             "admin",
                             "long-production-password",
@@ -286,6 +295,9 @@ class AuthorizationServerConfigurationTest {
                 "https://worker.example.test",
                 "https://attacker.example.test/worker/oauth2redirect",
                 "https://worker.example.test/",
+                "https://driver.example.test",
+                "https://driver.example.test/auth/callback",
+                "https://driver.example.test/",
                 false,
                 "admin",
                 "long-production-password",
@@ -302,6 +314,37 @@ class AuthorizationServerConfigurationTest {
                                 .afterPropertiesSet())
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("WORKER_ORIGIN");
+    }
+
+    @Test
+    void productionRequiresDriverRedirectsOnTheConfiguredAppLinkOrigin() {
+        AuthProperties properties = new AuthProperties(
+                "https://auth.example.test/auth",
+                "https://panel.example.test",
+                "https://panel.example.test/auth/callback",
+                "https://panel.example.test/",
+                "https://worker.example.test",
+                "https://worker.example.test/auth/callback",
+                "https://worker.example.test/",
+                "https://driver.example.test",
+                "https://attacker.example.test/driver/oauth2redirect",
+                "https://driver.example.test/",
+                false,
+                "admin",
+                "long-production-password",
+                "auth.p12",
+                "password",
+                "rwms-auth");
+
+        assertThatThrownBy(
+                () ->
+                        new AuthProductionSafetyValidator(
+                                        properties,
+                                        productionKafkaEnvironment(),
+                                        productionKafkaProperties())
+                                .afterPropertiesSet())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("DRIVER_ORIGIN");
     }
 
     @Test
@@ -398,6 +441,9 @@ class AuthorizationServerConfigurationTest {
                 "https://worker.example.test",
                 "https://worker.example.test/auth/callback",
                 "https://worker.example.test/",
+                "https://driver.example.test",
+                "https://driver.example.test/auth/callback",
+                "https://driver.example.test/",
                 false,
                 "admin",
                 "long-production-password",
@@ -450,6 +496,9 @@ class AuthorizationServerConfigurationTest {
                 "https://worker.example.test",
                 "https://worker.example.test/auth/callback",
                 "https://worker.example.test/",
+                "https://driver.example.test",
+                "https://driver.example.test/auth/callback",
+                "https://driver.example.test/",
                 true,
                 "admin",
                 "admin",

@@ -8,7 +8,16 @@ import {
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter, Route, Routes } from "react-router-dom"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest"
 
 import type {
   PresentationBooking,
@@ -44,6 +53,37 @@ import {
   presentationDraftIssues,
 } from "@/features/assistant/pages/public-client-presentation-draft"
 import { PublicClientPresentationPage } from "@/features/assistant/pages/public-client-presentation-page"
+
+const pointerCaptureDescriptors = new Map(
+  [
+    "hasPointerCapture",
+    "setPointerCapture",
+    "releasePointerCapture",
+    "scrollIntoView",
+  ].map((name) => [
+    name,
+    Object.getOwnPropertyDescriptor(HTMLElement.prototype, name),
+  ])
+)
+
+beforeAll(() => {
+  Object.defineProperties(HTMLElement.prototype, {
+    hasPointerCapture: { configurable: true, value: () => false },
+    setPointerCapture: { configurable: true, value: () => undefined },
+    releasePointerCapture: { configurable: true, value: () => undefined },
+    scrollIntoView: { configurable: true, value: () => undefined },
+  })
+})
+
+afterAll(() => {
+  for (const [name, descriptor] of pointerCaptureDescriptors) {
+    if (descriptor) {
+      Object.defineProperty(HTMLElement.prototype, name, descriptor)
+    } else {
+      Reflect.deleteProperty(HTMLElement.prototype, name)
+    }
+  }
+})
 
 function cabin(id: string, number: string, physicalBeds = 0) {
   return {
@@ -142,37 +182,63 @@ function renderPage() {
   )
 }
 
-async function chooseCalendarDate(user: ReturnType<typeof userEvent.setup>) {
-  const calendar = screen.getByLabelText(
-    "Календарь выбора желаемой даты получения"
-  )
-  const day = Array.from(
-    calendar.querySelectorAll<HTMLButtonElement>("button[data-day]")
-  )[0]
-  if (!day) throw new Error("Календарь не показал ни одного дня.")
+function calendarDateFromButton(day: HTMLButtonElement) {
   const localized = day.dataset.day
   if (!localized) throw new Error("У дня календаря нет локальной даты.")
   const [dayValue, monthValue, yearValue] = localized.split(".")
-  await user.click(day)
   return `${yearValue}-${monthValue}-${dayValue}`
+}
+
+function calendarDayButtons() {
+  const calendar = screen.getByLabelText(
+    "Календарь выбора желаемой даты получения"
+  )
+  return Array.from(
+    calendar.querySelectorAll<HTMLButtonElement>("button[data-day]")
+  )
+}
+
+async function chooseCalendarDates(
+  user: ReturnType<typeof userEvent.setup>,
+  indexes: number[] = [0]
+) {
+  const days = calendarDayButtons()
+  const selectedDates = indexes.map((index) => {
+    const day = days[index]
+    if (!day) throw new Error("Календарь не показал нужный день.")
+    return calendarDateFromButton(day)
+  })
+  for (const date of selectedDates) {
+    const day = calendarDayButtons().find(
+      (candidate) => calendarDateFromButton(candidate) === date
+    )
+    if (!day) throw new Error("Выбранный день исчез из календаря.")
+    await user.click(day)
+  }
+  return selectedDates
 }
 
 async function openNormalDetails(user: ReturnType<typeof userEvent.setup>) {
   await user.click(
-    (await screen.findAllByRole("button", { name: "Выбрать" }))[0]
+    await screen.findByRole("checkbox", {
+      name: "Выбрать бытовку БЫТ-1",
+    })
   )
   await user.click(
     screen.getByRole("button", { name: "Далее: дата, срок и доставка" })
   )
 }
 
-async function fillNormalDetails(user: ReturnType<typeof userEvent.setup>) {
-  const date = await chooseCalendarDate(user)
+async function fillNormalDetails(
+  user: ReturnType<typeof userEvent.setup>,
+  calendarDayIndexes: number[] = [0]
+) {
+  const dates = await chooseCalendarDates(user, calendarDayIndexes)
   await user.type(
     screen.getByLabelText("Адрес доставки"),
     "Санкт-Петербург, Невский проспект, 1"
   )
-  return date
+  return dates
 }
 
 beforeEach(() => {
@@ -188,16 +254,19 @@ afterEach(() => {
 })
 
 describe("public client presentation", () => {
-  it("shows the exact cabin actions and keeps the sticky safe-area layout", async () => {
+  it("uses labelled cabin checkboxes and keeps the sticky safe-area layout", async () => {
     renderPage()
 
     expect(
       await screen.findByRole("heading", { name: "Бытовка БЫТ-1" })
     ).toBeTruthy()
-    expect(screen.getAllByRole("button", { name: "Выбрать" })).toHaveLength(2)
     expect(
-      screen.getAllByRole("button", { name: "Добавить мебель" })
+      screen.getAllByRole("checkbox", { name: /Выбрать бытовку/ })
     ).toHaveLength(2)
+    expect(screen.queryByRole("button", { name: "Выбрать" })).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Добавить наполнение" })
+    ).toBeNull()
     expect(screen.getAllByText("tenant")).toHaveLength(2)
     expect(screen.queryByText("legacyId")).toBeNull()
     expect(screen.queryByText("source")).toBeNull()
@@ -309,45 +378,74 @@ describe("public client presentation", () => {
     ).toBe(3)
   })
 
-  it("keeps furniture compact and capacity-bound per cabin", async () => {
+  it("adds unique filling positions in a compact capacity-bound dialog", async () => {
     const user = userEvent.setup()
     renderPage()
 
     await user.click(
-      (await screen.findAllByRole("button", { name: "Выбрать" }))[0]
+      await screen.findByRole("checkbox", {
+        name: "Выбрать бытовку БЫТ-1",
+      })
     )
-    const addFurniture = screen.getAllByRole("button", {
-      name: "Добавить мебель",
+    const addFilling = screen.getAllByRole("button", {
+      name: "Добавить наполнение",
     })
-    expect(addFurniture[0]).toHaveProperty("disabled", false)
-    expect(addFurniture[1]).toHaveProperty("disabled", true)
-    await user.click(addFurniture[0])
+    expect(addFilling).toHaveLength(1)
+    expect(addFilling[0]).toHaveProperty("disabled", false)
+    await user.click(addFilling[0])
     const dialog = screen.getByRole("dialog", {
-      name: "Добавить мебель в бытовку БЫТ-1",
+      name: "Добавить наполнение в бытовку БЫТ-1",
     })
+    expect(dialog.className).toContain("max-h-[calc(100svh-2rem)]")
+    expect(dialog.className).toContain("overflow-y-auto")
+    expect(dialog.className).toContain("sm:max-w-xl")
+
+    const type = within(dialog).getByLabelText("Тип наполнения")
+    await user.click(type)
     expect(
-      within(dialog).getByText(
-        "Свободно сейчас: 3 · в этой бытовке: 4 · лимит: 4"
-      )
+      await screen.findByRole("option", { name: "Кровать: доступно — 4" })
     ).toBeTruthy()
     expect(
-      within(dialog).getByText(
-        "Свободно сейчас: 1 · в этой бытовке: 1 · лимит: нет"
-      )
+      await screen.findByRole("option", { name: "Стол: доступно — 1" })
     ).toBeTruthy()
+    await user.click(
+      await screen.findByRole("option", { name: "Кровать: доступно — 4" })
+    )
+    await user.click(
+      within(dialog).getByRole("button", { name: "Добавить наполнение" })
+    )
     const increment = within(dialog).getByRole("button", {
       name: "Увеличить количество: Кровать",
     })
     await user.click(increment)
+    await user.click(increment)
+    await user.click(increment)
     expect(
       within(dialog).getByLabelText("Количество: Кровать").textContent
-    ).toBe("1")
-    expect(increment).toHaveProperty("disabled", false)
-    const tableIncrement = within(dialog).getByRole("button", {
-      name: "Увеличить количество: Стол",
-    })
-    await user.click(tableIncrement)
-    expect(tableIncrement).toHaveProperty("disabled", true)
+    ).toBe("4")
+    expect(within(dialog).getByText("Доступно: 4 шт.")).toBeTruthy()
+    expect(increment).toHaveProperty("disabled", true)
+
+    await user.click(type)
+    expect(
+      screen.queryByRole("option", { name: "Кровать: доступно — 4" })
+    ).toBeNull()
+    await user.click(
+      await screen.findByRole("option", { name: "Стол: доступно — 1" })
+    )
+    await user.click(
+      within(dialog).getByRole("button", { name: "Добавить наполнение" })
+    )
+    expect(within(dialog).getByLabelText("Количество: Стол").textContent).toBe(
+      "1"
+    )
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: "Уменьшить количество: Стол",
+      })
+    )
+    expect(within(dialog).queryByLabelText("Количество: Стол")).toBeNull()
+    expect(increment).toHaveProperty("disabled", true)
     await user.click(within(dialog).getByRole("button", { name: "Готово" }))
   })
 
@@ -391,14 +489,16 @@ describe("public client presentation", () => {
     expect(screen.getByText("Условия текущего заказа")).toBeTruthy()
     expect(screen.getByText("2026-08-11")).toBeTruthy()
 
-    const choose = screen.getAllByRole("button", { name: "Выбрать" })
+    const choose = screen.getAllByRole("checkbox", {
+      name: /Выбрать бытовку/,
+    })
     await user.click(choose[1])
     await user.click(choose[0])
     await user.click(choose[2])
     expect(screen.getByText(/можно выбрать ровно 2/)).toBeTruthy()
     expect(
-      screen.getAllByRole("button", { name: "Добавить мебель" })[0]
-    ).toHaveProperty("disabled", true)
+      screen.queryByRole("button", { name: "Добавить наполнение" })
+    ).toBeNull()
 
     await user.click(screen.getByRole("button", { name: "Подтвердить выбор" }))
     await user.click(screen.getByRole("button", { name: "Подтвердить" }))
@@ -419,7 +519,7 @@ describe("public client presentation", () => {
     )
   })
 
-  it("moves normal selection to a date-only details step and submits its exact payload", async () => {
+  it("moves normal selection to a multi-date details step and submits sorted date-only payload", async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -440,7 +540,9 @@ describe("public client presentation", () => {
 
     expect(screen.getByText("Выбранные бытовки и наполнение")).toBeTruthy()
     expect(screen.getByText("Бытовка БЫТ-1")).toBeTruthy()
-    expect(screen.queryByRole("button", { name: "Добавить мебель" })).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Добавить наполнение" })
+    ).toBeNull()
     expect(document.querySelector('input[type="time"]')).toBeNull()
     expect(document.querySelector('input[type="number"]')).toBeNull()
     expect(screen.queryByText(/время|циферблат|час/i)).toBeNull()
@@ -448,7 +550,8 @@ describe("public client presentation", () => {
       screen.getByRole("button", { name: "Подтвердить выбор" })
     ).toHaveProperty("disabled", true)
 
-    const desiredDate = await fillNormalDetails(user)
+    const selectedDates = await fillNormalDetails(user, [2, 0])
+    expect(screen.getByText("Выбрано дней: 2 из 5.")).toBeTruthy()
     expect(
       screen.getByRole("button", { name: "Уменьшить срок аренды" })
     ).toHaveProperty("disabled", true)
@@ -467,8 +570,12 @@ describe("public client presentation", () => {
     expect(api.confirm.mock.calls[0][0]).toMatchObject({
       desiredDeliveryWindows: [
         {
-          startDate: desiredDate,
-          endDate: desiredDate,
+          startDate: [...selectedDates].sort()[0],
+          endDate: [...selectedDates].sort()[0],
+        },
+        {
+          startDate: [...selectedDates].sort()[1],
+          endDate: [...selectedDates].sort()[1],
         },
       ],
       rentalMonths: 2,
@@ -482,6 +589,37 @@ describe("public client presentation", () => {
       expect.any(String)
     )
   }, 15_000)
+
+  it("allows non-adjacent dates, caps selection at five, and permits deselection", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await openNormalDetails(user)
+    const selectedDates = await chooseCalendarDates(user, [0, 2, 4, 6, 8])
+    expect(screen.getByText("Выбрано дней: 5 из 5.")).toBeTruthy()
+
+    const selectedDateSet = new Set(selectedDates)
+    const sixthDate = calendarDayButtons()
+      .map(calendarDateFromButton)
+      .find((date) => !selectedDateSet.has(date))
+    if (!sixthDate) throw new Error("Календарь не показал шестой день.")
+    const sixthDay = calendarDayButtons().find(
+      (day) => calendarDateFromButton(day) === sixthDate
+    )
+    expect(sixthDay).toHaveProperty("disabled", true)
+
+    const selectedDay = calendarDayButtons().find(
+      (day) => calendarDateFromButton(day) === selectedDates[0]
+    )
+    if (!selectedDay) throw new Error("Календарь не сохранил выбранный день.")
+    await user.click(selectedDay)
+    expect(screen.getByText("Выбрано дней: 4 из 5.")).toBeTruthy()
+    expect(
+      calendarDayButtons().find(
+        (day) => calendarDateFromButton(day) === sixthDate
+      )
+    ).toHaveProperty("disabled", false)
+  })
 
   it("accepts a complete coordinate pair and maps optional contacts from details", async () => {
     const user = userEvent.setup()
@@ -517,22 +655,28 @@ describe("public client presentation", () => {
     })
   }, 15_000)
 
-  it("preserves date, duration, selection and furniture when returning to step one", async () => {
+  it("preserves dates, duration, selection and filling when returning to step one", async () => {
     const user = userEvent.setup()
     renderPage()
 
     await user.click(
-      (await screen.findAllByRole("button", { name: "Выбрать" }))[0]
+      await screen.findByRole("checkbox", {
+        name: "Выбрать бытовку БЫТ-1",
+      })
     )
     await user.click(
-      screen.getAllByRole("button", { name: "Добавить мебель" })[0]
+      screen.getByRole("button", { name: "Добавить наполнение" })
     )
     const furnitureDialog = screen.getByRole("dialog", {
-      name: "Добавить мебель в бытовку БЫТ-1",
+      name: "Добавить наполнение в бытовку БЫТ-1",
     })
+    await user.click(within(furnitureDialog).getByLabelText("Тип наполнения"))
+    await user.click(
+      await screen.findByRole("option", { name: "Кровать: доступно — 4" })
+    )
     await user.click(
       within(furnitureDialog).getByRole("button", {
-        name: "Увеличить количество: Кровать",
+        name: "Добавить наполнение",
       })
     )
     await user.click(
@@ -547,9 +691,13 @@ describe("public client presentation", () => {
     )
 
     await user.click(screen.getByRole("button", { name: "Назад к выбору" }))
-    expect(screen.getByRole("button", { name: "Убрать выбор" })).toBeTruthy()
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Выбрать бытовку БЫТ-1" })
+        .getAttribute("data-state")
+    ).toBe("checked")
     await user.click(
-      screen.getAllByRole("button", { name: "Добавить мебель" })[0]
+      screen.getByRole("button", { name: "Добавить наполнение" })
     )
     expect(screen.getByLabelText("Количество: Кровать").textContent).toBe("1")
     await user.click(screen.getByRole("button", { name: "Готово" }))
@@ -557,7 +705,7 @@ describe("public client presentation", () => {
     await user.click(
       screen.getByRole("button", { name: "Далее: дата, срок и доставка" })
     )
-    expect(screen.getAllByText(/^Выбрано:/)).toHaveLength(2)
+    expect(screen.getByText("Выбрано дней: 1 из 5.")).toBeTruthy()
     expect(screen.getByText("2 месяца")).toBeTruthy()
     expect(screen.getByLabelText("Адрес доставки")).toHaveProperty(
       "value",
@@ -593,7 +741,7 @@ describe("public client presentation", () => {
     )
   }, 15_000)
 
-  it("refetches a 409 and keeps the furniture draft visible", async () => {
+  it("refetches a 409 and keeps the filling draft visible", async () => {
     api.confirm.mockImplementation(async () => {
       api.presentation = presentation({
         equipmentAvailability: [
@@ -611,18 +759,28 @@ describe("public client presentation", () => {
     renderPage()
 
     await user.click(
-      (await screen.findAllByRole("button", { name: "Выбрать" }))[0]
+      await screen.findByRole("checkbox", {
+        name: "Выбрать бытовку БЫТ-1",
+      })
     )
     await user.click(
-      screen.getAllByRole("button", { name: "Добавить мебель" })[0]
+      screen.getByRole("button", { name: "Добавить наполнение" })
     )
     const furnitureDialog = screen.getByRole("dialog", {
-      name: "Добавить мебель в бытовку БЫТ-1",
+      name: "Добавить наполнение в бытовку БЫТ-1",
     })
+    await user.click(within(furnitureDialog).getByLabelText("Тип наполнения"))
+    await user.click(
+      await screen.findByRole("option", { name: "Кровать: доступно — 4" })
+    )
+    await user.click(
+      within(furnitureDialog).getByRole("button", {
+        name: "Добавить наполнение",
+      })
+    )
     const increment = within(furnitureDialog).getByRole("button", {
       name: "Увеличить количество: Кровать",
     })
-    await user.click(increment)
     await user.click(increment)
     await user.click(increment)
     await user.click(
@@ -646,7 +804,7 @@ describe("public client presentation", () => {
       screen.getByRole("button", { name: "Далее: дата, срок и доставка" })
     ).toHaveProperty("disabled", true)
     await user.click(
-      screen.getAllByRole("button", { name: "Добавить мебель" })[0]
+      screen.getByRole("button", { name: "Добавить наполнение" })
     )
     expect(screen.getByLabelText("Количество: Кровать").textContent).toBe("3")
   }, 20_000)

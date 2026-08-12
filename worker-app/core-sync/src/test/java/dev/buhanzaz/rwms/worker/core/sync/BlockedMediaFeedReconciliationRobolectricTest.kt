@@ -10,7 +10,6 @@ import dev.buhanzaz.rwms.worker.core.database.WorkerTaskEntity
 import dev.buhanzaz.rwms.worker.core.media.EvidenceUploadResult
 import dev.buhanzaz.rwms.worker.core.media.WorkerEvidenceUploader
 import dev.buhanzaz.rwms.worker.core.network.CreateUploadSessionRequestDto
-import dev.buhanzaz.rwms.worker.core.network.DriverTaskTripDetailsResponseDto
 import dev.buhanzaz.rwms.worker.core.network.EvidenceReservationRequestDto
 import dev.buhanzaz.rwms.worker.core.network.FinalizeUploadRequestDto
 import dev.buhanzaz.rwms.worker.core.network.MediaAssetDto
@@ -280,8 +279,6 @@ class BlockedMediaFeedReconciliationRobolectricTest {
         }
 
         override suspend fun workerTaskDetail(entryId: String): Response<WorkerTaskDetailDto> = unused()
-
-        override suspend fun logisticsDriverTask(taskId: String): Response<DriverTaskTripDetailsResponseDto> = unused()
 
         override suspend fun applyAction(
             entryId: String,

@@ -412,7 +412,7 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void canonicalOpenApiDeclaresWorkerMobileSurface() throws Exception {
+  void canonicalOpenApiDeclaresWorkerAndDriverMobileSurfaces() throws Exception {
     Map<String, Object> contract = yaml("openapi/task-board-service.yaml");
     Map<String, Object> paths = child(contract, "paths");
     assertThat(paths)
@@ -423,7 +423,14 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
             "/worker/v1/events",
             "/worker/v1/entries/{entryId}/actions",
             "/worker/v1/entries/{entryId}/evidence-reservations",
-            "/worker/v1/devices/{installationId}");
+            "/worker/v1/devices/{installationId}",
+            "/driver/v1/context",
+            "/driver/v1/feed",
+            "/driver/v1/entries/{entryId}",
+            "/driver/v1/events",
+            "/driver/v1/entries/{entryId}/actions",
+            "/driver/v1/entries/{entryId}/evidence-reservations",
+            "/driver/v1/devices/{installationId}");
 
     Map<String, Object> schemas = child(child(contract, "components"), "schemas");
     assertThat(schemas)
@@ -436,6 +443,7 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
             "WorkerKpiPalette",
             "WorkerKpiPaletteRange",
             "WorkerActionRequest",
+            "DriverActionRequest",
             "WorkerActionAppliedResult",
             "WorkerActionConflictProblem",
             "EvidenceReservationRequest",
@@ -486,6 +494,18 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
                 "evidenceId"));
     assertThat(child(child(schemas, "WorkerActionRequest"), "properties"))
         .doesNotContainKeys("workerId", "warehouseId");
+    assertThat(
+            child(
+                    child(child(schemas, "DriverActionRequest"), "properties"),
+                    "action")
+                .get("enum"))
+        .isEqualTo(List.of("TAKE", "PAUSE", "RESUME", "COMPLETE"));
+    assertThat(
+            child(
+                    child(child(schemas, "WorkerDeviceRegistrationRequest"), "properties"),
+                    "targetKind")
+                .get("enum"))
+        .isEqualTo(List.of("TOKEN", "FID"));
     assertThat(child(schemas, "AudienceSelector").get("required"))
         .isEqualTo(
             List.of(

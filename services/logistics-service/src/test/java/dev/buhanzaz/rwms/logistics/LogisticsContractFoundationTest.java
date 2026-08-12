@@ -341,6 +341,23 @@ class LogisticsContractFoundationTest {
   }
 
   @Test
+  void driverDetailContractFreezesExactWorkerIdentityAuthorization() throws Exception {
+    Map<String, Object> paths = child(openApi(), "paths");
+    Map<String, Object> endpoint = child(paths, "/api/logistics/v1/driver-tasks/{taskId}");
+    Map<String, Object> get = child(endpoint, "get");
+
+    assertThat(String.valueOf(get.get("description")))
+        .contains("WORKER")
+        .contains("driver.tasks")
+        .contains("worker_id")
+        .contains("plannedDriverWorkerId")
+        .contains("sub is not")
+        .contains("worker.tasks")
+        .contains("UNASSIGNED")
+        .contains("WAREHOUSE_DRIVERS");
+  }
+
+  @Test
   void rentalSettingsExposeIndependentChatAndPresentationHoldDurations() throws Exception {
     Map<String, Object> schemas = child(child(openApi(), "components"), "schemas");
     Map<String, Object> settings = child(schemas, "RentalSettings");
@@ -585,6 +602,11 @@ class LogisticsContractFoundationTest {
             "longitude",
             "additionalContacts");
     assertThat(confirmation.get("required")).isEqualTo(List.of("selections"));
+    Map<String, Object> desiredWindows =
+        child(child(confirmation, "properties"), "desiredDeliveryWindows");
+    assertThat(desiredWindows.get("minItems")).isEqualTo(1);
+    assertThat(desiredWindows.get("maxItems")).isEqualTo(5);
+    assertThat(desiredWindows.get("uniqueItems")).isEqualTo(true);
     Map<String, Object> desiredWindowInput = child(schemas, "DesiredDeliveryWindowInput");
     Map<String, Object> desiredWindow = child(schemas, "DesiredDeliveryWindow");
     assertThat(child(desiredWindowInput, "properties"))

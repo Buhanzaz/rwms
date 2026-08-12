@@ -54,7 +54,7 @@ workflow engine or a shared database for product state.
 ## How sign-in and token issuance work
 
 ```text
-Panel / manager app / worker app
+Panel / manager app / WorkerApp / DriverApp
           |
           | Authorization Code + PKCE through public /auth/**
           v
@@ -80,6 +80,15 @@ In production the public issuer is `<gateway>/auth`. The upstream service keeps
 its native authorization-server paths (`/oauth2/**`, `/login`, `/logout`, and
 `/api/**`); the gateway strips exactly one `/auth` prefix. The panel callback
 remains `/auth/callback` and is panel-owned, not forwarded to auth-service.
+
+WorkerApp and DriverApp share the same WORKER credential identity but use two
+non-interchangeable public clients; both authorization requests require PKCE
+`S256`. `rwms-worker-android` redirects to the
+query-free HTTPS `/auth/worker/callback` and receives `worker.tasks`;
+`rwms-driver-android` redirects to `/auth/driver/callback` and receives only
+`driver.tasks`. Their native login clients validate and consume the redirect
+Location in memory, so neither Android manifest exposes a custom-scheme or App
+Link receiver. Both client IDs select the worker credential login surface.
 
 User access and ID tokens include the canonical claims `sub`,
 `preferred_username`, `principal_type=USER`, `global_role`, and camel-case
@@ -120,9 +129,10 @@ update preserves its current persisted value.
 - Disabling a user blocks new form login and new token minting from its session.
   Already minted self-contained access tokens remain valid only until their
   short configured lifetime (five minutes in the current managed-client policy).
-- Stored authorizations and consents are removed when a password, relevant
-  access entitlement, or client access is revoked. Client-specific revocation is
-  used where a change affects only one client audience.
+- Stored authorizations and consents are removed when a login or password is
+  changed, or when a relevant access entitlement or client access is revoked.
+  Client-specific revocation is used where a change affects only one client
+  audience.
 - Physical user deletion is deliberately fail-closed. Disabling is the supported
   operation until the absence of external audit history and active sessions can
   be proven.
@@ -152,6 +162,11 @@ disable it explicitly instead.
 This is preferable to recreating clients at every startup: stable client IDs
 preserve valid state, while a deliberate revision makes security changes
 reviewable and prevents accidental reactivation after a deployment rollback.
+
+The managed mobile inventory includes the USER-only manager client plus the two
+WORKER-only WorkerApp/DriverApp clients above. Changing a callback, scope, or
+principal type requires its own revision and coordinated client release; one
+mobile client's refresh token cannot be exchanged through the other client ID.
 
 ## Warehouse-grant validation
 
@@ -239,7 +254,11 @@ Provide at least:
   `AUTH_SIGNING_KEY_ALIAS` for the persistent PKCS12 signing key;
 - `AUTH_DB_URL`, `AUTH_DB_USERNAME`, and `AUTH_DB_PASSWORD` with a non-loopback
   PostgreSQL endpoint and deployment-specific credentials;
-- a public HTTPS issuer/base, allowed origins, and registered redirect URIs.
+- a public HTTPS issuer/base, allowed origins, and registered redirect URIs;
+- `WORKER_ORIGIN`, `WORKER_REDIRECT_URI`, `WORKER_POST_LOGOUT_REDIRECT_URI`,
+  `DRIVER_ORIGIN`, `DRIVER_REDIRECT_URI`, and
+  `DRIVER_POST_LOGOUT_REDIRECT_URI`, all same-origin HTTPS values with dedicated
+  query-free callbacks.
 
 Outside dev/test, startup refuses missing bootstrap credentials, client secrets,
 signing material, and missing or development-default datasource settings. The

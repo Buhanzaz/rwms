@@ -20,7 +20,7 @@ Maintenance, logistics, inventory и менеджерам нужна опера�
 | Queue standard | Global definitions, warehouse bindings, order, capabilities и usage references | Maintenance/logistics регистрируют только contract-defined references |
 | Workforce | Worker classes, workers, groups, current membership и credentials workflow | Auth-service владеет credential material и token issuance |
 | Operational work | Tasks, route entries, assignment, pinning, move, pause/resume/complete и history | Source domain владеет причиной работы и состоянием своего агрегата |
-| Worker execution | Scoped feed/context, offline action lease, evidence reservation, SSE/FCM invalidation | Worker app обновляет authoritative REST state и загружает media через media-service |
+| Native execution | Раздельные driver/worker feeds, offline action leases, evidence reservation, SSE и transactional FCM invalidation | DriverApp и WorkerApp обновляют authoritative REST state и загружают media через media-service |
 | KPI | Warehouse palette/schedule revisions и emitted daily evidence | Analytics владеет KPI read projection |
 | Warehouse lifecycle | Local operation marks, admission fence, draining blockers и exact-version readiness | Warehouse-service владеет lifecycle state и admission decisions |
 
@@ -45,8 +45,9 @@ authorization + warehouse admission + idempotency/expectedVersion
           +--> worker invalidation
           +--> Kafka fact для projections/owners
 
-worker app --> feed/detail --> take/action/evidence reservation
-          --> media upload --> media fact --> evidence state --> completion
+driver app --> primary feed/detail --> take/action/evidence reservation
+worker app --> обычная работа + active slinger feed --> join/action/evidence reservation
+           --> media upload --> media fact --> shared completion
 ```
 
 Source-owned task использует stable external identity, поэтому retry находит ту
@@ -61,10 +62,18 @@ identity; этот worker должен быть активен на том же 
 водительской очереди. Task-board игнорирует переданное caller-ом display name и сохраняет
 авторитетный worker snapshot. Неназначенная задача остаётся работой диспетчера. Назначенную видит
 только этот водитель. Ожидающую identity-free общую задачу видят все квалифицированные водители
-склада до take, после чего доступ остаётся только у фактического исполнителя. Worker feed всегда
-выдаёт nullable `driverAudience`: null классифицирует обычную работу, non-null — logistics driver
-work. Только private source replan boundary может заменить audience под общим task/entry version
-fence; public board move её не меняет.
+склада до take, после чего доступ остаётся только у фактического исполнителя. DriverApp получает
+только primary bindings через `/api/driver/v1/**`; WorkerApp получает обычную работу и только
+активную secondary logistics work через `/api/worker/v1/**`. Take водителя транзакционно сохраняет
+push `TASK_JOIN_AVAILABLE` для подходящих стропальщиков. Ожидающая logistics task анонсируется
+только в DriverApp SSE: WorkerApp не получает ни pre-take `NEW_TASK`, ни entry ID из другой surface.
+Стропальщик присоединяется из current group; если он выполнял другое групповое задание, task-board
+ставит на паузу всю предыдущую entry и
+возобновляет её после закрытия совместной задачи. Каждый logistics-driver secondary binding
+обязательный и interrupting, а completion любым назначенным участником требует минимум одно READY
+result photo. Primary assignment без группы никогда не закрывает secondary binding, даже если у
+водителя также есть квалификация стропальщика. Только private source replan boundary может заменить
+audience под общим task/entry version fence; public board move её не меняет.
 
 ## Внутренняя структура приложения
 
@@ -83,6 +92,8 @@ fence; public board move её не меняет.
 | `TaskBoardQueuePositionCoordinator` | Только advisory locks, stream fences и persisted queue/pin ordering |
 | `TaskBoardRoutePayloadCodec` | Единственный canonical route JSON и fingerprint codec |
 | `DriverTaskAudienceService` | Shape аудитории logistics-driver, qualification, visibility и execution authorization |
+| `MobileTaskSurfacePolicy` | Непересекающиеся DriverApp primary и WorkerApp secondary capabilities |
+| `WorkerPushOutbox` / `WorkerPushDispatcher` | Transactional уведомление стропальщика, leased FCM delivery и bounded recovery |
 | `WorkforceService` | Стабильный фасад worker/group API над тремя владельцами lifecycle |
 | `WorkforceProfileService` | Изменение worker profile и qualifications с сохранением credential lock span |
 | `WorkforceCredentialLifecycleService` | Durable auth credential intents, completion/failure fencing, reconciliation и deletion recovery |
@@ -115,6 +126,7 @@ Public gateway преобразует `/api/task-board/**` в downstream `/api/*
 | `/api/warehouses/{warehouseId}/task-board/**` | Warehouse-authorized user | Board reads и operational commands |
 | `/api/warehouses/{warehouseId}/task-board/kpi-settings/**` | Warehouse manager/admin | Palette и effective schedule revisions |
 | `/api/worker/v1/**` | Worker credential и `worker.tasks` scope | Context, feed, detail, actions, evidence reservations, devices и events |
+| `/api/driver/v1/**` | Worker credential и `driver.tasks` scope | Driver-only context, primary feed, actions, evidence reservations, devices и events |
 | `/api/internal/task-board/v1/maintenance/**` | Exact maintenance-service identity | Routing и catalog preflight |
 | `/api/internal/task-board/v1/tasks/**` | Exact source service identity | Idempotent task synchronization и evidence reads |
 | `/api/internal/task-board/v1/logistics/**` | Exact logistics-service identity | Driver/equipment task integration |
@@ -124,12 +136,19 @@ Private paths — service-to-service boundaries, а не client shortcuts. Их 
 `principal_type`, `client_id`, scope, source ownership и warehouse checks входят
 в контракт.
 
-## Worker stream и offline execution
+## Native streams и offline execution
 
 `GET /api/worker/v1/events` — SSE invalidation stream. Текущий producer
 отправляет `FEED_CHANGED` при подписке и последующих изменениях; worker app также
 периодически делает authoritative REST refresh. Payload не является полной task
 projection.
+
+`GET /api/driver/v1/events` имеет ту же invalidation-only семантику. Device
+registrations привязаны к surface и принимают текущие Firebase Installation ID
+(`targetKind=FID`) и legacy registration tokens. Успешный TAKE водителя сохраняет
+уведомление стропальщику в `worker_push_outbox` в той же транзакции; leased dispatcher
+повторяет transient FCM failures, отзывает invalid targets и не отправляет вызовы
+стропальщика DriverApp installations.
 
 `WorkerTaskDetail.source` присутствует всегда и равен null для обычной работы. Для source-owned
 работы он содержит только существующие immutable type и ID источника. Worker client может
@@ -176,17 +195,24 @@ Migration
 очищает устаревшие worker IDs/names у задач `WAREHOUSE_DRIVERS` и усиливает DB constraint, чтобы
 общая и неназначенная аудитории всегда оставались identity-free.
 
+[`V30__driver_worker_surfaces_and_push_outbox.sql`](src/main/resources/db/migration/V30__driver_worker_surfaces_and_push_outbox.sql)
+разделяет WorkerApp/DriverApp installations, добавляет leased push outbox, нормализует каждый
+настроенный logistics secondary binding как required/interrupting/notified и повышает минимум
+result photo до одного. Миграция не придумывает отсутствующий класс стропальщиков: каждая активная
+logistics-driver queue должна явно иметь primary binding водителя и хотя бы один secondary binding
+стропальщика.
+
 ## Безопасность и изоляция
 
-- Все API chains валидируют JWT issuer/audience; worker routes требуют узкий
-  worker scope.
+- Все API chains валидируют JWT issuer/audience; worker и driver routes требуют
+  непересекающиеся scopes `worker.tasks` и `driver.tasks`.
 - Manager commands проверяют user role, warehouse access и command-specific
   write permission в `WarehouseAccessAuthorizer` и services.
 - Internal task, queue-reference, maintenance и logistics operations требуют
   exact service identity/scope и проверяют source ownership.
 - Auth-service остаётся владельцем credentials. Task-board хранит только
   operational workflow state, нужный для reconciliation.
-- CORS использует explicit panel/worker origins. Browser/mobile clients идут
+- CORS использует explicit panel/worker/driver origins. Browser/mobile clients идут
   через gateway; сервисы — по private routes с client credentials.
 - OAuth registrations для worker credentials, warehouse lifecycle read/confirm
   и warehouse timezone используют один `TASK_BOARD_CLIENT_SECRET`. Профиль
@@ -205,6 +231,9 @@ Migration
   и имеют explicit reconciliation commands вместо local rollback.
 - Worker media inbox остаётся pending, пока не появится referenced evidence;
   reconciler повторяет применение идемпотентно.
+- Push стропальщику доставляется at least once: expired lease можно reclaim,
+  transient failures получают bounded delay, invalid installations отзываются,
+  а exhausted rows остаются `DEAD` для operations вместо ложного delivery success.
 - Warehouse readiness невозможен, пока task/queue/credential/evidence или
   operation-mark work остаётся unresolved.
 - Outbox и sanitized DLT recovery сохраняют immutable envelope и audit review.
@@ -248,7 +277,8 @@ warehouse-service `http://localhost:8083`, Kafka `localhost:9092`, service port
 Задайте database credentials, HTTPS auth issuer/token URI, task-board service
 secret, worker offline-lease secret, private auth worker-credential URL,
 private warehouse lifecycle URL, explicit CORS origins, Kafka brokers и
-`TASK_BOARD_KAFKA_ENABLED=true`.
+`TASK_BOARD_KAFKA_ENABLED=true`, `TASK_BOARD_FCM_ENABLED=true`,
+`TASK_BOARD_FCM_PROJECT_ID` и Google Application Default Credentials.
 
 `TaskBoardProductionSafetyValidator` запрещает missing/insecure endpoints,
 disabled Kafka, topic drift, unsafe binder retry/DLT, topic auto-creation,
@@ -265,7 +295,7 @@ bash ./gradlew :services:task-board-service:javadoc
 bash ./gradlew :platform:architecture-tests:test
 ```
 
-Worker actions/streams требуют worker-app contract/unit tests и exact APK build.
+Native actions/streams требуют WorkerApp и DriverApp contract/unit tests и exact APK builds.
 Source-task integration, Kafka families или warehouse lifecycle требуют focused
 producer/consumer, idempotency, version-gap, dependency-outage и recovery
 coverage.
@@ -290,12 +320,15 @@ coverage.
 - [Канонический OpenAPI](../../contracts/openapi/task-board-service.yaml)
 - [Task-board controller](src/main/java/dev/buhanzaz/rwms/taskboard/api/TaskBoardController.java)
 - [Worker API](src/main/java/dev/buhanzaz/rwms/taskboard/api/WorkerTaskBoardController.java)
+- [Driver API](src/main/java/dev/buhanzaz/rwms/taskboard/api/DriverTaskBoardController.java)
 - [Task-board application service](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardService.java)
 - [Task-board read projection](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardReadProjectionService.java)
 - [External task registration](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardExternalRegistrationService.java)
 - [External task mutation](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardExternalMutationService.java)
 - [Queue position coordinator](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardQueuePositionCoordinator.java)
 - [Worker application service](src/main/java/dev/buhanzaz/rwms/taskboard/service/WorkerTaskBoardService.java)
+- [Mobile surface policy](src/main/java/dev/buhanzaz/rwms/taskboard/service/MobileTaskSurfacePolicy.java)
+- [Push outbox](src/main/java/dev/buhanzaz/rwms/taskboard/push/WorkerPushOutbox.java)
 - [Workforce service](src/main/java/dev/buhanzaz/rwms/taskboard/service/WorkforceService.java)
 - [Production safety validator](src/main/java/dev/buhanzaz/rwms/taskboard/config/TaskBoardProductionSafetyValidator.java)
 - [Event store](src/main/java/dev/buhanzaz/rwms/taskboard/eventing/TaskBoardEventStore.java)

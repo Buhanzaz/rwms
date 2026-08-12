@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.taskboard;
 import static dev.buhanzaz.rwms.taskboard.QueueFixtureModels.*;
 
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
+import static dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.*;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -19,6 +20,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import dev.buhanzaz.rwms.taskboard.config.TaskBoardClientProperties;
 import dev.buhanzaz.rwms.taskboard.domain.*;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
+import dev.buhanzaz.rwms.taskboard.eventing.WorkerMediaEventProcessor;
 import dev.buhanzaz.rwms.taskboard.repository.BoardTaskRepository;
 import dev.buhanzaz.rwms.taskboard.repository.QueueEntryRepository;
 import dev.buhanzaz.rwms.taskboard.repository.QueueUsageReferenceRepository;
@@ -32,6 +34,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -71,6 +74,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   @org.springframework.beans.factory.annotation.Autowired WorkforceService workforce;
   @org.springframework.beans.factory.annotation.Autowired TaskBoardService board;
   @org.springframework.beans.factory.annotation.Autowired WorkerTaskBoardService workerBoard;
+  @org.springframework.beans.factory.annotation.Autowired WorkerMediaEventProcessor mediaEvents;
   @org.springframework.beans.factory.annotation.Autowired FakeCredentials credentials;
   @org.springframework.beans.factory.annotation.Autowired JdbcTemplate jdbc;
 
@@ -673,7 +677,11 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     UUID secondTaskId = second.taskId();
 
     var firstFeedEntries =
-        workerBoard.feed(firstDriver.id(), W1, null, 50).feed().categories().stream()
+        workerBoard
+            .feed(MobileTaskSurface.DRIVER, firstDriver.id(), W1, null, 50)
+            .feed()
+            .categories()
+            .stream()
             .flatMap(category -> category.entries().stream())
             .toList();
     assertThat(firstFeedEntries).extracting(entry -> entry.taskId()).containsExactly(first.taskId());
@@ -682,7 +690,11 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(firstFeedEntries.getFirst().driverAudience().workerId())
         .isEqualTo(firstDriver.id());
     var secondFeedEntries =
-        workerBoard.feed(secondDriver.id(), W1, null, 50).feed().categories().stream()
+        workerBoard
+            .feed(MobileTaskSurface.DRIVER, secondDriver.id(), W1, null, 50)
+            .feed()
+            .categories()
+            .stream()
             .flatMap(category -> category.entries().stream())
             .toList();
     assertThat(secondFeedEntries)
@@ -695,7 +707,10 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             .filter(entry -> entry.taskId().equals(secondTaskId))
             .findFirst()
             .orElseThrow();
-    assertThat(workerBoard.detail(secondDriver.id(), W1, secondEntry.id()).source())
+    assertThat(
+            workerBoard
+                .detail(MobileTaskSurface.DRIVER, secondDriver.id(), W1, secondEntry.id())
+                .source())
         .isEqualTo(secondEntry.source());
     assertThat(secondEntry.source().type()).isEqualTo(TaskSourceType.LOGISTICS_DRIVER_TASK);
 
@@ -715,7 +730,11 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                 null,
                 List.of(new QualificationRequest(driverClass.id(), false, null))));
     assertThat(
-            workerBoard.feed(unqualifiedFirstDriver.id(), W1, null, 50).feed().categories().stream()
+            workerBoard
+                .feed(MobileTaskSurface.DRIVER, unqualifiedFirstDriver.id(), W1, null, 50)
+                .feed()
+                .categories()
+                .stream()
                 .flatMap(category -> category.entries().stream())
                 .map(entry -> entry.taskId()))
         .doesNotContain(first.taskId());
@@ -728,7 +747,10 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             secondDriver.id());
 
     assertThat(taken.status()).isEqualTo(EntryStatus.IN_PROGRESS);
-    assertThatThrownBy(() -> workerBoard.detail(firstDriver.id(), W1, secondEntry.id()))
+    assertThatThrownBy(
+            () ->
+                workerBoard.detail(
+                    MobileTaskSurface.DRIVER, firstDriver.id(), W1, secondEntry.id()))
         .isInstanceOf(NotFoundException.class);
     assertThatThrownBy(
             () ->
@@ -738,7 +760,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                     new TakeEntryRequest(taken.version(), null, firstDriver.id()),
                     firstDriver.id()))
         .isInstanceOf(ConflictException.class)
-        .hasMessageContaining("второго водителя");
+        .hasMessageContaining("текущая группа");
   }
 
   @Test
@@ -794,12 +816,20 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(registered.driverAudience().workerId()).isNull();
     assertThat(registered.driverAudience().workerName()).isNull();
     assertThat(
-            workerBoard.feed(firstDriver.id(), W1, null, 50).feed().categories().stream()
+            workerBoard
+                .feed(MobileTaskSurface.DRIVER, firstDriver.id(), W1, null, 50)
+                .feed()
+                .categories()
+                .stream()
                 .flatMap(category -> category.entries().stream())
                 .map(entry -> entry.taskId()))
         .contains(registered.taskId());
     assertThat(
-            workerBoard.feed(secondDriver.id(), W1, null, 50).feed().categories().stream()
+            workerBoard
+                .feed(MobileTaskSurface.DRIVER, secondDriver.id(), W1, null, 50)
+                .feed()
+                .categories()
+                .stream()
                 .flatMap(category -> category.entries().stream())
                 .map(entry -> entry.taskId()))
         .contains(registered.taskId());
@@ -842,9 +872,15 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         new TakeEntryRequest(sharedEntry.version(), null, firstDriver.id()),
         firstDriver.id());
 
-    assertThatCode(() -> workerBoard.detail(firstDriver.id(), W1, sharedEntry.id()))
+    assertThatCode(
+            () ->
+                workerBoard.detail(
+                    MobileTaskSurface.DRIVER, firstDriver.id(), W1, sharedEntry.id()))
         .doesNotThrowAnyException();
-    assertThatThrownBy(() -> workerBoard.detail(secondDriver.id(), W1, sharedEntry.id()))
+    assertThatThrownBy(
+            () ->
+                workerBoard.detail(
+                    MobileTaskSurface.DRIVER, secondDriver.id(), W1, sharedEntry.id()))
         .isInstanceOf(NotFoundException.class);
   }
 
@@ -2811,6 +2847,393 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
+  void driverAndSlingerShareActiveTaskPushPhotoCompletionAndGroupTimer() {
+    var driverClass = registry.createClass(workerClass("DRIVER_MOBILE_COLLABORATION"));
+    var slingerClass = registry.createClass(workerClass("SLINGER_MOBILE_COLLABORATION"));
+    var repairClass = registry.createClass(workerClass("REPAIR_MOBILE_COLLABORATION"));
+    var repairQueue =
+        QueueRegistryTestFixtures.create(
+            registry,
+            jdbc,
+            W1,
+            queue(
+                "COLLABORATION_REPAIR",
+                QueueType.REPAIR,
+                List.of(
+                    new QueueBindingRequest(
+                        repairClass.id(), 0, false, ParticipationPolicy.PRIMARY, false))));
+    var driverQueue =
+        QueueRegistryTestFixtures.create(
+            registry,
+            jdbc,
+            W1,
+            queue(
+                "COLLABORATION_DRIVER",
+                QueueType.MOVEMENT,
+                QueuePurpose.LOGISTICS_DRIVER,
+                List.of(
+                    new QueueBindingRequest(
+                        driverClass.id(), 0, false, ParticipationPolicy.PRIMARY, false),
+                    new QueueBindingRequest(
+                        slingerClass.id(), 1, false, ParticipationPolicy.OPTIONAL, false))));
+    assertThat(driverQueue.resultPhotoMinCount()).isOne();
+    assertThat(driverQueue.bindings().get(1).participationPolicy())
+        .isEqualTo(ParticipationPolicy.REQUIRED);
+    assertThat(driverQueue.bindings().get(1).stopTaskOnTake()).isTrue();
+    assertThat(driverQueue.bindings().get(1).notifyOnPrimaryTake()).isTrue();
+
+    var driver =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Mobile driver",
+                null,
+                null,
+                List.of(
+                    new QualificationRequest(driverClass.id(), true, null),
+                    new QualificationRequest(slingerClass.id(), true, null))));
+    var slinger =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Mobile slinger",
+                null,
+                null,
+                List.of(
+                    new QualificationRequest(driverClass.id(), true, null),
+                    new QualificationRequest(slingerClass.id(), true, null),
+                    new QualificationRequest(repairClass.id(), true, null))));
+    var repairMate =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Repair mate",
+                null,
+                null,
+                List.of(new QualificationRequest(repairClass.id(), true, null))));
+    var ungroupedSlinger =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Ungrouped slinger",
+                null,
+                null,
+                List.of(new QualificationRequest(slingerClass.id(), true, null))));
+    jdbc.update("update worker set app_login='mobile.driver' where id=?", driver.id());
+    jdbc.update("update worker set app_login='mobile.slinger' where id=?", slinger.id());
+    jdbc.update(
+        "update worker set app_login='ungrouped.slinger' where id=?", ungroupedSlinger.id());
+    var repairGroup =
+        workforce.createGroup(
+            W1,
+            new WorkerGroupRequest(
+                0L,
+                repairClass.id(),
+                "Repair mobile group",
+                null,
+                true,
+                List.of(
+                    new GroupMemberRequest(slinger.id(), true),
+                    new GroupMemberRequest(repairMate.id(), true))));
+    workforce.setCurrentGroup(
+        W1,
+        slinger.id(),
+        new SetCurrentGroupRequest(slinger.version(), repairGroup.id()));
+
+    var repair =
+        board.createTask(W1, task(repairQueue.id(), "collaboration repair")).columns().stream()
+            .flatMap(column -> column.entries().stream())
+            .findFirst()
+            .orElseThrow();
+    repair =
+        board.take(
+            W1,
+            repair.id(),
+            new TakeEntryRequest(repair.version(), repairGroup.id(), null),
+            null);
+
+    workerBoard.registerDevice(
+        MobileTaskSurface.WORKER,
+        slinger.id(),
+        W1,
+        "worker-mobile-installation",
+        new WorkerDeviceRegistrationRequest(
+            "FCM", "FID", "worker-mobile-fid", "0.1.16", 36, "ru-RU"));
+    workerBoard.registerDevice(
+        MobileTaskSurface.DRIVER,
+        driver.id(),
+        W1,
+        "driver-mobile-installation",
+        new WorkerDeviceRegistrationRequest(
+            "FCM", "FID", "driver-mobile-fid", "0.1.15", 36, "ru-RU"));
+
+    UUID externalTaskId = UUID.randomUUID();
+    var registration =
+        board.registerExternalTask(
+            "logistics-service",
+            driverRegistration(
+                driverQueue.definitionId(),
+                externalTaskId,
+                LocalDate.of(2026, 8, 12),
+                new DriverTaskAudienceDto(
+                    DriverTaskAudienceMode.ASSIGNED_DRIVER, driver.id(), null)));
+    registration =
+        board.setExternalTaskLane(
+            "logistics-service",
+            externalTaskId,
+            new SetTaskLaneRequest(registration.taskVersion(), TaskLane.CURRENT));
+    UUID driverTaskId = registration.taskId();
+    BoardEntryDto waiting =
+        board.logisticsSnapshot(W1).current().stream()
+            .filter(candidate -> candidate.taskId().equals(driverTaskId))
+            .findFirst()
+            .orElseThrow();
+
+    assertThat(mobileFeedEntryIds(MobileTaskSurface.WORKER, slinger.id()))
+        .doesNotContain(waiting.id());
+    assertThat(mobileFeedEntryIds(MobileTaskSurface.DRIVER, driver.id()))
+        .containsExactly(waiting.id());
+
+    WorkerContext driverContext =
+        workerBoard.context(MobileTaskSurface.DRIVER, driver.id(), W1);
+    UUID takeOperation = UUID.randomUUID();
+    WorkerActionAppliedResult taken =
+        workerBoard.applyAction(
+            MobileTaskSurface.DRIVER,
+            driver.id(),
+            W1,
+            waiting.id(),
+            takeOperation.toString(),
+            new WorkerActionRequest(
+                takeOperation,
+                WorkerAction.TAKE,
+                waiting.version(),
+                null,
+                driverContext.serverTime(),
+                driverContext.offlineLease().id(),
+                null));
+
+    assertThat(taken.entry().status()).isEqualTo("IN_PROGRESS");
+    assertThat(mobileFeedEntryIds(MobileTaskSurface.DRIVER, slinger.id()))
+        .doesNotContain(waiting.id());
+    assertThat(mobileFeedEntryIds(MobileTaskSurface.WORKER, driver.id()))
+        .doesNotContain(waiting.id());
+    assertThat(mobileFeedEntryIds(MobileTaskSurface.WORKER, ungroupedSlinger.id()))
+        .doesNotContain(waiting.id());
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from worker_push_outbox where entry_id=? and worker_id=? and status='PENDING'",
+                Integer.class,
+                waiting.id(),
+                slinger.id()))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from worker_push_outbox where entry_id=?",
+                Integer.class,
+                waiting.id()))
+        .isOne();
+    assertThat(
+            jdbc.queryForList(
+                "select app_surface from worker_device_registration order by app_surface",
+                String.class))
+        .containsExactly("DRIVER", "WORKER");
+    assertThat(mobileFeedEntries(MobileTaskSurface.WORKER, slinger.id()))
+        .filteredOn(offered -> offered.entryId().equals(waiting.id()))
+        .singleElement()
+        .satisfies(
+            offered -> {
+              assertThat(offered.entryId()).isEqualTo(waiting.id());
+              assertThat(offered.availabilityMode()).isEqualTo("REQUIRED_JOIN");
+            });
+
+    WorkerContext slingerContext =
+        workerBoard.context(MobileTaskSurface.WORKER, slinger.id(), W1);
+    UUID prematureSlingerAction = UUID.randomUUID();
+    assertThatThrownBy(
+            () ->
+                workerBoard.applyAction(
+                    MobileTaskSurface.WORKER,
+                    slinger.id(),
+                    W1,
+                    waiting.id(),
+                    prematureSlingerAction.toString(),
+                    new WorkerActionRequest(
+                        prematureSlingerAction,
+                        WorkerAction.PAUSE,
+                        taken.currentVersion(),
+                        repairGroup.id(),
+                        slingerContext.serverTime(),
+                        slingerContext.offlineLease().id(),
+                        null)))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("присоединитесь");
+    assertThatThrownBy(
+            () ->
+                board.complete(
+                    W1,
+                    waiting.id(),
+                    new VersionCommand(taken.currentVersion()),
+                    driver.id()))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("вторичного исполнителя");
+    UUID joinOperation = UUID.randomUUID();
+    WorkerActionAppliedResult joined =
+        workerBoard.applyAction(
+            MobileTaskSurface.WORKER,
+            slinger.id(),
+            W1,
+            waiting.id(),
+            joinOperation.toString(),
+            new WorkerActionRequest(
+                joinOperation,
+                WorkerAction.JOIN,
+                taken.currentVersion(),
+                repairGroup.id(),
+                slingerContext.serverTime(),
+                slingerContext.offlineLease().id(),
+                null));
+
+    BoardEntryDto pausedRepair = entry("collaboration repair");
+    assertThat(pausedRepair.status()).isEqualTo(EntryStatus.PAUSED);
+    assertThat(pausedRepair.assignments())
+        .extracting(AssignmentDto::status)
+        .containsOnly(AssignmentStatus.PAUSED);
+    assertThat(joined.entry().assignments())
+        .extracting(WorkerAssignmentSnapshot::workerId)
+        .containsExactlyInAnyOrder(driver.id(), slinger.id());
+
+    WorkerContext beforePhoto =
+        workerBoard.context(MobileTaskSurface.DRIVER, driver.id(), W1);
+    UUID prematureCompletion = UUID.randomUUID();
+    assertThatThrownBy(
+            () ->
+                workerBoard.applyAction(
+                    MobileTaskSurface.DRIVER,
+                    driver.id(),
+                    W1,
+                    waiting.id(),
+                    prematureCompletion.toString(),
+                    new WorkerActionRequest(
+                        prematureCompletion,
+                        WorkerAction.COMPLETE,
+                        joined.currentVersion(),
+                        null,
+                        beforePhoto.serverTime(),
+                        beforePhoto.offlineLease().id(),
+                        null)))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("фотограф");
+
+    WorkerContext evidenceContext =
+        workerBoard.context(MobileTaskSurface.WORKER, slinger.id(), W1);
+    UUID evidenceOperation = UUID.randomUUID();
+    UUID evidenceId = UUID.randomUUID();
+    workerBoard.reserveEvidence(
+        MobileTaskSurface.WORKER,
+        slinger.id(),
+        W1,
+        waiting.id(),
+        evidenceOperation.toString(),
+        new EvidenceReservationRequest(
+            evidenceOperation,
+            evidenceId,
+            waiting.routeIndex(),
+            evidenceContext.serverTime(),
+            evidenceContext.offlineLease().id(),
+            "image/jpeg",
+            128,
+            "b".repeat(64)));
+    UUID mediaId = UUID.randomUUID();
+    OffsetDateTime readyAt = OffsetDateTime.now(ZoneOffset.UTC);
+    String readyEvent =
+        """
+        {
+          "envelopeVersion":2,
+          "eventId":"%s",
+          "eventType":"media.media.ready.v1",
+          "eventVersion":1,
+          "occurredAt":null,
+          "recordedAt":"%s",
+          "producer":"media-service",
+          "aggregateType":"MEDIA",
+          "aggregateId":"%s",
+          "aggregateVersion":1,
+          "correlation":{"correlationId":"%s","causationId":null},
+          "actorRef":{"subjectId":"%s","principalType":"WORKER","profileRevision":null},
+          "payload":{
+            "mediaId":"%s",
+            "ownerType":"TASK_BOARD_ENTRY",
+            "ownerId":"%s",
+            "warehouseId":"%s",
+            "clientReferenceId":"%s",
+            "kind":"IMAGE",
+            "status":"READY",
+            "generation":1,
+            "rotationDegrees":0
+          }
+        }
+        """
+            .formatted(
+                UUID.randomUUID(),
+                readyAt,
+                mediaId,
+                UUID.randomUUID(),
+                slinger.id(),
+                mediaId,
+                waiting.id(),
+                W1,
+                evidenceId);
+    mediaEvents.process(readyEvent.getBytes(StandardCharsets.UTF_8));
+
+    WorkerTaskDetail ready =
+        workerBoard.detail(MobileTaskSurface.DRIVER, driver.id(), W1, waiting.id());
+    assertThat(ready.evidence())
+        .singleElement()
+        .satisfies(photo -> assertThat(photo.state()).isEqualTo("READY"));
+    WorkerContext completionContext =
+        workerBoard.context(MobileTaskSurface.DRIVER, driver.id(), W1);
+    UUID completionOperation = UUID.randomUUID();
+    WorkerActionAppliedResult completed =
+        workerBoard.applyAction(
+            MobileTaskSurface.DRIVER,
+            driver.id(),
+            W1,
+            waiting.id(),
+            completionOperation.toString(),
+            new WorkerActionRequest(
+                completionOperation,
+                WorkerAction.COMPLETE,
+                ready.version(),
+                null,
+                completionContext.serverTime(),
+                completionContext.offlineLease().id(),
+                evidenceId));
+
+    assertThat(completed.entry().status()).isEqualTo("DONE");
+    assertThat(
+            workerBoard
+                .detail(MobileTaskSurface.WORKER, slinger.id(), W1, waiting.id())
+                .status())
+        .isEqualTo("DONE");
+    assertThat(
+            jdbc.queryForObject(
+                "select selected_for_completion from worker_task_evidence where evidence_id=?",
+                Boolean.class,
+                evidenceId))
+        .isTrue();
+    assertThat(mobileFeedEntryIds(MobileTaskSurface.WORKER, slinger.id()))
+        .doesNotContain(waiting.id());
+    assertThat(mobileFeedEntryIds(MobileTaskSurface.DRIVER, driver.id()))
+        .doesNotContain(waiting.id());
+    BoardEntryDto resumedRepair = entry("collaboration repair");
+    assertThat(resumedRepair.status()).isEqualTo(EntryStatus.IN_PROGRESS);
+    assertThat(resumedRepair.assignments())
+        .extracting(AssignmentDto::status)
+        .containsOnly(AssignmentStatus.ACTIVE);
+  }
+
+  @Test
   void secondaryWorkerWaitsForPrimaryThenSeesMandatoryUrgentTask() {
     var driverClass = registry.createClass(workerClass("DRIVER_VISIBILITY"));
     var slingerClass = registry.createClass(workerClass("SLINGER_VISIBILITY"));
@@ -4508,6 +4931,17 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         .filter(e -> e.title().equals(title))
         .findFirst()
         .orElseThrow();
+  }
+
+  private List<WorkerFeedEntry> mobileFeedEntries(
+      MobileTaskSurface surface, UUID workerId) {
+    return workerBoard.feed(surface, workerId, W1, null, 50).feed().categories().stream()
+        .flatMap(category -> category.entries().stream())
+        .toList();
+  }
+
+  private List<UUID> mobileFeedEntryIds(MobileTaskSurface surface, UUID workerId) {
+    return mobileFeedEntries(surface, workerId).stream().map(WorkerFeedEntry::entryId).toList();
   }
 
   private WorkerClassRequest workerClass(String name) {

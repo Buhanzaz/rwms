@@ -12,7 +12,7 @@ class WorkerFirebaseMessagingService : FirebaseMessagingService() {
 
     @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     override fun onNewToken(token: String) {
-        push.onNewToken(token)
+        if (token.isNotBlank()) push.onMessagingTokenChanged()
     }
 
     override fun onMessageReceived(message: RemoteMessage) {

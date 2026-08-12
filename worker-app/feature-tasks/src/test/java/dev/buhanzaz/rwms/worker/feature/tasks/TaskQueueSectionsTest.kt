@@ -116,35 +116,51 @@ class TaskQueueSectionsTest {
     }
 
     @Test
-    fun `driver audience creates separate personal logistics and shared movement tables`() {
-        val driverCategory = category(
-            queueId = "drivers",
-            name = "Водители",
+    fun `active shared task is rendered in the slinger group without driver columns`() {
+        val sharedCategory = category(
+            queueId = "joint-loading",
+            name = "Совместная погрузка",
             sortOrder = 5,
+            groupIds = listOf("slingers"),
             queuePurpose = "LOGISTICS_DRIVER",
         )
-        val assigned = task("shipment", "drivers", "Водители", 5, 0)
-            .copy(driverAudienceMode = "ASSIGNED_DRIVER")
-        val shared = task("movement", "drivers", "Водители", 5, 1)
-            .copy(driverAudienceMode = "WAREHOUSE_DRIVERS")
-        val legacyUnclassified = task("legacy", "drivers", "Водители", 5, 2)
+        val activeTask = task("shipment", "joint-loading", "Совместная погрузка", 5, 0)
+            .copy(status = "IN_PROGRESS", availabilityMode = "REQUIRED_JOIN")
 
         val columns = buildWorkBoardColumns(
-            groups = emptyList(),
-            categories = listOf(driverCategory),
-            tasks = listOf(shared, legacyUnclassified, assigned),
+            groups = listOf(group("slingers", "Стропальщики")),
+            categories = listOf(sharedCategory),
+            tasks = listOf(activeTask),
+            assignments = listOf(assignment(activeTask.entryId, null)),
+        )
+
+        assertThat(columns.map { it.name }).containsExactly("Стропальщики")
+        assertThat(columns.single().sections.single().tasks.map { it.entryId })
+            .containsExactly("shipment")
+        assertThat(columns.none { it.id.startsWith("driver-") }).isTrue()
+    }
+
+    @Test
+    fun `stale waiting logistics task is hidden from the worker board`() {
+        val category = category(
+            queueId = "joint-loading",
+            name = "Совместная погрузка",
+            sortOrder = 5,
+            groupIds = listOf("slingers"),
+            queuePurpose = "LOGISTICS_DRIVER",
+        )
+
+        val columns = buildWorkBoardColumns(
+            groups = listOf(group("slingers", "Стропальщики")),
+            categories = listOf(category),
+            tasks = listOf(
+                task("waiting", "joint-loading", category.name, 5, 0)
+                    .copy(status = "WAITING"),
+            ),
             assignments = emptyList(),
         )
 
-        assertThat(columns.map { it.name })
-            .containsExactly("Логистика", "Перемещения")
-            .inOrder()
-        assertThat(columns[0].description).isEqualTo("Только назначенные вам задания")
-        assertThat(columns[0].sections.single().tasks.map { it.entryId })
-            .containsExactly("shipment")
-        assertThat(columns[1].description).isEqualTo("Общие задания водителей склада")
-        assertThat(columns[1].sections.single().tasks.map { it.entryId })
-            .containsExactly("movement")
+        assertThat(columns.single().sections.single().tasks).isEmpty()
     }
 
     @Test
@@ -199,11 +215,11 @@ class TaskQueueSectionsTest {
         workerClassName = name,
     )
 
-    private fun assignment(entryId: String, groupId: String) = WorkerAssignmentEntity(
+    private fun assignment(entryId: String, groupId: String?) = WorkerAssignmentEntity(
         localId = "$USER_ID:$entryId:$groupId",
         userId = USER_ID,
         entryId = entryId,
-        assignmentId = "assignment-$groupId",
+        assignmentId = "assignment-${groupId ?: "primary"}",
         workerId = null,
         workerName = null,
         workerGroupId = groupId,

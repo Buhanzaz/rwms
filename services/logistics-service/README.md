@@ -34,8 +34,11 @@ prevents regrouping, and no new document-line task is created.
 
 The public board and task detail expose the whole trip: operation, client, address and coordinates,
 primary plus client/order additional contacts, comment, advisory delivery dates, actual assigned
-date, cabins and per-cabin desired/actual furniture with movement-task and readiness facts. An
-exact assigned driver may read that task detail; an unassigned task remains manager-only. A board
+date, cabins and per-cabin desired/actual furniture with movement-task and readiness facts. After
+the ordinary manager `rwms.read` warehouse check, only a `WORKER` with `driver.tasks` whose
+`worker_id` equals the frozen `plannedDriverWorkerId` may read an `ASSIGNED_DRIVER` task detail;
+the session `sub` is not worker identity, and `worker.tasks`, `UNASSIGNED`, and
+`WAREHOUSE_DRIVERS` grant no such access. A board
 move acts on the grouped task, never one member. It intentionally retains the locked local task and
 document rows across task-board's version-fenced call so a locally started trip cannot race a stale
 remote `WAITING` entry; the dependency boundary is limited by the configured connect/read timeouts
@@ -93,9 +96,10 @@ expected version. Create and ordinary update commands accept only the client, pr
 comment; delivery address, coordinate pair and order-owned additional contacts are deliberately
 collected by the client in a normal presentation confirmation. Desired-delivery windows remain an
 order-owned read projection: migrated legacy rows remain truthfully readable, while a current normal
-confirmation replaces them with exactly one client-selected calendar day (`startDate=endDate`). A
-draft may be saved without delivery facts, but shipment creation requires an address, primary phone
-and one desired delivery day. The actual document schedule is its `scheduledDate`; public commands
+confirmation replaces them with one to five distinct client-selected calendar days
+(`startDate=endDate`) in chronological order. A draft may be saved without delivery facts, but
+shipment creation requires an address, primary phone and at least one desired delivery day. The
+actual document schedule is its `scheduledDate`; public commands
 and projections carry no clock-time value. Human phone formatting is normalized to canonical E.164.
 
 `CreateRentalInquiryRequest` can target an existing draft or saved-but-editable order. Assistant
@@ -106,13 +110,13 @@ its fixed warehouse. Presentation reads combine live shared asset availability, 
 cabins' atomically captured contents and unassigned physical surplus already inside that order; zero
 shared availability rows remain visible with their per-cabin maximum. Confirmation carries furniture
 per cabin and atomically converts holds plus the authoritative all-order furniture composition.
-Every `NORMAL` public presentation therefore requires one client delivery day, a required delivery
-address, an optional complete latitude/longitude pair, nullable additional contacts normalized to an
-empty list, and a positive initial `rentalMonths`; none is prefilled from the linked order. The
-durable booking receipt includes those normalized facts, and the local post-conversion transition
-stores the one order delivery day and creates a term only for every newly converted cabin. Retry
-checks include every delivery fact and duration, so a mismatched replay conflicts and can never
-rewrite an existing cabin term. A `REPLACEMENT` presentation exposes current order facts read-only
+Every `NORMAL` public presentation therefore requires one to five independently selected client
+delivery days, a required delivery address, an optional complete latitude/longitude pair, nullable
+additional contacts normalized to an empty list, and a positive initial `rentalMonths`; none is
+prefilled from the linked order. The durable booking receipt chronologically normalizes those facts,
+and the local post-conversion transition stores the ordered order delivery days and creates a term
+only for every newly converted cabin. Retry checks include every delivery fact and duration, so a
+mismatched replay conflicts and can never rewrite an existing cabin term. A `REPLACEMENT` presentation exposes current order facts read-only
 and rejects every normal-only field. Shipment assignment derives each cabin return date from its actual shipment
 date plus its client-selected term; the only public term mutation is the existing extension command
 for selected already shipped cabins. `OrderPermissions.canExtendRentalTerms` is the server-derived

@@ -40,8 +40,8 @@ android {
         applicationId = "dev.buhanzaz.rwms.worker"
         minSdk = 23
         targetSdk = 36
-        versionCode = 16
-        versionName = "0.1.15"
+        versionCode = 17
+        versionName = "0.1.16"
         testInstrumentationRunner = "dev.buhanzaz.rwms.worker.HiltWorkerTestRunner"
         manifestPlaceholders["appAuthRedirectScheme"] = "rwms-worker-auth"
     }
@@ -119,6 +119,7 @@ dependencies {
     implementation(libs.retrofit.serialization)
     implementation(libs.profileinstaller)
     implementation(libs.firebase.messaging)
+    implementation(libs.firebase.installations)
     implementation(libs.coroutines.android)
     ksp(libs.hilt.compiler)
     coreLibraryDesugaring(libs.desugar.jdk.libs)

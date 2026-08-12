@@ -19,7 +19,10 @@ import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
 import dev.buhanzaz.rwms.logistics.order.service.RentalOrderService;
 import dev.buhanzaz.rwms.logistics.order.service.RentalOrderUnitReplacementService;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -30,8 +33,8 @@ import org.springframework.stereotype.Service;
 
 /**
  * Owns the presentation booking lifecycle: a normal selection converts held cabins and the complete
- * per-cabin furniture composition atomically, then durably applies its one-day client receiving
- * preference, delivery facts and initial term to the converted cabins. A replacement delegates
+ * per-cabin furniture composition atomically, then durably applies up to five individual client
+ * receiving days, delivery facts and the initial term to the converted cabins. A replacement delegates
  * one ordered same-order batch without changing either. Pending effects are retried from the
  * existing booking receipt; only terminal rejection releases holds and allows a manager to publish
  * the next presentation revision.
@@ -169,7 +172,7 @@ public class PresentationBookingService {
               context.booking().getId(),
               converted,
               requirements,
-              normalDesiredDeliveryWindow(context),
+              normalDesiredDeliveryWindows(context),
               normalRentalMonths(context),
               normalDeliveryAddress(context),
               context.latitude(),
@@ -361,24 +364,39 @@ public class PresentationBookingService {
     return Map.copyOf(result);
   }
 
-  /** Rebuilds the already validated one-day client preference from the durable booking receipt. */
-  private static DesiredDeliveryWindow normalDesiredDeliveryWindow(BookingContext context) {
-    if (context.desiredDeliveryWindows().size() != 1) {
+  /**
+   * Rebuilds the already validated, chronologically ordered client receiving days from the durable
+   * normal-presentation receipt.
+   */
+  private static List<DesiredDeliveryWindow> normalDesiredDeliveryWindows(BookingContext context) {
+    if (context.desiredDeliveryWindows().isEmpty()) {
       throw new OrderProblemException(
           org.springframework.http.HttpStatus.CONFLICT,
           "CLIENT_PRESENTATION_DELIVERY_WINDOW_REQUIRED",
           "Не найдена желаемая дата получения бытовок");
     }
-    var window = context.desiredDeliveryWindows().getFirst();
-    if (window.startDate() == null
-        || window.endDate() == null
-        || !window.startDate().equals(window.endDate())) {
+    if (context.desiredDeliveryWindows().size() > 5) {
       throw new OrderProblemException(
           org.springframework.http.HttpStatus.CONFLICT,
           "CLIENT_PRESENTATION_DELIVERY_WINDOW_INVALID",
-          "Сохранённая желаемая дата получения бытовок некорректна");
+          "Сохранено больше пяти желаемых дат получения бытовок");
     }
-    return DesiredDeliveryWindow.create(window.startDate(), window.endDate());
+    LinkedHashSet<LocalDate> selectedDays = new LinkedHashSet<>();
+    for (var window : context.desiredDeliveryWindows()) {
+      if (window.startDate() == null
+          || window.endDate() == null
+          || !window.startDate().equals(window.endDate())
+          || !selectedDays.add(window.startDate())) {
+        throw new OrderProblemException(
+            org.springframework.http.HttpStatus.CONFLICT,
+            "CLIENT_PRESENTATION_DELIVERY_WINDOW_INVALID",
+            "Сохранённые желаемые даты получения бытовок некорректны");
+      }
+    }
+    return selectedDays.stream()
+        .sorted(Comparator.naturalOrder())
+        .map(day -> DesiredDeliveryWindow.create(day, day))
+        .toList();
   }
 
   /** Reads the duration from the durable booking receipt before local order reconciliation. */

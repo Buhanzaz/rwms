@@ -64,6 +64,7 @@ PROMPT_PANEL_RENTAL_TABLE_MIGRATION.md
 /.playwright/
 /.claude/
 /output/
+/panel/output/
 /old_db/
 /WMS_ARCHITECTURE_KNOWLEDGE/
 

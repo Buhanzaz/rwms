@@ -32,11 +32,6 @@ interface WorkerGatewayApi {
     @GET("/api/task-board/worker/v1/entries/{entryId}")
     suspend fun workerTaskDetail(@Path("entryId") entryId: String): Response<WorkerTaskDetailDto>
 
-    @GET("/api/logistics/v1/driver-tasks/{taskId}")
-    suspend fun logisticsDriverTask(
-        @Path("taskId") taskId: String,
-    ): Response<DriverTaskTripDetailsResponseDto>
-
     @POST("/api/task-board/worker/v1/entries/{entryId}/actions")
     suspend fun applyAction(
         @Path("entryId") entryId: String,

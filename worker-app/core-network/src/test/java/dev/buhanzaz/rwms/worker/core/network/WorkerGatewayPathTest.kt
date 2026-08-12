@@ -55,8 +55,6 @@ class WorkerGatewayPathTest {
         assertThat(route<GET>("workerContext")).isEqualTo("$WORKER_PREFIX/context")
         assertThat(route<GET>("workerFeed")).isEqualTo("$WORKER_PREFIX/feed")
         assertThat(route<GET>("workerTaskDetail")).isEqualTo("$WORKER_PREFIX/entries/{entryId}")
-        assertThat(route<GET>("logisticsDriverTask"))
-            .isEqualTo("/api/logistics/v1/driver-tasks/{taskId}")
         assertThat(route<POST>("applyAction")).isEqualTo("$WORKER_PREFIX/entries/{entryId}/actions")
         assertThat(route<POST>("reserveEvidence"))
             .isEqualTo("$WORKER_PREFIX/entries/{entryId}/evidence-reservations")

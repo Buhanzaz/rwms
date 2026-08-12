@@ -121,9 +121,35 @@ after take. A shared task may name a responsible driver without narrowing
 visibility. Task-board resolves the authoritative worker name and applies the
 same policy to feed, detail, take, execution ordering and invalidation.
 
+Native roles are separate capabilities over that one aggregate. DriverApp has
+only the primary driver surface and may take, pause, resume or complete; it
+cannot join as a secondary. WorkerApp has no driver take or trip surface and
+sees a logistics task only while it is active/paused and the worker is eligible
+for a configured secondary class. A driver take transaction also persists the
+slinger's `TASK_JOIN_AVAILABLE` notification. Delivery is at least once and
+only an invalidation: the server feed remains the authorization source. Before
+that take, a waiting logistics task is announced only to authorized DriverApp
+streams; WorkerApp receives neither an early task alert nor a cross-surface
+entry identity.
+
+A slinger joins with the current worker-group identity. If that group is
+executing another entry, task-board pauses that entire entry and later resumes
+it when the joint logistics task closes. Every configured logistics secondary
+binding is required, interrupting and notified; an active logistics queue must
+explicitly configure at least one slinger class rather than relying on an
+invented fallback. A primary assignment without a group does not satisfy that
+secondary binding even when the driver is also slinger-qualified. The driver
+and joined slinger share one evidence set and terminal transition. Completion
+by either participant requires at least one
+result photo whose media generation is `READY`, then removes the task for both.
+
 Evidence: [`services/task-board-service/`](../../services/task-board-service/),
 [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml),
-[`DriverTaskAudienceService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/DriverTaskAudienceService.java).
+[`DriverTaskAudienceService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/DriverTaskAudienceService.java),
+[`MobileTaskSurfacePolicy.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/MobileTaskSurfacePolicy.java),
+[`TaskBoardWorkerExecutionService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardWorkerExecutionService.java),
+and
+[`WorkerPushDispatcher.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/push/WorkerPushDispatcher.java).
 
 ### Maintenance
 
@@ -311,8 +337,8 @@ additional name/phone contacts remain separate from the primary contact and
 are combined only in a deterministic driver/task snapshot. Rental-order create
 and ordinary manager edit commands carry only the client, primary phone and
 comment. A normal public presentation confirmation owns the delivery address,
-optional complete coordinate pair, order-owned additional contacts, exactly one
-same-day client delivery preference and positive rental duration; nullable
+optional complete coordinate pair, order-owned additional contacts, one to five
+distinct same-day client delivery preferences and positive rental duration; nullable
 contacts normalize to an empty list. Desired-delivery windows remain order-owned
 read state: legacy physical time columns can retain old values but no public
 command or projection exposes them. A draft can save without client delivery
@@ -343,7 +369,7 @@ shared pool. A rejected booking can republish the same inquiry as a new
 revision; pending and completed bookings remain fenced. The same durable
 `PresentationBooking` receipt stores normalized `NORMAL` delivery facts and a
 positive client-selected initial rental duration only. Its order transition
-creates terms only for newly converted cabins, includes the date, duration,
+creates terms only for newly converted cabins, includes the chronologically normalized dates, duration,
 address, coordinates and contacts in replay checksums, and never rewrites a
 pre-existing cabin term on replay. A `REPLACEMENT` confirmation rejects all of
 those normal-only values and preserves current order wishes/terms. Shipment term
@@ -457,6 +483,12 @@ and
 variants and transformations. MinIO remains private; other domains reference
 media IDs and ownership contexts rather than object keys or credentials.
 
+A WORKER media request must carry exactly one native task scope:
+`worker.tasks` for WorkerApp or `driver.tasks` for DriverApp. Missing both or
+combining both is rejected, and the existing worker, warehouse and media-owner
+proofs still apply. Scope separation changes neither media ownership nor the
+private-object boundary.
+
 Phone-side capture and gallery intake normalize still-image pixels to their
 upright orientation before upload. Media-service neither auto-rotates EXIF
 images nor accepts a mutable rotation command for new media. Its historical
@@ -484,6 +516,7 @@ Evidence: [`services/media-service/`](../../services/media-service/),
 [`ManagerPhotos.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/ui/components/ManagerPhotos.kt),
 [`InventoryMediaRebasePolicy.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/uploads/InventoryMediaRebasePolicy.kt),
 [`BackgroundUploadWorker.kt`](../../app/src/main/java/dev/buhanzaz/rwms/manager/uploads/BackgroundUploadWorker.kt),
+[`validator.go`](../../services/media-service/internal/auth/validator.go),
 [`consumer.go`](../../services/media-service/internal/worker/consumer.go),
 [`worker.go`](../../services/media-service/internal/persistence/worker.go),
 [`V11__bounded_media_processing_recovery.sql`](../../services/media-service/db/migration/V11__bounded_media_processing_recovery.sql),

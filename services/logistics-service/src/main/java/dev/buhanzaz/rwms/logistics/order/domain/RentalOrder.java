@@ -21,6 +21,8 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -216,19 +218,39 @@ public class RentalOrder {
   }
 
   /**
-   * Replaces the single client-selected receiving window after a normal presentation confirmation.
-   * Existing client-confirmed delivery details, primary phone and comment remain unchanged.
+   * Replaces the one-to-five client-selected individual receiving days after a normal presentation
+   * confirmation. The days are kept in chronological order for deterministic idempotency; existing
+   * client-confirmed delivery details, primary phone and comment remain unchanged.
    */
-  public boolean replaceClientDesiredDeliveryWindow(DesiredDeliveryWindow nextWindow) {
+  public boolean replaceClientDesiredDeliveryWindows(List<DesiredDeliveryWindow> nextWindows) {
     requireEditable();
-    DesiredDeliveryWindow requiredWindow = Objects.requireNonNull(nextWindow, "desiredDeliveryWindow");
-    if (desiredDeliveryWindows.size() == 1 && desiredDeliveryWindows.getFirst().equals(requiredWindow)) {
+    List<DesiredDeliveryWindow> normalizedWindows = normalizedClientDesiredDeliveryWindows(nextWindows);
+    if (desiredDeliveryWindows.equals(normalizedWindows)) {
       return false;
     }
     desiredDeliveryWindows.clear();
-    desiredDeliveryWindows.add(requiredWindow);
+    desiredDeliveryWindows.addAll(normalizedWindows);
     touch();
     return true;
+  }
+
+  /** Validates the normal-presentation invariant without exposing the JPA collection to callers. */
+  private static List<DesiredDeliveryWindow> normalizedClientDesiredDeliveryWindows(
+      List<DesiredDeliveryWindow> values) {
+    if (values == null || values.isEmpty() || values.size() > 5) {
+      throw new IllegalArgumentException("One to five desired delivery days are required");
+    }
+    LinkedHashSet<DesiredDeliveryWindow> uniqueDays = new LinkedHashSet<>();
+    for (DesiredDeliveryWindow window : values) {
+      if (window == null
+          || window.getStartDate() == null
+          || window.getEndDate() == null
+          || !window.getStartDate().equals(window.getEndDate())
+          || !uniqueDays.add(window)) {
+        throw new IllegalArgumentException("Desired delivery days must be distinct calendar days");
+      }
+    }
+    return uniqueDays.stream().sorted(Comparator.comparing(DesiredDeliveryWindow::getStartDate)).toList();
   }
 
   /** Returns the ordered order-owned contacts without exposing the mutable JPA collection. */

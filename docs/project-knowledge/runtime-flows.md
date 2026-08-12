@@ -1,6 +1,6 @@
 # Current Runtime Flows
 
-Status: Confirmed cross-component execution model as of 2026-08-08.
+Status: Confirmed cross-component execution model as of 2026-08-12.
 
 This page explains how current RWMS components cooperate at runtime. It is a
 navigation layer: canonical request fields remain in OpenAPI, event fields in
@@ -27,6 +27,7 @@ flowchart LR
     Panel[Web panel] --> Gateway[API gateway]
     Manager[Manager Android] --> Gateway
     Worker[Worker Android] --> Gateway
+    Driver[Driver Android] --> Gateway
     Gateway --> Auth[Auth service]
     Gateway --> Owner[Owning domain service]
     Owner --> OwnerDb[(Owner PostgreSQL)]
@@ -101,6 +102,14 @@ not replace domain authorization. Warehouse access, role, scope, entity
 ownership, status, and command preconditions are enforced where their state is
 owned.
 
+WorkerApp and DriverApp are distinct public PKCE-S256 clients for the same WORKER
+principal family. `rwms-worker-android` receives `worker.tasks` and returns to
+the HTTPS `/auth/worker/callback`; `rwms-driver-android` receives
+`driver.tasks` and returns to `/auth/driver/callback`. The scopes are not
+interchangeable at either gateway or task-board. Each native client validates
+and consumes its callback in the in-memory login transaction and exposes no
+custom-scheme redirect receiver.
+
 After the panel verifies `/me`, it binds protected server state to the exact
 subject and bearer-grant revision. A logout, account switch or silent grant
 renewal first retires the old protected query client: in-flight queries are
@@ -113,6 +122,9 @@ Evidence:
 [`GatewayRouteConfiguration.java`](../../services/api-gateway-service/src/main/java/dev/buhanzaz/rwms/gateway/config/GatewayRouteConfiguration.java),
 [`GatewaySecurityConfiguration.java`](../../services/api-gateway-service/src/main/java/dev/buhanzaz/rwms/gateway/config/GatewaySecurityConfiguration.java),
 [`AuthorizationServerConfiguration.java`](../../services/auth-service/src/main/java/dev/buhanzaz/rwms/auth/config/AuthorizationServerConfiguration.java),
+[`OAuthClientProperties.java`](../../services/auth-service/src/main/java/dev/buhanzaz/rwms/auth/config/OAuthClientProperties.java),
+[`WorkerAuthConfiguration.kt`](../../worker-app/core-auth/src/main/java/dev/buhanzaz/rwms/worker/core/auth/WorkerAuthConfiguration.kt),
+[`DriverAuthConfiguration.kt`](../../driver-app/core-auth/src/main/java/dev/buhanzaz/rwms/driver/core/auth/DriverAuthConfiguration.kt),
 [`AuthProvider`](../../panel/src/features/auth/auth-provider.tsx),
 [`ProtectedClientState`](../../panel/src/features/auth/protected-client-state.ts).
 
@@ -435,7 +447,7 @@ and
    wishes. Desired windows remain readable order state: legacy physical time
    columns may retain historical values but are never exposed. A draft can save
    with none, and a rental shipment cannot be created until client confirmation
-   supplies an address, primary phone and one desired delivery day. Wishes
+   supplies an address, primary phone and at least one desired delivery day. Wishes
    remain advisory and do not constrain the document's actual `scheduledDate`.
 4. “Add cabins” creates an idempotent inquiry linked to the current `DRAFT` or
    normally editable `SAVED` order. The assistant branch retains a conversation
@@ -445,14 +457,14 @@ and
    assistant presentations rediscoverable after reload. The first selected
    cabin fixes the order warehouse for every later search and confirmation.
 5. A normal presentation publishes atomically held cabin snapshots and live
-   equipment metadata. Its public confirmation requires exactly one same-day
-   client date, a positive initial rental duration, delivery address, optional
+   equipment metadata. Its public confirmation requires one to five distinct same-day
+   client dates, a positive initial rental duration, delivery address, optional
    complete latitude/longitude pair and nullable additional contacts normalized
    to an empty list, without prefill from a linked order. Confirmation stores
    those normalized facts with the existing durable booking receipt, carries
    furniture quantities per cabin, atomically converts all selected holds plus
-   the authoritative all-order furniture composition, then writes the one
-   desired order date and terms only for newly converted cabins in the same
+   the authoritative all-order furniture composition, then writes the ordered
+   desired order dates and terms only for newly converted cabins in the same
    local transition. The receipt and local command checksum fence every delivery
    fact and duration on replay; they never rewrite existing terms. Selected
    cabins append to the target order instead of creating another order. A
@@ -525,28 +537,47 @@ and
    delivery date. A lost local confirmation converges from the
    existing task status poll. Members cannot be reordered independently and
    the move never changes audience.
-6. Worker feed reads are filtered in task-board. Assigned work reaches only its
-   selected driver; unassigned work reaches none; an unclaimed shared Current
-   entry reaches every qualified warehouse driver and becomes assignee-only
-   after take. Only the first visible waiting Current entry is actionable.
-7. WorkerApp uses the required nullable worker-feed audience to split the
-   logistics-driver category into two collapsible tables: personal Logistics
-   (`ASSIGNED_DRIVER`) and shared warehouse Movements (`WAREHOUSE_DRIVERS`). It
-   also keeps separately collapsible group-role and qualification-only panels.
-   A grouped shipment shows the cabin count and exposes its client/cabin list
-   in details. Cards show cabin, date, authoritative elapsed time and photo
-   state; details reuse the existing camera, durable evidence upload and
-   Downloads retry flows.
+6. DriverApp feed reads are filtered in task-board. Assigned work reaches only
+   its selected driver; unassigned work reaches none; an unclaimed shared
+   Current entry reaches every qualified warehouse driver and becomes
+   assignee-only after take. Only the first visible waiting Current entry is
+   actionable. The driver may `TAKE`, `PAUSE`, `RESUME` or `COMPLETE`, but may
+   never `JOIN`.
+7. The driver's successful logistics `TAKE` commits a
+   `TASK_JOIN_AVAILABLE` push-outbox row in the same task-board transaction for
+   each eligible secondary worker. The leased dispatcher sends only to active
+   WorkerApp installations, using the registered Firebase Installation ID;
+   retries are bounded and an invalid installation is revoked. FCM and SSE are
+   invalidations, so WorkerApp refreshes the authoritative feed.
+8. WorkerApp has no driver board or driver-trip route. It reveals a joint
+   `LOGISTICS_DRIVER` entry only after the driver has made it active and only
+   to an eligible secondary worker. The slinger accepts with `JOIN` and the
+   current group ID. Task-board pauses the whole entry currently executed by
+   that group, not only one worker's timer, and resumes it after the joint task
+   closes.
+9. The joined driver and slinger share one task-board entry and evidence set.
+   At least one result photo must have reached media state `READY`; after that,
+   either participant may complete the entry. The one owner transition closes
+   it for both clients and resumes the interrupted group work.
+10. DriverApp exposes exactly warehouse work and durable uploads as its two
+    main destinations. Grouped-trip detail remains logistics-owned and is
+    available only to the planned assigned driver with `driver.tasks`. Its
+    CameraX capture, encrypted evidence store and WorkManager outbox survive
+    restart, and the Uploads destination permits explicit retry without
+    inventing local task success.
 
 Evidence:
 [`DocumentDriverTaskPlanner.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DocumentDriverTaskPlanner.java),
 [`DriverBoardService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverBoardService.java),
 [`DriverTripProjectionService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DriverTripProjectionService.java),
 [`DriverTaskAudienceService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/DriverTaskAudienceService.java),
+[`MobileTaskSurfacePolicy.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/MobileTaskSurfacePolicy.java),
+[`WorkerPushDispatcher.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/push/WorkerPushDispatcher.java),
 [`TaskBoardReadProjectionService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardReadProjectionService.java),
 [`logistics-board-page.tsx`](../../panel/src/features/logistics/driver-board/logistics-board-page.tsx),
+[`Worker TasksScreen.kt`](../../worker-app/feature-tasks/src/main/java/dev/buhanzaz/rwms/worker/feature/tasks/TasksScreen.kt),
 and
-[`TasksScreen.kt`](../../worker-app/feature-tasks/src/main/java/dev/buhanzaz/rwms/worker/feature/tasks/TasksScreen.kt).
+[`Driver TasksScreen.kt`](../../driver-app/feature-tasks/src/main/java/dev/buhanzaz/rwms/driver/feature/tasks/TasksScreen.kt).
 
 ### Assistant booking-fact inbox and recovery
 
@@ -724,11 +755,16 @@ projection, clients treat it as an invalidation signal and refresh only the
 affected query or local cache entry. Periodic pull may provide an additional
 recovery path, but it does not make an inaccurate replay contract acceptable.
 
+Task-board exposes separate WorkerApp and DriverApp SSE routes. A persisted
+`TASK_JOIN_AVAILABLE` FCM delivery is also only an invalidation for WorkerApp;
+it carries stable event/revision/entry identifiers for deduplication and never
+replaces the owner feed or grants task access.
+
 Evidence:
 [`SseProxyHandler.java`](../../services/api-gateway-service/src/main/java/dev/buhanzaz/rwms/gateway/config/SseProxyHandler.java),
 [`WorkerInvalidationHub.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/WorkerInvalidationHub.java),
 client realtime coordinators under [`panel/`](../../panel/) and
-[`worker-app/`](../../worker-app/).
+[`worker-app/`](../../worker-app/), and [`driver-app/`](../../driver-app/).
 
 ## Warehouse lifecycle coordination
 

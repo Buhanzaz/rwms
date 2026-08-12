@@ -46,23 +46,28 @@ func TestValidatorAcceptsValidRS256UserToken(t *testing.T) {
 }
 
 func TestValidatorAcceptsNarrowWorkerTaskToken(t *testing.T) {
-	fixture := newJWTFixture(t)
-	warehouseID := uuid.New()
-	workerID := uuid.New()
-	claims := fixture.validWorkerClaims(warehouseID, workerID)
+	for _, taskScope := range []string{"worker.tasks", "driver.tasks"} {
+		t.Run(taskScope, func(t *testing.T) {
+			fixture := newJWTFixture(t)
+			warehouseID := uuid.New()
+			workerID := uuid.New()
+			claims := fixture.validWorkerClaims(warehouseID, workerID)
+			claims["scope"] = "openid profile " + taskScope
 
-	principal, err := fixture.validator.ValidateWorker(context.Background(), "Bearer "+fixture.sign(t, testKeyID, claims, jwt.SigningMethodRS256))
-	if err != nil {
-		t.Fatalf("ValidateWorker() error = %v", err)
-	}
-	if principal.WorkerID != workerID || principal.WarehouseID != warehouseID {
-		t.Fatalf("worker principal = %#v", principal)
-	}
-	if err := principal.RequireTaskAccess(warehouseID); err != nil {
-		t.Fatalf("RequireTaskAccess() error = %v", err)
-	}
-	if err := principal.RequireTaskAccess(uuid.New()); !errors.Is(err, ErrForbidden) {
-		t.Fatalf("cross-warehouse RequireTaskAccess() error = %v, want forbidden", err)
+			principal, err := fixture.validator.ValidateWorker(context.Background(), "Bearer "+fixture.sign(t, testKeyID, claims, jwt.SigningMethodRS256))
+			if err != nil {
+				t.Fatalf("ValidateWorker() error = %v", err)
+			}
+			if principal.WorkerID != workerID || principal.WarehouseID != warehouseID {
+				t.Fatalf("worker principal = %#v", principal)
+			}
+			if err := principal.RequireTaskAccess(warehouseID); err != nil {
+				t.Fatalf("RequireTaskAccess() error = %v", err)
+			}
+			if err := principal.RequireTaskAccess(uuid.New()); !errors.Is(err, ErrForbidden) {
+				t.Fatalf("cross-warehouse RequireTaskAccess() error = %v, want forbidden", err)
+			}
+		})
 	}
 }
 
@@ -75,6 +80,7 @@ func TestValidatorRejectsWorkerTokenWithoutExactWorkerClaims(t *testing.T) {
 		mutate func(jwt.MapClaims)
 	}{
 		{name: "missing worker scope", mutate: func(claims jwt.MapClaims) { claims["scope"] = "openid profile" }},
+		{name: "both task scopes", mutate: func(claims jwt.MapClaims) { claims["scope"] = "worker.tasks driver.tasks" }},
 		{name: "user principal", mutate: func(claims jwt.MapClaims) { claims["principal_type"] = "USER" }},
 		{name: "noncanonical worker id", mutate: func(claims jwt.MapClaims) { claims["worker_id"] = strings.ToUpper(workerID.String()) }},
 		{name: "missing warehouse", mutate: func(claims jwt.MapClaims) { delete(claims, "warehouse_id") }},
@@ -88,6 +94,21 @@ func TestValidatorRejectsWorkerTokenWithoutExactWorkerClaims(t *testing.T) {
 				t.Fatalf("ValidateWorker() error = %v, want forbidden", err)
 			}
 		})
+	}
+}
+
+func TestWorkerPrincipalRejectsAmbiguousTaskScopes(t *testing.T) {
+	warehouseID := uuid.New()
+	principal := WorkerPrincipal{
+		WarehouseID: warehouseID,
+		Scopes: map[string]struct{}{
+			"worker.tasks": {},
+			"driver.tasks": {},
+		},
+	}
+
+	if err := principal.RequireTaskAccess(warehouseID); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("RequireTaskAccess() error = %v, want forbidden", err)
 	}
 }
 

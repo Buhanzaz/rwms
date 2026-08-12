@@ -92,20 +92,24 @@ public class LogisticsAuthorizer {
   }
 
   /**
-   * Returns whether a USER carrying the WorkerApp task scope is the exact driver frozen on an
-   * assigned logistics task. It grants no warehouse-wide visibility.
+   * Returns whether a WORKER carrying the DriverApp task scope has a {@code worker_id} equal to the
+   * exact driver frozen on an assigned logistics task. The session subject is deliberately not a
+   * worker identity, and this check grants no warehouse-wide visibility.
    */
   public boolean isExactAssignedDriver(Jwt jwt, String audienceMode, UUID plannedDriverWorkerId) {
     if (developmentBypass) return true;
     if (jwt == null
-        || !"USER".equals(jwt.getClaimAsString("principal_type"))
+        || !"WORKER".equals(jwt.getClaimAsString("principal_type"))
         || !"ASSIGNED_DRIVER".equals(audienceMode)
         || plannedDriverWorkerId == null
-        || !scopes(jwt).contains("worker.tasks")) {
+        || !scopes(jwt).contains("driver.tasks")
+        || scopes(jwt).contains("worker.tasks")) {
       return false;
     }
+    Object workerClaim = jwt.getClaims().get("worker_id");
+    if (!(workerClaim instanceof String workerId)) return false;
     try {
-      return plannedDriverWorkerId.equals(UUID.fromString(jwt.getSubject()));
+      return plannedDriverWorkerId.equals(UUID.fromString(workerId));
     } catch (IllegalArgumentException exception) {
       return false;
     }

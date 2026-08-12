@@ -400,17 +400,26 @@ public final class WorkerApiModels {
    * Worker-owned push-device installation declaration.
    *
    * @param provider push provider identifier
-   * @param token provider device token
+   * @param targetKind Firebase target kind; {@code null} retains legacy TOKEN behavior
+   * @param token provider registration token or Firebase Installation ID
    * @param appVersion worker-app version
    * @param sdkInt device SDK level
    * @param locale device locale tag
    */
   public record WorkerDeviceRegistrationRequest(
       @NotBlank String provider,
+      @Size(max = 16) String targetKind,
       @NotBlank @Size(max = 4096) String token,
       @NotBlank @Size(max = 64) String appVersion,
       @Min(23) @Max(1000) int sdkInt,
-      @NotBlank @Size(min = 2, max = 35) String locale) {}
+      @NotBlank @Size(min = 2, max = 35) String locale) {
+
+    /** Preserves the source-compatible legacy constructor used by registration-token clients. */
+    public WorkerDeviceRegistrationRequest(
+        String provider, String token, String appVersion, int sdkInt, String locale) {
+      this(provider, null, token, appVersion, sdkInt, locale);
+    }
+  }
 
   public record WorkerDeviceRegistration(
       String installationId,

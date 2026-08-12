@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 @Controller
 public class LoginPageController {
     private static final String WORKER_CLIENT_ID = "rwms-worker-android";
+    private static final String DRIVER_CLIENT_ID = "rwms-driver-android";
     private static final String LOGIN_SURFACE_PARAMETER = "surface";
     private static final String WORKER_LOGIN_SURFACE = "worker";
 
@@ -53,7 +54,9 @@ public class LoginPageController {
         }
         String[] clientIds = savedRequest.getParameterValues("client_id");
         return clientIds != null
-                && Arrays.stream(clientIds).anyMatch(WORKER_CLIENT_ID::equals);
+                && Arrays.stream(clientIds)
+                        .anyMatch(clientId -> WORKER_CLIENT_ID.equals(clientId)
+                                || DRIVER_CLIENT_ID.equals(clientId));
     }
 
     private void preserveFlag(
